@@ -8,11 +8,13 @@ Key concepts:
 - **Agent ID**: An identity issued to an autonomous agent (e.g., Copilot CLI) that distinguishes it from the human user
 - **OBO (On-Behalf-Of)**: A token exchange flow where a human consents to let an agent act on their behalf; the resulting token is attributed to the agent
 - **Platform abstraction**: OS-level integration (macOS, Linux, Windows) for agent identity lifecycle — creation, consent, token acquisition, and audit
-- **Teams integration**: Agents connect to Teams as "Agent Users," enabling human-to-agent command flows
+- **Teams integration**: Agents connect to Teams as "Agent Users" with **bidirectional communication** — the agent uses Teams to message the human, and the human steers the agent back through Teams. Analogous to `gh copilot --remote`, which lets you steer a local Copilot session through GitHub's web UI.
+- **Digital worker**: Another term for the agent identity. The local session holds a token for the digital worker, distinct from the human user's token.
 
 Open research questions:
 - What identity system replaces Live ID for agent-to-Teams auth at scale?
 - How do you track agent actions across OSes with a universal audit store?
+- Teams Graph API gaps: if the Graph API can't do something the Teams UX can, report it (Office is obligated to close gaps within 30 days).
 
 ## Tech Stack
 
