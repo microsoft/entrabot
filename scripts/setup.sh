@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Openclaw Identity Research — one-command setup
-# Creates an Entra app registration AND a dedicated Agent User,
-# assigns an M365 E3 license, installs dependencies, writes .env.
+# Creates an Entra Agent Identity Blueprint + Agent Identity (service principal),
+# runs a one-time human device-code auth, caches the refresh token in the OS
+# keychain, installs dependencies, and writes .env.
 # Idempotent: safe to re-run — detects existing resources and skips.
 set -euo pipefail
 
-TOTAL_STEPS=14
-APP_DISPLAY_NAME="Openclaw Agent"
+TOTAL_STEPS=15
 GRAPH_API_ID="00000003-0000-0000-c000-000000000000"
+PROVISIONER_APP_NAME="Openclaw Agent ID Provisioner"
+BLUEPRINT_DISPLAY_NAME="Openclaw Code Agent"
 
 # ── Colored output helpers ──────────────────────────────────────────────────
 
@@ -30,6 +32,7 @@ cd "$PROJECT_ROOT"
 
 echo -e "${GREEN}╔══════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║   Openclaw Identity Research — Setup     ║${NC}"
+echo -e "${GREEN}║   (Entra Agent Identity — no fake users) ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════╝${NC}"
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -73,13 +76,6 @@ success "az CLI found ($(az version --query '\"azure-cli\"' -o tsv 2>/dev/null |
 success "$PYTHON found ($PY_VER)"
 success "git found ($(git --version | awk '{print $3}'))"
 
-# Optional: Copilot CLI
-if command -v copilot &>/dev/null || command -v github-copilot-cli &>/dev/null; then
-    success "Copilot CLI found"
-else
-    warn "Copilot CLI not found — you can install it later"
-fi
-
 # ════════════════════════════════════════════════════════════════════════════
 # Step 2: Discover Azure subscription and tenant
 # ════════════════════════════════════════════════════════════════════════════
@@ -93,81 +89,102 @@ SUBSCRIPTION_ID=$(az account show --query "id" -o tsv)
 TENANT_ID=$(az account show --query "tenantId" -o tsv)
 ACCOUNT_NAME=$(az account show --query "name" -o tsv)
 
-# Discover the tenant's primary domain for UPN creation
-DOMAIN=$(az rest --method GET \
-    --uri "https://graph.microsoft.com/v1.0/domains" \
-    --query "value[?isDefault].id" -o tsv 2>/dev/null || echo "")
-if [ -z "$DOMAIN" ]; then
-    DOMAIN=$(az account show --query "tenantDefaultDomain" -o tsv 2>/dev/null || echo "")
-fi
-if [ -z "$DOMAIN" ]; then
-    fail "Could not discover tenant domain. Ensure you have directory read permissions."
-fi
-
 # Discover the signed-in human user's info
 HUMAN_UPN=$(az account show --query "user.name" -o tsv 2>/dev/null || echo "")
 HUMAN_USER_ID=$(az ad signed-in-user show --query "id" -o tsv 2>/dev/null || echo "")
 
 success "Subscription: $ACCOUNT_NAME ($SUBSCRIPTION_ID)"
 success "Tenant:       $TENANT_ID"
-success "Domain:       $DOMAIN"
 success "Human user:   $HUMAN_UPN ($HUMAN_USER_ID)"
 
 # ════════════════════════════════════════════════════════════════════════════
-# Step 3: Create / find Entra app registration
+# Step 3: Create / find Provisioner app registration
 # ════════════════════════════════════════════════════════════════════════════
-step 3 "Creating/finding Entra app registration \"$APP_DISPLAY_NAME\""
+step 3 "Creating/finding Provisioner app registration"
 
-EXISTING_APP=$(az ad app list --display-name "$APP_DISPLAY_NAME" --query "[0].appId" -o tsv 2>/dev/null)
-if [ -n "$EXISTING_APP" ]; then
-    success "Found existing app registration: $EXISTING_APP"
-    CLIENT_ID="$EXISTING_APP"
-    OBJECT_ID=$(az ad app list --display-name "$APP_DISPLAY_NAME" --query "[0].id" -o tsv)
+# A dedicated app for Agent ID provisioning (Azure CLI tokens include
+# Directory.AccessAsUser.All which the Agent Identity APIs reject).
+EXISTING_PROV=$(az ad app list --display-name "$PROVISIONER_APP_NAME" --query "[0].appId" -o tsv 2>/dev/null)
+if [ -n "$EXISTING_PROV" ]; then
+    success "Found existing provisioner app: $EXISTING_PROV"
+    PROV_CLIENT_ID="$EXISTING_PROV"
+    PROV_OBJECT_ID=$(az ad app list --display-name "$PROVISIONER_APP_NAME" --query "[0].id" -o tsv)
 else
-    echo "  Creating new app registration..."
-    APP_JSON=$(az ad app create \
-        --display-name "$APP_DISPLAY_NAME" \
+    echo "  Creating provisioner app registration..."
+    PROV_JSON=$(az ad app create \
+        --display-name "$PROVISIONER_APP_NAME" \
         --sign-in-audience AzureADMyOrg \
-        --is-fallback-public-client true \
-        --enable-id-token-issuance true \
-        --enable-access-token-issuance true \
         --query "{appId: appId, id: id}" -o json)
-    CLIENT_ID=$(echo "$APP_JSON" | "$PYTHON" -c "import sys,json; print(json.load(sys.stdin)['appId'])")
-    OBJECT_ID=$(echo "$APP_JSON" | "$PYTHON" -c "import sys,json; print(json.load(sys.stdin)['id'])")
-    success "Created app registration: $CLIENT_ID"
+    PROV_CLIENT_ID=$(echo "$PROV_JSON" | "$PYTHON" -c "import sys,json; print(json.load(sys.stdin)['appId'])")
+    PROV_OBJECT_ID=$(echo "$PROV_JSON" | "$PYTHON" -c "import sys,json; print(json.load(sys.stdin)['id'])")
+    success "Created provisioner app: $PROV_CLIENT_ID"
 fi
 
-# Enable ROPC (public client) for agent user token acquisition
-az rest --method PATCH \
-    --uri "https://graph.microsoft.com/v1.0/applications/$OBJECT_ID" \
-    --headers "Content-Type=application/json" \
-    --body '{"isFallbackPublicClient": true}' 2>/dev/null || true
-success "ROPC (public client) enabled"
+# Ensure service principal exists for provisioner
+EXISTING_PROV_SP=$(az ad sp list --filter "appId eq '$PROV_CLIENT_ID'" --query "[0].id" -o tsv 2>/dev/null)
+if [ -z "$EXISTING_PROV_SP" ]; then
+    az ad sp create --id "$PROV_CLIENT_ID" -o none 2>/dev/null
+    success "Provisioner service principal created"
+fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# Step 4: Expose custom API scope (access_as_user)
+# Step 4: Create Agent Identity Blueprint via Graph beta API
 # ════════════════════════════════════════════════════════════════════════════
-step 4 "Exposing custom API scope (api://$CLIENT_ID/access_as_user)"
+step 4 "Creating/finding Agent Identity Blueprint"
 
-# Set the Application ID URI if not already set
-APP_ID_URI=$(az ad app show --id "$OBJECT_ID" --query "identifierUris[0]" -o tsv 2>/dev/null)
+# Check for existing blueprint
+EXISTING_BP=$(az ad app list --display-name "$BLUEPRINT_DISPLAY_NAME" --query "[0].appId" -o tsv 2>/dev/null)
+if [ -n "$EXISTING_BP" ]; then
+    success "Found existing blueprint: $EXISTING_BP"
+    BLUEPRINT_APP_ID="$EXISTING_BP"
+    BLUEPRINT_OBJECT_ID=$(az ad app list --display-name "$BLUEPRINT_DISPLAY_NAME" --query "[0].id" -o tsv)
+else
+    echo "  Creating Agent Identity Blueprint via Graph beta API..."
+    BP_JSON=$(az rest --method POST \
+        --uri "https://graph.microsoft.com/beta/applications" \
+        --headers "Content-Type=application/json" \
+        --body "{
+            \"@odata.type\": \"Microsoft.Graph.AgentIdentityBlueprint\",
+            \"displayName\": \"$BLUEPRINT_DISPLAY_NAME\",
+            \"description\": \"Agent Identity Blueprint for Openclaw device agents\",
+            \"sponsors@odata.bind\": [\"https://graph.microsoft.com/beta/users/$HUMAN_USER_ID\"]
+        }" 2>/dev/null || echo "FALLBACK")
+
+    if [ "$BP_JSON" = "FALLBACK" ]; then
+        warn "Graph beta Agent Identity API not available — falling back to standard app registration"
+        BP_JSON=$(az ad app create \
+            --display-name "$BLUEPRINT_DISPLAY_NAME" \
+            --sign-in-audience AzureADMyOrg \
+            --query "{appId: appId, id: id}" -o json)
+    fi
+
+    BLUEPRINT_APP_ID=$(echo "$BP_JSON" | "$PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('appId', d.get('appId','')))")
+    BLUEPRINT_OBJECT_ID=$(echo "$BP_JSON" | "$PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('id',''))")
+    success "Created blueprint: $BLUEPRINT_APP_ID"
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# Step 5: Expose custom API scope on the blueprint (access_as_user)
+# ════════════════════════════════════════════════════════════════════════════
+step 5 "Exposing custom API scope (api://$BLUEPRINT_APP_ID/access_as_user)"
+
+APP_ID_URI=$(az ad app show --id "$BLUEPRINT_OBJECT_ID" --query "identifierUris[0]" -o tsv 2>/dev/null)
 if [ -z "$APP_ID_URI" ] || [ "$APP_ID_URI" = "None" ]; then
     az rest --method PATCH \
-        --uri "https://graph.microsoft.com/v1.0/applications/$OBJECT_ID" \
+        --uri "https://graph.microsoft.com/v1.0/applications/$BLUEPRINT_OBJECT_ID" \
         --headers "Content-Type=application/json" \
-        --body "{\"identifierUris\":[\"api://$CLIENT_ID\"]}" 2>/dev/null
-    success "Set Application ID URI: api://$CLIENT_ID"
+        --body "{\"identifierUris\":[\"api://$BLUEPRINT_APP_ID\"]}" 2>/dev/null
+    success "Set Application ID URI: api://$BLUEPRINT_APP_ID"
 else
     success "Application ID URI already set: $APP_ID_URI"
 fi
 
-# Add oauth2PermissionScope
-EXISTING_SCOPE=$(az ad app show --id "$OBJECT_ID" \
+EXISTING_SCOPE=$(az ad app show --id "$BLUEPRINT_OBJECT_ID" \
     --query "api.oauth2PermissionScopes[?value=='access_as_user'].id" -o tsv 2>/dev/null)
 if [ -z "$EXISTING_SCOPE" ]; then
     SCOPE_ID=$("$PYTHON" -c "import uuid; print(uuid.uuid4())")
     az rest --method PATCH \
-        --uri "https://graph.microsoft.com/v1.0/applications/$OBJECT_ID" \
+        --uri "https://graph.microsoft.com/v1.0/applications/$BLUEPRINT_OBJECT_ID" \
         --headers "Content-Type=application/json" \
         --body "{
             \"api\": {
@@ -189,16 +206,11 @@ else
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# Step 5: Add Graph API delegated permissions
+# Step 6: Add Graph API delegated permissions to the blueprint
 # ════════════════════════════════════════════════════════════════════════════
-step 5 "Adding Graph API delegated permissions"
+step 6 "Adding Graph API delegated permissions"
 
-# Permission GUIDs (Microsoft Graph delegated):
-#   User.Read            = e1fe6dd8-ba31-4d61-89e7-88639da4683d
-#   Chat.Create          = 9ff7295e-131b-4d94-90e1-69fde507ac11
-#   ChatMessage.Send     = 116b7235-7cc6-461e-b163-8e55691d839e
-#   Chat.ReadWrite       = 7427e0e9-2fba-42fe-b0c0-848c9e6a8182
-az ad app permission add --id "$CLIENT_ID" \
+az ad app permission add --id "$BLUEPRINT_APP_ID" \
     --api "$GRAPH_API_ID" \
     --api-permissions \
         e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope \
@@ -209,27 +221,21 @@ az ad app permission add --id "$CLIENT_ID" \
 success "Delegated permissions: User.Read, Chat.Create, ChatMessage.Send, Chat.ReadWrite"
 
 # ════════════════════════════════════════════════════════════════════════════
-# Step 6: Create service principal (if not exists)
+# Step 7: Create service principal for blueprint + grant admin consent
 # ════════════════════════════════════════════════════════════════════════════
-step 6 "Creating service principal"
+step 7 "Creating blueprint service principal and granting admin consent"
 
-EXISTING_SP=$(az ad sp list --filter "appId eq '$CLIENT_ID'" --query "[0].id" -o tsv 2>/dev/null)
-if [ -n "$EXISTING_SP" ]; then
-    success "Service principal already exists ($EXISTING_SP)"
+EXISTING_BP_SP=$(az ad sp list --filter "appId eq '$BLUEPRINT_APP_ID'" --query "[0].id" -o tsv 2>/dev/null)
+if [ -n "$EXISTING_BP_SP" ]; then
+    success "Blueprint service principal already exists ($EXISTING_BP_SP)"
 else
-    az ad sp create --id "$CLIENT_ID" -o none 2>/dev/null
-    success "Service principal created"
+    az ad sp create --id "$BLUEPRINT_APP_ID" -o none 2>/dev/null
+    success "Blueprint service principal created"
 fi
 
-# ════════════════════════════════════════════════════════════════════════════
-# Step 7: Grant admin consent for permissions
-# ════════════════════════════════════════════════════════════════════════════
-step 7 "Granting admin consent for permissions"
-
-# Admin consent can take a moment after permission changes — retry up to 3 times
 CONSENT_GRANTED=false
 for i in 1 2 3; do
-    if az ad app permission admin-consent --id "$CLIENT_ID" 2>&1; then
+    if az ad app permission admin-consent --id "$BLUEPRINT_APP_ID" 2>&1; then
         CONSENT_GRANTED=true
         break
     else
@@ -243,119 +249,150 @@ done
 if [ "$CONSENT_GRANTED" = true ]; then
     success "Admin consent granted"
 else
-    warn "Admin consent failed after 3 attempts. Grant manually:"
-    warn "  az ad app permission admin-consent --id $CLIENT_ID"
-    warn "  Or visit: https://entra.microsoft.com → App registrations → Openclaw Agent → API permissions → Grant admin consent"
+    warn "Admin consent failed. Grant manually:"
+    warn "  az ad app permission admin-consent --id $BLUEPRINT_APP_ID"
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# Step 8: Create / retrieve client secret
+# Step 8: Create Agent Identity (service principal linked to blueprint)
 # ════════════════════════════════════════════════════════════════════════════
-step 8 "Managing client secret"
+step 8 "Creating/finding Agent Identity"
+
+HOSTNAME_SHORT=$(hostname -s 2>/dev/null || hostname)
+AGENT_DISPLAY_NAME="Openclaw Agent - $HOSTNAME_SHORT"
+
+# Check for existing agent identity by display name
+EXISTING_AGENT=$(az ad sp list --display-name "$AGENT_DISPLAY_NAME" --query "[0].appId" -o tsv 2>/dev/null)
+if [ -n "$EXISTING_AGENT" ]; then
+    success "Found existing agent identity: $EXISTING_AGENT"
+    AGENT_ID="$EXISTING_AGENT"
+    AGENT_OBJECT_ID=$(az ad sp list --display-name "$AGENT_DISPLAY_NAME" --query "[0].id" -o tsv)
+else
+    echo "  Creating Agent Identity via Graph beta API..."
+    AGENT_JSON=$(az rest --method POST \
+        --uri "https://graph.microsoft.com/beta/servicePrincipals" \
+        --headers "Content-Type=application/json" \
+        --body "{
+            \"@odata.type\": \"Microsoft.Graph.AgentIdentity\",
+            \"displayName\": \"$AGENT_DISPLAY_NAME\",
+            \"agentIdentityBlueprintId\": \"$BLUEPRINT_APP_ID\",
+            \"sponsors@odata.bind\": [\"https://graph.microsoft.com/beta/users/$HUMAN_USER_ID\"]
+        }" 2>/dev/null || echo "FALLBACK")
+
+    if [ "$AGENT_JSON" = "FALLBACK" ]; then
+        warn "Graph beta Agent Identity API not available — using standard service principal"
+        # Create a standard service principal as fallback
+        AGENT_JSON=$(az rest --method POST \
+            --uri "https://graph.microsoft.com/v1.0/servicePrincipals" \
+            --headers "Content-Type=application/json" \
+            --body "{
+                \"displayName\": \"$AGENT_DISPLAY_NAME\",
+                \"appId\": \"$BLUEPRINT_APP_ID\",
+                \"notes\": \"Agent Identity for Openclaw - sponsored by $HUMAN_UPN\"
+            }" 2>/dev/null || echo "{}")
+    fi
+
+    AGENT_ID=$(echo "$AGENT_JSON" | "$PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('appId',''))" 2>/dev/null || echo "$BLUEPRINT_APP_ID")
+    AGENT_OBJECT_ID=$(echo "$AGENT_JSON" | "$PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('id',''))" 2>/dev/null || echo "")
+
+    if [ -n "$AGENT_ID" ]; then
+        success "Created agent identity: $AGENT_DISPLAY_NAME ($AGENT_ID)"
+    else
+        AGENT_ID="$BLUEPRINT_APP_ID"
+        warn "Could not create separate agent identity — using blueprint app ID"
+    fi
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# Step 9: Create / retrieve client secret for the blueprint
+# ════════════════════════════════════════════════════════════════════════════
+step 9 "Managing blueprint client secret"
 
 CACHED_SECRET=""
 CACHED_SECRET=$("$PYTHON" -c "
 import keyring
-s = keyring.get_password('openclaw', '$CLIENT_ID/client_secret')
+s = keyring.get_password('openclaw', 'blueprint_secret')
 print(s or '')
 " 2>/dev/null) || true
 
 if [ -n "$CACHED_SECRET" ]; then
-    success "Using cached client secret from credential store"
-    CLIENT_SECRET="$CACHED_SECRET"
+    success "Using cached blueprint secret from credential store"
+    BLUEPRINT_SECRET="$CACHED_SECRET"
 else
-    echo "  Creating new client secret..."
-    CLIENT_SECRET=$(az ad app credential reset \
-        --id "$CLIENT_ID" \
-        --display-name "Openclaw MCP Server" \
+    echo "  Creating new client secret on blueprint..."
+    BLUEPRINT_SECRET=$(az ad app credential reset \
+        --id "$BLUEPRINT_OBJECT_ID" \
+        --display-name "Openclaw Device" \
         --query "password" -o tsv)
 
     # Cache in OS credential store
     if "$PYTHON" -c "
 import keyring, sys
-keyring.set_password('openclaw', '$CLIENT_ID/client_secret', sys.argv[1])
-" "$CLIENT_SECRET" 2>/dev/null; then
-        success "Client secret created and cached in credential store"
+keyring.set_password('openclaw', 'blueprint_secret', sys.argv[1])
+" "$BLUEPRINT_SECRET" 2>/dev/null; then
+        success "Blueprint secret created and cached in credential store"
     else
-        warn "Client secret created but could not cache in credential store"
+        warn "Blueprint secret created but could not cache in credential store"
         success "Secret will be written to .env"
     fi
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# Step 9: Create Agent User in Entra ID
+# Step 10: Human device-code auth (one-time consent)
 # ════════════════════════════════════════════════════════════════════════════
-step 9 "Creating/finding Agent User"
+step 10 "Human device-code authentication (one-time consent)"
 
-AGENT_UPN="openclaw-agent@$DOMAIN"
-AGENT_PASSWORD=""
-
-# Check if agent user already exists
-AGENT_USER_ID=$(az ad user list --filter "userPrincipalName eq '$AGENT_UPN'" \
-    --query "[0].id" -o tsv 2>/dev/null || echo "")
-
-if [ -n "$AGENT_USER_ID" ]; then
-    success "Agent user already exists: $AGENT_UPN ($AGENT_USER_ID)"
-    # Try to retrieve cached password
-    AGENT_PASSWORD=$("$PYTHON" -c "
+# Check if we already have a cached refresh token
+EXISTING_RT=$("$PYTHON" -c "
 import keyring
-p = keyring.get_password('openclaw', 'agent_password')
-print(p or '')
+t = keyring.get_password('openclaw', 'human_refresh_token')
+print('yes' if t else '')
 " 2>/dev/null) || true
-    if [ -z "$AGENT_PASSWORD" ]; then
-        # Reset the password so we have a known value
-        AGENT_PASSWORD="$(openssl rand -base64 16)!"
-        az ad user update --id "$AGENT_USER_ID" \
-            --password "$AGENT_PASSWORD" \
-            --force-change-password-next-sign-in false 2>/dev/null
-        success "Agent user password reset"
-    fi
+
+if [ -n "$EXISTING_RT" ]; then
+    success "Human refresh token already cached in keychain"
 else
-    AGENT_PASSWORD="$(openssl rand -base64 16)!"
-    AGENT_USER_ID=$(az ad user create \
-        --display-name "Openclaw Agent" \
-        --user-principal-name "$AGENT_UPN" \
-        --password "$AGENT_PASSWORD" \
-        --force-change-password-next-sign-in false \
-        --query id -o tsv 2>/dev/null)
-    success "Created agent user: $AGENT_UPN ($AGENT_USER_ID)"
-fi
+    echo "  Starting device-code flow for human consent..."
+    echo -e "  ${YELLOW}You will be shown a device code — sign in at https://microsoft.com/devicelogin${NC}"
 
-# Cache agent password in OS credential store
-"$PYTHON" -c "
-import keyring, sys
-keyring.set_password('openclaw', 'agent_password', sys.argv[1])
-" "$AGENT_PASSWORD" 2>/dev/null || true
+    "$PYTHON" -c "
+import sys, json
+from msal import PublicClientApplication
+import keyring
 
-# ════════════════════════════════════════════════════════════════════════════
-# Step 10: Assign M365 E3 license to Agent User
-# ════════════════════════════════════════════════════════════════════════════
-step 10 "Assigning M365 E3 license to Agent User"
+app = PublicClientApplication(
+    client_id='$BLUEPRINT_APP_ID',
+    authority='https://login.microsoftonline.com/$TENANT_ID',
+)
 
-# Get the E3 SKU ID (ENTERPRISEPACK)
-E3_SKU=$(az rest --method GET \
-    --uri "https://graph.microsoft.com/v1.0/subscribedSkus" \
-    --query "value[?contains(skuPartNumber,'ENTERPRISEPACK')].skuId" -o tsv 2>/dev/null || echo "")
+flow = app.initiate_device_flow(
+    scopes=['api://$BLUEPRINT_APP_ID/access_as_user']
+)
+if 'user_code' not in flow:
+    print(f'ERROR: Could not initiate device flow: {flow}', file=sys.stderr)
+    sys.exit(1)
 
-if [ -z "$E3_SKU" ]; then
-    warn "No M365 E3 license (ENTERPRISEPACK) found in tenant"
-    warn "Agent user needs a Teams license to send messages"
-else
-    # Check if already assigned
-    HAS_LICENSE=$(az rest --method GET \
-        --uri "https://graph.microsoft.com/v1.0/users/$AGENT_USER_ID/licenseDetails" \
-        --query "value[?skuId=='$E3_SKU'].skuId" -o tsv 2>/dev/null || echo "")
-    if [ -n "$HAS_LICENSE" ]; then
-        success "E3 license already assigned"
-    else
-        if az rest --method POST \
-            --uri "https://graph.microsoft.com/v1.0/users/$AGENT_USER_ID/assignLicense" \
-            --body "{\"addLicenses\":[{\"skuId\":\"$E3_SKU\"}],\"removeLicenses\":[]}" 2>/dev/null; then
-            success "E3 license assigned to $AGENT_UPN"
-        else
-            warn "Could not assign E3 license — may need manual assignment"
-        fi
+print(f'\\n  📱 Device code: {flow[\"user_code\"]}')
+print(f'  🌐 Go to: {flow[\"verification_uri\"]}')
+print(f'  ⏳ Waiting for authentication...\\n')
+
+result = app.acquire_token_by_device_flow(flow)
+if 'error' in result:
+    print(f'ERROR: {result[\"error\"]}: {result.get(\"error_description\", \"\")}', file=sys.stderr)
+    sys.exit(1)
+
+# Cache the refresh token in the OS keychain
+if 'refresh_token' in result:
+    keyring.set_password('openclaw', 'human_refresh_token', result['refresh_token'])
+    print('  ✅ Human refresh token cached in OS keychain')
+else:
+    print('  ⚠️  No refresh token in response — OBO may not work', file=sys.stderr)
+    sys.exit(1)
+"
+    if [ $? -ne 0 ]; then
+        fail "Device-code authentication failed"
     fi
+    success "Human authenticated and refresh token cached"
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -383,15 +420,15 @@ step 12 "Writing .env configuration"
 
 cat > .env << EOF
 # Openclaw Identity Research — generated by scripts/setup.sh
+# Uses Entra Agent Identity Blueprint + OBO flow (no fake users)
 # DO NOT commit this file (it is in .gitignore)
 
 OPENCLAW_TENANT_ID=$TENANT_ID
-OPENCLAW_CLIENT_ID=$CLIENT_ID
-OPENCLAW_CLIENT_SECRET=$CLIENT_SECRET
-OPENCLAW_SUBSCRIPTION_ID=$SUBSCRIPTION_ID
-OPENCLAW_AGENT_USER_ID=$AGENT_USER_ID
-OPENCLAW_AGENT_UPN=$AGENT_UPN
-OPENCLAW_AGENT_PASSWORD=$AGENT_PASSWORD
+OPENCLAW_BLUEPRINT_APP_ID=$BLUEPRINT_APP_ID
+OPENCLAW_BLUEPRINT_OBJECT_ID=$BLUEPRINT_OBJECT_ID
+OPENCLAW_BLUEPRINT_SECRET=$BLUEPRINT_SECRET
+OPENCLAW_AGENT_ID=${AGENT_ID:-$BLUEPRINT_APP_ID}
+OPENCLAW_AGENT_OBJECT_ID=${AGENT_OBJECT_ID:-}
 OPENCLAW_HUMAN_USER_ID=$HUMAN_USER_ID
 OPENCLAW_HUMAN_UPN=$HUMAN_UPN
 OPENCLAW_LOG_LEVEL=INFO
@@ -408,9 +445,34 @@ else
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# Step 13: Run tests
+# Step 13: Delete legacy fake agent user (if exists)
 # ════════════════════════════════════════════════════════════════════════════
-step 13 "Running tests"
+step 13 "Cleaning up legacy fake agent user (if any)"
+
+# Discover the tenant's primary domain
+DOMAIN=$(az rest --method GET \
+    --uri "https://graph.microsoft.com/v1.0/domains" \
+    --query "value[?isDefault].id" -o tsv 2>/dev/null || echo "")
+
+if [ -n "$DOMAIN" ]; then
+    LEGACY_UPN="openclaw-agent@$DOMAIN"
+    LEGACY_ID=$(az ad user list --filter "userPrincipalName eq '$LEGACY_UPN'" \
+        --query "[0].id" -o tsv 2>/dev/null || echo "")
+    if [ -n "$LEGACY_ID" ]; then
+        az ad user delete --id "$LEGACY_ID" 2>/dev/null && \
+            success "Deleted legacy fake agent user: $LEGACY_UPN" || \
+            warn "Could not delete legacy user $LEGACY_UPN — delete manually"
+    else
+        success "No legacy fake agent user found"
+    fi
+else
+    warn "Could not discover domain — skip legacy user cleanup"
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# Step 14: Run tests
+# ════════════════════════════════════════════════════════════════════════════
+step 14 "Running tests"
 
 if pytest -v --tb=short 2>&1; then
     success "All tests passed"
@@ -419,9 +481,9 @@ else
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# Step 14: Print next steps
+# Step 15: Print next steps
 # ════════════════════════════════════════════════════════════════════════════
-step 14 "Setup complete — next steps"
+step 15 "Setup complete — next steps"
 
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
@@ -447,13 +509,15 @@ echo -e "  2. Launch Copilot CLI:"
 echo ""
 echo -e "     ${BLUE}copilot${NC}"
 echo ""
-echo -e "  3. Available tools (pre-authenticated — no bootstrap needed):"
+echo -e "  3. Available tools (pre-authenticated via OBO — no bootstrap needed):"
 echo ""
 echo -e "     ${GREEN}openclaw_whoami${NC}         — show agent identity and status"
 echo -e "     ${GREEN}openclaw_teams_send${NC}    — send a message as the agent"
 echo -e "     ${GREEN}openclaw_teams_read${NC}    — read messages from the human"
 echo -e "     ${GREEN}openclaw_audit_log${NC}     — record an audit event"
 echo ""
-echo -e "  Agent User: ${BLUE}$AGENT_UPN${NC}"
-echo -e "  Human User: ${BLUE}$HUMAN_UPN${NC}"
+echo -e "  Blueprint:   ${BLUE}$BLUEPRINT_APP_ID${NC}"
+echo -e "  Agent ID:    ${BLUE}${AGENT_ID:-$BLUEPRINT_APP_ID}${NC}"
+echo -e "  Human User:  ${BLUE}$HUMAN_UPN${NC}"
+echo -e "  Auth Flow:   ${BLUE}OBO (On-Behalf-Of) — agent-attributed tokens${NC}"
 echo ""
