@@ -279,8 +279,8 @@ async def read(
         return [
             {
                 "message_id": m["id"],
-                "from": m.get("from", {}).get("user", {}).get("displayName", "unknown"),
-                "content": m.get("body", {}).get("content", ""),
+                "from": (m.get("from") or {}).get("user", {}).get("displayName", "unknown"),
+                "content": (m.get("body") or {}).get("content", ""),
                 "sent_at": m.get("createdDateTime"),
             }
             for m in messages
