@@ -314,21 +314,26 @@ if [ -n "$AGENT_LICENSE" ]; then
     echo -e "  License:     ${BLUE}$AGENT_LICENSE${NC} (Teams provisioning in 10-15 min)"
 fi
 
+# Write MCP server config to project root (.mcp.json)
+# Claude Code picks this up automatically when opening the project.
+VENV_PYTHON="$PROJECT_ROOT/.venv/bin/python3"
+cat > "$PROJECT_ROOT/.mcp.json" << MCPEOF
+{
+  "mcpServers": {
+    "openclaw": {
+      "command": "$VENV_PYTHON",
+      "args": ["-m", "openclaw.mcp_server"],
+      "cwd": "$PROJECT_ROOT",
+      "env": {}
+    }
+  }
+}
+MCPEOF
+success "MCP server config written to .mcp.json"
+
 echo -e "  ${YELLOW}NEXT STEPS:${NC}"
 echo -e "  1. Wait 10-15 min for Teams/mailbox provisioning (if license was just assigned)"
 echo -e "  2. Run tests: ${BLUE}$PROJECT_ROOT/.venv/bin/pytest -v${NC}"
-echo -e "  3. Start the MCP server via Copilot CLI config:"
-echo ""
-echo -e "     ${BLUE}~/.copilot/mcp-config.json${NC}"
-echo ""
-echo '     {'
-echo '       "mcpServers": {'
-echo '         "openclaw": {'
-echo "           \"command\": \"$PYTHON\","
-echo '           "args": ["-m", "openclaw.mcp_server"],'
-echo "           \"cwd\": \"$PROJECT_ROOT\","
-echo '           "env": {}'
-echo '         }'
-echo '       }'
-echo '     }'
+echo -e "  3. Restart Claude Code / Copilot CLI in this project — the MCP server"
+echo -e "     will be auto-discovered from ${BLUE}.mcp.json${NC}"
 echo ""
