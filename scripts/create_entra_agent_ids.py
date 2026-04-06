@@ -464,6 +464,8 @@ def grant_agent_user_consent(
             print(f"  [skip] Consent already granted (scope: {existing[0].get('scope', '')})")
             return
 
+    from datetime import UTC, datetime
+
     scopes = "Chat.Create Chat.ReadWrite ChatMessage.Send User.Read"
     body = {
         "clientId": agent_identity_obj_id,
@@ -471,6 +473,7 @@ def grant_agent_user_consent(
         "principalId": agent_user_obj_id,
         "resourceId": graph_sp_id,
         "scope": scopes,
+        "startTime": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
     # Use v1.0 endpoint for oauth2PermissionGrants
