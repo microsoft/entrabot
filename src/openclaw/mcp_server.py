@@ -166,14 +166,11 @@ async def send_teams_message(message: str, content_type: str = "text") -> str:
     if not chat_id:
         return json.dumps({"error": "Teams chat not established. Check setup."})
 
-    token = _state.get("token")
-    if not token:
-        return json.dumps({"error": "No agent token. Run ./scripts/setup.sh first."})
-
-    result = await send(
+    await _ensure_valid_token()
+    result = await _with_token_retry(
+        send,
         chat_id=str(chat_id),
         message=message,
-        token=str(token),
         content_type=content_type,
     )
     return json.dumps(result, indent=2)
@@ -199,13 +196,10 @@ async def read_teams_messages(count: int = 5) -> str:
     if not chat_id:
         return json.dumps({"error": "Teams chat not established. Check setup."})
 
-    token = _state.get("token")
-    if not token:
-        return json.dumps({"error": "No agent token. Run ./scripts/setup.sh first."})
-
-    result = await read(
+    await _ensure_valid_token()
+    result = await _with_token_retry(
+        read,
         chat_id=str(chat_id),
-        token=str(token),
         count=count,
     )
     return json.dumps(result, indent=2)

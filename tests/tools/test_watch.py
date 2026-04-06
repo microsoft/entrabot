@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import time
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
-from openclaw.tools.teams import filter_human_messages
+from openclaw.tools.teams import GRAPH_BASE, filter_human_messages
 
 
 class TestFilterHumanMessages:
@@ -181,6 +184,99 @@ class TestLazyTokenRetry:
                 pytest.raises(TokenExpiredError),
             ):
                 await mcp_server._with_token_retry(always_fails)
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+
+
+class TestExistingToolsRetrofitted:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_retries_on_401(self) -> None:
+        """send_teams_message should retry once on TokenExpiredError."""
+        from openclaw import mcp_server
+
+        respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            side_effect=[
+                httpx.Response(401),
+                httpx.Response(
+                    201,
+                    json={
+                        "id": "msg-1",
+                        "createdDateTime": "2026-04-06T12:00:00Z",
+                    },
+                ),
+            ]
+        )
+
+        mock_acquire = MagicMock(return_value="refreshed-token")
+        mock_config = MagicMock()
+
+        old_state = mcp_server._state.copy()
+        try:
+            mcp_server._state.update({
+                "initialized": True,
+                "token": "old-token",
+                "config": mock_config,
+                "chat_id": "c1",
+                "token_acquired_at": time.monotonic(),
+            })
+
+            with patch(
+                "openclaw.mcp_server.acquire_agent_user_token",
+                mock_acquire,
+            ):
+                result_json = await mcp_server.send_teams_message("hello")
+
+            result = json.loads(result_json)
+            assert result["message_id"] == "msg-1"
+            mock_acquire.assert_called_once()
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_read_retries_on_401(self) -> None:
+        """read_teams_messages should retry once on TokenExpiredError."""
+        from openclaw import mcp_server
+
+        respx.get(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            side_effect=[
+                httpx.Response(401),
+                httpx.Response(200, json={"value": [
+                    {
+                        "id": "m1",
+                        "from": {"user": {"displayName": "Human"}},
+                        "body": {"content": "reply"},
+                        "createdDateTime": "2026-04-06T12:00:00Z",
+                    },
+                ]}),
+            ]
+        )
+
+        mock_acquire = MagicMock(return_value="refreshed-token")
+        mock_config = MagicMock()
+
+        old_state = mcp_server._state.copy()
+        try:
+            mcp_server._state.update({
+                "initialized": True,
+                "token": "old-token",
+                "config": mock_config,
+                "chat_id": "c1",
+                "token_acquired_at": time.monotonic(),
+            })
+
+            with patch(
+                "openclaw.mcp_server.acquire_agent_user_token",
+                mock_acquire,
+            ):
+                result_json = await mcp_server.read_teams_messages(count=5)
+
+            result = json.loads(result_json)
+            assert len(result) == 1
+            mock_acquire.assert_called_once()
         finally:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
