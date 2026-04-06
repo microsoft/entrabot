@@ -25,17 +25,24 @@
 
 ## The Problem
 
-When an autonomous agent runs on a user's device — writing code, deploying services, accessing files — everything it does looks like the **human** did it. Sign-in logs, access logs, audit trails — all attributed to the user. There is no way to distinguish "the human typed this command" from "an AI agent autonomously decided to do this."
+When an autonomous agent runs on a user's device — writing code, deploying services, accessing files — **two things go wrong:**
 
-This is a security and governance gap. Enterprises need to know:
+**1. Identity attribution is lost.** Everything the agent does looks like the **human** did it. Sign-in logs, access logs, audit trails — all attributed to the user. There is no way to distinguish "the human typed this command" from "an AI agent autonomously decided to do this."
+
+**2. Local resource control doesn't exist.** The agent runs as the user's process and inherits all of the user's filesystem permissions, network access, and system privileges. ACLs are meaningless — the agent can read any file the user can, execute any binary, and modify any setting. Unlike cloud agents that operate behind network boundaries, device agents share the user's entire local attack surface.
+
+This is both a **security gap** and a **governance gap.** Enterprises need to know:
 - **Who** performed an action — human or agent?
 - **What** permissions was the agent using — its own, or delegated by a human?
+- **What resources** can the agent access on the local machine — and who controls that boundary?
 - **When** did the human consent — and can they revoke it?
 - **Where** is the audit trail that proves all of the above?
 
-In the cloud, we solved this with **Agent IDs** and **on-behalf-of (OBO)** token flows. An agent gets its own identity in Microsoft Entra, the human consents, and the resulting OBO token attributes all actions to the agent while preserving the chain back to the consenting human.
+In the cloud, we solved the identity half with **Agent IDs** and **on-behalf-of (OBO)** token flows. An agent gets its own identity in Microsoft Entra, the human consents, and the resulting OBO token attributes all actions to the agent while preserving the chain back to the consenting human.
 
-**The challenge:** Bring this identity model to agents running on local devices — Mac, Linux, and Windows — and demonstrate bidirectional communication through Microsoft Teams.
+On the device, we must also solve the **sandboxing half** — restricting what the agent can do locally, regardless of what tokens it holds. Competitors like Claude Code already face this: they've had to implement permission systems to prevent agents from running destructive commands unchecked.
+
+**The challenge:** Bring both the identity model AND local resource control to agents running on devices — Mac, Linux, and Windows — and demonstrate bidirectional communication through Microsoft Teams.
 
 ---
 
@@ -59,25 +66,31 @@ A Microsoft employee using our agentic Copilot harness for code:
 
 | # | Requirement | Category |
 |---|-------------|----------|
+| R0 | Human's identity is bootstrapped on the device — using OS-native credentials (WAM/PRT on Windows, device code flow on Mac/Linux) | Identity |
 | R1 | Agent obtains a distinct Entra Agent ID, separate from the human | Identity |
-| R2 | Human explicitly consents before the agent can act | Consent |
+| R2 | Human explicitly consents to specific scopes: Teams messaging, filesystem access boundaries, command execution limits, identity delegation | Consent |
 | R3 | Agent acquires OBO token — attributed to agent, delegated from human | Auth |
-| R4 | All agent actions emit audit events before execution | Audit |
-| R5 | Audit logs distinguish agent actions from human actions | Audit |
-| R6 | Agent sends messages to human via Teams | Teams |
-| R7 | Human sends commands to agent via Teams | Teams |
-| R8 | Works on macOS, Linux, and Windows | Platform |
-| R9 | Credentials stored in OS-native secure storage | Security |
-| R10 | Human can revoke agent access at any time | Governance |
+| R4 | All agent actions emit audit events before execution — filesystem, process, network, credential access | Audit |
+| R5 | Audit logs distinguish agent actions from human actions, with specific action types: file read/write/delete, process spawn/exec, network calls, config changes | Audit |
+| R6 | Agent runs inside a sandbox that restricts local filesystem, network, and process access | Sandbox |
+| R7 | Agent sends messages to human via Teams | Teams |
+| R8 | Human sends commands to agent via Teams | Teams |
+| R9 | Works on macOS, Linux, and Windows | Platform |
+| R10 | Credentials stored in OS-native secure storage | Security |
+| R11 | Human can revoke agent access at any time | Governance |
 
 ---
 
 ## Platform Limitations & Broad Issues
 
 ### Identity Limitations
-- **Agent IDs are in public preview** — the beta API may change before GA
-- **Agent IDs are single-tenant only** — no cross-tenant, no personal Microsoft accounts
+- **Agent IDs are GA** — recently shipped, stable API surface
+- **Agent IDs are single-tenant only** — no cross-tenant, no personal Microsoft accounts. A "mega tenant" model (Openclaw tenant for AgentID, OBO into customer tenant for resources) could address this
 - **No device attestation** — Agent IDs don't bind to hardware (TPM/Secure Enclave). A copied credential works on any machine
+- **Bootstrap problem** — the human needs a credential on the device BEFORE the agent can do OBO. Each OS has a different story:
+  - **Windows:** PRT (Primary Refresh Token) via WAM on Entra-joined devices — seamless
+  - **macOS:** Apple ID exists but is the wrong identity provider. Must bridge to Entra via device code flow
+  - **Linux:** No built-in identity. Device code flow is the only option
 - **ConfidentialClient on device is risky** — the agent blueprint secret on a user device is a crown-jewel credential exposed to user-space attack
 
 ### Teams API Limitations
@@ -276,6 +289,75 @@ flowchart TB
 **Why this matters:** The blueprint's client secret is a crown-jewel credential. On a user device, any process running as the same user can read it from memory. The split architecture keeps the secret in a hardened cloud service — the device agent only holds a `PublicClientApplication` token and sends it to the cloud for OBO exchange.
 
 **For MVP:** Accept the risk and put `ConfidentialClient` on-device. **For production:** Implement the split architecture.
+
+---
+
+## Agent Sandboxing & Local Resource Control
+
+> **This is the section we initially missed.** Identity tells you WHO did something. Sandboxing controls WHAT they can do. Without sandboxing, an agent with a valid OBO token can still `rm -rf /`, read SSH keys, or exfiltrate data — all of which look like legitimate user actions at the filesystem level.
+
+### What Needs Restricting
+
+| Resource | Example Actions | Risk Without Sandbox |
+|----------|----------------|---------------------|
+| **Filesystem** | Read/write/delete files, traverse directories | Agent reads `~/.ssh/id_rsa`, deletes source code |
+| **Process** | Spawn subprocess, exec binary, kill process | Agent runs `curl` to exfiltrate, kills competing processes |
+| **Network** | Outbound HTTP, DNS, raw sockets | Agent contacts C2 server, leaks tokens |
+| **System config** | Registry (Windows), defaults (macOS), dotfiles | Agent changes shell config, disables security tools |
+| **Credentials** | Keychain/Credential Manager access | Agent reads other apps' stored passwords |
+| **Packages** | pip/npm/brew install, binary download | Agent installs malicious dependencies |
+
+### Per-Platform Sandbox Mechanisms
+
+| Platform | Mechanism | How It Works | Feasibility |
+|----------|-----------|-------------|-------------|
+| **macOS** | **Seatbelt** (`sandbox-exec`) | Kernel-level mandatory access control (TrustedBSD MAC). Apple uses it internally. Profile defines allowed syscalls, file paths, network access. Not officially supported for third-party devs but stable and functional. | ⚠️ Private API — works but unsupported |
+| **macOS** | **App Sandbox** (entitlements) | Xcode-based entitlements restrict file access, network, hardware. The "official" way but requires a signed app bundle. | ⚠️ Requires app bundle, not a script |
+| **Linux** | **Bubblewrap** (`bwrap`) | Flatpak's sandbox tool. Uses namespaces, seccomp, bind mounts. Lightweight, battle-tested. Can restrict filesystem to a read-only overlay + specific writable paths. | ✅ High — user-space, well-documented |
+| **Linux** | **seccomp + AppArmor/SELinux** | Kernel-level syscall filtering + mandatory access control. Fine-grained but complex to configure. | ⚠️ Medium — requires per-distro profiles |
+| **Windows** | **AppContainers** | Lightweight sandboxing used by UWP apps and Edge. Restricts filesystem, registry, network at the kernel level. Win32 API accessible. | ⚠️ Medium — limited docs for non-UWP use |
+| **Windows** | **Windows Sandbox** | Full VM isolation. Heavy but complete. Not suitable for persistent agents. | ❌ Too heavy for our use case |
+| **Windows** | **Custom subsystem (moonshot)** | A purpose-built "Agent Subsystem" — like WSL but for AI agents. Lightweight container with identity-aware capability broker. | 🚀 Moonshot — see below |
+
+### The Moonshot: An Agent Subsystem for Windows
+
+What if we built a dedicated subsystem for agent execution — like WSL, but purpose-built for AI agents?
+
+```
+┌──────────────────────────────────────────────┐
+│  Agent Subsystem for Windows (ASW)           │
+│                                              │
+│  ┌────────────────────────────────────────┐  │
+│  │ Agent Process (sandboxed)              │  │
+│  │ - Restricted filesystem view           │  │
+│  │ - Filtered network (allowlist only)    │  │
+│  │ - Controlled process spawning          │  │
+│  │ - No direct registry access            │  │
+│  └────────────────┬───────────────────────┘  │
+│                   │                          │
+│  ┌────────────────▼───────────────────────┐  │
+│  │ Capability Broker                      │  │
+│  │ - Identity-aware (Entra Agent ID)      │  │
+│  │ - Audit every resource request to ETW  │  │
+│  │ - Human approval for elevated actions  │  │
+│  │ - Configurable policies per agent      │  │
+│  └────────────────────────────────────────┘  │
+└──────────────────────────────────────────────┘
+```
+
+Built on existing Windows primitives: AppContainers for isolation, ETW for audit, WDAC for binary allowlisting, Hyper-V for optional VM-level isolation. The capability broker mediates ALL host resource access and integrates with Entra Agent IDs — every request is authenticated, authorized, and audited.
+
+This is ambitious, but with AI-assisted development, not as far-fetched as it sounds. Even if we don't build it, articulating this vision could influence the Windows platform team's roadmap.
+
+### Competitor Reference: Claude Code
+
+Claude Code (Anthropic) has already encountered this problem. Their approach:
+- Permission prompts for file read/write, command execution, and web access
+- Allowlists for "safe" commands that don't require approval
+- No OS-level sandboxing (relies on user-space permission model)
+- The result: agents can be told "just approve everything" — consent fatigue defeats the model
+
+**Our advantage:** If we solve sandboxing at the OS level (Seatbelt, Bubblewrap, AppContainers, or the Agent Subsystem), the restriction is enforced by the kernel, not by the agent's own permission system. A compromised agent can't bypass kernel-level sandboxing.
 
 ---
 
@@ -526,19 +608,26 @@ The correlation chain: Entra `correlation_id` ↔ Openclaw `agent_id` ↔ OS `de
 
 ## Recommended Phased Approach
 
-### Phase 1: MVP (Weeks 1-8) — Prove the Identity Model
+### Phase 1: Windows MVP + macOS in parallel (Weeks 1-8) — Prove the Identity Model
 
-**Pick one OS** (macOS recommended — best MSAL Python support, most team members have Macs).
-
-Build macOS Proposal A / Linux Proposal B / Windows Proposal 2:
-- Device code flow → human authenticates
-- Agent ID registration via Entra beta API
+**Windows (primary):** Build Windows Proposal 2 (Graph-First Lightweight).
+- WAM/PRT for human identity bootstrap on Entra-joined devices — smoothest path
+- Agent ID registration via Entra GA API
 - OBO token exchange → agent-attributed token
 - Graph API → create Teams chat, send messages, delta poll for replies
-- Keychain/Secret Service/Credential Manager for token storage
+- Credential Manager for token storage
 - Console audit log (structured JSON)
+- AppContainer investigation for sandboxing
 
-**Success criteria:** An agent on a Mac sends a message to a human in Teams saying "I completed task X" and the Entra sign-in logs show the **agent**, not the human, as the actor.
+**macOS (parallel):** Build macOS Proposal A (Graph-Native Agent User).
+- Device code flow for human bootstrap (no PRT equivalent)
+- Same Agent ID + OBO + Graph API flow
+- Keychain for token storage
+- Seatbelt/sandbox-exec investigation for sandboxing
+
+**The code is ~80% shared** — only the platform layer (credential storage, process model, sandbox) differs.
+
+**Success criteria:** An agent on Windows sends a message to a human in Teams saying "I completed task X" and the Entra sign-in logs show the **agent**, not the human, as the actor. Same demo runs on macOS.
 
 ### Phase 2: Bot Framework Relay (Weeks 9-14) — Real Teams UX
 
