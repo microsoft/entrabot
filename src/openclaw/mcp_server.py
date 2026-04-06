@@ -15,7 +15,7 @@ import sys
 import time
 from datetime import UTC, datetime, timedelta
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from openclaw.config import get_config
 from openclaw.errors import OpenclawError, TokenExchangeError
@@ -262,7 +262,11 @@ async def read_teams_messages(count: int = 5) -> str:
 
 
 @mcp.tool()
-async def watch_teams_replies(timeout: int = 30, interval: int = 5) -> str:
+async def watch_teams_replies(
+    timeout: int = 30,
+    interval: int = 5,
+    ctx: Context | None = None,
+) -> str:
     """Poll Teams for new replies from the human. Returns when new messages
     arrive or after timeout seconds. Uses server-side cursor to track what's
     been seen — only returns genuinely new human messages.
@@ -311,6 +315,18 @@ async def watch_teams_replies(timeout: int = 30, interval: int = 5) -> str:
     while True:
         poll_count += 1
         await _ensure_valid_token()
+
+        # Report progress so the LLM knows we're actively polling
+        if ctx:
+            try:
+                elapsed = int(time.monotonic() - start)
+                await ctx.report_progress(
+                    progress=float(elapsed),
+                    total=float(timeout),
+                    message=f"Polling for Teams replies... ({elapsed}s / {timeout}s)",
+                )
+            except Exception:
+                pass  # Progress reporting is best-effort
 
         raw_messages = await _with_token_retry(
             read,

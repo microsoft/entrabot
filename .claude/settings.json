@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "mcp__openclaw__send_teams_message",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"You just sent a Teams message. The human may reply. Call watch_teams_replies to wait for their response — this is how bidirectional Teams communication works. Do NOT consider the task complete until you have checked for a reply.\"}}'",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
