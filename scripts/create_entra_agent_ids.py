@@ -612,30 +612,53 @@ def assign_license_to_agent_user(token: str, agent_user_id: str) -> None:
                 print("  Assign manually in the Entra admin center.")
                 return
 
-    # Set usageLocation (required before license assignment)
-    print("  Setting usageLocation=US on Agent User...")
-    if not _set_usage_location(token, agent_user_id):
-        print("  WARNING: Could not set usageLocation — license assignment may fail")
+    # Set usageLocation (required before license assignment).
+    # The Agent User may not have fully replicated yet — retry a few times.
+    print("  Setting usageLocation on Agent User (waiting for Entra replication)...")
+    location_set = False
+    for attempt in range(5):
+        if _set_usage_location(token, agent_user_id):
+            location_set = True
+            break
+        wait = 5 * (attempt + 1)
+        print(f"  Agent User not ready yet, retrying in {wait}s...")
+        time.sleep(wait)
 
-    # Assign the license
+    if not location_set:
+        print("  WARNING: Could not set usageLocation after retries")
+        print("  The Agent User may not have replicated to M365 yet.")
+        print("  Re-run setup.sh in a few minutes to assign the license.")
+        return
+
+    # Assign the license (also retry — replication can lag)
     print(f"  Assigning {chosen['displayName']} to Agent User...")
-    resp = graph_request(
-        "POST",
-        f"/users/{agent_user_id}/assignLicense",
-        token,
-        json_body={
-            "addLicenses": [{"skuId": chosen["skuId"]}],
-            "removeLicenses": [],
-        },
-    )
-    if resp.status_code in (200, 201):
+    assigned = False
+    for attempt in range(3):
+        resp = graph_request(
+            "POST",
+            f"/users/{agent_user_id}/assignLicense",
+            token,
+            json_body={
+                "addLicenses": [{"skuId": chosen["skuId"]}],
+                "removeLicenses": [],
+            },
+        )
+        if resp.status_code in (200, 201):
+            assigned = True
+            break
+        if attempt < 2:
+            wait = 10 * (attempt + 1)
+            print(f"  License assignment returned {resp.status_code}, retrying in {wait}s...")
+            time.sleep(wait)
+
+    if assigned:
         print(f"  [done] License assigned: {chosen['displayName']}")
         print("  Teams/mailbox provisioning will complete in 10-15 minutes")
         set_state("AGENT_USER_LICENSE_SKU", chosen["skuPartNumber"])
     else:
-        print(f"  WARNING: License assignment returned {resp.status_code}")
+        print(f"  WARNING: License assignment failed after retries ({resp.status_code})")
         print(f"  Response: {resp.text[:300]}")
-        print("  Assign manually in the Entra admin center")
+        print("  Re-run setup.sh in a few minutes or assign manually in the Entra admin center")
 
 
 # ---------------------------------------------------------------------------
