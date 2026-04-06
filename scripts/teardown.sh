@@ -35,7 +35,9 @@ print(data.get('$key', ''))
 
 # Load from .env (non-fatal if missing)
 # shellcheck disable=SC1091
-source .env 2>/dev/null || true
+if [ -f .env ]; then
+    source .env
+fi
 
 # Merge state file values (state file takes precedence for new-format IDs)
 AGENT_USER_ID="${OPENCLAW_AGENT_USER_ID:-$(_read_state AGENT_USER_ID)}"
