@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -280,3 +281,65 @@ class TestExistingToolsRetrofitted:
         finally:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
+
+
+class TestDedupHelpers:
+    def test_new_messages_detected(self) -> None:
+        """Messages newer than cursor and not in seen-set should be returned."""
+        from openclaw.mcp_server import _filter_new_messages
+
+        messages = [
+            {"message_id": "m1", "sent_at": "2026-04-06T12:00:05Z"},
+            {"message_id": "m2", "sent_at": "2026-04-06T12:00:10Z"},
+        ]
+        result = _filter_new_messages(
+            messages=messages,
+            last_seen_timestamp="2026-04-06T12:00:00Z",
+            seen_ids=set(),
+        )
+        assert len(result) == 2
+
+    def test_skips_already_seen(self) -> None:
+        """Messages in seen-set should be excluded even if timestamp is newer."""
+        from openclaw.mcp_server import _filter_new_messages
+
+        messages = [
+            {"message_id": "m1", "sent_at": "2026-04-06T12:00:05Z"},
+            {"message_id": "m2", "sent_at": "2026-04-06T12:00:10Z"},
+        ]
+        result = _filter_new_messages(
+            messages=messages,
+            last_seen_timestamp="2026-04-06T12:00:00Z",
+            seen_ids={"m1"},
+        )
+        assert len(result) == 1
+        assert result[0]["message_id"] == "m2"
+
+    def test_overlap_window_catches_boundary(self) -> None:
+        """Messages within the 2s overlap window should be included (if not seen)."""
+        from openclaw.mcp_server import _overlap_timestamp
+
+        ts = "2026-04-06T12:00:10Z"
+        overlap_ts = _overlap_timestamp(ts)
+        assert overlap_ts == "2026-04-06T12:00:08Z"
+
+    def test_seen_set_cleanup(self) -> None:
+        """Seen-set should be pruned when it exceeds 500 entries."""
+        from openclaw.mcp_server import _prune_seen_set
+
+        seen = {f"msg-{i}" for i in range(501)}
+        now = datetime.now(UTC)
+        timestamps = {}
+        for i in range(501):
+            if i >= 451:
+                timestamps[f"msg-{i}"] = (
+                    now - timedelta(minutes=1)
+                ).isoformat()
+            else:
+                timestamps[f"msg-{i}"] = (
+                    now - timedelta(minutes=20)
+                ).isoformat()
+
+        pruned = _prune_seen_set(seen, timestamps)
+        assert len(pruned) <= 500
+        assert f"msg-{500}" in pruned

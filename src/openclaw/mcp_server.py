@@ -13,6 +13,7 @@ import json
 import logging
 import sys
 import time
+from datetime import UTC, datetime, timedelta
 
 from mcp.server.fastmcp import FastMCP
 
@@ -80,6 +81,61 @@ async def _with_token_retry(fn, **kwargs):
         return await fn(token=str(_state["token"]), **kwargs)
 
 
+OVERLAP_SECONDS = 2
+SEEN_SET_MAX = 500
+SEEN_SET_PRUNE_MINUTES = 10
+
+
+def _overlap_timestamp(iso_timestamp: str) -> str:
+    """Subtract OVERLAP_SECONDS from an ISO 8601 timestamp.
+
+    Used to create a query window that overlaps with the previous poll,
+    preventing message loss at timestamp boundaries (Learning #17).
+    """
+    dt = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
+    overlap_dt = dt - timedelta(seconds=OVERLAP_SECONDS)
+    return overlap_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _filter_new_messages(
+    messages: list[dict],
+    last_seen_timestamp: str | None,
+    seen_ids: set[str],
+) -> list[dict]:
+    """Return messages that are newer than cursor AND not already seen.
+
+    Applies the overlap-window pattern: messages with sent_at >= (cursor - 2s)
+    are candidates, then the seen-set filters duplicates from the overlap.
+    """
+    if not last_seen_timestamp:
+        return messages
+
+    overlap_ts = _overlap_timestamp(last_seen_timestamp)
+    return [
+        m
+        for m in messages
+        if m.get("sent_at", "") >= overlap_ts and m["message_id"] not in seen_ids
+    ]
+
+
+def _prune_seen_set(
+    seen_ids: set[str],
+    id_timestamps: dict[str, str],
+) -> set[str]:
+    """Prune the seen-set to only IDs from the last SEEN_SET_PRUNE_MINUTES.
+
+    Called when seen-set exceeds SEEN_SET_MAX entries to prevent memory leaks
+    in long-running polling sessions (Learning #20).
+    """
+    cutoff = datetime.now(UTC) - timedelta(minutes=SEEN_SET_PRUNE_MINUTES)
+    cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {
+        msg_id
+        for msg_id in seen_ids
+        if id_timestamps.get(msg_id, "") >= cutoff_str
+    }
+
+
 async def _initialize() -> None:
     """Acquire the Agent User token and set up the Teams chat.
 
@@ -113,6 +169,9 @@ async def _initialize() -> None:
 
     _state["token"] = token
     _state["token_acquired_at"] = time.monotonic()
+    _state["last_seen_timestamp"] = None
+    _state["seen_message_ids"] = set()
+    _state["seen_id_timestamps"] = {}  # message_id -> sent_at for pruning
     _state["config"] = config
 
     # Create / find the Teams chat (requires human user ID)
