@@ -22,12 +22,16 @@ TOTAL_STEPS=8
 # ── Argument parsing ───────────────────────────────────────────────────────
 
 SWITCH_USER=false
+TEAMS_USER_EMAIL=""
 SHOW_HELP=false
 
 for arg in "$@"; do
     case $arg in
         --switch-user)
             SWITCH_USER=true
+            ;;
+        --teams-user=*)
+            TEAMS_USER_EMAIL="${arg#--teams-user=}"
             ;;
         --help|-h)
             SHOW_HELP=true
@@ -43,9 +47,12 @@ if [ "$SHOW_HELP" = true ]; then
     echo "Usage: ./scripts/setup.sh [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --switch-user   Sign in as a different user before setup."
-    echo "                  The new user becomes the agent's owner and sponsor."
-    echo "  --help, -h      Show this help"
+    echo "  --switch-user          Sign in as a different user before setup."
+    echo "                         The new user becomes the agent's owner and sponsor."
+    echo "  --teams-user=EMAIL     Set a different user as the Teams chat recipient."
+    echo "                         The az CLI user remains the admin/provisioner."
+    echo "                         e.g., --teams-user=brandon@werner.ac"
+    echo "  --help, -h             Show this help"
     exit 0
 fi
 
@@ -152,9 +159,22 @@ if [ -z "$HUMAN_USER_ID" ]; then
     fail "Could not determine signed-in user ID. Ensure 'az login' is done with a user account."
 fi
 
+# If --teams-user was specified, resolve that user for Teams (separate from admin)
+if [ -n "$TEAMS_USER_EMAIL" ]; then
+    TEAMS_USER_ID=$(az ad user show --id "$TEAMS_USER_EMAIL" --query "id" -o tsv) || true
+    if [ -z "$TEAMS_USER_ID" ]; then
+        fail "Could not find Teams user '$TEAMS_USER_EMAIL' in Entra. Check the email address."
+    fi
+    HUMAN_UPN="$TEAMS_USER_EMAIL"
+    HUMAN_USER_ID="$TEAMS_USER_ID"
+    success "Admin:      $(az account show --query 'user.name' -o tsv) (provisioning)"
+    success "Teams user: $HUMAN_UPN ($HUMAN_USER_ID)"
+else
+    success "Human user: $HUMAN_UPN ($HUMAN_USER_ID)"
+fi
+
 success "Tenant:     $TENANT_ID"
 success "Account:    $ACCOUNT_NAME"
-success "Human user: $HUMAN_UPN ($HUMAN_USER_ID)"
 
 # ════════════════════════════════════════════════════════════════════════════
 # Step 3: Ensure Python dependencies for provisioning scripts
