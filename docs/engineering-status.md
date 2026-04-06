@@ -79,12 +79,22 @@ Researched 12+ MCP messaging servers (Slack, iMessage, Discord, Teams). Key find
 - **Token refresh is universal #1 pain point** — official Slack MCP had 18 re-auths in 5 days. Our three-hop flow is the most complex token lifecycle of any MCP messaging server studied (Learning #18)
 - **Delta queries deferred** — too much complexity upfront (`@removed` entries, change types). Start simple (Learning #21)
 
-### Known Unknowns (Will Discover During Implementation)
+### Known Unknowns (Will Discover During Testing)
 
 1. **Overlap window size** — 2s borrowed from iMessage/SQLite; Graph API latency may need 3-5s
 2. **Three-hop refresh behavior** — nobody else has refreshed a chained OBO flow mid-session
 3. **Agent User token + `$orderby`** — floriscornel uses MSAL delegated tokens; our `user_fic` grant may behave differently
 4. **Rate limiting thresholds** — undocumented for our endpoint + token type combination
+
+### Discovered Gap: The MCP "Close the Loop" Problem
+
+**The LLM doesn't automatically call `watch_teams_replies` after sending a message.** This is not a bug — it's a fundamental MCP protocol gap. The protocol is request-response; there is no mechanism for the server to wake up the LLM when new data arrives.
+
+**Industry status:** Nobody has solved this. We researched 12+ MCP messaging servers — all are fire-and-forget. The MCP Triggers & Events Working Group was chartered March 2026 with an RFC targeting April 2026. No solution exists in any major client today.
+
+**Our position:** We are ahead of the industry — the only MCP messaging server with a polling tool, token auto-refresh, and message dedup. When the WG ships its spec, we'll adopt it immediately.
+
+**Current workarounds:** PostToolUse hook with `additionalContext` to hint the LLM should poll. See `docs/platform-learnings/mcp-close-the-loop.md` for full research.
 
 ---
 
@@ -100,7 +110,7 @@ Researched 12+ MCP messaging servers (Slack, iMessage, Discord, Teams). Key find
 - MCP server auto-discovered via `.mcp.json`
 - `--teams-user` flag to set Teams recipient separately from admin
 - Teams read with null-from handling (system messages)
-- 21 hard-won learnings documented in runbooks (6 new from platform research)
+- 23 hard-won learnings documented in runbooks (8 new from platform research)
 - Bidirectional Teams polling loop with dedup + token refresh
 - Token auto-refresh: eager (55-min) + lazy (401 retry) for all tools
 - 429 rate limit handling propagates through polling tool

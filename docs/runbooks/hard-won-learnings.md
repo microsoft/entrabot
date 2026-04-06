@@ -184,6 +184,27 @@ Append-only log of gotchas, surprises, and non-obvious behaviors discovered duri
 **Fix:** Start with timestamp overlap + message ID seen-set (proven by iMessage servers, simpler). Defer delta queries as an optimization for when polling volume increases or timestamp approach proves insufficient.
 **Prevention:** Evaluate the full contract of an API before adopting it. Delta queries solve a different problem (bidirectional sync) than what we need (new message detection).
 
+### Learning #22: The MCP "Close the Loop" Problem — No Solution Exists in Any Major Client
+
+**Date:** 2026-04-06
+**Context:** After building `watch_teams_replies`, discovered the LLM doesn't call it automatically after `send_teams_message` — it says "done" and stops. Human's replies go into the void.
+**Problem:** MCP is request-response. The LLM drives all interaction. There is no mechanism for the server to wake up the LLM when new data arrives. This is not a bug in our implementation — it is a fundamental protocol gap.
+**Root cause:** LLMs are request-response systems. Message roles ("user", "assistant", "system") don't accommodate external events. There is no "tool_push" role. Even with perfect MCP notifications, something must inject a new "turn" into the conversation.
+**Industry status:** The MCP Triggers & Events Working Group was chartered March 24, 2026 (led by AWS + Anthropic). RFC "Events in MCP v1" targeting end of April 2026. No solution exists today.
+**What we tried:** Discord MCP sends JSON-RPC notifications — Claude Code ignores them. Resource subscriptions — closed as "not planned" (Issue #7252). Tasks primitive — no client supports it. Hook-based tool chaining — closed as "not planned" (Issue #4992).
+**Current workarounds:** (1) PostToolUse hook with `additionalContext` to hint the LLM should poll, (2) Stop hook with agent subagent to catch missed replies, (3) Desktop scheduled task for autonomous loops.
+**Prevention:** When the Triggers & Events WG ships its spec, adopt immediately. Our polling infrastructure (`watch_teams_replies`) already works — we just need to swap "LLM decides to poll" to "server pushes event."
+**See also:** `docs/platform-learnings/mcp-close-the-loop.md` for the full research with sources.
+
+### Learning #23: FastMCP Context Object Has Untapped Capabilities
+
+**Date:** 2026-04-06
+**Context:** Researching mechanisms for server-to-LLM communication within a tool call
+**Problem:** We needed to understand what FastMCP provides beyond basic tool return values.
+**Discovery:** FastMCP's `Context` object exposes: `ctx.sample()` (ask the LLM to generate text mid-tool), `ctx.elicit()` (request structured input), `ctx.report_progress()`, `ctx.set_state()`/`ctx.get_state()` (session state persistence), and `ctx.send_notification()` (for spec-defined notification types).
+**Implications:** `ctx.sample()` could theoretically let `watch_teams_replies` re-engage the LLM when a reply arrives — but this is untested with Claude Code's MCP client and likely unsupported. `ctx.set_state()`/`ctx.get_state()` could replace our manual `_state` dict for cursor and seen-set management in a future refactor.
+**Prevention:** Before building custom infrastructure, always check what the framework provides. FastMCP's Context is much richer than we initially used.
+
 ---
 
 ## Historical Learnings
