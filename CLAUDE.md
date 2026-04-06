@@ -9,6 +9,12 @@
 - Secrets and tokens never appear in logs — use `__repr__` overrides on sensitive fields
 - Test before committing — `pytest -v && ruff check .`
 - Token flows are separated by type — never mix OBO, device-code, and client-credentials logic
+- Never redirect stderr to /dev/null — errors must always be visible for debugging
+- Check every MSAL result for `"error"` key before accessing `"access_token"` — MSAL returns dicts, not exceptions
+- Never use `az rest` or Azure CLI tokens for Agent Identity APIs — they include `Directory.AccessAsUser.All` which causes hard 403
+- Always create BlueprintPrincipal explicitly after Blueprint — it is NOT auto-created
+- Agent IDs are service principals, not users — never create fake user accounts with passwords
+- Parse `az` CLI output as JSON, not TSV — TSV can be corrupted by warnings
 
 ## Current Runtime Model
 

@@ -9,6 +9,12 @@
 - Secrets and tokens never appear in logs — use `__repr__` overrides on sensitive fields
 - Test before committing — `pytest -v && ruff check .`
 - Token flows are separated by type — never mix OBO, device-code, and client-credentials logic
+- Never redirect stderr to /dev/null — errors must always be visible for debugging
+- Check every MSAL result for `"error"` key before accessing `"access_token"` — MSAL returns dicts, not exceptions
+- Never use `az rest` or Azure CLI tokens for Agent Identity APIs — they include `Directory.AccessAsUser.All` which causes hard 403
+- Always create BlueprintPrincipal explicitly after Blueprint — it is NOT auto-created
+- Agent IDs are service principals, not users — never create fake user accounts with passwords
+- Parse `az` CLI output as JSON, not TSV — TSV can be corrupted by warnings
 
 ## Current Runtime Model
 
@@ -53,3 +59,39 @@ pip install mkdocs-material && mkdocs serve
 - `src/openclaw/audit/`: Audit-first enforcement — events emitted before actions execute
 - `src/openclaw/teams/`: Bidirectional Teams communication via Graph API
 - `docs/decisions/`: ADRs — every significant architectural choice is recorded here
+
+## gstack
+
+This project uses gstack for enhanced AI workflows. **Use `/browse` for all web browsing — never use `mcp__claude-in-chrome__*` tools.**
+
+### Available skills
+
+`/office-hours`, `/plan-ceo-review`, `/plan-eng-review`, `/plan-design-review`, `/design-consultation`, `/design-shotgun`, `/design-html`, `/review`, `/ship`, `/land-and-deploy`, `/canary`, `/benchmark`, `/browse`, `/connect-chrome`, `/qa`, `/qa-only`, `/design-review`, `/setup-browser-cookies`, `/setup-deploy`, `/retro`, `/investigate`, `/document-release`, `/codex`, `/cso`, `/autoplan`, `/plan-devex-review`, `/devex-review`, `/careful`, `/freeze`, `/guard`, `/unfreeze`, `/gstack-upgrade`, `/learn`
+
+### Troubleshooting
+
+If gstack skills aren't working, rebuild:
+
+```bash
+cd .claude/skills/gstack && ./setup
+```
+
+## Skill routing
+
+When the user's request matches an available skill, ALWAYS invoke it using the Skill
+tool as your FIRST action. Do NOT answer directly, do NOT use other tools first.
+The skill has specialized workflows that produce better results than ad-hoc answers.
+
+Key routing rules:
+- Product ideas, "is this worth building", brainstorming → invoke office-hours
+- Bugs, errors, "why is this broken", 500 errors → invoke investigate
+- Ship, deploy, push, create PR → invoke ship
+- QA, test the site, find bugs → invoke qa
+- Code review, check my diff → invoke review
+- Update docs after shipping → invoke document-release
+- Weekly retro → invoke retro
+- Design system, brand → invoke design-consultation
+- Visual audit, design polish → invoke design-review
+- Architecture review → invoke plan-eng-review
+- Save progress, checkpoint, resume → invoke checkpoint
+- Code quality, health check → invoke health

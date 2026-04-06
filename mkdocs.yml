@@ -41,6 +41,7 @@ nav:
   - Reference:
     - OBO Token Flows: reference/obo-flows.md
   - Developer Guide:
+    - Engineering Status: engineering-status.md
     - QA Log: developer/qa-log.md
     - Docs Site: developer/docs-site.md
   - Runbooks:
