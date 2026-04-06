@@ -149,20 +149,25 @@ class TestAcquireAgentUserToken:
 
             acquire_agent_user_token(get_config())
 
-        # Hop 1: client_credentials
+        # Hop 1: client_credentials with fmi_path
         hop1_body = dict(x.split("=") for x in route.calls[0].request.content.decode().split("&"))
         assert hop1_body["grant_type"] == "client_credentials"
         assert hop1_body["client_id"] == "bp-id"
+        assert hop1_body["fmi_path"] == "agent-id"
 
-        # Hop 2: client_credentials with assertion
+        # Hop 2: client_credentials with T1 as assertion
         hop2_body = dict(x.split("=") for x in route.calls[1].request.content.decode().split("&"))
         assert hop2_body["grant_type"] == "client_credentials"
         assert hop2_body["client_id"] == "agent-id"
+        assert hop2_body["client_assertion"] == "bp-token"
 
-        # Hop 3: user_fic
+        # Hop 3: user_fic with T1 + T2
         hop3_body = dict(x.split("=") for x in route.calls[2].request.content.decode().split("&"))
         assert hop3_body["grant_type"] == "user_fic"
         assert hop3_body["user_id"] == "agent-user-oid"
+        assert hop3_body["client_assertion"] == "bp-token"
+        assert hop3_body["user_federated_identity_credential"] == "agent-id-token"
+        assert hop3_body["requested_token_use"] == "on_behalf_of"
 
 
 # ---------------------------------------------------------------------------

@@ -85,41 +85,50 @@ def acquire_agent_user_token(config: OpenclawConfig) -> str:
 
     url = _token_url(config.tenant_id)  # type: ignore[arg-type]
 
-    # Hop 1: Blueprint token via client_credentials
+    # Hop 1: Blueprint exchange token (T1) via client_credentials
+    # The Blueprint authenticates with its client_secret and requests a token
+    # scoped for Agent Identity impersonation (fmi_path=AgentIdentity).
     with httpx.Client() as client:
         hop1_resp = client.post(url, data={
             "client_id": config.blueprint_app_id,
-            "scope": "https://graph.microsoft.com/.default",
+            "scope": "api://AzureADTokenExchange/.default",
+            "fmi_path": config.agent_id,
             "grant_type": "client_credentials",
             "client_secret": config.blueprint_secret,
         })
-    blueprint_token = _check_token_response("hop1:blueprint", hop1_resp.json())
+    t1_token = _check_token_response("hop1:blueprint", hop1_resp.json())
 
-    # Hop 2: Agent Identity token via FIC exchange
+    # Hop 2: Agent Identity exchange token (T2)
+    # The Agent Identity presents T1 as its client assertion.
+    # Entra validates T1.aud == Agent Identity's parent (Blueprint).
     with httpx.Client() as client:
         hop2_resp = client.post(url, data={
             "client_id": config.agent_id,
             "scope": "api://AzureADTokenExchange/.default",
             "grant_type": "client_credentials",
             "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-            "client_assertion": blueprint_token,
+            "client_assertion": t1_token,
         })
-    agent_identity_token = _check_token_response("hop2:agent_identity", hop2_resp.json())
+    t2_token = _check_token_response("hop2:agent_identity", hop2_resp.json())
 
-    # Hop 3: Agent User token via user_fic grant
+    # Hop 3: Agent User resource token via user_fic grant
+    # Presents both T1 (client_assertion) and T2 (user_federated_identity_credential).
+    # Entra validates T2.aud == Agent Identity, then issues a delegated token
+    # with idtyp=user for the Agent User.
     with httpx.Client() as client:
         hop3_resp = client.post(url, data={
             "client_id": config.agent_id,
             "scope": "https://graph.microsoft.com/.default",
             "grant_type": "user_fic",
             "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-            "client_assertion": blueprint_token,
+            "client_assertion": t1_token,
             "user_id": config.agent_user_id,
-            "user_federated_identity_credential": agent_identity_token,
+            "user_federated_identity_credential": t2_token,
+            "requested_token_use": "on_behalf_of",
         })
-    agent_user_token = _check_token_response("hop3:agent_user", hop3_resp.json())
+    resource_token = _check_token_response("hop3:agent_user", hop3_resp.json())
 
-    return agent_user_token
+    return resource_token
 
 
 async def create_or_find_chat(
