@@ -19,6 +19,36 @@ set -euo pipefail
 
 TOTAL_STEPS=8
 
+# ── Argument parsing ───────────────────────────────────────────────────────
+
+OVERRIDE_HUMAN_USER=""
+SHOW_HELP=false
+
+for arg in "$@"; do
+    case $arg in
+        --human-user=*)
+            OVERRIDE_HUMAN_USER="${arg#--human-user=}"
+            ;;
+        --help|-h)
+            SHOW_HELP=true
+            ;;
+        *)
+            echo "ERROR: Unknown argument: $arg" >&2
+            SHOW_HELP=true
+            ;;
+    esac
+done
+
+if [ "$SHOW_HELP" = true ]; then
+    echo "Usage: ./scripts/setup.sh [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --human-user=EMAIL   Override the human user (default: signed-in az CLI user)"
+    echo "                       e.g., --human-user=brandon@other.com"
+    echo "  --help, -h           Show this help"
+    exit 0
+fi
+
 # ── Colored output helpers ──────────────────────────────────────────────────
 
 GREEN='\033[0;32m'
@@ -110,16 +140,26 @@ fi
 
 TENANT_ID=$(az account show --query "tenantId" -o tsv)
 ACCOUNT_NAME=$(az account show --query "name" -o tsv)
-HUMAN_UPN=$(az account show --query "user.name" -o tsv || echo "")
-HUMAN_USER_ID=$(az ad signed-in-user show --query "id" -o tsv || echo "")
 
-if [ -z "$HUMAN_USER_ID" ]; then
-    fail "Could not determine signed-in user ID. Ensure 'az login' is done with a user account."
+if [ -n "$OVERRIDE_HUMAN_USER" ]; then
+    HUMAN_UPN="$OVERRIDE_HUMAN_USER"
+    # Resolve UPN to object ID via Graph
+    HUMAN_USER_ID=$(az ad user show --id "$HUMAN_UPN" --query "id" -o tsv) || true
+    if [ -z "$HUMAN_USER_ID" ]; then
+        fail "Could not find user '$HUMAN_UPN' in Entra. Check the email address."
+    fi
+    success "Human user (override): $HUMAN_UPN ($HUMAN_USER_ID)"
+else
+    HUMAN_UPN=$(az account show --query "user.name" -o tsv || echo "")
+    HUMAN_USER_ID=$(az ad signed-in-user show --query "id" -o tsv || echo "")
+    if [ -z "$HUMAN_USER_ID" ]; then
+        fail "Could not determine signed-in user ID. Ensure 'az login' is done with a user account."
+    fi
+    success "Human user: $HUMAN_UPN ($HUMAN_USER_ID)"
 fi
 
 success "Tenant:     $TENANT_ID"
 success "Account:    $ACCOUNT_NAME"
-success "Human user: $HUMAN_UPN ($HUMAN_USER_ID)"
 
 # ════════════════════════════════════════════════════════════════════════════
 # Step 3: Ensure Python dependencies for provisioning scripts
