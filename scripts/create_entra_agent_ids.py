@@ -555,11 +555,28 @@ def assign_license_to_agent_user(token: str, agent_user_id: str) -> None:
     """
     print("\n--- License Assignment ---\n")
 
-    # Check if already licensed
-    existing = _check_existing_licenses(token, agent_user_id)
-    if existing:
-        print(f"  [skip] Agent User already has {len(existing)} license(s) assigned")
-        return
+    # Check if already licensed with a Teams-capable SKU
+    existing_sku_ids = _check_existing_licenses(token, agent_user_id)
+    if existing_sku_ids:
+        # Resolve SKU IDs to part numbers to check if any are Teams-capable
+        resp = graph_request("GET", "/subscribedSkus", token)
+        sku_id_to_name = {}
+        if resp.status_code == 200:
+            for sku in resp.json().get("value", []):
+                sku_id_to_name[sku["skuId"]] = sku.get("skuPartNumber", sku["skuId"])
+
+        existing_names = [sku_id_to_name.get(sid, sid) for sid in existing_sku_ids]
+        has_teams = any(name in TEAMS_CAPABLE_SKUS for name in existing_names)
+
+        if has_teams:
+            teams_name = next(n for n in existing_names if n in TEAMS_CAPABLE_SKUS)
+            print(f"  [skip] Agent User already has Teams-capable license: {teams_name}")
+            return
+        else:
+            print(f"  Agent User has {len(existing_sku_ids)} license(s) but none include Teams:")
+            for name in existing_names:
+                print(f"    - {name}")
+            print("  Will assign a Teams-capable license...")
 
     # Get available SKUs
     all_skus = _get_available_skus(token)
