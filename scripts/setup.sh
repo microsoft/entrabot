@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Openclaw Identity Research — one-command setup
-# Creates an Entra app registration, installs dependencies, writes .env
+# Creates an Entra app registration AND a dedicated Agent User,
+# assigns an M365 E3 license, installs dependencies, writes .env.
 # Idempotent: safe to re-run — detects existing resources and skips.
 set -euo pipefail
 
-TOTAL_STEPS=12
+TOTAL_STEPS=14
 APP_DISPLAY_NAME="Openclaw Agent"
 GRAPH_API_ID="00000003-0000-0000-c000-000000000000"
 
@@ -92,8 +93,25 @@ SUBSCRIPTION_ID=$(az account show --query "id" -o tsv)
 TENANT_ID=$(az account show --query "tenantId" -o tsv)
 ACCOUNT_NAME=$(az account show --query "name" -o tsv)
 
+# Discover the tenant's primary domain for UPN creation
+DOMAIN=$(az rest --method GET \
+    --uri "https://graph.microsoft.com/v1.0/domains" \
+    --query "value[?isDefault].id" -o tsv 2>/dev/null || echo "")
+if [ -z "$DOMAIN" ]; then
+    DOMAIN=$(az account show --query "tenantDefaultDomain" -o tsv 2>/dev/null || echo "")
+fi
+if [ -z "$DOMAIN" ]; then
+    fail "Could not discover tenant domain. Ensure you have directory read permissions."
+fi
+
+# Discover the signed-in human user's info
+HUMAN_UPN=$(az account show --query "user.name" -o tsv 2>/dev/null || echo "")
+HUMAN_USER_ID=$(az ad signed-in-user show --query "id" -o tsv 2>/dev/null || echo "")
+
 success "Subscription: $ACCOUNT_NAME ($SUBSCRIPTION_ID)"
 success "Tenant:       $TENANT_ID"
+success "Domain:       $DOMAIN"
+success "Human user:   $HUMAN_UPN ($HUMAN_USER_ID)"
 
 # ════════════════════════════════════════════════════════════════════════════
 # Step 3: Create / find Entra app registration
@@ -110,6 +128,7 @@ else
     APP_JSON=$(az ad app create \
         --display-name "$APP_DISPLAY_NAME" \
         --sign-in-audience AzureADMyOrg \
+        --is-fallback-public-client true \
         --enable-id-token-issuance true \
         --enable-access-token-issuance true \
         --query "{appId: appId, id: id}" -o json)
@@ -117,6 +136,13 @@ else
     OBJECT_ID=$(echo "$APP_JSON" | "$PYTHON" -c "import sys,json; print(json.load(sys.stdin)['id'])")
     success "Created app registration: $CLIENT_ID"
 fi
+
+# Enable ROPC (public client) for agent user token acquisition
+az rest --method PATCH \
+    --uri "https://graph.microsoft.com/v1.0/applications/$OBJECT_ID" \
+    --headers "Content-Type=application/json" \
+    --body '{"isFallbackPublicClient": true}' 2>/dev/null || true
+success "ROPC (public client) enabled"
 
 # ════════════════════════════════════════════════════════════════════════════
 # Step 4: Expose custom API scope (access_as_user)
@@ -242,9 +268,85 @@ keyring.set_password('openclaw', '$CLIENT_ID/client_secret', sys.argv[1])
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# Step 9: Create Python venv and install dependencies
+# Step 9: Create Agent User in Entra ID
 # ════════════════════════════════════════════════════════════════════════════
-step 9 "Setting up Python virtual environment"
+step 9 "Creating/finding Agent User"
+
+AGENT_UPN="openclaw-agent@$DOMAIN"
+AGENT_PASSWORD=""
+
+# Check if agent user already exists
+AGENT_USER_ID=$(az ad user list --filter "userPrincipalName eq '$AGENT_UPN'" \
+    --query "[0].id" -o tsv 2>/dev/null || echo "")
+
+if [ -n "$AGENT_USER_ID" ]; then
+    success "Agent user already exists: $AGENT_UPN ($AGENT_USER_ID)"
+    # Try to retrieve cached password
+    AGENT_PASSWORD=$("$PYTHON" -c "
+import keyring
+p = keyring.get_password('openclaw', 'agent_password')
+print(p or '')
+" 2>/dev/null) || true
+    if [ -z "$AGENT_PASSWORD" ]; then
+        # Reset the password so we have a known value
+        AGENT_PASSWORD="$(openssl rand -base64 16)!"
+        az ad user update --id "$AGENT_USER_ID" \
+            --password "$AGENT_PASSWORD" \
+            --force-change-password-next-sign-in false 2>/dev/null
+        success "Agent user password reset"
+    fi
+else
+    AGENT_PASSWORD="$(openssl rand -base64 16)!"
+    AGENT_USER_ID=$(az ad user create \
+        --display-name "Openclaw Agent" \
+        --user-principal-name "$AGENT_UPN" \
+        --password "$AGENT_PASSWORD" \
+        --force-change-password-next-sign-in false \
+        --query id -o tsv 2>/dev/null)
+    success "Created agent user: $AGENT_UPN ($AGENT_USER_ID)"
+fi
+
+# Cache agent password in OS credential store
+"$PYTHON" -c "
+import keyring, sys
+keyring.set_password('openclaw', 'agent_password', sys.argv[1])
+" "$AGENT_PASSWORD" 2>/dev/null || true
+
+# ════════════════════════════════════════════════════════════════════════════
+# Step 10: Assign M365 E3 license to Agent User
+# ════════════════════════════════════════════════════════════════════════════
+step 10 "Assigning M365 E3 license to Agent User"
+
+# Get the E3 SKU ID (ENTERPRISEPACK)
+E3_SKU=$(az rest --method GET \
+    --uri "https://graph.microsoft.com/v1.0/subscribedSkus" \
+    --query "value[?contains(skuPartNumber,'ENTERPRISEPACK')].skuId" -o tsv 2>/dev/null || echo "")
+
+if [ -z "$E3_SKU" ]; then
+    warn "No M365 E3 license (ENTERPRISEPACK) found in tenant"
+    warn "Agent user needs a Teams license to send messages"
+else
+    # Check if already assigned
+    HAS_LICENSE=$(az rest --method GET \
+        --uri "https://graph.microsoft.com/v1.0/users/$AGENT_USER_ID/licenseDetails" \
+        --query "value[?skuId=='$E3_SKU'].skuId" -o tsv 2>/dev/null || echo "")
+    if [ -n "$HAS_LICENSE" ]; then
+        success "E3 license already assigned"
+    else
+        if az rest --method POST \
+            --uri "https://graph.microsoft.com/v1.0/users/$AGENT_USER_ID/assignLicense" \
+            --body "{\"addLicenses\":[{\"skuId\":\"$E3_SKU\"}],\"removeLicenses\":[]}" 2>/dev/null; then
+            success "E3 license assigned to $AGENT_UPN"
+        else
+            warn "Could not assign E3 license — may need manual assignment"
+        fi
+    fi
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# Step 11: Create Python venv and install dependencies
+# ════════════════════════════════════════════════════════════════════════════
+step 11 "Setting up Python virtual environment"
 
 if [ ! -d ".venv" ]; then
     "$PYTHON" -m venv .venv
@@ -260,9 +362,9 @@ pip install --quiet -e ".[dev]"
 success "Installed dependencies (including dev)"
 
 # ════════════════════════════════════════════════════════════════════════════
-# Step 10: Write .env file
+# Step 12: Write .env file
 # ════════════════════════════════════════════════════════════════════════════
-step 10 "Writing .env configuration"
+step 12 "Writing .env configuration"
 
 cat > .env << EOF
 # Openclaw Identity Research — generated by scripts/setup.sh
@@ -272,6 +374,11 @@ OPENCLAW_TENANT_ID=$TENANT_ID
 OPENCLAW_CLIENT_ID=$CLIENT_ID
 OPENCLAW_CLIENT_SECRET=$CLIENT_SECRET
 OPENCLAW_SUBSCRIPTION_ID=$SUBSCRIPTION_ID
+OPENCLAW_AGENT_USER_ID=$AGENT_USER_ID
+OPENCLAW_AGENT_UPN=$AGENT_UPN
+OPENCLAW_AGENT_PASSWORD=$AGENT_PASSWORD
+OPENCLAW_HUMAN_USER_ID=$HUMAN_USER_ID
+OPENCLAW_HUMAN_UPN=$HUMAN_UPN
 OPENCLAW_LOG_LEVEL=INFO
 EOF
 
@@ -286,9 +393,9 @@ else
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# Step 11: Run tests
+# Step 13: Run tests
 # ════════════════════════════════════════════════════════════════════════════
-step 11 "Running tests"
+step 13 "Running tests"
 
 if pytest -v --tb=short 2>&1; then
     success "All tests passed"
@@ -297,9 +404,9 @@ else
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# Step 12: Print next steps
+# Step 14: Print next steps
 # ════════════════════════════════════════════════════════════════════════════
-step 12 "Setup complete — next steps"
+step 14 "Setup complete — next steps"
 
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
@@ -325,10 +432,13 @@ echo -e "  2. Launch Copilot CLI:"
 echo ""
 echo -e "     ${BLUE}copilot${NC}"
 echo ""
-echo -e "  3. Available tools:"
+echo -e "  3. Available tools (pre-authenticated — no bootstrap needed):"
 echo ""
-echo -e "     ${GREEN}openclaw_bootstrap${NC}     — authenticate and get an agent identity"
-echo -e "     ${GREEN}openclaw_teams_connect${NC} — connect to Teams"
-echo -e "     ${GREEN}openclaw_teams_send${NC}    — send a message"
+echo -e "     ${GREEN}openclaw_whoami${NC}         — show agent identity and status"
+echo -e "     ${GREEN}openclaw_teams_send${NC}    — send a message as the agent"
+echo -e "     ${GREEN}openclaw_teams_read${NC}    — read messages from the human"
 echo -e "     ${GREEN}openclaw_audit_log${NC}     — record an audit event"
+echo ""
+echo -e "  Agent User: ${BLUE}$AGENT_UPN${NC}"
+echo -e "  Human User: ${BLUE}$HUMAN_UPN${NC}"
 echo ""

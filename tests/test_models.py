@@ -1,9 +1,9 @@
-"""Tests for Pydantic domain models — especially token redaction."""
+"""Tests for Pydantic domain models — especially token/credential redaction."""
 
 from openclaw.models import (
+    AgentCredentials,
     AgentIdentity,
     AuditEvent,
-    BootstrapResult,
     TeamsChat,
     TeamsMessage,
     TokenResult,
@@ -36,6 +36,48 @@ class TestTokenRedaction:
         assert "secret" not in formatted
 
 
+class TestAgentCredentials:
+    """AgentCredentials must redact the password in repr/str."""
+
+    def test_repr_redacts_password(self) -> None:
+        creds = AgentCredentials(
+            agent_upn="agent@example.com",
+            agent_password="super-secret-pass",
+            client_id="cid",
+            tenant_id="tid",
+        )
+        assert "super-secret-pass" not in repr(creds)
+        assert "***REDACTED***" in repr(creds)
+
+    def test_str_redacts_password(self) -> None:
+        creds = AgentCredentials(
+            agent_upn="agent@example.com",
+            agent_password="super-secret-pass",
+            client_id="cid",
+            tenant_id="tid",
+        )
+        assert "super-secret-pass" not in str(creds)
+
+    def test_password_still_accessible_via_field(self) -> None:
+        creds = AgentCredentials(
+            agent_upn="a@e.com",
+            agent_password="my-pass",
+            client_id="c",
+            tenant_id="t",
+        )
+        assert creds.agent_password == "my-pass"
+
+    def test_f_string_redacts(self) -> None:
+        creds = AgentCredentials(
+            agent_upn="a@e.com",
+            agent_password="secret",
+            client_id="c",
+            tenant_id="t",
+        )
+        formatted = f"creds = {creds}"
+        assert "secret" not in formatted
+
+
 class TestAgentIdentity:
     def test_defaults(self) -> None:
         ai = AgentIdentity(
@@ -57,15 +99,6 @@ class TestAgentIdentity:
         data = ai.model_dump()
         rebuilt = AgentIdentity(**data)
         assert rebuilt == ai
-
-
-class TestBootstrapResult:
-    def test_optional_chat_id(self) -> None:
-        br = BootstrapResult(
-            agent_identity=AgentIdentity(agent_id="a", client_id="c", tenant_id="t", object_id="o"),
-            token_result=TokenResult(access_token="tok"),
-        )
-        assert br.chat_id is None
 
 
 class TestAuditEvent:

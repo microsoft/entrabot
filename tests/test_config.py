@@ -13,6 +13,11 @@ class TestOpenclawConfig:
         assert cfg.tenant_id is None
         assert cfg.client_id is None
         assert cfg.client_secret is None
+        assert cfg.agent_user_id is None
+        assert cfg.agent_upn is None
+        assert cfg.agent_password is None
+        assert cfg.human_user_id is None
+        assert cfg.human_upn is None
         assert cfg.log_level == "INFO"
         assert cfg.log_dir == Path.home() / ".openclaw" / "logs"
         assert cfg.audit_dir == Path.home() / ".openclaw" / "audit"
@@ -23,6 +28,11 @@ class TestOpenclawConfig:
             "OPENCLAW_TENANT_ID": "my-tenant",
             "OPENCLAW_CLIENT_ID": "my-client",
             "OPENCLAW_CLIENT_SECRET": "my-secret",
+            "OPENCLAW_AGENT_USER_ID": "agent-uid",
+            "OPENCLAW_AGENT_UPN": "agent@example.com",
+            "OPENCLAW_AGENT_PASSWORD": "agent-pass",
+            "OPENCLAW_HUMAN_USER_ID": "human-uid",
+            "OPENCLAW_HUMAN_UPN": "human@example.com",
             "OPENCLAW_LOG_LEVEL": "DEBUG",
             "OPENCLAW_LOG_DIR": "/custom/logs",
             "OPENCLAW_AUDIT_DIR": "/custom/audit",
@@ -33,6 +43,11 @@ class TestOpenclawConfig:
         assert cfg.tenant_id == "my-tenant"
         assert cfg.client_id == "my-client"
         assert cfg.client_secret == "my-secret"
+        assert cfg.agent_user_id == "agent-uid"
+        assert cfg.agent_upn == "agent@example.com"
+        assert cfg.agent_password == "agent-pass"
+        assert cfg.human_user_id == "human-uid"
+        assert cfg.human_upn == "human@example.com"
         assert cfg.log_level == "DEBUG"
         assert cfg.log_dir == Path("/custom/logs")
         assert cfg.audit_dir == Path("/custom/audit")
@@ -44,6 +59,7 @@ class TestOpenclawConfig:
         with patch.dict(os.environ, cleaned, clear=True):
             cfg = OpenclawConfig.from_env()
         assert cfg.tenant_id is None
+        assert cfg.agent_upn is None
         assert cfg.log_level == "INFO"
 
     def test_frozen(self) -> None:

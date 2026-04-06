@@ -1,7 +1,8 @@
 """Pydantic models for Openclaw domain objects.
 
-SECURITY: TokenResult.__repr__ is overridden so access_token and
-refresh_token values are NEVER exposed in logs or debug output.
+SECURITY: TokenResult.__repr__ is overridden so access_token,
+refresh_token, and password values are NEVER exposed in logs or
+debug output.
 """
 
 from __future__ import annotations
@@ -44,12 +45,24 @@ class TokenResult(BaseModel):
         return self.__repr__()
 
 
-class BootstrapResult(BaseModel):
-    """Result of the full bootstrap flow."""
+class AgentCredentials(BaseModel):
+    """Credentials for the agent user. Secrets are REDACTED in repr/str."""
 
-    agent_identity: AgentIdentity
-    token_result: TokenResult
-    chat_id: str | None = None
+    agent_upn: str
+    agent_password: str
+    client_id: str
+    tenant_id: str
+
+    def __repr__(self) -> str:
+        return (
+            f"AgentCredentials(agent_upn={self.agent_upn!r}, "
+            f"agent_password='***REDACTED***', "
+            f"client_id={self.client_id!r}, "
+            f"tenant_id={self.tenant_id!r})"
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
 
 
 class AuditEvent(BaseModel):
