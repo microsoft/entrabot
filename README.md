@@ -8,11 +8,78 @@ Research project for securing agentic workflows on local devices (Mac/Linux/Wind
 
 ## Getting Started
 
+### Prerequisites
+
+- Azure CLI (`az`) logged in with admin access to your Entra tenant
+- Python 3.12+
+- Git
+
+### One-Command Setup
+
 ```bash
-python -m venv .venv
-source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+./scripts/setup.sh
+```
+
+This script will:
+
+1. Create an Entra app registration with the correct permissions
+2. Set up Graph API scopes for Teams integration
+3. Install Python dependencies
+4. Save configuration to `.env`
+5. Run tests to verify everything works
+
+The script is **idempotent** — safe to re-run at any time. It detects existing resources and skips creation.
+
+### Run the MCP Server
+
+After setup, add Openclaw to your Copilot CLI config:
+
+```jsonc
+// Add to ~/.copilot/mcp-config.json
+{
+  "mcpServers": {
+    "openclaw": {
+      "command": "python3.12",
+      "args": ["-m", "openclaw.mcp_server"],
+      "cwd": "/path/to/openclaw-identity-research",
+      "env": {}
+    }
+  }
+}
+```
+
+The server loads configuration from `.env` automatically.
+
+Then launch Copilot CLI:
+
+```bash
+copilot
+```
+
+And use the tools:
+
+- `openclaw_bootstrap` — authenticate and get an agent identity
+- `openclaw_teams_connect` — connect to Teams
+- `openclaw_teams_send` — send a message
+- `openclaw_audit_log` — record an audit event
+
+### Manual Setup (without Azure)
+
+If you just want to run the code and tests without an Entra tenant:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 pytest -v
+```
+
+### Teardown
+
+To remove the Entra app registration and all cached credentials:
+
+```bash
+./scripts/teardown.sh
 ```
 
 ### Software Dependencies
@@ -64,6 +131,7 @@ ruff format .
 | `docs/` | Documentation site (MkDocs Material) |
 | `docs/platform-learnings/` | Deep research on all integration platforms |
 | `docs/proposals.md` | Architecture proposals (9 proposals across 3 OSes) |
+| `scripts/` | Setup and teardown automation |
 | `.github/` | CI workflows and Copilot instructions |
 
 ## Contribute
