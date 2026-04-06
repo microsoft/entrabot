@@ -30,6 +30,9 @@ nav:
   - Architecture:
     - System Overview: architecture/system-overview.md
     - Enforcement Flow: architecture/enforcement-flow.md
+    - "Next: Tenant & Identity Setup": architecture/next-tenant-identity-setup.md
+    - "Next: MCP Server Design": architecture/next-mcp-server-design.md
+    - "Next: Windows Dev Environment": architecture/next-windows-dev-environment.md
     - Layers:
       - Platform Abstraction: architecture/layers/platform.md
       - Auth & Token Flows: architecture/layers/auth.md
