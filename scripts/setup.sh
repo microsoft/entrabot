@@ -274,12 +274,15 @@ if [ -z "$AGENT_USER_ID" ]; then
     echo ""
 fi
 
+AGENT_LICENSE=$(read_state "AGENT_USER_LICENSE_SKU")
+if [ -n "$AGENT_LICENSE" ]; then
+    echo -e "  License:     ${BLUE}$AGENT_LICENSE${NC} (Teams provisioning in 10-15 min)"
+fi
+
 echo -e "  ${YELLOW}NEXT STEPS:${NC}"
-echo -e "  1. Assign a Teams-capable M365 license (E3/E5/Teams Enterprise)"
-echo -e "     to the Agent User in the Entra admin center"
-echo -e "  2. Wait 10-15 min for Teams/mailbox provisioning"
-echo -e "  3. Run tests: ${BLUE}pytest -v${NC}"
-echo -e "  4. Start the MCP server via Copilot CLI config:"
+echo -e "  1. Wait 10-15 min for Teams/mailbox provisioning (if license was just assigned)"
+echo -e "  2. Run tests: ${BLUE}pytest -v${NC}"
+echo -e "  3. Start the MCP server via Copilot CLI config:"
 echo ""
 echo -e "     ${BLUE}~/.copilot/mcp-config.json${NC}"
 echo ""
