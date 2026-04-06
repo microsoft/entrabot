@@ -35,6 +35,7 @@ mcp = FastMCP(
         "Available tools:\n"
         "- send_teams_message: Message/notify/tell the human via Teams\n"
         "- read_teams_messages: Check for replies from the human in Teams\n"
+        "- watch_teams_replies: Wait for the human to reply in Teams\n"
         "- whoami: Check your agent identity and Teams connection\n"
         "- audit_log: Record what you're about to do (call before actions)\n\n"
         "When asked to 'message someone', 'notify someone', 'tell someone', "
@@ -262,6 +263,107 @@ async def read_teams_messages(count: int = 5) -> str:
         count=count,
     )
     return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def watch_teams_replies(timeout: int = 30, interval: int = 5) -> str:
+    """Poll Teams for new replies from the human. Returns when new messages
+    arrive or after timeout seconds. Uses server-side cursor to track what's
+    been seen — only returns genuinely new human messages.
+
+    Call this in a loop to maintain a bidirectional conversation with the
+    human via Teams. The agent sends via send_teams_message, then calls
+    this tool to wait for the human's reply.
+
+    Args:
+        timeout: Max seconds to poll before returning empty (default 30).
+        interval: Seconds between poll iterations (default 5).
+
+    Returns:
+        JSON with messages (list), timed_out (bool), and poll_count (int).
+    """
+    import asyncio
+
+    await _initialize()
+    from openclaw.tools.teams import filter_human_messages, read
+
+    chat_id = _state.get("chat_id")
+    if not chat_id:
+        return json.dumps({"error": "Teams chat not established. Check setup."})
+
+    config = _state["config"]
+    agent_display_name = config.agent_user_upn or "Openclaw Agent"
+
+    # Bootstrap cursor on first call: fetch latest messages, set cursor to newest
+    if _state.get("last_seen_timestamp") is None:
+        await _ensure_valid_token()
+        bootstrap_msgs = await _with_token_retry(
+            read, chat_id=str(chat_id), count=10,
+        )
+        if bootstrap_msgs:
+            newest = max(bootstrap_msgs, key=lambda m: m.get("sent_at", ""))
+            _state["last_seen_timestamp"] = newest["sent_at"]
+            for m in bootstrap_msgs:
+                _state["seen_message_ids"].add(m["message_id"])
+                _state["seen_id_timestamps"][m["message_id"]] = m.get("sent_at", "")
+
+    start = time.monotonic()
+    poll_count = 0
+
+    while True:
+        poll_count += 1
+        await _ensure_valid_token()
+
+        raw_messages = await _with_token_retry(
+            read, chat_id=str(chat_id), count=10,
+        )
+
+        # Client-side filtering: human only, then dedup
+        human_msgs = filter_human_messages(raw_messages, agent_display_name)
+        new_msgs = _filter_new_messages(
+            human_msgs,
+            _state.get("last_seen_timestamp"),
+            _state["seen_message_ids"],
+        )
+
+        if new_msgs:
+            # Advance cursor and update seen-set
+            newest = max(new_msgs, key=lambda m: m.get("sent_at", ""))
+            _state["last_seen_timestamp"] = newest["sent_at"]
+            for m in new_msgs:
+                _state["seen_message_ids"].add(m["message_id"])
+                _state["seen_id_timestamps"][m["message_id"]] = m.get("sent_at", "")
+
+            # Bounded cleanup
+            if len(_state["seen_message_ids"]) > SEEN_SET_MAX:
+                _state["seen_message_ids"] = _prune_seen_set(
+                    _state["seen_message_ids"],
+                    _state["seen_id_timestamps"],
+                )
+                _state["seen_id_timestamps"] = {
+                    k: v
+                    for k, v in _state["seen_id_timestamps"].items()
+                    if k in _state["seen_message_ids"]
+                }
+
+            # Return newest-last (Graph returns newest-first)
+            new_msgs.sort(key=lambda m: m.get("sent_at", ""))
+            return json.dumps({
+                "messages": new_msgs,
+                "timed_out": False,
+                "poll_count": poll_count,
+            }, indent=2)
+
+        elapsed = time.monotonic() - start
+        if elapsed >= timeout:
+            return json.dumps({
+                "messages": [],
+                "timed_out": True,
+                "poll_count": poll_count,
+            }, indent=2)
+
+        if interval > 0:
+            await asyncio.sleep(interval)
 
 
 @mcp.tool()

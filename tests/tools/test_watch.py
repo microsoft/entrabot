@@ -343,3 +343,166 @@ class TestDedupHelpers:
         pruned = _prune_seen_set(seen, timestamps)
         assert len(pruned) <= 500
         assert f"msg-{500}" in pruned
+
+
+class TestWatchTeamsReplies:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_returns_new_human_messages(self) -> None:
+        """Should return only new human messages, not agent or system messages."""
+        from openclaw import mcp_server
+
+        respx.get(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            side_effect=[
+                # First call: bootstrap — sets cursor
+                httpx.Response(200, json={"value": [
+                    {
+                        "id": "old-1",
+                        "from": {"user": {"displayName": "Human"}},
+                        "body": {"content": "old msg"},
+                        "createdDateTime": "2026-04-06T11:59:00Z",
+                    },
+                ]}),
+                # Second call: new messages
+                httpx.Response(200, json={"value": [
+                    {
+                        "id": "new-1",
+                        "from": {"user": {"displayName": "Human"}},
+                        "body": {"content": "do something"},
+                        "createdDateTime": "2026-04-06T12:00:05Z",
+                    },
+                    {
+                        "id": "agent-1",
+                        "from": {"user": {"displayName": "Openclaw Agent"}},
+                        "body": {"content": "sure thing"},
+                        "createdDateTime": "2026-04-06T12:00:06Z",
+                    },
+                ]}),
+            ]
+        )
+
+        mock_acquire = MagicMock(return_value="token")
+        mock_config = MagicMock()
+        mock_config.agent_user_upn = "Openclaw Agent"
+
+        old_state = mcp_server._state.copy()
+        try:
+            mcp_server._state.update({
+                "initialized": True,
+                "token": "token",
+                "config": mock_config,
+                "chat_id": "c1",
+                "token_acquired_at": time.monotonic(),
+                "last_seen_timestamp": None,
+                "seen_message_ids": set(),
+                "seen_id_timestamps": {},
+            })
+
+            with patch("openclaw.mcp_server.acquire_agent_user_token", mock_acquire):
+                result_json = await mcp_server.watch_teams_replies(timeout=5, interval=0)
+
+            result = json.loads(result_json)
+            assert result["timed_out"] is False
+            assert len(result["messages"]) == 1
+            assert result["messages"][0]["message_id"] == "new-1"
+            assert result["messages"][0]["content"] == "do something"
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_timeout_returns_empty(self) -> None:
+        """Should return timed_out=true when no new messages arrive."""
+        from openclaw import mcp_server
+
+        respx.get(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            return_value=httpx.Response(200, json={"value": [
+                {
+                    "id": "old-1",
+                    "from": {"user": {"displayName": "Human"}},
+                    "body": {"content": "old"},
+                    "createdDateTime": "2026-04-06T11:59:00Z",
+                },
+            ]})
+        )
+
+        mock_config = MagicMock()
+        mock_config.agent_user_upn = "Openclaw Agent"
+
+        old_state = mcp_server._state.copy()
+        try:
+            mcp_server._state.update({
+                "initialized": True,
+                "token": "token",
+                "config": mock_config,
+                "chat_id": "c1",
+                "token_acquired_at": time.monotonic(),
+                "last_seen_timestamp": None,
+                "seen_message_ids": set(),
+                "seen_id_timestamps": {},
+            })
+
+            with patch("openclaw.mcp_server.acquire_agent_user_token", MagicMock()):
+                result_json = await mcp_server.watch_teams_replies(timeout=1, interval=0)
+
+            result = json.loads(result_json)
+            assert result["timed_out"] is True
+            assert result["messages"] == []
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_cursor_advances(self) -> None:
+        """After returning messages, cursor should advance to newest timestamp."""
+        from openclaw import mcp_server
+
+        respx.get(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            side_effect=[
+                # Bootstrap call
+                httpx.Response(200, json={"value": [
+                    {
+                        "id": "m0",
+                        "from": {"user": {"displayName": "Human"}},
+                        "body": {"content": "seed"},
+                        "createdDateTime": "2026-04-06T11:59:00Z",
+                    },
+                ]}),
+                # First watch: new message
+                httpx.Response(200, json={"value": [
+                    {
+                        "id": "m1",
+                        "from": {"user": {"displayName": "Human"}},
+                        "body": {"content": "first"},
+                        "createdDateTime": "2026-04-06T12:00:05Z",
+                    },
+                ]}),
+            ]
+        )
+
+        mock_config = MagicMock()
+        mock_config.agent_user_upn = "Openclaw Agent"
+
+        old_state = mcp_server._state.copy()
+        try:
+            mcp_server._state.update({
+                "initialized": True,
+                "token": "token",
+                "config": mock_config,
+                "chat_id": "c1",
+                "token_acquired_at": time.monotonic(),
+                "last_seen_timestamp": None,
+                "seen_message_ids": set(),
+                "seen_id_timestamps": {},
+            })
+
+            with patch("openclaw.mcp_server.acquire_agent_user_token", MagicMock()):
+                await mcp_server.watch_teams_replies(timeout=5, interval=0)
+
+            assert mcp_server._state["last_seen_timestamp"] == "2026-04-06T12:00:05Z"
+            assert "m1" in mcp_server._state["seen_message_ids"]
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
