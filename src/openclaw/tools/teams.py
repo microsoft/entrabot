@@ -285,3 +285,22 @@ async def read(
             }
             for m in messages
         ]
+
+
+def filter_human_messages(
+    messages: list[dict],
+    agent_user_display_name: str,
+) -> list[dict]:
+    """Return only messages from the human (not the agent, not system messages).
+
+    Filters out:
+    - Messages where ``from`` matches the agent's display name
+    - Messages where ``from`` is ``"unknown"`` (system messages with null from field)
+
+    All filtering is client-side — Graph API ``$filter`` is unreliable for chat messages.
+    """
+    return [
+        m
+        for m in messages
+        if m.get("from") not in (agent_user_display_name, "unknown")
+    ]
