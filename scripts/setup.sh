@@ -256,10 +256,19 @@ success "Propagation wait complete"
 step 10 "Creating provisioner client secret"
 
 echo "  Creating new client secret on provisioner app..."
-PROV_SECRET=$(az ad app credential reset \
+PROV_CRED_JSON=$(az ad app credential reset \
     --id "$PROV_CLIENT_ID" \
     --display-name "Openclaw Setup" \
-    --query "password" -o tsv)
+    -o json 2>/dev/null)
+
+PROV_SECRET=$("$PYTHON" -c "import sys,json; print(json.loads('''$PROV_CRED_JSON''')['password'])" 2>/dev/null)
+if [ -z "$PROV_SECRET" ]; then
+    # Fallback: try extracting with --query
+    PROV_SECRET=$(az ad app credential reset \
+        --id "$PROV_CLIENT_ID" \
+        --display-name "Openclaw Setup Retry" \
+        --query "password" -o tsv 2>/dev/null)
+fi
 
 if [ -z "$PROV_SECRET" ]; then
     fail "Could not create provisioner client secret"
@@ -271,18 +280,28 @@ success "Provisioner client secret created"
 # ════════════════════════════════════════════════════════════════════════════
 step 11 "Acquiring provisioner token via ClientSecretCredential"
 
-# Ensure azure-identity is available
-"$PYTHON" -m pip install --quiet azure-identity 2>/dev/null || true
+# Ensure azure-identity is available — install in project venv if it exists, else system
+if [ -d "$PROJECT_ROOT/.venv" ]; then
+    VENV_PYTHON="$PROJECT_ROOT/.venv/bin/python3"
+    "$VENV_PYTHON" -m pip install --quiet azure-identity 2>/dev/null || true
+    TOKEN_PYTHON="$VENV_PYTHON"
+else
+    "$PYTHON" -m pip install --quiet azure-identity 2>/dev/null || true
+    TOKEN_PYTHON="$PYTHON"
+fi
 
-PROV_TOKEN=$("$PYTHON" -c "
+PROV_TOKEN=$("$TOKEN_PYTHON" -c "
 from azure.identity import ClientSecretCredential
 cred = ClientSecretCredential('$TENANT_ID', '$PROV_CLIENT_ID', '$PROV_SECRET')
 token = cred.get_token('https://graph.microsoft.com/.default')
 print(token.token)
-" 2>/dev/null) || true
+" 2>&1)
+TOKEN_EXIT=$?
 
-if [ -z "$PROV_TOKEN" ]; then
-    fail "Could not acquire provisioner token. Permissions may not have propagated yet."
+if [ $TOKEN_EXIT -ne 0 ] || [ -z "$PROV_TOKEN" ]; then
+    echo "  Token acquisition error output:"
+    echo "  $PROV_TOKEN" | head -5
+    fail "Could not acquire provisioner token. Check errors above."
 fi
 success "Provisioner token acquired via client_credentials flow"
 
@@ -544,10 +563,17 @@ if [ -n "$CACHED_SECRET" ]; then
     BLUEPRINT_SECRET="$CACHED_SECRET"
 else
     echo "  Creating new client secret on Blueprint..."
-    BLUEPRINT_SECRET=$(az ad app credential reset \
+    BP_CRED_JSON=$(az ad app credential reset \
         --id "$BLUEPRINT_OBJECT_ID" \
         --display-name "Openclaw Device" \
-        --query "password" -o tsv)
+        -o json 2>/dev/null)
+    BLUEPRINT_SECRET=$("$PYTHON" -c "import sys,json; print(json.loads('''$BP_CRED_JSON''')['password'])" 2>/dev/null)
+    if [ -z "$BLUEPRINT_SECRET" ]; then
+        BLUEPRINT_SECRET=$(az ad app credential reset \
+            --id "$BLUEPRINT_OBJECT_ID" \
+            --display-name "Openclaw Device Retry" \
+            --query "password" -o tsv 2>/dev/null)
+    fi
 
     if [ -z "$BLUEPRINT_SECRET" ]; then
         fail "Could not create Blueprint client secret"
