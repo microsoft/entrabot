@@ -24,15 +24,19 @@ logger: logging.Logger | None = None
 mcp = FastMCP(
     "Openclaw Agent Identity",
     instructions=(
-        "Openclaw gives you a real Microsoft Entra Agent Identity with its own "
-        "Teams presence. Authentication is AUTOMATIC — you do NOT need credentials, "
-        "tokens, .env files, or any setup. Just call the tools directly.\n\n"
+        "You have a real Microsoft Teams identity via the Openclaw Agent User. "
+        "Authentication is AUTOMATIC. Just call the tools — no credentials needed.\n\n"
+        "IMPORTANT: When the user asks you to message, notify, tell, ping, or contact "
+        "someone, USE the send_teams_message tool. The recipient is pre-configured — "
+        "you only need to provide the message text.\n\n"
         "Available tools:\n"
-        "- openclaw_whoami: Check your agent identity and Teams connection status\n"
-        "- openclaw_teams_send: Send a Teams message to the human user\n"
-        "- openclaw_teams_read: Read recent Teams messages from the human\n"
-        "- openclaw_audit_log: Record an audit event before taking an action\n\n"
-        "Start by calling openclaw_whoami to verify your identity is active."
+        "- send_teams_message: Message/notify/tell the human via Teams\n"
+        "- read_teams_messages: Check for replies from the human in Teams\n"
+        "- whoami: Check your agent identity and Teams connection\n"
+        "- audit_log: Record what you're about to do (call before actions)\n\n"
+        "When asked to 'message someone', 'notify someone', 'tell someone', "
+        "'send a message', 'ping someone', or 'let someone know' — "
+        "use send_teams_message. The recipient is already configured."
     ),
 )
 
@@ -94,14 +98,21 @@ async def _initialize() -> None:
 
 
 @mcp.tool()
-async def openclaw_teams_send(message: str, content_type: str = "text") -> str:
-    """Send a message to the human user in Microsoft Teams. Authentication is
-    automatic — just provide the message text and call this tool. No credentials
-    or setup needed from the caller.
+async def send_teams_message(message: str, content_type: str = "text") -> str:
+    """Send a message to the human user via Microsoft Teams. Use this tool
+    whenever the user asks you to message, notify, tell, ping, or contact
+    someone. The recipient is pre-configured — just provide the message text.
 
-    The message is sent FROM the Openclaw Agent User identity (a real Teams
-    user), not the human. The human will see it as a message from "Openclaw Agent"
-    in their Teams chat.
+    Authentication is automatic. No credentials, tokens, or email addresses
+    needed from the caller. Just call this tool with your message.
+
+    Examples of when to use this tool:
+    - "message brandon@werner.ac" → call this tool
+    - "tell the user I'm done" → call this tool
+    - "notify them about the build" → call this tool
+    - "send a Teams message" → call this tool
+    - "ping brandon" → call this tool
+    - "let them know" → call this tool
 
     Args:
         message: The text to send.
@@ -131,12 +142,11 @@ async def openclaw_teams_send(message: str, content_type: str = "text") -> str:
 
 
 @mcp.tool()
-async def openclaw_teams_read(count: int = 5) -> str:
-    """Read recent messages from the human in the Teams chat. Authentication is
-    automatic — just call this tool. No credentials or setup needed from the caller.
+async def read_teams_messages(count: int = 5) -> str:
+    """Read recent messages from the human in Microsoft Teams. Use this to
+    check for replies, commands, or responses from the human user.
 
-    Returns the most recent messages in the 1:1 chat between the Openclaw Agent
-    User and the human, newest first.
+    Authentication is automatic. No credentials needed. Just call this tool.
 
     Args:
         count: Number of messages to return (default 5, max ~50).
@@ -164,7 +174,7 @@ async def openclaw_teams_read(count: int = 5) -> str:
 
 
 @mcp.tool()
-def openclaw_audit_log(
+def audit_log(
     action: str,
     resource: str,
     outcome: str = "success",
@@ -200,22 +210,20 @@ def openclaw_audit_log(
 
 
 @mcp.tool()
-async def openclaw_whoami() -> str:
+async def whoami() -> str:
     """Show the current agent identity, Teams connection status, and permissions.
-    Call this first to verify the agent is authenticated and connected.
+    Call this to verify the agent is authenticated and connected to Teams.
 
-    Authentication is automatic — no credentials needed. Returns the agent's
-    identity details including tenant, blueprint, agent ID, and whether the
-    Teams chat is active.
+    Authentication is automatic — no credentials needed.
 
     Returns:
         JSON with agent identity details and connection status.
     """
     await _initialize()
-    from openclaw.tools.identity import whoami
+    from openclaw.tools.identity import whoami as _whoami
 
     token = _state.get("token")
-    result = await whoami(token=str(token) if token else None)
+    result = await _whoami(token=str(token) if token else None)
     result["teams_chat_id"] = _state.get("chat_id", "not_connected")
     return json.dumps(result, indent=2)
 
