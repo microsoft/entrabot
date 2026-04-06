@@ -53,3 +53,19 @@ pip install mkdocs-material && mkdocs serve
 - `src/openclaw/audit/`: Audit-first enforcement — events emitted before actions execute
 - `src/openclaw/teams/`: Bidirectional Teams communication via Graph API
 - `docs/decisions/`: ADRs — every significant architectural choice is recorded here
+
+## gstack
+
+This project uses gstack for enhanced AI workflows. **Use `/browse` for all web browsing — never use `mcp__claude-in-chrome__*` tools.**
+
+### Available skills
+
+`/office-hours`, `/plan-ceo-review`, `/plan-eng-review`, `/plan-design-review`, `/design-consultation`, `/design-shotgun`, `/design-html`, `/review`, `/ship`, `/land-and-deploy`, `/canary`, `/benchmark`, `/browse`, `/connect-chrome`, `/qa`, `/qa-only`, `/design-review`, `/setup-browser-cookies`, `/setup-deploy`, `/retro`, `/investigate`, `/document-release`, `/codex`, `/cso`, `/autoplan`, `/plan-devex-review`, `/devex-review`, `/careful`, `/freeze`, `/guard`, `/unfreeze`, `/gstack-upgrade`, `/learn`
+
+### Troubleshooting
+
+If gstack skills aren't working, rebuild:
+
+```bash
+cd .claude/skills/gstack && ./setup
+```
