@@ -2,7 +2,7 @@
 
 **Date:** April 6, 2026
 **Team:** Brandon Werner
-**Status:** MCP server built, Agent User auth flow implemented, setup script complete (8 steps), 64 tests passing (87% coverage)
+**Status:** End-to-end working — Agent User sends Teams messages from Copilot CLI. 64 tests, 87% coverage. Next: bidirectional Teams loop.
 
 ---
 
@@ -12,31 +12,31 @@ A proof-of-concept demonstrating that **device-local AI agents can have their ow
 
 **Identity Chain:** Blueprint (client_credentials) → Agent Identity (FIC exchange) → Agent User (user_fic grant) → Graph API with `idtyp=user` token
 
-### The Demo Scenario
+### The Demo Scenario — WORKING
 
-| Step | What Happens | What It Proves |
-|------|-------------|----------------|
-| 1. `./scripts/setup.sh` | Creates Provisioner, Blueprint, Agent Identity, Agent User | Proper Entra Agent ID provisioning works on device |
-| 2. Assign M365 license | Agent User gets Teams/mailbox provisioning | Agent User is a real digital worker |
-| 3. `copilot` (with Openclaw MCP) | MCP server starts, acquires Agent User token via three-hop flow | Agent authenticates autonomously — no human token needed |
-| 4. `openclaw_teams_send` | Agent sends message to human in Teams as its own identity | Agent has working Teams integration |
-| 5. Check Entra sign-in logs | Token shows agent identity, not human | **Identity attribution works** — the research goal |
+| Step | What Happens | Status |
+|------|-------------|--------|
+| 1. `./scripts/setup.sh` | Creates Provisioner, Blueprint, Agent Identity, Agent User, assigns license, grants consent | ✅ Working |
+| 2. Copilot CLI with MCP | MCP server starts, three-hop flow acquires Agent User token | ✅ Working |
+| 3. `send_teams_message` | Agent sends message to human in Teams as "Openclaw Agent" with AI agent badge | ✅ Working |
+| 4. `read_teams_messages` | Agent reads human's replies from Teams | ✅ Working |
+| 5. Bidirectional loop | Agent polls for replies, acts on instructions, reports back | 🔄 Next milestone |
 
 ### MCP Tools (4 total)
 
 | Tool | Purpose | Status |
 |------|---------|--------|
-| `openclaw_whoami` | Show agent identity, sponsor, scopes | Built + tested |
-| `openclaw_teams_send` | Send message to human in Teams | Built + tested |
-| `openclaw_teams_read` | Read human's replies from Teams | Built + tested |
-| `openclaw_audit_log` | Record audit event (action, resource, outcome) | Built + tested |
+| `send_teams_message` | Send message to human in Teams | ✅ Live |
+| `read_teams_messages` | Read human's replies from Teams | ✅ Live |
+| `whoami` | Show agent identity and connection status | ✅ Live |
+| `audit_log` | Record audit event before actions | ✅ Live |
 
 ---
 
 ## TDD Status
 
 ```
-64 passed in 0.32s
+64 passed in 0.22s
 
 Coverage: 87% (threshold: 80%)
 
@@ -54,38 +54,56 @@ src/openclaw/tools/teams.py            79      3    96%
 TOTAL                                 245     33    87%
 ```
 
-Omitted from coverage (untestable on a single platform):
-- `mcp_server.py` (MCP integration entry point)
-- `logging_config.py`
-- `platform/mac.py`, `platform/linux.py`, `platform/windows.py` (OS-specific keyring)
+---
+
+## Current Milestone: Bidirectional Teams Loop
+
+The agent can send messages and read replies, but there's no automated loop. The human replies in Teams, but the agent doesn't know to check unless explicitly told.
+
+### What Needs Building
+
+1. **`watch_teams_replies` tool** — polls Teams every N seconds, returns when the human replies. Needs message deduplication (track last-seen message ID so old messages aren't reprocessed).
+
+2. **Conversation state** — the agent needs to know what it was working on when the human replies (e.g., "I was editing hello.py when the human asked me to add Brandon to the string").
+
+3. **Action dispatch** — when the human says "add Brandon to the Hello World string", the agent parses that as an instruction and executes it, then reports back via Teams.
+
+4. **Token refresh** — the three-hop tokens expire after ~60 min. Long-running polling needs automatic re-acquisition.
+
+### Design Options
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **Polling tool** (`watch_teams_replies`) | Simple, LLM calls it explicitly | LLM must remember to call it; burns context |
+| **Background polling thread** in MCP server | Automatic, no LLM involvement | Needs a way to notify the LLM of new messages |
+| **CronCreate** in Claude Code | Uses the built-in scheduler | Tight coupling to Claude Code runtime |
+
+Recommended: **Polling tool first** (simplest, works today), then add background polling as a follow-up.
 
 ---
 
-## Current State
+## What Works (Shipped)
 
-### What Works
-- 1,067 lines of tests (64 tests, all passing, 87% coverage)
-- 2,419 lines of application + provisioning code across 18 Python modules
-- 490 lines of setup/teardown scripts (8-step setup, idempotent)
+- End-to-end: setup.sh → MCP server → Teams message delivery ✅
 - Three-hop Agent User token flow (Blueprint → Agent Identity → Agent User)
 - Agent User creation via Graph beta API (`microsoft.graph.agentUser`)
+- Agent User license assignment (auto-detects Teams-capable SKUs)
 - Consent grant (`oAuth2PermissionGrant`) for Teams/Chat permissions
-- Dedicated Provisioner app (avoids Azure CLI's `Directory.AccessAsUser.All` rejection)
-- Provisioner state persisted in `.openclaw-state.json` (no secret reset on re-runs)
-- Teams Graph API integration (send, read, connect) tested with mocked httpx
-- Cross-platform credential storage (Keychain on Mac, Credential Manager on Windows)
-- Structured JSON audit logging
-- All code passes ruff lint + format
-
-### What's In Progress
-- End-to-end test: setup.sh → license assignment → MCP server → Teams message
-- Verify Agent User token `idtyp=user` claim in Entra sign-in logs
+- Dedicated provisioner app (avoids Azure CLI token rejection)
+- State persisted in `.openclaw-state.json` (idempotent, no secret reset)
+- MCP server auto-discovered via `.mcp.json`
+- `--teams-user` flag to set Teams recipient separately from admin
+- Teams read with null-from handling (system messages)
+- 16 hard-won learnings documented in runbooks
+- All code passes ruff lint + format, 87% coverage
 
 ### What's Not Started
+- Bidirectional Teams polling loop (NEXT)
+- Token auto-refresh for long-running sessions
 - Windows VM provisioning and testing
 - AppContainer sandbox spike
-- Token auto-refresh (P1 TODO)
-- Graph API rate limit handler (P2 TODO)
+- Graph API rate limit handler
+- Entra sign-in log verification (`idtyp=user` claim)
 
 ---
 
@@ -109,10 +127,10 @@ Blueprint (client_credentials)
 │  ┌──────────────────────────────────────────────────┐   │
 │  │ Openclaw MCP Server (Python)                     │   │
 │  │                                                  │   │
-│  │  openclaw_whoami ──────▶ cached state            │   │
-│  │  openclaw_teams_send ──▶ Graph API (Agent User)  │   │
-│  │  openclaw_teams_read ──▶ Graph API (Agent User)  │   │
-│  │  openclaw_audit_log ───▶ ~/.openclaw/audit/      │   │
+│  │  send_teams_message ───▶ Graph API (Agent User)  │   │
+│  │  read_teams_messages ──▶ Graph API (Agent User)  │   │
+│  │  whoami ───────────────▶ cached state            │   │
+│  │  audit_log ────────────▶ ~/.openclaw/audit/      │   │
 │  │                                                  │   │
 │  │  Token: Agent User (three-hop, idtyp=user)       │   │
 │  └──────────────────────────────────────────────────┘   │
@@ -128,48 +146,33 @@ Blueprint (client_credentials)
 
 ---
 
-## Key Architectural Decisions
+## Bugs Encountered & Resolved (This Session)
 
-1. **Agent User over OBO** (ADR-002) — OBO required a human device-code flow and refresh token caching. Agent Users authenticate autonomously via the three-hop flow. No human in the loop.
-2. **Dedicated provisioner app** — Azure CLI tokens include `Directory.AccessAsUser.All` which Agent Identity APIs reject. The provisioner uses `client_credentials` via `ClientSecretCredential`.
-3. **Python provisioning scripts** (from agent-foundry-poc pattern) — `entra_provisioning.py` + `create_entra_agent_ids.py` replace the 823-line monolithic bash script.
-4. **TDD** — Tests are written before implementation. Coverage enforced at 80% (currently 87%).
+| # | Bug | Impact | Fix |
+|---|-----|--------|-----|
+| 1 | Provisioner secret reset on every re-run | High | Cache in state file, use `--append` |
+| 2 | Agent User UPN used tenant ID as domain | Blocking | Extract domain from signed-in user's UPN |
+| 3 | oAuth2PermissionGrant missing startTime | Blocking | Add `startTime: now()` to request body |
+| 4 | Provisioner lacked DelegatedPermissionGrant permission | Blocking | Added to BASE_PERMISSION_VALUES |
+| 5 | Three-hop flow missing fmi_path parameter | Blocking | Added `fmi_path={agent-id}` to hop 1 |
+| 6 | Consent grant used beta API instead of v1.0 | Blocking | Use v1.0 URL directly, not graph_request() |
+| 7 | Chat creation /me doesn't work for Agent Users | Blocking | Use explicit user IDs for both members |
+| 8 | read_teams_messages crashed on null from field | Crash | `(m.get("from") or {})` pattern |
+| 9 | Non-Teams licenses triggered skip | Wrong | Check TEAMS_CAPABLE_SKUS, not any license |
+| 10 | MCP tool names not discoverable by LLM | UX | Renamed to verb-first, added trigger phrases |
+| 11 | No httpx timeout on token flow | Hang | Added 15s timeout to all hops |
+| 12 | teardown.sh silent exit on missing .env | Silent | Guard with `[ -f .env ]` check |
+| 13 | stderr swallowed throughout scripts | Hidden errors | Removed all `2>/dev/null` |
+| 14 | Admin and Teams user conflated | Wrong recipient | Added `--teams-user` flag |
 
----
-
-## Bugs Encountered & Resolved
-
-### Bug 1: Azure CLI Tokens Rejected by Agent Identity APIs
-**Impact:** Critical — setup failed with 403
-**Fix:** Dedicated provisioner app with `client_credentials` flow.
-
-### Bug 2: BlueprintPrincipal Not Auto-Created
-**Impact:** Critical — Agent Identity creation failed with 400
-**Fix:** Explicit `POST /servicePrincipals` with `AgentIdentityBlueprintPrincipal` type.
-
-### Bug 3: Fake User Account Instead of Agent ID
-**Impact:** Critical — fundamentally wrong identity model
-**Fix:** Complete rewrite to Agent Identity Blueprint → Agent Identity → Agent User.
-
-### Bug 4: OBO Was Unnecessary
-**Impact:** Architectural — entire OBO chain was unnecessary complexity
-**Fix:** Replaced with Agent User three-hop flow. Removed device-code flow, MSAL runtime dependency, human refresh token caching, access_as_user scope.
-
-### Bug 5: Silent Script Failures
-**Impact:** High — `2>/dev/null` and `source .env` under `set -e` hid errors
-**Fix:** Removed all stderr swallowing. Guard `source` with `[ -f ]` check.
-
-### Bug 6: Permission Propagation Delay
-**Impact:** Medium — intermittent 403 on token acquisition
-**Fix:** 10-40s backoff + 30s explicit propagation wait.
+See `docs/runbooks/hard-won-learnings.md` for the full append-only log (16 entries).
 
 ---
 
-## Next Steps
+## Next Steps (Priority Order)
 
-1. **Run setup.sh end-to-end** — all 8 steps should work with the new provisioning scripts
-2. **Assign M365 license** to Agent User and wait for Teams provisioning
-3. **Test in Copilot CLI** — verify MCP tools work, Teams message appears as Agent User
-4. **Check Entra sign-in logs** — confirm `idtyp=user` and agent identity attribution
-5. **Provision Windows VM** — verify cross-platform setup
-6. **Token auto-refresh** — handle 60-90 min token expiry gracefully
+1. **Bidirectional Teams loop** — `watch_teams_replies` polling tool + message dedup + action dispatch
+2. **Token auto-refresh** — re-acquire three-hop tokens before 60-min expiry
+3. **Entra sign-in log verification** — confirm `idtyp=user` and agent attribution
+4. **Windows VM provisioning** — verify cross-platform setup.sh
+5. **AppContainer sandbox spike** — kernel-level agent isolation on Windows
