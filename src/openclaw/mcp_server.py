@@ -27,20 +27,28 @@ logger: logging.Logger | None = None
 mcp = FastMCP(
     "Openclaw Agent Identity",
     instructions=(
-        "You have a real Microsoft Teams identity via the Openclaw Agent User. "
-        "Authentication is AUTOMATIC. Just call the tools — no credentials needed.\n\n"
-        "IMPORTANT: When the user asks you to message, notify, tell, ping, or contact "
-        "someone, USE the send_teams_message tool. The recipient is pre-configured — "
-        "you only need to provide the message text.\n\n"
-        "Available tools:\n"
-        "- send_teams_message: Message/notify/tell the human via Teams\n"
-        "- read_teams_messages: Check for replies from the human in Teams\n"
-        "- watch_teams_replies: Wait for the human to reply in Teams\n"
-        "- whoami: Check your agent identity and Teams connection\n"
-        "- audit_log: Record what you're about to do (call before actions)\n\n"
-        "When asked to 'message someone', 'notify someone', 'tell someone', "
-        "'send a message', 'ping someone', or 'let someone know' — "
-        "use send_teams_message. The recipient is already configured."
+        "You are an AI agent with your own Microsoft Teams identity. You can send "
+        "and receive messages as 'Openclaw Agent' — a real Teams user with an AI "
+        "agent badge. Authentication is fully automatic.\n\n"
+        "BIDIRECTIONAL WORKFLOW — This is how Teams communication works:\n"
+        "1. send_teams_message: Send a message to the human\n"
+        "2. watch_teams_replies: ALWAYS call this after sending. It polls for the "
+        "human's reply (blocks up to timeout seconds). Without this step, you will "
+        "never see the human's response.\n"
+        "3. Act on the reply, then respond via send_teams_message\n"
+        "4. Repeat steps 2-3 to maintain a conversation\n\n"
+        "CRITICAL: After EVERY send_teams_message, you MUST call watch_teams_replies "
+        "to check for the human's response. A message without watching for a reply "
+        "is like talking and then walking away. The human WILL reply — you need to "
+        "be listening.\n\n"
+        "TOOL REFERENCE:\n"
+        "- send_teams_message: Send a message (trigger: 'message', 'notify', "
+        "'tell', 'ping', 'contact', 'let them know')\n"
+        "- watch_teams_replies: Poll for new replies (ALWAYS call after sending)\n"
+        "- read_teams_messages: Read recent message history (for context, not polling)\n"
+        "- whoami: Check agent identity and Teams connection status\n"
+        "- audit_log: Record an action before performing it\n\n"
+        "The recipient is pre-configured. Just provide the message text."
     ),
 )
 
@@ -197,16 +205,10 @@ async def send_teams_message(message: str, content_type: str = "text") -> str:
     whenever the user asks you to message, notify, tell, ping, or contact
     someone. The recipient is pre-configured — just provide the message text.
 
-    Authentication is automatic. No credentials, tokens, or email addresses
-    needed from the caller. Just call this tool with your message.
+    Authentication is automatic. No credentials needed.
 
-    Examples of when to use this tool:
-    - "message brandon@werner.ac" → call this tool
-    - "tell the user I'm done" → call this tool
-    - "notify them about the build" → call this tool
-    - "send a Teams message" → call this tool
-    - "ping brandon" → call this tool
-    - "let them know" → call this tool
+    IMPORTANT: After calling this tool, you MUST call watch_teams_replies
+    to wait for the human's response. Sending without watching is incomplete.
 
     Args:
         message: The text to send.
@@ -271,9 +273,11 @@ async def watch_teams_replies(
     arrive or after timeout seconds. Uses server-side cursor to track what's
     been seen — only returns genuinely new human messages.
 
-    Call this in a loop to maintain a bidirectional conversation with the
-    human via Teams. The agent sends via send_teams_message, then calls
-    this tool to wait for the human's reply.
+    WHEN TO CALL: Always after send_teams_message. This completes the
+    bidirectional loop — send a message, then watch for the reply.
+
+    If timed_out is true, the human hasn't replied yet. You can call this
+    again with a longer timeout, or move on and check back later.
 
     Args:
         timeout: Max seconds to poll before returning empty (default 30).
