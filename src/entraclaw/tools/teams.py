@@ -30,6 +30,7 @@ from entraclaw.errors import (
     TokenExpiredError,
 )
 from entraclaw.platform import get_credential_store
+from entraclaw.tools.rate_limit import RetryOn429Transport
 
 logger = logging.getLogger("entraclaw.tools.teams")
 
@@ -167,17 +168,17 @@ def acquire_agent_user_token(config: EntraClawConfig) -> str:
 async def create_or_find_chat(
     *,
     token: str,
-    human_user_id: str,
+    human_user_ids: list[str],
     agent_user_id: str | None = None,
 ) -> dict:
-    """Create or resume a 1:1 Teams chat between the Agent User and the human.
+    """Create or resume a Teams chat between the Agent User and human(s).
 
-    Uses explicit user IDs for both members (not ``/me``) because the
+    If one human user is provided, creates a ``oneOnOne`` chat (idempotent).
+    If multiple humans are provided, creates a ``group`` chat with a topic.
+
+    Uses explicit user IDs for all members (not ``/me``) because the
     ``user@odata.bind`` field doesn't reliably resolve ``/me`` for
     Agent User tokens in the chat creation context.
-
-    The Graph ``POST /chats`` call is idempotent for ``oneOnOne`` chats —
-    if a chat already exists it is returned unchanged.
     """
     headers = {
         "Authorization": f"Bearer {token}",
@@ -188,8 +189,9 @@ async def create_or_find_chat(
         {
             "@odata.type": "#microsoft.graph.aadUserConversationMember",
             "roles": ["owner"],
-            "user@odata.bind": (f"https://graph.microsoft.com/v1.0/users('{human_user_id}')"),
-        },
+            "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{uid}')",
+        }
+        for uid in human_user_ids
     ]
     # Add Agent User as explicit member if ID is provided
     if agent_user_id:
@@ -198,16 +200,20 @@ async def create_or_find_chat(
             {
                 "@odata.type": "#microsoft.graph.aadUserConversationMember",
                 "roles": ["owner"],
-                "user@odata.bind": (f"https://graph.microsoft.com/v1.0/users('{agent_user_id}')"),
+                "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{agent_user_id}')",
             },
         )
 
-    chat_payload = {
-        "chatType": "oneOnOne",
+    is_group = len(human_user_ids) > 1
+    chat_payload: dict = {
+        "chatType": "group" if is_group else "oneOnOne",
         "members": members,
     }
+    if is_group:
+        chat_payload["topic"] = "EntraClaw Agent Chat"
 
-    async with httpx.AsyncClient() as client:
+    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    async with httpx.AsyncClient(transport=transport) as client:
         resp = await client.post(
             f"{GRAPH_BASE}/chats",
             json=chat_payload,
@@ -253,7 +259,8 @@ async def send(
         "Content-Type": "application/json",
     }
 
-    async with httpx.AsyncClient() as client:
+    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    async with httpx.AsyncClient(transport=transport) as client:
         resp = await client.post(
             f"{GRAPH_BASE}/chats/{chat_id}/messages",
             json={"body": {"contentType": content_type, "content": message}},
@@ -290,7 +297,8 @@ async def read(
         "Authorization": f"Bearer {token}",
     }
 
-    async with httpx.AsyncClient() as client:
+    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    async with httpx.AsyncClient(transport=transport) as client:
         resp = await client.get(
             f"{GRAPH_BASE}/chats/{chat_id}/messages",
             params={"$top": str(count), "$orderby": "createdDateTime desc"},

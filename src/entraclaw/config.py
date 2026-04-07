@@ -13,6 +13,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+def _parse_csv(value: str | None) -> list[str]:
+    """Parse a comma-separated string into a list, filtering empty strings."""
+    if not value:
+        return []
+    return [v.strip() for v in value.split(",") if v.strip()]
+
+
 def _default_dir(subdir: str) -> Path:
     return Path.home() / ".entraclaw" / subdir
 
@@ -54,6 +61,8 @@ class EntraClawConfig:
     agent_user_upn: str | None = field(default=None)
     human_user_id: str | None = field(default=None)
     human_upn: str | None = field(default=None)
+    human_user_ids: list[str] = field(default_factory=list)
+    human_upns: list[str] = field(default_factory=list)
     log_dir: Path = field(default_factory=lambda: _default_dir("logs"))
     audit_dir: Path = field(default_factory=lambda: _default_dir("audit"))
     data_dir: Path = field(default_factory=lambda: _default_dir("data"))
@@ -73,6 +82,10 @@ class EntraClawConfig:
             agent_user_upn=os.environ.get("ENTRACLAW_AGENT_USER_UPN"),
             human_user_id=os.environ.get("ENTRACLAW_HUMAN_USER_ID"),
             human_upn=os.environ.get("ENTRACLAW_HUMAN_UPN"),
+            human_user_ids=_parse_csv(os.environ.get("ENTRACLAW_HUMAN_USER_IDS"))
+            or _parse_csv(os.environ.get("ENTRACLAW_HUMAN_USER_ID")),
+            human_upns=_parse_csv(os.environ.get("ENTRACLAW_HUMAN_UPNS"))
+            or _parse_csv(os.environ.get("ENTRACLAW_HUMAN_UPN")),
             log_dir=Path(os.environ.get("ENTRACLAW_LOG_DIR", _default_dir("logs"))),
             audit_dir=Path(os.environ.get("ENTRACLAW_AUDIT_DIR", _default_dir("audit"))),
             data_dir=Path(os.environ.get("ENTRACLAW_DATA_DIR", _default_dir("data"))),

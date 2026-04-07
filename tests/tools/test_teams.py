@@ -218,7 +218,7 @@ class TestCreateOrFindChat:
         )
         result = await create_or_find_chat(
             token="agent-token",
-            human_user_id="human-uid",
+            human_user_ids=["human-uid"],
         )
         assert result["chat_id"] == "19:chat-id@thread.v2"
 
@@ -229,7 +229,7 @@ class TestCreateOrFindChat:
         with pytest.raises(TokenExpiredError):
             await create_or_find_chat(
                 token="expired",
-                human_user_id="h",
+                human_user_ids=["h"],
             )
 
     @respx.mock
@@ -239,7 +239,7 @@ class TestCreateOrFindChat:
         with pytest.raises(TeamsNotLicensed):
             await create_or_find_chat(
                 token="tok",
-                human_user_id="h",
+                human_user_ids=["h"],
             )
 
     @respx.mock
@@ -251,9 +251,28 @@ class TestCreateOrFindChat:
         with pytest.raises(RateLimitError) as exc_info:
             await create_or_find_chat(
                 token="tok",
-                human_user_id="h",
+                human_user_ids=["h"],
             )
         assert exc_info.value.retry_after == 30
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_group_chat_multiple_users(self) -> None:
+        route = respx.post(f"{GRAPH_BASE}/chats").mock(
+            return_value=httpx.Response(
+                201,
+                json={"id": "19:group-chat@thread.v2", "createdDateTime": "2024-01-01"},
+            )
+        )
+        result = await create_or_find_chat(
+            token="agent-token",
+            human_user_ids=["user-1", "user-2"],
+        )
+        assert result["chat_id"] == "19:group-chat@thread.v2"
+        # Verify group chat type was used
+        body = route.calls.last.request.content
+        assert b'"group"' in body
+        assert b"EntraClaw Agent Chat" in body
 
 
 # ---------------------------------------------------------------------------

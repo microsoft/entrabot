@@ -159,17 +159,37 @@ if [ -z "$HUMAN_USER_ID" ]; then
     fail "Could not determine signed-in user ID. Ensure 'az login' is done with a user account."
 fi
 
-# If --teams-user was specified, resolve that user for Teams (separate from admin)
+# If --teams-user was specified, resolve user(s) for Teams (comma-separated for group chat)
+HUMAN_USER_IDS=""
+HUMAN_UPNS=""
 if [ -n "$TEAMS_USER_EMAIL" ]; then
-    TEAMS_USER_ID=$(az ad user show --id "$TEAMS_USER_EMAIL" --query "id" -o tsv) || true
-    if [ -z "$TEAMS_USER_ID" ]; then
-        fail "Could not find Teams user '$TEAMS_USER_EMAIL' in Entra. Check the email address."
-    fi
-    HUMAN_UPN="$TEAMS_USER_EMAIL"
-    HUMAN_USER_ID="$TEAMS_USER_ID"
+    IFS=',' read -ra TEAMS_USERS <<< "$TEAMS_USER_EMAIL"
+    RESOLVED_IDS=()
+    RESOLVED_UPNS=()
+    for TU in "${TEAMS_USERS[@]}"; do
+        TU=$(echo "$TU" | xargs)  # trim whitespace
+        TU_ID=$(az ad user show --id "$TU" --query "id" -o tsv 2>/dev/null) || true
+        if [ -z "$TU_ID" ]; then
+            fail "Could not find Teams user '$TU' in Entra. Check the email/ID."
+        fi
+        RESOLVED_IDS+=("$TU_ID")
+        RESOLVED_UPNS+=("$TU")
+    done
+    # Join arrays with commas
+    HUMAN_USER_IDS=$(IFS=','; echo "${RESOLVED_IDS[*]}")
+    HUMAN_UPNS=$(IFS=','; echo "${RESOLVED_UPNS[*]}")
+    # First user is the primary (backward compat)
+    HUMAN_USER_ID="${RESOLVED_IDS[0]}"
+    HUMAN_UPN="${RESOLVED_UPNS[0]}"
     success "Admin:      $(az account show --query 'user.name' -o tsv) (provisioning)"
-    success "Teams user: $HUMAN_UPN ($HUMAN_USER_ID)"
+    if [ ${#TEAMS_USERS[@]} -gt 1 ]; then
+        success "Teams users: $HUMAN_UPNS (group chat)"
+    else
+        success "Teams user: $HUMAN_UPN ($HUMAN_USER_ID)"
+    fi
 else
+    HUMAN_USER_IDS="$HUMAN_USER_ID"
+    HUMAN_UPNS="$HUMAN_UPN"
     success "Human user: $HUMAN_UPN ($HUMAN_USER_ID)"
 fi
 
@@ -375,6 +395,8 @@ ENTRACLAW_AGENT_USER_ID=${AGENT_USER_ID:-}
 ENTRACLAW_AGENT_USER_UPN=${AGENT_USER_UPN:-}
 ENTRACLAW_HUMAN_USER_ID=$HUMAN_USER_ID
 ENTRACLAW_HUMAN_UPN=$HUMAN_UPN
+ENTRACLAW_HUMAN_USER_IDS=$HUMAN_USER_IDS
+ENTRACLAW_HUMAN_UPNS=$HUMAN_UPNS
 ENTRACLAW_PROVISIONER_APP_ID=$PROV_CLIENT_ID
 ENTRACLAW_LOG_LEVEL=INFO
 EOF
