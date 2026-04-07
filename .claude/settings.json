@@ -6,7 +6,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"You just sent a Teams message. The human may reply. Call watch_teams_replies to wait for their response — this is how bidirectional Teams communication works. Do NOT consider the task complete until you have checked for a reply.\"}}'",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"MANDATORY: You just sent a Teams message. You MUST now call watch_teams_replies to wait for the human response. Do NOT stop or respond to the terminal until you have polled for a reply. The human is remote and WILL reply via Teams.\"}}'",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import json, pathlib; state=json.loads(pathlib.Path('.openclaw-state.json').read_text()) if pathlib.Path('.openclaw-state.json').is_file() else {}; sent=state.get('_last_send_timestamp',''); import sys; sys.exit(0)\" 2>/dev/null; echo '{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"additionalContext\":\"Before stopping: if you sent a Teams message this session, did you call watch_teams_replies to check for the human reply? The human is remote and communicates via Teams. If you sent a message and did not poll for a reply, call watch_teams_replies now.\"}}'",
             "timeout": 5
           }
         ]
