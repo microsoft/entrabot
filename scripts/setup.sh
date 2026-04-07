@@ -256,20 +256,20 @@ if [ -n "$CERT_THUMBPRINT" ]; then
 else
     echo "  Generating self-signed certificate for Blueprint..."
 
-    # Generate cert + private key, compute thumbprint, store key in keyring
-    CERT_RESULT=$("$VENV_PY" -c "
-import sys, json, hashlib, base64, tempfile, os
+    # Generate cert, store private key in keyring, upload public cert via
+    # Provisioner token (NOT az CLI — Learning #1: az CLI tokens include
+    # Directory.AccessAsUser.All which Agent Identity APIs reject).
+    CERT_THUMBPRINT=$("$VENV_PY" -c "
+import sys, json, hashlib, base64
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from datetime import datetime, timedelta, timezone
-import keyring
+import keyring, requests, pathlib
 
-# Generate RSA 2048 key
+# --- Generate RSA 2048 key + self-signed cert ---
 key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-
-# Self-signed cert, valid 1 year
 subject = issuer = x509.Name([
     x509.NameAttribute(NameOID.COMMON_NAME, 'openclaw-blueprint-$BLUEPRINT_APP_ID'),
     x509.NameAttribute(NameOID.ORGANIZATION_NAME, 'Openclaw Device Agent'),
@@ -283,11 +283,11 @@ cert = (x509.CertificateBuilder()
     .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
     .sign(key, hashes.SHA256()))
 
-# Compute thumbprint (SHA-256 of DER cert, base64url no padding)
+# --- Compute thumbprint (SHA-256 of DER, base64url no padding) ---
 der_bytes = cert.public_bytes(serialization.Encoding.DER)
 thumbprint = base64.urlsafe_b64encode(hashlib.sha256(der_bytes).digest()).rstrip(b'=').decode()
 
-# Store private key in OS credential store
+# --- Store private key in OS credential store ---
 pem_key = key.private_bytes(
     serialization.Encoding.PEM,
     serialization.PrivateFormat.PKCS8,
@@ -295,42 +295,48 @@ pem_key = key.private_bytes(
 ).decode()
 keyring.set_password('openclaw', 'blueprint-private-key', pem_key)
 
-# Write public cert to temp file for az CLI upload
-cert_pem = cert.public_bytes(serialization.Encoding.PEM).decode()
-cert_path = tempfile.mktemp(suffix='.pem')
-with open(cert_path, 'w') as f:
-    f.write(cert_pem)
+# --- Upload public cert to Blueprint app via Graph API ---
+# Uses Provisioner token (not az CLI) to avoid Directory.AccessAsUser.All rejection
+sys.path.insert(0, '$PROJECT_ROOT/scripts')
+from entra_provisioning import get_graph_token
+token = get_graph_token(wait_for_propagation=False)
 
-# Output as JSON
-print(json.dumps({'thumbprint': thumbprint, 'cert_path': cert_path}))
+# Graph API: PATCH /applications/{id} with keyCredentials
+cert_b64 = base64.b64encode(der_bytes).decode()
+end_date = (datetime.now(timezone.utc) + timedelta(days=365)).strftime('%Y-%m-%dT%H:%M:%SZ')
+start_date = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+# Use v1.0 (not beta) for keyCredentials — more stable (Learning #15)
+resp = requests.patch(
+    'https://graph.microsoft.com/v1.0/applications/$BLUEPRINT_OBJECT_ID',
+    headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'},
+    json={'keyCredentials': [{
+        'type': 'AsymmetricX509Cert',
+        'usage': 'Verify',
+        'key': cert_b64,
+        'displayName': 'Openclaw Device Certificate',
+        'startDateTime': start_date,
+        'endDateTime': end_date,
+    }]},
+)
+if resp.status_code >= 400:
+    print(f'ERROR: Failed to upload cert: {resp.status_code} {resp.text}', file=sys.stderr)
+    sys.exit(1)
+
+# --- Persist thumbprint in state file ---
+state_file = pathlib.Path('$PROJECT_ROOT/.openclaw-state.json')
+data = json.loads(state_file.read_text()) if state_file.is_file() else {}
+data['BLUEPRINT_CERT_THUMBPRINT'] = thumbprint
+data.pop('BLUEPRINT_SECRET', None)  # clean up old secret if present
+state_file.write_text(json.dumps(data, indent=2) + '\n')
+
+print(thumbprint)
 ")
-
-    CERT_THUMBPRINT=$(echo "$CERT_RESULT" | "$VENV_PY" -c "import sys,json; print(json.loads(sys.stdin.read())['thumbprint'])")
-    CERT_PATH=$(echo "$CERT_RESULT" | "$VENV_PY" -c "import sys,json; print(json.loads(sys.stdin.read())['cert_path'])")
 
     if [ -z "$CERT_THUMBPRINT" ]; then
         fail "Could not generate Blueprint certificate"
     fi
 
-    # Upload public cert to Blueprint app registration in Entra
-    echo "  Uploading public certificate to Blueprint app..."
-    az ad app credential reset \
-        --id "$BLUEPRINT_OBJECT_ID" \
-        --cert "@$CERT_PATH" \
-        --append \
-        -o json > /dev/null
-
-    rm -f "$CERT_PATH"
-
-    # Persist thumbprint in state file (private key is in keyring, not here)
-    "$VENV_PY" -c "
-import json, pathlib
-state_file = pathlib.Path('$PROJECT_ROOT/.openclaw-state.json')
-data = json.loads(state_file.read_text()) if state_file.is_file() else {}
-data['BLUEPRINT_CERT_THUMBPRINT'] = '$CERT_THUMBPRINT'
-data.pop('BLUEPRINT_SECRET', None)  # clean up old secret if present
-state_file.write_text(json.dumps(data, indent=2) + '\n')
-"
     success "Certificate generated, uploaded to Entra, private key stored in OS keyring"
 fi
 
