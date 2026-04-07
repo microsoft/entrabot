@@ -214,6 +214,128 @@ async def _initialize() -> None:
 
     _state["initialized"] = True
 
+    # Start background polling for inbound Teams messages (like iMessage channel)
+    if _state.get("chat_id"):
+        import asyncio
+
+        asyncio.get_event_loop().create_task(_background_poll())
+
+
+BACKGROUND_POLL_INTERVAL = 5  # seconds between polls
+
+
+async def _background_poll() -> None:
+    """Background polling loop — pushes inbound Teams messages to Claude Code.
+
+    Mirrors the iMessage channel pattern: poll the data source in the
+    background, push new messages via ``notifications/claude/channel``
+    so Claude Code sees them without needing to call a tool.
+
+    This is the solution to the "close the loop" problem (Learning #22).
+    """
+    import asyncio
+
+    from openclaw.tools.teams import filter_human_messages, read
+
+    if logger:
+        logger.info("Starting background Teams poll (interval=%ds)", BACKGROUND_POLL_INTERVAL)
+
+    config = _state["config"]
+    agent_display_name = config.agent_user_upn or "Openclaw Agent"
+    chat_id = str(_state["chat_id"])
+
+    # Bootstrap cursor: set watermark to newest existing message
+    try:
+        await _ensure_valid_token()
+        bootstrap_msgs = await _with_token_retry(read, chat_id=chat_id, count=10)
+        if bootstrap_msgs:
+            newest = max(bootstrap_msgs, key=lambda m: m.get("sent_at", ""))
+            _state["last_seen_timestamp"] = newest["sent_at"]
+            for m in bootstrap_msgs:
+                _state["seen_message_ids"].add(m["message_id"])
+                _state["seen_id_timestamps"][m["message_id"]] = m.get("sent_at", "")
+    except Exception as exc:
+        if logger:
+            logger.warning("Background poll bootstrap failed: %s", exc)
+
+    while True:
+        try:
+            await asyncio.sleep(BACKGROUND_POLL_INTERVAL)
+            await _ensure_valid_token()
+
+            raw_messages = await _with_token_retry(read, chat_id=chat_id, count=10)
+            human_msgs = filter_human_messages(raw_messages, agent_display_name)
+            new_msgs = _filter_new_messages(
+                human_msgs,
+                _state.get("last_seen_timestamp"),
+                _state["seen_message_ids"],
+            )
+
+            if new_msgs:
+                # Advance cursor
+                newest = max(new_msgs, key=lambda m: m.get("sent_at", ""))
+                _state["last_seen_timestamp"] = newest["sent_at"]
+                for m in new_msgs:
+                    _state["seen_message_ids"].add(m["message_id"])
+                    _state["seen_id_timestamps"][m["message_id"]] = m.get("sent_at", "")
+
+                # Bounded cleanup
+                if len(_state["seen_message_ids"]) > SEEN_SET_MAX:
+                    _state["seen_message_ids"] = _prune_seen_set(
+                        _state["seen_message_ids"],
+                        _state["seen_id_timestamps"],
+                    )
+                    _state["seen_id_timestamps"] = {
+                        k: v
+                        for k, v in _state["seen_id_timestamps"].items()
+                        if k in _state["seen_message_ids"]
+                    }
+
+                # Push each new message to Claude Code via channel notification
+                for m in sorted(new_msgs, key=lambda m: m.get("sent_at", "")):
+                    await _push_channel_notification(m)
+
+        except Exception as exc:
+            if logger:
+                logger.warning("Background poll error: %s", exc)
+            # Don't crash the loop — wait and retry
+            await asyncio.sleep(BACKGROUND_POLL_INTERVAL)
+
+
+async def _push_channel_notification(message: dict) -> None:
+    """Push an inbound Teams message to Claude Code via notifications/claude/channel.
+
+    This is the same notification method used by the iMessage channel plugin.
+    Claude Code receives it and injects the message into the conversation.
+    """
+    import json as _json
+
+    notification = {
+        "jsonrpc": "2.0",
+        "method": "notifications/claude/channel",
+        "params": {
+            "content": message.get("content", ""),
+            "meta": {
+                "chat_id": str(_state.get("chat_id", "")),
+                "message_id": message.get("message_id", ""),
+                "user": message.get("from", "unknown"),
+                "ts": message.get("sent_at", ""),
+            },
+        },
+    }
+
+    # Write JSON-RPC notification to stdout (stdio transport)
+    line = _json.dumps(notification) + "\n"
+    sys.stdout.write(line)
+    sys.stdout.flush()
+
+    if logger:
+        logger.info(
+            "Pushed Teams message from %s: %s",
+            message.get("from", "?"),
+            message.get("content", "")[:50],
+        )
+
 
 @mcp.tool()
 async def send_teams_message(message: str, content_type: str = "text") -> str:
