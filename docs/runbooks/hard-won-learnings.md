@@ -212,6 +212,26 @@ Append-only log of gotchas, surprises, and non-obvious behaviors discovered duri
 **Discovery:** Microsoft documents an "Agent OBO" flow where a human user's token IS used — but it enters at Hop 2 as the OBO `assertion`, not at Hop 1 as the Blueprint credential. The Blueprint still authenticates with its own confidential credentials. This flow is for "interactive agents" that act on behalf of a signed-in user, NOT for autonomous agents like Openclaw.
 **Implication:** If Openclaw ever adds a mode where the agent acts on behalf of a specific human (not as its own digital worker), the Agent OBO flow provides that pattern. The human token + Blueprint credential together produce an Agent Identity token scoped to that human's permissions.
 
+### Learning #26: Channel Notifications Require Experimental Capability + Startup Flag
+
+**Date:** 2026-04-07
+**Context:** Background poll detected Teams messages and pushed notifications via MCP write stream, but Claude Code silently dropped them.
+**Problem:** `notifications/claude/channel` was being sent correctly through the transport but Claude Code never reacted.
+**Root cause:** Three requirements for channel notifications, all undocumented outside source code:
+1. Server must declare `experimental: {"claude/channel": {}}` capability during MCP initialization
+2. Claude Code must be started with `--dangerously-load-development-channels server:<name>` (or `--channels` for allowlisted plugins)
+3. Server must NOT be spoofed as a marketplace plugin — just use `.mcp.json` with the flag
+**Fix:** Added `experimental_capabilities={"claude/channel": {}}` to `create_initialization_options()`. User starts Claude Code with `claude --dangerously-load-development-channels server:openclaw`.
+**Prevention:** When implementing MCP notifications, check the iMessage channel plugin source for the exact capability declarations and startup requirements. The official docs at `code.claude.com/docs/en/channels-reference` document the flags.
+
+### Learning #27: Background Poll Must Not Share State With Polling Tool
+
+**Date:** 2026-04-07
+**Context:** Background poll and `watch_teams_replies` tool both detecting messages, but messages only visible to one.
+**Problem:** Both used the same `_state["seen_message_ids"]` and cursor. Background poll detected a message, marked it "seen", pushed a notification. If the notification didn't reach Claude Code (before we fixed Learning #26), the message was consumed but never delivered. `watch_teams_replies` couldn't see it either — already in the seen-set.
+**Fix:** Background poll uses its own local variables (`bg_seen_ids`, `bg_last_ts`) completely independent of `watch_teams_replies`' state. Both can detect the same message independently — belt and suspenders.
+**Prevention:** Concurrent consumers of the same data source must have independent tracking state. Never share dedup state between a "best-effort" path (notifications) and a "guaranteed" path (explicit tool call).
+
 ### Learning #23: FastMCP Context Object Has Untapped Capabilities
 
 **Date:** 2026-04-06
