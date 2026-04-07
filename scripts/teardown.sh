@@ -166,18 +166,20 @@ done
 
 echo ""
 
-# Legacy keychain entries (from old OBO flow)
+# Keychain entries (certificate private key + legacy)
 python3 -c "
 import keyring
 cleared = []
-for key in ['blueprint_secret', 'human_refresh_token', 'agent_password']:
+for key in ['blueprint-private-key', 'blueprint_secret', 'human_refresh_token', 'agent_password']:
     try:
         keyring.delete_password('entraclaw', key)
         cleared.append(key)
     except Exception:
         pass
 if cleared:
-    print(f'  ✅ Cleared legacy keychain entries: {\", \".join(cleared)}')
+    print(f'  ✅ Cleared keychain entries: {\", \".join(cleared)}')
+else:
+    print('  (no keychain entries found)')
 " || true
 
 if [ -f .env ]; then
