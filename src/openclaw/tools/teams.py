@@ -18,6 +18,7 @@ import logging
 
 import httpx
 
+from openclaw.auth.certificate import build_client_assertion
 from openclaw.config import OpenclawConfig
 from openclaw.errors import (
     AgentIDNotAvailable,
@@ -28,6 +29,7 @@ from openclaw.errors import (
     TokenExchangeError,
     TokenExpiredError,
 )
+from openclaw.platform import get_credential_store
 
 logger = logging.getLogger("openclaw.tools.teams")
 
@@ -75,7 +77,7 @@ def acquire_agent_user_token(config: OpenclawConfig) -> str:
     if not all(
         [
             config.blueprint_app_id,
-            config.blueprint_secret,
+            config.blueprint_cert_thumbprint,
             config.tenant_id,
             config.agent_id,
             config.agent_user_id,
@@ -89,8 +91,25 @@ def acquire_agent_user_token(config: OpenclawConfig) -> str:
 
     timeout = httpx.Timeout(15.0)
 
+    # Retrieve private key from OS credential store (Keychain/TPM/Keyring)
+    store = get_credential_store()
+    private_key_pem = store.retrieve("openclaw", "blueprint-private-key")
+    if not private_key_pem:
+        raise AgentIDNotAvailable(
+            "Blueprint private key not found in credential store. "
+            "Run ./scripts/setup.sh to generate and store the certificate."
+        )
+
+    # Build JWT assertion (replaces client_secret per ADR-003)
+    jwt_assertion = build_client_assertion(
+        private_key_pem=private_key_pem,
+        cert_thumbprint=config.blueprint_cert_thumbprint,
+        client_id=config.blueprint_app_id,
+        token_endpoint=url,
+    )
+
     # Hop 1: Blueprint exchange token (T1) via client_credentials
-    # The Blueprint authenticates with its client_secret and requests a token
+    # The Blueprint authenticates with a certificate assertion and requests a token
     # scoped for Agent Identity impersonation (fmi_path=AgentIdentity).
     with httpx.Client(timeout=timeout) as client:
         hop1_resp = client.post(
@@ -100,7 +119,8 @@ def acquire_agent_user_token(config: OpenclawConfig) -> str:
                 "scope": "api://AzureADTokenExchange/.default",
                 "fmi_path": config.agent_id,
                 "grant_type": "client_credentials",
-                "client_secret": config.blueprint_secret,
+                "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                "client_assertion": jwt_assertion,
             },
         )
     t1_token = _check_token_response("hop1:blueprint", hop1_resp.json())

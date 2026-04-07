@@ -47,7 +47,7 @@ class OpenclawConfig:
     tenant_id: str | None = field(default=None)
     blueprint_app_id: str | None = field(default=None)
     blueprint_object_id: str | None = field(default=None)
-    blueprint_secret: str | None = field(default=None)
+    blueprint_cert_thumbprint: str | None = field(default=None)
     agent_id: str | None = field(default=None)
     agent_object_id: str | None = field(default=None)
     agent_user_id: str | None = field(default=None)
@@ -66,7 +66,7 @@ class OpenclawConfig:
             tenant_id=os.environ.get("OPENCLAW_TENANT_ID"),
             blueprint_app_id=os.environ.get("OPENCLAW_BLUEPRINT_APP_ID"),
             blueprint_object_id=os.environ.get("OPENCLAW_BLUEPRINT_OBJECT_ID"),
-            blueprint_secret=os.environ.get("OPENCLAW_BLUEPRINT_SECRET"),
+            blueprint_cert_thumbprint=os.environ.get("OPENCLAW_BLUEPRINT_CERT_THUMBPRINT"),
             agent_id=os.environ.get("OPENCLAW_AGENT_ID"),
             agent_object_id=os.environ.get("OPENCLAW_AGENT_OBJECT_ID"),
             agent_user_id=os.environ.get("OPENCLAW_AGENT_USER_ID"),

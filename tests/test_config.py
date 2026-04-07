@@ -13,7 +13,7 @@ class TestOpenclawConfig:
         assert cfg.tenant_id is None
         assert cfg.blueprint_app_id is None
         assert cfg.blueprint_object_id is None
-        assert cfg.blueprint_secret is None
+        assert cfg.blueprint_cert_thumbprint is None
         assert cfg.agent_id is None
         assert cfg.agent_object_id is None
         assert cfg.agent_user_id is None
@@ -30,7 +30,7 @@ class TestOpenclawConfig:
             "OPENCLAW_TENANT_ID": "my-tenant",
             "OPENCLAW_BLUEPRINT_APP_ID": "my-blueprint",
             "OPENCLAW_BLUEPRINT_OBJECT_ID": "my-blueprint-obj",
-            "OPENCLAW_BLUEPRINT_SECRET": "my-secret",
+            "OPENCLAW_BLUEPRINT_CERT_THUMBPRINT": "my-thumbprint",
             "OPENCLAW_AGENT_ID": "my-agent-id",
             "OPENCLAW_AGENT_OBJECT_ID": "my-agent-obj",
             "OPENCLAW_AGENT_USER_ID": "my-agent-user",
@@ -47,7 +47,7 @@ class TestOpenclawConfig:
         assert cfg.tenant_id == "my-tenant"
         assert cfg.blueprint_app_id == "my-blueprint"
         assert cfg.blueprint_object_id == "my-blueprint-obj"
-        assert cfg.blueprint_secret == "my-secret"
+        assert cfg.blueprint_cert_thumbprint == "my-thumbprint"
         assert cfg.agent_id == "my-agent-id"
         assert cfg.agent_object_id == "my-agent-obj"
         assert cfg.agent_user_id == "my-agent-user"

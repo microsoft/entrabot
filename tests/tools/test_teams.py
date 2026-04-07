@@ -9,7 +9,7 @@ Token acquisition uses the three-hop Agent User flow:
 from __future__ import annotations
 
 import os
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -40,11 +40,21 @@ from openclaw.tools.teams import (
 
 FULL_ENV = {
     "OPENCLAW_BLUEPRINT_APP_ID": "bp-id",
-    "OPENCLAW_BLUEPRINT_SECRET": "bp-secret",
+    "OPENCLAW_BLUEPRINT_CERT_THUMBPRINT": "fake-thumbprint",
     "OPENCLAW_TENANT_ID": "tid",
     "OPENCLAW_AGENT_ID": "agent-id",
     "OPENCLAW_AGENT_USER_ID": "agent-user-oid",
 }
+
+
+def _mock_credential_store():
+    store = MagicMock()
+    store.retrieve.return_value = "fake-pem-key"
+    return store
+
+
+_P_STORE = "openclaw.tools.teams.get_credential_store"
+_P_ASSERT = "openclaw.tools.teams.build_client_assertion"
 
 TOKEN_URL = TOKEN_ENDPOINT.format(tenant="tid")
 
@@ -81,6 +91,8 @@ class TestAcquireAgentUserToken:
         }))
         with (
             patch.dict(os.environ, FULL_ENV, clear=False),
+            patch(_P_STORE, return_value=_mock_credential_store()),
+            patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
             pytest.raises(TokenExchangeError, match="hop1:blueprint"),
         ):
             from openclaw.config import get_config
@@ -99,6 +111,8 @@ class TestAcquireAgentUserToken:
         ])
         with (
             patch.dict(os.environ, FULL_ENV, clear=False),
+            patch(_P_STORE, return_value=_mock_credential_store()),
+            patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
             pytest.raises(TokenExchangeError, match="hop2:agent_identity"),
         ):
             from openclaw.config import get_config
@@ -117,6 +131,8 @@ class TestAcquireAgentUserToken:
         ])
         with (
             patch.dict(os.environ, FULL_ENV, clear=False),
+            patch(_P_STORE, return_value=_mock_credential_store()),
+            patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
             pytest.raises(TokenExchangeError, match="hop3:agent_user"),
         ):
             from openclaw.config import get_config
@@ -130,7 +146,11 @@ class TestAcquireAgentUserToken:
             httpx.Response(200, json={"access_token": "agent-id-token"}),
             httpx.Response(200, json={"access_token": "agent-user-token-123"}),
         ])
-        with patch.dict(os.environ, FULL_ENV, clear=False):
+        with (
+            patch.dict(os.environ, FULL_ENV, clear=False),
+            patch(_P_STORE, return_value=_mock_credential_store()),
+            patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
+        ):
             from openclaw.config import get_config
 
             token = acquire_agent_user_token(get_config())
@@ -144,16 +164,27 @@ class TestAcquireAgentUserToken:
             httpx.Response(200, json={"access_token": "agent-id-token"}),
             httpx.Response(200, json={"access_token": "final-token"}),
         ])
-        with patch.dict(os.environ, FULL_ENV, clear=False):
+        with (
+            patch.dict(os.environ, FULL_ENV, clear=False),
+            patch(_P_STORE, return_value=_mock_credential_store()),
+            patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
+        ):
             from openclaw.config import get_config
 
             acquire_agent_user_token(get_config())
 
-        # Hop 1: client_credentials with fmi_path
+        # Hop 1: client_credentials with certificate assertion
         hop1_body = dict(x.split("=") for x in route.calls[0].request.content.decode().split("&"))
         assert hop1_body["grant_type"] == "client_credentials"
         assert hop1_body["client_id"] == "bp-id"
         assert hop1_body["fmi_path"] == "agent-id"
+        expected_type = (
+            "urn%3Aietf%3Aparams%3Aoauth%3A"
+            "client-assertion-type%3Ajwt-bearer"
+        )
+        assert hop1_body["client_assertion_type"] == expected_type
+        assert hop1_body["client_assertion"] == "mocked-jwt-assertion"
+        assert "client_secret" not in hop1_body
 
         # Hop 2: client_credentials with T1 as assertion
         hop2_body = dict(x.split("=") for x in route.calls[1].request.content.decode().split("&"))
