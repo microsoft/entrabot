@@ -232,38 +232,97 @@ success "Agent ID:  $AGENT_ID"
 success "Agent User: ${AGENT_USER_UPN:-not created} (${AGENT_USER_ID:-n/a})"
 
 # ════════════════════════════════════════════════════════════════════════════
-# Step 6: Create Blueprint client secret (for three-hop flow)
+# Step 6: Generate Blueprint certificate (for three-hop flow)
 # ════════════════════════════════════════════════════════════════════════════
-step 6 "Managing Blueprint client secret"
+step 6 "Managing Blueprint certificate"
 
-# The Blueprint needs a client secret for Hop 1 of the three-hop flow.
-# In production, use a certificate or Managed Identity FIC instead.
-BLUEPRINT_SECRET=$(read_state "BLUEPRINT_SECRET")
+# The Blueprint authenticates with a certificate, not a client secret.
+# Private key is stored in the OS credential store (Keychain/TPM/Keyring).
+# Only the public certificate is uploaded to the Blueprint app in Entra.
+# See ADR-003 for rationale.
+CERT_THUMBPRINT=$(read_state "BLUEPRINT_CERT_THUMBPRINT")
 
-if [ -n "$BLUEPRINT_SECRET" ]; then
-    success "Using cached Blueprint secret from state file"
+if [ -n "$CERT_THUMBPRINT" ]; then
+    success "Using cached certificate (thumbprint: ${CERT_THUMBPRINT:0:16}...)"
 else
-    echo "  Creating new client secret on Blueprint..."
-    BP_CRED_JSON=$(az ad app credential reset \
-        --id "$BLUEPRINT_OBJECT_ID" \
-        --display-name "Openclaw Device" \
-        --append \
-        -o json)
-    BLUEPRINT_SECRET=$("$PYTHON" -c "import sys,json; print(json.loads(sys.stdin.read())['password'])" <<< "$BP_CRED_JSON")
+    echo "  Generating self-signed certificate for Blueprint..."
 
-    if [ -z "$BLUEPRINT_SECRET" ]; then
-        fail "Could not create Blueprint client secret"
+    # Generate cert + private key, compute thumbprint, store key in keyring
+    CERT_RESULT=$("$PYTHON" -c "
+import sys, json, hashlib, base64, tempfile, os
+from cryptography import x509
+from cryptography.x509.oid import NameOID
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from datetime import datetime, timedelta, timezone
+import keyring
+
+# Generate RSA 2048 key
+key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+# Self-signed cert, valid 1 year
+subject = issuer = x509.Name([
+    x509.NameAttribute(NameOID.COMMON_NAME, 'openclaw-blueprint-$BLUEPRINT_APP_ID'),
+    x509.NameAttribute(NameOID.ORGANIZATION_NAME, 'Openclaw Device Agent'),
+])
+cert = (x509.CertificateBuilder()
+    .subject_name(subject)
+    .issuer_name(issuer)
+    .public_key(key.public_key())
+    .serial_number(x509.random_serial_number())
+    .not_valid_before(datetime.now(timezone.utc))
+    .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
+    .sign(key, hashes.SHA256()))
+
+# Compute thumbprint (SHA-256 of DER cert, base64url no padding)
+der_bytes = cert.public_bytes(serialization.Encoding.DER)
+thumbprint = base64.urlsafe_b64encode(hashlib.sha256(der_bytes).digest()).rstrip(b'=').decode()
+
+# Store private key in OS credential store
+pem_key = key.private_bytes(
+    serialization.Encoding.PEM,
+    serialization.PrivateFormat.PKCS8,
+    serialization.NoEncryption(),
+).decode()
+keyring.set_password('openclaw', 'blueprint-private-key', pem_key)
+
+# Write public cert to temp file for az CLI upload
+cert_pem = cert.public_bytes(serialization.Encoding.PEM).decode()
+cert_path = tempfile.mktemp(suffix='.pem')
+with open(cert_path, 'w') as f:
+    f.write(cert_pem)
+
+# Output as JSON
+print(json.dumps({'thumbprint': thumbprint, 'cert_path': cert_path}))
+")
+
+    CERT_THUMBPRINT=$(echo "$CERT_RESULT" | "$PYTHON" -c "import sys,json; print(json.loads(sys.stdin.read())['thumbprint'])")
+    CERT_PATH=$(echo "$CERT_RESULT" | "$PYTHON" -c "import sys,json; print(json.loads(sys.stdin.read())['cert_path'])")
+
+    if [ -z "$CERT_THUMBPRINT" ]; then
+        fail "Could not generate Blueprint certificate"
     fi
 
-    # Persist in state file (not keychain — simpler, same security for dev)
+    # Upload public cert to Blueprint app registration in Entra
+    echo "  Uploading public certificate to Blueprint app..."
+    az ad app credential reset \
+        --id "$BLUEPRINT_OBJECT_ID" \
+        --cert "@$CERT_PATH" \
+        --append \
+        -o json > /dev/null
+
+    rm -f "$CERT_PATH"
+
+    # Persist thumbprint in state file (private key is in keyring, not here)
     "$PYTHON" -c "
 import json, pathlib
 state_file = pathlib.Path('$PROJECT_ROOT/.openclaw-state.json')
 data = json.loads(state_file.read_text()) if state_file.is_file() else {}
-data['BLUEPRINT_SECRET'] = '$BLUEPRINT_SECRET'
+data['BLUEPRINT_CERT_THUMBPRINT'] = '$CERT_THUMBPRINT'
+data.pop('BLUEPRINT_SECRET', None)  # clean up old secret if present
 state_file.write_text(json.dumps(data, indent=2) + '\n')
 "
-    success "Blueprint secret created and stored in state file"
+    success "Certificate generated, uploaded to Entra, private key stored in OS keyring"
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -286,13 +345,14 @@ success "Installed dependencies (including dev)"
 
 cat > .env << EOF
 # Openclaw Identity Research — generated by scripts/setup.sh
-# Uses Agent User (three-hop flow) — no OBO, no device-code
+# Uses Agent User (three-hop flow) with certificate auth — no secrets on disk
+# Private key stored in OS credential store (Keychain/TPM/Keyring)
 # DO NOT commit this file (it is in .gitignore)
 
 OPENCLAW_TENANT_ID=$TENANT_ID
 OPENCLAW_BLUEPRINT_APP_ID=$BLUEPRINT_APP_ID
 OPENCLAW_BLUEPRINT_OBJECT_ID=$BLUEPRINT_OBJECT_ID
-OPENCLAW_BLUEPRINT_SECRET=$BLUEPRINT_SECRET
+OPENCLAW_BLUEPRINT_CERT_THUMBPRINT=$CERT_THUMBPRINT
 OPENCLAW_AGENT_ID=$AGENT_ID
 OPENCLAW_AGENT_OBJECT_ID=$AGENT_OBJECT_ID
 OPENCLAW_AGENT_USER_ID=${AGENT_USER_ID:-}
@@ -321,7 +381,8 @@ echo -e "  Blueprint:   ${BLUE}$BLUEPRINT_APP_ID${NC}"
 echo -e "  Agent ID:    ${BLUE}$AGENT_ID${NC}"
 echo -e "  Agent User:  ${BLUE}${AGENT_USER_UPN:-not created}${NC} (${AGENT_USER_ID:-n/a})"
 echo -e "  Human User:  ${BLUE}$HUMAN_UPN${NC}"
-echo -e "  Auth Flow:   ${BLUE}Three-hop (Blueprint → Agent Identity → Agent User)${NC}"
+echo -e "  Auth Flow:   ${BLUE}Three-hop (Blueprint cert → Agent Identity → Agent User)${NC}"
+echo -e "  Credential:  ${BLUE}Certificate (private key in OS keyring, no secrets on disk)${NC}"
 echo ""
 
 if [ -z "$AGENT_USER_ID" ]; then
