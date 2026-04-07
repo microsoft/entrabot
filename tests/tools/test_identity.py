@@ -10,17 +10,17 @@ from unittest.mock import patch
 
 import pytest
 
-from openclaw.tools.identity import whoami
+from entraclaw.tools.identity import whoami
 
 
 class TestWhoami:
     @pytest.mark.asyncio
     async def test_returns_config_when_set(self) -> None:
         env = {
-            "OPENCLAW_BLUEPRINT_APP_ID": "test-blueprint-id",
-            "OPENCLAW_TENANT_ID": "test-tenant-id",
-            "OPENCLAW_AGENT_ID": "test-agent-id",
-            "OPENCLAW_HUMAN_UPN": "human@example.com",
+            "ENTRACLAW_BLUEPRINT_APP_ID": "test-blueprint-id",
+            "ENTRACLAW_TENANT_ID": "test-tenant-id",
+            "ENTRACLAW_AGENT_ID": "test-agent-id",
+            "ENTRACLAW_HUMAN_UPN": "human@example.com",
         }
         with patch.dict(os.environ, env, clear=False):
             result = await whoami(token="fake-token")
@@ -34,8 +34,8 @@ class TestWhoami:
     @pytest.mark.asyncio
     async def test_not_authenticated_without_token(self) -> None:
         env = {
-            "OPENCLAW_BLUEPRINT_APP_ID": "bp-id",
-            "OPENCLAW_TENANT_ID": "tid",
+            "ENTRACLAW_BLUEPRINT_APP_ID": "bp-id",
+            "ENTRACLAW_TENANT_ID": "tid",
         }
         with patch.dict(os.environ, env, clear=False):
             result = await whoami()
@@ -44,7 +44,7 @@ class TestWhoami:
     @pytest.mark.asyncio
     async def test_defaults_when_not_configured(self) -> None:
         # Remove all Openclaw env vars
-        cleaned = {k: v for k, v in os.environ.items() if not k.startswith("OPENCLAW_")}
+        cleaned = {k: v for k, v in os.environ.items() if not k.startswith("ENTRACLAW_")}
         with patch.dict(os.environ, cleaned, clear=True):
             result = await whoami()
         assert result["agent_id"] == "not_configured"

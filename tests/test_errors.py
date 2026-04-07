@@ -1,13 +1,13 @@
-"""Tests for the Openclaw error hierarchy."""
+"""Tests for the EntraClaw error hierarchy."""
 
 import pytest
 
-from openclaw.errors import (
+from entraclaw.errors import (
     AgentIDNotAvailable,
     AuthError,
     ChatNotFound,
+    EntraClawError,
     MessageTooLong,
-    OpenclawError,
     RateLimitError,
     TeamsError,
     TeamsNotLicensed,
@@ -19,8 +19,8 @@ from openclaw.errors import (
 class TestErrorHierarchy:
     """Verify that error classes inherit from the expected bases."""
 
-    def test_auth_errors_inherit_openclaw(self) -> None:
-        assert issubclass(AuthError, OpenclawError)
+    def test_auth_errors_inherit_entraclaw(self) -> None:
+        assert issubclass(AuthError, EntraClawError)
 
     def test_token_exchange_error_inherits_auth(self) -> None:
         assert issubclass(TokenExchangeError, AuthError)
@@ -31,8 +31,8 @@ class TestErrorHierarchy:
     def test_token_expired_inherits_auth(self) -> None:
         assert issubclass(TokenExpiredError, AuthError)
 
-    def test_teams_errors_inherit_openclaw(self) -> None:
-        assert issubclass(TeamsError, OpenclawError)
+    def test_teams_errors_inherit_entraclaw(self) -> None:
+        assert issubclass(TeamsError, EntraClawError)
 
     def test_teams_not_licensed_inherits_teams(self) -> None:
         assert issubclass(TeamsNotLicensed, TeamsError)
@@ -43,8 +43,8 @@ class TestErrorHierarchy:
     def test_message_too_long_inherits_teams(self) -> None:
         assert issubclass(MessageTooLong, TeamsError)
 
-    def test_rate_limit_inherits_openclaw(self) -> None:
-        assert issubclass(RateLimitError, OpenclawError)
+    def test_rate_limit_inherits_entraclaw(self) -> None:
+        assert issubclass(RateLimitError, EntraClawError)
 
 
 class TestErrorMessages:
@@ -65,8 +65,8 @@ class TestErrorMessages:
         err = RateLimitError()
         assert err.retry_after == 60
 
-    def test_catch_all_openclaw_errors(self) -> None:
-        """All custom errors can be caught with ``except OpenclawError``."""
+    def test_catch_all_entraclaw_errors(self) -> None:
+        """All custom errors can be caught with ``except EntraClawError``."""
         errors = [
             TokenExchangeError("hop1", "e", "d"),
             AgentIDNotAvailable("a"),
@@ -77,5 +77,5 @@ class TestErrorMessages:
             RateLimitError(10),
         ]
         for err in errors:
-            with pytest.raises(OpenclawError):
+            with pytest.raises(EntraClawError):
                 raise err

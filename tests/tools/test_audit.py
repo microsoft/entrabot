@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from openclaw.tools.audit import log_event
+from entraclaw.tools.audit import log_event
 
 
 @pytest.fixture
@@ -21,7 +21,7 @@ def audit_dir(tmp_path: Path) -> Path:
 
 class TestAuditLogEvent:
     def test_creates_event_with_required_fields(self, audit_dir: Path) -> None:
-        with patch("openclaw.tools.audit._audit_dir", return_value=audit_dir):
+        with patch("entraclaw.tools.audit._audit_dir", return_value=audit_dir):
             event = log_event(
                 action="graph_api_call",
                 resource="/v1.0/chats",
@@ -35,7 +35,7 @@ class TestAuditLogEvent:
         assert event["timestamp"]
 
     def test_writes_jsonl_file(self, audit_dir: Path) -> None:
-        with patch("openclaw.tools.audit._audit_dir", return_value=audit_dir):
+        with patch("entraclaw.tools.audit._audit_dir", return_value=audit_dir):
             log_event(action="test", resource="r", agent_id="a")
 
         files = list(audit_dir.glob("*.jsonl"))
@@ -46,7 +46,7 @@ class TestAuditLogEvent:
         assert parsed["action"] == "test"
 
     def test_appends_multiple_events(self, audit_dir: Path) -> None:
-        with patch("openclaw.tools.audit._audit_dir", return_value=audit_dir):
+        with patch("entraclaw.tools.audit._audit_dir", return_value=audit_dir):
             log_event(action="a1", resource="r1", agent_id="a")
             log_event(action="a2", resource="r2", agent_id="a")
 
@@ -56,12 +56,12 @@ class TestAuditLogEvent:
         assert len(lines) == 2
 
     def test_custom_outcome(self, audit_dir: Path) -> None:
-        with patch("openclaw.tools.audit._audit_dir", return_value=audit_dir):
+        with patch("entraclaw.tools.audit._audit_dir", return_value=audit_dir):
             event = log_event(action="x", resource="r", outcome="failure", agent_id="a")
         assert event["outcome"] == "failure"
 
     def test_metadata(self, audit_dir: Path) -> None:
-        with patch("openclaw.tools.audit._audit_dir", return_value=audit_dir):
+        with patch("entraclaw.tools.audit._audit_dir", return_value=audit_dir):
             event = log_event(
                 action="x",
                 resource="r",
@@ -80,8 +80,8 @@ class TestAuditLogEvent:
             },
         )()
         with (
-            patch("openclaw.tools.audit._audit_dir", return_value=audit_dir),
-            patch("openclaw.platform.get_credential_store", return_value=mock_store),
+            patch("entraclaw.tools.audit._audit_dir", return_value=audit_dir),
+            patch("entraclaw.platform.get_credential_store", return_value=mock_store),
         ):
             event = log_event(action="x", resource="r")
         assert event["agent_id"] == "unknown"

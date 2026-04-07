@@ -1,4 +1,4 @@
-"""Pydantic models for Openclaw domain objects.
+"""Pydantic models for EntraClaw domain objects.
 
 SECURITY: TokenResult.__repr__ is overridden so access_token,
 refresh_token, and password values are NEVER exposed in logs or
@@ -20,7 +20,7 @@ class AgentIdentity(BaseModel):
     client_id: str
     tenant_id: str
     object_id: str
-    display_name: str = "Openclaw Agent"
+    display_name: str = "EntraClaw Agent"
 
 
 class TokenResult(BaseModel):

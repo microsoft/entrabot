@@ -4,22 +4,22 @@ from __future__ import annotations
 
 import platform as _platform
 
-from openclaw.platform.base import CredentialStore
+from entraclaw.platform.base import CredentialStore
 
 
 def get_credential_store() -> CredentialStore:
     """Return an OS-appropriate credential store implementation."""
     system = _platform.system()
     if system == "Darwin":
-        from openclaw.platform.mac import MacCredentialStore
+        from entraclaw.platform.mac import MacCredentialStore
 
         return MacCredentialStore()
     elif system == "Windows":
-        from openclaw.platform.windows import WindowsCredentialStore
+        from entraclaw.platform.windows import WindowsCredentialStore
 
         return WindowsCredentialStore()
     elif system == "Linux":
-        from openclaw.platform.linux import LinuxCredentialStore
+        from entraclaw.platform.linux import LinuxCredentialStore
 
         return LinuxCredentialStore()
     raise RuntimeError(f"Unsupported platform: {system}")

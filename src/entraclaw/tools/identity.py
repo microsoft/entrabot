@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import logging
 
-from openclaw.config import get_config
+from entraclaw.config import get_config
 
-logger = logging.getLogger("openclaw.tools.identity")
+logger = logging.getLogger("entraclaw.tools.identity")
 
 
 async def whoami(*, token: str | None = None) -> dict:

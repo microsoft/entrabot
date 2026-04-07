@@ -4,7 +4,7 @@ create_entra_agent_ids.py
 =========================
 Creates an Agent Identity Blueprint and a per-device Agent Identity in
 Microsoft Entra ID via the Graph beta API.  Stores the resulting IDs in
-the local provision state file (.openclaw-state.json).
+the local provision state file (.entraclaw-state.json).
 
 Uses the dedicated provisioner app from entra_provisioning.py — never
 Azure CLI tokens (which include Directory.AccessAsUser.All and get
@@ -38,7 +38,7 @@ from entra_provisioning import (
 
 GRAPH_BASE = "https://graph.microsoft.com/beta"
 
-BLUEPRINT_DISPLAY_NAME = "Openclaw Code Agent"
+BLUEPRINT_DISPLAY_NAME = "EntraClaw Code Agent"
 
 
 def odata_escape(value: str) -> str:
@@ -171,7 +171,7 @@ def create_blueprint(token: str) -> tuple[str, str]:
     body: dict = {
         "@odata.type": "Microsoft.Graph.AgentIdentityBlueprint",
         "displayName": BLUEPRINT_DISPLAY_NAME,
-        "description": "Agent Identity Blueprint for Openclaw device agents",
+        "description": "Agent Identity Blueprint for EntraClaw device agents",
     }
     sponsors_bind = build_sponsors_bind()
     if sponsors_bind:
@@ -215,7 +215,7 @@ def _agent_display_name() -> str:
         hostname = socket.gethostname().split(".")[0]
     except Exception:
         hostname = platform.node() or "unknown"
-    return f"Openclaw Agent - {hostname}"
+    return f"EntraClaw Agent - {hostname}"
 
 
 def find_existing_agent_identity(
@@ -339,7 +339,7 @@ def _agent_user_upn() -> str:
             "--query", "value[?isDefault].id | [0]", "-o", "tsv",
         ])
         domain = out if rc == 0 and out else "unknown.onmicrosoft.com"
-    return f"openclaw-agent@{domain}"
+    return f"entraclaw-agent@{domain}"
 
 
 def _resolve_graph_sp_object_id(token: str) -> str | None:
@@ -397,10 +397,10 @@ def create_agent_user(
     upn = _agent_user_upn()
     body = {
         "@odata.type": "microsoft.graph.agentUser",
-        "displayName": "Openclaw Agent",
+        "displayName": "EntraClaw Agent",
         "userPrincipalName": upn,
         "identityParentId": agent_identity_obj_id,
-        "mailNickname": "openclaw-agent",
+        "mailNickname": "entraclaw-agent",
         "accountEnabled": True,
     }
 
@@ -700,7 +700,7 @@ def assign_license_to_agent_user(token: str, agent_user_id: str) -> None:
 
 def main() -> int:
     print("=" * 60)
-    print("Openclaw — Entra Agent Identity Provisioning")
+    print("EntraClaw — Entra Agent Identity Provisioning")
     print("=" * 60)
 
     try:

@@ -1,7 +1,7 @@
 """Teams Graph API integration — 1:1 chat creation and messaging.
 
 All HTTP calls use ``httpx.AsyncClient`` with proper auth headers.
-Errors are mapped to the typed hierarchy in ``openclaw.errors``.
+Errors are mapped to the typed hierarchy in ``entraclaw.errors``.
 
 The agent token is acquired via the three-hop Agent User flow:
   1. Blueprint authenticates with client_credentials → Blueprint token
@@ -18,9 +18,9 @@ import logging
 
 import httpx
 
-from openclaw.auth.certificate import build_client_assertion
-from openclaw.config import OpenclawConfig
-from openclaw.errors import (
+from entraclaw.auth.certificate import build_client_assertion
+from entraclaw.config import EntraClawConfig
+from entraclaw.errors import (
     AgentIDNotAvailable,
     ChatNotFound,
     MessageTooLong,
@@ -29,9 +29,9 @@ from openclaw.errors import (
     TokenExchangeError,
     TokenExpiredError,
 )
-from openclaw.platform import get_credential_store
+from entraclaw.platform import get_credential_store
 
-logger = logging.getLogger("openclaw.tools.teams")
+logger = logging.getLogger("entraclaw.tools.teams")
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 TOKEN_ENDPOINT = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
@@ -61,7 +61,7 @@ def _check_token_response(hop: str, data: dict) -> str:
     return token
 
 
-def acquire_agent_user_token(config: OpenclawConfig) -> str:
+def acquire_agent_user_token(config: EntraClawConfig) -> str:
     """Acquire a delegated token for the Agent User via the three-hop flow.
 
     Hop 1: Blueprint → client_credentials → Blueprint token
@@ -93,7 +93,7 @@ def acquire_agent_user_token(config: OpenclawConfig) -> str:
 
     # Retrieve private key from OS credential store (Keychain/TPM/Keyring)
     store = get_credential_store()
-    private_key_pem = store.retrieve("openclaw", "blueprint-private-key")
+    private_key_pem = store.retrieve("entraclaw", "blueprint-private-key")
     if not private_key_pem:
         raise AgentIDNotAvailable(
             "Blueprint private key not found in credential store. "

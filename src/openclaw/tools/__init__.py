@@ -1,1 +1,0 @@
-"""Openclaw MCP server tools."""

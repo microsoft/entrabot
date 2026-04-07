@@ -1,7 +1,7 @@
-"""JSON-structured logging for Openclaw.
+"""JSON-structured logging for EntraClaw.
 
-Logs to ~/.openclaw/logs/openclaw.log with a JSON formatter.
-Log level is controlled by the OPENCLAW_LOG_LEVEL env var (default: INFO).
+Logs to ~/.entraclaw/logs/entraclaw.log with a JSON formatter.
+Log level is controlled by the ENTRACLAW_LOG_LEVEL env var (default: INFO).
 Directories are created lazily on first use.
 """
 
@@ -12,7 +12,7 @@ import logging
 import sys
 from datetime import UTC, datetime
 
-from openclaw.config import get_config
+from entraclaw.config import get_config
 
 
 class _JSONFormatter(logging.Formatter):
@@ -36,9 +36,9 @@ class _JSONFormatter(logging.Formatter):
 
 
 def setup_logging() -> logging.Logger:
-    """Configure the root ``openclaw`` logger and return it."""
+    """Configure the root ``entraclaw`` logger and return it."""
     cfg = get_config()
-    logger = logging.getLogger("openclaw")
+    logger = logging.getLogger("entraclaw")
 
     if logger.handlers:
         return logger  # already configured
@@ -50,7 +50,7 @@ def setup_logging() -> logging.Logger:
     # File handler — create log directory lazily
     try:
         cfg.log_dir.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(cfg.log_dir / "openclaw.log")
+        file_handler = logging.FileHandler(cfg.log_dir / "entraclaw.log")
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
     except OSError:

@@ -41,13 +41,13 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 
 [tool.coverage.run]
-source = ["openclaw"]
+source = ["entraclaw"]
 omit = [
-    "src/openclaw/mcp_server.py",
-    "src/openclaw/logging_config.py",
-    "src/openclaw/platform/mac.py",
-    "src/openclaw/platform/linux.py",
-    "src/openclaw/platform/windows.py",
+    "src/entraclaw/mcp_server.py",
+    "src/entraclaw/logging_config.py",
+    "src/entraclaw/platform/mac.py",
+    "src/entraclaw/platform/linux.py",
+    "src/entraclaw/platform/windows.py",
 ]
 
 [tool.coverage.report]
@@ -63,4 +63,4 @@ exclude_lines = [
 where = ["src"]
 
 [project.scripts]
-openclaw-mcp = "openclaw.mcp_server:main"
+entraclaw-mcp = "entraclaw.mcp_server:main"

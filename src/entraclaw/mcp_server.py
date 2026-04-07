@@ -1,4 +1,4 @@
-"""Openclaw MCP server — pre-authenticated Agent User tools.
+"""EntraClaw MCP server — pre-authenticated Agent User tools.
 
 Authentication is fully automatic. The server loads credentials from .env
 (written by scripts/setup.sh), acquires an Agent User token via the three-hop
@@ -20,18 +20,18 @@ from mcp.server.stdio import stdio_server
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage, JSONRPCNotification
 
-from openclaw.config import get_config
-from openclaw.errors import OpenclawError, TokenExchangeError
-from openclaw.logging_config import setup_logging
-from openclaw.tools.teams import acquire_agent_user_token
+from entraclaw.config import get_config
+from entraclaw.errors import EntraClawError, TokenExchangeError
+from entraclaw.logging_config import setup_logging
+from entraclaw.tools.teams import acquire_agent_user_token
 
 logger: logging.Logger | None = None
 
 mcp = FastMCP(
-    "Openclaw Agent Identity",
+    "EntraClaw Agent Identity",
     instructions=(
         "You are an autonomous AI agent with your own Microsoft Teams identity. "
-        "You send and receive messages as 'Openclaw Agent' — a real Teams user. "
+        "You send and receive messages as 'EntraClaw Agent' — a real Teams user. "
         "Authentication is fully automatic.\n\n"
         "WHY THIS EXISTS: The human developer is REMOTE — on their phone, at a "
         "bar, on a train. They communicate with you through Teams, not the "
@@ -97,7 +97,7 @@ async def _with_token_retry(fn, **kwargs):
     The function *fn* must accept a ``token`` keyword argument.
     Any additional kwargs are passed through to *fn*.
     """
-    from openclaw.errors import TokenExpiredError
+    from entraclaw.errors import TokenExpiredError
 
     try:
         return await fn(token=str(_state["token"]), **kwargs)
@@ -164,18 +164,18 @@ async def _initialize() -> None:
     """Acquire the Agent User token and set up the Teams chat.
 
     Called lazily on the first tool invocation. All config comes from
-    environment variables (loaded from .env by openclaw.config).
+    environment variables (loaded from .env by entraclaw.config).
     """
     if _state.get("initialized"):
         return
 
-    from openclaw.tools.teams import create_or_find_chat
+    from entraclaw.tools.teams import create_or_find_chat
 
     config = get_config()
 
     if not config.blueprint_app_id or not config.tenant_id:
         print(  # noqa: T201
-            "ERROR: OPENCLAW_BLUEPRINT_APP_ID / OPENCLAW_TENANT_ID not set. "
+            "ERROR: ENTRACLAW_BLUEPRINT_APP_ID / ENTRACLAW_TENANT_ID not set. "
             "Run ./scripts/setup.sh first.",
             file=sys.stderr,
         )
@@ -184,7 +184,7 @@ async def _initialize() -> None:
     # Acquire Agent User token via three-hop flow
     try:
         token = acquire_agent_user_token(config)
-    except (TokenExchangeError, OpenclawError) as exc:
+    except (TokenExchangeError, EntraClawError) as exc:
         print(  # noqa: T201
             f"ERROR: Failed to acquire Agent User token. Run ./scripts/setup.sh first.\n{exc}",
             file=sys.stderr,
@@ -207,13 +207,13 @@ async def _initialize() -> None:
                 agent_user_id=config.agent_user_id,
             )
             _state["chat_id"] = chat["chat_id"]
-        except OpenclawError as exc:
+        except EntraClawError as exc:
             # Non-fatal: Teams chat is optional (audit still works)
             if logger:
                 logger.warning("Could not set up Teams chat: %s", exc)
     else:
         if logger:
-            logger.warning("OPENCLAW_HUMAN_USER_ID not set — Teams tools will not work")
+            logger.warning("ENTRACLAW_HUMAN_USER_ID not set — Teams tools will not work")
 
     _state["initialized"] = True
 
@@ -243,13 +243,13 @@ async def _background_poll() -> None:
     """
     import asyncio
 
-    from openclaw.tools.teams import filter_human_messages, read
+    from entraclaw.tools.teams import filter_human_messages, read
 
     if logger:
         logger.info("Starting background Teams poll (interval=%ds)", BACKGROUND_POLL_INTERVAL)
 
     config = _state["config"]
-    agent_display_name = config.agent_user_upn or "Openclaw Agent"
+    agent_display_name = config.agent_user_upn or "EntraClaw Agent"
     chat_id = str(_state["chat_id"])
 
     # Background poll has its OWN cursor and seen-set (separate from watch_teams_replies)
@@ -355,7 +355,7 @@ async def send_teams_message(message: str, content_type: str = "text") -> str:
         JSON with message_id and sent_at timestamp.
     """
     await _initialize()
-    from openclaw.tools.teams import send
+    from entraclaw.tools.teams import send
 
     chat_id = _state.get("chat_id")
     if not chat_id:
@@ -385,7 +385,7 @@ async def read_teams_messages(count: int = 5) -> str:
         JSON array of messages, each with message_id, from, content, sent_at.
     """
     await _initialize()
-    from openclaw.tools.teams import read
+    from entraclaw.tools.teams import read
 
     chat_id = _state.get("chat_id")
     if not chat_id:
@@ -426,14 +426,14 @@ async def watch_teams_replies(
     import asyncio
 
     await _initialize()
-    from openclaw.tools.teams import filter_human_messages, read
+    from entraclaw.tools.teams import filter_human_messages, read
 
     chat_id = _state.get("chat_id")
     if not chat_id:
         return json.dumps({"error": "Teams chat not established. Check setup."})
 
     config = _state["config"]
-    agent_display_name = config.agent_user_upn or "Openclaw Agent"
+    agent_display_name = config.agent_user_upn or "EntraClaw Agent"
 
     # Bootstrap cursor on first call: fetch latest messages, set cursor to newest
     if _state.get("last_seen_timestamp") is None:
@@ -540,7 +540,7 @@ def audit_log(
     user's behalf. No credentials needed — works immediately.
 
     The audit trail proves the agent (not the human) performed the action.
-    Events are written to ~/.openclaw/audit/ as daily JSONL files.
+    Events are written to ~/.entraclaw/audit/ as daily JSONL files.
 
     Args:
         action: What the agent is doing (e.g., "file_read", "code_execute").
@@ -551,7 +551,7 @@ def audit_log(
     Returns:
         JSON with event_id, timestamp, and the recorded event.
     """
-    from openclaw.tools.audit import log_event
+    from entraclaw.tools.audit import log_event
 
     config = get_config()
     meta = json.loads(metadata) if metadata else {}
@@ -576,7 +576,7 @@ async def whoami() -> str:
         JSON with agent identity details and connection status.
     """
     await _initialize()
-    from openclaw.tools.identity import whoami as _whoami
+    from entraclaw.tools.identity import whoami as _whoami
 
     token = _state.get("token")
     result = await _whoami(token=str(token) if token else None)
@@ -607,12 +607,12 @@ async def _run_stdio_with_write_stream() -> None:
 
 
 def main() -> None:
-    """Entry point for ``openclaw-mcp`` console script."""
+    """Entry point for ``entraclaw-mcp`` console script."""
     import anyio
 
     global logger
     logger = setup_logging()
-    logger.info("Starting Openclaw MCP server (Agent User auth)")
+    logger.info("Starting EntraClaw MCP server (Agent User auth)")
     anyio.run(_run_stdio_with_write_stream)
 
 

@@ -1,9 +1,9 @@
 {
-  "name": "openclaw",
+  "name": "entraclaw",
   "description": "Microsoft Teams channel for Claude Code — autonomous AI agent with its own Entra identity, bidirectional messaging via Graph API.",
   "version": "0.1.0",
   "keywords": [
-    "openclaw",
+    "entraclaw",
     "teams",
     "messaging",
     "channel",

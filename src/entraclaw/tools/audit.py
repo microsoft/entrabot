@@ -2,7 +2,7 @@
 
 Every agent action that touches a resource emits an audit event
 BEFORE the action proceeds. Events are appended to daily JSONL files
-under ``~/.openclaw/audit/``.
+under ``~/.entraclaw/audit/``.
 """
 
 from __future__ import annotations
@@ -13,9 +13,9 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from openclaw.config import get_config
+from entraclaw.config import get_config
 
-logger = logging.getLogger("openclaw.tools.audit")
+logger = logging.getLogger("entraclaw.tools.audit")
 
 
 def _audit_dir() -> Path:
@@ -39,10 +39,10 @@ def log_event(
     """
     if agent_id is None:
         try:
-            from openclaw.platform import get_credential_store
+            from entraclaw.platform import get_credential_store
 
             store = get_credential_store()
-            agent_id = store.retrieve("openclaw", "active_client_id") or "unknown"
+            agent_id = store.retrieve("entraclaw", "active_client_id") or "unknown"
         except Exception:
             agent_id = "unknown"
 

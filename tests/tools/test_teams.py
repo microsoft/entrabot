@@ -15,7 +15,7 @@ import httpx
 import pytest
 import respx
 
-from openclaw.errors import (
+from entraclaw.errors import (
     AgentIDNotAvailable,
     ChatNotFound,
     MessageTooLong,
@@ -24,7 +24,7 @@ from openclaw.errors import (
     TokenExchangeError,
     TokenExpiredError,
 )
-from openclaw.tools.teams import (
+from entraclaw.tools.teams import (
     GRAPH_BASE,
     MAX_MESSAGE_LENGTH,
     TOKEN_ENDPOINT,
@@ -39,11 +39,11 @@ from openclaw.tools.teams import (
 # ---------------------------------------------------------------------------
 
 FULL_ENV = {
-    "OPENCLAW_BLUEPRINT_APP_ID": "bp-id",
-    "OPENCLAW_BLUEPRINT_CERT_THUMBPRINT": "fake-thumbprint",
-    "OPENCLAW_TENANT_ID": "tid",
-    "OPENCLAW_AGENT_ID": "agent-id",
-    "OPENCLAW_AGENT_USER_ID": "agent-user-oid",
+    "ENTRACLAW_BLUEPRINT_APP_ID": "bp-id",
+    "ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT": "fake-thumbprint",
+    "ENTRACLAW_TENANT_ID": "tid",
+    "ENTRACLAW_AGENT_ID": "agent-id",
+    "ENTRACLAW_AGENT_USER_ID": "agent-user-oid",
 }
 
 
@@ -53,33 +53,33 @@ def _mock_credential_store():
     return store
 
 
-_P_STORE = "openclaw.tools.teams.get_credential_store"
-_P_ASSERT = "openclaw.tools.teams.build_client_assertion"
+_P_STORE = "entraclaw.tools.teams.get_credential_store"
+_P_ASSERT = "entraclaw.tools.teams.build_client_assertion"
 
 TOKEN_URL = TOKEN_ENDPOINT.format(tenant="tid")
 
 
 class TestAcquireAgentUserToken:
     def test_missing_config_raises(self) -> None:
-        cleaned = {k: v for k, v in os.environ.items() if not k.startswith("OPENCLAW_")}
+        cleaned = {k: v for k, v in os.environ.items() if not k.startswith("ENTRACLAW_")}
         with (
             patch.dict(os.environ, cleaned, clear=True),
             pytest.raises(AgentIDNotAvailable),
         ):
-            from openclaw.config import get_config
+            from entraclaw.config import get_config
 
             acquire_agent_user_token(get_config())
 
     def test_missing_agent_user_id_raises(self) -> None:
-        env = {k: v for k, v in FULL_ENV.items() if k != "OPENCLAW_AGENT_USER_ID"}
-        # Clear all OPENCLAW_ vars to avoid interference, then set only ours
-        cleaned = {k: v for k, v in os.environ.items() if not k.startswith("OPENCLAW_")}
+        env = {k: v for k, v in FULL_ENV.items() if k != "ENTRACLAW_AGENT_USER_ID"}
+        # Clear all ENTRACLAW_ vars to avoid interference, then set only ours
+        cleaned = {k: v for k, v in os.environ.items() if not k.startswith("ENTRACLAW_")}
         cleaned.update(env)
         with (
             patch.dict(os.environ, cleaned, clear=True),
             pytest.raises(AgentIDNotAvailable),
         ):
-            from openclaw.config import get_config
+            from entraclaw.config import get_config
 
             acquire_agent_user_token(get_config())
 
@@ -95,7 +95,7 @@ class TestAcquireAgentUserToken:
             patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
             pytest.raises(TokenExchangeError, match="hop1:blueprint"),
         ):
-            from openclaw.config import get_config
+            from entraclaw.config import get_config
 
             acquire_agent_user_token(get_config())
 
@@ -115,7 +115,7 @@ class TestAcquireAgentUserToken:
             patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
             pytest.raises(TokenExchangeError, match="hop2:agent_identity"),
         ):
-            from openclaw.config import get_config
+            from entraclaw.config import get_config
 
             acquire_agent_user_token(get_config())
 
@@ -135,7 +135,7 @@ class TestAcquireAgentUserToken:
             patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
             pytest.raises(TokenExchangeError, match="hop3:agent_user"),
         ):
-            from openclaw.config import get_config
+            from entraclaw.config import get_config
 
             acquire_agent_user_token(get_config())
 
@@ -151,7 +151,7 @@ class TestAcquireAgentUserToken:
             patch(_P_STORE, return_value=_mock_credential_store()),
             patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
         ):
-            from openclaw.config import get_config
+            from entraclaw.config import get_config
 
             token = acquire_agent_user_token(get_config())
         assert token == "agent-user-token-123"
@@ -169,7 +169,7 @@ class TestAcquireAgentUserToken:
             patch(_P_STORE, return_value=_mock_credential_store()),
             patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
         ):
-            from openclaw.config import get_config
+            from entraclaw.config import get_config
 
             acquire_agent_user_token(get_config())
 

@@ -11,7 +11,7 @@ import httpx
 import pytest
 import respx
 
-from openclaw.tools.teams import GRAPH_BASE, filter_human_messages
+from entraclaw.tools.teams import GRAPH_BASE, filter_human_messages
 
 
 class TestFilterHumanMessages:
@@ -25,7 +25,7 @@ class TestFilterHumanMessages:
             },
             {
                 "message_id": "m2",
-                "from": "Openclaw Agent",
+                "from": "EntraClaw Agent",
                 "content": "hi back",
                 "sent_at": "2026-04-06T12:00:01Z",
             },
@@ -36,7 +36,7 @@ class TestFilterHumanMessages:
                 "sent_at": "2026-04-06T12:00:02Z",
             },
         ]
-        result = filter_human_messages(messages, agent_user_display_name="Openclaw Agent")
+        result = filter_human_messages(messages, agent_user_display_name="EntraClaw Agent")
         assert len(result) == 2
         assert result[0]["message_id"] == "m1"
         assert result[1]["message_id"] == "m3"
@@ -58,24 +58,24 @@ class TestFilterHumanMessages:
         ]
         # "unknown" is what teams.read() returns when from is None — see existing code
         # System messages have from="unknown", so filter those out too
-        result = filter_human_messages(messages, agent_user_display_name="Openclaw Agent")
+        result = filter_human_messages(messages, agent_user_display_name="EntraClaw Agent")
         assert len(result) == 1
         assert result[0]["message_id"] == "m1"
 
     def test_empty_list(self) -> None:
-        result = filter_human_messages([], agent_user_display_name="Openclaw Agent")
+        result = filter_human_messages([], agent_user_display_name="EntraClaw Agent")
         assert result == []
 
     def test_all_agent_messages(self) -> None:
         messages = [
             {
                 "message_id": "m1",
-                "from": "Openclaw Agent",
+                "from": "EntraClaw Agent",
                 "content": "hi",
                 "sent_at": "2026-04-06T12:00:00Z",
             },
         ]
-        result = filter_human_messages(messages, agent_user_display_name="Openclaw Agent")
+        result = filter_human_messages(messages, agent_user_display_name="EntraClaw Agent")
         assert result == []
 
 
@@ -83,7 +83,7 @@ class TestEagerTokenRefresh:
     @pytest.mark.asyncio
     async def test_refreshes_when_expired(self) -> None:
         """Token older than 55 min should be refreshed."""
-        from openclaw import mcp_server
+        from entraclaw import mcp_server
 
         mock_acquire = MagicMock(return_value="new-token")
         mock_config = MagicMock()
@@ -94,7 +94,7 @@ class TestEagerTokenRefresh:
             mcp_server._state["config"] = mock_config
             mcp_server._state["token_acquired_at"] = time.monotonic() - 3400
 
-            with patch("openclaw.mcp_server.acquire_agent_user_token", mock_acquire):
+            with patch("entraclaw.mcp_server.acquire_agent_user_token", mock_acquire):
                 await mcp_server._ensure_valid_token()
 
             assert mcp_server._state["token"] == "new-token"
@@ -106,7 +106,7 @@ class TestEagerTokenRefresh:
     @pytest.mark.asyncio
     async def test_no_refresh_when_fresh(self) -> None:
         """Token younger than 55 min should NOT be refreshed."""
-        from openclaw import mcp_server
+        from entraclaw import mcp_server
 
         mock_acquire = MagicMock(return_value="new-token")
         mock_config = MagicMock()
@@ -117,7 +117,7 @@ class TestEagerTokenRefresh:
             mcp_server._state["config"] = mock_config
             mcp_server._state["token_acquired_at"] = time.monotonic() - 100
 
-            with patch("openclaw.mcp_server.acquire_agent_user_token", mock_acquire):
+            with patch("entraclaw.mcp_server.acquire_agent_user_token", mock_acquire):
                 await mcp_server._ensure_valid_token()
 
             assert mcp_server._state["token"] == "fresh-token"
@@ -131,8 +131,8 @@ class TestLazyTokenRetry:
     @pytest.mark.asyncio
     async def test_retry_on_401(self) -> None:
         """TokenExpiredError on first call should trigger refresh + retry."""
-        from openclaw import mcp_server
-        from openclaw.errors import TokenExpiredError
+        from entraclaw import mcp_server
+        from entraclaw.errors import TokenExpiredError
 
         call_count = 0
 
@@ -152,7 +152,7 @@ class TestLazyTokenRetry:
             mcp_server._state["config"] = mock_config
             mcp_server._state["token_acquired_at"] = time.monotonic()
 
-            with patch("openclaw.mcp_server.acquire_agent_user_token", mock_acquire):
+            with patch("entraclaw.mcp_server.acquire_agent_user_token", mock_acquire):
                 result = await mcp_server._with_token_retry(flaky_fn)
 
             assert result == "result-with-refreshed-token"
@@ -165,8 +165,8 @@ class TestLazyTokenRetry:
     @pytest.mark.asyncio
     async def test_raises_if_retry_also_fails(self) -> None:
         """If both attempts fail with TokenExpiredError, propagate the error."""
-        from openclaw import mcp_server
-        from openclaw.errors import TokenExpiredError
+        from entraclaw import mcp_server
+        from entraclaw.errors import TokenExpiredError
 
         async def always_fails(*, token: str) -> str:
             raise TokenExpiredError("still expired")
@@ -181,7 +181,7 @@ class TestLazyTokenRetry:
             mcp_server._state["token_acquired_at"] = time.monotonic()
 
             with (
-                patch("openclaw.mcp_server.acquire_agent_user_token", mock_acquire),
+                patch("entraclaw.mcp_server.acquire_agent_user_token", mock_acquire),
                 pytest.raises(TokenExpiredError),
             ):
                 await mcp_server._with_token_retry(always_fails)
@@ -195,7 +195,7 @@ class TestExistingToolsRetrofitted:
     @pytest.mark.asyncio
     async def test_send_retries_on_401(self) -> None:
         """send_teams_message should retry once on TokenExpiredError."""
-        from openclaw import mcp_server
+        from entraclaw import mcp_server
 
         respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
             side_effect=[
@@ -226,7 +226,7 @@ class TestExistingToolsRetrofitted:
             )
 
             with patch(
-                "openclaw.mcp_server.acquire_agent_user_token",
+                "entraclaw.mcp_server.acquire_agent_user_token",
                 mock_acquire,
             ):
                 result_json = await mcp_server.send_teams_message("hello")
@@ -242,7 +242,7 @@ class TestExistingToolsRetrofitted:
     @pytest.mark.asyncio
     async def test_read_retries_on_401(self) -> None:
         """read_teams_messages should retry once on TokenExpiredError."""
-        from openclaw import mcp_server
+        from entraclaw import mcp_server
 
         respx.get(f"{GRAPH_BASE}/chats/c1/messages").mock(
             side_effect=[
@@ -279,7 +279,7 @@ class TestExistingToolsRetrofitted:
             )
 
             with patch(
-                "openclaw.mcp_server.acquire_agent_user_token",
+                "entraclaw.mcp_server.acquire_agent_user_token",
                 mock_acquire,
             ):
                 result_json = await mcp_server.read_teams_messages(count=5)
@@ -295,7 +295,7 @@ class TestExistingToolsRetrofitted:
 class TestDedupHelpers:
     def test_new_messages_detected(self) -> None:
         """Messages newer than cursor and not in seen-set should be returned."""
-        from openclaw.mcp_server import _filter_new_messages
+        from entraclaw.mcp_server import _filter_new_messages
 
         messages = [
             {"message_id": "m1", "sent_at": "2026-04-06T12:00:05Z"},
@@ -310,7 +310,7 @@ class TestDedupHelpers:
 
     def test_skips_already_seen(self) -> None:
         """Messages in seen-set should be excluded even if timestamp is newer."""
-        from openclaw.mcp_server import _filter_new_messages
+        from entraclaw.mcp_server import _filter_new_messages
 
         messages = [
             {"message_id": "m1", "sent_at": "2026-04-06T12:00:05Z"},
@@ -326,7 +326,7 @@ class TestDedupHelpers:
 
     def test_overlap_window_catches_boundary(self) -> None:
         """Messages within the 2s overlap window should be included (if not seen)."""
-        from openclaw.mcp_server import _overlap_timestamp
+        from entraclaw.mcp_server import _overlap_timestamp
 
         ts = "2026-04-06T12:00:10Z"
         overlap_ts = _overlap_timestamp(ts)
@@ -334,7 +334,7 @@ class TestDedupHelpers:
 
     def test_seen_set_cleanup(self) -> None:
         """Seen-set should be pruned when it exceeds 500 entries."""
-        from openclaw.mcp_server import _prune_seen_set
+        from entraclaw.mcp_server import _prune_seen_set
 
         seen = {f"msg-{i}" for i in range(501)}
         now = datetime.now(UTC)
@@ -355,7 +355,7 @@ class TestWatchTeamsReplies:
     @pytest.mark.asyncio
     async def test_returns_new_human_messages(self) -> None:
         """Should return only new human messages, not agent or system messages."""
-        from openclaw import mcp_server
+        from entraclaw import mcp_server
 
         respx.get(f"{GRAPH_BASE}/chats/c1/messages").mock(
             side_effect=[
@@ -386,7 +386,7 @@ class TestWatchTeamsReplies:
                             },
                             {
                                 "id": "agent-1",
-                                "from": {"user": {"displayName": "Openclaw Agent"}},
+                                "from": {"user": {"displayName": "EntraClaw Agent"}},
                                 "body": {"content": "sure thing"},
                                 "createdDateTime": "2026-04-06T12:00:06Z",
                             },
@@ -398,7 +398,7 @@ class TestWatchTeamsReplies:
 
         mock_acquire = MagicMock(return_value="token")
         mock_config = MagicMock()
-        mock_config.agent_user_upn = "Openclaw Agent"
+        mock_config.agent_user_upn = "EntraClaw Agent"
 
         old_state = mcp_server._state.copy()
         try:
@@ -415,7 +415,7 @@ class TestWatchTeamsReplies:
                 }
             )
 
-            with patch("openclaw.mcp_server.acquire_agent_user_token", mock_acquire):
+            with patch("entraclaw.mcp_server.acquire_agent_user_token", mock_acquire):
                 result_json = await mcp_server.watch_teams_replies(timeout=5, interval=0)
 
             result = json.loads(result_json)
@@ -431,7 +431,7 @@ class TestWatchTeamsReplies:
     @pytest.mark.asyncio
     async def test_timeout_returns_empty(self) -> None:
         """Should return timed_out=true when no new messages arrive."""
-        from openclaw import mcp_server
+        from entraclaw import mcp_server
 
         respx.get(f"{GRAPH_BASE}/chats/c1/messages").mock(
             return_value=httpx.Response(
@@ -450,7 +450,7 @@ class TestWatchTeamsReplies:
         )
 
         mock_config = MagicMock()
-        mock_config.agent_user_upn = "Openclaw Agent"
+        mock_config.agent_user_upn = "EntraClaw Agent"
 
         old_state = mcp_server._state.copy()
         try:
@@ -467,7 +467,7 @@ class TestWatchTeamsReplies:
                 }
             )
 
-            with patch("openclaw.mcp_server.acquire_agent_user_token", MagicMock()):
+            with patch("entraclaw.mcp_server.acquire_agent_user_token", MagicMock()):
                 result_json = await mcp_server.watch_teams_replies(timeout=1, interval=0)
 
             result = json.loads(result_json)
@@ -481,7 +481,7 @@ class TestWatchTeamsReplies:
     @pytest.mark.asyncio
     async def test_cursor_advances(self) -> None:
         """After returning messages, cursor should advance to newest timestamp."""
-        from openclaw import mcp_server
+        from entraclaw import mcp_server
 
         respx.get(f"{GRAPH_BASE}/chats/c1/messages").mock(
             side_effect=[
@@ -517,7 +517,7 @@ class TestWatchTeamsReplies:
         )
 
         mock_config = MagicMock()
-        mock_config.agent_user_upn = "Openclaw Agent"
+        mock_config.agent_user_upn = "EntraClaw Agent"
 
         old_state = mcp_server._state.copy()
         try:
@@ -534,7 +534,7 @@ class TestWatchTeamsReplies:
                 }
             )
 
-            with patch("openclaw.mcp_server.acquire_agent_user_token", MagicMock()):
+            with patch("entraclaw.mcp_server.acquire_agent_user_token", MagicMock()):
                 await mcp_server.watch_teams_replies(timeout=5, interval=0)
 
             assert mcp_server._state["last_seen_timestamp"] == "2026-04-06T12:00:05Z"
@@ -549,8 +549,8 @@ class TestRateLimitHandling:
     @pytest.mark.asyncio
     async def test_429_propagates_from_watch(self) -> None:
         """watch_teams_replies should propagate RateLimitError from read()."""
-        from openclaw import mcp_server
-        from openclaw.errors import RateLimitError
+        from entraclaw import mcp_server
+        from entraclaw.errors import RateLimitError
 
         respx.get(f"{GRAPH_BASE}/chats/c1/messages").mock(
             side_effect=[
@@ -574,7 +574,7 @@ class TestRateLimitHandling:
         )
 
         mock_config = MagicMock()
-        mock_config.agent_user_upn = "Openclaw Agent"
+        mock_config.agent_user_upn = "EntraClaw Agent"
 
         old_state = mcp_server._state.copy()
         try:
@@ -592,7 +592,7 @@ class TestRateLimitHandling:
             )
 
             with (
-                patch("openclaw.mcp_server.acquire_agent_user_token", MagicMock()),
+                patch("entraclaw.mcp_server.acquire_agent_user_token", MagicMock()),
                 pytest.raises(RateLimitError) as exc_info,
             ):
                 await mcp_server.watch_teams_replies(timeout=5, interval=0)

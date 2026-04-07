@@ -4,12 +4,12 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-from openclaw.config import OpenclawConfig, get_config
+from entraclaw.config import EntraClawConfig, get_config
 
 
-class TestOpenclawConfig:
+class TestEntraClawConfig:
     def test_defaults(self) -> None:
-        cfg = OpenclawConfig()
+        cfg = EntraClawConfig()
         assert cfg.tenant_id is None
         assert cfg.blueprint_app_id is None
         assert cfg.blueprint_object_id is None
@@ -21,29 +21,29 @@ class TestOpenclawConfig:
         assert cfg.human_user_id is None
         assert cfg.human_upn is None
         assert cfg.log_level == "INFO"
-        assert cfg.log_dir == Path.home() / ".openclaw" / "logs"
-        assert cfg.audit_dir == Path.home() / ".openclaw" / "audit"
-        assert cfg.data_dir == Path.home() / ".openclaw" / "data"
+        assert cfg.log_dir == Path.home() / ".entraclaw" / "logs"
+        assert cfg.audit_dir == Path.home() / ".entraclaw" / "audit"
+        assert cfg.data_dir == Path.home() / ".entraclaw" / "data"
 
     def test_from_env(self) -> None:
         env = {
-            "OPENCLAW_TENANT_ID": "my-tenant",
-            "OPENCLAW_BLUEPRINT_APP_ID": "my-blueprint",
-            "OPENCLAW_BLUEPRINT_OBJECT_ID": "my-blueprint-obj",
-            "OPENCLAW_BLUEPRINT_CERT_THUMBPRINT": "my-thumbprint",
-            "OPENCLAW_AGENT_ID": "my-agent-id",
-            "OPENCLAW_AGENT_OBJECT_ID": "my-agent-obj",
-            "OPENCLAW_AGENT_USER_ID": "my-agent-user",
-            "OPENCLAW_AGENT_USER_UPN": "agent@tenant.onmicrosoft.com",
-            "OPENCLAW_HUMAN_USER_ID": "human-uid",
-            "OPENCLAW_HUMAN_UPN": "human@example.com",
-            "OPENCLAW_LOG_LEVEL": "DEBUG",
-            "OPENCLAW_LOG_DIR": "/custom/logs",
-            "OPENCLAW_AUDIT_DIR": "/custom/audit",
-            "OPENCLAW_DATA_DIR": "/custom/data",
+            "ENTRACLAW_TENANT_ID": "my-tenant",
+            "ENTRACLAW_BLUEPRINT_APP_ID": "my-blueprint",
+            "ENTRACLAW_BLUEPRINT_OBJECT_ID": "my-blueprint-obj",
+            "ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT": "my-thumbprint",
+            "ENTRACLAW_AGENT_ID": "my-agent-id",
+            "ENTRACLAW_AGENT_OBJECT_ID": "my-agent-obj",
+            "ENTRACLAW_AGENT_USER_ID": "my-agent-user",
+            "ENTRACLAW_AGENT_USER_UPN": "agent@tenant.onmicrosoft.com",
+            "ENTRACLAW_HUMAN_USER_ID": "human-uid",
+            "ENTRACLAW_HUMAN_UPN": "human@example.com",
+            "ENTRACLAW_LOG_LEVEL": "DEBUG",
+            "ENTRACLAW_LOG_DIR": "/custom/logs",
+            "ENTRACLAW_AUDIT_DIR": "/custom/audit",
+            "ENTRACLAW_DATA_DIR": "/custom/data",
         }
         with patch.dict(os.environ, env, clear=False):
-            cfg = OpenclawConfig.from_env()
+            cfg = EntraClawConfig.from_env()
         assert cfg.tenant_id == "my-tenant"
         assert cfg.blueprint_app_id == "my-blueprint"
         assert cfg.blueprint_object_id == "my-blueprint-obj"
@@ -61,15 +61,15 @@ class TestOpenclawConfig:
 
     def test_from_env_with_no_vars(self) -> None:
         # Remove any Openclaw env vars that might be set
-        cleaned = {k: v for k, v in os.environ.items() if not k.startswith("OPENCLAW_")}
+        cleaned = {k: v for k, v in os.environ.items() if not k.startswith("ENTRACLAW_")}
         with patch.dict(os.environ, cleaned, clear=True):
-            cfg = OpenclawConfig.from_env()
+            cfg = EntraClawConfig.from_env()
         assert cfg.tenant_id is None
         assert cfg.blueprint_app_id is None
         assert cfg.log_level == "INFO"
 
     def test_frozen(self) -> None:
-        cfg = OpenclawConfig()
+        cfg = EntraClawConfig()
         try:
             cfg.tenant_id = "new"  # type: ignore[misc]
             raise AssertionError("Should not allow mutation")
@@ -78,4 +78,4 @@ class TestOpenclawConfig:
 
     def test_get_config_shortcut(self) -> None:
         cfg = get_config()
-        assert isinstance(cfg, OpenclawConfig)
+        assert isinstance(cfg, EntraClawConfig)

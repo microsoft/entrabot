@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 
 MS_GRAPH_API_ID = "00000003-0000-0000-c000-000000000000"
-PROVISIONER_APP_DISPLAY_NAME = "Openclaw Agent ID Provisioner"
+PROVISIONER_APP_DISPLAY_NAME = "EntraClaw Agent ID Provisioner"
 
 # Application.ReadWrite.All — required for Blueprint CRUD
 APP_READWRITE_ALL_ID = "1bfefb4e-e0b5-418b-a88f-73c46d2cc8e9"
@@ -49,10 +49,10 @@ class ProvisionerBootstrapError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# State persistence (replaces azd env for openclaw)
+# State persistence (replaces azd env for entraclaw)
 # ---------------------------------------------------------------------------
 
-_STATE_FILE = Path(__file__).resolve().parent.parent / ".openclaw-state.json"
+_STATE_FILE = Path(__file__).resolve().parent.parent / ".entraclaw-state.json"
 
 
 def _load_state() -> dict:
@@ -300,7 +300,7 @@ def ensure_app_registration(
     Uses state file for persistence across runs.
     """
     # Resolve tenant ID
-    tenant_id = os.environ.get("OPENCLAW_TENANT_ID") or get_state("TENANT_ID")
+    tenant_id = os.environ.get("ENTRACLAW_TENANT_ID") or get_state("TENANT_ID")
     if not tenant_id:
         rc, out, err = run_az(["account", "show", "--query", "tenantId", "-o", "tsv"])
         if rc != 0 or not out:

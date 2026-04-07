@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "openclaw": {
+    "entraclaw": {
       "command": "/Volumes/Development HD/openclaw-identity-research/.venv/bin/python3",
-      "args": ["-m", "openclaw.mcp_server"],
+      "args": ["-m", "entraclaw.mcp_server"],
       "cwd": "/Volumes/Development HD/openclaw-identity-research",
       "env": {}
     }

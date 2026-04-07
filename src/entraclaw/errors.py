@@ -1,15 +1,15 @@
-"""Openclaw error hierarchy.
+"""EntraClaw error hierarchy.
 
-All Openclaw errors inherit from OpenclawError so callers can catch broadly
+All EntraClaw errors inherit from EntraClawError so callers can catch broadly
 or narrow down to specific failure modes.
 """
 
 
-class OpenclawError(Exception):
-    """Base class for all Openclaw errors."""
+class EntraClawError(Exception):
+    """Base class for all EntraClaw errors."""
 
 
-class AuthError(OpenclawError):
+class AuthError(EntraClawError):
     """Authentication/identity errors."""
 
 
@@ -31,7 +31,7 @@ class TokenExpiredError(AuthError):
     """Cached token has expired and needs refresh."""
 
 
-class TeamsError(OpenclawError):
+class TeamsError(EntraClawError):
     """Teams Graph API errors."""
 
 
@@ -47,7 +47,7 @@ class MessageTooLong(TeamsError):
     """Message exceeds the Teams character limit."""
 
 
-class RateLimitError(OpenclawError):
+class RateLimitError(EntraClawError):
     """Graph API returned 429 — too many requests."""
 
     def __init__(self, retry_after: int = 60) -> None:

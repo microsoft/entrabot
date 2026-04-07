@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
-from openclaw.auth.certificate import build_client_assertion, compute_cert_thumbprint
+from entraclaw.auth.certificate import build_client_assertion, compute_cert_thumbprint
 
 
 @pytest.fixture

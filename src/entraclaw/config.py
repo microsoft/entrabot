@@ -1,7 +1,7 @@
-"""Environment-based configuration for Openclaw.
+"""Environment-based configuration for EntraClaw.
 
 Uses a simple dataclass with fallback defaults. Values are read from
-environment variables prefixed with OPENCLAW_.  On import the module
+environment variables prefixed with ENTRACLAW_.  On import the module
 looks for a ``.env`` file in the project root (best-effort, no hard
 dependency on ``python-dotenv``).
 """
@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 def _default_dir(subdir: str) -> Path:
-    return Path.home() / ".openclaw" / subdir
+    return Path.home() / ".entraclaw" / subdir
 
 
 def _load_dotenv() -> None:
@@ -41,7 +41,7 @@ _load_dotenv()
 
 
 @dataclass(frozen=True)
-class OpenclawConfig:
+class EntraClawConfig:
     """Immutable configuration loaded from environment variables."""
 
     tenant_id: str | None = field(default=None)
@@ -60,26 +60,26 @@ class OpenclawConfig:
     log_level: str = field(default="INFO")
 
     @classmethod
-    def from_env(cls) -> OpenclawConfig:
-        """Build config from OPENCLAW_* environment variables."""
+    def from_env(cls) -> EntraClawConfig:
+        """Build config from ENTRACLAW_* environment variables."""
         return cls(
-            tenant_id=os.environ.get("OPENCLAW_TENANT_ID"),
-            blueprint_app_id=os.environ.get("OPENCLAW_BLUEPRINT_APP_ID"),
-            blueprint_object_id=os.environ.get("OPENCLAW_BLUEPRINT_OBJECT_ID"),
-            blueprint_cert_thumbprint=os.environ.get("OPENCLAW_BLUEPRINT_CERT_THUMBPRINT"),
-            agent_id=os.environ.get("OPENCLAW_AGENT_ID"),
-            agent_object_id=os.environ.get("OPENCLAW_AGENT_OBJECT_ID"),
-            agent_user_id=os.environ.get("OPENCLAW_AGENT_USER_ID"),
-            agent_user_upn=os.environ.get("OPENCLAW_AGENT_USER_UPN"),
-            human_user_id=os.environ.get("OPENCLAW_HUMAN_USER_ID"),
-            human_upn=os.environ.get("OPENCLAW_HUMAN_UPN"),
-            log_dir=Path(os.environ.get("OPENCLAW_LOG_DIR", _default_dir("logs"))),
-            audit_dir=Path(os.environ.get("OPENCLAW_AUDIT_DIR", _default_dir("audit"))),
-            data_dir=Path(os.environ.get("OPENCLAW_DATA_DIR", _default_dir("data"))),
-            log_level=os.environ.get("OPENCLAW_LOG_LEVEL", "INFO"),
+            tenant_id=os.environ.get("ENTRACLAW_TENANT_ID"),
+            blueprint_app_id=os.environ.get("ENTRACLAW_BLUEPRINT_APP_ID"),
+            blueprint_object_id=os.environ.get("ENTRACLAW_BLUEPRINT_OBJECT_ID"),
+            blueprint_cert_thumbprint=os.environ.get("ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT"),
+            agent_id=os.environ.get("ENTRACLAW_AGENT_ID"),
+            agent_object_id=os.environ.get("ENTRACLAW_AGENT_OBJECT_ID"),
+            agent_user_id=os.environ.get("ENTRACLAW_AGENT_USER_ID"),
+            agent_user_upn=os.environ.get("ENTRACLAW_AGENT_USER_UPN"),
+            human_user_id=os.environ.get("ENTRACLAW_HUMAN_USER_ID"),
+            human_upn=os.environ.get("ENTRACLAW_HUMAN_UPN"),
+            log_dir=Path(os.environ.get("ENTRACLAW_LOG_DIR", _default_dir("logs"))),
+            audit_dir=Path(os.environ.get("ENTRACLAW_AUDIT_DIR", _default_dir("audit"))),
+            data_dir=Path(os.environ.get("ENTRACLAW_DATA_DIR", _default_dir("data"))),
+            log_level=os.environ.get("ENTRACLAW_LOG_LEVEL", "INFO"),
         )
 
 
-def get_config() -> OpenclawConfig:
+def get_config() -> EntraClawConfig:
     """Convenience accessor — returns config from current environment."""
-    return OpenclawConfig.from_env()
+    return EntraClawConfig.from_env()
