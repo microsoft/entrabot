@@ -234,7 +234,12 @@ async def _background_poll() -> None:
     background, push new messages via ``notifications/claude/channel``
     so Claude Code sees them without needing to call a tool.
 
-    This is the solution to the "close the loop" problem (Learning #22).
+    IMPORTANT: Uses its OWN separate tracking state (_bg_*) so it does NOT
+    interfere with watch_teams_replies. Both can detect the same message
+    independently — the background poll pushes a notification, and
+    watch_teams_replies returns it as a tool result. This is intentional:
+    if the notification doesn't reach Claude Code, watch_teams_replies
+    still works as a fallback.
     """
     import asyncio
 
@@ -247,16 +252,19 @@ async def _background_poll() -> None:
     agent_display_name = config.agent_user_upn or "Openclaw Agent"
     chat_id = str(_state["chat_id"])
 
-    # Bootstrap cursor: set watermark to newest existing message
+    # Background poll has its OWN cursor and seen-set (separate from watch_teams_replies)
+    bg_seen_ids: set[str] = set()
+    bg_last_ts: str | None = None
+
+    # Bootstrap: set watermark to newest existing message
     try:
         await _ensure_valid_token()
         bootstrap_msgs = await _with_token_retry(read, chat_id=chat_id, count=10)
         if bootstrap_msgs:
             newest = max(bootstrap_msgs, key=lambda m: m.get("sent_at", ""))
-            _state["last_seen_timestamp"] = newest["sent_at"]
+            bg_last_ts = newest["sent_at"]
             for m in bootstrap_msgs:
-                _state["seen_message_ids"].add(m["message_id"])
-                _state["seen_id_timestamps"][m["message_id"]] = m.get("sent_at", "")
+                bg_seen_ids.add(m["message_id"])
     except Exception as exc:
         if logger:
             logger.warning("Background poll bootstrap failed: %s", exc)
@@ -268,31 +276,18 @@ async def _background_poll() -> None:
 
             raw_messages = await _with_token_retry(read, chat_id=chat_id, count=10)
             human_msgs = filter_human_messages(raw_messages, agent_display_name)
-            new_msgs = _filter_new_messages(
-                human_msgs,
-                _state.get("last_seen_timestamp"),
-                _state["seen_message_ids"],
-            )
+            new_msgs = _filter_new_messages(human_msgs, bg_last_ts, bg_seen_ids)
 
             if new_msgs:
-                # Advance cursor
+                # Advance background cursor only
                 newest = max(new_msgs, key=lambda m: m.get("sent_at", ""))
-                _state["last_seen_timestamp"] = newest["sent_at"]
+                bg_last_ts = newest["sent_at"]
                 for m in new_msgs:
-                    _state["seen_message_ids"].add(m["message_id"])
-                    _state["seen_id_timestamps"][m["message_id"]] = m.get("sent_at", "")
+                    bg_seen_ids.add(m["message_id"])
 
-                # Bounded cleanup
-                if len(_state["seen_message_ids"]) > SEEN_SET_MAX:
-                    _state["seen_message_ids"] = _prune_seen_set(
-                        _state["seen_message_ids"],
-                        _state["seen_id_timestamps"],
-                    )
-                    _state["seen_id_timestamps"] = {
-                        k: v
-                        for k, v in _state["seen_id_timestamps"].items()
-                        if k in _state["seen_message_ids"]
-                    }
+                # Bounded cleanup (keep last 500)
+                if len(bg_seen_ids) > SEEN_SET_MAX:
+                    bg_seen_ids = set(sorted(bg_seen_ids)[-100:])
 
                 # Push each new message to Claude Code via channel notification
                 for m in sorted(new_msgs, key=lambda m: m.get("sent_at", "")):
@@ -301,7 +296,6 @@ async def _background_poll() -> None:
         except Exception as exc:
             if logger:
                 logger.warning("Background poll error: %s", exc)
-            # Don't crash the loop — wait and retry
             await asyncio.sleep(BACKGROUND_POLL_INTERVAL)
 
 
