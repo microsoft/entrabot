@@ -326,20 +326,41 @@ def _agent_user_upn() -> str:
     """
     from entra_provisioning import run_az
 
+    # Use -o json, not -o tsv — TSV can be corrupted by CLI warnings (Learning #7)
     rc, out, _ = run_az([
-        "ad", "signed-in-user", "show", "--query", "userPrincipalName", "-o", "tsv",
+        "ad", "signed-in-user", "show", "-o", "json",
     ])
-    if rc == 0 and out and "@" in out:
-        domain = out.split("@", 1)[1]
-    else:
-        # Fallback: query tenant verified domains via az CLI
-        rc, out, _ = run_az([
-            "rest", "--method", "GET",
-            "--url", "https://graph.microsoft.com/v1.0/domains?$select=id,isDefault",
-            "--query", "value[?isDefault].id | [0]", "-o", "tsv",
-        ])
-        domain = out if rc == 0 and out else "unknown.onmicrosoft.com"
-    return f"entraclaw-agent@{domain}"
+    if rc == 0 and out:
+        import json as _json
+        try:
+            user_data = _json.loads(out)
+            upn = user_data.get("userPrincipalName", "")
+            if "@" in upn:
+                domain = upn.split("@", 1)[1]
+                return f"entraclaw-agent@{domain}"
+        except _json.JSONDecodeError:
+            pass
+
+    # Fallback: query tenant verified domains
+    rc, out, _ = run_az([
+        "rest", "--method", "GET",
+        "--url", "https://graph.microsoft.com/v1.0/domains?$select=id,isDefault",
+        "-o", "json",
+    ])
+    if rc == 0 and out:
+        import json as _json
+        try:
+            domains = _json.loads(out).get("value", [])
+            for d in domains:
+                if d.get("isDefault"):
+                    return f"entraclaw-agent@{d['id']}"
+        except _json.JSONDecodeError:
+            pass
+
+    # Last resort — will fail UPN validation but gives a clear error
+    print("  WARNING: Could not determine verified domain for Agent User UPN")
+    print("  Make sure you're signed in: az login")
+    return "entraclaw-agent@unknown.onmicrosoft.com"
 
 
 def _resolve_graph_sp_object_id(token: str) -> str | None:
