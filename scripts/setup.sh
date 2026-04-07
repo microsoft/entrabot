@@ -236,6 +236,15 @@ success "Agent User: ${AGENT_USER_UPN:-not created} (${AGENT_USER_ID:-n/a})"
 # ════════════════════════════════════════════════════════════════════════════
 step 6 "Managing Blueprint certificate"
 
+# Ensure venv + deps are available (cryptography + keyring needed for cert generation)
+if [ ! -d ".venv" ]; then
+    "$PYTHON" -m venv .venv
+fi
+# shellcheck disable=SC1091
+source .venv/bin/activate
+pip install --quiet -e ".[dev]" 2>/dev/null || pip install --quiet -e "." 2>/dev/null
+VENV_PY="$PROJECT_ROOT/.venv/bin/python3"
+
 # The Blueprint authenticates with a certificate, not a client secret.
 # Private key is stored in the OS credential store (Keychain/TPM/Keyring).
 # Only the public certificate is uploaded to the Blueprint app in Entra.
@@ -248,7 +257,7 @@ else
     echo "  Generating self-signed certificate for Blueprint..."
 
     # Generate cert + private key, compute thumbprint, store key in keyring
-    CERT_RESULT=$("$PYTHON" -c "
+    CERT_RESULT=$("$VENV_PY" -c "
 import sys, json, hashlib, base64, tempfile, os
 from cryptography import x509
 from cryptography.x509.oid import NameOID
@@ -296,8 +305,8 @@ with open(cert_path, 'w') as f:
 print(json.dumps({'thumbprint': thumbprint, 'cert_path': cert_path}))
 ")
 
-    CERT_THUMBPRINT=$(echo "$CERT_RESULT" | "$PYTHON" -c "import sys,json; print(json.loads(sys.stdin.read())['thumbprint'])")
-    CERT_PATH=$(echo "$CERT_RESULT" | "$PYTHON" -c "import sys,json; print(json.loads(sys.stdin.read())['cert_path'])")
+    CERT_THUMBPRINT=$(echo "$CERT_RESULT" | "$VENV_PY" -c "import sys,json; print(json.loads(sys.stdin.read())['thumbprint'])")
+    CERT_PATH=$(echo "$CERT_RESULT" | "$VENV_PY" -c "import sys,json; print(json.loads(sys.stdin.read())['cert_path'])")
 
     if [ -z "$CERT_THUMBPRINT" ]; then
         fail "Could not generate Blueprint certificate"
@@ -314,7 +323,7 @@ print(json.dumps({'thumbprint': thumbprint, 'cert_path': cert_path}))
     rm -f "$CERT_PATH"
 
     # Persist thumbprint in state file (private key is in keyring, not here)
-    "$PYTHON" -c "
+    "$VENV_PY" -c "
 import json, pathlib
 state_file = pathlib.Path('$PROJECT_ROOT/.openclaw-state.json')
 data = json.loads(state_file.read_text()) if state_file.is_file() else {}
