@@ -18,18 +18,21 @@
 ## Current Runtime Model
 
 - Python 3.12+ research project — no deployed service yet
-- Four modules: `platform/` (OS shim) → `auth/` (Agent ID) → `audit/` (tracking) → `teams/` (Agent User)
+- Five modules: `platform/` (OS shim) → `auth/` (certificate JWT) → `tools/` (MCP tools) → `audit/` (tracking) → `mcp_server.py` (FastMCP + background channel)
 - External dependencies: Microsoft Entra ID (identity), Microsoft Teams (communication via Graph API)
-- Auth via three-hop Agent User flow: Blueprint → Agent Identity → Agent User (`httpx` direct, no MSAL at runtime)
+- Auth via three-hop Agent User flow: Blueprint (certificate) → Agent Identity (FIC) → Agent User (`user_fic` grant) — `httpx` direct, no MSAL at runtime
+- Certificate auth: private key in OS keystore (Keychain/TPM/Keyring), JWT assertion for Hop 1 (ADR-003)
+- Background channel: polls Teams every 5s, pushes via `notifications/claude/channel`
 - All structured data uses `dataclasses` or `pydantic` — no raw dicts
 
 ## Read These First
 
 - `docs/index.md`
-- `docs/getting-started/quickstart.md`
-- `docs/architecture/system-overview.md`
-- `docs/reference/obo-flows.md`
+- `docs/engineering-status.md`
+- `docs/runbooks/hard-won-learnings.md` (27 entries — read before making changes)
 - `docs/decisions/001-obo-flows-for-device-agents.md`
+- `docs/decisions/003-certificate-auth-over-client-secrets.md`
+- `docs/platform-learnings/mcp-close-the-loop.md`
 
 ## Commands
 
@@ -56,11 +59,12 @@ pip install mkdocs-material && mkdocs serve
 
 ## High-Value Repo Areas
 
-- `src/openclaw/platform/`: OS-specific agent identity — `AgentIdentityProvider` protocol with Mac/Linux/Windows implementations
-- `src/openclaw/auth/`: Agent ID registration, token exchange — one module per flow type
-- `src/openclaw/audit/`: Audit-first enforcement — events emitted before actions execute
-- `src/openclaw/teams/`: Bidirectional Teams communication via Graph API
+- `src/openclaw/platform/`: OS-specific credential storage — `CredentialStore` protocol with Mac/Linux/Windows implementations
+- `src/openclaw/auth/`: Certificate-based JWT assertion builder — `build_client_assertion()`, `compute_cert_thumbprint()`
+- `src/openclaw/tools/teams.py`: Three-hop token flow + Teams Graph API (send, read, filter, chat creation)
+- `src/openclaw/mcp_server.py`: FastMCP server — 5 tools + background poll + channel push + token refresh
 - `docs/decisions/`: ADRs — every significant architectural choice is recorded here
+- `docs/runbooks/hard-won-learnings.md`: 27 hard-won learnings — READ THIS before making changes
 
 ## gstack
 

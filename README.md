@@ -2,6 +2,8 @@
 
 Research project for securing agentic workflows on local devices (Mac/Linux/Windows) using Microsoft Entra Agent IDs and Agent Users. Agents get their own identity — a real Entra user account with Teams presence, mailbox, and M365 license — so audit logs always distinguish agent actions from human actions.
 
+**The demo:** Tell your AI agent to do something and message you on Teams. Go to a bar. Reply from your phone. The agent acts on your instruction autonomously and reports back. Fully bidirectional, no human at the terminal.
+
 ## Getting Started
 
 ### Prerequisites
@@ -23,42 +25,42 @@ This script will:
 2. Create an Agent Identity Blueprint + BlueprintPrincipal + Agent Identity
 3. Create an Agent User (Entra user account linked to the Agent Identity)
 4. Grant consent for Teams/Chat Graph permissions
-5. Create a Blueprint client secret and write `.env`
+5. Generate a self-signed certificate, upload public key to Entra, store private key in OS keystore (Keychain/TPM/Keyring) — no secrets on disk
+6. Write `.env` with configuration (no secrets — only the cert thumbprint)
 
 The script is **idempotent** — safe to re-run. State persists in `.openclaw-state.json`.
 
 After setup, **assign an M365 license** (E3/E5/Teams Enterprise) to the Agent User in the Entra admin center and wait 10-15 minutes for Teams provisioning.
 
-### Run the MCP Server
+### Run with Claude Code
 
-Add Openclaw to your Copilot CLI config:
-
-```jsonc
-// ~/.copilot/mcp-config.json
-{
-  "mcpServers": {
-    "openclaw": {
-      "command": "python3.12",
-      "args": ["-m", "openclaw.mcp_server"],
-      "cwd": "/path/to/openclaw-identity-research",
-      "env": {}
-    }
-  }
-}
+```bash
+claude --dangerously-load-development-channels server:openclaw
 ```
 
-Then launch Copilot CLI:
+The `--dangerously-load-development-channels` flag enables the Teams channel, which pushes inbound Teams messages directly into the conversation (like the iMessage channel plugin).
+
+### Run with Copilot CLI
+
+The `.mcp.json` in the project root auto-discovers the MCP server:
 
 ```bash
 copilot
 ```
 
-Available tools:
+Note: Without `--dangerously-load-development-channels`, the agent won't receive push notifications for Teams replies. Use `watch_teams_replies` for explicit polling instead.
 
-- `openclaw_whoami` — show agent identity and connection status
-- `openclaw_teams_send` — send a message to the human as the Agent User
-- `openclaw_teams_read` — read recent messages from the human
-- `openclaw_audit_log` — record an audit event
+### MCP Tools (5 total)
+
+| Tool | Purpose |
+|------|---------|
+| `send_teams_message` | Send a message to the human via Teams |
+| `watch_teams_replies` | Poll for new human replies with dedup |
+| `read_teams_messages` | Read recent message history |
+| `whoami` | Check agent identity and connection status |
+| `audit_log` | Record an action before performing it |
+
+Plus a **background channel** that polls Teams every 5 seconds and pushes new messages via `notifications/claude/channel`.
 
 ### Without an Entra Tenant
 
@@ -83,21 +85,22 @@ Removes the Agent User, Agent Identity, Blueprint, Provisioner app, and all loca
 
 ## Architecture
 
-The agent authenticates via the **three-hop Agent User flow** — fully autonomous, no human in the loop:
+The agent authenticates via the **three-hop Agent User flow** with certificate auth — fully autonomous, no human in the loop, no secrets on disk:
 
 ```
-Blueprint (client_credentials)
+Blueprint (certificate in OS keystore)
   → Agent Identity (FIC exchange)
     → Agent User (user_fic grant, idtyp=user)
       → Graph API: Teams, Mail, OneDrive
 ```
 
-Four modules handle the agent identity lifecycle:
+Five modules handle the agent identity lifecycle:
 
-- **platform/** — OS-specific credential storage (Keychain, Credential Manager, Secret Service)
-- **auth/** — Three-hop token exchange with Microsoft Entra
+- **platform/** — OS-specific credential storage (Keychain, Certificate Store, Secret Service)
+- **auth/** — Certificate-based JWT assertion builder + three-hop token exchange
 - **audit/** — Action tracking — every resource access emits an audit event before executing
-- **teams/** — Teams messaging via Graph API as the Agent User identity
+- **tools/** — MCP tool implementations (Teams messaging, identity, audit)
+- **mcp_server.py** — FastMCP server with background polling + channel notifications
 
 ## Build and Test (TDD)
 
@@ -117,19 +120,24 @@ pytest tests/tools/test_teams.py::TestAcquireAgentUserToken::test_success -v
 ruff check . && ruff format .
 ```
 
-Current status: **64 tests passing, 87% coverage**.
+Current status: **89 tests passing, 91% coverage**.
 
 ## Repository Map
 
 | Directory | Purpose |
 |-----------|---------|
-| `src/openclaw/` | Application source code (18 modules) |
+| `src/openclaw/` | Application source code |
+| `src/openclaw/auth/` | Certificate auth + JWT assertion builder |
+| `src/openclaw/platform/` | OS-specific credential storage |
+| `src/openclaw/tools/` | MCP tool implementations |
 | `tests/` | Test suite (mirrors `src/` structure) |
 | `scripts/` | Setup, teardown, and Entra provisioning scripts |
 | `docs/` | Documentation site (MkDocs Material) |
-| `docs/platform-learnings/` | Deep research on all integration platforms |
-| `docs/decisions/` | Architecture Decision Records |
-| `.github/` | CI workflows and Copilot instructions |
+| `docs/platform-learnings/` | Deep research on integration platforms + MCP ecosystem |
+| `docs/decisions/` | Architecture Decision Records (3 ADRs) |
+| `docs/runbooks/` | Hard-won learnings (27 entries) |
+| `docs/superpowers/specs/` | Design specs |
+| `docs/superpowers/plans/` | Implementation plans |
 
 ## Documentation
 

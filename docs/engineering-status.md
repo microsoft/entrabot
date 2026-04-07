@@ -1,8 +1,8 @@
 # Openclaw Identity Research — Engineering Summary
 
-**Date:** April 6, 2026
+**Date:** April 7, 2026
 **Team:** Brandon Werner
-**Status:** Bidirectional loop working — Agent User sends and polls for Teams messages. 82 tests, 91% coverage. 5 MCP tools live.
+**Status:** Full bidirectional Teams channel working — background poll + push notifications. Certificate auth (no secrets on disk). 89 tests, 91% coverage. 5 MCP tools + background channel.
 
 ---
 
@@ -10,7 +10,9 @@
 
 A proof-of-concept demonstrating that **device-local AI agents can have their own identity** in Microsoft Entra, separate from the human user. The agent gets an Agent Identity + Agent User, authenticates autonomously via the three-hop token flow, and interacts with Teams as its own digital worker.
 
-**Identity Chain:** Blueprint (client_credentials) → Agent Identity (FIC exchange) → Agent User (user_fic grant) → Graph API with `idtyp=user` token
+**Identity Chain:** Blueprint (certificate auth) → Agent Identity (FIC exchange) → Agent User (user_fic grant) → Graph API with `idtyp=user` token
+
+**Channel:** Background poll every 5s → push via `notifications/claude/channel` → Claude Code receives messages automatically
 
 ### The Demo Scenario — WORKING
 
@@ -37,22 +39,24 @@ A proof-of-concept demonstrating that **device-local AI agents can have their ow
 ## TDD Status
 
 ```
-64 passed in 0.22s
+89 passed in 2.32s
 
-Coverage: 87% (threshold: 80%)
+Coverage: 91% (threshold: 80%)
 
 Name                                Stmts   Miss  Cover
---------------------------------------------------------
-src/openclaw/config.py                 43     11    74%
+-----------------------------------------------------------------
+src/openclaw/auth/__init__.py           2      0   100%
+src/openclaw/auth/certificate.py       21      0   100%
+src/openclaw/config.py                 43      2    95%
 src/openclaw/errors.py                 18      0   100%
 src/openclaw/models.py                 47      0   100%
 src/openclaw/platform/__init__.py      16     11    31%
 src/openclaw/platform/base.py           9      3    67%
 src/openclaw/tools/audit.py            26      5    81%
 src/openclaw/tools/identity.py          7      0   100%
-src/openclaw/tools/teams.py            79      3    96%
---------------------------------------------------------
-TOTAL                                 245     33    87%
+src/openclaw/tools/teams.py            92      3    97%
+-----------------------------------------------------------------
+TOTAL                                 281     24    91%
 ```
 
 ---
@@ -86,15 +90,17 @@ Researched 12+ MCP messaging servers (Slack, iMessage, Discord, Teams). Key find
 3. **Agent User token + `$orderby`** — floriscornel uses MSAL delegated tokens; our `user_fic` grant may behave differently
 4. **Rate limiting thresholds** — undocumented for our endpoint + token type combination
 
-### Discovered Gap: The MCP "Close the Loop" Problem
+### Solved: The MCP "Close the Loop" Problem
 
-**The LLM doesn't automatically call `watch_teams_replies` after sending a message.** This is not a bug — it's a fundamental MCP protocol gap. The protocol is request-response; there is no mechanism for the server to wake up the LLM when new data arrives.
+**Problem:** LLM doesn't automatically check for replies after sending a Teams message. The MCP protocol is request-response — no mechanism for the server to wake up the LLM when new data arrives.
 
-**Industry status:** Nobody has solved this. We researched 12+ MCP messaging servers — all are fire-and-forget. The MCP Triggers & Events Working Group was chartered March 2026 with an RFC targeting April 2026. No solution exists in any major client today.
+**Solution:** Background polling + `notifications/claude/channel` push notifications. The MCP server declares `experimental: {"claude/channel": {}}` capability and pushes inbound Teams messages directly into the Claude Code conversation — the same mechanism used by the iMessage channel plugin.
 
-**Our position:** We are ahead of the industry — the only MCP messaging server with a polling tool, token auto-refresh, and message dedup. When the WG ships its spec, we'll adopt it immediately.
+**Requirements:** Start Claude Code with `--dangerously-load-development-channels server:openclaw` to enable channel notifications for development servers.
 
-**Current workarounds:** PostToolUse hook with `additionalContext` to hint the LLM should poll. See `docs/platform-learnings/mcp-close-the-loop.md` for full research.
+**Fallback:** `watch_teams_replies` tool still available for explicit polling. Background poll uses separate dedup state so both can detect the same message independently (Learning #27).
+
+**Research:** See `docs/platform-learnings/mcp-close-the-loop.md` for full analysis of 12+ MCP messaging servers, the MCP Triggers & Events Working Group, and the three problems we solved (capability declaration, startup flag, separate state).
 
 ---
 
@@ -110,10 +116,14 @@ Researched 12+ MCP messaging servers (Slack, iMessage, Discord, Teams). Key find
 - MCP server auto-discovered via `.mcp.json`
 - `--teams-user` flag to set Teams recipient separately from admin
 - Teams read with null-from handling (system messages)
-- 23 hard-won learnings documented in runbooks (8 new from platform research)
-- Bidirectional Teams polling loop with dedup + token refresh
+- 27 hard-won learnings documented in runbooks
+- Bidirectional Teams channel with background polling + push notifications
+- Certificate auth for Blueprint (private key in OS keystore, no secrets on disk, ADR-003)
 - Token auto-refresh: eager (55-min) + lazy (401 retry) for all tools
+- `notifications/claude/channel` push — same mechanism as iMessage channel plugin
+- Message dedup: 2s overlap window + bounded seen-set (imessage-kit pattern)
 - 429 rate limit handling propagates through polling tool
+- Autonomous agent instructions — acts on Teams messages without terminal prompting
 - All code passes ruff lint + format, 91% coverage
 
 ### What's Not Started
@@ -181,15 +191,18 @@ Blueprint (client_credentials)
 | 13 | stderr swallowed throughout scripts | Hidden errors | Removed all `2>/dev/null` |
 | 14 | Admin and Teams user conflated | Wrong recipient | Added `--teams-user` flag |
 
-See `docs/runbooks/hard-won-learnings.md` for the full append-only log (21 entries).
+See `docs/runbooks/hard-won-learnings.md` for the full append-only log (27 entries).
 
 ---
 
 ## Next Steps (Priority Order)
 
-1. **~~Bidirectional Teams loop~~** — IMPLEMENTING NOW. `watch_teams_replies` polling tool + timestamp overlap dedup + token refresh. See spec.
-2. **~~Token auto-refresh~~** — IMPLEMENTING NOW. Bundled with #1. Eager (55-min) + lazy (401 retry).
-3. **Entra sign-in log verification** — confirm `idtyp=user` and agent attribution
-4. **Windows VM provisioning** — verify cross-platform setup.sh
-5. **AppContainer sandbox spike** — kernel-level agent isolation on Windows
-6. **Delta query optimization** — replace timestamp polling with `/messages/delta` if needed (deferred from #1)
+1. ~~Bidirectional Teams loop~~ — ✅ DONE. Background poll + channel push + dedup + token refresh.
+2. ~~Token auto-refresh~~ — ✅ DONE. Eager (55-min) + lazy (401 retry).
+3. ~~Certificate auth~~ — ✅ DONE. No secrets on disk. Private key in OS keystore (ADR-003).
+4. ~~Close the loop~~ — ✅ DONE. `notifications/claude/channel` push via experimental capability.
+5. **Entra sign-in log verification** — confirm `idtyp=user` and agent attribution
+6. **Windows VM provisioning** — verify cross-platform setup.sh
+7. **AppContainer sandbox spike** — kernel-level agent isolation on Windows
+8. **Delta query optimization** — replace timestamp polling with `/messages/delta` if needed
+9. **Publish as Claude Code marketplace plugin** — move from `--dangerously-load-development-channels` to proper plugin distribution
