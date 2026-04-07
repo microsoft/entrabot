@@ -98,10 +98,39 @@ fi
 
 echo ""
 
+# ── Get Provisioner token for Agent Identity API deletions ────────────────
+# Learning #1: az CLI tokens include Directory.AccessAsUser.All which Agent
+# Identity APIs reject. Must use the Provisioner's client_credentials token.
+# Get this BEFORE deleting anything, since we need the Provisioner alive.
+
+VENV_PY="$PROJECT_ROOT/.venv/bin/python3"
+PROV_TOKEN=""
+
+if [ -d "$PROJECT_ROOT/.venv" ] && [ -f "$PROJECT_ROOT/scripts/entra_provisioning.py" ]; then
+    PROV_TOKEN=$("$VENV_PY" -c "
+import sys
+sys.path.insert(0, '$PROJECT_ROOT/scripts')
+try:
+    from entra_provisioning import get_graph_token
+    print(get_graph_token(wait_for_propagation=False))
+except Exception as e:
+    print('', end='')
+    print(f'  Could not get provisioner token: {e}', file=sys.stderr)
+" 2>&1 | head -1) || true
+fi
+
+if [ -n "$PROV_TOKEN" ] && [ ${#PROV_TOKEN} -gt 100 ]; then
+    echo -e "  ${GREEN}Got Provisioner token for Agent Identity API deletions${NC}"
+else
+    echo -e "  ${YELLOW}⚠️  No Provisioner token — will try az CLI (may fail for Agent Identity APIs)${NC}"
+    PROV_TOKEN=""
+fi
+
 # ── 1. Delete Agent User (child — must go before Agent Identity) ──────────
 
 if [ -n "$AGENT_USER_ID" ]; then
-    if az ad user delete --id "$AGENT_USER_ID"; then
+    # Agent Users are regular Entra users — az CLI works fine here
+    if az ad user delete --id "$AGENT_USER_ID" 2>/dev/null; then
         echo -e "  ${GREEN}✅ Deleted Agent User ($AGENT_USER_ID)${NC}"
     else
         echo -e "  ${YELLOW}⚠️  Could not delete Agent User — may already be deleted${NC}"
@@ -111,50 +140,69 @@ else
 fi
 
 # ── 2. Delete Agent Identity (service principal) ──────────────────────────
+# MUST use Provisioner token — az CLI is rejected by Agent Identity APIs
 
 if [ -n "$AGENT_OBJECT_ID" ]; then
-    if az ad sp delete --id "$AGENT_OBJECT_ID"; then
-        echo -e "  ${GREEN}✅ Deleted Agent Identity SP ($AGENT_OBJECT_ID)${NC}"
+    if [ -n "$PROV_TOKEN" ]; then
+        STATUS=$("$VENV_PY" -c "
+import requests
+resp = requests.delete(
+    'https://graph.microsoft.com/beta/servicePrincipals/$AGENT_OBJECT_ID',
+    headers={'Authorization': 'Bearer $PROV_TOKEN'},
+)
+print(resp.status_code)
+" 2>/dev/null) || STATUS="error"
+        if [ "$STATUS" = "204" ] || [ "$STATUS" = "200" ]; then
+            echo -e "  ${GREEN}✅ Deleted Agent Identity SP ($AGENT_OBJECT_ID)${NC}"
+        elif [ "$STATUS" = "404" ]; then
+            echo -e "  ${YELLOW}⚠️  Agent Identity SP not found — already deleted${NC}"
+        else
+            echo -e "  ${YELLOW}⚠️  Could not delete Agent Identity SP (status: $STATUS)${NC}"
+        fi
     else
-        echo -e "  ${YELLOW}⚠️  Could not delete Agent Identity SP — may already be deleted${NC}"
+        echo -e "  ${YELLOW}⚠️  No Provisioner token — cannot delete Agent Identity SP via az CLI (Learning #1)${NC}"
+        echo -e "  ${YELLOW}   Delete manually in Azure Portal → Entra ID → Enterprise applications → $AGENT_OBJECT_ID${NC}"
     fi
 else
     echo -e "  ${YELLOW}⚠️  No Agent Identity object ID found — skipping${NC}"
 fi
 
 # ── 3. Delete Blueprint (app registration + BlueprintPrincipal cascade) ───
+# MUST use Provisioner token — az CLI is rejected by Agent Identity APIs
 
 if [ -n "$BLUEPRINT_OBJECT_ID" ]; then
-    if az ad app delete --id "$BLUEPRINT_OBJECT_ID"; then
-        echo -e "  ${GREEN}✅ Deleted Blueprint app registration ($BLUEPRINT_APP_ID)${NC}"
-    else
-        echo -e "  ${YELLOW}⚠️  Could not delete Blueprint — may already be deleted${NC}"
-    fi
-elif [ -n "$BLUEPRINT_APP_ID" ]; then
-    # Fallback: look up object ID by app ID
-    OBJ_ID=$(az ad app list \
-        --filter "appId eq '${BLUEPRINT_APP_ID}'" \
-        --query "[0].id" -o tsv) || true
-    if [ -n "$OBJ_ID" ]; then
-        if az ad app delete --id "$OBJ_ID"; then
-            echo -e "  ${GREEN}✅ Deleted Blueprint app registration ($BLUEPRINT_APP_ID)${NC}"
+    if [ -n "$PROV_TOKEN" ]; then
+        STATUS=$("$VENV_PY" -c "
+import requests
+resp = requests.delete(
+    'https://graph.microsoft.com/beta/applications/$BLUEPRINT_OBJECT_ID',
+    headers={'Authorization': 'Bearer $PROV_TOKEN'},
+)
+print(resp.status_code)
+" 2>/dev/null) || STATUS="error"
+        if [ "$STATUS" = "204" ] || [ "$STATUS" = "200" ]; then
+            echo -e "  ${GREEN}✅ Deleted Blueprint app ($BLUEPRINT_APP_ID)${NC}"
+        elif [ "$STATUS" = "404" ]; then
+            echo -e "  ${YELLOW}⚠️  Blueprint not found — already deleted${NC}"
         else
-            echo -e "  ${YELLOW}⚠️  Could not delete Blueprint${NC}"
+            echo -e "  ${YELLOW}⚠️  Could not delete Blueprint (status: $STATUS)${NC}"
         fi
     else
-        echo -e "  ${YELLOW}⚠️  Blueprint not found in directory — may already be deleted${NC}"
+        echo -e "  ${YELLOW}⚠️  No Provisioner token — cannot delete Blueprint via az CLI (Learning #1)${NC}"
+        echo -e "  ${YELLOW}   Delete manually in Azure Portal → Entra ID → App registrations → $BLUEPRINT_OBJECT_ID${NC}"
     fi
 else
     echo -e "  ${YELLOW}⚠️  No Blueprint ID found — skipping${NC}"
 fi
 
-# ── 4. Delete Provisioner app (by display name — both old and new names) ──
+# ── 4. Delete Provisioner app LAST (needed it for steps 2-3) ─────────────
+# Provisioner is a regular app — az CLI works fine here
 
 for PROV_NAME in "EntraClaw Provisioner" "EntraClaw Agent ID Provisioner"; do
     PROV_OBJ=$(az ad app list --display-name "$PROV_NAME" \
-        --query "[0].id" -o tsv) || true
+        --query "[0].id" -o tsv 2>/dev/null) || true
     if [ -n "$PROV_OBJ" ]; then
-        if az ad app delete --id "$PROV_OBJ"; then
+        if az ad app delete --id "$PROV_OBJ" 2>/dev/null; then
             echo -e "  ${GREEN}✅ Deleted Provisioner app ($PROV_NAME)${NC}"
         else
             echo -e "  ${YELLOW}⚠️  Could not delete Provisioner app ($PROV_NAME)${NC}"
@@ -166,8 +214,9 @@ done
 
 echo ""
 
-# Keychain entries (certificate private key + legacy)
-python3 -c "
+# Keychain entries (certificate private key + legacy) — use venv Python for keyring
+CLEANUP_PY="${VENV_PY:-python3}"
+"$CLEANUP_PY" -c "
 import keyring
 cleared = []
 for key in ['blueprint-private-key', 'blueprint_secret', 'human_refresh_token', 'agent_password']:
