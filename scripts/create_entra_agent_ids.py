@@ -413,6 +413,9 @@ def create_agent_user(
             print(f"  [new] Agent User created: {actual_upn} ({user_id})")
             set_state("AGENT_USER_ID", user_id)
             set_state("AGENT_USER_UPN", actual_upn)
+            # Wait for Entra propagation (Learning #8: 30-120s for new principals)
+            print("  Waiting 30s for Agent User to propagate in Entra...")
+            time.sleep(30)
             return user_id, actual_upn
         elif resp.status_code == 403:
             print("  ERROR: Permission denied creating Agent User")
@@ -481,16 +484,32 @@ def grant_agent_user_consent(
 
     # oAuth2PermissionGrants is a v1.0 API — use the full URL, not graph_request()
     # which prepends the beta base URL.
-    resp = requests.post(
-        "https://graph.microsoft.com/v1.0/oauth2PermissionGrants",
-        headers=headers,
-        json=body,
-    )
-    if resp.status_code in (200, 201):
-        print(f"  [new] Consent granted: {scopes}")
-    else:
+    # Retry on "Principal not found" — Agent User may still be propagating (Learning #8)
+    for attempt in range(4):
+        resp = requests.post(
+            "https://graph.microsoft.com/v1.0/oauth2PermissionGrants",
+            headers=headers,
+            json=body,
+        )
+        if resp.status_code in (200, 201):
+            print(f"  [new] Consent granted: {scopes}")
+            return
+
+        # Retry on propagation-related errors
+        resp_text = resp.text
+        is_propagation = (
+            "Principal was not found" in resp_text
+            or "does not exist" in resp_text
+            or resp.status_code == 404
+        )
+        if is_propagation and attempt < 3:
+            wait = 15 * (attempt + 1)
+            print(f"  Agent User not yet propagated — waiting {wait}s (attempt {attempt + 1}/4)...")
+            time.sleep(wait)
+            continue
+
         print(f"  ERROR: Consent grant failed ({resp.status_code})")
-        print(f"  Response: {resp.text[:400]}")
+        print(f"  Response: {resp_text[:400]}")
         print("")
         print("  This is a BLOCKING error — hop 3 of the three-hop flow will fail")
         print("  without this consent grant. Check that the provisioner has")
