@@ -318,48 +318,37 @@ def create_agent_identity(token: str, blueprint_app_id: str) -> tuple[str, str]:
 MS_GRAPH_API_APP_ID = "00000003-0000-0000-c000-000000000000"
 
 
-def _agent_user_upn() -> str:
+def _agent_user_upn(token: str) -> str:
     """Generate the UPN for the Agent User.
 
-    Extracts the domain from the signed-in user's UPN (e.g., admin@werner.ac → werner.ac).
-    This guarantees the domain is a verified domain in the tenant.
+    Queries the tenant's verified domains via Graph API (using the Provisioner
+    token) and picks the best domain. Prefers custom domains over .onmicrosoft.com.
+
+    Previous approach (extracting from signed-in user UPN) failed for guest
+    accounts like brandwe@outlook.com — the domain is outlook.com, not the
+    tenant's verified domain.
     """
-    from entra_provisioning import run_az
+    # Query verified domains via Provisioner token (not az CLI — Learning #1)
+    resp = requests.get(
+        "https://graph.microsoft.com/v1.0/domains?$select=id,isDefault,isVerified",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    if resp.status_code == 200:
+        domains = resp.json().get("value", [])
+        # Prefer custom domain (not .onmicrosoft.com)
+        custom = [d["id"] for d in domains if d.get("isVerified") and ".onmicrosoft.com" not in d["id"]]
+        if custom:
+            print(f"  Using custom verified domain: {custom[0]}")
+            return f"entraclaw-agent@{custom[0]}"
+        # Fall back to default domain (including .onmicrosoft.com)
+        default = [d["id"] for d in domains if d.get("isDefault")]
+        if default:
+            print(f"  Using default domain: {default[0]}")
+            return f"entraclaw-agent@{default[0]}"
 
-    # Use -o json, not -o tsv — TSV can be corrupted by CLI warnings (Learning #7)
-    rc, out, _ = run_az([
-        "ad", "signed-in-user", "show", "-o", "json",
-    ])
-    if rc == 0 and out:
-        import json as _json
-        try:
-            user_data = _json.loads(out)
-            upn = user_data.get("userPrincipalName", "")
-            if "@" in upn:
-                domain = upn.split("@", 1)[1]
-                return f"entraclaw-agent@{domain}"
-        except _json.JSONDecodeError:
-            pass
-
-    # Fallback: query tenant verified domains
-    rc, out, _ = run_az([
-        "rest", "--method", "GET",
-        "--url", "https://graph.microsoft.com/v1.0/domains?$select=id,isDefault",
-        "-o", "json",
-    ])
-    if rc == 0 and out:
-        import json as _json
-        try:
-            domains = _json.loads(out).get("value", [])
-            for d in domains:
-                if d.get("isDefault"):
-                    return f"entraclaw-agent@{d['id']}"
-        except _json.JSONDecodeError:
-            pass
-
-    # Last resort — will fail UPN validation but gives a clear error
+    # Last resort
     print("  WARNING: Could not determine verified domain for Agent User UPN")
-    print("  Make sure you're signed in: az login")
+    print(f"  Graph API returned: {resp.status_code} {resp.text[:200]}")
     return "entraclaw-agent@unknown.onmicrosoft.com"
 
 
@@ -415,7 +404,7 @@ def create_agent_user(
         set_state("AGENT_USER_UPN", upn)
         return user_id, upn
 
-    upn = _agent_user_upn()
+    upn = _agent_user_upn(token)
     body = {
         "@odata.type": "microsoft.graph.agentUser",
         "displayName": "EntraClaw Agent",
