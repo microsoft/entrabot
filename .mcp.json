@@ -1,9 +1,9 @@
 {
   "mcpServers": {
     "openclaw": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/.venv/bin/python3",
+      "command": "/Volumes/Development HD/openclaw-identity-research/.venv/bin/python3",
       "args": ["-m", "openclaw.mcp_server"],
-      "cwd": "${CLAUDE_PLUGIN_ROOT}",
+      "cwd": "/Volumes/Development HD/openclaw-identity-research",
       "env": {}
     }
   }
