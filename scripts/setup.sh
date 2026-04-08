@@ -199,7 +199,7 @@ if [ -n "$TEAMS_USER_EMAIL" ]; then
         RESOLVED_TYPES+=("$TU_TYPE")
 
         if [ "$TU_TYPE" = "Guest" ]; then
-            success "  User '$TU' is a B2B Guest — will use role='guest' in chat"
+            success "  User '$TU' is a B2B Guest — will use federated chat (Example 7)"
             # Extract home domain from UPN: user_domain.com#EXT#@tenant.onmicrosoft.com
             HOME_DOMAIN=$(echo "$TU_UPN" | python3 -c "
 import sys
