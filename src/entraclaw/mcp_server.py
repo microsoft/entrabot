@@ -396,19 +396,43 @@ async def send_teams_message(message: str, content_type: str = "text") -> str:
 async def add_teams_member(email: str, tenant_id: str = "") -> str:
     """Add a new member to the current Teams chat without restarting.
 
-    For external users (B2B guests from another org), provide their
-    email and home tenant_id. For in-tenant members, just provide email.
+    Just provide the email address. For external users (different org),
+    the tenant is auto-resolved from the email domain. No tenant_id needed.
 
     Args:
-        email: The user's email address (e.g., 'user@microsoft.com').
-        tenant_id: The user's home tenant GUID (required for external users).
-            Find it via: https://login.microsoftonline.com/{domain}/.well-known/openid-configuration
+        email: The user's email address (e.g., 'user@example.com').
+        tenant_id: Optional override. Auto-resolved from email domain if empty.
 
     Returns:
         JSON with member_id, display_name, and roles.
     """
     await _initialize()
     from entraclaw.tools.teams import add_member
+
+    # Auto-resolve tenant ID from email domain if not provided
+    if not tenant_id and "@" in email:
+        domain = email.split("@")[1]
+        config = _state.get("config")
+        our_domain = ""
+        if config and config.agent_user_upn and "@" in config.agent_user_upn:
+            our_domain = config.agent_user_upn.split("@")[1]
+        if domain.lower() != our_domain.lower():
+            # External user — resolve tenant via OpenID discovery
+            import httpx
+
+            try:
+                oidc_url = f"https://login.microsoftonline.com/{domain}/.well-known/openid-configuration"
+                resp = httpx.get(oidc_url, timeout=10)
+                if resp.status_code == 200:
+                    issuer = resp.json().get("issuer", "")
+                    parts = issuer.rstrip("/").split("/")
+                    if len(parts) > 3:
+                        tenant_id = parts[-1]
+                        if logger:
+                            logger.info("Auto-resolved tenant for %s: %s", domain, tenant_id)
+            except Exception:
+                if logger:
+                    logger.warning("Could not auto-resolve tenant for %s", domain)
 
     chat_id = _state.get("chat_id")
     if not chat_id:
