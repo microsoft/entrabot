@@ -104,7 +104,7 @@ fi
 if [ -d "$IMPORT_DIR/claude-memory" ]; then
     # Find or create the Claude memory directory for this project
     # The path is based on the project root, with slashes replaced by dashes
-    PROJECT_PATH=$(echo "$PROJECT_ROOT" | sed 's|^/||; s|/|-|g')
+    PROJECT_PATH=$(echo "$PROJECT_ROOT" | sed 's|/|-|g')
     MEMORY_DIR="$HOME/.claude/projects/$PROJECT_PATH/memory"
     mkdir -p "$MEMORY_DIR"
     cp "$IMPORT_DIR/claude-memory"/*.md "$MEMORY_DIR/" 2>/dev/null || true
