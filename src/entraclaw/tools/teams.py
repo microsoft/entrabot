@@ -380,17 +380,60 @@ async def add_member(
         }
 
 
+async def list_members(
+    *,
+    chat_id: str,
+    token: str,
+) -> list[dict]:
+    """List members of a Teams chat with their user IDs.
+
+    Returns a list of dicts with user_id, name, and email — useful for
+    resolving @mention targets.
+    """
+    headers = {"Authorization": f"Bearer {token}"}
+
+    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    async with httpx.AsyncClient(transport=transport) as client:
+        resp = await client.get(
+            f"{GRAPH_BASE}/chats/{chat_id}/members",
+            headers=headers,
+        )
+        if resp.status_code == 401:
+            raise TokenExpiredError("Agent User token expired — re-acquire via three-hop flow")
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", "60"))
+            raise RateLimitError(retry_after)
+        resp.raise_for_status()
+
+        members = resp.json().get("value", [])
+        return [
+            {
+                "user_id": m.get("userId", ""),
+                "name": m.get("displayName", ""),
+                "email": m.get("email", ""),
+                "roles": m.get("roles", []),
+            }
+            for m in members
+        ]
+
+
 async def send(
     *,
     chat_id: str,
     message: str,
     token: str,
     content_type: str = "text",
+    mentions: list[dict] | None = None,
 ) -> dict:
     """Send *message* to the Teams chat identified by *chat_id*.
 
     ``content_type`` must be ``"text"`` or ``"html"``.
     The message is sent FROM the Agent User's own Teams identity.
+
+    ``mentions`` is an optional list of dicts with keys:
+      - ``id``: int — matches the ``<at id="N">`` in the HTML body
+      - ``name``: str — display name shown in the mention
+      - ``user_id``: str — Entra user GUID of the mentioned user
     """
     if len(message) > MAX_MESSAGE_LENGTH:
         raise MessageTooLong(f"Message is {len(message)} chars, max is {MAX_MESSAGE_LENGTH}")
@@ -400,11 +443,28 @@ async def send(
         "Content-Type": "application/json",
     }
 
+    payload: dict = {"body": {"contentType": content_type, "content": message}}
+    if mentions:
+        payload["mentions"] = [
+            {
+                "id": m["id"],
+                "mentionText": m["name"],
+                "mentioned": {
+                    "user": {
+                        "displayName": m["name"],
+                        "id": m["user_id"],
+                        "userIdentityType": "aadUser",
+                    }
+                },
+            }
+            for m in mentions
+        ]
+
     transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
     async with httpx.AsyncClient(transport=transport) as client:
         resp = await client.post(
             f"{GRAPH_BASE}/chats/{chat_id}/messages",
-            json={"body": {"contentType": content_type, "content": message}},
+            json=payload,
             headers=headers,
         )
         if resp.status_code == 401:

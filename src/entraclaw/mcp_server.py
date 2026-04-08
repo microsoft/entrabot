@@ -360,7 +360,9 @@ async def _push_channel_notification(message: dict) -> None:
 
 
 @mcp.tool()
-async def send_teams_message(message: str, content_type: str = "text") -> str:
+async def send_teams_message(
+    message: str, content_type: str = "text", mentions: list[dict] | None = None
+) -> str:
     """Send a message to the human user via Microsoft Teams. The recipient
     is pre-configured — just provide the message text.
 
@@ -368,9 +370,22 @@ async def send_teams_message(message: str, content_type: str = "text") -> str:
     human's response. Then act on their reply autonomously — don't ask
     the terminal what to do. The Teams human IS your user.
 
+    To @mention someone in the message, use HTML content_type with
+    ``<at id="N">Display Name</at>`` tags in the message body, and pass
+    a mentions list. Each mention dict needs:
+      - id: int matching the at-tag id
+      - name: display name
+      - user_id: their Entra user GUID (get from chat members via read_teams_messages)
+
+    Example:
+      message: '<at id="0">Alice Example</at> check this out'
+      content_type: "html"
+      mentions: [{"id": 0, "name": "Alice Example", "user_id": "abc-123"}]
+
     Args:
         message: The text to send.
         content_type: "text" (default) or "html" for rich formatting.
+        mentions: Optional list of mention dicts for @mentions.
 
     Returns:
         JSON with message_id and sent_at timestamp.
@@ -388,6 +403,32 @@ async def send_teams_message(message: str, content_type: str = "text") -> str:
         chat_id=str(chat_id),
         message=message,
         content_type=content_type,
+        mentions=mentions,
+    )
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def list_chat_members() -> str:
+    """List all members of the current Teams chat with their user IDs.
+
+    Use this to resolve display names to user GUIDs for @mentions in
+    send_teams_message. Returns user_id, name, email, and roles for each member.
+
+    Returns:
+        JSON array of chat members.
+    """
+    await _initialize()
+    from entraclaw.tools.teams import list_members
+
+    chat_id = _state.get("chat_id")
+    if not chat_id:
+        return json.dumps({"error": "Teams chat not established. Check setup."})
+
+    await _ensure_valid_token()
+    result = await _with_token_retry(
+        list_members,
+        chat_id=str(chat_id),
     )
     return json.dumps(result, indent=2)
 

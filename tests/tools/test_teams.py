@@ -614,6 +614,117 @@ class TestTeamsSend:
         with pytest.raises(ChatNotFound):
             await send(chat_id="nope", message="hello", token="tok")
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_with_mentions(self) -> None:
+        """Mentions array is included in the Graph API payload."""
+        route = respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            return_value=httpx.Response(201, json={"id": "msg-m", "createdDateTime": "2024-01-01"})
+        )
+        mentions = [
+            {"id": 0, "name": "Alice Example", "user_id": "user-guid-eric"},
+        ]
+        result = await send(
+            chat_id="c1",
+            message='<at id="0">Alice Example</at> check this out',
+            token="tok",
+            content_type="html",
+            mentions=mentions,
+        )
+        assert result["message_id"] == "msg-m"
+        import json as _json
+
+        body = _json.loads(route.calls.last.request.content)
+        assert "mentions" in body
+        assert body["mentions"][0]["mentioned"]["user"]["id"] == "user-guid-eric"
+        assert body["mentions"][0]["mentionText"] == "Alice Example"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_with_multiple_mentions(self) -> None:
+        """Multiple mentions are all included in the payload."""
+        route = respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            return_value=httpx.Response(201, json={"id": "msg-mm", "createdDateTime": "2024-01-01"})
+        )
+        mentions = [
+            {"id": 0, "name": "Carol Sample", "user_id": "user-guid-ayse"},
+            {"id": 1, "name": "Alice Example", "user_id": "user-guid-eric"},
+        ]
+        await send(
+            chat_id="c1",
+            message='<at id="0">Carol Sample</at> and <at id="1">Alice Example</at>',
+            token="tok",
+            content_type="html",
+            mentions=mentions,
+        )
+        import json as _json
+
+        body = _json.loads(route.calls.last.request.content)
+        assert len(body["mentions"]) == 2
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_without_mentions_omits_field(self) -> None:
+        """When no mentions are passed, the payload has no mentions key."""
+        route = respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            return_value=httpx.Response(201, json={"id": "msg-nm", "createdDateTime": "2024-01-01"})
+        )
+        await send(chat_id="c1", message="no tags here", token="tok")
+        import json as _json
+
+        body = _json.loads(route.calls.last.request.content)
+        assert "mentions" not in body
+
+
+# ---------------------------------------------------------------------------
+# list_members
+# ---------------------------------------------------------------------------
+
+
+class TestListMembers:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_happy_path(self) -> None:
+        from entraclaw.tools.teams import list_members
+
+        respx.get(f"{GRAPH_BASE}/chats/c1/members").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "userId": "user-1",
+                            "displayName": "Alice Example",
+                            "email": "user@example.com",
+                            "roles": ["owner"],
+                        },
+                        {
+                            "userId": "user-2",
+                            "displayName": "Brandon Werner",
+                            "email": "brandon@werner.ac",
+                            "roles": ["owner"],
+                        },
+                    ]
+                },
+            )
+        )
+        result = await list_members(chat_id="c1", token="tok")
+        assert len(result) == 2
+        assert result[0]["user_id"] == "user-1"
+        assert result[0]["name"] == "Alice Example"
+        assert result[1]["name"] == "Brandon Werner"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_token_expired(self) -> None:
+        from entraclaw.tools.teams import list_members
+
+        respx.get(f"{GRAPH_BASE}/chats/c1/members").mock(
+            return_value=httpx.Response(401)
+        )
+        with pytest.raises(TokenExpiredError):
+            await list_members(chat_id="c1", token="tok")
+
 
 # ---------------------------------------------------------------------------
 # read
