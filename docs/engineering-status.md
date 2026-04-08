@@ -205,8 +205,9 @@ See `docs/runbooks/hard-won-learnings.md` for the full append-only log (29 entri
 2. ~~Token auto-refresh~~ — ✅ DONE. Eager (55-min) + lazy (401 retry).
 3. ~~Certificate auth~~ — ✅ DONE. No secrets on disk. Private key in OS keystore (ADR-003).
 4. ~~Close the loop~~ — ✅ DONE. `notifications/claude/channel` push via experimental capability.
-5. **Entra sign-in log verification** — confirm `idtyp=user` and agent attribution
-6. **Windows VM provisioning** — verify cross-platform setup.sh
-7. **AppContainer sandbox spike** — kernel-level agent isolation on Windows
-8. **Delta query optimization** — replace timestamp polling with `/messages/delta` if needed
-9. **Publish as Claude Code marketplace plugin** — move from `--dangerously-load-development-channels` to proper plugin distribution
+5. **Multi-tenant lightweight chat** — ACTIVE. Branch: `feature/multi-tenant-lightweight-chat`. Multi-tenant app + device code auth + progressive identity (sponsor → Agent User). See `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` for full spec.
+6. **Entra sign-in log verification** — confirm `idtyp=user` and agent attribution
+7. **Windows VM provisioning** — verify cross-platform setup.sh (rescheduled to weekend)
+8. **AppContainer sandbox spike** — kernel-level agent isolation on Windows (rescheduled to weekend)
+9. **Delta query optimization** — replace timestamp polling with `/messages/delta` if needed
+10. **Publish as Claude Code marketplace plugin** — move from `--dangerously-load-development-channels` to proper plugin distribution

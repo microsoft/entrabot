@@ -25,8 +25,13 @@
 - Background channel: polls Teams every 5s, pushes via `notifications/claude/channel`
 - All structured data uses `dataclasses` or `pydantic` — no raw dicts
 
+## Active Work
+
+- **Multi-tenant lightweight chat** — branch `feature/multi-tenant-lightweight-chat`. Full spec: `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md`. Multi-tenant app + device code auth + progressive identity (start with human's delegated token, background-provision Agent User). Approved by Alice Example, Brandon, Alex.
+
 ## Read These First
 
+- `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` (current active spec)
 - `docs/index.md`
 - `docs/engineering-status.md`
 - `docs/runbooks/hard-won-learnings.md` (29 entries — read before making changes)
