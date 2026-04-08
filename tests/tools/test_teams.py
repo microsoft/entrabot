@@ -274,6 +274,94 @@ class TestCreateOrFindChat:
         assert b'"group"' in body
         assert b"EntraClaw Agent Chat" in body
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_federated_user_includes_tenant_id(self) -> None:
+        """External/guest users must have tenantId in the member payload (Example 7)."""
+        route = respx.post(f"{GRAPH_BASE}/chats").mock(
+            return_value=httpx.Response(
+                201,
+                json={"id": "19:fed-chat@thread.v2", "createdDateTime": "2024-01-01"},
+            )
+        )
+        result = await create_or_find_chat(
+            token="agent-token",
+            human_user_ids=["guest-obj-id"],
+            human_user_tenant_ids=["72f988bf-86f1-41af-91ab-2d7cd011db47"],
+            human_user_mails=["adrumea@microsoft.com"],
+        )
+        assert result["chat_id"] == "19:fed-chat@thread.v2"
+        import json
+
+        body = json.loads(route.calls.last.request.content)
+        # Find the human member (not the agent)
+        human_members = [
+            m for m in body["members"] if "adrumea@microsoft.com" in m.get("user@odata.bind", "")
+        ]
+        assert len(human_members) == 1
+        assert human_members[0]["tenantId"] == "72f988bf-86f1-41af-91ab-2d7cd011db47"
+        # user@odata.bind should use email, not the guest object ID
+        assert "adrumea@microsoft.com" in human_members[0]["user@odata.bind"]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_mixed_members_and_guests(self) -> None:
+        """In-tenant members should NOT get tenantId; guests should."""
+        route = respx.post(f"{GRAPH_BASE}/chats").mock(
+            return_value=httpx.Response(
+                201,
+                json={"id": "19:mixed-chat@thread.v2", "createdDateTime": "2024-01-01"},
+            )
+        )
+        await create_or_find_chat(
+            token="agent-token",
+            human_user_ids=["member-uid", "guest-obj-id"],
+            human_user_tenant_ids=["", "ext-tenant-id"],
+            human_user_mails=["brandon@werner.ac", "guest@external.com"],
+        )
+        import json
+
+        body = json.loads(route.calls.last.request.content)
+        # Find the in-tenant member (uses object ID, no tenantId)
+        member_entry = [
+            m for m in body["members"] if "member-uid" in m.get("user@odata.bind", "")
+        ]
+        assert len(member_entry) == 1
+        assert "tenantId" not in member_entry[0]
+        # Find the guest (uses email, has tenantId)
+        guest_entry = [
+            m for m in body["members"] if "guest@external.com" in m.get("user@odata.bind", "")
+        ]
+        assert len(guest_entry) == 1
+        assert guest_entry[0]["tenantId"] == "ext-tenant-id"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_member_user_no_tenant_id(self) -> None:
+        """In-tenant members with empty tenant_id get no tenantId field (backward compat)."""
+        route = respx.post(f"{GRAPH_BASE}/chats").mock(
+            return_value=httpx.Response(
+                201,
+                json={"id": "19:member-chat@thread.v2", "createdDateTime": "2024-01-01"},
+            )
+        )
+        await create_or_find_chat(
+            token="agent-token",
+            human_user_ids=["local-uid"],
+            human_user_tenant_ids=[""],
+            human_user_mails=["brandon@werner.ac"],
+        )
+        import json
+
+        body = json.loads(route.calls.last.request.content)
+        human_members = [
+            m for m in body["members"] if "local-uid" in m.get("user@odata.bind", "")
+        ]
+        assert len(human_members) == 1
+        assert "tenantId" not in human_members[0]
+        # Uses object ID, not email
+        assert "local-uid" in human_members[0]["user@odata.bind"]
+
 
 # ---------------------------------------------------------------------------
 # send

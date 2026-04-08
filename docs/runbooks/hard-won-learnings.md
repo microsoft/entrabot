@@ -241,6 +241,15 @@ Append-only log of gotchas, surprises, and non-obvious behaviors discovered duri
 **Implications:** `ctx.sample()` could theoretically let `watch_teams_replies` re-engage the LLM when a reply arrives — but this is untested with Claude Code's MCP client and likely unsupported. `ctx.set_state()`/`ctx.get_state()` could replace our manual `_state` dict for cursor and seen-set management in a future refactor.
 **Prevention:** Before building custom infrastructure, always check what the framework provides. FastMCP's Context is much richer than we initially used.
 
+### Learning #28: Graph API Create Chat Requires `tenantId` for Guest/External Users
+
+**Date:** 2026-04-07
+**Context:** Messaging Microsoft employees invited as B2B guests into the werner.ac tenant
+**Problem:** `POST /chats` returned 200 and `POST /chats/{id}/messages` returned 200, but the external user never received the messages. First chat creation triggered a one-time email notification, but subsequent messages were invisible to the recipient.
+**Root cause:** The Graph API `Create chat` has two patterns for external users (Examples 6 and 7 in the docs). For federated/external users, the `aadUserConversationMember` must include `"tenantId"` with the user's home tenant GUID, and `user@odata.bind` should reference their email (not the guest object ID). Without `tenantId`, Graph creates a "phantom chat" — it exists in the calling tenant but is not properly routed cross-tenant.
+**Fix:** In `setup.sh`, detect `userType: Guest` via `az ad user show`, extract the home domain from the UPN pattern (`user_domain.com#EXT#@tenant.onmicrosoft.com`), look up the tenant GUID via OpenID discovery (`https://login.microsoftonline.com/{domain}/.well-known/openid-configuration`), and pass it through config → `create_or_find_chat()` → Graph API payload.
+**Prevention:** Always check `userType` before creating chats. Graph API returns 200 for malformed cross-tenant chats — the only symptom is silent message loss on the receiving end.
+
 ---
 
 ## Historical Learnings

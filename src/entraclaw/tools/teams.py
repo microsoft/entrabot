@@ -170,29 +170,52 @@ async def create_or_find_chat(
     token: str,
     human_user_ids: list[str],
     agent_user_id: str | None = None,
+    human_user_tenant_ids: list[str] | None = None,
+    human_user_mails: list[str] | None = None,
 ) -> dict:
     """Create or resume a Teams chat between the Agent User and human(s).
 
     If one human user is provided, creates a ``oneOnOne`` chat (idempotent).
     If multiple humans are provided, creates a ``group`` chat with a topic.
 
-    Uses explicit user IDs for all members (not ``/me``) because the
-    ``user@odata.bind`` field doesn't reliably resolve ``/me`` for
-    Agent User tokens in the chat creation context.
+    For external/guest users, ``human_user_tenant_ids`` provides the home
+    tenant GUID (parallel to ``human_user_ids``).  When a tenant ID is
+    present the member payload includes ``tenantId`` and the
+    ``user@odata.bind`` references the user's email (from
+    ``human_user_mails``) so Graph can route the chat cross-tenant
+    (see Graph API Create chat — Example 7).
     """
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
 
-    members = [
-        {
-            "@odata.type": "#microsoft.graph.aadUserConversationMember",
-            "roles": ["owner"],
-            "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{uid}')",
-        }
-        for uid in human_user_ids
-    ]
+    tenant_ids = human_user_tenant_ids or [""] * len(human_user_ids)
+    mails = human_user_mails or [""] * len(human_user_ids)
+
+    members: list[dict] = []
+    for i, uid in enumerate(human_user_ids):
+        tid = tenant_ids[i] if i < len(tenant_ids) else ""
+        mail = mails[i] if i < len(mails) else ""
+
+        # For external users with a home tenant ID, use their email
+        # and include tenantId so Graph routes the chat cross-tenant.
+        if tid:
+            user_ref = mail if mail else uid
+            member: dict = {
+                "@odata.type": "#microsoft.graph.aadUserConversationMember",
+                "roles": ["owner"],
+                "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{user_ref}')",
+                "tenantId": tid,
+            }
+        else:
+            member = {
+                "@odata.type": "#microsoft.graph.aadUserConversationMember",
+                "roles": ["owner"],
+                "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{uid}')",
+            }
+        members.append(member)
+
     # Add Agent User as explicit member if ID is provided
     if agent_user_id:
         members.insert(

@@ -162,22 +162,69 @@ fi
 # If --teams-user was specified, resolve user(s) for Teams (comma-separated for group chat)
 HUMAN_USER_IDS=""
 HUMAN_UPNS=""
+HUMAN_USER_TENANT_IDS=""
+HUMAN_USER_MAILS=""
 if [ -n "$TEAMS_USER_EMAIL" ]; then
     IFS=',' read -ra TEAMS_USERS <<< "$TEAMS_USER_EMAIL"
     RESOLVED_IDS=()
     RESOLVED_UPNS=()
+    RESOLVED_TENANT_IDS=()
+    RESOLVED_MAILS=()
     for TU in "${TEAMS_USERS[@]}"; do
         TU=$(echo "$TU" | xargs)  # trim whitespace
-        TU_ID=$(az ad user show --id "$TU" --query "id" -o tsv 2>/dev/null) || true
-        if [ -z "$TU_ID" ]; then
+        # Query user details including userType and mail for guest detection
+        TU_JSON=$(az ad user show --id "$TU" --query "{id:id, userType:userType, mail:mail, upn:userPrincipalName}" -o json 2>/dev/null) || true
+        if [ -z "$TU_JSON" ]; then
             fail "Could not find Teams user '$TU' in Entra. Check the email/ID."
         fi
+        TU_ID=$(echo "$TU_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+        TU_TYPE=$(echo "$TU_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['userType'])")
+        TU_MAIL=$(echo "$TU_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('mail') or '')")
+        TU_UPN=$(echo "$TU_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['upn'])")
+
         RESOLVED_IDS+=("$TU_ID")
         RESOLVED_UPNS+=("$TU")
+        RESOLVED_MAILS+=("$TU_MAIL")
+
+        if [ "$TU_TYPE" = "Guest" ]; then
+            # Extract home domain from UPN: user_domain.com#EXT#@tenant.onmicrosoft.com
+            HOME_DOMAIN=$(echo "$TU_UPN" | python3 -c "
+import sys
+upn = sys.stdin.read().strip()
+# Pattern: user_domain.com#EXT#@tenant.onmicrosoft.com
+if '#EXT#' in upn:
+    local_part = upn.split('#EXT#')[0]  # user_domain.com
+    # Domain is after the last underscore
+    parts = local_part.rsplit('_', 1)
+    print(parts[1] if len(parts) > 1 else '')
+else:
+    print('')
+")
+            if [ -n "$HOME_DOMAIN" ]; then
+                # Look up home tenant GUID via OpenID discovery
+                HOME_TENANT_ID=$(curl -s "https://login.microsoftonline.com/${HOME_DOMAIN}/.well-known/openid-configuration" \
+                    | python3 -c "import sys,json; issuer=json.load(sys.stdin).get('issuer',''); parts=issuer.rstrip('/').split('/'); print(parts[-1] if len(parts)>3 else '')")
+                if [ -n "$HOME_TENANT_ID" ]; then
+                    success "  Guest '$TU' → home tenant: $HOME_DOMAIN ($HOME_TENANT_ID)"
+                    RESOLVED_TENANT_IDS+=("$HOME_TENANT_ID")
+                else
+                    warn "Could not resolve home tenant for guest '$TU' (domain: $HOME_DOMAIN)"
+                    RESOLVED_TENANT_IDS+=("")
+                fi
+            else
+                warn "Could not extract home domain from guest UPN: $TU_UPN"
+                RESOLVED_TENANT_IDS+=("")
+            fi
+        else
+            # In-tenant member — no tenantId needed
+            RESOLVED_TENANT_IDS+=("")
+        fi
     done
     # Join arrays with commas
     HUMAN_USER_IDS=$(IFS=','; echo "${RESOLVED_IDS[*]}")
     HUMAN_UPNS=$(IFS=','; echo "${RESOLVED_UPNS[*]}")
+    HUMAN_USER_TENANT_IDS=$(IFS=','; echo "${RESOLVED_TENANT_IDS[*]}")
+    HUMAN_USER_MAILS=$(IFS=','; echo "${RESOLVED_MAILS[*]}")
     # First user is the primary (backward compat)
     HUMAN_USER_ID="${RESOLVED_IDS[0]}"
     HUMAN_UPN="${RESOLVED_UPNS[0]}"
@@ -190,6 +237,8 @@ if [ -n "$TEAMS_USER_EMAIL" ]; then
 else
     HUMAN_USER_IDS="$HUMAN_USER_ID"
     HUMAN_UPNS="$HUMAN_UPN"
+    HUMAN_USER_TENANT_IDS=""
+    HUMAN_USER_MAILS="$HUMAN_UPN"
     success "Human user: $HUMAN_UPN ($HUMAN_USER_ID)"
 fi
 
@@ -397,6 +446,8 @@ ENTRACLAW_HUMAN_USER_ID=$HUMAN_USER_ID
 ENTRACLAW_HUMAN_UPN=$HUMAN_UPN
 ENTRACLAW_HUMAN_USER_IDS=$HUMAN_USER_IDS
 ENTRACLAW_HUMAN_UPNS=$HUMAN_UPNS
+ENTRACLAW_HUMAN_USER_TENANT_IDS=$HUMAN_USER_TENANT_IDS
+ENTRACLAW_HUMAN_USER_MAILS=$HUMAN_USER_MAILS
 ENTRACLAW_PROVISIONER_APP_ID=$PROV_CLIENT_ID
 ENTRACLAW_LOG_LEVEL=INFO
 EOF

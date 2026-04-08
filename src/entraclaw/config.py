@@ -20,6 +20,18 @@ def _parse_csv(value: str | None) -> list[str]:
     return [v.strip() for v in value.split(",") if v.strip()]
 
 
+def _parse_csv_preserve_empty(value: str | None) -> list[str]:
+    """Parse a comma-separated string, preserving empty entries.
+
+    Unlike ``_parse_csv``, empty strings between commas are kept so that
+    the result stays index-aligned with parallel CSV lists (e.g. user IDs
+    and their corresponding tenant IDs).
+    """
+    if not value:
+        return []
+    return [v.strip() for v in value.split(",")]
+
+
 def _default_dir(subdir: str) -> Path:
     return Path.home() / ".entraclaw" / subdir
 
@@ -63,6 +75,8 @@ class EntraClawConfig:
     human_upn: str | None = field(default=None)
     human_user_ids: list[str] = field(default_factory=list)
     human_upns: list[str] = field(default_factory=list)
+    human_user_tenant_ids: list[str] = field(default_factory=list)
+    human_user_mails: list[str] = field(default_factory=list)
     log_dir: Path = field(default_factory=lambda: _default_dir("logs"))
     audit_dir: Path = field(default_factory=lambda: _default_dir("audit"))
     data_dir: Path = field(default_factory=lambda: _default_dir("data"))
@@ -86,6 +100,10 @@ class EntraClawConfig:
             or _parse_csv(os.environ.get("ENTRACLAW_HUMAN_USER_ID")),
             human_upns=_parse_csv(os.environ.get("ENTRACLAW_HUMAN_UPNS"))
             or _parse_csv(os.environ.get("ENTRACLAW_HUMAN_UPN")),
+            human_user_tenant_ids=_parse_csv_preserve_empty(
+                os.environ.get("ENTRACLAW_HUMAN_USER_TENANT_IDS")
+            ),
+            human_user_mails=_parse_csv(os.environ.get("ENTRACLAW_HUMAN_USER_MAILS")),
             log_dir=Path(os.environ.get("ENTRACLAW_LOG_DIR", _default_dir("logs"))),
             audit_dir=Path(os.environ.get("ENTRACLAW_AUDIT_DIR", _default_dir("audit"))),
             data_dir=Path(os.environ.get("ENTRACLAW_DATA_DIR", _default_dir("data"))),

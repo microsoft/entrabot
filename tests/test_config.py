@@ -79,3 +79,31 @@ class TestEntraClawConfig:
     def test_get_config_shortcut(self) -> None:
         cfg = get_config()
         assert isinstance(cfg, EntraClawConfig)
+
+    def test_tenant_ids_parsed_from_env(self) -> None:
+        """ENTRACLAW_HUMAN_USER_TENANT_IDS CSV is parsed into a list."""
+        env = {
+            "ENTRACLAW_HUMAN_USER_TENANT_IDS": "72f988bf-86f1-41af-91ab-2d7cd011db47,,other-tenant",
+            "ENTRACLAW_HUMAN_USER_MAILS": "adrumea@microsoft.com,brandon@werner.ac,guest@other.com",
+            "ENTRACLAW_HUMAN_USER_IDS": "guest-id,member-id,guest2-id",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            cfg = EntraClawConfig.from_env()
+        assert cfg.human_user_tenant_ids == [
+            "72f988bf-86f1-41af-91ab-2d7cd011db47",
+            "",
+            "other-tenant",
+        ]
+        assert cfg.human_user_mails == [
+            "adrumea@microsoft.com",
+            "brandon@werner.ac",
+            "guest@other.com",
+        ]
+
+    def test_tenant_ids_empty_when_not_set(self) -> None:
+        """Missing ENTRACLAW_HUMAN_USER_TENANT_IDS defaults to empty list."""
+        cleaned = {k: v for k, v in os.environ.items() if not k.startswith("ENTRACLAW_")}
+        with patch.dict(os.environ, cleaned, clear=True):
+            cfg = EntraClawConfig.from_env()
+        assert cfg.human_user_tenant_ids == []
+        assert cfg.human_user_mails == []
