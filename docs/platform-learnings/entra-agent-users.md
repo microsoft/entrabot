@@ -189,6 +189,43 @@ The Agent User gets:
 4. Audit attribution (agent actions show as agent in sign-in logs)
 5. Conditional Access governance (admin can block the agent)
 
+## Directory Scale Constraints (Learning from 2026-04-08 debate)
+
+Agent Users are directory objects. Every Agent User counts against the tenant's directory quota:
+
+| Directory Size | Platform Support | Operational Risk |
+|---|---|---|
+| ≤300K | default | trivial |
+| 300K–500K | common enterprise | low |
+| 500K–1M | supported w/ approval | lifecycle needed |
+| 1M–2M | achievable | RP propagation cost shows up — requires coordination |
+
+**Without a verified domain:** 50K object limit.
+**With 1+ verified domain:** 300K object limit.
+**Beyond that:** contact Microsoft support.
+
+### Why This Matters for Agent Users at Scale
+
+If each user creates multiple agent sessions (Ayse reported 7-8 concurrent sessions), a 100K-employee company could need 700K+ Agent User objects — well past default limits.
+
+### Pooling Does NOT Work
+
+A "connection pool" model (pre-provision Agent Users, check out/return) was considered and rejected:
+
+1. **OID recycling is a security risk** — residual permissions/audit from one session would attach to the next user who gets that OID
+2. **Soft-deleted objects still count against quota** — deleted objects persist for 30 days at full weight, then another month at partial. Churning through pooled Agent Users worsens the scale problem.
+3. **Hard deletes take time** — total lifecycle of a deleted object is ~2 months before quota is freed
+
+### Better Alternatives
+
+1. **IC3/Teams federation** (Henry Placeholder's proposal) — agent identities live in Teams' IC3 backend, not the Entra directory. Session IDs as external OIDs via native federation tokens. IC3 already scales to billions. No directory objects needed for chat-only scenarios.
+2. **FMIs (Federated Machine Identities)** — SPIFFE/SPIRE-like identities that don't require directory objects. Could be hosted in IC3 or a separate identity store.
+3. **Ephemeral Agent Users with TTL** — auto-deprovision after session end. Acceptable if the 2-month delete lifecycle is fixed.
+
+### Implication
+
+For ad-hoc CLI sessions, Agent Users (directory objects) are overkill. Reserve Agent Users for long-running autonomous agents that need persistent identity, governance, and resource access. For ephemeral sessions, use a lighter identity construct (federation, FMI, or OBO with decorated tokens).
+
 ## References
 
 - [Agent Users concept](https://learn.microsoft.com/entra/agent-id/identity-platform/agent-users)
