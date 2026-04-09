@@ -292,6 +292,121 @@ class TestExistingToolsRetrofitted:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_send_prefixes_in_delegated_mode(self) -> None:
+        """send_teams_message should add [EntraClaw] prefix in delegated auth mode."""
+        from entraclaw import mcp_server
+        from entraclaw.identity.state_machine import IdentityStateMachine
+        from entraclaw.models import IdentityState
+
+        # Capture the request body to verify the prefix
+        captured_body: dict = {}
+
+        def capture_request(request: httpx.Request) -> httpx.Response:
+            captured_body.update(json.loads(request.content))
+            return httpx.Response(
+                201,
+                json={"id": "msg-pfx", "createdDateTime": "2026-04-09T12:00:00Z"},
+            )
+
+        respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(side_effect=capture_request)
+
+        old_state = mcp_server._state.copy()
+        old_identity = mcp_server._identity
+        try:
+            sm = IdentityStateMachine()
+            await sm.transition(IdentityState.DELEGATED)
+            sm.update_session(
+                token="deleg-token",
+                token_acquired_at=time.monotonic(),
+                auth_mode="delegated",
+            )
+            mcp_server._identity = sm
+            mcp_server._state.update(
+                {
+                    "initialized": True,
+                    "token": "deleg-token",
+                    "config": MagicMock(),
+                    "chat_id": "c1",
+                }
+            )
+
+            result_json = await mcp_server.send_teams_message("hello team")
+            result = json.loads(result_json)
+            assert result["message_id"] == "msg-pfx"
+
+            # The message body sent to Graph should start with [EntraClaw]
+            sent_content = captured_body["body"]["content"]
+            assert sent_content.startswith("[EntraClaw]"), (
+                f"Expected prefix '[EntraClaw]', got: {sent_content!r}"
+            )
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+            mcp_server._identity = old_identity
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_no_prefix_in_agent_user_mode(self) -> None:
+        """send_teams_message should NOT add prefix in agent_user auth mode."""
+        from entraclaw import mcp_server
+        from entraclaw.identity.state_machine import IdentityStateMachine
+        from entraclaw.models import IdentityState
+
+        captured_body: dict = {}
+
+        def capture_request(request: httpx.Request) -> httpx.Response:
+            captured_body.update(json.loads(request.content))
+            return httpx.Response(
+                201,
+                json={"id": "msg-no-pfx", "createdDateTime": "2026-04-09T12:00:00Z"},
+            )
+
+        respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(side_effect=capture_request)
+
+        mock_acquire = MagicMock(return_value="refreshed-token")
+        mock_config = MagicMock()
+
+        old_state = mcp_server._state.copy()
+        old_identity = mcp_server._identity
+        try:
+            sm = IdentityStateMachine()
+            await sm.transition(IdentityState.AGENT_USER)
+            sm.update_session(
+                token="agent-token",
+                token_acquired_at=time.monotonic(),
+                auth_mode="agent_user",
+            )
+            mcp_server._identity = sm
+            mcp_server._state.update(
+                {
+                    "initialized": True,
+                    "token": "agent-token",
+                    "config": mock_config,
+                    "chat_id": "c1",
+                }
+            )
+
+            with patch(
+                "entraclaw.mcp_server.acquire_agent_user_token",
+                mock_acquire,
+            ):
+                result_json = await mcp_server.send_teams_message("hello team")
+
+            result = json.loads(result_json)
+            assert result["message_id"] == "msg-no-pfx"
+
+            # No prefix in agent_user mode
+            sent_content = captured_body["body"]["content"]
+            assert not sent_content.startswith("[EntraClaw]"), (
+                f"Should NOT have prefix in agent_user mode, got: {sent_content!r}"
+            )
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+            mcp_server._identity = old_identity
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_read_retries_on_401(self) -> None:
         """read_teams_messages should retry once on TokenExpiredError."""
         from entraclaw import mcp_server

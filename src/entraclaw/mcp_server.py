@@ -679,12 +679,20 @@ async def send_teams_message(
         return json.dumps({"error": "Teams chat not established. Check setup."})
 
     await _ensure_valid_token()
+
+    # In delegated mode the message comes from the human's identity,
+    # so prefix it to distinguish agent-sent messages from the human.
+    prefix = None
+    if _identity and _identity.session.auth_mode == "delegated":
+        prefix = "[EntraClaw]"
+
     result = await _with_token_retry(
         send,
         chat_id=str(target_chat),
         message=message,
         content_type=content_type,
         mentions=mentions,
+        prefix=prefix,
     )
     return json.dumps(result, indent=2)
 

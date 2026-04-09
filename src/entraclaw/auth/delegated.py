@@ -19,7 +19,7 @@ logger = logging.getLogger("entraclaw.auth.delegated")
 
 DEFAULT_SCOPES = ["Chat.ReadWrite", "User.Read"]
 LOCALHOST_PORT = 8400
-LOCALHOST_TIMEOUT = 10  # seconds before falling back to device code
+LOCALHOST_TIMEOUT = 120  # seconds — browser sign-in needs time
 CACHE_LOCATION = "entraclaw_msal_cache"
 
 
