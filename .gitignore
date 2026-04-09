@@ -19,3 +19,4 @@ venv/
 .openclaw-state.json
 .entraclaw-state.json
 .mcp.json
+entraclaw-state-export.tar.gz.enc
