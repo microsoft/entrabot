@@ -62,12 +62,24 @@ mcp = FastMCP(
         "- If you receive an instruction via Teams, execute it and report back "
         "via Teams. The terminal user should see you working, not prompts.\n\n"
         "TOOLS:\n"
-        "- send_teams_message: Send a message (trigger: 'message', 'notify', "
-        "'tell', 'ping', 'contact')\n"
+        "- send_teams_message: Send a message to the default group chat, "
+        "OR pass chat_id to target any other chat (trigger: 'message', "
+        "'notify', 'tell', 'ping', 'contact')\n"
+        "- create_chat: Create a 1:1 DM with a user by email. Returns a "
+        "chat_id you can pass to send/read/list tools. Use this when the "
+        "human asks you to DM someone or start a private conversation.\n"
         "- watch_teams_replies: Poll for replies (ALWAYS after sending)\n"
-        "- read_teams_messages: Read message history (context, not polling)\n"
+        "- read_teams_messages: Read message history. Pass chat_id to read "
+        "from any chat (default: group chat).\n"
+        "- list_chat_members: List members of any chat (default: group chat). "
+        "Pass chat_id to target a specific chat.\n"
+        "- add_teams_member: Add someone to the default group chat by email.\n"
         "- whoami: Check identity and connection\n"
-        "- audit_log: Record actions before performing them"
+        "- audit_log: Record actions before performing them\n\n"
+        "MULTI-CHAT: You can monitor multiple chats at once. Every chat you "
+        "create_chat for is registered for background polling and persists "
+        "across restarts. Use chat_id to send DMs to users while still "
+        "watching the group chat."
     ),
 )
 
@@ -440,12 +452,16 @@ async def send_teams_message(
     mentions: list[dict] | None = None,
     chat_id: str = "",
 ) -> str:
-    """Send a message to the human user via Microsoft Teams. The recipient
-    is pre-configured — just provide the message text.
+    """Send a message via Microsoft Teams.
 
-    After calling this, ALWAYS call watch_teams_replies to listen for the
-    human's response. Then act on their reply autonomously — don't ask
-    the terminal what to do. The Teams human IS your user.
+    By default, messages go to the configured group chat. To send a
+    private DM or target any other chat, pass ``chat_id`` explicitly —
+    you can get one from ``create_chat`` (for a new 1:1 DM) or from
+    the ``meta.chat_id`` of a channel notification.
+
+    After calling this, you don't need to call watch_teams_replies —
+    the background poll pushes replies automatically via the channel
+    notification for every watched chat.
 
     To @mention someone in the message, use HTML content_type with
     ``<at id="N">Display Name</at>`` tags in the message body, and pass
@@ -454,7 +470,11 @@ async def send_teams_message(
       - name: display name
       - user_id: their Entra user GUID (get from chat members via read_teams_messages)
 
-    Example:
+    Example — DM someone:
+      chat_id = await create_chat(target_email="alice@example.com")
+      await send_teams_message("Hey Alice", chat_id=chat_id)
+
+    Example — @mention in the group chat:
       message: '<at id="0">Alice Example</at> check this out'
       content_type: "html"
       mentions: [{"id": 0, "name": "Alice Example", "user_id": "abc-123"}]
@@ -490,11 +510,17 @@ async def send_teams_message(
 async def list_chat_members(chat_id: str = "") -> str:
     """List all members of a Teams chat with their user IDs.
 
+    By default lists members of the configured group chat. Pass
+    ``chat_id`` to list members of a specific chat (e.g., a DM you
+    created with create_chat).
+
     Use this to resolve display names to user GUIDs for @mentions in
-    send_teams_message. Returns user_id, name, email, and roles for each member.
+    send_teams_message. Returns user_id, name, email, and roles for
+    each member.
 
     Args:
-        chat_id: Optional chat ID to target. If empty, uses the default group chat.
+        chat_id: Optional chat ID to target. If empty, uses the default
+            group chat.
 
     Returns:
         JSON array of chat members.
@@ -572,19 +598,36 @@ async def add_teams_member(email: str, tenant_id: str = "") -> str:
 
 @mcp.tool()
 async def create_chat(target_email: str, target_tenant_id: str = "") -> str:
-    """Create a 1:1 chat with a user by email. Returns the chat_id you can
-    pass to send_teams_message, read_teams_messages, and list_chat_members
-    to operate on that chat independently of the default group chat.
+    """Create a 1:1 private DM with a user by email.
 
-    Graph's oneOnOne chat creation is idempotent — calling this twice with
-    the same email returns the existing chat, not a duplicate.
+    **Use this when the human asks you to DM, message privately, or
+    start a 1:1 conversation with someone.** The default group chat
+    is for public discussion; this tool creates a private side channel.
 
-    For cross-tenant users (different org), provide target_tenant_id.
-    For in-tenant users, leave it empty.
+    Returns a chat_id you can pass to send_teams_message,
+    read_teams_messages, and list_chat_members to operate on that chat
+    independently of the default group chat.
+
+    The new chat is automatically registered for background polling —
+    replies will push to you via channel notifications just like the
+    group chat. Registration persists across MCP server restarts.
+
+    Graph's oneOnOne chat creation is idempotent — calling this twice
+    with the same email returns the existing chat, not a duplicate.
+
+    For cross-tenant users (different org), the target_tenant_id is
+    auto-resolved from the email domain. Just pass the email.
+
+    Example:
+      result = await create_chat(target_email="alice@example.com")
+      chat_id = json.loads(result)["chat_id"]
+      await send_teams_message("Hey Alice, private note", chat_id=chat_id)
 
     Args:
-        target_email: The user's email address (e.g., 'brandon@werner.ac').
-        target_tenant_id: Optional home tenant GUID for cross-tenant users.
+        target_email: The user's email address (e.g., 'alice@example.com').
+        target_tenant_id: Optional home tenant GUID override. Usually
+            auto-resolved from the email domain — only pass this if
+            auto-resolution fails.
 
     Returns:
         JSON with chat_id and created_at.
@@ -636,14 +679,19 @@ async def create_chat(target_email: str, target_tenant_id: str = "") -> str:
 
 @mcp.tool()
 async def read_teams_messages(count: int = 5, chat_id: str = "") -> str:
-    """Read recent messages from a Microsoft Teams chat. Use this to
-    check for replies, commands, or responses from the human user.
+    """Read recent messages from any Microsoft Teams chat.
 
-    Authentication is automatic. No credentials needed. Just call this tool.
+    By default reads from the configured group chat. Pass ``chat_id``
+    to read from a specific chat — e.g., a DM you created with
+    create_chat, or any other chat_id you know.
+
+    Authentication is automatic. No credentials needed.
 
     Args:
         count: Number of messages to return (default 5, max ~50).
-        chat_id: Optional chat ID to target. If empty, uses the default group chat.
+        chat_id: Optional chat ID to target. If empty, uses the default
+            group chat. Pass the chat_id from create_chat or from a
+            channel notification's meta.chat_id to read from a specific chat.
 
     Returns:
         JSON array of messages, each with message_id, from, content, sent_at.
