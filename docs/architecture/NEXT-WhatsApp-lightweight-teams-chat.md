@@ -1,11 +1,12 @@
 # NEXT: Lightweight Teams Chat — Multi-Tenant App with Progressive Identity
 
-**Date:** 2026-04-08
+**Date:** 2026-04-08 (updated 2026-04-09 — architecture debate context added, plan unchanged)
 **Status:** Approved — ready to implement
 **Branch:** `feature/multi-tenant-lightweight-chat`
 **Driver:** Alice Example' request for WhatsApp-like simplicity in Teams; Ales' standup pushback on heavyweight provisioning
 **Priority:** Moved ahead of Windows isolation work (rescheduled to weekend)
 **Approval:** Alice Example ("I'm supportive of this direction"), Brandon Werner, Dave Fixture
+**Related:** `docs/architecture/SPEC-dual-track-agent-identity.md` (broader architecture debate that validated this build-time plan)
 
 ---
 
@@ -235,3 +236,42 @@ If the admin doesn't approve the multi-tenant app, users can still set up their 
 3. Can the multi-tenant app's application permissions create Agent Users in the consenting tenant?
 4. Should we support both paths (multi-tenant app + standalone tenant) in the same MCP server?
 5. What does the "self-chat" look like in Teams when the agent messages using the human's identity?
+
+## 2026-04-09 Update — Architecture Debate Context
+
+Between 2026-04-08 evening and 2026-04-09 early morning, the group (Henry Placeholder, Carol Sample, Iris Sample, Bob Tester, Frank Demo, Brandon Werner, Dave Fixture) had an extended debate on the broader agent identity architecture. Full synthesis in `docs/architecture/SPEC-dual-track-agent-identity.md`.
+
+**Does this change the build-time plan?** No. The progressive identity approach in this spec was **validated** by the debate as the right bridge. Key points:
+
+1. **The OBO vs Agent User debate is long-term architecture, not a BUILD blocker.** This spec is the short-term bridge regardless of where that lands.
+
+2. **Diana flagged device code flow as insecure** for security-sensitive operations. Action: use localhost redirect for the initial auth flow instead of pure device code. (Step 2 of the implementation plan — update the MSAL flow choice.)
+
+3. **Ayse confirmed device code UX works great in practice** (CoClaw proved it, even from her phone on the go). But "great UX" is not "secure enough" — we still need the localhost redirect for prod.
+
+4. **Directory scale is real but solvable.** Ayse's quota table: 300K default, 1M+ needs coordination. Ayse had 7-8 concurrent agent sessions at once — this doesn't scale if every session creates an Agent User. Mitigations:
+   - Don't pool (OID recycling is a security risk, soft-delete quota makes churn worse)
+   - Do push substrate for fast provisioning (Brandon confirmed doable)
+   - Long-term: Teams/IC3 federation for chat-only agent identities (Adrian's idea — virtual agent tenant, session IDs as external OIDs)
+
+5. **Brandon's substrate commitment:** fast Agent User provisioning (sub-minute) is doable. That makes the Phase 1 → Phase 2 swap fast enough for BUILD.
+
+6. **Agent User is NOT replaced by OBO.** Agent User remains the security anchor. OBO with decorated tokens is a UX layer with weaker security (same OID = no real isolation). The progressive model uses delegated tokens as a bridge, not as an architectural endpoint.
+
+### Minor Adjustments to This Spec
+
+- **Step 2 (Device Code Auth Flow):** Change default to **localhost redirect** for security (Diana's flag). Keep device code as a fallback for headless environments.
+- **Step 4 (Background Agent User Provisioning):** Coordinate with Brandon's substrate contacts for sub-minute provisioning target. If achievable, Phase 2 upgrade happens in seconds, not 10-15 minutes.
+- **Step 5 (Token Swap):** No change — the seamless swap logic is the same regardless of wait time.
+
+### Not Changed
+
+- Multi-tenant app registration (Step 1)
+- Agent User as the target identity (non-negotiable)
+- Phase 1 / Phase 2 flow
+- End user experience
+- Testing plan
+
+### New Future Direction (Tracked Separately)
+
+The IC3/Teams federation approach (agent identities as native federated users in Teams backend, no directory objects) is a promising long-term direction but is **not part of this build-time spec**. Brandon has a TODO to talk to the Teams team about it on 2026-04-09 morning. If that lands, it would be a follow-up spec, not a change to this one.
