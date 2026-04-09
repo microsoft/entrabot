@@ -82,49 +82,71 @@ class TestFilterHumanMessages:
 class TestEagerTokenRefresh:
     @pytest.mark.asyncio
     async def test_refreshes_when_expired(self) -> None:
-        """Token older than 55 min should be refreshed."""
+        """Token older than 55 min should be refreshed via identity-aware dispatch."""
         from entraclaw import mcp_server
+        from entraclaw.identity.state_machine import IdentityStateMachine
+        from entraclaw.models import IdentityState
 
         mock_acquire = MagicMock(return_value="new-token")
         mock_config = MagicMock()
 
         old_state = mcp_server._state.copy()
+        old_identity = mcp_server._identity
         try:
+            # Set up identity state machine in AGENT_USER state
+            sm = IdentityStateMachine()
+            await sm.transition(IdentityState.AGENT_USER)
+            sm.update_session(
+                token="old-token",
+                token_acquired_at=time.monotonic() - 3400,
+            )
+            mcp_server._identity = sm
             mcp_server._state["token"] = "old-token"
             mcp_server._state["config"] = mock_config
-            mcp_server._state["token_acquired_at"] = time.monotonic() - 3400
 
             with patch("entraclaw.mcp_server.acquire_agent_user_token", mock_acquire):
                 await mcp_server._ensure_valid_token()
 
+            assert mcp_server._identity.session.token == "new-token"
             assert mcp_server._state["token"] == "new-token"
             mock_acquire.assert_called_once_with(mock_config)
         finally:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
+            mcp_server._identity = old_identity
 
     @pytest.mark.asyncio
     async def test_no_refresh_when_fresh(self) -> None:
         """Token younger than 55 min should NOT be refreshed."""
         from entraclaw import mcp_server
+        from entraclaw.identity.state_machine import IdentityStateMachine
+        from entraclaw.models import IdentityState
 
         mock_acquire = MagicMock(return_value="new-token")
         mock_config = MagicMock()
 
         old_state = mcp_server._state.copy()
+        old_identity = mcp_server._identity
         try:
+            sm = IdentityStateMachine()
+            await sm.transition(IdentityState.AGENT_USER)
+            sm.update_session(
+                token="fresh-token",
+                token_acquired_at=time.monotonic() - 100,
+            )
+            mcp_server._identity = sm
             mcp_server._state["token"] = "fresh-token"
             mcp_server._state["config"] = mock_config
-            mcp_server._state["token_acquired_at"] = time.monotonic() - 100
 
             with patch("entraclaw.mcp_server.acquire_agent_user_token", mock_acquire):
                 await mcp_server._ensure_valid_token()
 
-            assert mcp_server._state["token"] == "fresh-token"
+            assert mcp_server._identity.session.token == "fresh-token"
             mock_acquire.assert_not_called()
         finally:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
+            mcp_server._identity = old_identity
 
 
 class TestLazyTokenRetry:
@@ -133,6 +155,8 @@ class TestLazyTokenRetry:
         """TokenExpiredError on first call should trigger refresh + retry."""
         from entraclaw import mcp_server
         from entraclaw.errors import TokenExpiredError
+        from entraclaw.identity.state_machine import IdentityStateMachine
+        from entraclaw.models import IdentityState
 
         call_count = 0
 
@@ -147,26 +171,36 @@ class TestLazyTokenRetry:
         mock_config = MagicMock()
 
         old_state = mcp_server._state.copy()
+        old_identity = mcp_server._identity
         try:
+            sm = IdentityStateMachine()
+            await sm.transition(IdentityState.AGENT_USER)
+            sm.update_session(
+                token="old-token",
+                token_acquired_at=time.monotonic(),
+            )
+            mcp_server._identity = sm
             mcp_server._state["token"] = "old-token"
             mcp_server._state["config"] = mock_config
-            mcp_server._state["token_acquired_at"] = time.monotonic()
 
             with patch("entraclaw.mcp_server.acquire_agent_user_token", mock_acquire):
                 result = await mcp_server._with_token_retry(flaky_fn)
 
             assert result == "result-with-refreshed-token"
-            assert mcp_server._state["token"] == "refreshed-token"
+            assert mcp_server._identity.session.token == "refreshed-token"
             mock_acquire.assert_called_once()
         finally:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
+            mcp_server._identity = old_identity
 
     @pytest.mark.asyncio
     async def test_raises_if_retry_also_fails(self) -> None:
         """If both attempts fail with TokenExpiredError, propagate the error."""
         from entraclaw import mcp_server
         from entraclaw.errors import TokenExpiredError
+        from entraclaw.identity.state_machine import IdentityStateMachine
+        from entraclaw.models import IdentityState
 
         async def always_fails(*, token: str) -> str:
             raise TokenExpiredError("still expired")
@@ -175,10 +209,17 @@ class TestLazyTokenRetry:
         mock_config = MagicMock()
 
         old_state = mcp_server._state.copy()
+        old_identity = mcp_server._identity
         try:
+            sm = IdentityStateMachine()
+            await sm.transition(IdentityState.AGENT_USER)
+            sm.update_session(
+                token="old-token",
+                token_acquired_at=time.monotonic(),
+            )
+            mcp_server._identity = sm
             mcp_server._state["token"] = "old-token"
             mcp_server._state["config"] = mock_config
-            mcp_server._state["token_acquired_at"] = time.monotonic()
 
             with (
                 patch("entraclaw.mcp_server.acquire_agent_user_token", mock_acquire),
@@ -188,6 +229,7 @@ class TestLazyTokenRetry:
         finally:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
+            mcp_server._identity = old_identity
 
 
 class TestExistingToolsRetrofitted:
@@ -196,6 +238,8 @@ class TestExistingToolsRetrofitted:
     async def test_send_retries_on_401(self) -> None:
         """send_teams_message should retry once on TokenExpiredError."""
         from entraclaw import mcp_server
+        from entraclaw.identity.state_machine import IdentityStateMachine
+        from entraclaw.models import IdentityState
 
         respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
             side_effect=[
@@ -214,14 +258,21 @@ class TestExistingToolsRetrofitted:
         mock_config = MagicMock()
 
         old_state = mcp_server._state.copy()
+        old_identity = mcp_server._identity
         try:
+            sm = IdentityStateMachine()
+            await sm.transition(IdentityState.AGENT_USER)
+            sm.update_session(
+                token="old-token",
+                token_acquired_at=time.monotonic(),
+            )
+            mcp_server._identity = sm
             mcp_server._state.update(
                 {
                     "initialized": True,
                     "token": "old-token",
                     "config": mock_config,
                     "chat_id": "c1",
-                    "token_acquired_at": time.monotonic(),
                 }
             )
 
@@ -237,12 +288,15 @@ class TestExistingToolsRetrofitted:
         finally:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
+            mcp_server._identity = old_identity
 
     @respx.mock
     @pytest.mark.asyncio
     async def test_read_retries_on_401(self) -> None:
         """read_teams_messages should retry once on TokenExpiredError."""
         from entraclaw import mcp_server
+        from entraclaw.identity.state_machine import IdentityStateMachine
+        from entraclaw.models import IdentityState
 
         respx.get(f"{GRAPH_BASE}/chats/c1/messages").mock(
             side_effect=[
@@ -267,14 +321,21 @@ class TestExistingToolsRetrofitted:
         mock_config = MagicMock()
 
         old_state = mcp_server._state.copy()
+        old_identity = mcp_server._identity
         try:
+            sm = IdentityStateMachine()
+            await sm.transition(IdentityState.AGENT_USER)
+            sm.update_session(
+                token="old-token",
+                token_acquired_at=time.monotonic(),
+            )
+            mcp_server._identity = sm
             mcp_server._state.update(
                 {
                     "initialized": True,
                     "token": "old-token",
                     "config": mock_config,
                     "chat_id": "c1",
-                    "token_acquired_at": time.monotonic(),
                 }
             )
 
@@ -290,6 +351,7 @@ class TestExistingToolsRetrofitted:
         finally:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
+            mcp_server._identity = old_identity
 
 
 class TestDedupHelpers:

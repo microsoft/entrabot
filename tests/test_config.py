@@ -24,6 +24,9 @@ class TestEntraClawConfig:
         assert cfg.log_dir == Path.home() / ".entraclaw" / "logs"
         assert cfg.audit_dir == Path.home() / ".entraclaw" / "audit"
         assert cfg.data_dir == Path.home() / ".entraclaw" / "data"
+        assert cfg.client_id is None
+        assert cfg.skip_provisioning is False
+        assert cfg.authority == "https://login.microsoftonline.com/common"
 
     def test_from_env(self) -> None:
         env = {
@@ -41,6 +44,9 @@ class TestEntraClawConfig:
             "ENTRACLAW_LOG_DIR": "/custom/logs",
             "ENTRACLAW_AUDIT_DIR": "/custom/audit",
             "ENTRACLAW_DATA_DIR": "/custom/data",
+            "ENTRACLAW_CLIENT_ID": "my-client-id",
+            "ENTRACLAW_SKIP_PROVISIONING": "true",
+            "ENTRACLAW_AUTHORITY": "https://login.microsoftonline.com/my-tenant",
         }
         with patch.dict(os.environ, env, clear=False):
             cfg = EntraClawConfig.from_env()
@@ -58,6 +64,9 @@ class TestEntraClawConfig:
         assert cfg.log_dir == Path("/custom/logs")
         assert cfg.audit_dir == Path("/custom/audit")
         assert cfg.data_dir == Path("/custom/data")
+        assert cfg.client_id == "my-client-id"
+        assert cfg.skip_provisioning is True
+        assert cfg.authority == "https://login.microsoftonline.com/my-tenant"
 
     def test_from_env_with_no_vars(self) -> None:
         # Remove any Openclaw env vars that might be set
@@ -67,6 +76,9 @@ class TestEntraClawConfig:
         assert cfg.tenant_id is None
         assert cfg.blueprint_app_id is None
         assert cfg.log_level == "INFO"
+        assert cfg.client_id is None
+        assert cfg.skip_provisioning is False
+        assert cfg.authority == "https://login.microsoftonline.com/common"
 
     def test_frozen(self) -> None:
         cfg = EntraClawConfig()
@@ -124,3 +136,15 @@ class TestEntraClawConfig:
         with patch.dict(os.environ, cleaned, clear=True):
             cfg = EntraClawConfig.from_env()
         assert cfg.human_user_types == []
+
+    def test_skip_provisioning_truthy_values(self) -> None:
+        for val in ("true", "True", "TRUE", "1", "yes", "Yes"):
+            with patch.dict(os.environ, {"ENTRACLAW_SKIP_PROVISIONING": val}, clear=False):
+                cfg = EntraClawConfig.from_env()
+            assert cfg.skip_provisioning is True, f"Expected True for '{val}'"
+
+    def test_skip_provisioning_falsy_values(self) -> None:
+        for val in ("false", "False", "0", "no", ""):
+            with patch.dict(os.environ, {"ENTRACLAW_SKIP_PROVISIONING": val}, clear=False):
+                cfg = EntraClawConfig.from_env()
+            assert cfg.skip_provisioning is False, f"Expected False for '{val}'"

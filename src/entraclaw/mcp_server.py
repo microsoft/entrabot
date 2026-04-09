@@ -1,20 +1,22 @@
-"""EntraClaw MCP server — pre-authenticated Agent User tools.
+"""EntraClaw MCP server — progressive identity with Agent User tools.
 
-Authentication is fully automatic. The server loads credentials from .env
-(written by scripts/setup.sh), acquires an Agent User token via the three-hop
-flow on first tool call, and establishes a Teams chat. The calling LLM does
-NOT need to provide any credentials, tokens, or configuration — just call
-the tools directly.
+Authentication is automatic via progressive identity:
+1. Try three-hop Agent User flow with existing creds (fast path)
+2. If that fails, fall back to MSAL delegated auth (human's token)
+3. Optionally background-provision an Agent User identity
+
+The calling LLM does NOT need to provide any credentials, tokens, or
+configuration — just call the tools directly.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import sys
 import time
 from datetime import UTC, datetime, timedelta
 
+import httpx
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.stdio import stdio_server
 from mcp.shared.message import SessionMessage
@@ -22,7 +24,9 @@ from mcp.types import JSONRPCMessage, JSONRPCNotification
 
 from entraclaw.config import get_config
 from entraclaw.errors import EntraClawError, TokenExchangeError
+from entraclaw.identity.state_machine import IdentityStateMachine
 from entraclaw.logging_config import setup_logging
+from entraclaw.models import IdentityState
 from entraclaw.tools.teams import acquire_agent_user_token
 
 logger: logging.Logger | None = None
@@ -85,22 +89,111 @@ mcp = FastMCP(
 
 # Module-level state populated by _initialize()
 _state: dict[str, object] = {}
+_identity: IdentityStateMachine | None = None
 
 TOKEN_REFRESH_THRESHOLD = 3300  # 55 min (5-min buffer on 60-min expiry)
 
+# Sent-message tracking for delegated-mode echo prevention
+SENT_MESSAGE_MAX = 1000
+_sent_message_ids: set[str] = set()
+
+
+def _resolve_tenant_id(email: str, our_domain: str) -> str | None:
+    """Resolve a tenant ID from an email domain via OpenID discovery.
+
+    Returns the tenant GUID if the email domain differs from our_domain
+    and OpenID discovery succeeds, otherwise None.
+    """
+    if "@" not in email:
+        return None
+
+    domain = email.split("@")[1]
+    if our_domain and domain.lower() == our_domain.lower():
+        return None
+
+    try:
+        oidc_url = (
+            f"https://login.microsoftonline.com/{domain}/.well-known/openid-configuration"
+        )
+        resp = httpx.get(oidc_url, timeout=10)
+        if resp.status_code == 200:
+            issuer = resp.json().get("issuer", "")
+            # Issuer format: https://login.microsoftonline.com/{tenant_id}/v2.0
+            # Split: ['https:', '', 'login.microsoftonline.com', '{tenant}', 'v2.0']
+            parts = issuer.rstrip("/").split("/")
+            if len(parts) > 3:
+                tenant_id = parts[3]
+                if logger:
+                    logger.info("Auto-resolved tenant for %s: %s", domain, tenant_id)
+                return tenant_id
+    except Exception:
+        if logger:
+            logger.warning("Could not auto-resolve tenant for %s", domain)
+
+    return None
+
 
 async def _ensure_valid_token() -> None:
-    """Eagerly refresh the Agent User token if it's near expiry.
+    """Eagerly refresh the token if it's near expiry.
 
-    Called before every Graph API call. If the token is older than
-    TOKEN_REFRESH_THRESHOLD seconds, re-runs the full three-hop flow.
+    Identity-aware dispatch (eng review decision 6A):
+    - DELEGATED → MSAL silent refresh
+    - AGENT_USER → three-hop flow
+    - UNAUTHENTICATED → no-op (auth needed first)
     """
-    acquired_at = _state.get("token_acquired_at")
+    if _identity is None:
+        return
+
+    session = _identity.session
+    acquired_at = session.token_acquired_at
     if acquired_at is None or (time.monotonic() - acquired_at) > TOKEN_REFRESH_THRESHOLD:
-        if logger:
-            logger.info("Token near expiry — refreshing via three-hop flow")
-        _state["token"] = acquire_agent_user_token(_state["config"])
-        _state["token_acquired_at"] = time.monotonic()
+        current_state = _identity.state
+
+        if current_state == IdentityState.AGENT_USER:
+            if logger:
+                logger.info("Token near expiry — refreshing via three-hop flow")
+            config = _state.get("config")
+            token = acquire_agent_user_token(config)
+            _identity.update_session(token=token, token_acquired_at=time.monotonic())
+            _state["token"] = token
+
+        elif current_state == IdentityState.DELEGATED:
+            if logger:
+                logger.info("Token near expiry — refreshing via MSAL silent")
+            try:
+                from entraclaw.auth.delegated import MsalDelegatedAuth
+
+                config = _state.get("config")
+                auth = MsalDelegatedAuth(
+                    client_id=config.client_id,
+                    tenant_id=config.tenant_id or "common",
+                )
+                result = auth.try_silent()
+                if result and "access_token" in result:
+                    token = result["access_token"]
+                    _identity.update_session(
+                        token=token, token_acquired_at=time.monotonic(),
+                    )
+                    _state["token"] = token
+                else:
+                    # Silent failed — try interactive
+                    result = auth.authenticate()
+                    token = result["access_token"]
+                    _identity.update_session(
+                        token=token, token_acquired_at=time.monotonic(),
+                    )
+                    _state["token"] = token
+            except Exception as exc:
+                if logger:
+                    logger.warning("MSAL refresh failed: %s", exc)
+                # Transition to UNAUTHENTICATED on total failure
+                import contextlib
+
+                with contextlib.suppress(Exception):
+                    await _identity.transition(IdentityState.UNAUTHENTICATED)
+
+        elif current_state == IdentityState.UNAUTHENTICATED:
+            pass  # No token to refresh — auth needed first
 
 
 async def _with_token_retry(fn, **kwargs):
@@ -111,14 +204,18 @@ async def _with_token_retry(fn, **kwargs):
     """
     from entraclaw.errors import TokenExpiredError
 
+    token = _state.get("token") or (_identity.session.token if _identity else None)
     try:
-        return await fn(token=str(_state["token"]), **kwargs)
+        return await fn(token=str(token), **kwargs)
     except TokenExpiredError:
         if logger:
             logger.warning("Token expired mid-call — refreshing and retrying")
-        _state["token"] = acquire_agent_user_token(_state["config"])
-        _state["token_acquired_at"] = time.monotonic()
-        return await fn(token=str(_state["token"]), **kwargs)
+        # Force refresh by clearing token_acquired_at (token may be fresh but revoked)
+        if _identity is not None:
+            _identity.update_session(token_acquired_at=None)
+        await _ensure_valid_token()
+        token = _state.get("token") or (_identity.session.token if _identity else None)
+        return await fn(token=str(token), **kwargs)
 
 
 OVERLAP_SECONDS = 2
@@ -172,48 +269,102 @@ def _prune_seen_set(
     return {msg_id for msg_id in seen_ids if id_timestamps.get(msg_id, "") >= cutoff_str}
 
 
-async def _initialize() -> None:
-    """Acquire the Agent User token and set up the Teams chat.
+async def _init_auth() -> None:
+    """Phase 1: Authenticate — try three-hop fast path, fall back to MSAL delegated.
 
-    Called lazily on the first tool invocation. All config comes from
-    environment variables (loaded from .env by entraclaw.config).
+    Per eng review decision 1A:
+    - If SKIP_PROVISIONING is true → MSAL delegated only
+    - Otherwise → try three-hop with existing creds (fast path to AGENT_USER)
+    - If three-hop fails → warn + MSAL delegated auth → DELEGATED
+    - If MSAL also fails → UNAUTHENTICATED
     """
-    if _state.get("initialized"):
+    global _identity
+    _identity = IdentityStateMachine()
+
+    config = get_config()
+    _state["config"] = config
+
+    # Fast path: try three-hop with existing creds (unless SKIP_PROVISIONING)
+    if not config.skip_provisioning and config.blueprint_app_id and config.tenant_id:
+        try:
+            token = acquire_agent_user_token(config)
+            _identity.update_session(
+                token=token,
+                token_acquired_at=time.monotonic(),
+                auth_mode="agent_user",
+                user_id=config.agent_user_id,
+                display_name="EntraClaw Agent",
+            )
+            await _identity.transition(IdentityState.AGENT_USER)
+            _state["token"] = token
+            if logger:
+                logger.info("Fast path: Agent User token acquired via three-hop flow")
+            return
+        except (TokenExchangeError, EntraClawError) as exc:
+            if logger:
+                logger.warning(
+                    "Three-hop flow failed, falling back to MSAL delegated: %s", exc,
+                )
+        except Exception as exc:
+            if logger:
+                logger.warning("Unexpected auth error, falling back to MSAL: %s", exc)
+
+    # Delegated path: MSAL interactive auth
+    if config.client_id:
+        try:
+            from entraclaw.auth.delegated import MsalDelegatedAuth
+
+            auth = MsalDelegatedAuth(
+                client_id=config.client_id,
+                tenant_id=config.tenant_id or "common",
+            )
+            result = auth.authenticate()
+            token = result["access_token"]
+            account = result.get("id_token_claims", {})
+
+            _identity.update_session(
+                token=token,
+                token_acquired_at=time.monotonic(),
+                auth_mode="delegated",
+                user_id=account.get("oid"),
+                display_name=account.get("name"),
+                account_id=account.get("sub"),
+                tenant_id=account.get("tid"),
+            )
+            await _identity.transition(IdentityState.DELEGATED)
+            _state["token"] = token
+            if logger:
+                logger.info(
+                    "MSAL delegated auth succeeded for %s",
+                    account.get("preferred_username", "unknown"),
+                )
+            return
+        except Exception as exc:
+            if logger:
+                logger.warning("MSAL delegated auth failed: %s", exc)
+
+    # No auth method available — stay UNAUTHENTICATED
+    # Per eng review decision 4A: no hard exits, state transitions instead
+    if not config.blueprint_app_id and not config.client_id and logger:
+        logger.warning(
+            "No auth configured: set ENTRACLAW_BLUEPRINT_APP_ID (three-hop) "
+            "or ENTRACLAW_CLIENT_ID (MSAL delegated) in .env"
+        )
+
+
+async def _init_chat() -> None:
+    """Phase 2: Establish the Teams chat (if authenticated)."""
+    if _identity is None or _identity.state == IdentityState.UNAUTHENTICATED:
+        if logger:
+            logger.warning("Skipping chat init — not authenticated")
         return
 
     from entraclaw.tools.teams import create_or_find_chat
 
-    config = get_config()
-
-    if not config.blueprint_app_id or not config.tenant_id:
-        print(  # noqa: T201
-            "ERROR: ENTRACLAW_BLUEPRINT_APP_ID / ENTRACLAW_TENANT_ID not set. "
-            "Run ./scripts/setup.sh first.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    # Acquire Agent User token via three-hop flow
-    try:
-        token = acquire_agent_user_token(config)
-    except (TokenExchangeError, EntraClawError) as exc:
-        print(  # noqa: T201
-            f"ERROR: Failed to acquire Agent User token. Run ./scripts/setup.sh first.\n{exc}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    _state["token"] = token
-    _state["token_acquired_at"] = time.monotonic()
-    _state["last_seen_timestamp"] = None
-    _state["seen_message_ids"] = set()
-    _state["seen_id_timestamps"] = {}  # message_id -> sent_at for pruning
-    _state["config"] = config
-
-    # Create / find the Teams chat (requires at least one human user ID)
+    config = _state.get("config")
     chat_id_file = config.data_dir / "chat_id"
+
     if config.human_user_ids:
-        # Reuse persisted chat ID if available (avoids creating duplicate group chats)
         saved_chat_id = None
         if chat_id_file.is_file():
             saved_chat_id = chat_id_file.read_text().strip()
@@ -224,6 +375,7 @@ async def _initialize() -> None:
 
         if not _state.get("chat_id"):
             try:
+                token = _state.get("token") or _identity.session.token
                 chat = await create_or_find_chat(
                     token=token,
                     human_user_ids=config.human_user_ids,
@@ -233,21 +385,23 @@ async def _initialize() -> None:
                     human_user_types=config.human_user_types,
                 )
                 _state["chat_id"] = chat["chat_id"]
-                # Persist for next restart
                 chat_id_file.parent.mkdir(parents=True, exist_ok=True)
                 chat_id_file.write_text(chat["chat_id"])
             except EntraClawError as exc:
-                # Non-fatal: Teams chat is optional (audit still works)
                 if logger:
                     logger.warning("Could not set up Teams chat: %s", exc)
     else:
         if logger:
             logger.warning("ENTRACLAW_HUMAN_USER_ID not set — Teams tools will not work")
 
-    _state["initialized"] = True
+
+async def _init_poll() -> None:
+    """Phase 3: Initialize watched chats and start background polling."""
+    _state["last_seen_timestamp"] = None
+    _state["seen_message_ids"] = set()
+    _state["seen_id_timestamps"] = {}
 
     # Watched chats: dict of chat_id -> {seen_ids: set, last_ts: str|None}
-    # Background poll iterates over all watched chats each cycle.
     _state["watched_chats"] = {}
 
     # Register the default group chat
@@ -255,20 +409,41 @@ async def _initialize() -> None:
         _register_watched_chat(str(_state["chat_id"]), persist=False)
 
     # Load persisted watched chats (DMs created via create_chat tool)
-    watched_file = config.data_dir / "watched_chats"
-    if watched_file.is_file():
-        for line in watched_file.read_text().splitlines():
-            cid = line.strip()
-            if cid and cid != _state.get("chat_id"):
-                _register_watched_chat(cid, persist=False)
-                if logger:
-                    logger.info("Loaded persisted watched chat: %s", cid)
+    config = _state.get("config")
+    if config:
+        watched_file = config.data_dir / "watched_chats"
+        if watched_file.is_file():
+            for line in watched_file.read_text().splitlines():
+                cid = line.strip()
+                if cid and cid != _state.get("chat_id"):
+                    _register_watched_chat(cid, persist=False)
+                    if logger:
+                        logger.info("Loaded persisted watched chat: %s", cid)
 
-    # Start background polling for inbound Teams messages (like iMessage channel)
+    # Start background polling
     if _state.get("watched_chats"):
         import asyncio
 
         asyncio.get_event_loop().create_task(_background_poll())
+
+
+async def _initialize() -> None:
+    """Acquire a token and set up the Teams chat.
+
+    Called lazily on the first tool invocation. Split into 3 phases
+    (eng review decision Tension 2):
+    1. _init_auth() — authenticate (three-hop fast path or MSAL delegated)
+    2. _init_chat() — establish Teams chat
+    3. _init_poll() — set up background polling
+    """
+    if _state.get("initialized"):
+        return
+
+    await _init_auth()
+    await _init_chat()
+    await _init_poll()
+
+    _state["initialized"] = True
 
 
 BACKGROUND_POLL_INTERVAL = 5  # seconds between polls
@@ -358,12 +533,20 @@ async def _background_poll() -> None:
         logger.info("Starting background Teams poll (interval=%ds)", BACKGROUND_POLL_INTERVAL)
 
     # Must match the displayName that Graph API returns in message.from.user.displayName
-    # NOT the UPN — Graph returns "EntraClaw Agent", not "entraclaw-agent@werner.ac"
+    # Identity-aware: filter out messages from BOTH the agent and the human user
+    # depending on current identity mode
     agent_display_name = "EntraClaw Agent"
 
     while True:
         try:
             await asyncio.sleep(BACKGROUND_POLL_INTERVAL)
+
+            # Skip polling if not authenticated
+            if _identity and _identity.state in (
+                IdentityState.UNAUTHENTICATED, IdentityState.ERROR,
+            ):
+                continue
+
             await _ensure_valid_token()
 
             # Snapshot chat IDs to avoid mutation during iteration
@@ -559,28 +742,13 @@ async def add_teams_member(email: str, tenant_id: str = "") -> str:
 
     # Auto-resolve tenant ID from email domain if not provided
     if not tenant_id and "@" in email:
-        domain = email.split("@")[1]
         config = _state.get("config")
         our_domain = ""
         if config and config.agent_user_upn and "@" in config.agent_user_upn:
             our_domain = config.agent_user_upn.split("@")[1]
-        if domain.lower() != our_domain.lower():
-            # External user — resolve tenant via OpenID discovery
-            import httpx
-
-            try:
-                oidc_url = f"https://login.microsoftonline.com/{domain}/.well-known/openid-configuration"
-                resp = httpx.get(oidc_url, timeout=10)
-                if resp.status_code == 200:
-                    issuer = resp.json().get("issuer", "")
-                    parts = issuer.rstrip("/").split("/")
-                    if len(parts) > 3:
-                        tenant_id = parts[-1]
-                        if logger:
-                            logger.info("Auto-resolved tenant for %s: %s", domain, tenant_id)
-            except Exception:
-                if logger:
-                    logger.warning("Could not auto-resolve tenant for %s", domain)
+        resolved = _resolve_tenant_id(email, our_domain)
+        if resolved:
+            tenant_id = resolved
 
     chat_id = _state.get("chat_id")
     if not chat_id:
@@ -637,27 +805,13 @@ async def create_chat(target_email: str, target_tenant_id: str = "") -> str:
 
     # Auto-resolve tenant ID from email domain if not provided
     if not target_tenant_id and "@" in target_email:
-        domain = target_email.split("@")[1]
         config = _state.get("config")
         our_domain = ""
         if config and config.agent_user_upn and "@" in config.agent_user_upn:
             our_domain = config.agent_user_upn.split("@")[1]
-        if domain.lower() != our_domain.lower():
-            import httpx
-
-            try:
-                oidc_url = f"https://login.microsoftonline.com/{domain}/.well-known/openid-configuration"
-                resp = httpx.get(oidc_url, timeout=10)
-                if resp.status_code == 200:
-                    issuer = resp.json().get("issuer", "")
-                    parts = issuer.rstrip("/").split("/")
-                    if len(parts) > 3:
-                        target_tenant_id = parts[-1]
-                        if logger:
-                            logger.info("Auto-resolved tenant for %s: %s", domain, target_tenant_id)
-            except Exception:
-                if logger:
-                    logger.warning("Could not auto-resolve tenant for %s", domain)
+        resolved = _resolve_tenant_id(target_email, our_domain)
+        if resolved:
+            target_tenant_id = resolved
 
     await _ensure_valid_token()
     config = _state.get("config")
@@ -868,12 +1022,25 @@ def audit_log(
 
     config = get_config()
     meta = json.loads(metadata) if metadata else {}
+
+    # Identity-aware attribution (eng review Tension 1)
+    if _identity:
+        agent_id = (
+            _identity.session.user_id or config.agent_id
+            or config.blueprint_app_id or "unknown"
+        )
+        attribution = _identity.session.attribution_type
+    else:
+        agent_id = config.agent_id or config.blueprint_app_id or "unknown"
+        attribution = "agent"
+
     result = log_event(
         action=action,
         resource=resource,
         outcome=outcome,
-        agent_id=config.agent_id or config.blueprint_app_id or "unknown",
+        agent_id=agent_id,
         metadata=meta,
+        attribution_type=attribution,
     )
     return json.dumps(result, indent=2)
 
@@ -891,9 +1058,14 @@ async def whoami() -> str:
     await _initialize()
     from entraclaw.tools.identity import whoami as _whoami
 
-    token = _state.get("token")
+    token = _state.get("token") or (_identity.session.token if _identity else None)
     result = await _whoami(token=str(token) if token else None)
     result["teams_chat_id"] = _state.get("chat_id", "not_connected")
+    # Add identity state info
+    if _identity:
+        result["identity_state"] = _identity.state.value
+        result["attribution_type"] = _identity.session.attribution_type
+        result["auth_mode"] = _identity.session.auth_mode
     return json.dumps(result, indent=2)
 
 
@@ -925,7 +1097,7 @@ def main() -> None:
 
     global logger
     logger = setup_logging()
-    logger.info("Starting EntraClaw MCP server (Agent User auth)")
+    logger.info("Starting EntraClaw MCP server (progressive identity)")
     anyio.run(_run_stdio_with_write_stream)
 
 

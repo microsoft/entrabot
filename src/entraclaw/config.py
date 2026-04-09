@@ -82,6 +82,9 @@ class EntraClawConfig:
     audit_dir: Path = field(default_factory=lambda: _default_dir("audit"))
     data_dir: Path = field(default_factory=lambda: _default_dir("data"))
     log_level: str = field(default="INFO")
+    client_id: str | None = field(default=None)
+    skip_provisioning: bool = field(default=False)
+    authority: str = field(default="https://login.microsoftonline.com/common")
 
     @classmethod
     def from_env(cls) -> EntraClawConfig:
@@ -112,6 +115,12 @@ class EntraClawConfig:
             audit_dir=Path(os.environ.get("ENTRACLAW_AUDIT_DIR", _default_dir("audit"))),
             data_dir=Path(os.environ.get("ENTRACLAW_DATA_DIR", _default_dir("data"))),
             log_level=os.environ.get("ENTRACLAW_LOG_LEVEL", "INFO"),
+            client_id=os.environ.get("ENTRACLAW_CLIENT_ID"),
+            skip_provisioning=os.environ.get("ENTRACLAW_SKIP_PROVISIONING", "").lower()
+            in ("true", "1", "yes"),
+            authority=os.environ.get(
+                "ENTRACLAW_AUTHORITY", "https://login.microsoftonline.com/common"
+            ),
         )
 
 
