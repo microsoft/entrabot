@@ -778,3 +778,100 @@ class TestTeamsRead:
         )
         result = await read(chat_id="c1", token="tok")
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# create_one_on_one_chat
+# ---------------------------------------------------------------------------
+
+
+class TestCreateOneOnOneChat:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_creates_one_on_one_by_email(self) -> None:
+        """Creates a 1:1 chat using the target user's email."""
+        from entraclaw.tools.teams import create_one_on_one_chat
+
+        route = respx.post(f"{GRAPH_BASE}/chats").mock(
+            return_value=httpx.Response(
+                201,
+                json={
+                    "id": "19:dm-chat@thread.v2",
+                    "chatType": "oneOnOne",
+                    "createdDateTime": "2024-01-01",
+                },
+            )
+        )
+        result = await create_one_on_one_chat(
+            token="agent-token",
+            target_email="brandon@werner.ac",
+            agent_user_id="agent-oid-123",
+        )
+        assert result["chat_id"] == "19:dm-chat@thread.v2"
+        import json
+
+        body = json.loads(route.calls.last.request.content)
+        assert body["chatType"] == "oneOnOne"
+        # Target user referenced by email
+        target_members = [
+            m for m in body["members"] if "brandon@werner.ac" in m.get("user@odata.bind", "")
+        ]
+        assert len(target_members) == 1
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_cross_tenant_includes_tenant_id(self) -> None:
+        """Cross-tenant 1:1 chat includes tenantId in the member payload."""
+        from entraclaw.tools.teams import create_one_on_one_chat
+
+        route = respx.post(f"{GRAPH_BASE}/chats").mock(
+            return_value=httpx.Response(
+                201,
+                json={
+                    "id": "19:xt-dm@thread.v2",
+                    "chatType": "oneOnOne",
+                    "createdDateTime": "2024-01-01",
+                },
+            )
+        )
+        result = await create_one_on_one_chat(
+            token="agent-token",
+            target_email="user@microsoft.com",
+            target_tenant_id="72f988bf-86f1-41af-91ab-2d7cd011db47",
+            agent_user_id="agent-oid-123",
+        )
+        assert result["chat_id"] == "19:xt-dm@thread.v2"
+        import json
+
+        body = json.loads(route.calls.last.request.content)
+        target_members = [
+            m for m in body["members"] if "user@microsoft.com" in m.get("user@odata.bind", "")
+        ]
+        assert len(target_members) == 1
+        assert target_members[0]["tenantId"] == "72f988bf-86f1-41af-91ab-2d7cd011db47"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_token_expired(self) -> None:
+        from entraclaw.tools.teams import create_one_on_one_chat
+
+        respx.post(f"{GRAPH_BASE}/chats").mock(return_value=httpx.Response(401))
+        with pytest.raises(TokenExpiredError):
+            await create_one_on_one_chat(
+                token="expired",
+                target_email="someone@example.com",
+                agent_user_id="agent-oid-123",
+            )
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_not_licensed(self) -> None:
+        from entraclaw.tools.teams import create_one_on_one_chat
+
+        respx.post(f"{GRAPH_BASE}/chats").mock(return_value=httpx.Response(403))
+        with pytest.raises(TeamsNotLicensed):
+            await create_one_on_one_chat(
+                token="tok",
+                target_email="someone@example.com",
+                agent_user_id="agent-oid-123",
+            )

@@ -165,6 +165,97 @@ def acquire_agent_user_token(config: EntraClawConfig) -> str:
     return resource_token
 
 
+async def create_one_on_one_chat(
+    *,
+    token: str,
+    target_email: str,
+    target_tenant_id: str | None = None,
+    agent_user_id: str | None = None,
+) -> dict:
+    """Create a 1:1 chat between the Agent User and a target user by email.
+
+    Graph ``POST /chats`` with ``chatType: "oneOnOne"`` is idempotent —
+    calling it twice with the same pair returns the existing chat.
+
+    For cross-tenant users, provide ``target_tenant_id`` (their home tenant
+    GUID) so Graph resolves the identity correctly.
+
+    Returns dict with ``chat_id`` and ``created_at``.
+    """
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    target_member: dict = {
+        "@odata.type": "#microsoft.graph.aadUserConversationMember",
+        "roles": ["owner"],
+        "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{target_email}')",
+    }
+    if target_tenant_id:
+        target_member["tenantId"] = target_tenant_id
+
+    # Agent User must be listed with their object ID — /me is not valid
+    # in user@odata.bind. If not provided, resolve via /me endpoint.
+    if not agent_user_id:
+        transport_me = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+        async with httpx.AsyncClient(transport=transport_me) as me_client:
+            me_resp = await me_client.get(
+                f"{GRAPH_BASE}/me",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if me_resp.status_code == 200:
+                agent_user_id = me_resp.json().get("id", "")
+
+    agent_member: dict = {
+        "@odata.type": "#microsoft.graph.aadUserConversationMember",
+        "roles": ["owner"],
+        "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{agent_user_id}')",
+    }
+
+    payload = {
+        "chatType": "oneOnOne",
+        "members": [agent_member, target_member],
+    }
+
+    logger.info("Creating 1:1 chat with %s", target_email)
+
+    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    async with httpx.AsyncClient(transport=transport) as client:
+        resp = await client.post(
+            f"{GRAPH_BASE}/chats",
+            json=payload,
+            headers=headers,
+        )
+        if resp.status_code == 403:
+            raise TeamsNotLicensed(
+                "Agent User does not have a Teams license. "
+                "Assign E3/E5/Teams Enterprise to the Agent User."
+            )
+        if resp.status_code == 401:
+            raise TokenExpiredError("Agent User token expired — re-acquire via three-hop flow")
+        if resp.status_code == 400:
+            try:
+                error_body = resp.json()
+                error_msg = error_body.get("error", {}).get("message", resp.text)
+            except Exception:
+                error_msg = resp.text or "Bad Request"
+            logger.error("400 creating 1:1 chat: %s", error_msg)
+            raise ValueError(f"Graph API rejected chat creation: {error_msg}")
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", "60"))
+            raise RateLimitError(retry_after)
+        resp.raise_for_status()
+
+        chat = resp.json()
+        chat_id = chat["id"]
+        logger.info("1:1 chat established: %s with %s", chat_id, target_email)
+        return {
+            "chat_id": chat_id,
+            "created_at": chat.get("createdDateTime"),
+        }
+
+
 async def create_or_find_chat(
     *,
     token: str,

@@ -234,16 +234,91 @@ async def _initialize() -> None:
 
     _state["initialized"] = True
 
-    # Background poll watches only the configured --teams-user chat (trusted).
+    # Watched chats: dict of chat_id -> {seen_ids: set, last_ts: str|None}
+    # Background poll iterates over all watched chats each cycle.
+    _state["watched_chats"] = {}
+
+    # Register the default group chat
+    if _state.get("chat_id"):
+        _register_watched_chat(str(_state["chat_id"]), persist=False)
+
+    # Load persisted watched chats (DMs created via create_chat tool)
+    watched_file = config.data_dir / "watched_chats"
+    if watched_file.is_file():
+        for line in watched_file.read_text().splitlines():
+            cid = line.strip()
+            if cid and cid != _state.get("chat_id"):
+                _register_watched_chat(cid, persist=False)
+                if logger:
+                    logger.info("Loaded persisted watched chat: %s", cid)
 
     # Start background polling for inbound Teams messages (like iMessage channel)
-    if _state.get("chat_id"):
+    if _state.get("watched_chats"):
         import asyncio
 
         asyncio.get_event_loop().create_task(_background_poll())
 
 
 BACKGROUND_POLL_INTERVAL = 5  # seconds between polls
+
+
+def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
+    """Register a chat for background polling.
+
+    Each chat gets its own cursor and seen-set so message tracking is
+    independent. Safe to call multiple times — idempotent.
+
+    When ``persist`` is True (default), the chat ID is also appended to
+    ``data_dir/watched_chats`` so it survives MCP server restarts.
+    """
+    watched = _state.get("watched_chats", {})
+    if chat_id not in watched:
+        watched[chat_id] = {"seen_ids": set(), "last_ts": None, "bootstrapped": False}
+        _state["watched_chats"] = watched
+        if logger:
+            logger.info("Registered chat for background polling: %s", chat_id)
+
+    if persist:
+        config = _state.get("config")
+        if config:
+            watched_file = config.data_dir / "watched_chats"
+            watched_file.parent.mkdir(parents=True, exist_ok=True)
+            # Read existing, add if not present
+            existing = set()
+            if watched_file.is_file():
+                existing = {
+                    line.strip()
+                    for line in watched_file.read_text().splitlines()
+                    if line.strip()
+                }
+            if chat_id not in existing:
+                existing.add(chat_id)
+                watched_file.write_text("\n".join(sorted(existing)) + "\n")
+                if logger:
+                    logger.info("Persisted watched chat: %s", chat_id)
+
+
+async def _bootstrap_chat(chat_id: str) -> None:
+    """Bootstrap a watched chat's cursor to the newest existing message.
+
+    Called once per chat on first poll cycle. Sets the watermark so only
+    messages arriving AFTER registration trigger notifications.
+    """
+    from entraclaw.tools.teams import read
+
+    chat_state = _state["watched_chats"][chat_id]
+    try:
+        await _ensure_valid_token()
+        bootstrap_msgs = await _with_token_retry(read, chat_id=chat_id, count=10)
+        if bootstrap_msgs:
+            newest = max(bootstrap_msgs, key=lambda m: m.get("sent_at", ""))
+            chat_state["last_ts"] = newest["sent_at"]
+            for m in bootstrap_msgs:
+                chat_state["seen_ids"].add(m["message_id"])
+    except Exception as exc:
+        if logger:
+            logger.warning("Bootstrap failed for chat %s: %s", chat_id, exc)
+    chat_state["bootstrapped"] = True
 
 
 async def _background_poll() -> None:
@@ -253,7 +328,10 @@ async def _background_poll() -> None:
     background, push new messages via ``notifications/claude/channel``
     so Claude Code sees them without needing to call a tool.
 
-    IMPORTANT: Uses its OWN separate tracking state (_bg_*) so it does NOT
+    Iterates over ALL watched chats each cycle. Each chat has its own
+    cursor and seen-set so tracking is independent.
+
+    IMPORTANT: Uses its OWN separate tracking state so it does NOT
     interfere with watch_teams_replies. Both can detect the same message
     independently — the background poll pushes a notification, and
     watch_teams_replies returns it as a tool result. This is intentional:
@@ -270,49 +348,43 @@ async def _background_poll() -> None:
     # Must match the displayName that Graph API returns in message.from.user.displayName
     # NOT the UPN — Graph returns "EntraClaw Agent", not "entraclaw-agent@werner.ac"
     agent_display_name = "EntraClaw Agent"
-    chat_id = str(_state["chat_id"])
-
-    # Background poll has its OWN cursor and seen-set (separate from watch_teams_replies)
-    bg_seen_ids: set[str] = set()
-    bg_last_ts: str | None = None
-
-    # Bootstrap: set watermark to newest existing message
-    try:
-        await _ensure_valid_token()
-        bootstrap_msgs = await _with_token_retry(read, chat_id=chat_id, count=10)
-        if bootstrap_msgs:
-            newest = max(bootstrap_msgs, key=lambda m: m.get("sent_at", ""))
-            bg_last_ts = newest["sent_at"]
-            for m in bootstrap_msgs:
-                bg_seen_ids.add(m["message_id"])
-    except Exception as exc:
-        if logger:
-            logger.warning("Background poll bootstrap failed: %s", exc)
 
     while True:
         try:
             await asyncio.sleep(BACKGROUND_POLL_INTERVAL)
             await _ensure_valid_token()
 
-            raw_messages = await _with_token_retry(read, chat_id=chat_id, count=10)
-            human_msgs = filter_human_messages(raw_messages, agent_display_name)
-            new_msgs = _filter_new_messages(human_msgs, bg_last_ts, bg_seen_ids)
+            # Snapshot chat IDs to avoid mutation during iteration
+            watched = dict(_state.get("watched_chats", {}))
 
-            if new_msgs:
-                # Advance background cursor only
-                newest = max(new_msgs, key=lambda m: m.get("sent_at", ""))
-                bg_last_ts = newest["sent_at"]
-                for m in new_msgs:
-                    bg_seen_ids.add(m["message_id"])
+            for chat_id, chat_state in watched.items():
+                # Bootstrap on first encounter
+                if not chat_state.get("bootstrapped"):
+                    await _bootstrap_chat(chat_id)
+                    continue
 
-                # Bounded cleanup (keep last 500)
-                if len(bg_seen_ids) > SEEN_SET_MAX:
-                    bg_seen_ids = set(sorted(bg_seen_ids)[-100:])
+                raw_messages = await _with_token_retry(
+                    read, chat_id=chat_id, count=10,
+                )
+                human_msgs = filter_human_messages(raw_messages, agent_display_name)
+                new_msgs = _filter_new_messages(
+                    human_msgs, chat_state["last_ts"], chat_state["seen_ids"],
+                )
 
-                # Single-chat mode: the configured --teams-user chat is always
-                # trusted. Push all new messages directly.
-                for m in sorted(new_msgs, key=lambda m: m.get("sent_at", "")):
-                    await _push_channel_notification(m)
+                if new_msgs:
+                    newest = max(new_msgs, key=lambda m: m.get("sent_at", ""))
+                    chat_state["last_ts"] = newest["sent_at"]
+                    for m in new_msgs:
+                        chat_state["seen_ids"].add(m["message_id"])
+
+                    # Bounded cleanup (keep last 500)
+                    if len(chat_state["seen_ids"]) > SEEN_SET_MAX:
+                        chat_state["seen_ids"] = set(
+                            sorted(chat_state["seen_ids"])[-100:]
+                        )
+
+                    for m in sorted(new_msgs, key=lambda m: m.get("sent_at", "")):
+                        await _push_channel_notification(m, chat_id=chat_id)
 
         except Exception as exc:
             if logger:
@@ -320,7 +392,9 @@ async def _background_poll() -> None:
             await asyncio.sleep(BACKGROUND_POLL_INTERVAL)
 
 
-async def _push_channel_notification(message: dict) -> None:
+async def _push_channel_notification(
+    message: dict, *, chat_id: str | None = None,
+) -> None:
     """Push an inbound Teams message to Claude Code via notifications/claude/channel.
 
     This is the same notification method used by the iMessage channel plugin.
@@ -341,7 +415,7 @@ async def _push_channel_notification(message: dict) -> None:
         params={
             "content": message.get("content", ""),
             "meta": {
-                "chat_id": str(_state.get("chat_id", "")),
+                "chat_id": chat_id or str(_state.get("chat_id", "")),
                 "message_id": message.get("message_id", ""),
                 "user": message.get("from", "unknown"),
                 "ts": message.get("sent_at", ""),
@@ -361,7 +435,10 @@ async def _push_channel_notification(message: dict) -> None:
 
 @mcp.tool()
 async def send_teams_message(
-    message: str, content_type: str = "text", mentions: list[dict] | None = None
+    message: str,
+    content_type: str = "text",
+    mentions: list[dict] | None = None,
+    chat_id: str = "",
 ) -> str:
     """Send a message to the human user via Microsoft Teams. The recipient
     is pre-configured — just provide the message text.
@@ -386,6 +463,7 @@ async def send_teams_message(
         message: The text to send.
         content_type: "text" (default) or "html" for rich formatting.
         mentions: Optional list of mention dicts for @mentions.
+        chat_id: Optional chat ID to target. If empty, uses the default group chat.
 
     Returns:
         JSON with message_id and sent_at timestamp.
@@ -393,14 +471,14 @@ async def send_teams_message(
     await _initialize()
     from entraclaw.tools.teams import send
 
-    chat_id = _state.get("chat_id")
-    if not chat_id:
+    target_chat = chat_id or _state.get("chat_id")
+    if not target_chat:
         return json.dumps({"error": "Teams chat not established. Check setup."})
 
     await _ensure_valid_token()
     result = await _with_token_retry(
         send,
-        chat_id=str(chat_id),
+        chat_id=str(target_chat),
         message=message,
         content_type=content_type,
         mentions=mentions,
@@ -409,11 +487,14 @@ async def send_teams_message(
 
 
 @mcp.tool()
-async def list_chat_members() -> str:
-    """List all members of the current Teams chat with their user IDs.
+async def list_chat_members(chat_id: str = "") -> str:
+    """List all members of a Teams chat with their user IDs.
 
     Use this to resolve display names to user GUIDs for @mentions in
     send_teams_message. Returns user_id, name, email, and roles for each member.
+
+    Args:
+        chat_id: Optional chat ID to target. If empty, uses the default group chat.
 
     Returns:
         JSON array of chat members.
@@ -421,14 +502,14 @@ async def list_chat_members() -> str:
     await _initialize()
     from entraclaw.tools.teams import list_members
 
-    chat_id = _state.get("chat_id")
-    if not chat_id:
+    target_chat = chat_id or _state.get("chat_id")
+    if not target_chat:
         return json.dumps({"error": "Teams chat not established. Check setup."})
 
     await _ensure_valid_token()
     result = await _with_token_retry(
         list_members,
-        chat_id=str(chat_id),
+        chat_id=str(target_chat),
     )
     return json.dumps(result, indent=2)
 
@@ -490,14 +571,79 @@ async def add_teams_member(email: str, tenant_id: str = "") -> str:
 
 
 @mcp.tool()
-async def read_teams_messages(count: int = 5) -> str:
-    """Read recent messages from the human in Microsoft Teams. Use this to
+async def create_chat(target_email: str, target_tenant_id: str = "") -> str:
+    """Create a 1:1 chat with a user by email. Returns the chat_id you can
+    pass to send_teams_message, read_teams_messages, and list_chat_members
+    to operate on that chat independently of the default group chat.
+
+    Graph's oneOnOne chat creation is idempotent — calling this twice with
+    the same email returns the existing chat, not a duplicate.
+
+    For cross-tenant users (different org), provide target_tenant_id.
+    For in-tenant users, leave it empty.
+
+    Args:
+        target_email: The user's email address (e.g., 'brandon@werner.ac').
+        target_tenant_id: Optional home tenant GUID for cross-tenant users.
+
+    Returns:
+        JSON with chat_id and created_at.
+    """
+    await _initialize()
+    from entraclaw.tools.teams import create_one_on_one_chat
+
+    # Auto-resolve tenant ID from email domain if not provided
+    if not target_tenant_id and "@" in target_email:
+        domain = target_email.split("@")[1]
+        config = _state.get("config")
+        our_domain = ""
+        if config and config.agent_user_upn and "@" in config.agent_user_upn:
+            our_domain = config.agent_user_upn.split("@")[1]
+        if domain.lower() != our_domain.lower():
+            import httpx
+
+            try:
+                oidc_url = f"https://login.microsoftonline.com/{domain}/.well-known/openid-configuration"
+                resp = httpx.get(oidc_url, timeout=10)
+                if resp.status_code == 200:
+                    issuer = resp.json().get("issuer", "")
+                    parts = issuer.rstrip("/").split("/")
+                    if len(parts) > 3:
+                        target_tenant_id = parts[-1]
+                        if logger:
+                            logger.info("Auto-resolved tenant for %s: %s", domain, target_tenant_id)
+            except Exception:
+                if logger:
+                    logger.warning("Could not auto-resolve tenant for %s", domain)
+
+    await _ensure_valid_token()
+    config = _state.get("config")
+    agent_user_id = config.agent_user_id if config else None
+    result = await _with_token_retry(
+        create_one_on_one_chat,
+        target_email=target_email,
+        target_tenant_id=target_tenant_id or None,
+        agent_user_id=agent_user_id,
+    )
+
+    # Auto-register the new chat for background polling
+    new_chat_id = result.get("chat_id")
+    if new_chat_id:
+        _register_watched_chat(new_chat_id)
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def read_teams_messages(count: int = 5, chat_id: str = "") -> str:
+    """Read recent messages from a Microsoft Teams chat. Use this to
     check for replies, commands, or responses from the human user.
 
     Authentication is automatic. No credentials needed. Just call this tool.
 
     Args:
         count: Number of messages to return (default 5, max ~50).
+        chat_id: Optional chat ID to target. If empty, uses the default group chat.
 
     Returns:
         JSON array of messages, each with message_id, from, content, sent_at.
@@ -505,14 +651,14 @@ async def read_teams_messages(count: int = 5) -> str:
     await _initialize()
     from entraclaw.tools.teams import read
 
-    chat_id = _state.get("chat_id")
-    if not chat_id:
+    target_chat = chat_id or _state.get("chat_id")
+    if not target_chat:
         return json.dumps({"error": "Teams chat not established. Check setup."})
 
     await _ensure_valid_token()
     result = await _with_token_retry(
         read,
-        chat_id=str(chat_id),
+        chat_id=str(target_chat),
         count=count,
     )
     return json.dumps(result, indent=2)
