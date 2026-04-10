@@ -155,7 +155,7 @@ async def _outbound_pump(
                 for msg in messages:
                     chat_id = msg.get("chat_id")
                     content = msg.get("content", "")
-                    if not content:
+                    if not content and not msg.get("attachments"):
                         continue
 
                     # Find the conversation reference
@@ -169,11 +169,37 @@ async def _outbound_pump(
                         try:
                             convo_ref = _dict_to_convo_ref(ref_dict)
 
+                            attachments = msg.get("attachments")
+
                             async def _send_callback(
                                 turn_context: TurnContext,
                                 text: str = content,
+                                atts: list | None = attachments,
                             ) -> None:
-                                await turn_context.send_activity(text)
+                                if atts:
+                                    from botbuilder.schema import (
+                                        Activity as OutActivity,
+                                    )
+                                    from botbuilder.schema import Attachment
+
+                                    activity = OutActivity(
+                                        type="message",
+                                        text=text or "",
+                                        attachment_layout="list",
+                                        attachments=[
+                                            Attachment(
+                                                content_type=a.get(
+                                                    "contentType",
+                                                    "application/vnd.microsoft.card.adaptive",
+                                                ),
+                                                content=a.get("content"),
+                                            )
+                                            for a in atts
+                                        ],
+                                    )
+                                    await turn_context.send_activity(activity)
+                                else:
+                                    await turn_context.send_activity(text)
 
                             await adapter.continue_conversation(
                                 convo_ref,
@@ -246,17 +272,18 @@ def create_bot_app(
 async def run_bot_server(port: int = 3978) -> None:
     """Start the bot server on the given port.
 
-    Creates the Bot Framework adapter with settings from environment,
-    launches the aiohttp server and the outbound message pump.
+    Creates the Bot Framework adapter with credentials from environment.
+    Prefers certificate auth (ADR-003) — loads private key from OS keystore.
+    Falls back to client secret if cert is not available.
     """
     bot_app_id = os.environ.get("ENTRACLAW_BOT_APP_ID", "")
+    bot_cert_thumbprint = os.environ.get("ENTRACLAW_BOT_CERT_THUMBPRINT", "")
     bot_app_password = os.environ.get("ENTRACLAW_BOT_APP_PASSWORD", "")
+    tenant_id = os.environ.get("ENTRACLAW_TENANT_ID", "")
 
-    settings = BotFrameworkAdapterSettings(
-        app_id=bot_app_id,
-        app_password=bot_app_password,
+    adapter = _create_adapter(
+        bot_app_id, bot_cert_thumbprint, bot_app_password, tenant_id
     )
-    adapter = BotFrameworkAdapter(settings)
 
     async def on_error(context: TurnContext, error: Exception) -> None:
         logger.error("Bot adapter error: %s", error)
@@ -281,6 +308,69 @@ async def run_bot_server(port: int = 3978) -> None:
             await asyncio.sleep(3600)
     finally:
         await runner.cleanup()
+
+
+def _create_adapter(
+    app_id: str,
+    cert_thumbprint: str,
+    app_password: str,
+    tenant_id: str,
+) -> BotFrameworkAdapter:
+    """Create the BotFrameworkAdapter with the best available credentials.
+
+    Priority (per ADR-003 — no secrets on disk):
+      1. Certificate from OS keystore (keychain/TPM)
+      2. Client secret (fallback for dev)
+      3. No credentials (local-only mode)
+    """
+    if cert_thumbprint and app_id:
+        try:
+            import keyring
+
+            private_key_pem = keyring.get_password("entraclaw-bot", "private-key")
+            if private_key_pem:
+                from botframework.connector.auth import (
+                    CertificateAppCredentials,
+                )
+
+                credentials = CertificateAppCredentials(
+                    app_id=app_id,
+                    certificate_thumbprint=cert_thumbprint,
+                    certificate_private_key=private_key_pem,
+                    channel_auth_tenant=tenant_id or None,
+                )
+
+                settings = BotFrameworkAdapterSettings(
+                    app_id=app_id,
+                    app_password="",
+                )
+                adapter = BotFrameworkAdapter(settings)
+                # Replace the default credentials with cert-based ones
+                adapter._credentials = credentials
+                logger.info(
+                    "Using certificate auth (thumbprint: %s...)",
+                    cert_thumbprint[:20],
+                )
+                return adapter
+            else:
+                logger.warning(
+                    "Cert thumbprint set but private key not in keystore — "
+                    "falling back to client secret"
+                )
+        except ImportError:
+            logger.warning("keyring not installed — falling back to client secret")
+
+    if app_password and app_id:
+        logger.info("Using client secret auth")
+        settings = BotFrameworkAdapterSettings(
+            app_id=app_id,
+            app_password=app_password,
+        )
+        return BotFrameworkAdapter(settings)
+
+    logger.warning("No bot credentials — running in local-only mode")
+    settings = BotFrameworkAdapterSettings(app_id="", app_password="")
+    return BotFrameworkAdapter(settings)
 
 
 if __name__ == "__main__":
