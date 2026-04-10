@@ -92,6 +92,13 @@ if ! command -v devtunnel &>/dev/null; then
 fi
 ok "devtunnel CLI found"
 
+# Check devtunnel login
+if devtunnel user show 2>&1 | grep -q "Not logged in"; then
+    warn "devtunnel not logged in — launching login..."
+    devtunnel user login || fail "devtunnel login failed. Run: devtunnel user login"
+fi
+ok "devtunnel authenticated"
+
 # Activate venv if available
 if [ -f .venv/bin/activate ]; then
     source .venv/bin/activate
@@ -111,15 +118,20 @@ ok "aiohttp installed"
 
 # ── Start Dev Tunnel ─────────────────────────────────────────────────────
 info "Starting Dev Tunnel on port ${PORT}..."
-devtunnel host -p "${PORT}" --allow-anonymous > "${PIDDIR}/tunnel.log" 2>&1 &
+# devtunnel buffers stdout — redirect both stdout+stderr and use stdbuf if available
+if command -v stdbuf &>/dev/null; then
+    stdbuf -oL devtunnel host -p "${PORT}" --allow-anonymous > "${PIDDIR}/tunnel.log" 2>&1 &
+else
+    devtunnel host -p "${PORT}" --allow-anonymous > "${PIDDIR}/tunnel.log" 2>&1 &
+fi
 TUNNEL_PID=$!
 echo "${TUNNEL_PID}" > "${TUNNEL_PIDFILE}"
 
 # Wait for tunnel URL to appear in log
 TUNNEL_URL=""
-for i in $(seq 1 15); do
+for i in $(seq 1 25); do
     sleep 1
-    if TUNNEL_URL=$(grep -oE 'https://[a-z0-9-]+\.devtunnels\.ms' "${PIDDIR}/tunnel.log" 2>/dev/null | head -1) && [ -n "${TUNNEL_URL}" ]; then
+    if TUNNEL_URL=$(grep -oE 'https://[a-z0-9-]+(-[0-9]+)?\.([a-z0-9]+\.)?devtunnels\.ms' "${PIDDIR}/tunnel.log" 2>/dev/null | head -1) && [ -n "${TUNNEL_URL}" ]; then
         break
     fi
 done
@@ -131,8 +143,9 @@ if [ -n "${TUNNEL_URL}" ]; then
     echo -e "   ${BOLD}${TUNNEL_URL}/api/messages${NC}"
     echo ""
 else
-    warn "Tunnel started (PID ${TUNNEL_PID}) but URL not detected yet."
-    warn "Check ${PIDDIR}/tunnel.log for the URL."
+    warn "Tunnel URL not detected in time (devtunnel buffers output)."
+    warn "It will appear shortly. Check with:"
+    warn "  cat ${PIDDIR}/tunnel.log | grep devtunnels"
 fi
 
 # ── Start Bot Server ─────────────────────────────────────────────────────
@@ -150,11 +163,20 @@ else
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────────
+# If we didn't get the URL earlier, try once more now
+if [ -z "${TUNNEL_URL}" ]; then
+    TUNNEL_URL=$(grep -oE 'https://[a-z0-9-]+(-[0-9]+)?\.([a-z0-9]+\.)?devtunnels\.ms' "${PIDDIR}/tunnel.log" 2>/dev/null | head -1 || echo "")
+fi
+
 echo ""
 echo -e "${GREEN}${BOLD}Bot gateway is running!${NC}"
 echo ""
 echo -e "   Tunnel PID:  ${TUNNEL_PID} (log: ${PIDDIR}/tunnel.log)"
 echo -e "   Bot PID:     ${BOT_PID} (log: ${PIDDIR}/bot.log)"
+if [ -n "${TUNNEL_URL}" ]; then
+    echo -e "   Tunnel URL:  ${BOLD}${TUNNEL_URL}${NC}"
+    echo -e "   Endpoint:    ${BOLD}${TUNNEL_URL}/api/messages${NC}"
+fi
 echo -e "   Inbound:     ${PIDDIR}/inbound.jsonl"
 echo -e "   Outbound:    ${PIDDIR}/outbound.jsonl"
 echo ""

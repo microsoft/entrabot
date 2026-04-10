@@ -186,3 +186,11 @@ async def run_bot_server(port: int = 3978) -> None:
             await asyncio.sleep(3600)
     finally:
         await runner.cleanup()
+
+
+if __name__ == "__main__":
+    import os
+
+    logging.basicConfig(level=os.environ.get("ENTRACLAW_LOG_LEVEL", "INFO"))
+    port = int(os.environ.get("ENTRACLAW_BOT_TUNNEL_PORT", "3978"))
+    asyncio.run(run_bot_server(port))
