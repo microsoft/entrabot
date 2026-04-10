@@ -165,6 +165,9 @@ Stored as JSON at `~/.entraclaw/bot/conversation_refs.json`, keyed by chat ID. L
 | Dev Tunnel disconnect | Bot server gets no inbound activities | Bot logs warning, auto-reconnects tunnel. MCP server falls back to "bot unavailable" error on send. |
 | Bot server crash | MCP server's outbound file grows without being consumed | MCP server logs warning after 30s of unconsumed messages. User restarts bot. |
 | Shared file corruption | JSON parse error on read | Truncate corrupted file, log warning, continue. Messages in flight are lost (acceptable for demo). |
+| Bot credential failure (401/403) | Bot startup health check fails against Azure Bot Service | Log specific error (expired cert, wrong app ID, missing consent). Exit with actionable message. |
+
+**Known limitation:** JSONL files at `~/.entraclaw/bot/` contain message content in plaintext. For production, use local HTTP IPC or encrypt at rest.
 
 ### Testing Strategy
 
@@ -173,6 +176,11 @@ Per AGENTS.md: TDD — tests first, then implementation.
 - **Unit tests**: Mock M365 Agents SDK adapter, test `handler.py` message routing, test `cards.py` JSON output, test conversation reference persistence (load/save/corruption).
 - **Integration tests**: Bot server + fake tunnel (localhost-to-localhost), verify inbound/outbound JSONL round-trip.
 - **No live Teams tests in CI** — manual verification against real Teams for demo.
+- **Key test scenarios:**
+  1. Bot receives activity → writes correctly formatted entry to `inbound.jsonl`
+  2. MCP server writes to `outbound.jsonl` → bot reads and calls `continue_conversation` with correct conversation reference
+  3. Conversation ref persistence: save → simulate restart → load → proactive send succeeds
+  4. Corrupted JSONL → bot and MCP server recover without crash (truncate and continue)
 
 ### SDK Maturity
 
@@ -199,7 +207,7 @@ pip install microsoft-agents-hosting-core microsoft-agents-activity \
 2. Azure Bot Service relays to Dev Tunnel → localhost:3978
 3. Bot server's `on_message_activity` fires
 4. Bot writes message to shared inbound file
-5. MCP server reads inbound file (or polls it)
+5. MCP server reads inbound file (polls `inbound.jsonl` every 2 seconds via `asyncio.create_task` in the existing background poll loop)
 6. MCP server pushes to Claude Code via `notifications/claude/channel`
 
 ## Open Questions
