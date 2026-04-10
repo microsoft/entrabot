@@ -15,10 +15,9 @@
 #   ./scripts/start_bot.sh --stop   # kill running tunnel + bot server
 #
 # Prerequisites (one-time):
-#   1. Azure Bot resource created (see docs/architecture/DESIGN-teams-bot-gateway.md)
-#   2. .env has ENTRACLAW_BOT_APP_ID and ENTRACLAW_BOT_CERT_THUMBPRINT
-#   3. devtunnel CLI installed (https://learn.microsoft.com/azure/developer/dev-tunnels/get-started)
-#   4. pip install -e ".[dev]"
+#   1. Run ./scripts/setup_bot.sh first (creates Azure Bot + app registration + cert)
+#   2. devtunnel CLI installed (https://learn.microsoft.com/azure/developer/dev-tunnels/get-started)
+#   3. pip install -e ".[dev]"
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -83,7 +82,7 @@ fi
 PORT="${ENTRACLAW_BOT_TUNNEL_PORT:-3978}"
 
 if [ -z "${ENTRACLAW_BOT_APP_ID:-}" ]; then
-    fail "ENTRACLAW_BOT_APP_ID not set. Add it to .env (your Azure Bot app registration ID)."
+    fail "ENTRACLAW_BOT_APP_ID not set. Run ./scripts/setup_bot.sh first."
 fi
 ok "Bot app ID: ${ENTRACLAW_BOT_APP_ID}"
 
