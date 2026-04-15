@@ -33,3 +33,4 @@ pip.conf
 pip.ini
 .config/
 .claude-plugin/
+.gstack/
