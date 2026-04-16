@@ -462,6 +462,17 @@ async def _init_poll() -> None:
 
         asyncio.get_event_loop().create_task(_background_poll())
 
+    # Start email poll when authenticated as the Agent User (its own mailbox).
+    # In delegated mode /me/messages is the human's inbox — not what we want.
+    if (
+        _identity
+        and _identity.session
+        and _identity.session.auth_mode == "agent_user"
+    ):
+        import asyncio
+
+        asyncio.get_event_loop().create_task(_background_poll_email())
+
 
 async def _initialize() -> None:
     """Acquire a token and set up the Teams chat.
@@ -484,6 +495,7 @@ async def _initialize() -> None:
 
 BACKGROUND_POLL_INTERVAL = 5  # seconds between polls
 BOT_POLL_INTERVAL = 2  # seconds between bot inbound file checks
+EMAIL_POLL_INTERVAL = 60  # seconds between /me/messages polls
 
 
 async def _background_poll_bot() -> None:
@@ -662,6 +674,120 @@ async def _background_poll() -> None:
             if logger:
                 logger.warning("Background poll error: %s", exc)
             await asyncio.sleep(BACKGROUND_POLL_INTERVAL)
+
+
+async def _background_poll_email() -> None:
+    """Background poll of /me/messages for substantive inbound email.
+
+    Pushes each substantive message as a ``notifications/claude/channel``
+    notification and appends an inbound entry to the interaction log.
+    Cursor (last receivedDateTime seen) persists across restarts in
+    ``<data_dir>/email_cursor.txt``; on first run we initialize it to
+    "now" so the agent isn't flooded with historical mail.
+    """
+    import asyncio
+
+    from entraclaw.tools.email_poll import load_cursor, poll_once, save_cursor
+
+    if logger:
+        logger.info(
+            "Starting background email poll (interval=%ds)", EMAIL_POLL_INTERVAL
+        )
+
+    cursor = load_cursor()
+    if cursor is None:
+        cursor = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        save_cursor(cursor)
+
+    while True:
+        try:
+            await asyncio.sleep(EMAIL_POLL_INTERVAL)
+
+            if _identity and _identity.state in (
+                IdentityState.UNAUTHENTICATED,
+                IdentityState.ERROR,
+            ):
+                continue
+
+            await _ensure_valid_token()
+
+            messages, new_cursor = await _with_token_retry(
+                poll_once, cursor=cursor,
+            )
+
+            if new_cursor and new_cursor != cursor:
+                cursor = new_cursor
+                save_cursor(cursor)
+
+            for msg in messages:
+                await _push_email_notification(msg)
+
+        except Exception as exc:
+            if logger:
+                logger.warning("Email poll error: %s", exc)
+            await asyncio.sleep(EMAIL_POLL_INTERVAL)
+
+
+async def _push_email_notification(msg: dict) -> None:
+    """Push an inbound email to Claude Code and record it in the log."""
+    sender = (msg.get("from") or {}).get("emailAddress") or {}
+    sender_addr = sender.get("address", "unknown")
+    sender_name = sender.get("name") or sender_addr
+    subject = msg.get("subject") or "(no subject)"
+    preview = msg.get("bodyPreview") or ""
+    received = msg.get("receivedDateTime", "")
+    message_id = msg.get("id", "")
+    encrypted = msg.get("_encrypted") is True
+
+    if encrypted:
+        content = (
+            f"[email · encrypted] {sender_name} <{sender_addr}> — {subject}\n"
+            f"(Purview-encrypted; body inaccessible without IRM decryption)"
+        )
+    else:
+        content = (
+            f"[email] {sender_name} <{sender_addr}> — {subject}\n{preview[:400]}"
+        )
+
+    write_stream = _state.get("_write_stream")
+    if write_stream:
+        notification = JSONRPCNotification(
+            jsonrpc="2.0",
+            method="notifications/claude/channel",
+            params={
+                "content": content,
+                "meta": {
+                    "channel": "email",
+                    "message_id": message_id,
+                    "user": sender_addr,
+                    "ts": received,
+                    "subject": subject,
+                    "encrypted": encrypted,
+                },
+            },
+        )
+        await write_stream.send(SessionMessage(message=JSONRPCMessage(notification)))
+    elif logger:
+        logger.warning("Cannot push email notification — write stream not available")
+
+    _log_interaction_safe(
+        channel="email",
+        direction="inbound",
+        sender=sender_addr,
+        recipient="entraclaw-agent",
+        summary=f"{subject} — {preview[:120]}".strip(" \u2014"),
+        action="email_received",
+        content_ref=message_id,
+        metadata={
+            "subject": subject,
+            "conversationId": msg.get("conversationId"),
+            "encrypted": encrypted,
+            "ts": received,
+        },
+    )
+
+    if logger:
+        logger.info("Pushed email from %s: %s", sender_addr, subject[:60])
 
 
 def _log_interaction_safe(**kwargs) -> None:
