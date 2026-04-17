@@ -779,6 +779,91 @@ class TestTeamsRead:
         result = await read(chat_id="c1", token="tok")
         assert result == []
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_reply_to_ids_extracted_from_quote_attachment(self) -> None:
+        """Teams chat 'Reply UI' encodes the quoted source as an
+        ``<attachment id="SOURCE_ID">`` in the body. read() must surface
+        those IDs so the agent can detect "is this a reply to me?"
+        without a second Graph call. Graph does NOT populate replyToId
+        at the message level for chats (only channels), so this body-
+        parse is the only reliable signal."""
+        respx.get(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "id": "reply-1",
+                            "from": {"user": {"displayName": "Adrian"}},
+                            "body": {
+                                "content": (
+                                    '<attachment id="1776393595644">'
+                                    "</attachment><p>I am screwed.</p>"
+                                )
+                            },
+                            "createdDateTime": "2026-04-17T03:56:55Z",
+                        },
+                        {
+                            "id": "plain-1",
+                            "from": {"user": {"displayName": "Diana"}},
+                            "body": {"content": "<p>plain message</p>"},
+                            "createdDateTime": "2026-04-17T16:16:00Z",
+                        },
+                    ]
+                },
+            )
+        )
+        result = await read(chat_id="c1", token="tok")
+        assert len(result) == 2
+        assert result[0]["reply_to_ids"] == ["1776393595644"]
+        assert result[1]["reply_to_ids"] == []
+
+
+# ---------------------------------------------------------------------------
+# extract_reply_to_ids — the parser used by read()
+# ---------------------------------------------------------------------------
+
+
+class TestExtractReplyToIds:
+    def test_empty_or_none_returns_empty_list(self) -> None:
+        from entraclaw.tools.teams import extract_reply_to_ids
+
+        assert extract_reply_to_ids("") == []
+        assert extract_reply_to_ids(None) == []  # type: ignore[arg-type]
+
+    def test_no_attachment_returns_empty(self) -> None:
+        from entraclaw.tools.teams import extract_reply_to_ids
+
+        assert extract_reply_to_ids("<p>plain message</p>") == []
+
+    def test_single_attachment_double_quotes(self) -> None:
+        from entraclaw.tools.teams import extract_reply_to_ids
+
+        body = '<attachment id="ABC123"></attachment><p>reply</p>'
+        assert extract_reply_to_ids(body) == ["ABC123"]
+
+    def test_single_attachment_single_quotes(self) -> None:
+        from entraclaw.tools.teams import extract_reply_to_ids
+
+        assert extract_reply_to_ids("<attachment id='XYZ'></attachment>") == ["XYZ"]
+
+    def test_multiple_attachments_dedup_preserves_order(self) -> None:
+        from entraclaw.tools.teams import extract_reply_to_ids
+
+        body = (
+            '<attachment id="A"></attachment>'
+            '<attachment id="B"></attachment>'
+            '<attachment id="A"></attachment>'
+        )
+        assert extract_reply_to_ids(body) == ["A", "B"]
+
+    def test_case_insensitive_tag_name(self) -> None:
+        """Teams HTML sometimes normalizes tag case differently."""
+        from entraclaw.tools.teams import extract_reply_to_ids
+
+        assert extract_reply_to_ids('<ATTACHMENT ID="X"></ATTACHMENT>') == ["X"]
+
 
 # ---------------------------------------------------------------------------
 # create_one_on_one_chat

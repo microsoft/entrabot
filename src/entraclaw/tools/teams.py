@@ -11,6 +11,7 @@ Supports two identity modes:
 from __future__ import annotations
 
 import logging
+import re
 
 import httpx
 
@@ -622,6 +623,36 @@ async def fetch_hosted_image(*, token: str, url: str) -> bytes | None:
         return resp.content
 
 
+# Teams chats (unlike channels) don't populate `replyToId` at the message
+# level. When a user hits the "Reply" UI in a chat, Graph encodes the quote
+# as an ``<attachment id="SOURCE_MESSAGE_ID"></attachment>`` tag embedded at
+# the start of the body HTML. We parse those out into ``reply_to_ids`` so
+# the agent can detect "is this a reply to one of my messages?" without
+# additional Graph calls.
+_REPLY_ATTACHMENT_RE = re.compile(
+    r'<attachment\s+id=(?P<quote>["\'])(?P<id>[^"\']+)(?P=quote)[^>]*>',
+    re.IGNORECASE,
+)
+
+
+def extract_reply_to_ids(body_content: str) -> list[str]:
+    """Return message IDs referenced as Teams chat 'reply' quote-attachments.
+
+    Returns an empty list if *body_content* has no ``<attachment id="...">``
+    tags or is falsy. Deduplicates while preserving order.
+    """
+    if not body_content:
+        return []
+    seen: set[str] = set()
+    ids: list[str] = []
+    for m in _REPLY_ATTACHMENT_RE.finditer(body_content):
+        msg_id = m.group("id")
+        if msg_id and msg_id not in seen:
+            seen.add(msg_id)
+            ids.append(msg_id)
+    return ids
+
+
 async def read(
     *,
     chat_id: str,
@@ -630,7 +661,9 @@ async def read(
 ) -> list[dict]:
     """Read recent messages from the human in the Teams chat.
 
-    Returns up to *count* most recent messages, newest first.
+    Returns up to *count* most recent messages, newest first. Each entry
+    includes a ``reply_to_ids`` list — message IDs this message is an
+    explicit quote-reply to (empty for regular chat messages).
     """
     headers = {
         "Authorization": f"Bearer {token}",
@@ -653,15 +686,21 @@ async def read(
         resp.raise_for_status()
 
         messages = resp.json().get("value", [])
-        return [
-            {
-                "message_id": m["id"],
-                "from": (m.get("from") or {}).get("user", {}).get("displayName", "unknown"),
-                "content": (m.get("body") or {}).get("content", ""),
-                "sent_at": m.get("createdDateTime"),
-            }
-            for m in messages
-        ]
+        out: list[dict] = []
+        for m in messages:
+            body_content = (m.get("body") or {}).get("content", "") or ""
+            out.append(
+                {
+                    "message_id": m["id"],
+                    "from": (m.get("from") or {}).get("user", {}).get(
+                        "displayName", "unknown"
+                    ),
+                    "content": body_content,
+                    "sent_at": m.get("createdDateTime"),
+                    "reply_to_ids": extract_reply_to_ids(body_content),
+                }
+            )
+        return out
 
 
 def filter_human_messages(
