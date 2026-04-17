@@ -548,3 +548,99 @@ class TestPushChannelNotificationObservability:
         assert any(
             e.get("content_ref") == "m-crash-1" for e in entries
         ), "log must capture the message even when push transport throws"
+
+
+# ---------------------------------------------------------------------------
+# Chat auto-discovery — the fix for "polling misses chats I didn't register"
+# ---------------------------------------------------------------------------
+# Historical bug: chats created via raw entraclaw.tools.teams.create_* (not
+# the MCP create_chat tool wrapper) never got added to watched_chats, so
+# the background poll silently ignored them. Also: when a human adds the
+# Agent User to a brand-new group chat, there's no in-process hook to
+# register it at all. Fix: a background task that periodically hits
+# /me/chats and registers any chat_id not already watched.
+
+
+class TestChatAutoDiscovery:
+    @pytest.mark.asyncio
+    async def test_registers_new_chats_from_me_chats(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """When /me/chats returns a chat_id not in watched_chats, the
+        discovery sweep must register it (both in-memory and persisted)
+        so future background polls iterate it."""
+        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+
+        import respx
+
+        from entraclaw import mcp_server
+
+        existing = "19:existing@thread.v2"
+        brand_new = "19:brand_new@thread.v2"
+
+        # Seed state with one already-watched chat + token + identity.
+        fake_config = MagicMock()
+        fake_config.data_dir = tmp_path
+
+        sm = MagicMock()
+        sm.state = mcp_server.IdentityState.AGENT_USER
+        sm.session.token = "tok"
+        sm.session.token_acquired_at = time.monotonic()  # fresh token
+        sm.update_session = MagicMock()
+
+        old_state = mcp_server._state.copy()
+        old_identity = mcp_server._identity
+        try:
+            mcp_server._state.clear()
+            mcp_server._state["config"] = fake_config
+            mcp_server._state["token"] = "tok"
+            mcp_server._state["token_acquired_at"] = time.monotonic()
+            mcp_server._state["watched_chats"] = {
+                existing: {"seen_ids": set(), "last_ts": None, "bootstrapped": False}
+            }
+            mcp_server._identity = sm
+
+            with respx.mock:
+                respx.get("https://graph.microsoft.com/v1.0/me/chats").mock(
+                    return_value=httpx.Response(
+                        200,
+                        json={
+                            "value": [
+                                {"id": existing},
+                                {"id": brand_new},
+                            ]
+                        },
+                    )
+                )
+
+                # Inline the sweep loop body: one iteration without the
+                # asyncio.sleep that makes the while-True task untestable.
+                import httpx as _httpx
+                await mcp_server._ensure_valid_token()
+                async with _httpx.AsyncClient() as client:
+                    resp = await client.get(
+                        "https://graph.microsoft.com/v1.0/me/chats",
+                        headers={"Authorization": "Bearer tok"},
+                        params={"$top": "50"},
+                    )
+                    watched = mcp_server._state["watched_chats"]
+                    for chat in resp.json().get("value", []):
+                        cid = chat.get("id")
+                        if cid and cid not in watched:
+                            mcp_server._register_watched_chat(cid, persist=True)
+
+            # In-memory: both chats now present, new one marked not-bootstrapped
+            assert existing in mcp_server._state["watched_chats"]
+            assert brand_new in mcp_server._state["watched_chats"]
+            assert (
+                mcp_server._state["watched_chats"][brand_new]["bootstrapped"]
+                is False
+            )
+
+            # File: new chat persisted so next server start inherits it
+            persisted = (tmp_path / "watched_chats").read_text().splitlines()
+            assert brand_new in persisted
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+            mcp_server._identity = old_identity

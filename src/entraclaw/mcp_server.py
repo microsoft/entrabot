@@ -447,6 +447,7 @@ async def _init_poll() -> None:
 
         asyncio.get_event_loop().create_task(_background_poll_email())
         asyncio.get_event_loop().create_task(_background_daily_summary())
+        asyncio.get_event_loop().create_task(_background_discover_chats())
 
 
 async def _initialize() -> None:
@@ -471,6 +472,7 @@ async def _initialize() -> None:
 BACKGROUND_POLL_INTERVAL = 5  # seconds between polls
 BOT_POLL_INTERVAL = 2  # seconds between bot inbound file checks
 EMAIL_POLL_INTERVAL = 60  # seconds between /me/messages polls
+CHAT_DISCOVER_INTERVAL = 120  # seconds between /me/chats auto-discovery sweeps
 
 
 async def _background_poll_bot() -> None:
@@ -705,6 +707,86 @@ async def _background_poll_email() -> None:
             if logger:
                 logger.warning("Email poll error: %s", exc)
             await asyncio.sleep(EMAIL_POLL_INTERVAL)
+
+
+async def _background_discover_chats() -> None:
+    """Auto-discover new chats via ``GET /me/chats`` and register them.
+
+    Without this, chats only get added to ``watched_chats`` when something
+    explicitly calls ``_register_watched_chat`` (the MCP ``create_chat``
+    tool does; the raw ``entraclaw.tools.teams.create_*`` functions do NOT,
+    and chats created by OTHER humans adding the Agent User to a new
+    conversation never trigger the registration code at all).
+
+    This task runs every ``CHAT_DISCOVER_INTERVAL`` seconds, enumerates
+    the Agent User's chats, and registers any chat_id not already in
+    ``_state["watched_chats"]``. Persists to file so restarts inherit.
+    New chats pick up their cursor on the next ``_bootstrap_chat`` — no
+    historical flood.
+    """
+    import asyncio
+
+    import httpx
+
+    if logger:
+        logger.info(
+            "Starting chat auto-discovery (interval=%ds)",
+            CHAT_DISCOVER_INTERVAL,
+        )
+
+    while True:
+        try:
+            await asyncio.sleep(CHAT_DISCOVER_INTERVAL)
+
+            if _identity and _identity.state in (
+                IdentityState.UNAUTHENTICATED,
+                IdentityState.ERROR,
+            ):
+                continue
+
+            await _ensure_valid_token()
+            token = _state.get("token")
+            if not token:
+                continue
+
+            new_count = 0
+            async with httpx.AsyncClient() as client:
+                # NOTE: $orderby on /me/chats 400s — just fetch and sort client-side if needed
+                resp = await client.get(
+                    "https://graph.microsoft.com/v1.0/me/chats",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={"$top": "50"},
+                )
+                if resp.status_code != 200:
+                    if logger:
+                        logger.warning(
+                            "Chat auto-discovery: /me/chats returned %d",
+                            resp.status_code,
+                        )
+                    continue
+
+                watched = _state.get("watched_chats", {})
+                for chat in resp.json().get("value", []):
+                    cid = chat.get("id")
+                    if not cid or cid in watched:
+                        continue
+                    _register_watched_chat(cid, persist=True)
+                    new_count += 1
+
+            if new_count and logger:
+                logger.info(
+                    "Chat auto-discovery: registered %d new chat(s)",
+                    new_count,
+                )
+
+        except Exception as exc:
+            if logger:
+                logger.warning(
+                    "Chat auto-discovery error: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
+            await asyncio.sleep(CHAT_DISCOVER_INTERVAL)
 
 
 async def _push_email_notification(msg: dict) -> None:
