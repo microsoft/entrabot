@@ -940,7 +940,7 @@ async def _run_daily_summary_internal(
     config = _state.get("config") or get_config()
     target_day = day or datetime.now(UTC).strftime("%Y-%m-%d")
     entries = read_day(target_day)
-    buckets = triage_interactions(entries)
+    buckets = triage_interactions(entries, agent_upn=config.agent_user_upn)
     html = render_summary_html(buckets, day=target_day)
     archive_path = archive_summary(day=target_day, html=html, buckets=buckets)
 

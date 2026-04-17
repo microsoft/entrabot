@@ -174,6 +174,67 @@ class TestTriage:
         assert len(buckets["heads_up"]) == 1
         assert buckets["heads_up"][0]["summary"] == "Phase 2 shipped"
 
+    def test_inbound_from_agent_upn_is_filtered(self) -> None:
+        """Agent's own emails echoed back (Sent-Items leak) must not surface.
+
+        /me/messages returns the whole mailbox including Sent Items. Before
+        the mcp_server self-echo filter shipped (commit 85c8d78), outbound
+        agent emails were being logged as ``direction=inbound`` with
+        ``sender=<agent_upn>`` and then showing up in Needs-you. Belt-and-
+        suspenders: the summary must also drop those entries so stale log
+        lines don't haunt the sponsor.
+        """
+        entries = [
+            _entry(
+                ts="2026-04-17T23:11:00+00:00",
+                channel="email",
+                direction="inbound",
+                sender="entraclaw-agent@werner.ac",
+                summary="EntraClaw email pipeline test",
+            ),
+            _entry(
+                ts="2026-04-17T23:12:00+00:00",
+                channel="email",
+                direction="inbound",
+                sender="diana@microsoft.com",
+                summary="Actually needs attention",
+            ),
+        ]
+        buckets = triage_interactions(
+            entries, agent_upn="entraclaw-agent@werner.ac"
+        )
+        assert len(buckets["needs_you"]) == 1
+        assert buckets["needs_you"][0]["sender"] == "diana@microsoft.com"
+
+    def test_inbound_from_agent_upn_filter_is_case_insensitive(self) -> None:
+        entries = [
+            _entry(
+                ts="2026-04-17T23:11:00+00:00",
+                channel="email",
+                direction="inbound",
+                sender="EntraClaw-Agent@Werner.AC",
+                summary="self-echo with mixed case",
+            ),
+        ]
+        buckets = triage_interactions(
+            entries, agent_upn="entraclaw-agent@werner.ac"
+        )
+        assert buckets == {"needs_you": [], "handled": [], "heads_up": []}
+
+    def test_no_agent_upn_means_no_filtering(self) -> None:
+        """Backwards compat: callers that don't pass agent_upn get old behavior."""
+        entries = [
+            _entry(
+                ts="2026-04-17T23:11:00+00:00",
+                channel="email",
+                direction="inbound",
+                sender="entraclaw-agent@werner.ac",
+                summary="Would be filtered if upn were passed",
+            ),
+        ]
+        buckets = triage_interactions(entries)
+        assert len(buckets["needs_you"]) == 1
+
 
 # ---------------------------------------------------------------------------
 # render_summary_html

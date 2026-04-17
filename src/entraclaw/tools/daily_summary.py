@@ -61,10 +61,24 @@ def _counterparty(entry: dict) -> str:
     return entry.get("recipient") or ""
 
 
-def triage_interactions(entries: list[dict]) -> SummaryBuckets:
-    """Sort *entries* into needs_you / handled / heads_up buckets."""
+def triage_interactions(
+    entries: list[dict], *, agent_upn: str | None = None
+) -> SummaryBuckets:
+    """Sort *entries* into needs_you / handled / heads_up buckets.
+
+    When *agent_upn* is provided, inbound entries whose ``sender`` matches
+    the agent's own UPN are dropped — they're Sent-Items self-echoes that
+    leaked into the log and would otherwise pollute Needs-you.
+    """
+    self_upn = (agent_upn or "").lower()
     threads: dict[tuple, list[dict]] = {}
     for e in entries:
+        if (
+            self_upn
+            and e.get("direction") == "inbound"
+            and (e.get("sender") or "").lower() == self_upn
+        ):
+            continue
         key = (e.get("channel", ""), _counterparty(e))
         threads.setdefault(key, []).append(e)
 
