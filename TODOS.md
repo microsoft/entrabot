@@ -2,6 +2,17 @@
 
 ## P1
 
+### ADR-005 Phase 2: MemoryBackend protocol + Local/Blob impls
+Land the next phase of cloud-hosted memory. Spec: `docs/decisions/005-cloud-hosted-memory.md` §"Implementation phases" (Phase 2 row). Define `MemoryBackend` protocol in `src/entraclaw/storage/backend.py` with `LocalBackend` (current behavior) and `BlobBackend` (uses Phase 1 `BlobStore`). Route `interaction_log.py`, `daily_summary.py`, and memory-file access through it. Driven by `ENTRACLAW_KEEP_MEMORY_LOCAL` env var.
+- **Effort:** S (~150 LOC + tests)
+- **Depends on:** Phase 1 (`f900ba1`, shipped)
+- **Source:** ADR-005
+
+### Email cursor sub-second precision
+`email_poll.poll_once` returns `latest_ts` verbatim from Graph; the cursor file may end up at second precision while Graph internally compares with sub-second. Result: an email at the cursor's exact second gets re-returned every poll. Per-session dedup in `_background_poll_email` handles within-session, but the email re-pushes once on every server restart. Real fix: bump cursor by 1ms when it equals the latest receivedDateTime, or store sub-second precision unconditionally.
+- **Effort:** XS (~10 LOC + 1 test)
+- **Source:** Live observation 2026-04-17 (Jack Test "Ball game tonight" loop)
+
 ### ~~Token auto-refresh in teams_send~~ ✅ DONE
 Implemented as `_with_token_retry()` in `mcp_server.py` and `_ensure_valid_token()` (proactive refresh at 55 min). All tools use it.
 

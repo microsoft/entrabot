@@ -1,8 +1,24 @@
 # Openclaw Identity Research — Engineering Summary
 
-**Date:** April 10, 2026
+**Date:** April 17, 2026
 **Team:** Brandon Werner
-**Status:** Three auth modes working: Agent User (three-hop), Delegated (MSAL), Bot Gateway (M365 Agents SDK). Progressive identity state machine. 299 tests. 6 MCP tools + background channel + bot IPC.
+**Status:** Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **385 tests.** 11 MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat landed. Phase 1-3 daily-summary stack live (interaction log → email poll → triage email). ADR-005 cloud-memory: Phase 1 (`BlobStore` client) shipped, Phase 2 next.
+
+---
+
+## What's New Since Apr 10
+
+- **Phase 1 (interaction log)** — every Teams/email/terminal in/out appended to `~/.entraclaw/data/interactions/YYYY-MM-DD.jsonl`. Powers the daily summary.
+- **Phase 2 (email poll)** — per-minute `/me/messages` poll, filters Teams/M365 noise, detects Purview-encrypted mail via `message.rpmsg` lookup, persists cursor + per-session message-id dedup.
+- **Phase 3 (daily summary)** — 5pm PDT scheduler, triages day's interactions into `needs_you / handled / heads_up`, renders HTML, sends via `/me/sendMail`, archives to `<data_dir>/summaries/<day>.html`.
+- **Chat auto-discovery (`a75d043`)** — background task hits `GET /me/chats` every 120s; any chat not in `watched_chats` gets auto-registered (in memory + persisted) so chats created via raw Python or by other humans adding the Agent User get polled within ~2 min.
+- **Reply detection (`0732b8b`)** — `read_teams_messages` surfaces `reply_to_ids` from the Teams `<attachment id=…>` quote tag. `prompts/agent_system.md` Exception #3 lets the agent continue active 1:1 exchanges in group chats without re-`@`-tagging.
+- **Eager MCP init (`d6cc640`)** — `_initialize()` runs as a background task at server boot instead of waiting for the first tool call. Fixed: fresh servers used to sit deaf to inbound DMs/email until someone happened to invoke a tool.
+- **Email-push schema fix (`9a71d6c`)** — email push notification meta + content aligned with Teams push (no `<sender@addr>` angle brackets that read as HTML tags; meta carries only `chat_id="email"`/`message_id`/`user`/`ts`). Fixed: silent MCP-stream close after every email push.
+- **`prompts/agent_system.md` (`75917a3`)** — system prompt moved out of `mcp_server.py` Python string into editable markdown, loaded at import time. Encodes: channel discipline (reply on the same channel, default-to-Teams when initiating, group chat ≠ N DMs, HTML for structured content), watch-only-in-group-chats with literal "about me ≠ tagged me" caveat + 3 narrow exceptions, internal-framing-stays-internal, no back-to-back pings, IDNA-only chat membership.
+- **`setup.sh` hardening** — tenant-wide UPN lookup before Agent User creation (`8541d75`), warn-and-confirm before replacing Blueprint certs (`2338a7a`), cached-cert verification against Entra (`22e81d9`), `redirect_stdout(sys.stderr)` to stop diagnostic spam from corrupting `.env` cert thumbprint (`c99d66a`), `entraclaw-mcp` console script in `.mcp.json` (`5bb3bc4`).
+- **ADR-005 Phase 1 (`f900ba1`)** — `BlobStore` async client in `src/entraclaw/storage/blob.py`. 22 tests. Not yet wired into runtime — Phase 2 (`MemoryBackend` protocol + routing) is the next ship.
+- **Multi-tenant lightweight chat** — landed to `main` (commit `c8ec521`, 47 commits, +9331/-2484).
 
 ---
 

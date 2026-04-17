@@ -261,6 +261,51 @@ Append-only log of gotchas, surprises, and non-obvious behaviors discovered duri
 **Fix:** Detect guest via `userType` or `#EXT#` UPN, resolve home tenant GUID via OpenID discovery, use email + tenantId in chat payload (Example 7).
 **Prevention:** Never use the guest object ID for Teams messaging. Always resolve the user's home tenant and use their email as a federated reference.
 
+### Learning #29: Shell Capture of stdout-bearing Diagnostics Corrupts .env
+
+**Date:** 2026-04-17
+**Context:** `setup.sh` regenerating Blueprint cert. Inline Python called `get_graph_token()` (which prints diagnostic lines to stdout) then printed the cert thumbprint as the final line. Outer shell did `CERT_THUMBPRINT=$(...)` and wrote to `.env`.
+**Problem:** `.env` ended up with `ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT=  Ensuring 25 Graph application permissions on provisioner app...` — multi-line garbage, not the thumbprint. Hop 1 then failed `invalid_client` because the JWT `x5t` header didn't match any registered cert.
+**Root cause:** Anything that writes to stdout inside a `$(...)` capture becomes part of the captured value. Diagnostic prints from helper functions are easy to forget about.
+**Fix:** `with contextlib.redirect_stdout(sys.stderr): token = get_graph_token(...)` so diagnostic output goes to stderr (visible to the user, not captured). Plus: validate the captured value matches the expected shape (`^[A-Za-z0-9_-]{43}$` for SHA-256 base64url-no-pad) before writing `.env`. Fail loud on mismatch.
+**Prevention:** Any shell `$(...)` capture of an inline-Python block must redirect or suppress diagnostic output. Always shape-check captured values before writing them to config files.
+
+### Learning #30: Lazy `_initialize()` Leaves the MCP Server Deaf
+
+**Date:** 2026-04-17
+**Context:** MCP server boot — background polls only started inside `_initialize()`, which was called lazily from each `@mcp.tool()` (`await _initialize()` at the top of every tool function).
+**Problem:** Fresh MCP server processes that hadn't been hit by any tool call were observed to silently miss every inbound DM and email. The "Pushed Teams message" log line never appeared because `_background_poll()` was never spawned. Brandon could see DMs in Teams; the agent saw none.
+**Root cause:** The eager-init code paths only fired on first tool invocation. A long-idle session (or a session where the agent had nothing to call) would never wake the polls.
+**Fix:** Spawn `_initialize()` as a concurrent task in `_run_stdio_with_write_stream`, immediately after capturing the write_stream. Background polls start at server boot, regardless of tool activity.
+**Prevention:** Anything that should start "when the server is alive" belongs in the stdio-server lifecycle, not gated behind tool calls.
+
+### Learning #31: Teams Chat `replyToId` Is Channel-Only — Use `<attachment id=…>` in Body
+
+**Date:** 2026-04-17
+**Context:** Adding reply-detection so the agent can continue active 1:1 exchanges in group chats without re-`@`-tagging on every turn.
+**Problem:** Graph's `replyToId` field on chat messages is always `null`. Verified empirically: 8/8 recent IDNA chat messages had `replyToId: None`, including ones that were unambiguously quote-replies via the Teams UI.
+**Root cause:** `replyToId` is populated only in **channel** messages (the formally-threaded ones). Chats are flat sequences. When a user hits the Teams "Reply" UI in a chat, Graph encodes the quoted source as an `<attachment id="SOURCE_MESSAGE_ID"></attachment>` tag embedded in the body HTML — that's the only signal.
+**Fix:** Parse `<attachment id="…">` out of the body in `tools/teams.py` `read()` (`extract_reply_to_ids()`), surface as `reply_to_ids: list[str]` per message. Implicit-continuation reply detection (no formal Reply UI use) requires a heuristic — we use "my last message in this chat was within 10 min and no other human posted since."
+**Prevention:** When you see "we should detect X," check whether Graph actually exposes the metadata. Channel-vs-chat semantics differ in surprising ways.
+
+### Learning #32: MCP Notification Schema Divergence Closes the Stream Silently
+
+**Date:** 2026-04-17
+**Context:** Email-push notifications via `notifications/claude/channel`. Email push schema diverged from Teams push schema in two ways: (a) content rendered sender as `Name <email@addr>` (looks like an unknown HTML tag); (b) meta carried extra keys (`channel`, `subject`, `encrypted`) not present in Teams push meta.
+**Problem:** Every time the email poll fired and pushed a notification, the MCP server died silently within ~1 second. No exception, no signal, no traceback in `entraclaw.log`. Looked like a Python crash; was actually a clean shutdown via stdin EOF — Claude Code closed the stream after our notification, the server's `mcp._mcp_server.run()` returned, anyio teardown ran. Captured via `scripts/entraclaw-mcp-debug.sh` (a wrapper that tees stderr to `/tmp/entraclaw-debug.log`).
+**Root cause (likely):** Strict client-side channel handler refused the notification — either the angle-bracketed content (HTML-tag-like) or the unfamiliar meta keys triggered a close.
+**Fix:** Render sender as `Name (addr)`. Shrink meta to exactly the Teams-push superset (`chat_id` synthetic value `"email"`, `message_id`, `user`, `ts`). Wrap `write_stream.send` in try/except so future transport failures log and return instead of propagating. ALSO: per-session message-id dedup in `_background_poll_email` to defend against cursor-precision drift causing repeated push of the same message.
+**Prevention:** Channel-notification payloads should follow a single schema across all sources. Any new source's meta keys go through the same shape as existing sources or risk silent rejection. When the MCP server "crashes" with no Python trace, suspect stdin EOF (clean teardown) before suspecting a bug in your code.
+
+### Learning #33: Chat-Creation Code Paths Must All Auto-Register for Polling
+
+**Date:** 2026-04-17
+**Context:** Diana's reply in the repo-share group chat went unanswered for 2.5 hours. Ryan's similar message went 4 minutes. Weinong's DM 17 hours.
+**Problem:** The MCP `create_chat` tool wrapper auto-registered new chats into `watched_chats`. The underlying `entraclaw.tools.teams.create_or_find_chat` and `create_one_on_one_chat` functions DID NOT. Chats created via raw Python scripts (or by external humans adding the Agent User) silently never got polled.
+**Root cause:** Auto-registration was a side-effect of one specific entry point, not a property of the underlying chat-creation primitive. Easy to bypass.
+**Fix:** Background `_background_discover_chats()` task hits `GET /me/chats` every 120s and registers any chat not in `_state["watched_chats"]`. Catches chats from raw Python, MCP tool, or external-add. Also persists to file so restarts inherit. Net latency from "chat exists" → "agent watching it": ≤2m05s.
+**Prevention:** Don't rely on a single entry point for state-shaping side effects. If "I want all chats polled," that's a property of the polling system, not of the tool that happens to create chats. Auto-discovery via the canonical Graph endpoint is more robust.
+
 ---
 
 ## Historical Learnings

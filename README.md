@@ -45,7 +45,7 @@ The script auto-detects guest users via their UPN pattern, resolves their home t
 ### Run with Claude Code
 
 ```bash
-claude --dangerously-load-development-channels server:openclaw
+claude --dangerously-load-development-channels server:entraclaw
 ```
 
 The `--dangerously-load-development-channels` flag enables the Teams channel, which pushes inbound Teams messages directly into the conversation (like the iMessage channel plugin).

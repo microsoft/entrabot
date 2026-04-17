@@ -18,28 +18,37 @@
 ## Current Runtime Model
 
 - Python 3.12+ research project — no deployed service yet
-- Seven modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `tools/` (MCP tools) → `audit/` (tracking) → `bot/` (Bot Gateway) → `identity/` (state machine) → `mcp_server.py` (FastMCP + background channel)
-- External dependencies: Microsoft Entra ID (identity), Microsoft Teams (communication via Graph API or Bot Framework)
+- Eight modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `bot/` (Bot Gateway) → `identity/` (state machine) → `storage/` (cloud-memory backend, ADR-005 Phase 1) → `mcp_server.py` (FastMCP + background channel)
+- External dependencies: Microsoft Entra ID (identity), Microsoft Teams + Outlook mailbox (communication via Graph API or Bot Framework), Azure Blob Storage (planned for memory, ADR-005)
 - Three auth modes via `ENTRACLAW_MODE` config switch:
   - `agent_user` — three-hop Agent User flow (Blueprint cert → Agent Identity FIC → Agent User `user_fic`)
   - `delegated` — MSAL interactive auth with human's token, messages prefixed `[EntraClaw]`
   - `bot` — M365 Agents SDK bot server with JSONL IPC, bot has its own Teams identity
 - Certificate auth: private key in OS keystore (Keychain/TPM/Keyring), JWT assertion for Hop 1 (ADR-003)
-- Background channel: polls Teams every 5s (Graph) or 2s (bot JSONL), pushes via `notifications/claude/channel`
+- Background tasks (all started eagerly at MCP server boot in `agent_user` mode):
+  - Teams chat poll (5s) — pushes inbound DMs / group-chat messages via `notifications/claude/channel`
+  - Email poll (60s) — `/me/messages`, filters Teams/M365 noise, detects Purview-encrypted mail
+  - Chat auto-discovery (120s) — `GET /me/chats`, registers any chat not in `watched_chats`
+  - Daily summary scheduler — 5pm PDT triage email of the day's interactions
+- Agent system prompt: `prompts/agent_system.md` (markdown, loaded by mcp_server at import time, includes channel-discipline rules)
 - All structured data uses `dataclasses` or `pydantic` — no raw dicts
 
 ## Active Work
 
-- **Multi-tenant lightweight chat** — branch `feature/multi-tenant-lightweight-chat`. Full spec: `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md`. Multi-tenant app + device code auth + progressive identity (start with human's delegated token, background-provision Agent User). Approved by Alice Example, Brandon, Alex.
+- **ADR-005: cloud-hosted memory via Azure Blob Storage** — `docs/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phase 1 shipped, Phase 2 next.**
+  - Phase 1 (shipped, commit `f900ba1`): `BlobStore` async client in `src/entraclaw/storage/blob.py` (put/get/list/delete/exists + ETag concurrency + 401→TokenExpiredError). 22 tests in `tests/storage/test_blob.py`.
+  - Phase 2 (next): `MemoryBackend` protocol in `src/entraclaw/storage/backend.py` with `Local` and `Blob` implementations. Route `interaction_log.py`, `daily_summary.py`, and memory-file access through it. ~150 LOC. See ADR-005 §"Implementation phases" for the full 6-phase plan.
+- Multi-tenant lightweight chat — **landed to main** (commit `c8ec521`, PR #23369 abandoned-as-merged-externally). Spec: `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md`.
 
 ## Read These First
 
-- `docs/architecture/DESIGN-teams-bot-gateway.md` (Bot Gateway design, approved + reviewed)
-- `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` (delegated mode spec)
-- `docs/engineering-status.md` (current state: 189 tests, 3 auth modes)
+- `docs/decisions/005-cloud-hosted-memory.md` (current active spec — phase plan + open TODOs)
+- `prompts/agent_system.md` (agent behavioral rules — channel discipline, watch-only, reply detection)
+- `docs/architecture/DESIGN-teams-bot-gateway.md` (Bot Gateway design)
+- `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` (delegated mode spec — multi-tenant chat, now landed)
+- `docs/engineering-status.md` (current state: 385 tests, 3 auth modes, Phase 1-3 daily-summary stack live)
 - `docs/index.md`
-- `docs/engineering-status.md`
-- `docs/runbooks/hard-won-learnings.md` (29 entries — read before making changes)
+- `docs/runbooks/hard-won-learnings.md` (read before making changes — covers stdout-capture-into-env, lazy-init dead poll, schema-divergence killing MCP stream, et al.)
 - `docs/decisions/001-obo-flows-for-device-agents.md`
 - `docs/decisions/003-certificate-auth-over-client-secrets.md`
 - `docs/platform-learnings/mcp-close-the-loop.md`
