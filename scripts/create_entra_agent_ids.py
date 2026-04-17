@@ -388,6 +388,44 @@ def find_existing_agent_user(token: str, agent_identity_obj_id: str) -> dict | N
     return None
 
 
+def find_existing_agent_user_by_upn(token: str, upn: str) -> dict | None:
+    """Find an Agent User in the tenant by its UPN (tenant-wide).
+
+    An Agent User's UPN is globally unique in Entra. We check BEFORE any
+    creation so a re-run on a different machine (with a different
+    hostname-suffixed Agent Identity display name) doesn't try to mint
+    a second Agent Identity + Agent User and collide with the existing
+    UPN — the failure mode that produced the orphan 966d16f3-... on
+    2026-04-16.
+
+    Returns the user dict (including ``identityParentId``) so the caller
+    can derive the parent Agent Identity already in use.
+    """
+    resp = graph_request(
+        "GET",
+        (
+            f"/users?$filter=userPrincipalName eq '{odata_escape(upn)}'"
+            "&$select=id,userPrincipalName,displayName,identityParentId,"
+            "mailNickname,accountEnabled"
+        ),
+        token,
+    )
+    if resp.status_code != 200:
+        return None
+    for u in resp.json().get("value", []):
+        if u.get("userPrincipalName", "").lower() == upn.lower():
+            return u
+    return None
+
+
+def _servicePrincipal_by_object_id(token: str, obj_id: str) -> dict | None:
+    """Fetch a service principal by its object ID, or None on any error."""
+    resp = graph_request("GET", f"/servicePrincipals/{obj_id}", token, retry=False)
+    if resp.status_code == 200:
+        return resp.json()
+    return None
+
+
 def create_agent_user(
     token: str,
     agent_identity_obj_id: str,
@@ -772,8 +810,40 @@ def main() -> int:
         return 1
 
     blueprint_app_id, blueprint_obj_id = create_blueprint(token)
-    agent_id, agent_obj_id = create_agent_identity(token, blueprint_app_id)
-    agent_user_id, agent_user_upn = create_agent_user(token, agent_obj_id)
+
+    # Check tenant-wide for an existing Agent User by UPN BEFORE provisioning
+    # anything new. If the UPN already exists (from a prior run on another
+    # machine, or a state-file loss), reuse the Agent User + its parent
+    # Agent Identity rather than creating duplicates that would then
+    # collide on the unique-UPN constraint.
+    intended_upn = _agent_user_upn(token)
+    existing_user = find_existing_agent_user_by_upn(token, intended_upn)
+    if existing_user:
+        agent_user_id = existing_user["id"]
+        agent_user_upn = existing_user["userPrincipalName"]
+        agent_obj_id = existing_user.get("identityParentId", "")
+        sp = (
+            _servicePrincipal_by_object_id(token, agent_obj_id)
+            if agent_obj_id
+            else None
+        )
+        agent_id = sp.get("appId", "") if sp else ""
+        parent_name = sp.get("displayName", "?") if sp else "?"
+        print("\n--- Reusing existing Agent User ---\n")
+        print(f"  UPN:            {agent_user_upn}")
+        print(f"  User Object ID: {agent_user_id}")
+        print(f"  Parent Agent Identity: {parent_name}")
+        print(f"    appId:        {agent_id}")
+        print(f"    objId:        {agent_obj_id}")
+        print("  (Skipping Agent Identity + Agent User creation — already provisioned.)")
+        set_state("AGENT_ID", agent_id)
+        set_state("AGENT_OBJECT_ID", agent_obj_id)
+        set_state("AGENT_USER_ID", agent_user_id)
+        set_state("AGENT_USER_UPN", agent_user_upn)
+    else:
+        agent_id, agent_obj_id = create_agent_identity(token, blueprint_app_id)
+        agent_user_id, agent_user_upn = create_agent_user(token, agent_obj_id)
+
     grant_agent_user_consent(token, agent_obj_id, agent_user_id)
     assign_license_to_agent_user(token, agent_user_id)
 
