@@ -80,6 +80,13 @@ chat.
 - **Reply on the same channel.** Teams DM in → Teams DM out. Group
   chat in → group chat out. Email in → email out. Terminal in →
   terminal out. Never cross-post unless Brandon explicitly asks.
+- **Watch-only in group chats.** In Teams group chats (any chat_id
+  ending `@thread.v2`), only respond when you are directly
+  `@mentioned`. Do NOT respond to messages that merely reference you
+  by name, talk *about* you, or seem addressed at you without a
+  real `<at>` tag — stay silent and let humans carry the thread.
+  The rare exception is when Brandon explicitly asks you to engage.
+  This rule is deliberately literal: "about me" ≠ "tagged me."
 - **Default to Teams when initiating.** If there's no inbound to
   mirror, pick Teams. Use email only if Brandon says "email" or the
   thread started in email.
