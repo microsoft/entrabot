@@ -336,8 +336,27 @@ VENV_PY="$PROJECT_ROOT/.venv/bin/python3"
 CERT_THUMBPRINT=$(read_state "BLUEPRINT_CERT_THUMBPRINT")
 
 if [ -n "$CERT_THUMBPRINT" ]; then
-    success "Using cached certificate (thumbprint: ${CERT_THUMBPRINT:0:16}...)"
-else
+    # The state file has a thumbprint cached — but that's only trustworthy if
+    # the Blueprint on Entra still has it registered. A teammate or another
+    # machine could have run setup.sh since, replacing the keyCredentials
+    # list. If so, trusting the cached thumbprint here would set up a silent
+    # runtime auth failure ("invalid_client" with no useful hint). Verify
+    # the cached thumbprint is still present; if not, clear it and fall
+    # through to the regeneration path (which already warns + confirms).
+    if PYTHONPATH="$PROJECT_ROOT/scripts" "$VENV_PY" \
+        "$PROJECT_ROOT/scripts/verify_blueprint_cert.py" \
+        "$BLUEPRINT_OBJECT_ID" "$CERT_THUMBPRINT" >/dev/null; then
+        success "Using cached certificate (thumbprint: ${CERT_THUMBPRINT:0:16}...)"
+    else
+        echo ""
+        echo -e "  ${YELLOW}Cached cert is no longer registered on the Blueprint.${NC}"
+        echo -e "  Another machine replaced it since last run. Regenerating here."
+        echo ""
+        CERT_THUMBPRINT=""
+    fi
+fi
+
+if [ -z "$CERT_THUMBPRINT" ]; then
     # Before generating — check if the Blueprint already has certs registered
     # (e.g. from a teammate's machine or from a prior install on another
     # laptop). setup.sh uploads the new cert via PATCH keyCredentials,
