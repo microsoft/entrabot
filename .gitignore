@@ -34,3 +34,4 @@ pip.ini
 .config/
 .claude-plugin/
 .gstack/
+.worktrees/
