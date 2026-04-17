@@ -19,4 +19,18 @@ venv/
 .openclaw-state.json
 .entraclaw-state.json
 .mcp.json
+.coverage
 entraclaw-state-export.tar.gz.enc
+entraclaw_msal_cache
+*.zip
+
+# ADO / Azure Pipelines (kept locally, hidden from GitHub)
+agency.toml
+azurepipelines-coverage.yml
+es-metadata.yml
+owners.txt
+pip.conf
+pip.ini
+.config/
+.claude-plugin/
+.gstack/

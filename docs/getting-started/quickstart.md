@@ -19,10 +19,10 @@ This will:
 3. Create an Agent Identity (per-device service principal)
 4. Create an Agent User (Entra user account linked to the Agent Identity)
 5. Grant consent for Teams/Chat Graph permissions
-6. Create a Blueprint client secret (for the three-hop token flow)
-7. Install Python dependencies and write `.env`
+6. Generate a self-signed certificate, upload public key to Entra, store private key in OS keystore (Keychain/TPM/Keyring)
+7. Install Python dependencies and write `.env` (no secrets — only the cert thumbprint)
 
-The script is **idempotent** — safe to re-run. State is persisted in `.openclaw-state.json`.
+The script is **idempotent** — safe to re-run. State is persisted in `.entraclaw-state.json`.
 
 ## After Setup
 

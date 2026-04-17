@@ -31,11 +31,17 @@ def log_event(
     outcome: str = "success",
     agent_id: str | None = None,
     metadata: dict | None = None,
+    attribution_type: str = "agent",
 ) -> dict:
     """Write an audit event and return it as a dict.
 
     If *agent_id* is not provided the active agent from the credential store
     is used (best-effort; falls back to ``"unknown"``).
+
+    *attribution_type* distinguishes agent actions from delegated-human actions:
+    - ``"agent"`` — action performed as the Agent User identity
+    - ``"delegated-human"`` — action performed using the human's delegated token
+    - ``"none"`` — unauthenticated / unknown identity
     """
     if agent_id is None:
         try:
@@ -53,6 +59,7 @@ def log_event(
         "action": action,
         "resource": resource,
         "outcome": outcome,
+        "attribution_type": attribution_type,
         "metadata": metadata or {},
     }
 

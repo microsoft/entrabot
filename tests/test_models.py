@@ -4,6 +4,8 @@ from entraclaw.models import (
     AgentIdentity,
     AuditEvent,
     BlueprintCredentials,
+    IdentitySession,
+    IdentityState,
     TeamsChat,
     TeamsMessage,
     TokenResult,
@@ -132,3 +134,73 @@ class TestTeamsMessage:
         m = TeamsMessage(message_id="m1", chat_id="c1", content="hello")
         assert m.content_type == "text"
         assert m.sent_at is None
+
+
+class TestIdentityState:
+    """IdentityState enum values and str behavior."""
+
+    def test_enum_values(self) -> None:
+        assert IdentityState.UNAUTHENTICATED == "unauthenticated"
+        assert IdentityState.DELEGATED == "delegated"
+        assert IdentityState.PROVISIONING == "provisioning"
+        assert IdentityState.AGENT_USER == "agent_user"
+        assert IdentityState.ERROR == "error"
+
+    def test_is_str_enum(self) -> None:
+        """IdentityState values can be used as plain strings."""
+        state = IdentityState.DELEGATED
+        assert isinstance(state, str)
+        assert state == "delegated"
+
+
+class TestIdentitySession:
+    """IdentitySession defaults and token redaction."""
+
+    def test_defaults(self) -> None:
+        session = IdentitySession()
+        assert session.state == IdentityState.UNAUTHENTICATED
+        assert session.token is None
+        assert session.token_acquired_at is None
+        assert session.user_id is None
+        assert session.display_name is None
+        assert session.attribution_type == "none"
+        assert session.auth_mode is None
+        assert session.account_id is None
+        assert session.tenant_id is None
+        assert session.provisioning_state is None
+
+    def test_repr_redacts_token(self) -> None:
+        session = IdentitySession(token="super-secret-token-xyz")
+        assert "super-secret-token-xyz" not in repr(session)
+        assert "***REDACTED***" in repr(session)
+
+    def test_str_redacts_token(self) -> None:
+        session = IdentitySession(token="super-secret-token-xyz")
+        assert "super-secret-token-xyz" not in str(session)
+        assert "***REDACTED***" in str(session)
+
+    def test_token_accessible_via_field(self) -> None:
+        session = IdentitySession(token="my-token")
+        assert session.token == "my-token"
+
+    def test_f_string_redacts(self) -> None:
+        session = IdentitySession(token="my-secret")
+        formatted = f"session = {session}"
+        assert "my-secret" not in formatted
+
+
+class TestAuditEventAttribution:
+    """AuditEvent attribution_type field."""
+
+    def test_default_attribution_type(self) -> None:
+        ev = AuditEvent(agent_id="a1", action="read", resource="/data")
+        assert ev.attribution_type == "agent"
+
+    def test_custom_attribution_type(self) -> None:
+        ev = AuditEvent(
+            agent_id="a1",
+            action="read",
+            resource="/data",
+            attribution_type="delegated-human",
+        )
+        assert ev.attribution_type == "delegated-human"

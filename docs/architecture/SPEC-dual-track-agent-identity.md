@@ -66,6 +66,7 @@ Maya's CLI → Agent Runtime → [Decorated OBO Token] → GSA/CAE Proxy → RP
 ```
 
 **Key Constraints:**
+- **1:1 only** — OBO/decorated-token agent communicates exclusively with its owner/sponsor. Multi-user chat (agent talking to people other than its owner) requires full Agent User with Office license (Track 2). Agreed by Sachs, Diana, a teammateon 2026-04-10. Rationale: OBO claw chatting with non-owners introduces security risks documented in Dave Fixture's "Circles of Trust" (Lobster PoC).
 - Proxy choke point only works for in-network traffic (Aashima: "open claw running in AWS accessing Salesforce won't hit the proxy")
 - Diana: choke point might come from sandboxing infra, not necessarily GSA/Entra
 - Cannot rely on LLM prompt-level enforcement — LLMs forget instructions over long conversations (Ayse's firsthand experience with Copilot editing a doc it was told not to)
@@ -189,6 +190,7 @@ This changes nothing about what we should build for BUILD. The bridge plan stand
 6. **May timeline pressure** — Ayse wants an Identity-owned fallback plan for May
 7. **Agent IDs are GA, must scale** — Microsoft cannot ship a product that doesn't back up at scale (Brandon, 2026-04-09 night session)
 8. **Progressive model is the BUILD-time bridge** — human delegated token → background Agent User provision → seamless swap. Not a parallel architecture.
+9. **OBO track is 1:1 only** — agent communicates exclusively with its owner/sponsor. Multi-user chat requires Agent User + Office license (Track 2). Security rationale: OBO agent chatting beyond owner introduces Circles of Trust risks (Sachs, Diana, Adrian, 2026-04-10).
 
 ## Relationship to Existing Work
 

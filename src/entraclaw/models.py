@@ -8,9 +8,53 @@ debug output.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass as stdlib_dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
+
+
+class IdentityState(StrEnum):
+    """Identity modes for the progressive identity state machine."""
+
+    UNAUTHENTICATED = "unauthenticated"
+    DELEGATED = "delegated"
+    PROVISIONING = "provisioning"
+    AGENT_USER = "agent_user"
+    ERROR = "error"
+
+
+@stdlib_dataclass
+class IdentitySession:
+    """Mutable identity session state for the state machine.
+
+    Uses stdlib dataclass (not pydantic) because this is mutable runtime state.
+    Tokens are REDACTED in repr/str.
+    """
+
+    state: IdentityState = IdentityState.UNAUTHENTICATED
+    token: str | None = None
+    token_acquired_at: float | None = None
+    user_id: str | None = None
+    display_name: str | None = None
+    attribution_type: str = "none"
+    auth_mode: str | None = None  # "delegated" or "agent_user"
+    account_id: str | None = None  # MSAL account identifier
+    tenant_id: str | None = None
+    provisioning_state: str | None = None  # for restart determinism
+
+    def __repr__(self) -> str:
+        return (
+            f"IdentitySession(state={self.state!r}, "
+            f"token='***REDACTED***', "
+            f"user_id={self.user_id!r}, "
+            f"display_name={self.display_name!r}, "
+            f"attribution_type={self.attribution_type!r})"
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
 
 
 class AgentIdentity(BaseModel):
@@ -77,6 +121,7 @@ class AuditEvent(BaseModel):
     resource: str
     outcome: str = "pending"
     metadata: dict[str, str] = Field(default_factory=dict)
+    attribution_type: str = "agent"  # "agent", "delegated-human", "none"
 
 
 class TeamsChat(BaseModel):

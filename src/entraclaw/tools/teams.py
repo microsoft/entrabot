@@ -3,13 +3,9 @@
 All HTTP calls use ``httpx.AsyncClient`` with proper auth headers.
 Errors are mapped to the typed hierarchy in ``entraclaw.errors``.
 
-The agent token is acquired via the three-hop Agent User flow:
-  1. Blueprint authenticates with client_credentials → Blueprint token
-  2. Agent Identity authenticates with Blueprint token (FIC) → Agent Identity token
-  3. Agent User token via user_fic grant → delegated user token (idtyp=user)
-
-No human in the loop.  No device-code flow.  No OBO.
-The Agent User has its own Teams identity and license.
+Supports two identity modes:
+  - **Agent User** (three-hop flow): messages sent as 'EntraClaw Agent'
+  - **Delegated** (MSAL): messages sent as the human, prefixed [EntraClaw]
 """
 
 from __future__ import annotations
@@ -515,17 +511,30 @@ async def send(
     token: str,
     content_type: str = "text",
     mentions: list[dict] | None = None,
+    prefix: str | None = None,
+    attachments: list[dict] | None = None,
 ) -> dict:
     """Send *message* to the Teams chat identified by *chat_id*.
 
     ``content_type`` must be ``"text"`` or ``"html"``.
-    The message is sent FROM the Agent User's own Teams identity.
+
+    When *prefix* is set (e.g. ``"[EntraClaw]"``), the message is prefixed
+    to indicate it was sent by the agent using delegated credentials.
+    This is used in delegated mode where the message appears to come from
+    the human's identity.
 
     ``mentions`` is an optional list of dicts with keys:
       - ``id``: int — matches the ``<at id="N">`` in the HTML body
       - ``name``: str — display name shown in the mention
       - ``user_id``: str — Entra user GUID of the mentioned user
     """
+    if (not message or not message.strip()) and not attachments:
+        raise ValueError("Message cannot be empty")
+
+    # Apply prefix for delegated mode attribution
+    if prefix:
+        message = f"{prefix} {message}"
+
     if len(message) > MAX_MESSAGE_LENGTH:
         raise MessageTooLong(f"Message is {len(message)} chars, max is {MAX_MESSAGE_LENGTH}")
 
@@ -535,6 +544,8 @@ async def send(
     }
 
     payload: dict = {"body": {"contentType": content_type, "content": message}}
+    if attachments:
+        payload["attachments"] = attachments
     if mentions:
         payload["mentions"] = [
             {
@@ -559,7 +570,7 @@ async def send(
             headers=headers,
         )
         if resp.status_code == 401:
-            raise TokenExpiredError("Agent User token expired — re-acquire via three-hop flow")
+            raise TokenExpiredError("Token expired — re-acquire")
         if resp.status_code == 429:
             retry_after = int(resp.headers.get("Retry-After", "60"))
             raise RateLimitError(retry_after)
@@ -581,6 +592,34 @@ async def send(
             "message_id": msg["id"],
             "sent_at": msg.get("createdDateTime"),
         }
+
+
+async def fetch_hosted_image(*, token: str, url: str) -> bytes | None:
+    """Fetch an image from a Graph API hosted content URL.
+
+    Only accepts URLs under ``graph.microsoft.com`` to prevent
+    leaking the Bearer token to arbitrary hosts.
+
+    Returns the raw image bytes on success, None on 404,
+    raises TokenExpiredError on 401.
+    """
+    if "graph.microsoft.com" not in url:
+        raise ValueError(f"URL is not a Graph API URL: {url}")
+
+    headers = {"Authorization": f"Bearer {token}"}
+
+    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    async with httpx.AsyncClient(transport=transport) as client:
+        resp = await client.get(url, headers=headers)
+        if resp.status_code == 401:
+            raise TokenExpiredError("Token expired — re-acquire")
+        if resp.status_code == 404:
+            return None
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", "60"))
+            raise RateLimitError(retry_after)
+        resp.raise_for_status()
+        return resp.content
 
 
 async def read(
@@ -628,13 +667,24 @@ async def read(
 def filter_human_messages(
     messages: list[dict],
     agent_user_display_name: str,
+    *,
+    sent_message_ids: set[str] | None = None,
 ) -> list[dict]:
     """Return only messages from the human (not the agent, not system messages).
 
     Filters out:
     - Messages where ``from`` matches the agent's display name
     - Messages where ``from`` is ``"unknown"`` (system messages with null from field)
+    - Messages whose ``message_id`` is in *sent_message_ids* (echo prevention for delegated mode)
+    - Messages whose content starts with ``[EntraClaw]`` (restart-safe dedup filter)
 
     All filtering is client-side — Graph API ``$filter`` is unreliable for chat messages.
     """
-    return [m for m in messages if m.get("from") not in (agent_user_display_name, "unknown")]
+    exclude_ids = sent_message_ids or set()
+    return [
+        m
+        for m in messages
+        if m.get("from") not in (agent_user_display_name, "unknown")
+        and m.get("message_id") not in exclude_ids
+        and not (m.get("content", "").strip().startswith("[EntraClaw]"))
+    ]

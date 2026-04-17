@@ -1,0 +1,52 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "0.1.0",
+  "id": "55991923-6f06-4e66-8ca3-cbc9ee991463",
+  "developer": {
+    "name": "EntraClaw Research",
+    "websiteUrl": "https://github.com/brandwe/openclaw-identity-research",
+    "privacyUrl": "https://github.com/brandwe/openclaw-identity-research",
+    "termsOfUseUrl": "https://github.com/brandwe/openclaw-identity-research"
+  },
+  "name": {
+    "short": "EntraClaw Agent",
+    "full": "EntraClaw Agent \u2014 AI Code Agent for Teams"
+  },
+  "description": {
+    "short": "AI agent that sends build results, PR updates, and status cards",
+    "full": "EntraClaw Agent is an AI-powered code agent that communicates through Teams. It sends Adaptive Cards with build results, PR updates, and task status. Messages from the agent show as the bot identity \u2014 not the human developer."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#4F6BED",
+  "bots": [
+    {
+      "botId": "55991923-6f06-4e66-8ca3-cbc9ee991463",
+      "scopes": [
+        "personal",
+        "team",
+        "groupChat"
+      ],
+      "commandLists": [
+        {
+          "scopes": [
+            "personal"
+          ],
+          "commands": [
+            {
+              "title": "status",
+              "description": "Get current agent status"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "permissions": [
+    "messageTeamMembers"
+  ],
+  "validDomains": []
+}

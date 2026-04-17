@@ -19,11 +19,11 @@
 ## Current Runtime Model
 
 - Python 3.12+ research project — no deployed service yet
-- Five modules: `platform/` (OS shim) → `auth/` (certificate JWT) → `tools/` (MCP tools) → `audit/` (tracking) → `mcp_server.py` (FastMCP + background channel)
-- External dependencies: Microsoft Entra ID (identity), Microsoft Teams (communication via Graph API)
-- Auth via three-hop Agent User flow: Blueprint (certificate) → Agent Identity (FIC) → Agent User (`user_fic` grant) — `httpx` direct, no MSAL at runtime
+- Seven modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `tools/` (MCP tools) → `audit/` (tracking) → `bot/` (Bot Gateway) → `identity/` (state machine) → `mcp_server.py` (FastMCP + background channel)
+- External dependencies: Microsoft Entra ID (identity), Microsoft Teams (communication via Graph API or Bot Framework)
+- Three auth modes via `ENTRACLAW_MODE`: `agent_user` (three-hop), `delegated` (MSAL), `bot` (M365 Agents SDK)
 - Certificate auth: private key in OS keystore (Keychain/TPM/Keyring), JWT assertion for Hop 1 (ADR-003)
-- Background channel: polls Teams every 5s, pushes via `notifications/claude/channel`
+- Background channel: polls Teams every 5s (Graph) or 2s (bot JSONL), pushes via `notifications/claude/channel`
 - All structured data uses `dataclasses` or `pydantic` — no raw dicts
 
 ## Commands

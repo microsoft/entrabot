@@ -73,6 +73,27 @@ Note: Without `--dangerously-load-development-channels`, the agent won't receive
 
 Plus a **background channel** that polls Teams every 5 seconds and pushes new messages via `notifications/claude/channel`.
 
+### Delegated Mode (No Agent User Needed)
+
+For a quick demo without Agent User provisioning:
+
+```bash
+./scripts/setup_delegated.sh   # Sign in with your browser, caches token
+copilot                        # or claude --dangerously-load-development-channels server:entraclaw
+```
+
+Messages are sent as you (with `[EntraClaw]` prefix). No E5 license, no 15-minute wait.
+
+### Bot Mode (Separate Bot Identity)
+
+For a demo where the agent has its own identity in Teams via Bot Framework:
+
+1. Set `ENTRACLAW_MODE=bot` in `.env` with bot app credentials
+2. Start the bot server + Dev Tunnel
+3. Launch Claude Code / Copilot CLI
+
+See `docs/architecture/DESIGN-teams-bot-gateway.md` for the full design.
+
 ### Without an Entra Tenant
 
 To run the code and tests locally without a tenant:
@@ -108,10 +129,12 @@ Blueprint (certificate in OS keystore)
 Five modules handle the agent identity lifecycle:
 
 - **platform/** — OS-specific credential storage (Keychain, Certificate Store, Secret Service)
-- **auth/** — Certificate-based JWT assertion builder + three-hop token exchange
+- **auth/** — Certificate-based JWT assertion builder + MSAL delegated auth (localhost redirect + device code)
 - **audit/** — Action tracking — every resource access emits an audit event before executing
 - **tools/** — MCP tool implementations (Teams messaging, identity, audit)
-- **mcp_server.py** — FastMCP server with background polling + channel notifications
+- **bot/** — Bot Gateway: M365 Agents SDK server, JSONL IPC, Dev Tunnel manager, conversation reference persistence
+- **identity/** — Progressive identity state machine (UNAUTHENTICATED → DELEGATED → AGENT_USER)
+- **mcp_server.py** — FastMCP server with three auth modes, background polling + channel notifications
 
 ## Build and Test (TDD)
 
@@ -131,24 +154,25 @@ pytest tests/tools/test_teams.py::TestAcquireAgentUserToken::test_success -v
 ruff check . && ruff format .
 ```
 
-Current status: **110 tests passing**.
+Current status: **299 tests passing**.
 
 ## Repository Map
 
 | Directory | Purpose |
 |-----------|---------|
-| `src/openclaw/` | Application source code |
-| `src/openclaw/auth/` | Certificate auth + JWT assertion builder |
-| `src/openclaw/platform/` | OS-specific credential storage |
-| `src/openclaw/tools/` | MCP tool implementations |
+| `src/entraclaw/` | Application source code |
+| `src/entraclaw/auth/` | Certificate auth + JWT assertion builder + MSAL delegated auth |
+| `src/entraclaw/bot/` | Bot Gateway: M365 Agents SDK server, JSONL IPC, tunnel, convo store |
+| `src/entraclaw/identity/` | Progressive identity state machine |
+| `src/entraclaw/platform/` | OS-specific credential storage |
+| `src/entraclaw/tools/` | MCP tool implementations |
 | `tests/` | Test suite (mirrors `src/` structure) |
-| `scripts/` | Setup, teardown, and Entra provisioning scripts |
+| `scripts/` | Setup, teardown, delegated auth, and Entra provisioning scripts |
 | `docs/` | Documentation site (MkDocs Material) |
 | `docs/platform-learnings/` | Deep research on integration platforms + MCP ecosystem |
 | `docs/decisions/` | Architecture Decision Records (3 ADRs) |
-| `docs/runbooks/` | Hard-won learnings (27 entries) |
-| `docs/superpowers/specs/` | Design specs |
-| `docs/superpowers/plans/` | Implementation plans |
+| `docs/runbooks/` | Hard-won learnings (28 entries) |
+
 
 ## Documentation
 

@@ -30,6 +30,11 @@ nav:
   - Architecture:
     - System Overview: architecture/system-overview.md
     - Enforcement Flow: architecture/enforcement-flow.md
+    - Bot Gateway Design: architecture/DESIGN-teams-bot-gateway.md
+    - "Four-Pager: Teams Augmented Token": architecture/FOURPAGER-openclaw-cli-teams-augmented-token.md
+    - Multi-Tenant Lightweight Chat: architecture/PLAN-multi-tenant-lightweight-chat.md
+    - Dual-Track Agent Identity: architecture/SPEC-dual-track-agent-identity.md
+    - Lightweight Teams Chat: architecture/NEXT-WhatsApp-lightweight-teams-chat.md
     - "Next: Tenant & Identity Setup": architecture/next-tenant-identity-setup.md
     - "Next: MCP Server Design": architecture/next-mcp-server-design.md
     - "Next: Windows Dev Environment": architecture/next-windows-dev-environment.md
@@ -39,19 +44,23 @@ nav:
       - Audit: architecture/layers/audit.md
       - Teams Integration: architecture/layers/teams.md
   - Reference:
-    - OBO Token Flows: reference/obo-flows.md
+    - Token Flows: reference/token-flows.md
   - Developer Guide:
     - Engineering Status: engineering-status.md
     - QA Log: developer/qa-log.md
     - Docs Site: developer/docs-site.md
   - Runbooks:
     - Hard-Won Learnings: runbooks/hard-won-learnings.md
+    - "Session: 2026-04-08 Teams Chat": runbooks/session-2026-04-08-teams-chat-transcript.md
   - Platform Learnings:
+    - Entra Agent Users: platform-learnings/entra-agent-users.md
     - GitHub CLI: platform-learnings/github-cli.md
     - Teams Graph API: platform-learnings/teams-graph-api.md
     - Teams Bot Framework: platform-learnings/teams-bot-framework.md
     - Teams Toolkit: platform-learnings/teams-toolkit.md
     - MSAL & Entra Agent IDs: platform-learnings/msal-entra-agent-ids.md
+    - MCP Close the Loop: platform-learnings/mcp-close-the-loop.md
+    - MCP Messaging Servers: platform-learnings/mcp-messaging-servers.md
     - macOS Platform: platform-learnings/platform-macos.md
     - Linux Platform: platform-learnings/platform-linux.md
     - Windows Platform: platform-learnings/platform-windows.md
@@ -59,3 +68,6 @@ nav:
     - GitHub Copilot Extensions: platform-learnings/github-copilot-extensions.md
   - Decision Records:
     - Index: decisions/README.md
+    - "ADR-001: OBO Flows": decisions/001-obo-flows-for-device-agents.md
+    - "ADR-002: Agent User over OBO": decisions/002-agent-user-over-obo.md
+    - "ADR-003: Certificate Auth": decisions/003-certificate-auth-over-client-secrets.md

@@ -18,11 +18,14 @@
 ## Current Runtime Model
 
 - Python 3.12+ research project — no deployed service yet
-- Five modules: `platform/` (OS shim) → `auth/` (certificate JWT) → `tools/` (MCP tools) → `audit/` (tracking) → `mcp_server.py` (FastMCP + background channel)
-- External dependencies: Microsoft Entra ID (identity), Microsoft Teams (communication via Graph API)
-- Auth via three-hop Agent User flow: Blueprint (certificate) → Agent Identity (FIC) → Agent User (`user_fic` grant) — `httpx` direct, no MSAL at runtime
+- Seven modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `tools/` (MCP tools) → `audit/` (tracking) → `bot/` (Bot Gateway) → `identity/` (state machine) → `mcp_server.py` (FastMCP + background channel)
+- External dependencies: Microsoft Entra ID (identity), Microsoft Teams (communication via Graph API or Bot Framework)
+- Three auth modes via `ENTRACLAW_MODE` config switch:
+  - `agent_user` — three-hop Agent User flow (Blueprint cert → Agent Identity FIC → Agent User `user_fic`)
+  - `delegated` — MSAL interactive auth with human's token, messages prefixed `[EntraClaw]`
+  - `bot` — M365 Agents SDK bot server with JSONL IPC, bot has its own Teams identity
 - Certificate auth: private key in OS keystore (Keychain/TPM/Keyring), JWT assertion for Hop 1 (ADR-003)
-- Background channel: polls Teams every 5s, pushes via `notifications/claude/channel`
+- Background channel: polls Teams every 5s (Graph) or 2s (bot JSONL), pushes via `notifications/claude/channel`
 - All structured data uses `dataclasses` or `pydantic` — no raw dicts
 
 ## Active Work
@@ -31,7 +34,9 @@
 
 ## Read These First
 
-- `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` (current active spec)
+- `docs/architecture/DESIGN-teams-bot-gateway.md` (Bot Gateway design, approved + reviewed)
+- `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` (delegated mode spec)
+- `docs/engineering-status.md` (current state: 189 tests, 3 auth modes)
 - `docs/index.md`
 - `docs/engineering-status.md`
 - `docs/runbooks/hard-won-learnings.md` (29 entries — read before making changes)
@@ -64,10 +69,13 @@ pip install mkdocs-material && mkdocs serve
 
 ## High-Value Repo Areas
 
-- `src/openclaw/platform/`: OS-specific credential storage — `CredentialStore` protocol with Mac/Linux/Windows implementations
-- `src/openclaw/auth/`: Certificate-based JWT assertion builder — `build_client_assertion()`, `compute_cert_thumbprint()`
-- `src/openclaw/tools/teams.py`: Three-hop token flow + Teams Graph API (send, read, filter, chat creation, add members cross-tenant)
-- `src/entraclaw/mcp_server.py`: FastMCP server — 6 tools + background poll + channel push + token refresh
+- `src/entraclaw/platform/`: OS-specific credential storage — `CredentialStore` protocol with Mac/Linux/Windows implementations
+- `src/entraclaw/auth/`: Certificate-based JWT assertion builder + MSAL delegated auth (localhost redirect + device code fallback)
+- `src/entraclaw/bot/`: Bot Gateway — M365 Agents SDK server, JSONL IPC handler, Dev Tunnel manager, conversation reference persistence
+- `src/entraclaw/identity/`: Progressive identity state machine (UNAUTHENTICATED → DELEGATED → PROVISIONING → AGENT_USER)
+- `src/entraclaw/tools/teams.py`: Three-hop token flow + Teams Graph API (send, read, filter, chat creation, add members cross-tenant)
+- `src/entraclaw/mcp_server.py`: FastMCP server — 6 tools + 3 auth modes + background poll + channel push + token refresh
+- `src/entraclaw/config.py`: `ENTRACLAW_MODE` switch (auto/bot/delegated/agent_user) + all env config
 - `docs/decisions/`: ADRs — every significant architectural choice is recorded here
 - `docs/runbooks/hard-won-learnings.md`: 29 hard-won learnings — READ THIS before making changes
 

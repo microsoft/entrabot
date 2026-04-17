@@ -16,6 +16,9 @@ Openclaw brings cloud-style identity tracking to device-local agents. When an au
 
 - **New to the project?** Start with the [Quickstart](getting-started/quickstart.md)
 - **Understanding the design?** Read [System Overview](architecture/system-overview.md)
+- **Bot Gateway design?** Read [DESIGN: Teams Bot Gateway](architecture/DESIGN-teams-bot-gateway.md)
+- **Delegated mode spec?** Read [Lightweight Teams Chat](architecture/NEXT-WhatsApp-lightweight-teams-chat.md)
+- **Current status?** See [Engineering Status](engineering-status.md) (299 tests, 3 auth modes)
 - **How tokens flow?** See [Token Flows](reference/token-flows.md)
 - **Debugging?** Check [Hard-Won Learnings](runbooks/hard-won-learnings.md)
 - **Why we made a decision?** Browse [Architecture Decision Records](decisions/README.md)

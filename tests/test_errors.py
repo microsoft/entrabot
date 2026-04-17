@@ -4,15 +4,23 @@ import pytest
 
 from entraclaw.errors import (
     AgentIDNotAvailable,
+    AuthCancelledError,
     AuthError,
+    AuthTimeoutError,
     ChatNotFound,
     EntraClawError,
+    GraphApiError,
+    InvalidTransitionError,
     MessageTooLong,
+    MsalAuthError,
+    ProvisioningError,
     RateLimitError,
     TeamsError,
     TeamsNotLicensed,
     TokenExchangeError,
     TokenExpiredError,
+    TransitionError,
+    TransitionTimeoutError,
 )
 
 
@@ -46,6 +54,32 @@ class TestErrorHierarchy:
     def test_rate_limit_inherits_entraclaw(self) -> None:
         assert issubclass(RateLimitError, EntraClawError)
 
+    # --- New Lane B error hierarchy tests ---
+
+    def test_auth_timeout_inherits_auth(self) -> None:
+        assert issubclass(AuthTimeoutError, AuthError)
+
+    def test_auth_cancelled_inherits_auth(self) -> None:
+        assert issubclass(AuthCancelledError, AuthError)
+
+    def test_msal_auth_error_inherits_auth(self) -> None:
+        assert issubclass(MsalAuthError, AuthError)
+
+    def test_invalid_transition_inherits_entraclaw(self) -> None:
+        assert issubclass(InvalidTransitionError, EntraClawError)
+
+    def test_transition_timeout_inherits_entraclaw(self) -> None:
+        assert issubclass(TransitionTimeoutError, EntraClawError)
+
+    def test_transition_error_inherits_entraclaw(self) -> None:
+        assert issubclass(TransitionError, EntraClawError)
+
+    def test_provisioning_error_inherits_entraclaw(self) -> None:
+        assert issubclass(ProvisioningError, EntraClawError)
+
+    def test_graph_api_error_inherits_teams(self) -> None:
+        assert issubclass(GraphApiError, TeamsError)
+
 
 class TestErrorMessages:
     def test_token_exchange_error_message(self) -> None:
@@ -75,7 +109,89 @@ class TestErrorMessages:
             ChatNotFound("c"),
             MessageTooLong("m"),
             RateLimitError(10),
+            AuthTimeoutError("timeout"),
+            AuthCancelledError("cancelled"),
+            MsalAuthError(error="invalid_grant", error_description="Bad token"),
+            InvalidTransitionError(from_state="a", to_state="b"),
+            TransitionTimeoutError("timed out"),
+            TransitionError(from_state="a", to_state="b", cause=ValueError("x")),
+            ProvisioningError(),
+            GraphApiError(status_code=403, message="Forbidden"),
         ]
         for err in errors:
             with pytest.raises(EntraClawError):
                 raise err
+
+
+class TestMsalAuthError:
+    """MsalAuthError stores error and error_description."""
+
+    def test_stores_fields(self) -> None:
+        err = MsalAuthError(error="invalid_grant", error_description="Token expired")
+        assert err.error == "invalid_grant"
+        assert err.error_description == "Token expired"
+
+    def test_message_includes_fields(self) -> None:
+        err = MsalAuthError(error="invalid_grant", error_description="Bad token")
+        assert "invalid_grant" in str(err)
+        assert "Bad token" in str(err)
+
+
+class TestInvalidTransitionError:
+    """InvalidTransitionError stores from_state and to_state."""
+
+    def test_stores_fields(self) -> None:
+        err = InvalidTransitionError(from_state="delegated", to_state="agent_user")
+        assert err.from_state == "delegated"
+        assert err.to_state == "agent_user"
+
+    def test_message_includes_states(self) -> None:
+        err = InvalidTransitionError(from_state="delegated", to_state="agent_user")
+        assert "delegated" in str(err)
+        assert "agent_user" in str(err)
+
+
+class TestTransitionError:
+    """TransitionError stores from_state, to_state, and cause."""
+
+    def test_stores_fields(self) -> None:
+        cause = RuntimeError("something broke")
+        err = TransitionError(
+            from_state="unauthenticated", to_state="delegated", cause=cause
+        )
+        assert err.from_state == "unauthenticated"
+        assert err.to_state == "delegated"
+        assert err.cause is cause
+
+    def test_message_includes_cause(self) -> None:
+        cause = RuntimeError("kaboom")
+        err = TransitionError(from_state="a", to_state="b", cause=cause)
+        assert "kaboom" in str(err)
+
+
+class TestProvisioningError:
+    """ProvisioningError stores optional detail."""
+
+    def test_with_detail(self) -> None:
+        err = ProvisioningError(detail="FIC creation failed")
+        assert err.detail == "FIC creation failed"
+        assert "FIC creation failed" in str(err)
+
+    def test_without_detail(self) -> None:
+        err = ProvisioningError()
+        assert err.detail is None
+        assert "Provisioning failed" in str(err)
+
+
+class TestGraphApiError:
+    """GraphApiError stores status_code and message."""
+
+    def test_stores_fields(self) -> None:
+        err = GraphApiError(status_code=403, message="Forbidden")
+        assert err.status_code == 403
+        assert err.message == "Forbidden"
+
+    def test_message_includes_fields(self) -> None:
+        err = GraphApiError(status_code=404, message="Not Found")
+        assert "404" in str(err)
+        assert "Not Found" in str(err)

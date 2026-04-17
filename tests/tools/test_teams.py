@@ -875,3 +875,54 @@ class TestCreateOneOnOneChat:
                 target_email="someone@example.com",
                 agent_user_id="agent-oid-123",
             )
+
+
+# ---------------------------------------------------------------------------
+# fetch_hosted_image
+# ---------------------------------------------------------------------------
+
+
+class TestFetchHostedImage:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_fetches_image_bytes(self) -> None:
+        from entraclaw.tools.teams import fetch_hosted_image
+
+        img_url = f"{GRAPH_BASE}/chats/c1/messages/m1/hostedContents/img1/$value"
+        fake_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+        respx.get(img_url).mock(return_value=httpx.Response(200, content=fake_png))
+
+        result = await fetch_hosted_image(token="tok", url=img_url)
+        assert result == fake_png
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_401_raises_token_expired(self) -> None:
+        from entraclaw.tools.teams import fetch_hosted_image
+
+        img_url = f"{GRAPH_BASE}/chats/c1/messages/m1/hostedContents/img1/$value"
+        respx.get(img_url).mock(return_value=httpx.Response(401))
+
+        with pytest.raises(TokenExpiredError):
+            await fetch_hosted_image(token="tok", url=img_url)
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_404_returns_none(self) -> None:
+        from entraclaw.tools.teams import fetch_hosted_image
+
+        img_url = f"{GRAPH_BASE}/chats/c1/messages/m1/hostedContents/img1/$value"
+        respx.get(img_url).mock(return_value=httpx.Response(404))
+
+        result = await fetch_hosted_image(token="tok", url=img_url)
+        assert result is None
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_rejects_non_graph_urls(self) -> None:
+        from entraclaw.tools.teams import fetch_hosted_image
+
+        with pytest.raises(ValueError, match="not a Graph API"):
+            await fetch_hosted_image(
+                token="tok", url="https://evil.com/steal-token"
+            )

@@ -1,36 +1,40 @@
 # Openclaw Identity Research — Engineering Summary
 
-**Date:** April 7, 2026
+**Date:** April 10, 2026
 **Team:** Brandon Werner
-**Status:** Full bidirectional Teams channel working — background poll + push notifications. Certificate auth (no secrets on disk). Multi-user group chats with cross-tenant federation. 110 tests. 6 MCP tools + background channel.
+**Status:** Three auth modes working: Agent User (three-hop), Delegated (MSAL), Bot Gateway (M365 Agents SDK). Progressive identity state machine. 299 tests. 6 MCP tools + background channel + bot IPC.
 
 ---
 
 ## What We're Building
 
-A proof-of-concept demonstrating that **device-local AI agents can have their own identity** in Microsoft Entra, separate from the human user. The agent gets an Agent Identity + Agent User, authenticates autonomously via the three-hop token flow, and interacts with Teams as its own digital worker.
+A proof-of-concept demonstrating that **device-local AI agents can have their own identity** in Microsoft Entra, separate from the human user. Three identity modes:
 
-**Identity Chain:** Blueprint (certificate auth) → Agent Identity (FIC exchange) → Agent User (user_fic grant) → Graph API with `idtyp=user` token
+1. **Agent User** (production path) — Blueprint → Agent Identity → Agent User via three-hop flow. Agent sends as its own Entra user.
+2. **Delegated** (instant start) — MSAL interactive auth with human's token. Messages prefixed `[EntraClaw]`. No provisioning needed.
+3. **Bot Gateway** (new) — M365 Agents SDK bot server with Dev Tunnel. Bot has its own identity in Teams by design. No Agent User provisioning, no M365 license.
 
-**Channel:** Background poll every 5s → push via `notifications/claude/channel` → Claude Code receives messages automatically
+**Identity Chain (Agent User):** Blueprint (certificate auth) → Agent Identity (FIC exchange) → Agent User (user_fic grant) → Graph API with `idtyp=user` token
 
-### The Demo Scenario — WORKING
+**Channel:** Background poll every 5s (Graph API) or 2s (bot JSONL) → push via `notifications/claude/channel` → Claude Code receives messages automatically
 
-| Step | What Happens | Status |
-|------|-------------|--------|
-| 1. `./scripts/setup.sh` | Creates Provisioner, Blueprint, Agent Identity, Agent User, assigns license, grants consent | ✅ Working |
-| 2. Copilot CLI with MCP | MCP server starts, three-hop flow acquires Agent User token | ✅ Working |
-| 3. `send_teams_message` | Agent sends message to human in Teams as "Openclaw Agent" with AI agent badge | ✅ Working |
-| 4. `read_teams_messages` | Agent reads human's replies from Teams | ✅ Working |
-| 5. Bidirectional loop | Agent polls for replies, acts on instructions, reports back | ✅ Working |
+### The Demo Scenario — WORKING (Three Modes)
+
+| Step | Agent User Mode | Delegated Mode | Bot Mode |
+|------|----------------|----------------|----------|
+| Setup | `./scripts/setup.sh` (10-15 min) | `./scripts/setup_delegated.sh` (60s) | `./scripts/start_bot.sh` + Dev Tunnel |
+| Auth | Three-hop flow (automatic) | MSAL browser sign-in (cached) | Bot app credentials |
+| Identity | Agent's own Entra user | Human's identity + `[EntraClaw]` prefix | Bot's app identity |
+| Send | Graph API as Agent User | Graph API as human | Bot Framework relay |
+| Receive | Graph API poll (5s) | Graph API poll (5s) | Bot activity handler (instant) |
 
 ### MCP Tools (6 total)
 
 | Tool | Purpose | Status |
 |------|---------|--------|
-| `send_teams_message` | Send message to chat in Teams (text or HTML) | ✅ Live (+ token refresh) |
+| `send_teams_message` | Send message to chat in Teams (text or HTML). Bot mode: writes to outbound JSONL. | ✅ Live |
 | `add_teams_member` | Add user to chat (cross-tenant auto-resolved) | ✅ Live |
-| `read_teams_messages` | Read human's replies from Teams | ✅ Live (+ token refresh) |
+| `read_teams_messages` | Read human's replies from Teams | ✅ Live |
 | `watch_teams_replies` | Poll for new human replies with dedup | ✅ Live |
 | `whoami` | Show agent identity and connection status | ✅ Live |
 | `audit_log` | Record audit event before actions | ✅ Live |
@@ -40,29 +44,22 @@ A proof-of-concept demonstrating that **device-local AI agents can have their ow
 ## TDD Status
 
 ```
-110 passed
+299 passed
 
-Name                                Stmts   Miss  Cover
------------------------------------------------------------------
-src/openclaw/auth/__init__.py           2      0   100%
-src/openclaw/auth/certificate.py       21      0   100%
-src/openclaw/config.py                 43      2    95%
-src/openclaw/errors.py                 18      0   100%
-src/openclaw/models.py                 47      0   100%
-src/openclaw/platform/__init__.py      16     11    31%
-src/openclaw/platform/base.py           9      3    67%
-src/openclaw/tools/audit.py            26      5    81%
-src/openclaw/tools/identity.py          7      0   100%
-src/openclaw/tools/teams.py            92      3    97%
------------------------------------------------------------------
-TOTAL                                 281     24    91%
+Key modules:
+  src/entraclaw/auth/          — certificate JWT + MSAL delegated auth
+  src/entraclaw/bot/           — Bot Gateway (server, handler, tunnel, convo_store)
+  src/entraclaw/identity/      — progressive identity state machine
+  src/entraclaw/config.py      — ENTRACLAW_MODE + all env config
+  src/entraclaw/mcp_server.py  — FastMCP + 3 auth modes + background poll
+  src/entraclaw/tools/         — Teams Graph API tools
 ```
 
 ---
 
 ## Current Milestone: Bidirectional Teams Loop
 
-**Spec:** `docs/superpowers/specs/2026-04-06-bidirectional-teams-loop-design.md`
+**Spec:** `docs/architecture/PLAN-multi-tenant-lightweight-chat.md`
 **Research:** `docs/platform-learnings/mcp-messaging-servers.md`
 
 ### Scope (scoped down from original)
@@ -111,7 +108,7 @@ Researched 12+ MCP messaging servers (Slack, iMessage, Discord, Teams). Key find
 - Agent User license assignment (auto-detects Teams-capable SKUs)
 - Consent grant (`oAuth2PermissionGrant`) for Teams/Chat permissions
 - Dedicated provisioner app (avoids Azure CLI token rejection)
-- State persisted in `.openclaw-state.json` (idempotent, no secret reset)
+- State persisted in `.entraclaw-state.json` (idempotent, no secret reset)
 - MCP server auto-discovered via `.mcp.json`
 - `--teams-user` flag to set Teams recipient separately from admin
 - Teams read with null-from handling (system messages)
@@ -129,11 +126,16 @@ Researched 12+ MCP messaging servers (Slack, iMessage, Discord, Teams). Key find
 - Chat ID persistence across restarts — no duplicate group chats
 - 429 rate limit handling with Retry-After propagation
 - All code passes ruff lint + format
+- **Progressive identity state machine** — UNAUTHENTICATED → DELEGATED → PROVISIONING → AGENT_USER with asyncio.Lock-protected transitions
+- **MSAL delegated auth** — localhost redirect + device code fallback, OS-encrypted token cache via msal-extensions
+- **Setup script** for delegated mode (`scripts/setup_delegated.sh`) — sign in once, cache token, launch MCP server
+- **Bot Gateway** — M365 Agents SDK bot server + JSONL IPC (inbound/outbound with fcntl.flock) + Dev Tunnel manager + conversation reference persistence. Coexists via `ENTRACLAW_MODE=bot` config switch
+- **Identity-aware user ID** — `_effective_user_id()` returns the correct user ID for the current mode (agent user OID vs signed-in human OID)
 
 ### What's Not Started
+- Azure Bot resource registration on werner.ac (needed for live bot test)
+- Adaptive Cards for bot mode (Phase 2)
 - Windows VM provisioning and testing
-- AppContainer sandbox spike
-- Entra sign-in log verification (`idtyp=user` claim)
 
 ---
 
@@ -195,7 +197,7 @@ Blueprint (client_credentials)
 | 13 | stderr swallowed throughout scripts | Hidden errors | Removed all `2>/dev/null` |
 | 14 | Admin and Teams user conflated | Wrong recipient | Added `--teams-user` flag |
 
-See `docs/runbooks/hard-won-learnings.md` for the full append-only log (29 entries).
+See `docs/runbooks/hard-won-learnings.md` for the full append-only log (28 entries).
 
 ---
 
@@ -205,9 +207,11 @@ See `docs/runbooks/hard-won-learnings.md` for the full append-only log (29 entri
 2. ~~Token auto-refresh~~ — ✅ DONE. Eager (55-min) + lazy (401 retry).
 3. ~~Certificate auth~~ — ✅ DONE. No secrets on disk. Private key in OS keystore (ADR-003).
 4. ~~Close the loop~~ — ✅ DONE. `notifications/claude/channel` push via experimental capability.
-5. **Multi-tenant lightweight chat** — ACTIVE. Branch: `feature/multi-tenant-lightweight-chat`. Multi-tenant app + device code auth + progressive identity (sponsor → Agent User). See `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` for full spec.
-6. **Entra sign-in log verification** — confirm `idtyp=user` and agent attribution
-7. **Windows VM provisioning** — verify cross-platform setup.sh (rescheduled to weekend)
-8. **AppContainer sandbox spike** — kernel-level agent isolation on Windows (rescheduled to weekend)
-9. **Delta query optimization** — replace timestamp polling with `/messages/delta` if needed
-10. **Publish as Claude Code marketplace plugin** — move from `--dangerously-load-development-channels` to proper plugin distribution
+5. ~~Multi-tenant lightweight chat~~ — ✅ DONE (PR #1). Progressive identity state machine + MSAL delegated auth. Branch: `feature/multi-tenant-lightweight-chat`.
+6. ~~Bot Gateway~~ — ✅ DONE. M365 Agents SDK bot server + JSONL IPC + tunnel manager. Coexists via `ENTRACLAW_MODE=bot` switch. See `docs/architecture/DESIGN-teams-bot-gateway.md`.
+7. **Bot Gateway live test** — NEXT. Register Azure Bot on werner.ac, sideload Teams app, verify end-to-end with Dev Tunnel.
+8. **Adaptive Cards** — Rich status cards (build results, PR links, action buttons) for bot mode.
+9. **Entra sign-in log verification** — confirm `idtyp=user` and agent attribution
+10. **Windows VM provisioning** — verify cross-platform setup.sh (rescheduled to weekend)
+11. **AppContainer sandbox spike** — kernel-level agent isolation on Windows
+12. **Delta query optimization** — replace timestamp polling with `/messages/delta` if needed
