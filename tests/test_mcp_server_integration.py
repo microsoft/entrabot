@@ -419,3 +419,132 @@ class TestSendWithPrefix:
 
         with pytest.raises(ValueError, match="empty"):
             await send(chat_id="c1", message="   ", token="tok")
+
+
+# ---------------------------------------------------------------------------
+# _push_channel_notification — observability must survive transport failure
+# ---------------------------------------------------------------------------
+# Historical bug (project_dm_notification_bug.md): DM messages were readable
+# via manual calls but the channel-notification push silently dropped them,
+# AND we lost any record that the message was ever observed because the
+# interaction log write happened after the write-stream check. Daily summaries
+# were blind to any inbound DM. These tests lock in the fix: observe (log)
+# first, then push.
+
+class TestPushChannelNotificationObservability:
+    @pytest.mark.asyncio
+    async def test_logs_interaction_even_when_write_stream_missing(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """When write_stream is absent (no MCP client attached), the message
+        must still be recorded in the interaction log. Otherwise the daily
+        summary is blind to inbound traffic whenever the push path breaks.
+        """
+        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+
+        from datetime import UTC, datetime
+
+        from entraclaw import mcp_server
+        from entraclaw.tools.interaction_log import read_day
+
+        mcp_server._state.pop("_write_stream", None)
+
+        await mcp_server._push_channel_notification(
+            {
+                "message_id": "m-dm-1",
+                "from": "Brandon Werner",
+                "content": "test DM",
+                "sent_at": "2026-04-17T01:00:00Z",
+            },
+            chat_id="19:abc_def@unq.gbl.spaces",
+        )
+
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        entries = read_day(today)
+        inbound = [e for e in entries if e.get("direction") == "inbound"]
+        assert any(
+            e.get("content_ref") == "m-dm-1" and e.get("channel") == "teams_dm"
+            for e in inbound
+        ), f"Expected inbound DM entry for m-dm-1, got: {inbound}"
+
+    @pytest.mark.asyncio
+    async def test_logs_interaction_and_pushes_when_stream_present(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Happy path: write_stream is available, push fires AND log captures
+        the inbound message. Both effects must occur in the same call.
+        """
+        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+
+        from datetime import UTC, datetime
+
+        from entraclaw import mcp_server
+        from entraclaw.tools.interaction_log import read_day
+
+        mock_stream = AsyncMock()
+        mcp_server._state["_write_stream"] = mock_stream
+
+        try:
+            await mcp_server._push_channel_notification(
+                {
+                    "message_id": "m-grp-1",
+                    "from": "Alice Example",
+                    "content": "group chat test",
+                    "sent_at": "2026-04-17T01:05:00Z",
+                },
+                chat_id="19:xyz@thread.v2",
+            )
+        finally:
+            mcp_server._state.pop("_write_stream", None)
+
+        mock_stream.send.assert_awaited_once()
+
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        entries = read_day(today)
+        inbound = [e for e in entries if e.get("direction") == "inbound"]
+        assert any(
+            e.get("content_ref") == "m-grp-1" and e.get("channel") == "teams_group"
+            for e in inbound
+        ), f"Expected inbound group entry for m-grp-1, got: {inbound}"
+
+    @pytest.mark.asyncio
+    async def test_log_survives_push_exception(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """If write_stream.send raises, the interaction must already be logged.
+        Root-cause traceability depends on this invariant: we can always
+        answer 'did this message arrive at the agent?' by reading the log,
+        even when the push transport is broken.
+        """
+        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+
+        from datetime import UTC, datetime
+
+        from entraclaw import mcp_server
+        from entraclaw.tools.interaction_log import read_day
+
+        bad_stream = AsyncMock()
+        bad_stream.send.side_effect = RuntimeError("stream closed")
+        mcp_server._state["_write_stream"] = bad_stream
+
+        try:
+            # Exception inside the push must not propagate out of
+            # _push_channel_notification — it's observability, not a
+            # primary path. Caller (background poll) continues.
+            await mcp_server._push_channel_notification(
+                {
+                    "message_id": "m-crash-1",
+                    "from": "Brandon Werner",
+                    "content": "crash path",
+                    "sent_at": "2026-04-17T01:06:00Z",
+                },
+                chat_id="19:abc_def@unq.gbl.spaces",
+            )
+        finally:
+            mcp_server._state.pop("_write_stream", None)
+
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        entries = read_day(today)
+        assert any(
+            e.get("content_ref") == "m-crash-1" for e in entries
+        ), "log must capture the message even when push transport throws"

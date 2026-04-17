@@ -674,7 +674,11 @@ async def _background_poll() -> None:
 
         except Exception as exc:
             if logger:
-                logger.warning("Background poll error: %s", exc)
+                logger.warning(
+                    "Background poll error: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
             await asyncio.sleep(BACKGROUND_POLL_INTERVAL)
 
 
@@ -909,21 +913,46 @@ def _summarize_content(content: str, limit: int = 200) -> str:
 async def _push_channel_notification(
     message: dict, *, chat_id: str | None = None,
 ) -> None:
-    """Push an inbound Teams message to Claude Code via notifications/claude/channel.
+    """Observe + push an inbound Teams message.
 
-    This is the same notification method used by the iMessage channel plugin.
-    Claude Code receives it and injects the message into the conversation.
+    Two concerns here, in order:
 
-    Uses the MCP SDK's write stream (captured during server startup) to ensure
-    notifications go through the proper transport layer, not raw stdout.
+    1. **Observe** — always write to the interaction log first. Daily
+       summaries must see every inbound message even when push transport
+       is broken or no MCP client is attached. (Historical bug:
+       interaction logging was gated behind the write-stream check and
+       we lost visibility into inbound DMs entirely when push failed.)
+
+    2. **Push** — notify Claude Code via ``notifications/claude/channel``
+       so the inbound message surfaces in the conversation. Transport
+       errors are swallowed — this path is observability, not primary,
+       and the interaction log already has the record.
     """
+    resolved_chat_id = chat_id or str(_state.get("chat_id", ""))
+
+    _log_interaction_safe(
+        channel=detect_channel(resolved_chat_id),
+        direction="inbound",
+        sender=message.get("from", "unknown"),
+        recipient="entraclaw-agent",
+        summary=_summarize_content(message.get("content", "")),
+        action="push_channel_notification",
+        content_ref=message.get("message_id"),
+        metadata={
+            "chat_id": resolved_chat_id,
+            "ts": message.get("sent_at"),
+        },
+    )
+
     write_stream = _state.get("_write_stream")
     if not write_stream:
         if logger:
-            logger.warning("Cannot push notification — write stream not available")
+            logger.warning(
+                "Channel push skipped — write stream not available (logged inbound %s from %s)",
+                message.get("message_id", "?"),
+                message.get("from", "?"),
+            )
         return
-
-    resolved_chat_id = chat_id or str(_state.get("chat_id", ""))
 
     notification = JSONRPCNotification(
         jsonrpc="2.0",
@@ -939,22 +968,18 @@ async def _push_channel_notification(
         },
     )
     session_message = SessionMessage(message=JSONRPCMessage(notification))
-    await write_stream.send(session_message)
-
-    # Record the inbound interaction for the daily summary.
-    _log_interaction_safe(
-        channel=detect_channel(resolved_chat_id),
-        direction="inbound",
-        sender=message.get("from", "unknown"),
-        recipient="entraclaw-agent",
-        summary=_summarize_content(message.get("content", "")),
-        action="push_channel_notification",
-        content_ref=message.get("message_id"),
-        metadata={
-            "chat_id": resolved_chat_id,
-            "ts": message.get("sent_at"),
-        },
-    )
+    try:
+        await write_stream.send(session_message)
+    except Exception as exc:
+        if logger:
+            logger.warning(
+                "Channel push failed for %s (%s): %s: %s",
+                message.get("message_id", "?"),
+                detect_channel(resolved_chat_id),
+                type(exc).__name__,
+                exc,
+            )
+        return
 
     if logger:
         logger.info(
