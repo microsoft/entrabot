@@ -344,7 +344,7 @@ else
     # Provisioner token (NOT az CLI — Learning #1: az CLI tokens include
     # Directory.AccessAsUser.All which Agent Identity APIs reject).
     CERT_THUMBPRINT=$("$VENV_PY" -c "
-import sys, json, hashlib, base64
+import contextlib, sys, json, hashlib, base64
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
@@ -380,10 +380,17 @@ pem_key = key.private_bytes(
 keyring.set_password('entraclaw', 'blueprint-private-key', pem_key)
 
 # --- Upload public cert to Blueprint app via Graph API ---
-# Uses Provisioner token (not az CLI) to avoid Directory.AccessAsUser.All rejection
+# Uses Provisioner token (not az CLI) to avoid Directory.AccessAsUser.All rejection.
+# get_graph_token() prints diagnostic lines to stdout (provisioner permission
+# checks, admin-consent status, cached-secret notices). We redirect those to
+# stderr so the shell-level \$(...) capture only sees the final thumbprint
+# line — previously the diagnostic output leaked into .env as the literal
+# ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT value and broke Hop 1 auth until
+# manually repaired.
 sys.path.insert(0, '$PROJECT_ROOT/scripts')
 from entra_provisioning import get_graph_token
-token = get_graph_token(wait_for_propagation=False)
+with contextlib.redirect_stdout(sys.stderr):
+    token = get_graph_token(wait_for_propagation=False)
 
 # Graph API: PATCH /applications/{id} with keyCredentials
 # Dates MUST come from the cert itself and use Graph's 7-decimal-place format
@@ -420,6 +427,13 @@ print(thumbprint)
 
     if [ -z "$CERT_THUMBPRINT" ]; then
         fail "Could not generate Blueprint certificate"
+    fi
+
+    # Defense in depth: the thumbprint is SHA-256 DER base64url-no-padding
+    # (43 chars, [A-Za-z0-9_-]). If anything else lands here, the .env file
+    # is about to be corrupted — fail loudly instead of writing garbage.
+    if ! [[ "$CERT_THUMBPRINT" =~ ^[A-Za-z0-9_-]{43}$ ]]; then
+        fail "Captured thumbprint doesn't look like a SHA-256 base64url digest: '$CERT_THUMBPRINT'"
     fi
 
     success "Certificate generated, uploaded to Entra, private key stored in OS keyring"
