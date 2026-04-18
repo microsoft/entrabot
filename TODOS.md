@@ -8,6 +8,13 @@ Land the next phase of cloud-hosted memory. Spec: `docs/decisions/005-cloud-host
 - **Depends on:** Phase 1 (`f900ba1`, shipped)
 - **Source:** ADR-005
 
+### Daily summary scheduler: wrong day + double-fire
+Two bugs, both observed at 2026-04-17T17:00:00 PDT (= 00:00:01 UTC 2026-04-18):
+1. `_run_daily_summary_internal` defaults `target_day = datetime.now(UTC).strftime("%Y-%m-%d")`. At 5pm PDT the UTC clock is already past midnight, so the scheduler summarizes the brand-new UTC day (empty) instead of the one that just ended. Fix: when called from the scheduler, target `now_utc - 1 day` — or compute the "just-ended PDT day" explicitly.
+2. Scheduler fired twice at the same second — two summary emails arrived simultaneously (one for 2026-04-17, one for 2026-04-18). Suggests either a boot-time catch-up colliding with the scheduled tick or a loop that doesn't gate on "already sent today." Inspect `_background_daily_summary` for idempotency + single-fire semantics.
+- **Effort:** S (~30 LOC + tests for both)
+- **Source:** Live observation 2026-04-17 evening (first real scheduled fire)
+
 ### Email cursor sub-second precision
 `email_poll.poll_once` returns `latest_ts` verbatim from Graph; the cursor file may end up at second precision while Graph internally compares with sub-second. Result: an email at the cursor's exact second gets re-returned every poll. Per-session dedup in `_background_poll_email` handles within-session, but the email re-pushes once on every server restart. Real fix: bump cursor by 1ms when it equals the latest receivedDateTime, or store sub-second precision unconditionally.
 - **Effort:** XS (~10 LOC + 1 test)
