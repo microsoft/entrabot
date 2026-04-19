@@ -24,6 +24,7 @@ jobs:
       - name: Run Claude on the review feedback
         uses: anthropics/claude-code-action@v1
         with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
             A PR review or inline comment was submitted on this pull request.
 
@@ -45,5 +46,3 @@ jobs:
             - Never push to main — always PR branch
             - Flag naming is being aligned with persona-sati: --with-upn-prefix and --with-blueprint (replacing the old --with-upn-suffix and --use-blueprint)
           claude_args: "--max-turns 15 --model claude-opus-4-7"
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
