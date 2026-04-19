@@ -71,7 +71,11 @@ if [ "$SHOW_HELP" = true ]; then
     echo "  --use-blueprint=ID     Attach to an existing Blueprint by App ID."
     echo "                         Generates a new cert for this machine and adds it"
     echo "                         to the Blueprint. Reuses existing Agent Identity"
-    echo "                         and Agent User. Use when switching machines."
+    echo "                         and Agent User. Use when switching machines, OR"
+    echo "                         when switching this machine to a different Blueprint"
+    echo "                         (the stale Agent Identity / User / cert thumbprint"
+    echo "                         are wiped from local state so create_entra_agent_ids.py"
+    echo "                         rediscovers everything under the new Blueprint)."
     echo ""
     echo "  --with-upn-suffix=NAME Agent User UPN suffix (required with --new)."
     echo "                         e.g., --with-upn-suffix=sati-agent"
@@ -333,20 +337,56 @@ if [ "$NEW_CHAIN" = false ] && [ -z "$USE_BLUEPRINT" ]; then
 fi
 
 # ── Handle --use-blueprint: reuse existing identity, add cert for this machine ─
+#
+# Two scenarios this has to handle cleanly:
+#   (a) Fresh machine / no state — just record BLUEPRINT_APP_ID; the rest of
+#       the script discovers everything under it.
+#   (b) Existing state pointing at a DIFFERENT Blueprint — treat this as a
+#       switch. create_entra_agent_ids.find_existing_blueprint() prefers the
+#       cached BLUEPRINT_OBJECT_ID over the APP_ID filter, so if we only
+#       rewrote BLUEPRINT_APP_ID the stale OBJECT_ID would silently pin us
+#       back to the old Blueprint. Wipe all identity-derived state to force
+#       fresh discovery against the new Blueprint. Keep PROVISIONER_* (the
+#       helper app is machine-scoped, unaffected by the switch).
 if [ -n "$USE_BLUEPRINT" ] && [ "$NEW_CHAIN" = false ]; then
-    echo -e "  ${GREEN}Using existing Blueprint: ${USE_BLUEPRINT}${NC}"
-    # Write the Blueprint ID to state so create_entra_agent_ids.py finds it
-    "$SCRIPT_PYTHON" -c "
+    STATE_FILE="$PROJECT_ROOT/.entraclaw-state.json"
+    CURRENT_BP=$(read_state "BLUEPRINT_APP_ID")
+
+    if [ -n "$CURRENT_BP" ] && [ "$CURRENT_BP" != "$USE_BLUEPRINT" ]; then
+        BACKUP="$STATE_FILE.bak.$(date +%Y%m%d-%H%M%S)"
+        cp "$STATE_FILE" "$BACKUP"
+        echo -e "  ${YELLOW}Switching Blueprint: ${CURRENT_BP} → ${USE_BLUEPRINT}${NC}"
+        echo -e "  ${YELLOW}Backed up prior state to $(basename "$BACKUP")${NC}"
+        echo -e "  ${YELLOW}Note: this machine's cert on the OLD Blueprint is NOT revoked."
+        echo -e "        Remove it manually with ./scripts/cleanup-orphans.sh or via"
+        echo -e "        'az ad app credential delete' if you want a clean break.${NC}"
+        "$SCRIPT_PYTHON" -c "
 import json, pathlib
-sf = pathlib.Path('$PROJECT_ROOT/.entraclaw-state.json')
+sf = pathlib.Path('$STATE_FILE')
+data = json.loads(sf.read_text()) if sf.is_file() else {}
+# Keep provisioner app + tenant; drop everything tied to the old chain
+keep = {
+    k: v for k, v in data.items()
+    if k.startswith('PROVISIONER') or k == 'TENANT_ID'
+}
+keep['BLUEPRINT_APP_ID'] = '$USE_BLUEPRINT'
+sf.write_text(json.dumps(keep, indent=2))
+print('  Cleared stale Blueprint/Agent/User state (kept Provisioner + tenant)')
+"
+    else
+        echo -e "  ${GREEN}Using existing Blueprint: ${USE_BLUEPRINT}${NC}"
+        # Fresh machine or re-run with the same ID — just record it.
+        "$SCRIPT_PYTHON" -c "
+import json, pathlib
+sf = pathlib.Path('$STATE_FILE')
 data = json.loads(sf.read_text()) if sf.is_file() else {}
 data['BLUEPRINT_APP_ID'] = '$USE_BLUEPRINT'
 sf.write_text(json.dumps(data, indent=2))
 "
-    echo "  State file updated with Blueprint ID"
-    # create_entra_agent_ids.py will find the existing Blueprint by stored ID,
-    # then find/reuse the existing Agent Identity + Agent User.
-    # The cert step (Step 6) generates a new cert for this machine.
+        echo "  State file updated with Blueprint ID"
+    fi
+    # From here create_entra_agent_ids.py discovers Agent Identity + Agent User
+    # under the chosen Blueprint. Step 6 generates/reuses a cert as appropriate.
 fi
 
 # ── Handle --new: back up state, force fresh identity chain ───────────────
