@@ -10,7 +10,6 @@ directly against the Graph API, logging every detail.
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
 
 # Ensure the source is importable
@@ -107,7 +106,10 @@ async def main() -> None:
             members2 = resp2.json().get("value", [])
             print(f"\n  Members via /members endpoint ({len(members2)}):")
             for m in members2:
-                print(f"    - {m.get('displayName', '?')} | roles={m.get('roles')} | tenant={m.get('tenantId')}")
+                print(
+                    f"    - {m.get('displayName', '?')} | "
+                    f"roles={m.get('roles')} | tenant={m.get('tenantId')}"
+                )
         else:
             print(f"  ⚠️  GET /members returned {resp2.status_code}: {resp2.text[:200]}")
 

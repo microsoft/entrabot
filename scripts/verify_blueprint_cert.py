@@ -27,7 +27,6 @@ import sys
 import requests
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
-
 from entra_provisioning import get_graph_token
 
 
@@ -58,7 +57,10 @@ def main() -> int:
         headers={"Authorization": f"Bearer {token}"},
     )
     if not resp.ok:
-        print(f"  [warn] Blueprint fetch failed ({resp.status_code}); assuming cache stale", file=sys.stderr)
+        print(
+            f"  [warn] Blueprint fetch failed ({resp.status_code}); assuming cache stale",
+            file=sys.stderr,
+        )
         return 1
 
     creds = resp.json().get("keyCredentials", []) or []

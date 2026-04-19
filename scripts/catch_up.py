@@ -14,7 +14,12 @@ from entraclaw.config import get_config
 from entraclaw.tools.teams import acquire_agent_user_token
 
 
-async def fetch(client: httpx.AsyncClient, url: str, token: str, params: dict | None = None) -> dict:
+async def fetch(
+    client: httpx.AsyncClient,
+    url: str,
+    token: str,
+    params: dict | None = None,
+) -> dict:
     r = await client.get(
         url,
         headers={"Authorization": f"Bearer {token}"},
@@ -26,7 +31,7 @@ async def fetch(client: httpx.AsyncClient, url: str, token: str, params: dict | 
 
 
 async def main() -> None:
-    hours = int(sys.argv[1]) if len(sys.argv) > 1 else 6
+    _hours = int(sys.argv[1]) if len(sys.argv) > 1 else 6  # noqa: F841 — reserved for future filtering
     token = acquire_agent_user_token(get_config())
 
     watched = Path.home() / ".entraclaw" / "data" / "watched_chats"

@@ -18,7 +18,6 @@ import contextlib
 import sys
 
 import requests
-
 from entra_provisioning import get_graph_token
 
 

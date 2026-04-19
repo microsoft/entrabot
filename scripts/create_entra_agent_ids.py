@@ -32,7 +32,7 @@ _FORCE_NEW = os.environ.get("ENTRACLAW_NEW_CHAIN") == "1"
 
 # entra_provisioning.py lives in the same directory
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
-from entra_provisioning import (
+from entra_provisioning import (  # noqa: E402 — sys.path insert precedes this import
     ProvisionerBootstrapError,
     build_sponsors_bind,
     get_graph_token,
@@ -264,7 +264,7 @@ def create_agent_identity(token: str, blueprint_app_id: str) -> tuple[str, str]:
     stored_app_id = get_state("AGENT_ID")
 
     if _FORCE_NEW:
-        print(f"  [--new] Skipping existing Agent Identity lookup — creating fresh")
+        print("  [--new] Skipping existing Agent Identity lookup — creating fresh")
         existing = None
     else:
         existing = find_existing_agent_identity(token, display_name, stored_app_id=stored_app_id)
@@ -354,7 +354,11 @@ def _agent_user_upn(token: str) -> str:
     if resp.status_code == 200:
         domains = resp.json().get("value", [])
         # Prefer custom domain (not .onmicrosoft.com)
-        custom = [d["id"] for d in domains if d.get("isVerified") and ".onmicrosoft.com" not in d["id"]]
+        custom = [
+            d["id"]
+            for d in domains
+            if d.get("isVerified") and ".onmicrosoft.com" not in d["id"]
+        ]
         # When --new, add a unique suffix to avoid UPN collision
         upn_suffix = os.environ.get("_ENTRACLAW_UPN_SUFFIX", "")
         agent_name = f"entraclaw-agent-{upn_suffix}" if upn_suffix else "entraclaw-agent"
@@ -717,7 +721,10 @@ def grant_agent_user_storage_consent(
         )
         if is_propagation and attempt < 3:
             wait = 15 * (attempt + 1)
-            print(f"  Storage SP/User not yet propagated — waiting {wait}s (attempt {attempt + 1}/4)...")
+            print(
+                f"  Storage SP/User not yet propagated — "
+                f"waiting {wait}s (attempt {attempt + 1}/4)..."
+            )
             time.sleep(wait)
             continue
 
