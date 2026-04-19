@@ -676,3 +676,146 @@ class TestChatAutoDiscovery:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
             mcp_server._identity = old_identity
+
+
+# ---------------------------------------------------------------------------
+# _bootstrap_chat — watermark behavior
+# ---------------------------------------------------------------------------
+class TestBootstrapChat:
+    """Bootstrap should NOT swallow the newest existing message.
+
+    Previously, bootstrap added every fetched message to seen_ids and set
+    last_ts to the newest message's sent_at, so the newest message was
+    treated as "already seen" and never pushed on the first real poll.
+    That swallowed the common case where a human adds the agent to a new
+    chat AND posts an intro in the same minute: the intro post got added
+    during bootstrap and silently filtered.
+
+    Fix: bootstrap marks every message EXCEPT the newest as seen. last_ts
+    still watermarks at the newest's sent_at (plus the 2s overlap window in
+    _filter_new_messages) but the newest's message_id is NOT in seen_ids,
+    so the first real poll pushes it normally.
+    """
+
+    async def test_newest_message_is_not_swallowed_by_bootstrap(
+        self, tmp_path
+    ) -> None:
+        from entraclaw import mcp_server
+
+        chat_id = "19:brand_new@thread.v2"
+
+        fake_config = MagicMock()
+        fake_config.data_dir = tmp_path
+
+        sm = MagicMock()
+        sm.state = mcp_server.IdentityState.AGENT_USER
+        sm.session.token = "tok"
+        sm.session.token_acquired_at = time.monotonic()
+        sm.update_session = MagicMock()
+
+        bootstrap_msgs = [
+            {"message_id": "m-old", "sent_at": "2026-04-19T18:40:00.000Z"},
+            {"message_id": "m-mid", "sent_at": "2026-04-19T18:45:00.000Z"},
+            {"message_id": "m-new", "sent_at": "2026-04-19T18:50:54.280Z"},
+        ]
+
+        old_state = mcp_server._state.copy()
+        old_identity = mcp_server._identity
+        try:
+            mcp_server._state.clear()
+            mcp_server._state["config"] = fake_config
+            mcp_server._state["token"] = "tok"
+            mcp_server._state["token_acquired_at"] = time.monotonic()
+            mcp_server._state["watched_chats"] = {
+                chat_id: {
+                    "seen_ids": set(),
+                    "last_ts": None,
+                    "bootstrapped": False,
+                }
+            }
+            mcp_server._identity = sm
+
+            with patch(
+                "entraclaw.tools.teams.read",
+                new=AsyncMock(return_value=bootstrap_msgs),
+            ):
+                await mcp_server._bootstrap_chat(chat_id)
+
+            chat_state = mcp_server._state["watched_chats"][chat_id]
+            assert chat_state["bootstrapped"] is True
+
+            # Older messages should be marked seen (so they don't re-push).
+            assert "m-old" in chat_state["seen_ids"]
+            assert "m-mid" in chat_state["seen_ids"]
+
+            # The NEWEST message must NOT be in seen_ids — it should get
+            # pushed on the first real poll cycle.
+            assert "m-new" not in chat_state["seen_ids"], (
+                "bug: bootstrap is swallowing the newest message by pre-"
+                "marking it seen"
+            )
+
+            # Simulate the first real poll: _filter_new_messages should
+            # return the newest message because it's not yet in seen_ids.
+            filtered = mcp_server._filter_new_messages(
+                bootstrap_msgs,
+                chat_state["last_ts"],
+                chat_state["seen_ids"],
+            )
+            filtered_ids = {m["message_id"] for m in filtered}
+            assert "m-new" in filtered_ids, (
+                "bug: first real poll should return the newest message but "
+                "it was filtered out"
+            )
+            # Older messages should still be filtered (they're in seen_ids).
+            assert "m-old" not in filtered_ids
+            assert "m-mid" not in filtered_ids
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+            mcp_server._identity = old_identity
+
+    async def test_bootstrap_with_no_messages_is_a_noop(self, tmp_path) -> None:
+        from entraclaw import mcp_server
+
+        chat_id = "19:empty@thread.v2"
+
+        fake_config = MagicMock()
+        fake_config.data_dir = tmp_path
+
+        sm = MagicMock()
+        sm.state = mcp_server.IdentityState.AGENT_USER
+        sm.session.token = "tok"
+        sm.session.token_acquired_at = time.monotonic()
+        sm.update_session = MagicMock()
+
+        old_state = mcp_server._state.copy()
+        old_identity = mcp_server._identity
+        try:
+            mcp_server._state.clear()
+            mcp_server._state["config"] = fake_config
+            mcp_server._state["token"] = "tok"
+            mcp_server._state["token_acquired_at"] = time.monotonic()
+            mcp_server._state["watched_chats"] = {
+                chat_id: {
+                    "seen_ids": set(),
+                    "last_ts": None,
+                    "bootstrapped": False,
+                }
+            }
+            mcp_server._identity = sm
+
+            with patch(
+                "entraclaw.tools.teams.read",
+                new=AsyncMock(return_value=[]),
+            ):
+                await mcp_server._bootstrap_chat(chat_id)
+
+            chat_state = mcp_server._state["watched_chats"][chat_id]
+            assert chat_state["bootstrapped"] is True
+            assert chat_state["seen_ids"] == set()
+            assert chat_state["last_ts"] is None
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+            mcp_server._identity = old_identity

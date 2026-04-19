@@ -546,10 +546,21 @@ def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
 
 
 async def _bootstrap_chat(chat_id: str) -> None:
-    """Bootstrap a watched chat's cursor to the newest existing message.
+    """Bootstrap a watched chat's cursor so the newest message surfaces once.
 
-    Called once per chat on first poll cycle. Sets the watermark so only
-    messages arriving AFTER registration trigger notifications.
+    Called once per chat on first poll cycle. Intent: don't flood Claude
+    Code with the full pre-existing history when a chat is added mid-
+    session, but DO surface the message that is most likely the reason
+    the chat was created (e.g. the human adds the agent and posts an
+    intro in the same minute — that intro must not be swallowed).
+
+    Implementation: mark every fetched message EXCEPT the newest as
+    ``seen_ids`` and watermark ``last_ts`` to the newest's sent_at. On
+    the first real poll cycle, ``_filter_new_messages`` sees the newest
+    message inside the 2-second overlap window and not in seen_ids, so
+    it gets pushed. All older messages are dropped as duplicates. A
+    chat with exactly one pre-existing message behaves the same — that
+    one message surfaces once.
     """
     from entraclaw.tools.teams import read
 
@@ -560,8 +571,13 @@ async def _bootstrap_chat(chat_id: str) -> None:
         if bootstrap_msgs:
             newest = max(bootstrap_msgs, key=lambda m: m.get("sent_at", ""))
             chat_state["last_ts"] = newest["sent_at"]
+            # Mark every message EXCEPT the newest as seen. The newest
+            # must remain "unseen" so the first real poll pushes it.
+            newest_id = newest.get("message_id")
             for m in bootstrap_msgs:
-                chat_state["seen_ids"].add(m["message_id"])
+                mid = m.get("message_id")
+                if mid and mid != newest_id:
+                    chat_state["seen_ids"].add(mid)
     except Exception as exc:
         if logger:
             logger.warning("Bootstrap failed for chat %s: %s", chat_id, exc)
