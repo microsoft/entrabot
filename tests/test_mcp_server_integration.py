@@ -54,6 +54,124 @@ class TestLoadAgentInstructions:
 
 
 # ---------------------------------------------------------------------------
+# Persona-sati integration (TODO 4)
+# ---------------------------------------------------------------------------
+class TestLoadAgentInstructionsPersonaSati:
+    """Covers the four cases from docs/TODO-persona-sati-integration.md.
+
+    _load_agent_instructions() should:
+      - return the local fallback when the persona-sati env vars are absent,
+      - return the local fallback when the token command fails,
+      - return the remote prompt when everything works,
+      - return the local fallback when the remote MCP fetch fails.
+    Boot must never raise.
+    """
+
+    _LOCAL_PREFIX = "EntraClaw Teams Interface"
+
+    def test_load_instructions_uses_local_when_env_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("PERSONA_SATI_MCP_URL", raising=False)
+        monkeypatch.delenv("PERSONA_SATI_MCP_TOKEN_COMMAND", raising=False)
+        from entraclaw.mcp_server import _load_agent_instructions
+
+        result = _load_agent_instructions()
+        assert result.startswith(self._LOCAL_PREFIX)
+
+    def test_load_instructions_uses_local_when_token_cmd_fails(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        import subprocess
+
+        monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
+        monkeypatch.setenv(
+            "PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/does-not-exist"
+        )
+
+        def _raise(*args, **kwargs):
+            raise subprocess.SubprocessError("token mint blew up")
+
+        monkeypatch.setattr(subprocess, "check_output", _raise)
+
+        from entraclaw.mcp_server import _load_agent_instructions
+
+        result = _load_agent_instructions()
+        assert result.startswith(self._LOCAL_PREFIX)
+        # Diagnostic must go to stderr, not stdout.
+        captured = capsys.readouterr()
+        assert "could not mint persona-sati token" in captured.err
+        assert captured.out == ""
+
+    def test_load_instructions_uses_remote_when_all_works(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        import asyncio
+        import subprocess
+
+        monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
+        monkeypatch.setenv(
+            "PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/fake-token-cli"
+        )
+        monkeypatch.setattr(
+            subprocess,
+            "check_output",
+            lambda *a, **kw: "fake.jwt.token\n",
+        )
+
+        def _fake_run(coro):
+            coro.close()  # silence "coroutine was never awaited"
+            return "REMOTE_SYSTEM_PROMPT"
+
+        monkeypatch.setattr(asyncio, "run", _fake_run)
+
+        from entraclaw.mcp_server import _load_agent_instructions
+
+        result = _load_agent_instructions()
+        assert result == "REMOTE_SYSTEM_PROMPT"
+        # Success is logged to stderr only; stdout stays clean.
+        captured = capsys.readouterr()
+        assert "loaded system prompt from persona-sati" in captured.err
+        assert captured.out == ""
+
+    def test_load_instructions_uses_local_when_remote_fetch_fails(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        import asyncio
+        import subprocess
+
+        monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
+        monkeypatch.setenv(
+            "PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/fake-token-cli"
+        )
+        monkeypatch.setattr(
+            subprocess,
+            "check_output",
+            lambda *a, **kw: "fake.jwt.token\n",
+        )
+
+        def _boom(coro):
+            coro.close()  # silence "coroutine was never awaited"
+            raise RuntimeError("remote MCP unreachable")
+
+        monkeypatch.setattr(asyncio, "run", _boom)
+
+        from entraclaw.mcp_server import _load_agent_instructions
+
+        result = _load_agent_instructions()
+        assert result.startswith(self._LOCAL_PREFIX)
+        captured = capsys.readouterr()
+        assert "persona-sati fetch failed" in captured.err
+        assert captured.out == ""
+
+
+# ---------------------------------------------------------------------------
 # _resolve_tenant_id
 # ---------------------------------------------------------------------------
 class TestResolveTenantId:

@@ -34,20 +34,94 @@ logger: logging.Logger | None = None
 
 
 def _load_agent_instructions() -> str:
-    """Return a generic tool-description prompt.
+    """Return the agent's system prompt.
 
-    The agent's personality and behavioral rules are served by the
-    persona-sati MCP server.  This prompt only describes what this
-    MCP server's tools do — no personality, no channel discipline,
-    no memory references.
+    If PERSONA_SATI_MCP_URL is set, fetch the prompt from the cloud
+    persona-sati MCP server via get_system_prompt(). Otherwise (or on
+    any failure), return the local tool-description fallback.
+
+    The body (entraclaw) delegates personality to the mind (persona-
+    sati). Revoking persona-sati access gracefully degrades entraclaw
+    to a generic communication tool; it never crashes the boot.
     """
-    return (
+    import os
+    import subprocess
+    import sys
+
+    local_fallback = (
         "EntraClaw Teams Interface: provides tools for sending and "
         "receiving Microsoft Teams messages, managing group chats, "
         "email polling, and daily summary generation. This server "
         "handles communication channels only. For personality, memory, "
         "and behavioral rules, connect to the persona-sati MCP server."
     )
+
+    remote_url = os.environ.get("PERSONA_SATI_MCP_URL", "").strip()
+    token_cmd = os.environ.get("PERSONA_SATI_MCP_TOKEN_COMMAND", "").strip()
+    if not remote_url or not token_cmd:
+        return local_fallback
+
+    try:
+        token = subprocess.check_output(
+            [token_cmd], text=True, timeout=30
+        ).strip()
+    except (subprocess.SubprocessError, OSError) as exc:
+        print(
+            f"[entraclaw] could not mint persona-sati token "
+            f"({token_cmd}): {exc}; using local fallback prompt",
+            file=sys.stderr,
+        )
+        return local_fallback
+    if not token:
+        print(
+            f"[entraclaw] token command {token_cmd} returned empty; "
+            "using local fallback prompt",
+            file=sys.stderr,
+        )
+        return local_fallback
+
+    try:
+        import asyncio
+
+        from mcp import ClientSession
+        from mcp.client.sse import sse_client
+
+        async def _fetch_remote_prompt() -> str | None:
+            sse_url = f"{remote_url.rstrip('/')}/sse"
+            headers = {"Authorization": f"Bearer {token}"}
+            async with (
+                sse_client(sse_url, headers=headers) as (read, write),
+                ClientSession(read, write) as session,
+            ):
+                await session.initialize()
+                result = await session.call_tool("get_system_prompt", {})
+                for item in result.content:
+                    if hasattr(item, "text") and item.text:
+                        return item.text
+            return None
+
+        remote = asyncio.run(_fetch_remote_prompt())
+    except Exception as exc:  # noqa: BLE001 — never break boot
+        print(
+            f"[entraclaw] persona-sati fetch failed: {exc}; "
+            "using local fallback prompt",
+            file=sys.stderr,
+        )
+        return local_fallback
+
+    if not remote:
+        print(
+            "[entraclaw] persona-sati returned empty prompt; "
+            "using local fallback",
+            file=sys.stderr,
+        )
+        return local_fallback
+
+    print(
+        f"[entraclaw] loaded system prompt from persona-sati ({remote_url})",
+        file=sys.stderr,
+    )
+    return remote
 
 
 mcp = FastMCP(
