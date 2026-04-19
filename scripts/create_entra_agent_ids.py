@@ -951,11 +951,11 @@ def main() -> int:
     # unique UPN suffix so the new Agent User doesn't collide.
     if _FORCE_NEW:
         existing_user = None
-        # Generate a unique mailNickname/UPN to avoid collision
-        import hashlib
-        _suffix = hashlib.sha256(str(time.time()).encode()).hexdigest()[:6]
-        os.environ["_ENTRACLAW_UPN_SUFFIX"] = _suffix
-        print(f"  [--new] Will use UPN suffix: {_suffix}")
+        _suffix = os.environ.get("_ENTRACLAW_UPN_SUFFIX", "")
+        if _suffix:
+            print(f"  [--new] Will use UPN suffix: {_suffix}")
+        else:
+            print("  [--new] WARNING: No UPN suffix set — may collide with existing Agent User")
     else:
         intended_upn = _agent_user_upn(token)
         existing_user = find_existing_agent_user_by_upn(token, intended_upn)

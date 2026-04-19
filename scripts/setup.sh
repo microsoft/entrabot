@@ -26,6 +26,7 @@ TEAMS_USER_EMAIL=""
 SHOW_HELP=false
 KEEP_MEMORY_LOCAL=false
 NEW_CHAIN=false
+UPN_SUFFIX=""
 
 for arg in "$@"; do
     case $arg in
@@ -40,6 +41,9 @@ for arg in "$@"; do
             ;;
         --new)
             NEW_CHAIN=true
+            ;;
+        --with-upn-suffix=*)
+            UPN_SUFFIX="${arg#--with-upn-suffix=}"
             ;;
         --help|-h)
             SHOW_HELP=true
@@ -59,6 +63,10 @@ if [ "$SHOW_HELP" = true ]; then
     echo "                         Backs up existing state and provisions fresh:"
     echo "                         new Blueprint, new Agent Identity, new Agent User."
     echo "                         The existing chain is NOT affected."
+    echo "  --with-upn-suffix=NAME Set the Agent User UPN suffix for --new."
+    echo "                         e.g., --with-upn-suffix=sati-agent"
+    echo "                         produces: entraclaw-sati-agent@yourdomain.com"
+    echo "                         If omitted with --new, you will be prompted."
     echo "  --switch-user          Sign in as a different user before setup."
     echo "                         The new user becomes the agent's owner and sponsor."
     echo "  --teams-user=EMAIL     Set a different user as the Teams chat recipient."
@@ -313,9 +321,27 @@ sf.write_text(json.dumps(keep, indent=2))
 print('  Cleared identity state (kept provisioner app)')
 "
     fi
+    # Resolve UPN suffix — from flag or prompt
+    if [ -z "$UPN_SUFFIX" ]; then
+        echo ""
+        echo -e "  ${YELLOW}--new requires a UPN suffix to avoid collision with existing agents.${NC}"
+        echo "  This becomes part of the Agent User's email-like identity:"
+        echo "    entraclaw-<suffix>@yourdomain.com"
+        echo ""
+        echo "  Examples: sati-agent, dev-bot, test-agent"
+        echo ""
+        printf "  Enter UPN suffix: "
+        read -r UPN_SUFFIX
+        if [ -z "$UPN_SUFFIX" ]; then
+            echo "ERROR: UPN suffix is required with --new" >&2
+            exit 1
+        fi
+    fi
+    export _ENTRACLAW_UPN_SUFFIX="$UPN_SUFFIX"
+
     # Tell create_entra_agent_ids.py to skip display-name lookups
     export ENTRACLAW_NEW_CHAIN=1
-    echo -e "  ${YELLOW}--new: will create fresh Blueprint + Agent Identity + Agent User${NC}"
+    echo -e "  ${YELLOW}--new: will create fresh identity chain with suffix '${UPN_SUFFIX}'${NC}"
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
