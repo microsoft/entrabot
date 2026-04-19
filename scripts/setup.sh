@@ -26,6 +26,7 @@ TEAMS_USER_EMAIL=""
 SHOW_HELP=false
 KEEP_MEMORY_LOCAL=false
 NEW_CHAIN=false
+USE_BLUEPRINT=""
 UPN_SUFFIX=""
 
 for arg in "$@"; do
@@ -41,6 +42,9 @@ for arg in "$@"; do
             ;;
         --new)
             NEW_CHAIN=true
+            ;;
+        --use-blueprint=*)
+            USE_BLUEPRINT="${arg#--use-blueprint=}"
             ;;
         --with-upn-suffix=*)
             UPN_SUFFIX="${arg#--with-upn-suffix=}"
@@ -59,11 +63,17 @@ if [ "$SHOW_HELP" = true ]; then
     echo "Usage: ./scripts/setup.sh [OPTIONS]"
     echo ""
     echo "Options:"
+    echo ""
+    echo "Identity mode (one required):"
     echo "  --new                  Create a completely new Agent Identity chain."
-    echo "                         Backs up existing state and provisions fresh:"
-    echo "                         new Blueprint, new Agent Identity, new Agent User."
+    echo "                         Provisions fresh Blueprint, Agent Identity, Agent User."
     echo "                         The existing chain is NOT affected."
-    echo "  --with-upn-suffix=NAME Set the Agent User UPN suffix for --new."
+    echo "  --use-blueprint=ID     Attach to an existing Blueprint by App ID."
+    echo "                         Generates a new cert for this machine and adds it"
+    echo "                         to the Blueprint. Reuses existing Agent Identity"
+    echo "                         and Agent User. Use when switching machines."
+    echo ""
+    echo "  --with-upn-suffix=NAME Agent User UPN suffix (required with --new)."
     echo "                         e.g., --with-upn-suffix=sati-agent"
     echo "                         produces: entraclaw-sati-agent@yourdomain.com"
     echo "                         If omitted with --new, you will be prompted."
@@ -302,6 +312,61 @@ fi
 
 "$SCRIPT_PYTHON" -m pip install --quiet azure-identity requests 2>&1 | tail -1 || true
 success "azure-identity and requests available"
+
+# ── Validate identity mode ────────────────────────────────────────────────
+if [ "$NEW_CHAIN" = true ] && [ -n "$USE_BLUEPRINT" ]; then
+    echo "ERROR: --new and --use-blueprint are mutually exclusive." >&2
+    echo "  --new creates a fresh identity chain." >&2
+    echo "  --use-blueprint attaches to an existing one." >&2
+    exit 1
+fi
+
+if [ "$NEW_CHAIN" = false ] && [ -z "$USE_BLUEPRINT" ]; then
+    # Check if state file has existing identity — if so, reuse silently (backwards compat)
+    STATE_FILE="$PROJECT_ROOT/.entraclaw-state.json"
+    if [ -f "$STATE_FILE" ]; then
+        EXISTING_BP=$("$SCRIPT_PYTHON" -c "
+import json, pathlib
+sf = pathlib.Path('$STATE_FILE')
+data = json.loads(sf.read_text()) if sf.is_file() else {}
+print(data.get('BLUEPRINT_APP_ID', ''))
+" 2>/dev/null || echo "")
+        if [ -n "$EXISTING_BP" ]; then
+            echo -e "  ${GREEN}Reusing existing identity from state file${NC}"
+            echo "    Blueprint: ${EXISTING_BP}"
+            echo "    (use --new for a fresh chain, or --use-blueprint=ID to attach to a different one)"
+            USE_BLUEPRINT="$EXISTING_BP"
+        fi
+    fi
+
+    if [ -z "$USE_BLUEPRINT" ]; then
+        echo ""
+        echo "ERROR: No identity mode specified." >&2
+        echo "" >&2
+        echo "  Choose one:" >&2
+        echo "    --new --with-upn-suffix=NAME    Create a fresh identity chain" >&2
+        echo "    --use-blueprint=APP_ID          Attach to an existing Blueprint" >&2
+        echo "" >&2
+        exit 1
+    fi
+fi
+
+# ── Handle --use-blueprint: reuse existing identity, add cert for this machine ─
+if [ -n "$USE_BLUEPRINT" ] && [ "$NEW_CHAIN" = false ]; then
+    echo -e "  ${GREEN}Using existing Blueprint: ${USE_BLUEPRINT}${NC}"
+    # Write the Blueprint ID to state so create_entra_agent_ids.py finds it
+    "$SCRIPT_PYTHON" -c "
+import json, pathlib
+sf = pathlib.Path('$PROJECT_ROOT/.entraclaw-state.json')
+data = json.loads(sf.read_text()) if sf.is_file() else {}
+data['BLUEPRINT_APP_ID'] = '$USE_BLUEPRINT'
+sf.write_text(json.dumps(data, indent=2))
+"
+    echo "  State file updated with Blueprint ID"
+    # create_entra_agent_ids.py will find the existing Blueprint by stored ID,
+    # then find/reuse the existing Agent Identity + Agent User.
+    # The cert step (Step 6) generates a new cert for this machine.
+fi
 
 # ── Handle --new: back up state, force fresh identity chain ───────────────
 if [ "$NEW_CHAIN" = true ]; then
