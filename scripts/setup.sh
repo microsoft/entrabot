@@ -712,6 +712,10 @@ fi
 # (defined as a [project.scripts] entry in pyproject.toml) — cleaner than
 # invoking `python3 -m entraclaw.mcp_server` because it doesn't depend on
 # the CLI having the right cwd.
+#
+# NOTE: To add persona-sati (mind server), see .mcp.json.example for the
+# dual-server configuration. persona-sati is optional — openclaw works
+# standalone as a Teams tool server without it.
 ENTRACLAW_MCP_BIN="$PROJECT_ROOT/.venv/bin/entraclaw-mcp"
 cat > "$PROJECT_ROOT/.mcp.json" << MCPEOF
 {
@@ -725,7 +729,7 @@ cat > "$PROJECT_ROOT/.mcp.json" << MCPEOF
   }
 }
 MCPEOF
-success "MCP server config written to .mcp.json"
+success "MCP server config written to .mcp.json (see .mcp.json.example to add persona-sati)"
 
 echo -e "  ${YELLOW}NEXT STEPS:${NC}"
 echo -e "  1. Wait 10-15 min for Teams/mailbox provisioning (if license was just assigned)"

@@ -112,20 +112,21 @@ if [ -d "$IMPORT_DIR/claude-memory" ]; then
 fi
 
 # 6. Regenerate .mcp.json with correct paths for this machine
-VENV_PYTHON="$PROJECT_ROOT/.venv/bin/python3"
+# NOTE: To add persona-sati (mind server), see .mcp.json.example
+ENTRACLAW_MCP_BIN="$PROJECT_ROOT/.venv/bin/entraclaw-mcp"
 cat > "$PROJECT_ROOT/.mcp.json" << MCPEOF
 {
   "mcpServers": {
     "entraclaw": {
-      "command": "$VENV_PYTHON",
-      "args": ["-m", "entraclaw.mcp_server"],
-      "cwd": "$PROJECT_ROOT",
-      "env": {}
+      "type": "stdio",
+      "command": "$ENTRACLAW_MCP_BIN",
+      "args": [],
+      "description": "EntraClaw Agent Identity — Teams tools + background DM/email poll"
     }
   }
 }
 MCPEOF
-echo -e "  ${GREEN}✅ .mcp.json regenerated with local paths${NC}"
+echo -e "  ${GREEN}✅ .mcp.json regenerated with local paths (see .mcp.json.example for persona-sati)${NC}"
 
 # Clean up
 rm -rf "$IMPORT_DIR"

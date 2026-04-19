@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "entraclaw": {
+      "type": "stdio",
+      "command": ".venv/bin/entraclaw-mcp",
+      "args": [],
+      "description": "EntraClaw Agent Identity — Teams tools + background DM/email poll"
+    },
+    "persona-sati": {
+      "type": "sse",
+      "url": "http://localhost:8100/sse",
+      "description": "Persona-sati — personality, memory, and behavioral rules (optional)"
+    }
+  }
+}

@@ -1,16 +1,5 @@
 {
   "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "mkdir -p \"$HOME/.entraclaw/logs\" && cd \"$CLAUDE_PROJECT_DIR\" && [ \"$ENTRACLAW_PERSONA_SYNC\" = \"on\" ] && .venv/bin/python scripts/claude_memory_sync.py pull 2>>\"$HOME/.entraclaw/logs/persona-sync.log\" || true",
-            "timeout": 15
-          }
-        ]
-      }
-    ],
     "PostToolUse": [
       {
         "matcher": "mcp__entraclaw__send_teams_message",
@@ -18,16 +7,6 @@
           {
             "type": "command",
             "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Teams message sent. The background channel will push any replies automatically — no need to call watch_teams_replies unless you want to block and wait.\"}}'",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "mkdir -p \"$HOME/.entraclaw/logs\" && cd \"$CLAUDE_PROJECT_DIR\" && [ \"$ENTRACLAW_PERSONA_SYNC\" = \"on\" ] && case \"$CLAUDE_TOOL_INPUT_file_path\" in */memory/*) .venv/bin/python scripts/claude_memory_sync.py push-one \"$CLAUDE_TOOL_INPUT_file_path\" 2>>\"$HOME/.entraclaw/logs/persona-sync.log\" & ;; esac || true",
             "timeout": 5
           }
         ]

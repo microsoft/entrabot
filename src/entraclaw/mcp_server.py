@@ -15,7 +15,6 @@ import json
 import logging
 import time
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
@@ -35,25 +34,20 @@ logger: logging.Logger | None = None
 
 
 def _load_agent_instructions() -> str:
-    """Load the MCP server's system prompt from prompts/agent_system.md.
+    """Return a generic tool-description prompt.
 
-    Edit the markdown file, not this function — the prompt is intentionally
-    human-editable separate from the code. If the file is missing (e.g.
-    pip-installed outside the repo), fall back to a minimal inline string
-    so the server still boots.
+    The agent's personality and behavioral rules are served by the
+    persona-sati MCP server.  This prompt only describes what this
+    MCP server's tools do — no personality, no channel discipline,
+    no memory references.
     """
-    prompt_path = Path(__file__).resolve().parents[2] / "prompts" / "agent_system.md"
-    fallback = (
-        "EntraClaw Agent: you operate a Microsoft Teams identity with "
-        "cert-backed three-hop auth. The system prompt file "
-        "(prompts/agent_system.md) is missing from this install; channel-"
-        "discipline rules aren't loaded. Behave conservatively and route "
-        "ambiguity back to Brandon via Teams DM."
+    return (
+        "EntraClaw Teams Interface: provides tools for sending and "
+        "receiving Microsoft Teams messages, managing group chats, "
+        "email polling, and daily summary generation. This server "
+        "handles communication channels only. For personality, memory, "
+        "and behavioral rules, connect to the persona-sati MCP server."
     )
-    try:
-        return prompt_path.read_text(encoding="utf-8")
-    except OSError:
-        return fallback
 
 
 mcp = FastMCP(

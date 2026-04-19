@@ -1,10 +1,14 @@
 # Openclaw Identity Research — Engineering Summary
 
-**Date:** April 17, 2026
+**Date:** April 18, 2026
 **Team:** Brandon Werner
-**Status:** Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **449 tests.** 11 MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat landed. Phase 1-3 daily-summary stack live (interaction log → email poll → triage email). **ADR-005 cloud-memory: Phases 1, 2, 5, 6a shipped** — Phase 6b (session_digest writer) next.
+**Status:** Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **458 tests.** MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat landed. **Persona-sati integration: mind-body split complete** — system prompt externalized, memory sync hooks removed, openclaw is now a Teams-only tool server. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped.
 
 ---
+
+## What's New Since Apr 17
+
+- **Persona-sati integration (mind-body split)** — system prompt (`prompts/agent_system.md`) archived, replaced with generic tool-description string. Memory sync hooks (`SessionStart` pull, `PostToolUse(Write)` push) removed from `.claude/settings.json`. Personality, behavioral rules, and memory now served by persona-sati MCP server. `.mcp.json.example` added for dual-server configuration. `scripts/claude_memory_sync.py` retained as manual migration tool. See `docs/architecture/DESIGN-persona-sati-integration.md`.
 
 ## What's New Since Apr 10
 

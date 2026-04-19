@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 """Claude Code memory ↔ blob storage sync (ADR-005 Phase 6a).
 
-Three subcommands, all idempotent and safe to call from Claude Code hooks:
+.. deprecated::
+    Memory sync is now handled by the **persona-sati** MCP server.
+    The SessionStart and PostToolUse hooks that called this script have
+    been removed from ``.claude/settings.json``.  This script is kept
+    as a **manual migration / one-off sync tool** — it still works if
+    invoked directly, but it is no longer called automatically.
+
+Three subcommands, all idempotent and safe to call manually:
 
     pull            Download every ``claude_memory/`` blob into the local
                     Claude Code memory directory. Cloud is authoritative.
-                    Invoked from a SessionStart hook so a fresh session on
-                    any device starts with the latest persona state.
 
     push            Upload every local memory file not already in the cloud.
                     Used for initial bulk-upload and as a safety net.
 
-    push-one PATH   Upload a single file to ``claude_memory/``. Invoked
-                    from a PostToolUse(Write) hook after Claude Code
-                    writes a memory file.
+    push-one PATH   Upload a single file to ``claude_memory/``.
 
 All commands respect ``ENTRACLAW_PERSONA_SYNC`` — when unset or not ``on``
-the script exits 0 without touching the backend. Hooks must not break
-Claude Code, so every error path returns 0 and logs to stderr.
+the script exits 0 without touching the backend. Every error path returns
+0 and logs to stderr.
 """
 
 from __future__ import annotations

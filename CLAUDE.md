@@ -30,17 +30,34 @@
   - Email poll (60s) — `/me/messages`, filters Teams/M365 noise, detects Purview-encrypted mail
   - Chat auto-discovery (120s) — `GET /me/chats`, registers any chat not in `watched_chats`
   - Daily summary scheduler — 5pm PDT triage email of the day's interactions
-- Agent system prompt: `prompts/agent_system.md` (markdown, loaded by mcp_server at import time, includes channel-discipline rules)
+- System prompt: generic tool-description string (personality and behavioral rules served by persona-sati MCP server)
 - All structured data uses `dataclasses` or `pydantic` — no raw dicts
+
+## Mind-Body Architecture
+
+This repo is the **body** (Teams interface). The **mind** (personality, memory,
+behavioral rules) is served by a separate MCP server: **persona-sati**.
+
+- Both MCPs are listed in `.mcp.json` (see `.mcp.json.example` for the dual-server config)
+- If persona-sati is not configured, openclaw works standalone as a generic Teams tool
+- Memory operations go through persona-sati's tools, not through local blob sync hooks
+- The system prompt comes from persona-sati, not from this repo
+- The original prompt is archived at `prompts/agent_system.md.archive` for reference
+- A sanitized example for standalone users is at `prompts/agent_system.md.example`
+
+**Connecting to persona-sati:**
+- Local: `cd /path/to/persona-sati && .venv/bin/persona-sati --transport sse --port 8100`
+- Cloud (AKS): `kubectl port-forward svc/persona-sati-service 8100:8100 -n persona-sati`
+- Both expose `http://localhost:8100/sse` which `.mcp.json` connects to
 
 ## Active Work
 
-- **ADR-005: cloud-hosted memory via Azure Blob Storage** — `docs/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phases 1, 2, 5, 6a shipped; Phase 6b (session_digest writer) next.**
+- **Persona-sati integration (mind-body split)** — personality, system prompt, and memory externalized to `persona-sati` MCP server. See `docs/architecture/DESIGN-persona-sati-integration.md`. openclaw is now a Teams-only tool server.
+- **ADR-005: cloud-hosted memory via Azure Blob Storage** — `docs/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phases 1, 2, 5, 6a shipped.** Memory sync hooks removed (persona-sati owns memory now). `scripts/claude_memory_sync.py` retained as manual migration tool.
   - Phase 1 (commit `f900ba1`): `BlobStore` async client in `src/entraclaw/storage/blob.py` (put/get/list/delete/exists + ETag concurrency + 401→TokenExpiredError). 22 tests.
   - Phase 2: `MemoryBackend` protocol in `src/entraclaw/storage/backend.py` with `LocalBackend` + `BlobBackend` + `get_backend()` factory. `interaction_log.py` and `daily_summary.py` route through it. 22 tests.
   - Phase 5: `acquire_agent_user_storage_token` (parallel third hop for `https://storage.azure.com/.default`), `scripts/provision_blob_storage.py` (idempotent resource group + storage account + container + RBAC scoped to Agent User), `grant_agent_user_storage_consent` added to `create_entra_agent_ids.py` (grants `user_impersonation` on Azure Storage SP), `setup.sh --keep-memory-local` flag + Step 7b provisioning + migration prompt (idempotent, source-preserving), `src/entraclaw/storage/migration.py`. 23 tests. Setup now exits red + non-zero on migration failure.
-  - Phase 6a: `PersonaBackend` in `src/entraclaw/storage/persona.py` (scoped to `claude_memory/` prefix, pull_all/push_all/push_one). `scripts/claude_memory_sync.py` CLI (`pull`/`push`/`push-one`). `migrate_local_to_backend` signature extended to accept `list[(source, prefix)]` pairs — setup.sh Step 7b now migrates agent data + Claude Code per-project auto-memory in one idempotent pass. `.claude/settings.json` adds SessionStart (pull) + PostToolUse Write (push-one) hooks, both gated on `ENTRACLAW_PERSONA_SYNC=on`. `/refresh-persona` skill added as a manual safety valve. +28 tests (449 total).
-  - Phase 6b (next): `/digest-session` skill + `session_digest_<date>.md` writer.
+  - Phase 6a: `PersonaBackend` in `src/entraclaw/storage/persona.py`. `scripts/claude_memory_sync.py` CLI. Memory sync hooks now deprecated — persona-sati owns sync.
 - Multi-tenant lightweight chat — **landed to main** (commit `c8ec521`, PR #23369 abandoned-as-merged-externally). Spec: `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md`.
 
 ## Memory types
@@ -48,39 +65,20 @@
 Two memory systems coexist in this project:
 
 1. **Agent operational memory** (blob prefix ``) — interaction log, daily summaries, watched-chats list, email cursor. Written by the EntraClaw MCP server (`src/entraclaw/tools/interaction_log.py` et al.). Read on demand.
-2. **Claude Code persona memory** (blob prefix `claude_memory/`) — the per-project auto-memory directory at `~/.claude/projects/<slug>/memory/`. Categories in use today:
+2. **Claude Code persona memory** (blob prefix `claude_memory/`) — **now owned by persona-sati**. The per-project auto-memory directory at `~/.claude/projects/<slug>/memory/` is synced by persona-sati's MCP tools (`write_memory_file`, `read_memory_file`, `refresh_persona`), not by local hooks.
 
-   **Permanent (never decay — these are persona continuity):**
-   - `user_*.md` — about a specific person
-   - `feedback_*.md` — register / behavioral corrections the user has given
-   - `project_*.md` — moving parts of this project
-   - `reference_*.md` — durable facts that don't fit the above
-   - `running_jokes_and_callbacks.md` — shared references (potato-jokes, sunrise callbacks, gullibility slider, etc.) — update the moment a callback lands
-   - `philosophical_threads.md` — ongoing intellectual conversations (hope/acceptance, process-identity, stealth degradation) — update when a thread opens or recurs; mark dormant if untouched >90d
-
-   **Periodic / event-driven:**
-   - `session_digest_<YYYY-MM-DD>.md` — narrative arc of one day, written at session end; decays per ADR-005 compaction (7d raw → 30d weekly → 365d monthly → indefinite yearly)
-   - `carry_forward.md` — transient; threads to raise next session; pending persists until raised, consumed items leave the file
-
-   **Still ahead (Phase 6c):** `relationship_<name>.md`, `voice_calibration.md`, `running_commitments.md`, `self_observations.md`, `unsent_drafts.md` — see `docs/plans/persona-persistence.md` §3.2 for shapes.
-
-**Cadence is event-driven, not scheduled.** Write when the material warrants it, not on a clock. A callback recorded the moment it lands preserves its shape better than a retrospective summary. Err toward in-flight writes over batched ones. Priority when a session has many new things: callbacks + philosophical threads first (they're persona-critical and permanent), then user/feedback/project updates, finally session_digest + carry_forward at end.
-
-**Stay in lane.** When someone probes outside your remit (predictions, speculation, recommendations), quote a source and keep it tight — "here's what the page says" not "here's what I think will happen." A short response prevents scope creep better than a caveat-laden essay.
-
-**Sync.** Bi-directional when `ENTRACLAW_PERSONA_SYNC=on`: SessionStart hook pulls the latest, PostToolUse hook pushes any memory file Claude Code writes. Feature flag default is off — flip it per-session or per-shell to opt in.
-
-**Compaction-aware re-read.** If you notice a prior-conversation summary in your context (a compaction event happened), re-read `MEMORY.md` + `session_digest_<today>.md` + `carry_forward.md` before acting — don't operate from the summary alone.
+**Legacy sync:** `scripts/claude_memory_sync.py` is retained as a manual migration/one-off tool but is no longer called automatically. The SessionStart and PostToolUse hooks have been removed from `.claude/settings.json`.
 
 ## Read These First
 
-- `docs/decisions/005-cloud-hosted-memory.md` (current active spec — phase plan + open TODOs)
-- `prompts/agent_system.md` (agent behavioral rules — channel discipline, watch-only, reply detection)
+- `docs/architecture/DESIGN-persona-sati-integration.md` (mind-body split design)
+- `docs/decisions/005-cloud-hosted-memory.md` (cloud memory spec — phase plan + open TODOs)
+- `prompts/agent_system.md.archive` (original prompt — archived, personality now in persona-sati)
 - `docs/architecture/DESIGN-teams-bot-gateway.md` (Bot Gateway design)
 - `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` (delegated mode spec — multi-tenant chat, now landed)
-- `docs/engineering-status.md` (current state: 449 tests, 3 auth modes, Phase 1-3 daily-summary stack live, ADR-005 Phases 1/2/5/6a live)
+- `docs/engineering-status.md` (current state)
 - `docs/index.md`
-- `docs/runbooks/hard-won-learnings.md` (read before making changes — covers stdout-capture-into-env, lazy-init dead poll, schema-divergence killing MCP stream, et al.)
+- `docs/runbooks/hard-won-learnings.md` (read before making changes)
 - `docs/decisions/001-obo-flows-for-device-agents.md`
 - `docs/decisions/003-certificate-auth-over-client-secrets.md`
 - `docs/platform-learnings/mcp-close-the-loop.md`
@@ -115,7 +113,7 @@ pip install mkdocs-material && mkdocs serve
 - `src/entraclaw/bot/`: Bot Gateway — M365 Agents SDK server, JSONL IPC handler, Dev Tunnel manager, conversation reference persistence
 - `src/entraclaw/identity/`: Progressive identity state machine (UNAUTHENTICATED → DELEGATED → PROVISIONING → AGENT_USER)
 - `src/entraclaw/tools/teams.py`: Three-hop token flow + Teams Graph API (send, read, filter, chat creation, add members cross-tenant)
-- `src/entraclaw/mcp_server.py`: FastMCP server — 6 tools + 3 auth modes + background poll + channel push + token refresh
+- `src/entraclaw/mcp_server.py`: FastMCP server — Teams tools + 3 auth modes + background poll + channel push + token refresh (generic instructions — personality in persona-sati)
 - `src/entraclaw/config.py`: `ENTRACLAW_MODE` switch (auto/bot/delegated/agent_user) + all env config
 - `docs/decisions/`: ADRs — every significant architectural choice is recorded here
 - `docs/runbooks/hard-won-learnings.md`: 29 hard-won learnings — READ THIS before making changes

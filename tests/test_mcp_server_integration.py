@@ -1,6 +1,7 @@
 """Integration tests for mcp_server identity-aware changes.
 
 Tests cover:
+- _load_agent_instructions() returns generic tool-description (mind-body split)
 - _resolve_tenant_id() helper (eng review 3A)
 - Token refresh dispatch: DELEGATED→MSAL, AGENT_USER→three-hop (6A)
 - Delegated-mode poll echo-prevention via sent_message_ids
@@ -19,6 +20,37 @@ import httpx
 import pytest
 
 from entraclaw.tools.teams import filter_human_messages
+
+
+# ---------------------------------------------------------------------------
+# _load_agent_instructions (mind-body split)
+# ---------------------------------------------------------------------------
+class TestLoadAgentInstructions:
+    """After the persona-sati integration, _load_agent_instructions returns
+    a generic tool-description string — no file I/O, no personality."""
+
+    def test_returns_generic_tool_description(self) -> None:
+        from entraclaw.mcp_server import _load_agent_instructions
+
+        result = _load_agent_instructions()
+        assert "EntraClaw Teams Interface" in result
+        assert "persona-sati" in result
+        # Must NOT contain personality / channel-discipline content
+        assert "channel discipline" not in result.lower()
+        assert "Brandon" not in result
+        assert "watch-only" not in result.lower()
+
+    def test_does_not_import_path(self) -> None:
+        """The function should not depend on pathlib — no file I/O."""
+        import entraclaw.mcp_server as mod
+
+        assert not hasattr(mod, "Path"), "Path should not be imported"
+
+    def test_mcp_server_boots_without_prompt_file(self) -> None:
+        """The module-level mcp object should be created without error."""
+        from entraclaw.mcp_server import mcp
+
+        assert mcp.name == "EntraClaw Agent Identity"
 
 
 # ---------------------------------------------------------------------------
