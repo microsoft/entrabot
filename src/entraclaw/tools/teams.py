@@ -733,7 +733,9 @@ def filter_human_messages(
     """Return only messages from the human (not the agent, not system messages).
 
     Filters out:
-    - Messages where ``from`` matches the agent's display name
+    - Messages where ``from`` starts with the agent's display name. Graph
+      can append a persona suffix (e.g. "EntraClaw Agent (sati-agent)"),
+      so prefix-match instead of exact-match to catch agent echoes.
     - Messages where ``from`` is ``"unknown"`` (system messages with null from field)
     - Messages whose ``message_id`` is in *sent_message_ids* (echo prevention for delegated mode)
     - Messages whose content starts with ``[EntraClaw]`` (restart-safe dedup filter)
@@ -741,10 +743,19 @@ def filter_human_messages(
     All filtering is client-side — Graph API ``$filter`` is unreliable for chat messages.
     """
     exclude_ids = sent_message_ids or set()
+
+    def _is_agent(sender: str) -> bool:
+        if not agent_user_display_name:
+            return False
+        return sender == agent_user_display_name or sender.startswith(
+            agent_user_display_name + " "
+        )
+
     return [
         m
         for m in messages
-        if m.get("from") not in (agent_user_display_name, "unknown")
+        if not _is_agent(m.get("from", ""))
+        and m.get("from") != "unknown"
         and m.get("message_id") not in exclude_ids
         and not (m.get("content", "").strip().startswith("[EntraClaw]"))
     ]

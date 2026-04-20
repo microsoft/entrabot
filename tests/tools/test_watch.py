@@ -78,6 +78,31 @@ class TestFilterHumanMessages:
         result = filter_human_messages(messages, agent_user_display_name="EntraClaw Agent")
         assert result == []
 
+    def test_filters_agent_with_persona_suffix(self) -> None:
+        """Graph can append a persona-sati suffix to the agent's display
+        name (e.g. "EntraClaw Agent (sati-agent)"). Prefix-match so the
+        agent's own outbound still gets filtered out of the inbound poll.
+        """
+        messages = [
+            {
+                "message_id": "m1",
+                "from": "EntraClaw Agent (sati-agent)",
+                "content": "hi back",
+                "sent_at": "2026-04-06T12:00:00Z",
+            },
+            {
+                "message_id": "m2",
+                "from": "Human User",
+                "content": "hey",
+                "sent_at": "2026-04-06T12:00:01Z",
+            },
+        ]
+        result = filter_human_messages(
+            messages, agent_user_display_name="EntraClaw Agent",
+        )
+        assert len(result) == 1
+        assert result[0]["message_id"] == "m2"
+
 
 class TestEagerTokenRefresh:
     @pytest.mark.asyncio
