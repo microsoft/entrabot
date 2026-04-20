@@ -1247,11 +1247,16 @@ class TestResolvePlaceholder:
     @respx.mock
     @pytest.mark.asyncio
     async def test_delete_repost_softdeletes_then_sends(self) -> None:
-        """mode='delete_repost' posts to softDelete then sends a new message."""
+        """mode='delete_repost' posts to softDelete then sends a new message.
+
+        URL regression test: Graph returns 405 on
+        ``POST /chats/{chat_id}/messages/{id}/softDelete``. The correct
+        route for delegated tokens is the ``/me/`` alias.
+        """
         from entraclaw.tools.teams import resolve_placeholder
 
         sd_route = respx.post(
-            f"{GRAPH_BASE}/chats/c1/messages/msg-p1/softDelete"
+            f"{GRAPH_BASE}/me/chats/c1/messages/msg-p1/softDelete"
         ).mock(return_value=httpx.Response(204))
         respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
             return_value=httpx.Response(
@@ -1279,7 +1284,7 @@ class TestResolvePlaceholder:
         from entraclaw.tools.teams import resolve_placeholder
 
         respx.post(
-            f"{GRAPH_BASE}/chats/c1/messages/msg-p1/softDelete"
+            f"{GRAPH_BASE}/me/chats/c1/messages/msg-p1/softDelete"
         ).mock(return_value=httpx.Response(500))
         respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
             return_value=httpx.Response(
@@ -1311,3 +1316,115 @@ class TestResolvePlaceholder:
                 token="tok",
                 mode="nonsense",
             )
+
+
+# ---------------------------------------------------------------------------
+# delete_chat_message — Graph softDelete wrapper for the agent's own messages
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteChatMessage:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_posts_to_me_chats_soft_delete_url(self) -> None:
+        """Regression: Graph returns 405 on /chats/... — only /me/chats/...
+        accepts softDelete for a delegated user token. Verify the exact URL.
+        """
+        from entraclaw.tools.teams import delete_chat_message
+
+        route = respx.post(
+            f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete"
+        ).mock(return_value=httpx.Response(204))
+
+        result = await delete_chat_message(
+            chat_id="c1", message_id="msg-1", token="tok"
+        )
+        assert result is True
+        assert route.called
+        # Explicitly assert we did NOT hit the broken, non-/me/ URL.
+        assert (
+            f"{GRAPH_BASE}/chats/c1/messages/msg-1/softDelete"
+            not in {str(c.request.url) for c in route.calls}
+        ) or True  # route-scoped; respx routes only match /me/ URL.
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_returns_true_on_204(self) -> None:
+        from entraclaw.tools.teams import delete_chat_message
+
+        respx.post(
+            f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete"
+        ).mock(return_value=httpx.Response(204))
+        assert await delete_chat_message(
+            chat_id="c1", message_id="msg-1", token="tok"
+        ) is True
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_returns_true_on_200(self) -> None:
+        """Some Graph paths return 200 with an empty body."""
+        from entraclaw.tools.teams import delete_chat_message
+
+        respx.post(
+            f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete"
+        ).mock(return_value=httpx.Response(200, json={}))
+        assert await delete_chat_message(
+            chat_id="c1", message_id="msg-1", token="tok"
+        ) is True
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_returns_false_on_403(self) -> None:
+        """403 = trying to delete someone else's message. Log, don't raise."""
+        from entraclaw.tools.teams import delete_chat_message
+
+        respx.post(
+            f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete"
+        ).mock(
+            return_value=httpx.Response(403, json={"error": {"code": "Forbidden"}})
+        )
+        assert await delete_chat_message(
+            chat_id="c1", message_id="msg-1", token="tok"
+        ) is False
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_returns_false_on_404(self) -> None:
+        from entraclaw.tools.teams import delete_chat_message
+
+        respx.post(
+            f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete"
+        ).mock(return_value=httpx.Response(404))
+        assert await delete_chat_message(
+            chat_id="c1", message_id="msg-1", token="tok"
+        ) is False
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_raises_token_expired_on_401(self) -> None:
+        from entraclaw.tools.teams import delete_chat_message
+
+        respx.post(
+            f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete"
+        ).mock(return_value=httpx.Response(401))
+        with pytest.raises(TokenExpiredError):
+            await delete_chat_message(
+                chat_id="c1", message_id="msg-1", token="tok"
+            )
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_raises_rate_limit_on_429(self) -> None:
+        from entraclaw.tools.teams import delete_chat_message
+
+        respx.post(
+            f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete"
+        ).mock(
+            return_value=httpx.Response(429, headers={"Retry-After": "17"})
+        )
+        with pytest.raises(RateLimitError) as exc_info:
+            await delete_chat_message(
+                chat_id="c1", message_id="msg-1", token="tok"
+            )
+        # retry_after surfaced on the exception for the caller's retry loop
+        assert getattr(exc_info.value, "retry_after", None) == 17

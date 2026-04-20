@@ -1691,3 +1691,198 @@ class TestThinkingPlaceholderTool:
         assert captured["metadata"]["mode"] == "fallback_new"
         assert captured["metadata"]["requested_mode"] == "edit"
         _json.loads("{}")  # silence unused
+
+
+# ---------------------------------------------------------------------------
+# delete_teams_message MCP wrapper
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteTeamsMessageTool:
+    @pytest.mark.asyncio
+    async def test_calls_delete_chat_message_with_ids(
+        self, monkeypatch
+    ) -> None:
+        """delete_teams_message forwards chat_id + message_id to Graph helper."""
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_log_interaction_safe", lambda **kw: None
+        )
+        monkeypatch.setattr(
+            "entraclaw.tools.audit.log_event",
+            lambda **kw: {"event_id": "evt-x"},
+        )
+
+        captured_kwargs: dict = {}
+
+        async def fake_retry(fn, **kwargs):
+            captured_kwargs.update(kwargs)
+            return True
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+        result = await mcp_server.delete_teams_message(
+            message_id="msg-1", chat_id="c1"
+        )
+        parsed = _json.loads(result)
+        assert parsed["deleted"] is True
+        assert parsed["message_id"] == "msg-1"
+        assert captured_kwargs["chat_id"] == "c1"
+        assert captured_kwargs["message_id"] == "msg-1"
+
+    @pytest.mark.asyncio
+    async def test_rejects_missing_chat_id(self, monkeypatch) -> None:
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        result = await mcp_server.delete_teams_message(
+            message_id="msg-1", chat_id=""
+        )
+        parsed = _json.loads(result)
+        assert "error" in parsed
+        assert "chat_id" in parsed["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_rejects_missing_message_id(self, monkeypatch) -> None:
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        result = await mcp_server.delete_teams_message(
+            message_id="", chat_id="c1"
+        )
+        parsed = _json.loads(result)
+        assert "error" in parsed
+        assert "message_id" in parsed["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_audits_before_graph_call(self, monkeypatch) -> None:
+        """Security: audit event must land before the Graph mutation (fail-closed)."""
+        from entraclaw import mcp_server
+
+        audit_events: list[dict] = []
+
+        def fake_log_event(**kwargs):
+            audit_events.append(kwargs)
+            return {"event_id": "evt-1", **kwargs}
+
+        monkeypatch.setattr(
+            "entraclaw.tools.audit.log_event", fake_log_event
+        )
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_log_interaction_safe", lambda **kw: None
+        )
+
+        graph_called = False
+
+        async def fake_retry(fn, **kwargs):
+            nonlocal graph_called
+            assert audit_events, (
+                "audit event must be written before the Graph mutation"
+            )
+            graph_called = True
+            return True
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+        await mcp_server.delete_teams_message(
+            message_id="msg-1", chat_id="c1"
+        )
+        assert graph_called
+        assert audit_events[0]["action"] == "delete_teams_message"
+        assert audit_events[0]["resource"] == "c1:msg-1"
+
+    @pytest.mark.asyncio
+    async def test_interaction_log_on_success(self, monkeypatch) -> None:
+        from entraclaw import mcp_server
+
+        captured: dict = {}
+
+        def fake_log(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr(mcp_server, "_log_interaction_safe", fake_log)
+        monkeypatch.setattr(
+            "entraclaw.tools.audit.log_event",
+            lambda **kw: {"event_id": "evt-x"},
+        )
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server,
+            "_with_token_retry",
+            AsyncMock(return_value=True),
+        )
+
+        await mcp_server.delete_teams_message(
+            message_id="msg-1", chat_id="c1"
+        )
+        assert captured["direction"] == "outbound"
+        assert captured["action"] == "delete_teams_message"
+        assert captured["metadata"]["deleted"] is True
+        assert captured["metadata"]["chat_id"] == "c1"
+        assert captured["metadata"]["message_id"] == "msg-1"
+
+    @pytest.mark.asyncio
+    async def test_interaction_log_on_failure(self, monkeypatch) -> None:
+        """Failure path: Graph returned False (403/404). deleted=false logged."""
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        captured: dict = {}
+
+        def fake_log(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr(mcp_server, "_log_interaction_safe", fake_log)
+        monkeypatch.setattr(
+            "entraclaw.tools.audit.log_event",
+            lambda **kw: {"event_id": "evt-x"},
+        )
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server,
+            "_with_token_retry",
+            AsyncMock(return_value=False),
+        )
+
+        result = await mcp_server.delete_teams_message(
+            message_id="msg-1", chat_id="c1"
+        )
+        parsed = _json.loads(result)
+        assert parsed["deleted"] is False
+        assert "reason" in parsed
+        assert captured["action"] == "delete_teams_message"
+        assert captured["metadata"]["deleted"] is False

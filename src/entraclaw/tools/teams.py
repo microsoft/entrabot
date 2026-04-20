@@ -716,9 +716,12 @@ async def resolve_placeholder(
         return await _post_fallback(chat_id, final_message, token, content_type, mentions)
 
     # delete_repost
+    # Graph returns 405 on ``/chats/{id}/messages/{id}/softDelete`` — the
+    # correct route for a delegated user token is the ``/me/`` alias, per
+    # https://learn.microsoft.com/graph/api/chatmessage-softdelete.
     async with httpx.AsyncClient(transport=transport) as client:
         sd_resp = await client.post(
-            f"{GRAPH_BASE}/chats/{chat_id}/messages/{placeholder_id}/softDelete",
+            f"{GRAPH_BASE}/me/chats/{chat_id}/messages/{placeholder_id}/softDelete",
             headers=headers,
         )
         if sd_resp.status_code == 401:
@@ -760,6 +763,61 @@ async def _post_fallback(
         mentions=mentions,
     )
     return {"message_id": sent["message_id"], "mode": "fallback_new"}
+
+
+async def delete_chat_message(
+    chat_id: str,
+    message_id: str,
+    *,
+    token: str,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> bool:
+    """Soft-delete a chat message the Agent User sent.
+
+    Graph ``chatMessage: softDelete`` replaces the message body with a
+    tombstone visible to chat participants; the message id is retained
+    but the content is gone. Only the sender of the message can delete
+    it via the delegated ``Chat.ReadWrite`` path (application permissions
+    are NOT supported).
+
+    URL shape: ``POST {GRAPH_BASE}/me/chats/{chat_id}/messages/{message_id}/softDelete``.
+    The ``/me/`` alias is required — the ``/chats/{id}/...`` form returns
+    405 Method Not Allowed.
+
+    Returns:
+        True on 2xx from Graph; False on other 4xx/5xx (e.g. 403 when
+        trying to delete someone else's message, 404 for a missing
+        message). The False path is logged for observability.
+
+    Raises:
+        TokenExpiredError on 401 so the caller can re-acquire.
+        RateLimitError on 429 so the caller can honour Retry-After.
+    """
+    headers = {"Authorization": f"Bearer {token}"}
+
+    owned_transport = transport or RetryOn429Transport(
+        wrapped=httpx.AsyncHTTPTransport()
+    )
+    async with httpx.AsyncClient(transport=owned_transport) as client:
+        resp = await client.post(
+            f"{GRAPH_BASE}/me/chats/{chat_id}/messages/{message_id}/softDelete",
+            headers=headers,
+        )
+        if resp.status_code == 401:
+            raise TokenExpiredError("Token expired — re-acquire")
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", "60"))
+            raise RateLimitError(retry_after)
+        if 200 <= resp.status_code < 300:
+            return True
+        logger.warning(
+            "softDelete chat message %s in chat %s failed: %d %s",
+            message_id,
+            chat_id,
+            resp.status_code,
+            resp.text[:200],
+        )
+        return False
 
 
 async def fetch_hosted_image(*, token: str, url: str) -> bytes | None:

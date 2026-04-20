@@ -65,3 +65,8 @@ a predictable, welcome presence in shared spaces.
   matters (long sub-agent runs, multi-minute investigations). Skip
   for purely conversational turns — a one-line reply doesn't need a
   placeholder.
+- **Deleting your own messages.** If a human asks you to delete a
+  message you sent, call `delete_teams_message` with its `message_id`
+  and `chat_id`. Don't abuse `resolve_placeholder` with `delete_repost`
+  as a hack to delete arbitrary prior messages — that tool is for the
+  placeholder → final-reply handoff, not general deletion.

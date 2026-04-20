@@ -1517,6 +1517,114 @@ async def resolve_placeholder(
 
 
 @mcp.tool()
+async def delete_teams_message(
+    message_id: str,
+    chat_id: str = "",
+) -> str:
+    """Soft-delete one of the agent's own Teams messages.
+
+    Use when a human asks you to delete a message you sent. Graph
+    replaces the body with a "this message has been deleted" tombstone
+    visible to chat participants — the message id stays, but the content
+    is gone. You can only delete messages the Agent User itself sent;
+    Graph returns 403 on anyone else's, and that's the right failure
+    mode.
+
+    Prefer this over the ``resolve_placeholder`` delete-repost path when
+    the intent is "just remove the message," not "swap a placeholder for
+    a final reply."
+
+    Args:
+        message_id: The Teams message_id to delete.
+        chat_id: The chat the message lives in. Required.
+
+    Returns:
+        JSON with ``{"deleted": true, "message_id": ...}`` on success, or
+        ``{"deleted": false, "reason": "..."}`` on Graph failure.
+    """
+    await _initialize()
+
+    if not chat_id:
+        return json.dumps({
+            "error": (
+                "chat_id is required — pass the chat_id of the target "
+                "Teams chat."
+            )
+        })
+    if not message_id:
+        return json.dumps({
+            "error": (
+                "message_id is required — pass the message_id of the "
+                "agent's own message to delete."
+            )
+        })
+
+    # Audit before mutating — per security.md "Audit before acting". Fail
+    # closed: if the audit write raises, the Graph call does not proceed.
+    from entraclaw.tools.audit import log_event
+    config = get_config()
+    if _identity:
+        agent_id = (
+            _identity.session.user_id or config.agent_id
+            or config.blueprint_app_id or "unknown"
+        )
+        attribution = _identity.session.attribution_type
+    else:
+        agent_id = config.agent_id or config.blueprint_app_id or "unknown"
+        attribution = "agent"
+    log_event(
+        action="delete_teams_message",
+        resource=f"{chat_id}:{message_id}",
+        outcome="pending",
+        agent_id=agent_id,
+        metadata={},
+        attribution_type=attribution,
+    )
+
+    from entraclaw.tools.teams import delete_chat_message
+
+    await _ensure_valid_token()
+    deleted = await _with_token_retry(
+        delete_chat_message,
+        chat_id=chat_id,
+        message_id=message_id,
+    )
+
+    _log_interaction_safe(
+        channel=detect_channel(chat_id),
+        direction="outbound",
+        sender="entraclaw-agent",
+        recipient=chat_id,
+        summary=f"deleted message {message_id}" if deleted
+        else f"delete failed for {message_id}",
+        action="delete_teams_message",
+        content_ref=message_id,
+        metadata={
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "deleted": bool(deleted),
+        },
+    )
+
+    if deleted:
+        return json.dumps(
+            {"deleted": True, "message_id": message_id}, indent=2
+        )
+    return json.dumps(
+        {
+            "deleted": False,
+            "message_id": message_id,
+            "reason": (
+                "Graph softDelete returned a non-2xx status "
+                "(likely 403 not-owner or 404 not-found). "
+                "See audit + interaction log."
+            ),
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
 async def send_card(
     card_type: str,
     chat_id: str = "",
