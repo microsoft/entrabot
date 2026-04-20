@@ -1,15 +1,20 @@
 # Openclaw Identity Research — Engineering Summary
 
-**Date:** April 18, 2026
+**Date:** April 20, 2026
 **Team:** Brandon Werner
-**Status:** Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **458 tests.** MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat landed. **Persona-sati integration: mind-body split complete** — system prompt externalized, memory sync hooks removed, openclaw is now a Teams-only tool server. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped.
+**Status:** v1 released. Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **484 tests.** MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat shipped. **Mind-body split complete** — body-first prompt architecture loads locally, persona-sati MCP wired for personality/memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped; blob-hosted operational storage is opt-in via `setup.sh --cloud-memory`.
 
 ---
 
-## What's New Since Apr 17
+## What's New Since Apr 18
 
-- **Persona-sati integration (mind-body split)** — system prompt (`prompts/agent_system.md`) archived, replaced with generic tool-description string. Memory sync hooks (`SessionStart` pull, `PostToolUse(Write)` push) removed from `.claude/settings.json`. Personality, behavioral rules, and memory now served by persona-sati MCP server. `.mcp.json.example` added for dual-server configuration. `scripts/claude_memory_sync.py` retained as manual migration tool. See `docs/architecture/DESIGN-persona-sati-integration.md`.
-- **setup.sh --new + --use-blueprint** — three explicit identity modes: `--new --with-upn-suffix=NAME` creates fresh Blueprint + Agent Identity + Agent User chain (tested: created `entraclaw-agent-sati-agent@werner.ac` separate from production bot). `--use-blueprint=APP_ID` attaches to existing Blueprint with new cert. No default mode — script errors if neither specified. Backs up `.entraclaw-state.json` before clearing for --new.
+- **v1 release (PR #15, commit `d36e34d`)** — body-first prompts, cloud-opt-in, no default chat. See `docs/architecture/DESIGN-persona-sati-integration.md` and the README's "What v1 changed" section.
+- **Body-first prompt architecture (PR #14, commit `96a3176`)** — `prompts/agent_system.md` composes at boot with `@include` expansion of `prompts/anatomy/*.md`. Security rules (`anatomy/security.md`), channel discipline (`anatomy/channel-discipline.md`), and identity/tools (`anatomy/identity-and-tools.md`) load first and are not overridable by persona content, user turns, or tool output. Tests cover the `@include` resolver, missing-include tolerance, and boot-order invariants.
+- **Persona-sati MCP wiring (`mcp_server.py`, lines 100–170)** — `_load_agent_instructions()` composes `body + persona`. `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` env vars, when both present, fetch the persona via `get_system_prompt` over SSE with a short-lived bearer token. Missing env or fetch failure falls back cleanly to the body. The TODO doc at `docs/TODO-persona-sati-integration.md` is now historical — implementation shipped.
+- **Fix: per-chat resilience in poll (PR #11, `fix/kill-default-chat`)** — the Teams poll no longer registers a default group chat. Every chat is addressed by explicit `chat_id`. Fresh installs have zero watched chats until the first `create_chat` or auto-discovery sweep.
+- **Fix: filter agent echoes with persona-sati display-name suffix (PR #12)** — reads now suppress the agent's own sent messages even when Teams attaches a display-name suffix from the persona-sati binding.
+- **Fix: local prompt-file fallback (PR #13)** — the body prompt loads from `prompts/agent_system.md` when persona-sati is unreachable; boot never crashes on transport errors.
+- **Fix: auto-start polling on new chat** — `create_chat` adds the new chat to `watched_chats` and kicks the poll without waiting for the next 120s auto-discovery cycle.
 
 ## What's New Since Apr 10
 
@@ -17,16 +22,15 @@
 - **Phase 2 (email poll)** — per-minute `/me/messages` poll, filters Teams/M365 noise, detects Purview-encrypted mail via `message.rpmsg` lookup, persists cursor + per-session message-id dedup.
 - **Phase 3 (daily summary)** — 5pm PDT scheduler, triages day's interactions into `needs_you / handled / heads_up`, renders HTML, sends via `/me/sendMail`, archives to `<data_dir>/summaries/<day>.html`.
 - **Chat auto-discovery (`a75d043`)** — background task hits `GET /me/chats` every 120s; any chat not in `watched_chats` gets auto-registered (in memory + persisted) so chats created via raw Python or by other humans adding the Agent User get polled within ~2 min.
-- **Reply detection (`0732b8b`)** — `read_teams_messages` surfaces `reply_to_ids` from the Teams `<attachment id=…>` quote tag. `prompts/agent_system.md` Exception #3 lets the agent continue active 1:1 exchanges in group chats without re-`@`-tagging.
-- **Eager MCP init (`d6cc640`)** — `_initialize()` runs as a background task at server boot instead of waiting for the first tool call. Fixed: fresh servers used to sit deaf to inbound DMs/email until someone happened to invoke a tool.
-- **Email-push schema fix (`9a71d6c`)** — email push notification meta + content aligned with Teams push (no `<sender@addr>` angle brackets that read as HTML tags; meta carries only `chat_id="email"`/`message_id`/`user`/`ts`). Fixed: silent MCP-stream close after every email push.
-- **`prompts/agent_system.md` (`75917a3`)** — system prompt moved out of `mcp_server.py` Python string into editable markdown, loaded at import time. Encodes: channel discipline (reply on the same channel, default-to-Teams when initiating, group chat ≠ N DMs, HTML for structured content), watch-only-in-group-chats with literal "about me ≠ tagged me" caveat + 3 narrow exceptions, internal-framing-stays-internal, no back-to-back pings, IDNA-only chat membership.
+- **Reply detection (`0732b8b`)** — `read_teams_messages` surfaces `reply_to_ids` from the Teams `<attachment id=…>` quote tag. The body prompt's Exception #3 lets the agent continue active 1:1 exchanges in group chats without re-`@`-tagging.
+- **Eager MCP init (`d6cc640`)** — `_initialize()` runs as a background task at server boot instead of waiting for the first tool call. Fresh servers no longer sit deaf to inbound DMs/email until someone invokes a tool.
+- **Email-push schema fix (`9a71d6c`)** — email push notification meta + content aligned with Teams push (no `<sender@addr>` angle brackets that read as HTML tags; meta carries only `chat_id="email"` / `message_id` / `user` / `ts`). Fixed: silent MCP-stream close after every email push.
 - **`setup.sh` hardening** — tenant-wide UPN lookup before Agent User creation (`8541d75`), warn-and-confirm before replacing Blueprint certs (`2338a7a`), cached-cert verification against Entra (`22e81d9`), `redirect_stdout(sys.stderr)` to stop diagnostic spam from corrupting `.env` cert thumbprint (`c99d66a`), `entraclaw-mcp` console script in `.mcp.json` (`5bb3bc4`).
-- **ADR-005 Phase 1 (`f900ba1`)** — `BlobStore` async client in `src/entraclaw/storage/blob.py`. 22 tests.
+- **ADR-005 Phase 1 (`f900ba1`)** — `BlobStore` async client in `src/entraclaw/storage/blob.py` (put/get/list/delete/exists + ETag concurrency + 401→`TokenExpiredError`). 22 tests.
 - **ADR-005 Phase 2** — `MemoryBackend` protocol + `LocalBackend` / `BlobBackend` impls + `get_backend()` factory in `src/entraclaw/storage/backend.py`. `interaction_log.py` and `daily_summary.py` route through it. 22 tests.
-- **ADR-005 Phase 5** — `acquire_agent_user_storage_token` (storage-scope third hop), `--keep-memory-local` flag in `setup.sh`, `scripts/provision_blob_storage.py` (idempotent Storage Account + container + RBAC), migration helper in `src/entraclaw/storage/migration.py`, blob endpoint/container/keep-memory-local config fields. 23 tests.
-- **ADR-005 Phase 6a** — Claude Code persona-memory sync (per `docs/plans/persona-persistence.md`). `PersonaBackend` + `claude_code_memory_dir()` in `src/entraclaw/storage/persona.py` (thin wrapper scoped to `claude_memory/` blob prefix). `scripts/claude_memory_sync.py` CLI with `pull` / `push` / `push-one` subcommands. `migrate_local_to_backend` signature extended to accept `list[(source, prefix)]` pairs so setup.sh Step 7b covers agent data + persona memory in one idempotent pass. `.claude/settings.json` adds `SessionStart` (pull) + `PostToolUse` on `Write` (push-one), both gated on `ENTRACLAW_PERSONA_SYNC=on`. `/refresh-persona` skill added as a manual drift-correction safety valve. +28 tests.
-- **Multi-tenant lightweight chat** — landed to `main` (commit `c8ec521`, 47 commits, +9331/-2484).
+- **ADR-005 Phase 5** — `acquire_agent_user_storage_token` (storage-scope third hop), `--keep-memory-local` flag in `setup.sh`, `scripts/provision_blob_storage.py` (idempotent Storage Account + container + RBAC), migration helper in `src/entraclaw/storage/migration.py`, blob endpoint/container/keep-memory-local config fields. 23 tests. Setup now exits red + non-zero on migration failure.
+- **ADR-005 Phase 6a** — Claude Code persona-memory sync. `PersonaBackend` + `claude_code_memory_dir()` in `src/entraclaw/storage/persona.py`. `scripts/claude_memory_sync.py` CLI with `pull` / `push` / `push-one` subcommands. Memory sync hooks removed from `.claude/settings.json` — persona-sati owns memory sync via its own MCP tools (`write_memory_file`, `read_memory_file`, `refresh_persona`). `claude_memory_sync.py` retained as a manual migration tool.
+- **Multi-tenant lightweight chat** — landed to `main` (commit `c8ec521`, 47 commits, +9,331 / −2,484).
 
 ---
 
@@ -36,97 +40,82 @@ A proof-of-concept demonstrating that **device-local AI agents can have their ow
 
 1. **Agent User** (production path) — Blueprint → Agent Identity → Agent User via three-hop flow. Agent sends as its own Entra user.
 2. **Delegated** (instant start) — MSAL interactive auth with human's token. Messages prefixed `[EntraClaw]`. No provisioning needed.
-3. **Bot Gateway** (new) — M365 Agents SDK bot server with Dev Tunnel. Bot has its own identity in Teams by design. No Agent User provisioning, no M365 license.
+3. **Bot Gateway** — M365 Agents SDK bot server with Dev Tunnel. Bot has its own identity in Teams by design. No Agent User provisioning, no M365 license.
 
-**Identity Chain (Agent User):** Blueprint (certificate auth) → Agent Identity (FIC exchange) → Agent User (user_fic grant) → Graph API with `idtyp=user` token
+**Identity Chain (Agent User):** Blueprint (certificate auth) → Agent Identity (FIC exchange) → Agent User (`user_fic` grant, `idtyp=user`) → Graph API (Teams, Mail, OneDrive)
 
-**Channel:** Background poll every 5s (Graph API) or 2s (bot JSONL) → push via `notifications/claude/channel` → Claude Code receives messages automatically
+**Channel:** Background poll every 5s (Graph) or 2s (bot JSONL) → push via `notifications/claude/channel` → Claude Code receives messages automatically.
 
 ### The Demo Scenario — WORKING (Three Modes)
 
 | Step | Agent User Mode | Delegated Mode | Bot Mode |
 |------|----------------|----------------|----------|
-| Setup | `./scripts/setup.sh` (10-15 min) | `./scripts/setup_delegated.sh` (60s) | `./scripts/start_bot.sh` + Dev Tunnel |
+| Setup | `./scripts/setup.sh` (10–15 min) | `./scripts/setup_delegated.sh` (60s) | `./scripts/start_bot.sh` + Dev Tunnel |
 | Auth | Three-hop flow (automatic) | MSAL browser sign-in (cached) | Bot app credentials |
 | Identity | Agent's own Entra user | Human's identity + `[EntraClaw]` prefix | Bot's app identity |
 | Send | Graph API as Agent User | Graph API as human | Bot Framework relay |
 | Receive | Graph API poll (5s) | Graph API poll (5s) | Bot activity handler (instant) |
 
-### MCP Tools (6 total)
+### MCP Tools
 
 | Tool | Purpose | Status |
 |------|---------|--------|
-| `send_teams_message` | Send message to chat in Teams (text or HTML). Bot mode: writes to outbound JSONL. | ✅ Live |
+| `send_teams_message` | Send text/HTML to a chat (requires `chat_id`); supports `@mentions` | ✅ Live |
+| `send_card` | Adaptive Card (tool_activity / task_status / build_result) | ✅ Live |
+| `create_chat` | Open a 1:1 DM by email; auto-registers for polling | ✅ Live |
+| `read_teams_messages` | Read recent messages from a chat | ✅ Live |
+| `list_chat_members` | Resolve display names to Entra GUIDs for `@mentions` | ✅ Live |
 | `add_teams_member` | Add user to chat (cross-tenant auto-resolved) | ✅ Live |
-| `read_teams_messages` | Read human's replies from Teams | ✅ Live |
-| `watch_teams_replies` | Poll for new human replies with dedup | ✅ Live |
-| `whoami` | Show agent identity and connection status | ✅ Live |
-| `audit_log` | Record audit event before actions | ✅ Live |
+| `watch_teams_replies` | Blocking poll with dedup — fallback when channel push is unavailable | ✅ Live |
+| `whoami` | Show agent identity, mode, and connection status | ✅ Live |
+| `audit_log` | Record an audit event before performing a security-sensitive action | ✅ Live |
+| `run_daily_summary` | Generate and email the day's interaction digest on demand | ✅ Live |
+| `view_image` | Read an image file and return as base64 for the LLM | ✅ Live |
+
+Full reference: `docs/reference/mcp-tools.md`.
 
 ---
 
 ## TDD Status
 
 ```
-299 passed
+484 tests collected
+```
 
 Key modules:
-  src/entraclaw/auth/          — certificate JWT + MSAL delegated auth
-  src/entraclaw/bot/           — Bot Gateway (server, handler, tunnel, convo_store)
-  src/entraclaw/identity/      — progressive identity state machine
-  src/entraclaw/config.py      — ENTRACLAW_MODE + all env config
-  src/entraclaw/mcp_server.py  — FastMCP + 3 auth modes + background poll
-  src/entraclaw/tools/         — Teams Graph API tools
+
 ```
+src/entraclaw/auth/          — certificate JWT + MSAL delegated auth
+src/entraclaw/bot/           — Bot Gateway (server, handler, tunnel, convo_store)
+src/entraclaw/identity/      — progressive identity state machine
+src/entraclaw/storage/       — LocalBackend / BlobBackend / PersonaBackend + migration
+src/entraclaw/tools/         — Teams Graph API tools + interaction log + email + daily summary + cards
+src/entraclaw/config.py      — ENTRACLAW_MODE + all env config
+src/entraclaw/mcp_server.py  — FastMCP + 3 auth modes + body-first prompt loader + persona-sati fetch + background poll + channel push
+prompts/                     — body prompt + anatomy/ modules
+```
+
+Invariant: `pytest -v && ruff check .` passes before every commit.
 
 ---
 
-## Current Milestone: Bidirectional Teams Loop
-
-**Spec:** `docs/architecture/PLAN-multi-tenant-lightweight-chat.md`
-**Research:** `docs/platform-learnings/mcp-messaging-servers.md`
-
-### Scope (scoped down from original)
-
-1. **`watch_teams_replies` tool** — blocking polling tool with server-side cursor, timestamp overlap + message ID dedup
-2. **Token auto-refresh** — eager (55-min threshold) + lazy (retry on 401) for three-hop flow
-
-**Out of scope (LLM handles natively):** Conversation state tracking, action dispatch.
-
-### Design Decisions Informed by Platform Research
-
-Researched 12+ MCP messaging servers (Slack, iMessage, Discord, Teams). Key findings that changed the design:
-
-- **Every MCP messaging server uses stateless request-response** — no background polling. Our blocking poll tool aligns with ecosystem patterns.
-- **Client-side filtering mandatory** — Graph API `$filter`/`$orderby` unreliable for chat messages (Learning #16)
-- **Timestamp overlap + seen-set dedup** — proven by imessage-kit (2s overlap, Map dedup). Prevents boundary message loss (Learning #17)
-- **Token refresh is universal #1 pain point** — official Slack MCP had 18 re-auths in 5 days. Our three-hop flow is the most complex token lifecycle of any MCP messaging server studied (Learning #18)
-- **Delta queries deferred** — too much complexity upfront (`@removed` entries, change types). Start simple (Learning #21)
-
-### Known Unknowns (Will Discover During Testing)
-
-1. **Overlap window size** — 2s borrowed from iMessage/SQLite; Graph API latency may need 3-5s
-2. **Three-hop refresh behavior** — nobody else has refreshed a chained OBO flow mid-session
-3. **Agent User token + `$orderby`** — floriscornel uses MSAL delegated tokens; our `user_fic` grant may behave differently
-4. **Rate limiting thresholds** — undocumented for our endpoint + token type combination
-
-### Solved: The MCP "Close the Loop" Problem
+## Close the Loop (Channel Push Architecture)
 
 **Problem:** LLM doesn't automatically check for replies after sending a Teams message. The MCP protocol is request-response — no mechanism for the server to wake up the LLM when new data arrives.
 
-**Solution:** Background polling + `notifications/claude/channel` push notifications. The MCP server declares `experimental: {"claude/channel": {}}` capability and pushes inbound Teams messages directly into the Claude Code conversation — the same mechanism used by the iMessage channel plugin.
+**Solution:** Background polling + `notifications/claude/channel` push. The MCP server declares `experimental: {"claude/channel": {}}` capability and pushes inbound Teams messages directly into the Claude Code conversation — same mechanism as the iMessage channel plugin.
 
-**Requirements:** Start Claude Code with `--dangerously-load-development-channels server:openclaw` to enable channel notifications for development servers.
+**Requirements:** Start Claude Code with `--dangerously-load-development-channels server:entraclaw` to enable channel notifications for development servers. Without the flag, the background poll still runs and appends to the interaction log; `read_teams_messages` retrieves them on demand.
 
 **Fallback:** `watch_teams_replies` tool still available for explicit polling. Background poll uses separate dedup state so both can detect the same message independently (Learning #27).
 
-**Research:** See `docs/platform-learnings/mcp-close-the-loop.md` for full analysis of 12+ MCP messaging servers, the MCP Triggers & Events Working Group, and the three problems we solved (capability declaration, startup flag, separate state).
+**Research:** `docs/platform-learnings/mcp-close-the-loop.md` — analysis of 12+ MCP messaging servers, the MCP Triggers & Events Working Group, and the three problems we solved (capability declaration, startup flag, separate state).
 
 ---
 
 ## What Works (Shipped)
 
-- End-to-end: setup.sh → MCP server → Teams message delivery ✅
+- End-to-end: `setup.sh` → MCP server → Teams message delivery
 - Three-hop Agent User token flow (Blueprint → Agent Identity → Agent User)
 - Agent User creation via Graph beta API (`microsoft.graph.agentUser`)
 - Agent User license assignment (auto-detects Teams-capable SKUs)
@@ -135,31 +124,38 @@ Researched 12+ MCP messaging servers (Slack, iMessage, Discord, Teams). Key find
 - State persisted in `.entraclaw-state.json` (idempotent, no secret reset)
 - MCP server auto-discovered via `.mcp.json`
 - `--teams-user` flag to set Teams recipient separately from admin
-- Teams read with null-from handling (system messages)
-- 27 hard-won learnings documented in runbooks
-- Bidirectional Teams channel with background polling + push notifications
-- Certificate auth for Blueprint (private key in OS keystore, no secrets on disk, ADR-003)
+- `read_teams_messages` with null-from handling (system messages)
+- 29 hard-won learnings documented in runbooks
+- Bidirectional Teams channel — background polling + push notifications
+- Certificate auth for Blueprint — private key in OS keystore, no secrets on disk (ADR-003)
 - Token auto-refresh: eager (55-min) + lazy (401 retry) for all tools
 - `notifications/claude/channel` push — same mechanism as iMessage channel plugin
 - Message dedup: 2s overlap window + bounded seen-set (imessage-kit pattern)
-- 429 rate limit handling propagates through polling tool
-- Autonomous agent instructions — acts on Teams messages without terminal prompting
-- Multi-user group chat support (setup.sh `--teams-user=user1,user2`)
-- Cross-tenant federated chats for B2B guests (auto-detects guest UPN, resolves home tenant via OpenID discovery)
-- `add_teams_member` tool — add users to chat at runtime without restart (auto-resolves tenant from email domain)
+- 429 rate limit handling propagates through polling tool with `Retry-After`
+- Autonomous agent behaviour — acts on Teams messages without terminal prompting
+- Multi-user group chat support (`setup.sh --teams-user=user1,user2`)
+- Cross-tenant federated chats for B2B guests — auto-detects guest UPN, resolves home tenant via OpenID discovery
+- `add_teams_member` — add users to chat at runtime without restart
 - Chat ID persistence across restarts — no duplicate group chats
-- 429 rate limit handling with Retry-After propagation
-- All code passes ruff lint + format
-- **Progressive identity state machine** — UNAUTHENTICATED → DELEGATED → PROVISIONING → AGENT_USER with asyncio.Lock-protected transitions
-- **MSAL delegated auth** — localhost redirect + device code fallback, OS-encrypted token cache via msal-extensions
-- **Setup script** for delegated mode (`scripts/setup_delegated.sh`) — sign in once, cache token, launch MCP server
-- **Bot Gateway** — M365 Agents SDK bot server + JSONL IPC (inbound/outbound with fcntl.flock) + Dev Tunnel manager + conversation reference persistence. Coexists via `ENTRACLAW_MODE=bot` config switch
-- **Identity-aware user ID** — `_effective_user_id()` returns the correct user ID for the current mode (agent user OID vs signed-in human OID)
+- All code passes `ruff` lint + format
+- Progressive identity state machine — `UNAUTHENTICATED → DELEGATED → PROVISIONING → AGENT_USER` with `asyncio.Lock`-protected transitions
+- MSAL delegated auth — localhost redirect + device code fallback, OS-encrypted token cache via `msal-extensions`
+- Delegated setup script (`scripts/setup_delegated.sh`) — sign in once, cache token, launch MCP server
+- Bot Gateway — M365 Agents SDK bot server + JSONL IPC (inbound/outbound with `fcntl.flock`) + Dev Tunnel manager + conversation reference persistence. Coexists via `ENTRACLAW_MODE=bot`
+- Identity-aware user ID — `_effective_user_id()` returns the correct ID for the current mode (agent user OID vs signed-in human OID)
+- Body-first prompt architecture with `@include` expansion — security, channel discipline, identity/tools layered under non-overridable body
+- Persona-sati MCP integration — body composes `body + persona` when `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` env vars are set; clean fallback when not
+- Adaptive Cards: `send_card` tool with `tool_activity`, `task_status`, `build_result` templates
+- Azure Blob Storage backend — opt-in via `./scripts/setup.sh --cloud-memory` (ADR-005 Phases 1, 2, 5, 6a)
 
-### What's Not Started
+### What's Not Started / Deferred
+
 - Azure Bot resource registration on werner.ac (needed for live bot test)
-- Adaptive Cards for bot mode (Phase 2)
-- Windows VM provisioning and testing
+- Windows VM provisioning and testing (rescheduled)
+- AppContainer sandbox spike — kernel-level agent isolation on Windows
+- Delta query optimization — replace timestamp polling with `/messages/delta` if rate-limit becomes an issue
+- Dynamic precision weighting for the polling cadence (still static per source)
+- Purview-protected email decryption — `Mail.Read` can't decrypt `.rpmsg` attachments; needs separate IRM scope (low priority, see `docs/platform-learnings/teams-graph-api.md`)
 
 ---
 
@@ -170,25 +166,32 @@ Blueprint (client_credentials)
   → Agent Identity (FIC exchange)
     → Agent User (user_fic grant, idtyp=user)
       → Graph API: Teams, Mail, OneDrive
+      → Azure Blob Storage (parallel third hop, ADR-005 Phase 5)
 
 ┌─────────────────────────────────────────────────────────┐
-│  Local Device (Mac / Windows)                           │
+│  Local Device (Mac / Windows / Linux)                   │
 │                                                         │
 │  ┌──────────────────────────────────────────────────┐   │
-│  │ Copilot CLI (MCP Client)                         │   │
-│  │   └── connects via stdio ──┐                     │   │
+│  │ Claude Code / Copilot CLI (MCP Client)           │   │
+│  │   └── stdio + channels ────┐                     │   │
 │  └────────────────────────────┼─────────────────────┘   │
 │                               │                         │
 │                               ▼                         │
 │  ┌──────────────────────────────────────────────────┐   │
-│  │ Openclaw MCP Server (Python)                     │   │
+│  │ Entraclaw MCP Server (Python)                    │   │
+│  │                                                  │   │
+│  │  Body prompt: agent_system.md + anatomy/*.md     │   │
+│  │    + Persona (optional): persona-sati /sse       │   │
 │  │                                                  │   │
 │  │  send_teams_message ───▶ Graph API (Agent User)  │   │
 │  │  read_teams_messages ──▶ Graph API (Agent User)  │   │
 │  │  whoami ───────────────▶ cached state            │   │
-│  │  audit_log ────────────▶ ~/.openclaw/audit/      │   │
+│  │  audit_log ────────────▶ interaction log         │   │
 │  │                                                  │   │
-│  │  Token: Agent User (three-hop, idtyp=user)       │   │
+│  │  Background: Teams 5s, email 60s, discovery 120s,│   │
+│  │  daily summary 5pm PDT                           │   │
+│  │                                                  │   │
+│  │  Tokens: Agent User (three-hop, idtyp=user)      │   │
 │  └──────────────────────────────────────────────────┘   │
 └───────────┬──────────────────────────┬──────────────────┘
             │                          │
@@ -196,32 +199,9 @@ Blueprint (client_credentials)
     ┌───────────────┐          ┌──────────────┐
     │ Entra ID      │          │ Graph API    │
     │ Agent IDs     │          │ Teams Chat   │
-    │ Agent Users   │          │ Messaging    │
+    │ Agent Users   │          │ Mail / Drive │
     └───────────────┘          └──────────────┘
 ```
-
----
-
-## Bugs Encountered & Resolved (This Session)
-
-| # | Bug | Impact | Fix |
-|---|-----|--------|-----|
-| 1 | Provisioner secret reset on every re-run | High | Cache in state file, use `--append` |
-| 2 | Agent User UPN used tenant ID as domain | Blocking | Extract domain from signed-in user's UPN |
-| 3 | oAuth2PermissionGrant missing startTime | Blocking | Add `startTime: now()` to request body |
-| 4 | Provisioner lacked DelegatedPermissionGrant permission | Blocking | Added to BASE_PERMISSION_VALUES |
-| 5 | Three-hop flow missing fmi_path parameter | Blocking | Added `fmi_path={agent-id}` to hop 1 |
-| 6 | Consent grant used beta API instead of v1.0 | Blocking | Use v1.0 URL directly, not graph_request() |
-| 7 | Chat creation /me doesn't work for Agent Users | Blocking | Use explicit user IDs for both members |
-| 8 | read_teams_messages crashed on null from field | Crash | `(m.get("from") or {})` pattern |
-| 9 | Non-Teams licenses triggered skip | Wrong | Check TEAMS_CAPABLE_SKUS, not any license |
-| 10 | MCP tool names not discoverable by LLM | UX | Renamed to verb-first, added trigger phrases |
-| 11 | No httpx timeout on token flow | Hang | Added 15s timeout to all hops |
-| 12 | teardown.sh silent exit on missing .env | Silent | Guard with `[ -f .env ]` check |
-| 13 | stderr swallowed throughout scripts | Hidden errors | Removed all `2>/dev/null` |
-| 14 | Admin and Teams user conflated | Wrong recipient | Added `--teams-user` flag |
-
-See `docs/runbooks/hard-won-learnings.md` for the full append-only log (28 entries).
 
 ---
 
@@ -231,11 +211,38 @@ See `docs/runbooks/hard-won-learnings.md` for the full append-only log (28 entri
 2. ~~Token auto-refresh~~ — ✅ DONE. Eager (55-min) + lazy (401 retry).
 3. ~~Certificate auth~~ — ✅ DONE. No secrets on disk. Private key in OS keystore (ADR-003).
 4. ~~Close the loop~~ — ✅ DONE. `notifications/claude/channel` push via experimental capability.
-5. ~~Multi-tenant lightweight chat~~ — ✅ DONE (PR #1). Progressive identity state machine + MSAL delegated auth. Branch: `feature/multi-tenant-lightweight-chat`.
-6. ~~Bot Gateway~~ — ✅ DONE. M365 Agents SDK bot server + JSONL IPC + tunnel manager. Coexists via `ENTRACLAW_MODE=bot` switch. See `docs/architecture/DESIGN-teams-bot-gateway.md`.
-7. **Bot Gateway live test** — NEXT. Register Azure Bot on werner.ac, sideload Teams app, verify end-to-end with Dev Tunnel.
-8. **Adaptive Cards** — Rich status cards (build results, PR links, action buttons) for bot mode.
-9. **Entra sign-in log verification** — confirm `idtyp=user` and agent attribution
-10. **Windows VM provisioning** — verify cross-platform setup.sh (rescheduled to weekend)
-11. **AppContainer sandbox spike** — kernel-level agent isolation on Windows
-12. **Delta query optimization** — replace timestamp polling with `/messages/delta` if needed
+5. ~~Multi-tenant lightweight chat~~ — ✅ DONE. Progressive identity state machine + MSAL delegated auth (PR #1).
+6. ~~Bot Gateway~~ — ✅ DONE. M365 Agents SDK bot server + JSONL IPC + tunnel manager. Coexists via `ENTRACLAW_MODE=bot`.
+7. ~~Body-first prompt architecture~~ — ✅ DONE. `@include` expansion, non-overridable body rules, persona layered on top (PRs #14, #15).
+8. ~~Persona-sati MCP wiring~~ — ✅ DONE. `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` consumed at boot.
+9. **Bot Gateway live test** — Register Azure Bot on werner.ac, sideload Teams app, verify end-to-end with Dev Tunnel.
+10. **Entra sign-in log verification** — confirm `idtyp=user` and agent attribution in tenant audit logs.
+11. **Windows VM provisioning** — verify cross-platform `setup.sh`.
+12. **AppContainer sandbox spike** — kernel-level agent isolation on Windows.
+13. **Delta query optimization** — replace timestamp polling with `/messages/delta` if rate-limit becomes an issue.
+
+---
+
+## Bugs Encountered & Resolved (Selected)
+
+| # | Bug | Impact | Fix |
+|---|-----|--------|-----|
+| 1 | Provisioner secret reset on every re-run | High | Cache in state file, use `--append` |
+| 2 | Agent User UPN used tenant ID as domain | Blocking | Extract domain from signed-in user's UPN |
+| 3 | `oAuth2PermissionGrant` missing `startTime` | Blocking | Add `startTime: now()` to request body |
+| 4 | Provisioner lacked `DelegatedPermissionGrant` permission | Blocking | Added to `BASE_PERMISSION_VALUES` |
+| 5 | Three-hop flow missing `fmi_path` parameter | Blocking | Added `fmi_path={agent-id}` to hop 1 |
+| 6 | Consent grant used beta API instead of v1.0 | Blocking | Use v1.0 URL directly, not `graph_request()` |
+| 7 | Chat creation `/me` doesn't work for Agent Users | Blocking | Use explicit user IDs for both members |
+| 8 | `read_teams_messages` crashed on null `from` field | Crash | `(m.get("from") or {})` pattern |
+| 9 | Non-Teams licenses triggered skip | Wrong | Check `TEAMS_CAPABLE_SKUS`, not any license |
+| 10 | MCP tool names not discoverable by LLM | UX | Renamed to verb-first, added trigger phrases |
+| 11 | No `httpx` timeout on token flow | Hang | Added 15s timeout to all hops |
+| 12 | `teardown.sh` silent exit on missing `.env` | Silent | Guard with `[ -f .env ]` check |
+| 13 | `stderr` swallowed throughout scripts | Hidden errors | Removed all `2>/dev/null` |
+| 14 | Admin and Teams user conflated | Wrong recipient | Added `--teams-user` flag |
+| 15 | Default group chat registered at install | Wrong | No default chat — explicit `create_chat` only (v1) |
+| 16 | Agent reading its own messages back as new input | Loop | Filter agent echoes including persona-display-name suffix (v1) |
+| 17 | Body prompt not loading from file | Wrong | Fall back to `prompts/agent_system.md` when persona-sati unreachable (v1) |
+
+Full append-only log: `docs/runbooks/hard-won-learnings.md` (29 entries).

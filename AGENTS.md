@@ -47,17 +47,20 @@ This repo is the **body** (Teams interface). The **mind** (personality, memory, 
 
 ## Active Work
 
-- **Persona-sati integration (mind-body split)** — personality, system prompt, and memory externalized to persona-sati MCP server. See `docs/architecture/DESIGN-persona-sati-integration.md`.
+- **v1 released (2026-04-18, PR #15).** Body-first prompts, cloud-opt-in, no default chat.
+- **Mind-body split shipped.** Body-first prompt architecture (PR #14) — `prompts/agent_system.md` + `prompts/anatomy/*.md` load first with non-overridable rules. `mcp_server.py:_load_agent_instructions` composes `body + persona`; persona is fetched from a remote MCP when `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` env vars are set, with clean fallback to the body. `docs/TODO-persona-sati-integration.md` is now historical.
 - **ADR-005: cloud-hosted memory via Azure Blob Storage** — `docs/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phases 1, 2, 5, 6a shipped.** Memory sync hooks removed (persona-sati owns memory now).
 - Multi-tenant lightweight chat — landed to `main` (commit `c8ec521`).
+- **Up next** (see `docs/engineering-status.md`): Bot Gateway live test, sign-in log verification, Windows VM setup, AppContainer sandbox.
 
 ## Read These First
 
-- `docs/architecture/DESIGN-persona-sati-integration.md` (mind-body split design)
-- `docs/decisions/005-cloud-hosted-memory.md` (cloud memory spec)
-- `prompts/agent_system.md.archive` (original prompt — archived, personality now in persona-sati)
-- `docs/engineering-status.md` (current state)
-- `docs/runbooks/hard-won-learnings.md` (read before making changes)
+- `docs/engineering-status.md` — current state, test count (484), next steps
+- `prompts/agent_system.md` + `prompts/anatomy/*.md` — the body prompt that governs your behaviour (security, channel discipline, identity/tools)
+- `docs/architecture/DESIGN-persona-sati-integration.md` — mind-body split design
+- `docs/decisions/005-cloud-hosted-memory.md` — cloud memory spec
+- `prompts/agent_system.md.archive` — original monolithic prompt, kept for reference
+- `docs/runbooks/hard-won-learnings.md` — 29 learnings, read before making changes
 
 ## Commands
 

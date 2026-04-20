@@ -61,13 +61,15 @@ behavioral rules) is served by a separate MCP server: **persona-sati**.
 
 ## Active Work
 
-- **Persona-sati integration (mind-body split)** — personality, system prompt, and memory externalized to `persona-sati` MCP server. See `docs/architecture/DESIGN-persona-sati-integration.md`. openclaw is now a Teams-only tool server.
+- **v1 released (2026-04-18, PR #15).** Body-first prompts, cloud-opt-in, no default chat. See `docs/engineering-status.md` for the summary and `docs/architecture/DESIGN-persona-sati-integration.md` for the mind-body split design.
+- **Mind-body split shipped.** Body-first prompt architecture (PR #14, `prompts/agent_system.md` + `prompts/anatomy/*.md`) is live. `mcp_server.py:_load_agent_instructions` composes `body + persona`, fetching the persona from a remote MCP when `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` env vars are set, with clean fallback to the body when persona-sati is unreachable. `docs/TODO-persona-sati-integration.md` is now historical.
 - **ADR-005: cloud-hosted memory via Azure Blob Storage** — `docs/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phases 1, 2, 5, 6a shipped.** Memory sync hooks removed (persona-sati owns memory now). `scripts/claude_memory_sync.py` retained as manual migration tool.
-  - Phase 1 (commit `f900ba1`): `BlobStore` async client in `src/entraclaw/storage/blob.py` (put/get/list/delete/exists + ETag concurrency + 401→TokenExpiredError). 22 tests.
+  - Phase 1 (commit `f900ba1`): `BlobStore` async client in `src/entraclaw/storage/blob.py` (put/get/list/delete/exists + ETag concurrency + 401→`TokenExpiredError`). 22 tests.
   - Phase 2: `MemoryBackend` protocol in `src/entraclaw/storage/backend.py` with `LocalBackend` + `BlobBackend` + `get_backend()` factory. `interaction_log.py` and `daily_summary.py` route through it. 22 tests.
-  - Phase 5: `acquire_agent_user_storage_token` (parallel third hop for `https://storage.azure.com/.default`), `scripts/provision_blob_storage.py` (idempotent resource group + storage account + container + RBAC scoped to Agent User), `grant_agent_user_storage_consent` added to `create_entra_agent_ids.py` (grants `user_impersonation` on Azure Storage SP), `setup.sh --keep-memory-local` flag + Step 7b provisioning + migration prompt (idempotent, source-preserving), `src/entraclaw/storage/migration.py`. 23 tests. Setup now exits red + non-zero on migration failure.
-  - Phase 6a: `PersonaBackend` in `src/entraclaw/storage/persona.py`. `scripts/claude_memory_sync.py` CLI. Memory sync hooks now deprecated — persona-sati owns sync.
-- Multi-tenant lightweight chat — **landed to main** (commit `c8ec521`, PR #23369 abandoned-as-merged-externally). Spec: `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md`.
+  - Phase 5: `acquire_agent_user_storage_token` (parallel third hop for `https://storage.azure.com/.default`), `scripts/provision_blob_storage.py` (idempotent resource group + storage account + container + RBAC scoped to Agent User), `grant_agent_user_storage_consent` added to `create_entra_agent_ids.py`, `setup.sh --keep-memory-local` flag + Step 7b provisioning + migration prompt (idempotent, source-preserving), `src/entraclaw/storage/migration.py`. 23 tests. Setup now exits red + non-zero on migration failure.
+  - Phase 6a: `PersonaBackend` in `src/entraclaw/storage/persona.py`. `scripts/claude_memory_sync.py` CLI. Memory sync hooks deprecated — persona-sati owns sync.
+- **Multi-tenant lightweight chat** — landed to `main` (commit `c8ec521`). Spec: `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md`.
+- **Up next** (see `docs/engineering-status.md` "Next Steps"): Bot Gateway live test on werner.ac, Entra sign-in log attribution verification, Windows VM setup, AppContainer sandbox spike.
 
 ## Memory types
 
@@ -80,17 +82,19 @@ Two memory systems coexist in this project:
 
 ## Read These First
 
-- `docs/architecture/DESIGN-persona-sati-integration.md` (mind-body split design)
-- `docs/decisions/005-cloud-hosted-memory.md` (cloud memory spec — phase plan + open TODOs)
-- `prompts/agent_system.md.archive` (original prompt — archived, personality now in persona-sati)
-- `docs/architecture/DESIGN-teams-bot-gateway.md` (Bot Gateway design)
-- `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` (delegated mode spec — multi-tenant chat, now landed)
-- `docs/engineering-status.md` (current state)
-- `docs/index.md`
-- `docs/runbooks/hard-won-learnings.md` (read before making changes)
+- `docs/engineering-status.md` — current state, test count, next steps
+- `prompts/agent_system.md` + `prompts/anatomy/*.md` — the body prompt (security, channel discipline, identity/tools)
+- `docs/architecture/DESIGN-persona-sati-integration.md` — mind-body split design
+- `docs/decisions/005-cloud-hosted-memory.md` — cloud memory spec (phase plan + open TODOs)
+- `docs/architecture/DESIGN-teams-bot-gateway.md` — Bot Gateway design
+- `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` — delegated mode spec (landed)
+- `docs/index.md` — doc site entry point
+- `docs/runbooks/hard-won-learnings.md` — 29 learnings, read before making changes
 - `docs/decisions/001-obo-flows-for-device-agents.md`
 - `docs/decisions/003-certificate-auth-over-client-secrets.md`
 - `docs/platform-learnings/mcp-close-the-loop.md`
+- `prompts/agent_system.md.archive` — original monolithic prompt, kept for reference
+- `prompts/agent_system.md.example` — sanitized standalone example
 
 ## Commands
 

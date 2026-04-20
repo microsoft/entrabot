@@ -143,6 +143,19 @@ The body prompt **always loads first** and its rules cannot be overridden by per
 
 See [docs/guides/customizing-the-body-prompt.md](docs/guides/customizing-the-body-prompt.md) for a walk-through.
 
+### Attaching persona-sati (optional)
+
+If you're running `persona-sati` (see the separate repo), two env vars wire the remote mind into the body at boot:
+
+```bash
+PERSONA_SATI_MCP_URL="https://persona-sati-<suffix>.<region>.cloudapp.azure.com"
+PERSONA_SATI_MCP_TOKEN_COMMAND="/abs/path/to/persona-sati/scripts/persona-sati-token.py"
+```
+
+When both are present, `mcp_server.py:_load_agent_instructions()` mints a short-lived bearer token via the token command, opens an SSE session to `${URL}/sse`, calls `get_system_prompt`, and appends the result to the body. If either env var is missing or the fetch fails, boot falls back cleanly to the body prompt alone — the agent still works as a generic Teams tool. No crashes on transport errors.
+
+The `persona-sati` repo's `setup.sh --with-entraclaw` writes both env vars into this repo's `.mcp.json` automatically. Without it, set them manually in your environment or in `.mcp.json`'s `mcpServers.entraclaw.env` block.
+
 ## MCP tools
 
 | Tool | Purpose |

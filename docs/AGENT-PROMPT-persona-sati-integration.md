@@ -1,5 +1,9 @@
 # Agent prompt: wire entraclaw to consume `PERSONA_SATI_MCP_URL`
 
+**Status: DONE (2026-04-18, v1).** Implemented in `src/entraclaw/mcp_server.py:_load_agent_instructions()`. This prompt is kept as a reference example of how to delegate a scoped, self-contained task to a fresh Claude Code session — the spec below is what shipped. For the historical TODO doc see `docs/TODO-persona-sati-integration.md`.
+
+---
+
 Paste this into a fresh Claude Code session running in the `openclaw-identity-research` directory.
 
 ---

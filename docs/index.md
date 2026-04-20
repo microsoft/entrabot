@@ -15,19 +15,21 @@ Openclaw brings cloud-style identity tracking to device-local agents. When an au
 ## Where to Start
 
 - **New to the project?** Start with the [Quickstart](getting-started/quickstart.md)
-- **Customizing the agent's prompt?** Read [Customizing the body prompt](guides/customizing-the-body-prompt.md)
+- **Current status / what's shipped / what's next?** [Engineering Status](engineering-status.md)
+- **Customizing the agent's prompt?** Read [Customizing the body prompt](guides/customizing-the-body-prompt.md) — the `prompts/agent_system.md` body + `prompts/anatomy/*.md` modules
+- **Mind-body split (what's where)?** See [DESIGN: persona-sati integration](architecture/DESIGN-persona-sati-integration.md)
 - **Local vs. cloud storage?** Read [Storage configuration](guides/storage-configuration.md)
 - **MCP tool reference?** See [MCP tools](reference/mcp-tools.md)
 - **`setup.sh` flags?** See [setup.sh reference](reference/setup-script.md)
 - **Understanding the design?** Read [System Overview](architecture/system-overview.md)
 - **Bot Gateway design?** Read [DESIGN: Teams Bot Gateway](architecture/DESIGN-teams-bot-gateway.md)
-- **Delegated mode spec?** Read [Lightweight Teams Chat](architecture/NEXT-WhatsApp-lightweight-teams-chat.md)
-- **Current status?** See [Engineering Status](engineering-status.md)
+- **Delegated mode / multi-tenant chat?** Read [Lightweight Teams Chat](architecture/NEXT-WhatsApp-lightweight-teams-chat.md) (landed)
 - **Cloud memory work?** See [ADR-005: Cloud-Hosted Memory](decisions/005-cloud-hosted-memory.md) (Phases 1, 2, 5, 6a shipped)
 - **How tokens flow?** See [Token Flows](reference/token-flows.md)
-- **Debugging?** Check [Hard-Won Learnings](runbooks/hard-won-learnings.md)
+- **Debugging?** Check [Hard-Won Learnings](runbooks/hard-won-learnings.md) (29 entries)
 - **Why we made a decision?** Browse [Architecture Decision Records](decisions/README.md)
 - **Agent User deep dive?** See [Platform Learnings: Agent Users](platform-learnings/entra-agent-users.md)
+- **Open security work?** See [Security Debt: Provisioner client secret](SECURITY-DEBT-PROVISIONER-SECRET.md)
 
 ## Open Research Questions
 

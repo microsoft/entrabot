@@ -1,8 +1,14 @@
 # TODO — Entraclaw: consume `PERSONA_SATI_MCP_URL` at boot
 
-**Status: Open**
-**Scope: `src/entraclaw/mcp_server.py` only**
-**Size: ~60 LOC + ~30 LOC of tests**
+**Status: DONE (2026-04-18, v1).**
+Implemented in `src/entraclaw/mcp_server.py:_load_agent_instructions()` (lines ~100–170). The function composes `body + persona`: `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` env vars, when both present, trigger an SSE fetch of the persona via `get_system_prompt`; missing env or fetch failure falls back to the body prompt alone.
+
+This doc is retained for historical context — the spec below is what shipped.
+
+---
+
+**Original scope: `src/entraclaw/mcp_server.py` only**
+**Original size: ~60 LOC + ~30 LOC of tests**
 **Dependency:** `persona-sati` repo's setup.sh --with-entraclaw must have been run first (so the cross-blueprint consent grant and `.mcp.json` env vars are in place).
 
 ---
