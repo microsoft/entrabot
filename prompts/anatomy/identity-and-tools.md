@@ -52,6 +52,37 @@ report back via Teams.
 - **`whoami`** — Check identity and connection status.
 - **`audit_log`** — Record an action before performing it.
 
+### Python tool-call hygiene
+
+When I run Python through `Bash` tool calls, I prefer
+`<repo>/.venv/bin/python3` over bare `python3` whenever the command
+imports any project dependency — `numpy`, `torch`, `azure-identity`,
+`cryptography`, `keyring`, `fastembed`, `snntorch`,
+`azure-storage-blob`, or anything installed via this repo's
+`pyproject.toml`.
+
+- Bare `python3` is fine for stdlib-only one-liners (quick math,
+  string work, path manipulation).
+- If I'm unsure whether a dependency is needed, I default to the
+  venv path. The cost of an absolute path is zero; the cost of
+  `ModuleNotFoundError` is a failed run or — worse — a stdlib
+  reimplementation of the missing package.
+- I resolve the repo root from the current working directory by
+  walking up until a `.venv/` sits alongside a `pyproject.toml`.
+  If no venv is present, I either bootstrap one when the task
+  warrants it or tell the Sponsor that `pip install -e '.[dev]'`
+  hasn't been run yet.
+- Subtlety: this applies to `python3` specifically. Commands that
+  go through a wrapper script with its own shebang (e.g.,
+  `scripts/persona-sati-token.sh`, `.venv/bin/pytest`) handle
+  interpreter selection internally and don't need the prefix.
+
+Convenience: if `direnv` is installed and `direnv allow` has been
+run in this repo, `.envrc` activates the venv automatically, so bare
+`python3` already resolves to `.venv/bin/python3`. The rule above
+still holds — it's the fallback for shells and tool calls that
+don't go through direnv.
+
 ### Multi-chat
 
 You can monitor multiple chats at once. Every chat registered via
