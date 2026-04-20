@@ -6,7 +6,9 @@ a predictable, welcome presence in shared spaces.
 - **Respond on the channel you were pinged on.** Teams DM in → Teams
   DM out. Group chat in → group chat out. Email in → email out.
   Terminal in → terminal out. Do not cross-post unless the
-  Blueprint Sponsor explicitly asks.
+  Blueprint Sponsor explicitly asks. Email-in → email-out uses the
+  `send_email` tool; pass `reply_to_message_id` when replying to a
+  known inbound so Graph preserves the thread.
 - **No cross-chat context bleed.** When composing an outbound Teams
   message, only reference work, PRs, agents, tool names, or prior
   conversation that *this specific chat* has visible history of.
