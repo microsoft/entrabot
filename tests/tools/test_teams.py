@@ -1097,3 +1097,217 @@ class TestFetchHostedImage:
             await fetch_hosted_image(
                 token="tok", url="https://evil.com/steal-token"
             )
+
+
+# ---------------------------------------------------------------------------
+# post_thinking_placeholder + resolve_placeholder
+# ---------------------------------------------------------------------------
+
+
+class TestPostThinkingPlaceholder:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_returns_message_id(self) -> None:
+        from entraclaw.tools.teams import post_thinking_placeholder
+
+        respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            return_value=httpx.Response(
+                201, json={"id": "msg-p1", "createdDateTime": "2024-01-01"}
+            )
+        )
+        result = await post_thinking_placeholder(
+            chat_id="c1", token="tok"
+        )
+        assert result == "msg-p1"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_sends_html_italic(self) -> None:
+        """Placeholder must go out as HTML, italicized — not plain text."""
+        import json as _json
+
+        from entraclaw.tools.teams import post_thinking_placeholder
+
+        route = respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            return_value=httpx.Response(
+                201, json={"id": "msg-p2", "createdDateTime": "2024-01-01"}
+            )
+        )
+        await post_thinking_placeholder(chat_id="c1", token="tok")
+
+        body = _json.loads(route.calls.last.request.content)
+        assert body["body"]["contentType"] == "html"
+        # Italic styling — <i> or <em>
+        content = body["body"]["content"]
+        assert "<i>" in content or "<em>" in content
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_custom_text(self) -> None:
+        import json as _json
+
+        from entraclaw.tools.teams import post_thinking_placeholder
+
+        route = respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            return_value=httpx.Response(
+                201, json={"id": "msg-p3", "createdDateTime": "2024-01-01"}
+            )
+        )
+        await post_thinking_placeholder(
+            chat_id="c1", token="tok", text="researching…"
+        )
+        body = _json.loads(route.calls.last.request.content)
+        assert "researching" in body["body"]["content"]
+
+
+class TestResolvePlaceholder:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_edit_patches_message(self) -> None:
+        """mode='edit' issues PATCH with the final body."""
+        import json as _json
+
+        from entraclaw.tools.teams import resolve_placeholder
+
+        route = respx.patch(
+            f"{GRAPH_BASE}/chats/c1/messages/msg-p1"
+        ).mock(return_value=httpx.Response(200, json={"id": "msg-p1"}))
+
+        result = await resolve_placeholder(
+            chat_id="c1",
+            placeholder_id="msg-p1",
+            final_message="<p>done</p>",
+            token="tok",
+            mode="edit",
+        )
+        assert result == {"message_id": "msg-p1", "mode": "edit"}
+        body = _json.loads(route.calls.last.request.content)
+        assert body["body"]["contentType"] == "html"
+        assert body["body"]["content"] == "<p>done</p>"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_edit_with_mentions(self) -> None:
+        import json as _json
+
+        from entraclaw.tools.teams import resolve_placeholder
+
+        route = respx.patch(
+            f"{GRAPH_BASE}/chats/c1/messages/msg-p1"
+        ).mock(return_value=httpx.Response(200, json={"id": "msg-p1"}))
+
+        mentions = [
+            {
+                "id": 0,
+                "mentionText": "Alice",
+                "mentioned": {
+                    "user": {
+                        "displayName": "Alice",
+                        "id": "user-guid",
+                        "userIdentityType": "aadUser",
+                    }
+                },
+            }
+        ]
+        await resolve_placeholder(
+            chat_id="c1",
+            placeholder_id="msg-p1",
+            final_message='<at id="0">Alice</at> ok',
+            token="tok",
+            mode="edit",
+            mentions=mentions,
+        )
+        body = _json.loads(route.calls.last.request.content)
+        assert body["mentions"] == mentions
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_edit_fallback_on_patch_error(self) -> None:
+        """If PATCH fails 4xx/5xx, post the final message as NEW, return fallback_new."""
+        from entraclaw.tools.teams import resolve_placeholder
+
+        respx.patch(
+            f"{GRAPH_BASE}/chats/c1/messages/msg-p1"
+        ).mock(return_value=httpx.Response(403, json={"error": "forbidden"}))
+        respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            return_value=httpx.Response(
+                201, json={"id": "msg-new", "createdDateTime": "2024-01-01"}
+            )
+        )
+
+        result = await resolve_placeholder(
+            chat_id="c1",
+            placeholder_id="msg-p1",
+            final_message="<p>done</p>",
+            token="tok",
+            mode="edit",
+        )
+        assert result == {"message_id": "msg-new", "mode": "fallback_new"}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_delete_repost_softdeletes_then_sends(self) -> None:
+        """mode='delete_repost' posts to softDelete then sends a new message."""
+        from entraclaw.tools.teams import resolve_placeholder
+
+        sd_route = respx.post(
+            f"{GRAPH_BASE}/chats/c1/messages/msg-p1/softDelete"
+        ).mock(return_value=httpx.Response(204))
+        respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            return_value=httpx.Response(
+                201, json={"id": "msg-new", "createdDateTime": "2024-01-01"}
+            )
+        )
+
+        result = await resolve_placeholder(
+            chat_id="c1",
+            placeholder_id="msg-p1",
+            final_message="<p>done</p>",
+            token="tok",
+            mode="delete_repost",
+        )
+        assert result == {
+            "message_id": "msg-new",
+            "mode": "delete_repost",
+        }
+        assert sd_route.called
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_delete_repost_fallback_on_softdelete_error(self) -> None:
+        """If softDelete fails, post final as NEW and return fallback_new."""
+        from entraclaw.tools.teams import resolve_placeholder
+
+        respx.post(
+            f"{GRAPH_BASE}/chats/c1/messages/msg-p1/softDelete"
+        ).mock(return_value=httpx.Response(500))
+        respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            return_value=httpx.Response(
+                201, json={"id": "msg-new2", "createdDateTime": "2024-01-01"}
+            )
+        )
+
+        result = await resolve_placeholder(
+            chat_id="c1",
+            placeholder_id="msg-p1",
+            final_message="<p>done</p>",
+            token="tok",
+            mode="delete_repost",
+        )
+        assert result == {
+            "message_id": "msg-new2",
+            "mode": "fallback_new",
+        }
+
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_mode(self) -> None:
+        from entraclaw.tools.teams import resolve_placeholder
+
+        with pytest.raises(ValueError, match="mode"):
+            await resolve_placeholder(
+                chat_id="c1",
+                placeholder_id="msg-p1",
+                final_message="done",
+                token="tok",
+                mode="nonsense",
+            )

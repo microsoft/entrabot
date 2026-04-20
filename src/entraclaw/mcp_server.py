@@ -1365,6 +1365,158 @@ async def send_teams_message(
 
 
 @mcp.tool()
+async def post_thinking_placeholder(
+    chat_id: str,
+    text: str = "thinking…",
+) -> str:
+    """Post a short placeholder so humans see the agent was triggered.
+
+    Use this when you've decided to answer a Teams chat and the real
+    reply will take real work (tool calls, investigation, a sub-agent
+    run). Resolve with ``resolve_placeholder`` when the reply is ready.
+    Skip for purely conversational turns — a one-liner doesn't need
+    a placeholder.
+
+    Args:
+        chat_id: The chat to post into. Required.
+        text: Placeholder text (default "thinking…"). Kept italic + low-key.
+
+    Returns:
+        JSON with ``message_id`` of the placeholder (pass this to
+        ``resolve_placeholder``).
+    """
+    await _initialize()
+
+    if not chat_id:
+        return json.dumps({
+            "error": (
+                "chat_id is required — pass the chat_id of the target "
+                "Teams chat."
+            )
+        })
+
+    from entraclaw.tools.teams import post_thinking_placeholder as _post
+
+    await _ensure_valid_token()
+    message_id = await _with_token_retry(
+        _post,
+        chat_id=chat_id,
+        text=text,
+    )
+
+    _log_interaction_safe(
+        channel=detect_channel(chat_id),
+        direction="outbound",
+        sender="entraclaw-agent",
+        recipient=chat_id,
+        summary=f"placeholder: {text}",
+        action="post_thinking_placeholder",
+        content_ref=message_id,
+        metadata={"placeholder": True},
+    )
+
+    return json.dumps({"message_id": message_id}, indent=2)
+
+
+@mcp.tool()
+async def resolve_placeholder(
+    chat_id: str,
+    placeholder_id: str,
+    final_message: str,
+    content_type: str = "html",
+    mentions: list[dict] | None = None,
+    mode: str = "edit",
+) -> str:
+    """Replace a thinking placeholder with the final message.
+
+    Pair with ``post_thinking_placeholder``. Modes:
+      - ``edit`` (default, quieter): PATCH the placeholder in place.
+      - ``delete_repost``: soft-delete the placeholder and send a fresh
+        message. Use when a fresh ping matters (long sub-agent runs,
+        multi-minute investigations).
+
+    On Graph failure, falls back to posting the final as a NEW message
+    and reports ``mode="fallback_new"`` so you can see the degradation.
+
+    Args:
+        chat_id: The target chat. Required.
+        placeholder_id: The message_id returned by post_thinking_placeholder.
+        final_message: The final reply (HTML per channel-discipline).
+        content_type: "html" (default) or "text".
+        mentions: Graph-shape mention dicts if the final reply @-mentions.
+        mode: "edit" or "delete_repost".
+
+    Returns:
+        JSON with ``message_id`` and ``mode`` (one of edit, delete_repost,
+        fallback_new).
+    """
+    await _initialize()
+
+    if not chat_id or not placeholder_id:
+        return json.dumps({
+            "error": "chat_id and placeholder_id are required."
+        })
+    if mode not in ("edit", "delete_repost"):
+        return json.dumps({
+            "error": f"invalid mode: {mode!r} (expected 'edit' or 'delete_repost')"
+        })
+
+    # Audit before mutating — per security.md "Audit before acting". Fail
+    # closed: if the audit write raises, the Graph call does not proceed.
+    from entraclaw.tools.audit import log_event
+    config = get_config()
+    if _identity:
+        agent_id = (
+            _identity.session.user_id or config.agent_id
+            or config.blueprint_app_id or "unknown"
+        )
+        attribution = _identity.session.attribution_type
+    else:
+        agent_id = config.agent_id or config.blueprint_app_id or "unknown"
+        attribution = "agent"
+    log_event(
+        action="resolve_placeholder",
+        resource=f"{chat_id}:{placeholder_id}",
+        outcome="pending",
+        agent_id=agent_id,
+        metadata={"mode": mode, "content_type": content_type},
+        attribution_type=attribution,
+    )
+
+    from entraclaw.tools.teams import resolve_placeholder as _resolve
+
+    await _ensure_valid_token()
+    result = await _with_token_retry(
+        _resolve,
+        chat_id=chat_id,
+        placeholder_id=placeholder_id,
+        final_message=final_message,
+        content_type=content_type,
+        mentions=mentions,
+        mode=mode,
+    )
+
+    _log_interaction_safe(
+        channel=detect_channel(chat_id),
+        direction="outbound",
+        sender="entraclaw-agent",
+        recipient=chat_id,
+        summary=_summarize_content(final_message),
+        action="resolve_placeholder",
+        content_ref=result.get("message_id") if isinstance(result, dict) else None,
+        metadata={
+            "mode": result.get("mode") if isinstance(result, dict) else mode,
+            "requested_mode": mode,
+            "placeholder_id": placeholder_id,
+            "content_type": content_type,
+            "had_mentions": bool(mentions),
+        },
+    )
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
 async def send_card(
     card_type: str,
     chat_id: str = "",

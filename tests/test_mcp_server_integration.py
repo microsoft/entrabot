@@ -1498,3 +1498,196 @@ class TestNoDefaultChat:
         finally:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
+
+
+# ---------------------------------------------------------------------------
+# post_thinking_placeholder / resolve_placeholder MCP wrappers
+# ---------------------------------------------------------------------------
+
+
+class TestThinkingPlaceholderTool:
+    @pytest.mark.asyncio
+    async def test_post_placeholder_logs_interaction(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """post_thinking_placeholder writes an outbound interaction log entry."""
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        captured: dict = {}
+
+        def fake_log(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr(mcp_server, "_log_interaction_safe", fake_log)
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server,
+            "_with_token_retry",
+            AsyncMock(return_value="msg-placeholder-1"),
+        )
+
+        result = await mcp_server.post_thinking_placeholder(
+            chat_id="c1", text="thinking…"
+        )
+        parsed = _json.loads(result)
+        assert parsed["message_id"] == "msg-placeholder-1"
+        assert captured["direction"] == "outbound"
+        assert captured["action"] == "post_thinking_placeholder"
+        assert captured["content_ref"] == "msg-placeholder-1"
+
+    @pytest.mark.asyncio
+    async def test_post_placeholder_requires_chat_id(
+        self, monkeypatch
+    ) -> None:
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        result = await mcp_server.post_thinking_placeholder(chat_id="")
+        parsed = _json.loads(result)
+        assert "error" in parsed
+        assert "chat_id" in parsed["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_resolve_audits_before_graph_call(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """resolve_placeholder logs an audit event before the Graph call."""
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        audit_events: list[dict] = []
+
+        def fake_log_event(**kwargs):
+            audit_events.append(kwargs)
+            return {"event_id": "evt-1", **kwargs}
+
+        monkeypatch.setattr(
+            "entraclaw.tools.audit.log_event", fake_log_event
+        )
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_log_interaction_safe", lambda **kw: None
+        )
+
+        graph_called = False
+
+        async def fake_retry(fn, **kwargs):
+            nonlocal graph_called
+            # Audit must have been written before Graph is invoked.
+            assert audit_events, (
+                "audit event must be written before the Graph mutation"
+            )
+            graph_called = True
+            return {"message_id": "msg-p1", "mode": "edit"}
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+        result = await mcp_server.resolve_placeholder(
+            chat_id="c1",
+            placeholder_id="msg-p1",
+            final_message="<p>done</p>",
+            mode="edit",
+        )
+        parsed = _json.loads(result)
+        assert parsed["mode"] == "edit"
+        assert graph_called
+        assert audit_events[0]["action"] == "resolve_placeholder"
+        assert audit_events[0]["resource"] == "c1:msg-p1"
+        assert audit_events[0]["metadata"]["mode"] == "edit"
+
+    @pytest.mark.asyncio
+    async def test_resolve_rejects_invalid_mode(self, monkeypatch) -> None:
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        result = await mcp_server.resolve_placeholder(
+            chat_id="c1",
+            placeholder_id="msg-p1",
+            final_message="done",
+            mode="nonsense",
+        )
+        parsed = _json.loads(result)
+        assert "error" in parsed
+        assert "mode" in parsed["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_resolve_requires_ids(self, monkeypatch) -> None:
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        result = await mcp_server.resolve_placeholder(
+            chat_id="",
+            placeholder_id="msg-p1",
+            final_message="done",
+        )
+        parsed = _json.loads(result)
+        assert "error" in parsed
+
+    @pytest.mark.asyncio
+    async def test_resolve_logs_interaction_with_resolved_mode(
+        self, monkeypatch
+    ) -> None:
+        """Interaction log reports the actual mode returned by Graph (e.g. fallback_new)."""
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        captured: dict = {}
+
+        def fake_log(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr(mcp_server, "_log_interaction_safe", fake_log)
+        monkeypatch.setattr(
+            "entraclaw.tools.audit.log_event",
+            lambda **kw: {"event_id": "evt-x"},
+        )
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server,
+            "_with_token_retry",
+            AsyncMock(
+                return_value={"message_id": "msg-new", "mode": "fallback_new"}
+            ),
+        )
+
+        await mcp_server.resolve_placeholder(
+            chat_id="c1",
+            placeholder_id="msg-p1",
+            final_message="<p>done</p>",
+            mode="edit",
+        )
+        assert captured["action"] == "resolve_placeholder"
+        assert captured["metadata"]["mode"] == "fallback_new"
+        assert captured["metadata"]["requested_mode"] == "edit"
+        _json.loads("{}")  # silence unused

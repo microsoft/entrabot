@@ -616,6 +616,152 @@ async def send(
         }
 
 
+async def post_thinking_placeholder(
+    chat_id: str,
+    token: str,
+    text: str = "thinking…",
+) -> str:
+    """Post a low-key HTML placeholder and return its message_id.
+
+    Sent as italicized HTML so it reads as a working-indicator, not a
+    substantive reply. Resolve via :func:`resolve_placeholder` when the
+    real answer is ready.
+    """
+    payload = {
+        "body": {
+            "contentType": "html",
+            "content": f"<i>{text}</i>",
+        },
+    }
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    async with httpx.AsyncClient(transport=transport) as client:
+        resp = await client.post(
+            f"{GRAPH_BASE}/chats/{chat_id}/messages",
+            json=payload,
+            headers=headers,
+        )
+        if resp.status_code == 401:
+            raise TokenExpiredError("Token expired — re-acquire")
+        if resp.status_code == 404:
+            raise ChatNotFound(f"Chat {chat_id} not found")
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", "60"))
+            raise RateLimitError(retry_after)
+        resp.raise_for_status()
+
+        msg_id: str = resp.json()["id"]
+        logger.info("Posted thinking placeholder %s to chat %s", msg_id, chat_id)
+        return msg_id
+
+
+async def resolve_placeholder(
+    chat_id: str,
+    placeholder_id: str,
+    final_message: str,
+    token: str,
+    *,
+    content_type: str = "html",
+    mentions: list[dict] | None = None,
+    mode: str = "edit",
+) -> dict:
+    """Replace the placeholder with the final message.
+
+    ``mode="edit"`` PATCHes the existing placeholder in place.
+    ``mode="delete_repost"`` soft-deletes the placeholder and posts a
+    fresh message so the chat pings again.
+
+    If the underlying Graph call fails, falls back to posting the final
+    message as a NEW message and returns ``mode="fallback_new"`` so the
+    caller sees the degradation. Never leaves a stale placeholder with
+    no final reply.
+    """
+    if mode not in ("edit", "delete_repost"):
+        raise ValueError(f"invalid mode: {mode!r} (expected 'edit' or 'delete_repost')")
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+
+    if mode == "edit":
+        payload: dict = {
+            "body": {"contentType": content_type, "content": final_message},
+        }
+        if mentions:
+            payload["mentions"] = mentions
+        async with httpx.AsyncClient(transport=transport) as client:
+            resp = await client.patch(
+                f"{GRAPH_BASE}/chats/{chat_id}/messages/{placeholder_id}",
+                json=payload,
+                headers=headers,
+            )
+            if resp.status_code == 401:
+                raise TokenExpiredError("Token expired — re-acquire")
+            if resp.status_code == 429:
+                retry_after = int(resp.headers.get("Retry-After", "60"))
+                raise RateLimitError(retry_after)
+            if 200 <= resp.status_code < 300:
+                return {"message_id": placeholder_id, "mode": "edit"}
+            logger.warning(
+                "PATCH placeholder %s failed (%d) — falling back to new message",
+                placeholder_id,
+                resp.status_code,
+            )
+        return await _post_fallback(chat_id, final_message, token, content_type, mentions)
+
+    # delete_repost
+    async with httpx.AsyncClient(transport=transport) as client:
+        sd_resp = await client.post(
+            f"{GRAPH_BASE}/chats/{chat_id}/messages/{placeholder_id}/softDelete",
+            headers=headers,
+        )
+        if sd_resp.status_code == 401:
+            raise TokenExpiredError("Token expired — re-acquire")
+        if sd_resp.status_code == 429:
+            retry_after = int(sd_resp.headers.get("Retry-After", "60"))
+            raise RateLimitError(retry_after)
+        delete_ok = 200 <= sd_resp.status_code < 300
+    if not delete_ok:
+        logger.warning(
+            "softDelete placeholder %s failed (%d) — posting final as new message",
+            placeholder_id,
+            sd_resp.status_code,
+        )
+        return await _post_fallback(chat_id, final_message, token, content_type, mentions)
+
+    sent = await send(
+        chat_id=chat_id,
+        message=final_message,
+        token=token,
+        content_type=content_type,
+        mentions=mentions,
+    )
+    return {"message_id": sent["message_id"], "mode": "delete_repost"}
+
+
+async def _post_fallback(
+    chat_id: str,
+    final_message: str,
+    token: str,
+    content_type: str,
+    mentions: list[dict] | None,
+) -> dict:
+    sent = await send(
+        chat_id=chat_id,
+        message=final_message,
+        token=token,
+        content_type=content_type,
+        mentions=mentions,
+    )
+    return {"message_id": sent["message_id"], "mode": "fallback_new"}
+
+
 async def fetch_hosted_image(*, token: str, url: str) -> bytes | None:
     """Fetch an image from a Graph API hosted content URL.
 

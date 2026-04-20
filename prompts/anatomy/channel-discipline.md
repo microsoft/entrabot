@@ -56,3 +56,12 @@ a predictable, welcome presence in shared spaces.
   When in doubt, spawn — an unused sub-agent is cheap; a blocked
   Teams conversation is not. See `superpowers:dispatching-parallel-agents`
   for the broader pattern.
+- **Signal when you're working.** When you decide to answer a Teams
+  chat and the response will involve real work (tool calls,
+  investigation, sub-agent dispatch), post a
+  `post_thinking_placeholder` first and replace it via
+  `resolve_placeholder` when the reply is ready. Default mode is
+  `edit` (quiet, safer); use `delete_repost` only when a fresh ping
+  matters (long sub-agent runs, multi-minute investigations). Skip
+  for purely conversational turns — a one-line reply doesn't need a
+  placeholder.
