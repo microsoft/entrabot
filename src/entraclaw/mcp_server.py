@@ -192,6 +192,76 @@ mcp = FastMCP(
     instructions=_load_agent_instructions(),
 )
 
+# ---------------------------------------------------------------------------
+# Host detection — leader/slave gating for multi-MCP-client support.
+#
+# Claude Code is the canonical "leader" because it exposes the custom
+# ``notifications/claude/channel`` message mechanism the background polls
+# push onto. Every other MCP host (Copilot CLI, any future host lacking a
+# channel) runs in slave mode: no background tasks, no channel pushes, and
+# reply-expecting tools (e.g. send_teams_message) gain a disclosure so the
+# model tells the user their reply won't push through.
+#
+# Static designation via MCP ``clientInfo.name`` (not dynamic election).
+# TODO(verify): confirm the exact Copilot CLI clientInfo.name empirically;
+# the gating is deny-by-default (only the canonical leader set runs tasks)
+# so an unexpected name simply means "treat as slave" — safe.
+# ---------------------------------------------------------------------------
+LEADER_HOSTS: frozenset[str] = frozenset({"claude-code", "claude code"})
+
+# Disclosure appended to reply-expecting tool responses when the current
+# host is not a leader. The model reads this and can relay it to the user.
+SLAVE_REPLY_DISCLOSURE = (
+    "Reply channel unavailable in this host — Teams replies won't push here. "
+    "Check Teams directly or switch to Claude Code for channel events."
+)
+
+
+def _current_host() -> str:
+    """Return the active MCP client's ``clientInfo.name`` lowercased.
+
+    Reads from the FastMCP request context. Returns ``"unknown"`` when no
+    active request context is available (e.g. module-load time) or when
+    ``clientInfo`` is not yet populated.
+    """
+    try:
+        ctx = mcp.get_context()
+    except Exception:  # noqa: BLE001 — no active request context
+        return "unknown"
+
+    try:
+        client_params = ctx.session.client_params
+    except Exception:  # noqa: BLE001 — session not yet initialized
+        return "unknown"
+
+    if client_params is None:
+        return "unknown"
+
+    try:
+        name = client_params.clientInfo.name
+    except AttributeError:
+        return "unknown"
+
+    if not name:
+        return "unknown"
+    return str(name).lower()
+
+
+def _is_leader_host() -> bool:
+    """True iff the active client is in the canonical leader set.
+
+    Deny-by-default: unknown hosts are slaves. Only Claude Code is a leader.
+    """
+    return _current_host() in LEADER_HOSTS
+
+
+def _slave_disclosure_suffix() -> str:
+    """Return the slave-mode disclosure string, or empty string for leaders."""
+    if _is_leader_host():
+        return ""
+    return SLAVE_REPLY_DISCLOSURE
+
+
 # Module-level state populated by _initialize()
 _state: dict[str, object] = {}
 _identity: IdentityStateMachine | None = None
@@ -510,7 +580,20 @@ async def _init_poll() -> None:
                     if logger:
                         logger.info("Loaded persisted watched chat: %s", cid)
 
-    # Start background polling
+    # Start background polling — leader mode only.
+    #
+    # Slaves (Copilot CLI and any other host without a channel mechanism)
+    # do not run background tasks: there's no channel to push events onto,
+    # and running polls in parallel with the leader would double-write the
+    # interaction log / blob state. See _is_leader_host() docstring.
+    if not _is_leader_host():
+        if logger:
+            logger.info(
+                "Slave host detected (%s) — skipping background tasks",
+                _current_host(),
+            )
+        return
+
     config = _state.get("config")
     if config and config.mode == "bot":
         import asyncio
@@ -607,7 +690,13 @@ def _ensure_poll_task_running() -> None:
 
     Idempotent. Bot mode is skipped — the bot gateway handles inbound via
     _background_poll_bot which is started explicitly in _init_poll.
+
+    Also skipped in slave mode: only the leader (Claude Code) polls Teams,
+    since it's the only host with a channel to push events onto.
     """
+    if not _is_leader_host():
+        return
+
     config = _state.get("config")
     if config is not None and getattr(config, "mode", None) == "bot":
         return
@@ -1400,6 +1489,13 @@ async def send_teams_message(
             "had_mentions": bool(mentions),
         },
     )
+
+    # Slave-mode disclosure: no channel push means the reply won't arrive
+    # in this host's turn. The model reads this and tells the user.
+    notice = _slave_disclosure_suffix()
+    if notice and isinstance(result, dict):
+        result = dict(result)
+        result["notice"] = notice
 
     return json.dumps(result, indent=2)
 

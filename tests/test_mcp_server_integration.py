@@ -1374,6 +1374,9 @@ class TestPollTaskAutoStart:
 
         from entraclaw import mcp_server
 
+        # Leader mode required — slave hosts intentionally skip polling.
+        monkeypatch.setattr(mcp_server, "_is_leader_host", lambda: True)
+
         old_state = mcp_server._state.copy()
         try:
             mcp_server._state.clear()
@@ -1414,6 +1417,8 @@ class TestPollTaskAutoStart:
 
         from entraclaw import mcp_server
 
+        monkeypatch.setattr(mcp_server, "_is_leader_host", lambda: True)
+
         old_state = mcp_server._state.copy()
         try:
             mcp_server._state.clear()
@@ -1441,6 +1446,8 @@ class TestPollTaskAutoStart:
         monkeypatch.setenv("ENTRACLAW_SKIP_PROVISIONING", "true")
 
         from entraclaw import mcp_server
+
+        monkeypatch.setattr(mcp_server, "_is_leader_host", lambda: True)
 
         old_state = mcp_server._state.copy()
         try:

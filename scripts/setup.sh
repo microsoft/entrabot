@@ -870,30 +870,24 @@ if [ -n "$AGENT_LICENSE" ]; then
     echo -e "  License:     ${BLUE}$AGENT_LICENSE${NC} (Teams provisioning in 10-15 min)"
 fi
 
-# Write MCP server config to project root (.mcp.json)
-# Claude Code picks this up automatically when opening the project.
-# Uses the `entraclaw-mcp` console script installed by `pip install -e .[dev]`
-# (defined as a [project.scripts] entry in pyproject.toml) — cleaner than
-# invoking `python3 -m entraclaw.mcp_server` because it doesn't depend on
-# the CLI having the right cwd.
+# Write MCP server config to both Claude Code and Copilot CLI config paths.
+# Claude Code reads ``<project-root>/.mcp.json``. Copilot CLI reads
+# ``$COPILOT_HOME/mcp-config.json`` (default ``~/.copilot/mcp-config.json``)
+# and also honors the project-local ``.mcp.json``. Both entries are byte-
+# identical; the leader/slave split is done inside the MCP server at
+# session initialize via ``clientInfo.name``.
 #
-# NOTE: To add persona-sati (mind server), see .mcp.json.example for the
-# dual-server configuration. persona-sati is optional — openclaw works
+# The actual upsert (idempotent, preserves unrelated entries, backs up
+# corrupt files) lives in ``scripts/mcp_config.py`` so it's unit-tested.
+#
+# To add persona-sati (mind server), see .mcp.json.example for the dual-
+# server configuration. persona-sati is optional — openclaw works
 # standalone as a Teams tool server without it.
 ENTRACLAW_MCP_BIN="$PROJECT_ROOT/.venv/bin/entraclaw-mcp"
-cat > "$PROJECT_ROOT/.mcp.json" << MCPEOF
-{
-  "mcpServers": {
-    "entraclaw": {
-      "type": "stdio",
-      "command": "$ENTRACLAW_MCP_BIN",
-      "args": [],
-      "description": "EntraClaw Agent Identity — Teams tools + background DM/email poll"
-    }
-  }
-}
-MCPEOF
-success "MCP server config written to .mcp.json (see .mcp.json.example to add persona-sati)"
+"$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/scripts/mcp_config.py" \
+    --binary "$ENTRACLAW_MCP_BIN" \
+    --project-root "$PROJECT_ROOT"
+success "MCP server config written (.mcp.json + ~/.copilot/mcp-config.json)"
 
 echo -e "  ${YELLOW}NEXT STEPS:${NC}"
 echo -e "  1. Wait 10-15 min for Teams/mailbox provisioning (if license was just assigned)"
