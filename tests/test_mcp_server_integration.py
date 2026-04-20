@@ -2134,3 +2134,224 @@ class TestDeleteTeamsMessageTool:
         assert "reason" in parsed
         assert captured["action"] == "delete_teams_message"
         assert captured["metadata"]["deleted"] is False
+
+
+# ---------------------------------------------------------------------------
+# send_email MCP wrapper
+# ---------------------------------------------------------------------------
+
+
+class TestSendEmailTool:
+    @pytest.mark.asyncio
+    async def test_splits_comma_separated_recipients(
+        self, monkeypatch
+    ) -> None:
+        """to/cc/bcc arrive as comma-separated strings; wrapper splits to lists."""
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_log_interaction_safe", lambda **kw: None
+        )
+        monkeypatch.setattr(
+            "entraclaw.tools.audit.log_event",
+            lambda **kw: {"event_id": "evt-x"},
+        )
+
+        captured: dict = {}
+
+        async def fake_retry(fn, **kwargs):
+            captured.update(kwargs)
+            return {"sent_at": "2026-04-20T00:00:00+00:00"}
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+        await mcp_server.send_email(
+            to="a@example.com, b@example.com ,  ",
+            subject="hi",
+            body="<p>hi</p>",
+            cc="c@example.com",
+            bcc="d@example.com, e@example.com",
+        )
+
+        assert captured["to"] == ["a@example.com", "b@example.com"]
+        assert captured["cc"] == ["c@example.com"]
+        assert captured["bcc"] == ["d@example.com", "e@example.com"]
+        assert captured["subject"] == "hi"
+
+    @pytest.mark.asyncio
+    async def test_rejects_empty_to(self, monkeypatch) -> None:
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        result = await mcp_server.send_email(
+            to="   ", subject="hi", body="b"
+        )
+        parsed = _json.loads(result)
+        assert "error" in parsed
+        assert "to" in parsed["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_rejects_empty_subject(self, monkeypatch) -> None:
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        result = await mcp_server.send_email(
+            to="a@example.com", subject="", body="b"
+        )
+        parsed = _json.loads(result)
+        assert "error" in parsed
+        assert "subject" in parsed["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_audits_before_graph_call(self, monkeypatch) -> None:
+        """Security: audit event lands before the Graph mutation (fail-closed)."""
+        from entraclaw import mcp_server
+
+        audit_events: list[dict] = []
+
+        def fake_log_event(**kwargs):
+            audit_events.append(kwargs)
+            return {"event_id": "evt-1", **kwargs}
+
+        monkeypatch.setattr(
+            "entraclaw.tools.audit.log_event", fake_log_event
+        )
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_log_interaction_safe", lambda **kw: None
+        )
+
+        graph_called = False
+
+        async def fake_retry(fn, **kwargs):
+            nonlocal graph_called
+            assert audit_events, (
+                "audit event must be written before the Graph mutation"
+            )
+            graph_called = True
+            return {"sent_at": "2026-04-20T00:00:00+00:00"}
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+        await mcp_server.send_email(
+            to="a@example.com", subject="Re: hello", body="<p>hi</p>"
+        )
+        assert graph_called
+        assert audit_events[0]["action"] == "send_email"
+        # Resource should carry the recipient + subject for audit forensics.
+        resource = audit_events[0]["resource"]
+        assert "a@example.com" in resource
+        assert "Re: hello" in resource
+
+    @pytest.mark.asyncio
+    async def test_interaction_log_on_success(self, monkeypatch) -> None:
+        from entraclaw import mcp_server
+
+        captured: dict = {}
+
+        def fake_log(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr(mcp_server, "_log_interaction_safe", fake_log)
+        monkeypatch.setattr(
+            "entraclaw.tools.audit.log_event",
+            lambda **kw: {"event_id": "evt-x"},
+        )
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server,
+            "_with_token_retry",
+            AsyncMock(return_value={"sent_at": "2026-04-20T00:00:00+00:00"}),
+        )
+
+        await mcp_server.send_email(
+            to="a@example.com",
+            subject="Re: deploy",
+            body="<p>shipped</p>",
+            cc="b@example.com",
+            reply_to_message_id="AAMk==",
+        )
+        assert captured["direction"] == "outbound"
+        assert captured["channel"] == "email"
+        assert captured["action"] == "send_email"
+        assert captured["recipient"] == "a@example.com"
+        meta = captured["metadata"]
+        assert meta["to"] == ["a@example.com"]
+        assert meta["cc"] == ["b@example.com"]
+        assert meta["bcc"] == []
+        assert meta["subject"] == "Re: deploy"
+        assert meta["content_type"] == "html"
+        assert meta["reply_to_message_id"] == "AAMk=="
+        # Don't leak the body into the log (security: "no full bodies").
+        assert "<p>shipped</p>" not in _safe_json(meta)
+
+    @pytest.mark.asyncio
+    async def test_interaction_log_on_failure(self, monkeypatch) -> None:
+        from entraclaw import mcp_server
+        from entraclaw.tools.email import EmailSendError
+
+        captured: dict = {}
+
+        def fake_log(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr(mcp_server, "_log_interaction_safe", fake_log)
+        monkeypatch.setattr(
+            "entraclaw.tools.audit.log_event",
+            lambda **kw: {"event_id": "evt-x"},
+        )
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+
+        async def fake_retry(fn, **kwargs):
+            raise EmailSendError("Graph rejected: ErrorInvalidRecipients")
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+        # Wrapper returns JSON (with error), does NOT leak the exception.
+        import json as _json
+
+        result = await mcp_server.send_email(
+            to="bogus@example.com", subject="s", body="b"
+        )
+        parsed = _json.loads(result)
+        assert "error" in parsed
+        assert captured["action"] == "send_email"
+        assert captured["metadata"]["outcome"] == "failure"
+
+
+def _safe_json(obj) -> str:
+    import json as _json
+
+    try:
+        return _json.dumps(obj)
+    except Exception:
+        return str(obj)

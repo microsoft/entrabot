@@ -27,9 +27,6 @@ from datetime import UTC, datetime, timedelta
 from html import escape
 from typing import TypedDict
 
-import httpx
-
-from entraclaw.errors import TokenExpiredError
 from entraclaw.storage.backend import get_backend
 
 logger = logging.getLogger("entraclaw.tools.daily_summary")
@@ -175,28 +172,23 @@ async def send_summary_email(
     subject: str,
     to: list[str],
 ) -> None:
-    """Send the rendered summary to *to* via Graph ``/me/sendMail``."""
-    payload = {
-        "message": {
-            "subject": subject,
-            "body": {"contentType": "HTML", "content": html},
-            "toRecipients": [
-                {"emailAddress": {"address": addr}} for addr in to
-            ],
-        },
-        "saveToSentItems": True,
-    }
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(GRAPH_SENDMAIL_URL, json=payload, headers=headers)
-        if resp.status_code == 401:
-            raise TokenExpiredError(
-                "Agent User token expired — re-acquire via three-hop flow"
-            )
-        resp.raise_for_status()
+    """Send the rendered summary to *to* via Graph ``/me/sendMail``.
+
+    Delegates to :func:`entraclaw.tools.email.send_email` so the codebase
+    has exactly one Graph mail-send path. Kept as a thin wrapper because
+    this module's call-sites (scheduler, mcp_server) pin the kwargs
+    ``html``/``subject``/``to`` and the scheduler-specific semantics
+    (always HTML, always new thread) live here.
+    """
+    from entraclaw.tools.email import send_email
+
+    await send_email(
+        to=to,
+        subject=subject,
+        body=html,
+        content_type="HTML",
+        token=token,
+    )
 
 
 # ---------------------------------------------------------------------------

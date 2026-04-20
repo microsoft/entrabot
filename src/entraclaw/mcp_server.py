@@ -1760,6 +1760,150 @@ async def delete_teams_message(
     )
 
 
+def _split_addrs(raw: str) -> list[str]:
+    """Split a comma-separated address string, strip, drop empties."""
+    if not raw:
+        return []
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+@mcp.tool()
+async def send_email(
+    to: str,
+    subject: str,
+    body: str,
+    content_type: str = "html",
+    cc: str = "",
+    bcc: str = "",
+    reply_to_message_id: str = "",
+) -> str:
+    """Send an email from the Agent User's mailbox.
+
+    Use when channel-discipline says email-in → email-out, or when
+    initiating correspondence the Sponsor specifically routed to email.
+    When replying to a known inbound, pass ``reply_to_message_id`` so
+    Graph preserves the thread headers — it uses the original message's
+    subject, so any subject you pass here is informational only.
+
+    Args:
+        to: Comma-separated email addresses (single is fine).
+        subject: Subject line (ignored by Graph on replies).
+        body: Message body (default HTML — match Teams convention).
+        content_type: "html" or "text".
+        cc: Optional comma-separated CC addresses.
+        bcc: Optional comma-separated BCC addresses.
+        reply_to_message_id: If set, reply to that message_id (preserves
+            thread). Omit for a new thread.
+
+    Returns:
+        JSON with ``{"sent_at": "..."}`` on success, or ``{"error": "..."}``
+        on a validation/Graph failure.
+    """
+    await _initialize()
+
+    to_list = _split_addrs(to)
+    cc_list = _split_addrs(cc)
+    bcc_list = _split_addrs(bcc)
+
+    if not to_list:
+        return json.dumps({
+            "error": (
+                "to is required — pass a comma-separated list of email addresses."
+            )
+        })
+    if not subject or not subject.strip():
+        # Graph accepts empty subjects on replies, but reject uniformly —
+        # audit resource needs something to key on, and a blank subject
+        # is almost always a programming error.
+        return json.dumps({"error": "subject is required."})
+
+    # Audit before mutating — per security.md "Audit before acting". Fail
+    # closed: if the audit write raises, the Graph call does not proceed.
+    from entraclaw.tools.audit import log_event
+    config = get_config()
+    if _identity:
+        agent_id = (
+            _identity.session.user_id or config.agent_id
+            or config.blueprint_app_id or "unknown"
+        )
+        attribution = _identity.session.attribution_type
+    else:
+        agent_id = config.agent_id or config.blueprint_app_id or "unknown"
+        attribution = "agent"
+    log_event(
+        action="send_email",
+        resource=f"to={','.join(to_list)} subject={subject}",
+        outcome="pending",
+        agent_id=agent_id,
+        metadata={
+            "content_type": content_type,
+            "has_cc": bool(cc_list),
+            "has_bcc": bool(bcc_list),
+            "is_reply": bool(reply_to_message_id),
+        },
+        attribution_type=attribution,
+    )
+
+    from entraclaw.tools.email import EmailSendError
+    from entraclaw.tools.email import send_email as _send
+
+    await _ensure_valid_token()
+
+    try:
+        result = await _with_token_retry(
+            _send,
+            to=to_list,
+            subject=subject,
+            body=body,
+            content_type=content_type,
+            cc=cc_list or None,
+            bcc=bcc_list or None,
+            reply_to_message_id=reply_to_message_id or None,
+        )
+    except EmailSendError as exc:
+        _log_interaction_safe(
+            channel="email",
+            direction="outbound",
+            sender="entraclaw-agent",
+            recipient=to_list[0],
+            summary=_summarize_content(subject),
+            action="send_email",
+            content_ref=reply_to_message_id or None,
+            metadata={
+                "to": to_list,
+                "cc": cc_list,
+                "bcc": bcc_list,
+                "subject": subject,
+                "content_type": content_type,
+                "reply_to_message_id": reply_to_message_id or None,
+                "outcome": "failure",
+                "error": str(exc),
+            },
+        )
+        return json.dumps({"error": f"email send failed: {exc}"})
+
+    _log_interaction_safe(
+        channel="email",
+        direction="outbound",
+        sender="entraclaw-agent",
+        recipient=to_list[0],
+        summary=_summarize_content(subject),
+        action="send_email",
+        content_ref=reply_to_message_id or None,
+        metadata={
+            "to": to_list,
+            "cc": cc_list,
+            "bcc": bcc_list,
+            "subject": subject,
+            "content_type": content_type,
+            "reply_to_message_id": reply_to_message_id or None,
+            "outcome": "success",
+        },
+    )
+
+    return json.dumps(result, indent=2)
+
+
 @mcp.tool()
 async def send_card(
     card_type: str,
