@@ -27,6 +27,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 # ---------------------------------------------------------------------------
 # _current_host
@@ -142,3 +144,102 @@ class TestSlaveDisclosureSuffix:
             assert suffix  # non-empty
             assert "Reply channel unavailable" in suffix
             assert "Claude Code" in suffix
+
+
+# ---------------------------------------------------------------------------
+# Background-task gating
+#
+# In slave mode ``_init_poll`` must not spawn any of the four background
+# tasks (Teams poll, email poll, daily summary scheduler, chat discovery).
+# The leader-mode test is the symmetric control — same state, just the
+# leader predicate flipped — and the tasks DO spawn.
+# ---------------------------------------------------------------------------
+class TestBackgroundTaskGating:
+    """_init_poll respects _is_leader_host."""
+
+    @pytest.mark.asyncio
+    async def test_background_tasks_not_spawned_in_slave_mode(
+        self, monkeypatch
+    ) -> None:
+        from unittest.mock import MagicMock as _MM
+
+        from entraclaw import mcp_server
+
+        # Pretend we're in agent_user mode with one watched chat so that
+        # the leader-path WOULD spawn tasks. Slave mode must short-circuit.
+        fake_config = _MM()
+        fake_config.mode = "agent_user"
+        fake_config.data_dir = MagicMock()
+        fake_config.data_dir.__truediv__ = (
+            lambda self, other: MagicMock(is_file=lambda: False)
+        )
+
+        fake_identity = MagicMock()
+        fake_identity.session.auth_mode = "agent_user"
+
+        monkeypatch.setitem(mcp_server._state, "config", fake_config)
+        monkeypatch.setattr(mcp_server, "_identity", fake_identity)
+        monkeypatch.setattr(mcp_server, "_is_leader_host", lambda: False)
+
+        created: list[object] = []
+
+        class FakeLoop:
+            def create_task(self, coro):
+                created.append(coro)
+                coro.close()  # drop so no RuntimeWarning
+                return MagicMock()
+
+        monkeypatch.setattr(
+            "asyncio.get_event_loop", lambda: FakeLoop()
+        )
+
+        await mcp_server._init_poll()
+
+        assert created == [], (
+            f"slave mode must not spawn background tasks; got {created!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_background_tasks_spawned_in_leader_mode(
+        self, monkeypatch
+    ) -> None:
+        """Symmetric control: flip the leader predicate, tasks spawn."""
+        from unittest.mock import MagicMock as _MM
+
+        from entraclaw import mcp_server
+
+        fake_config = _MM()
+        fake_config.mode = "agent_user"
+        fake_config.data_dir = MagicMock()
+        fake_config.data_dir.__truediv__ = (
+            lambda self, other: MagicMock(is_file=lambda: False)
+        )
+
+        fake_identity = MagicMock()
+        fake_identity.session.auth_mode = "agent_user"
+
+        monkeypatch.setitem(mcp_server._state, "config", fake_config)
+        monkeypatch.setitem(mcp_server._state, "watched_chats", {})
+        monkeypatch.setattr(mcp_server, "_identity", fake_identity)
+        monkeypatch.setattr(mcp_server, "_is_leader_host", lambda: True)
+
+        created: list[object] = []
+
+        class FakeLoop:
+            def create_task(self, coro):
+                created.append(coro)
+                coro.close()
+                return MagicMock()
+
+        monkeypatch.setattr(
+            "asyncio.get_event_loop", lambda: FakeLoop()
+        )
+
+        await mcp_server._init_poll()
+
+        # Leader + agent_user identity: 3 tasks (email, daily, discover).
+        # No watched chats so no Teams poll. The point is: leader path
+        # creates tasks, slave path does not.
+        assert len(created) >= 3, (
+            f"leader mode must spawn background tasks; got {len(created)}"
+        )

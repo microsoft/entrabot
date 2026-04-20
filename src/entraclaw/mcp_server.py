@@ -580,7 +580,20 @@ async def _init_poll() -> None:
                     if logger:
                         logger.info("Loaded persisted watched chat: %s", cid)
 
-    # Start background polling
+    # Start background polling — leader mode only.
+    #
+    # Slaves (Copilot CLI and any other host without a channel mechanism)
+    # do not run background tasks: there's no channel to push events onto,
+    # and running polls in parallel with the leader would double-write the
+    # interaction log / blob state. See _is_leader_host() docstring.
+    if not _is_leader_host():
+        if logger:
+            logger.info(
+                "Slave host detected (%s) — skipping background tasks",
+                _current_host(),
+            )
+        return
+
     config = _state.get("config")
     if config and config.mode == "bot":
         import asyncio
@@ -677,7 +690,13 @@ def _ensure_poll_task_running() -> None:
 
     Idempotent. Bot mode is skipped — the bot gateway handles inbound via
     _background_poll_bot which is started explicitly in _init_poll.
+
+    Also skipped in slave mode: only the leader (Claude Code) polls Teams,
+    since it's the only host with a channel to push events onto.
     """
+    if not _is_leader_host():
+        return
+
     config = _state.get("config")
     if config is not None and getattr(config, "mode", None) == "bot":
         return
