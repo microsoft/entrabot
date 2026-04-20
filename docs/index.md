@@ -15,11 +15,15 @@ Openclaw brings cloud-style identity tracking to device-local agents. When an au
 ## Where to Start
 
 - **New to the project?** Start with the [Quickstart](getting-started/quickstart.md)
+- **Customizing the agent's prompt?** Read [Customizing the body prompt](guides/customizing-the-body-prompt.md)
+- **Local vs. cloud storage?** Read [Storage configuration](guides/storage-configuration.md)
+- **MCP tool reference?** See [MCP tools](reference/mcp-tools.md)
+- **`setup.sh` flags?** See [setup.sh reference](reference/setup-script.md)
 - **Understanding the design?** Read [System Overview](architecture/system-overview.md)
 - **Bot Gateway design?** Read [DESIGN: Teams Bot Gateway](architecture/DESIGN-teams-bot-gateway.md)
 - **Delegated mode spec?** Read [Lightweight Teams Chat](architecture/NEXT-WhatsApp-lightweight-teams-chat.md)
-- **Current status?** See [Engineering Status](engineering-status.md) (385 tests, 3 auth modes, Phase 1-3 daily-summary stack live)
-- **Cloud memory work?** See [ADR-005: Cloud-Hosted Memory](decisions/005-cloud-hosted-memory.md) (Accepted; Phase 1 shipped, Phase 2 next)
+- **Current status?** See [Engineering Status](engineering-status.md)
+- **Cloud memory work?** See [ADR-005: Cloud-Hosted Memory](decisions/005-cloud-hosted-memory.md) (Phases 1, 2, 5, 6a shipped)
 - **How tokens flow?** See [Token Flows](reference/token-flows.md)
 - **Debugging?** Check [Hard-Won Learnings](runbooks/hard-won-learnings.md)
 - **Why we made a decision?** Browse [Architecture Decision Records](decisions/README.md)

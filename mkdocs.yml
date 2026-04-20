@@ -27,6 +27,9 @@ nav:
   - Home: index.md
   - Getting Started:
     - Quickstart: getting-started/quickstart.md
+  - Guides:
+    - Customizing the body prompt: guides/customizing-the-body-prompt.md
+    - Storage configuration: guides/storage-configuration.md
   - Architecture:
     - System Overview: architecture/system-overview.md
     - Enforcement Flow: architecture/enforcement-flow.md
@@ -44,6 +47,8 @@ nav:
       - Audit: architecture/layers/audit.md
       - Teams Integration: architecture/layers/teams.md
   - Reference:
+    - MCP Tools: reference/mcp-tools.md
+    - setup.sh: reference/setup-script.md
     - Token Flows: reference/token-flows.md
   - Developer Guide:
     - Engineering Status: engineering-status.md

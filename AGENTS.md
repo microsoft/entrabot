@@ -25,13 +25,15 @@
 ## Current Runtime Model
 
 - Python 3.12+ research project — no deployed service yet
-- Eight modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `bot/` (Bot Gateway) → `identity/` (state machine) → `storage/` (cloud-memory backend: `BlobStore` + `MemoryBackend` protocol + `PersonaBackend` + `migration` helper — ADR-005 Phases 1, 2, 5, 6a shipped) → `mcp_server.py` (FastMCP + background channel)
-- External dependencies: Microsoft Entra ID, Microsoft Teams + Outlook mailbox (via Graph API or Bot Framework), Azure Blob Storage (agent memory, provisioned by setup.sh)
+- Eight modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `bot/` (Bot Gateway) → `identity/` (state machine) → `storage/` (`LocalBackend`/`BlobBackend`/`PersonaBackend` + `migration` helper — ADR-005 Phases 1, 2, 5, 6a shipped) → `mcp_server.py` (FastMCP + background channel)
+- External dependencies: Microsoft Entra ID, Microsoft Teams + Outlook mailbox (Graph API or Bot Framework), Azure Blob Storage (optional, opt-in via `setup.sh --cloud-memory`)
+- **No default group chat.** Every Teams tool requires an explicit `chat_id`. Chats come from `create_chat`, the persisted `watched_chats` file, or the auto-discovery sweep over `/me/chats`.
+- **Body-first prompt.** `prompts/agent_system.md` loads at boot with `@include` expansion of `prompts/anatomy/*.md`. Persona-sati output (if configured) is appended AFTER the body and cannot override body rules.
 - Three auth modes via `ENTRACLAW_MODE`: `agent_user` (three-hop), `delegated` (MSAL), `bot` (M365 Agents SDK). Agent memory has a **parallel third hop** against `https://storage.azure.com/.default` (`acquire_agent_user_storage_token`).
 - Certificate auth: private key in OS keystore (Keychain/TPM/Keyring), JWT assertion for Hop 1 (ADR-003)
 - Background tasks (eagerly started at MCP server boot in `agent_user` mode):
   - Teams chat poll (5s), email poll (60s), chat auto-discovery via `/me/chats` (120s), daily summary scheduler (5pm PDT)
-- System prompt: **body-first layering.** `prompts/agent_system.md` (with `@include` expansion of `prompts/anatomy/*.md`) loads first as non-overridable body directives. Persona-sati output (if configured) is appended after the body. Hardcoded tool-description string is the final fallback when neither body nor persona is available.
+- **Operational storage is local by default.** Cloud (Azure Blob) is opt-in via `./scripts/setup.sh --cloud-memory`; recommended for durability. Backend resolves from env at call time: `KEEP_MEMORY_LOCAL=true` → `LocalBackend`, else `BLOB_ENDPOINT`+`BLOB_CONTAINER` → `BlobBackend`, else `LocalBackend`.
 - All structured data uses `dataclasses` or `pydantic` — no raw dicts
 
 ## Mind-Body Architecture

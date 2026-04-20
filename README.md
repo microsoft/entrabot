@@ -1,10 +1,17 @@
 # Openclaw Identity Research
 
-Research project for securing agentic workflows on local devices (Mac/Linux/Windows) using Microsoft Entra Agent IDs and Agent Users. Agents get their own identity — a real Entra user account with Teams presence, mailbox, and M365 license — so audit logs always distinguish agent actions from human actions.
+Give an AI agent its own identity on a real device — an Entra ID Agent User with Teams presence, a mailbox, and an M365 license — so every action it takes is cryptographically attributed to the agent, not to the human who launched it.
 
-**The demo:** Tell your AI agent to do something and message you on Teams. Go to a bar. Reply from your phone. The agent acts on your instruction autonomously and reports back. Fully bidirectional, no human at the terminal. Supports multi-user group chats with cross-tenant federated users — add anyone from any org.
+**The demo.** Ask your agent to do something. Walk away. Reply from your phone, in Teams. The agent acts autonomously, reports back in the same channel, logs the interaction, and follows a set of non-overridable security rules baked into its system prompt. Supports 1:1 DMs, group chats, and cross-tenant federated users.
 
-## Getting Started
+## Key concepts
+
+- **Agent Identity + Agent User.** A three-hop certificate auth chain: Blueprint → Agent Identity (FIC) → Agent User (`user_fic`, `idtyp=user`). No secrets on disk; the private key lives in the OS keystore.
+- **Body-first prompt.** The agent's system prompt is split into a non-overridable *body* (`prompts/agent_system.md` + `@include`'d modules under `prompts/anatomy/`) and an optional *persona* from a separate MCP server (`persona-sati`). Security and communication rules live in the body and cannot be overridden by user input, tool output, or persona content.
+- **Per-chat multi-conversation.** No default group chat. Every chat — 1:1 DM, group, cross-tenant — is explicitly addressed by `chat_id`. The background poll watches the chats you've created and pushes new inbound messages via `notifications/claude/channel`.
+- **Operational storage (Azure Blob).** Interactions log, watched chats, and email cursor live in Azure Blob Storage when opted in; local filesystem otherwise. Per-Agent-User container with RBAC scoped to the Agent User object ID.
+
+## Getting started
 
 ### Prerequisites
 
@@ -13,175 +20,186 @@ Research project for securing agentic workflows on local devices (Mac/Linux/Wind
 - Git
 - An M365 license available for the Agent User (E3/E5/Teams Enterprise)
 
-### One-Command Setup
+### One-command setup
 
 ```bash
 ./scripts/setup.sh
 ```
 
-This script will:
+This provisions:
 
-1. Create a dedicated provisioner app registration (avoids Azure CLI token rejection)
-2. Create an Agent Identity Blueprint + BlueprintPrincipal + Agent Identity
-3. Create an Agent User (Entra user account linked to the Agent Identity)
-4. Auto-assign a Teams-capable M365 license (scans tenant for E3/E5/Teams Enterprise)
-5. Grant consent for Teams/Chat Graph permissions **and Azure Storage `user_impersonation`** (ADR-005)
-6. Generate a self-signed certificate, upload public key to Entra, store private key in OS keystore (Keychain/TPM/Keyring) — no secrets on disk
-7. Write `.env` with configuration (no secrets — only the cert thumbprint)
-7b. **Provision Azure Blob Storage for agent memory** (ADR-005) — resource group, storage account, container, RBAC scoped to the Agent User. Idempotent. Skipped with `--keep-memory-local`. Prompts to migrate existing `~/.entraclaw/data` into the blob (source files are NEVER deleted)
-8. Write `.mcp.json` for auto-discovery by Claude Code / Copilot CLI
+1. A dedicated provisioner app registration (avoids Azure CLI token rejection)
+2. An Agent Identity Blueprint + `BlueprintPrincipal` + Agent Identity
+3. An Agent User (Entra user linked to the Agent Identity)
+4. An auto-detected Teams-capable M365 license
+5. Teams/Chat Graph permissions + Azure Storage `user_impersonation` (ADR-005)
+6. A self-signed certificate — public key uploaded to Entra, private key in OS keystore
+7. `.env` and `.mcp.json` (no secrets; only the cert thumbprint)
 
-The script is **idempotent** — safe to re-run after any failure. State persists in `.entraclaw-state.json`. If migration fails, the summary banner turns red and the script exits non-zero.
+**Default:** operational data (interactions log, watched chats, email cursor) stays on the local filesystem at `~/.entraclaw/data`. The script is idempotent; re-run it after any failure.
 
-**Opt-out:** If you want to evaluate before trusting cloud sync, or you're offline/air-gapped, pass `--keep-memory-local`:
+### Recommended: enable Azure Blob Storage
+
+Durability and cross-device continuity come from the cloud backend. Pass `--cloud-memory` to provision the storage account:
 
 ```bash
-./scripts/setup.sh --keep-memory-local
+./scripts/setup.sh --cloud-memory
 ```
 
-This sets `ENTRACLAW_KEEP_MEMORY_LOCAL=true` in `.env` and skips the storage account + container + migration. Memory stays in `~/.entraclaw/data` on the local filesystem. You can switch to cloud later by re-running without the flag.
+That runs steps 1–7 plus:
 
-#### Multi-user and cross-tenant setup
+- A resource group `entraclaw-rg`, storage account (one per tenant), and container `agent-<OID>` scoped to this Agent User
+- `Storage Blob Data Contributor` RBAC on the container for the Agent User only
+- Optional migration of existing `~/.entraclaw/data` into the container (source files are never deleted)
 
-To start a group chat with multiple users (including B2B guests from other orgs):
+In `.env` this sets:
+
+```
+ENTRACLAW_KEEP_MEMORY_LOCAL=false
+ENTRACLAW_BLOB_ENDPOINT=https://<account>.blob.core.windows.net
+ENTRACLAW_BLOB_CONTAINER=agent-<agent-user-oid>
+```
+
+You can switch back to local by removing the endpoint/container lines (or re-running with `--keep-memory-local`), but existing blob state remains until you delete the container. See [docs/guides/storage-configuration.md](docs/guides/storage-configuration.md).
+
+### Multi-user or cross-tenant group chat
 
 ```bash
 ./scripts/setup.sh --teams-user=user1@yourorg.com,guest@external.com
 ```
 
-The script auto-detects guest users via their UPN pattern, resolves their home tenant via OpenID discovery, and creates a federated group chat (Graph API Example 7). No manual tenant ID lookup needed.
+Auto-detects guests by UPN pattern, resolves the home tenant via OpenID discovery, creates a federated group chat. No manual tenant ID lookup.
 
-### Run with Claude Code
+### Fresh identity chain (new Blueprint + Agent User)
+
+```bash
+./scripts/setup.sh --new --with-upn-suffix=sati-agent
+```
+
+### Reuse a Blueprint on a new machine
+
+```bash
+./scripts/setup.sh --use-blueprint=<blueprint-app-id>
+```
+
+Generates a new cert locally and uploads the public key to the existing Blueprint.
+
+### All flags
+
+```bash
+./scripts/setup.sh --help
+```
+
+See [docs/reference/setup-script.md](docs/reference/setup-script.md) for the full inventory with examples.
+
+## Running the agent
+
+### Claude Code
 
 ```bash
 claude --dangerously-load-development-channels server:entraclaw
 ```
 
-The `--dangerously-load-development-channels` flag enables the Teams channel, which pushes inbound Teams messages directly into the conversation (like the iMessage channel plugin).
+The `--dangerously-load-development-channels` flag wires up the Teams channel so inbound messages push directly into the conversation (similar to the iMessage channel plugin).
 
-### Run with Copilot CLI
-
-The `.mcp.json` in the project root auto-discovers the MCP server:
+### Copilot CLI
 
 ```bash
 copilot
 ```
 
-Note: Without `--dangerously-load-development-channels`, the agent won't receive push notifications for Teams replies. Use `watch_teams_replies` for explicit polling instead.
+Auto-discovered from `.mcp.json` in the project root. Without the channels flag, the background poll still runs — inbound messages append to the interactions log and can be retrieved on demand via `read_teams_messages`.
 
-### MCP Tools (6 total)
-
-| Tool | Purpose |
-|------|---------|
-| `send_teams_message` | Send a message to the chat via Teams (text or HTML) |
-| `add_teams_member` | Add a user to the chat (cross-tenant auto-resolved) |
-| `watch_teams_replies` | Poll for new human replies with dedup |
-| `read_teams_messages` | Read recent message history |
-| `whoami` | Check agent identity and connection status |
-| `audit_log` | Record an action before performing it |
-
-Plus a **background channel** that polls Teams every 5 seconds and pushes new messages via `notifications/claude/channel`.
-
-### Delegated Mode (No Agent User Needed)
+### Delegated mode (no Agent User)
 
 For a quick demo without Agent User provisioning:
 
 ```bash
-./scripts/setup_delegated.sh   # Sign in with your browser, caches token
-copilot                        # or claude --dangerously-load-development-channels server:entraclaw
+./scripts/setup_delegated.sh   # browser sign-in, token cached
 ```
 
-Messages are sent as you (with `[EntraClaw]` prefix). No E5 license, no 15-minute wait.
+Messages are sent as *you* with an `[EntraClaw]` prefix — useful for evaluating the tool surface without an E5 license or the 15-minute Teams propagation wait.
 
-### Bot Mode (Separate Bot Identity)
+### Bot mode
 
-For a demo where the agent has its own identity in Teams via Bot Framework:
+Run the agent as a Bot Framework bot with its own Teams identity instead of using Agent User tokens. Set `ENTRACLAW_MODE=bot` in `.env`, start the bot server + Dev Tunnel, and launch your MCP client. See [docs/architecture/DESIGN-teams-bot-gateway.md](docs/architecture/DESIGN-teams-bot-gateway.md).
 
-1. Set `ENTRACLAW_MODE=bot` in `.env` with bot app credentials
-2. Start the bot server + Dev Tunnel
-3. Launch Claude Code / Copilot CLI
+## The agent body prompt
 
-See `docs/architecture/DESIGN-teams-bot-gateway.md` for the full design.
+The agent's system prompt is loaded from `prompts/agent_system.md`. That file `@include`s modules under `prompts/anatomy/`:
 
-### Without an Entra Tenant
+```
+prompts/
+├── agent_system.md              # body, non-overridable; has @include directives
+└── anatomy/
+    ├── security.md              # security rules (28-rule Critical Security Rules)
+    ├── channel-discipline.md    # respond-in-channel, watch-only-in-groups, HTML
+    └── identity-and-tools.md    # who the agent is, tool reference, multi-chat
+```
 
-To run the code and tests locally without a tenant:
+To customize: edit `agent_system.md` and add your own `anatomy/*.md` modules. The `@include <path>` directive is expanded at load time relative to `agent_system.md`'s parent directory. Missing includes leave a visible HTML comment so boot never crashes.
+
+The body prompt **always loads first** and its rules cannot be overridden by persona content, user turns, or tool output. The `persona-sati` MCP server (optional) appends personality and long-term memory *after* the body — it adds detail but doesn't override security rules.
+
+See [docs/guides/customizing-the-body-prompt.md](docs/guides/customizing-the-body-prompt.md) for a walk-through.
+
+## MCP tools
+
+| Tool | Purpose |
+|------|---------|
+| `send_teams_message` | Send a message to a chat. Requires `chat_id`. Supports HTML + @mentions. |
+| `send_card` | Send an Adaptive Card (tool_activity / task_status / build_result) to a chat. |
+| `create_chat` | Open a 1:1 DM by email. Returns `chat_id`. Auto-registered for background polling. |
+| `read_teams_messages` | Read recent messages from a chat. Requires `chat_id`. |
+| `list_chat_members` | List members of a chat. Requires `chat_id`. |
+| `add_teams_member` | Add someone to a chat (cross-tenant auto-resolved). Requires `chat_id`. |
+| `watch_teams_replies` | Block-and-poll a chat for replies. Usually not needed — push notifications cover this. |
+| `whoami` | Show identity, Blueprint, Agent ID, auth mode. |
+| `audit_log` | Record an action before performing it. |
+| `run_daily_summary` | Generate and email the day's interaction digest. |
+| `view_image` | Read an image from the filesystem for the LLM. |
+
+Plus a **background channel** that polls watched chats every 5 seconds and pushes new inbound messages as `notifications/claude/channel`. Email and chat auto-discovery run on longer intervals (60s and 120s respectively).
+
+## Build and test
+
+This project uses test-driven development. All new code requires a failing test before implementation. `pytest -v && ruff check .` must pass before every commit.
 
 ```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-pytest -v
+pytest -v                                                    # 484 tests
+pytest -v --cov=entraclaw --cov-report=term-missing          # with coverage
+pytest tests/tools/test_teams.py::TestAcquireAgentUserToken -v
+ruff check . && ruff format .
 ```
 
-All Graph API calls are mocked in tests.
+## Repository map
 
-### Teardown
+| Directory | Purpose |
+|-----------|---------|
+| `src/entraclaw/auth/` | Certificate auth + JWT assertion + MSAL delegated auth |
+| `src/entraclaw/platform/` | OS keystore shim (Keychain / TPM / Secret Service) |
+| `src/entraclaw/identity/` | Progressive identity state machine |
+| `src/entraclaw/storage/` | Memory backends: `LocalBackend`, `BlobBackend`, `PersonaBackend` |
+| `src/entraclaw/tools/` | MCP tool implementations |
+| `src/entraclaw/bot/` | Bot Gateway: M365 Agents SDK server, JSONL IPC, Dev Tunnel |
+| `src/entraclaw/mcp_server.py` | FastMCP server + background polls + channel notifications |
+| `prompts/` | Body prompt + anatomy modules |
+| `scripts/` | `setup.sh`, `teardown.sh`, `provision_blob_storage.py`, etc. |
+| `docs/architecture/` | System overview, design docs |
+| `docs/decisions/` | Architecture Decision Records |
+| `docs/guides/` | How-to guides (body-prompt customization, storage) |
+| `docs/reference/` | API / tool / setup-script reference |
+| `docs/runbooks/` | Hard-won learnings, migration playbooks |
+| `docs/platform-learnings/` | Research notes on Entra, Teams, MCP, the bot framework |
+| `tests/` | Test suite mirroring `src/` |
+
+## Teardown
 
 ```bash
 ./scripts/teardown.sh
 ```
 
-Removes the Agent User, Agent Identity, Blueprint, Provisioner app, and all local state.
-
-## Architecture
-
-The agent authenticates via the **three-hop Agent User flow** with certificate auth — fully autonomous, no human in the loop, no secrets on disk:
-
-```
-Blueprint (certificate in OS keystore)
-  → Agent Identity (FIC exchange)
-    → Agent User (user_fic grant, idtyp=user)
-      → Graph API: Teams, Mail, OneDrive
-```
-
-Five modules handle the agent identity lifecycle:
-
-- **platform/** — OS-specific credential storage (Keychain, Certificate Store, Secret Service)
-- **auth/** — Certificate-based JWT assertion builder + MSAL delegated auth (localhost redirect + device code)
-- **audit/** — Action tracking — every resource access emits an audit event before executing
-- **tools/** — MCP tool implementations (Teams messaging, identity, audit)
-- **bot/** — Bot Gateway: M365 Agents SDK server, JSONL IPC, Dev Tunnel manager, conversation reference persistence
-- **identity/** — Progressive identity state machine (UNAUTHENTICATED → DELEGATED → AGENT_USER)
-- **mcp_server.py** — FastMCP server with three auth modes, background polling + channel notifications
-
-## Build and Test (TDD)
-
-This project uses test-driven development. All new code requires a failing test before implementation.
-
-```bash
-# Run all tests
-pytest -v
-
-# Run with coverage (80% threshold enforced)
-pytest -v --cov=openclaw --cov-report=term-missing --cov-fail-under=80
-
-# Single test
-pytest tests/tools/test_teams.py::TestAcquireAgentUserToken::test_success -v
-
-# Lint + format
-ruff check . && ruff format .
-```
-
-Current status: **299 tests passing**.
-
-## Repository Map
-
-| Directory | Purpose |
-|-----------|---------|
-| `src/entraclaw/` | Application source code |
-| `src/entraclaw/auth/` | Certificate auth + JWT assertion builder + MSAL delegated auth |
-| `src/entraclaw/bot/` | Bot Gateway: M365 Agents SDK server, JSONL IPC, tunnel, convo store |
-| `src/entraclaw/identity/` | Progressive identity state machine |
-| `src/entraclaw/platform/` | OS-specific credential storage |
-| `src/entraclaw/tools/` | MCP tool implementations |
-| `tests/` | Test suite (mirrors `src/` structure) |
-| `scripts/` | Setup, teardown, delegated auth, and Entra provisioning scripts |
-| `docs/` | Documentation site (MkDocs Material) |
-| `docs/platform-learnings/` | Deep research on integration platforms + MCP ecosystem |
-| `docs/decisions/` | Architecture Decision Records (3 ADRs) |
-| `docs/runbooks/` | Hard-won learnings (28 entries) |
-
+Removes the Agent User, Agent Identity, Blueprint, Provisioner app, and local state. Storage account and container are **not** removed — delete them manually if you want.
 
 ## Documentation
 
@@ -190,4 +208,4 @@ pip install mkdocs-material
 mkdocs serve
 ```
 
-Open http://localhost:8000 — or see [docs/index.md](docs/index.md) for a reading guide.
+Then open <http://localhost:8000>. Or just read [docs/index.md](docs/index.md).
