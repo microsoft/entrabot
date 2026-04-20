@@ -474,11 +474,10 @@ async def _init_poll() -> None:
     _state["seen_id_timestamps"] = {}
 
     # Watched chats: dict of chat_id -> {seen_ids: set, last_ts: str|None}
+    # Only chats the agent has explicitly registered (via create_chat or
+    # auto-discovery) are watched. There is no default group chat anymore —
+    # leftover _state["chat_id"] from _init_chat is intentionally ignored.
     _state["watched_chats"] = {}
-
-    # Register the default group chat
-    if _state.get("chat_id"):
-        _register_watched_chat(str(_state["chat_id"]), persist=False)
 
     # Load persisted watched chats (DMs created via create_chat tool)
     config = _state.get("config")
@@ -487,7 +486,7 @@ async def _init_poll() -> None:
         if watched_file.is_file():
             for line in watched_file.read_text().splitlines():
                 cid = line.strip()
-                if cid and cid != _state.get("chat_id"):
+                if cid:
                     _register_watched_chat(cid, persist=False)
                     if logger:
                         logger.info("Loaded persisted watched chat: %s", cid)
@@ -497,11 +496,11 @@ async def _init_poll() -> None:
     if config and config.mode == "bot":
         import asyncio
 
-        asyncio.get_event_loop().create_task(_background_poll_bot())
+        _state["poll_task"] = asyncio.get_event_loop().create_task(
+            _background_poll_bot()
+        )
     elif _state.get("watched_chats"):
-        import asyncio
-
-        asyncio.get_event_loop().create_task(_background_poll())
+        _ensure_poll_task_running()
 
     # Start email poll + daily summary when authenticated as the Agent User
     # (its own mailbox and outbound mail rights). In delegated mode /me/*
@@ -583,6 +582,29 @@ async def _background_poll_bot() -> None:
             await asyncio.sleep(BOT_POLL_INTERVAL)
 
 
+def _ensure_poll_task_running() -> None:
+    """Start the Graph background poll task if one isn't already running.
+
+    Idempotent. Bot mode is skipped — the bot gateway handles inbound via
+    _background_poll_bot which is started explicitly in _init_poll.
+    """
+    config = _state.get("config")
+    if config is not None and getattr(config, "mode", None) == "bot":
+        return
+
+    existing = _state.get("poll_task")
+    if existing is not None and not existing.done():
+        return
+
+    import asyncio
+
+    _state["poll_task"] = asyncio.get_event_loop().create_task(
+        _background_poll()
+    )
+    if logger:
+        logger.info("Started background Teams poll task")
+
+
 def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
     """Register a chat for background polling.
 
@@ -591,6 +613,11 @@ def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
 
     When ``persist`` is True (default), the chat ID is also appended to
     ``data_dir/watched_chats`` so it survives MCP server restarts.
+
+    If no background poll task is currently running (e.g. the MCP server
+    booted with zero watched chats and this is the first chat being added
+    via create_chat), lazily spins one up. Bot mode is excluded — the bot
+    gateway handles inbound via _background_poll_bot.
     """
     watched = _state.get("watched_chats", {})
     if chat_id not in watched:
@@ -598,6 +625,8 @@ def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
         _state["watched_chats"] = watched
         if logger:
             logger.info("Registered chat for background polling: %s", chat_id)
+
+    _ensure_poll_task_running()
 
     if persist:
         config = _state.get("config")
@@ -703,33 +732,48 @@ async def _background_poll() -> None:
             watched = dict(_state.get("watched_chats", {}))
 
             for chat_id, chat_state in watched.items():
-                # Bootstrap on first encounter
-                if not chat_state.get("bootstrapped"):
-                    await _bootstrap_chat(chat_id)
-                    continue
+                try:
+                    # Bootstrap on first encounter
+                    if not chat_state.get("bootstrapped"):
+                        await _bootstrap_chat(chat_id)
+                        continue
 
-                raw_messages = await _with_token_retry(
-                    read, chat_id=chat_id, count=10,
-                )
-                human_msgs = filter_human_messages(raw_messages, agent_display_name)
-                new_msgs = _filter_new_messages(
-                    human_msgs, chat_state["last_ts"], chat_state["seen_ids"],
-                )
+                    raw_messages = await _with_token_retry(
+                        read, chat_id=chat_id, count=10,
+                    )
+                    human_msgs = filter_human_messages(
+                        raw_messages, agent_display_name,
+                    )
+                    new_msgs = _filter_new_messages(
+                        human_msgs, chat_state["last_ts"], chat_state["seen_ids"],
+                    )
 
-                if new_msgs:
-                    newest = max(new_msgs, key=lambda m: m.get("sent_at", ""))
-                    chat_state["last_ts"] = newest["sent_at"]
-                    for m in new_msgs:
-                        chat_state["seen_ids"].add(m["message_id"])
+                    if new_msgs:
+                        newest = max(new_msgs, key=lambda m: m.get("sent_at", ""))
+                        chat_state["last_ts"] = newest["sent_at"]
+                        for m in new_msgs:
+                            chat_state["seen_ids"].add(m["message_id"])
 
-                    # Bounded cleanup (keep last 500)
-                    if len(chat_state["seen_ids"]) > SEEN_SET_MAX:
-                        chat_state["seen_ids"] = set(
-                            sorted(chat_state["seen_ids"])[-100:]
+                        # Bounded cleanup (keep last 500)
+                        if len(chat_state["seen_ids"]) > SEEN_SET_MAX:
+                            chat_state["seen_ids"] = set(
+                                sorted(chat_state["seen_ids"])[-100:]
+                            )
+
+                        for m in sorted(
+                            new_msgs, key=lambda m: m.get("sent_at", ""),
+                        ):
+                            await _push_channel_notification(m, chat_id=chat_id)
+                except Exception as chat_exc:
+                    # One chat's failure must not starve the others in this
+                    # cycle. Log and move on; the next cycle will retry.
+                    if logger:
+                        logger.warning(
+                            "Per-chat poll error (chat_id=%s): %s: %s",
+                            chat_id,
+                            type(chat_exc).__name__,
+                            chat_exc,
                         )
-
-                    for m in sorted(new_msgs, key=lambda m: m.get("sent_at", "")):
-                        await _push_channel_notification(m, chat_id=chat_id)
 
         except Exception as exc:
             if logger:
