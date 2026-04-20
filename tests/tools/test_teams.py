@@ -952,6 +952,82 @@ class TestExtractReplyToIds:
 
 
 # ---------------------------------------------------------------------------
+# fetch_message — single-message fetch used to inline quoted context on push
+# ---------------------------------------------------------------------------
+
+
+class TestFetchMessage:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_returns_parsed_dict_on_200(self) -> None:
+        """Happy path: parse body.content, from.user.displayName, createdDateTime."""
+        from entraclaw.tools.teams import fetch_message
+
+        respx.get(f"{GRAPH_BASE}/chats/c1/messages/m1").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "m1",
+                    "from": {"user": {"displayName": "Brandon"}},
+                    "body": {"content": "<p>original msg</p>"},
+                    "createdDateTime": "2026-04-17T01:00:00Z",
+                },
+            )
+        )
+        result = await fetch_message(chat_id="c1", message_id="m1", token="tok")
+        assert result == {
+            "message_id": "m1",
+            "from": "Brandon",
+            "content": "<p>original msg</p>",
+            "sent_at": "2026-04-17T01:00:00Z",
+        }
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_returns_none_on_404(self) -> None:
+        """Fail-open: quoted message missing (e.g. soft-deleted) → None, no raise."""
+        from entraclaw.tools.teams import fetch_message
+
+        respx.get(f"{GRAPH_BASE}/chats/c1/messages/gone").mock(
+            return_value=httpx.Response(404)
+        )
+        result = await fetch_message(chat_id="c1", message_id="gone", token="tok")
+        assert result is None
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_returns_none_on_500(self) -> None:
+        """Fail-open: Graph transient failure → None. Observability, not security."""
+        from entraclaw.tools.teams import fetch_message
+
+        respx.get(f"{GRAPH_BASE}/chats/c1/messages/m1").mock(
+            return_value=httpx.Response(500)
+        )
+        result = await fetch_message(chat_id="c1", message_id="m1", token="tok")
+        assert result is None
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_missing_fields_default_gracefully(self) -> None:
+        """If Graph omits from.user or body.content, we coerce to safe defaults."""
+        from entraclaw.tools.teams import fetch_message
+
+        respx.get(f"{GRAPH_BASE}/chats/c1/messages/m2").mock(
+            return_value=httpx.Response(
+                200,
+                json={"id": "m2", "createdDateTime": "2026-04-17T02:00:00Z"},
+            )
+        )
+        result = await fetch_message(chat_id="c1", message_id="m2", token="tok")
+        assert result == {
+            "message_id": "m2",
+            "from": "unknown",
+            "content": "",
+            "sent_at": "2026-04-17T02:00:00Z",
+        }
+
+
+# ---------------------------------------------------------------------------
 # create_one_on_one_chat
 # ---------------------------------------------------------------------------
 

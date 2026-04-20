@@ -878,6 +878,52 @@ def extract_reply_to_ids(body_content: str) -> list[str]:
     return ids
 
 
+async def fetch_message(
+    *,
+    chat_id: str,
+    message_id: str,
+    token: str,
+) -> dict | None:
+    """Fetch a single chat message's body by ID. Fail-open.
+
+    Used by the channel-push path to inline quoted context when a user
+    hits the Teams "Reply" UI: :func:`extract_reply_to_ids` yields the
+    source IDs, and we fetch each one to give the agent the original
+    message without a tool round-trip.
+
+    Returns the same shape as :func:`read` entries minus ``reply_to_ids``.
+    Returns ``None`` on any 4xx/5xx — this is observability, not
+    security; losing a quote fetch must not block the primary push.
+    Caller should log a warning and proceed.
+
+    Raises :class:`TokenExpiredError` on 401 so the standard refresh
+    wrapper (``_with_token_retry``) can re-drive the call.
+    """
+    headers = {"Authorization": f"Bearer {token}"}
+
+    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    async with httpx.AsyncClient(transport=transport) as client:
+        resp = await client.get(
+            f"{GRAPH_BASE}/chats/{chat_id}/messages/{message_id}",
+            headers=headers,
+        )
+        if resp.status_code == 401:
+            raise TokenExpiredError("Token expired — re-acquire")
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", "60"))
+            raise RateLimitError(retry_after)
+        if not (200 <= resp.status_code < 300):
+            return None
+
+        m = resp.json()
+        return {
+            "message_id": m.get("id", message_id),
+            "from": (m.get("from") or {}).get("user", {}).get("displayName", "unknown"),
+            "content": (m.get("body") or {}).get("content", "") or "",
+            "sent_at": m.get("createdDateTime"),
+        }
+
+
 async def read(
     *,
     chat_id: str,

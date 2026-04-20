@@ -29,7 +29,7 @@ from entraclaw.identity.state_machine import IdentityStateMachine
 from entraclaw.logging_config import setup_logging
 from entraclaw.models import IdentityState
 from entraclaw.tools.interaction_log import detect_channel, log_interaction
-from entraclaw.tools.teams import acquire_agent_user_token
+from entraclaw.tools.teams import acquire_agent_user_token, fetch_message
 
 logger: logging.Logger | None = None
 
@@ -1218,17 +1218,57 @@ async def _push_channel_notification(
             )
         return
 
+    meta: dict = {
+        "chat_id": resolved_chat_id,
+        "message_id": message.get("message_id", ""),
+        "user": message.get("from", "unknown"),
+        "ts": message.get("sent_at", ""),
+    }
+
+    # Quote-reply enrichment: when Teams' Reply UI quotes a prior message,
+    # Graph encodes the source as <attachment id=...> inline in body HTML
+    # (parsed into reply_to_ids by read()). Forward the IDs and fetch each
+    # quoted body so the agent has context without a tool round-trip.
+    # Fail-open: a failed fetch must never block the primary push.
+    reply_to_ids = message.get("reply_to_ids") or []
+    if reply_to_ids:
+        import asyncio
+
+        meta["reply_to_ids"] = list(reply_to_ids)
+        token = _state.get("token") or (_identity.session.token if _identity else None)
+        quoted: list[dict] = []
+        if token:
+            results = await asyncio.gather(
+                *(
+                    fetch_message(
+                        chat_id=resolved_chat_id,
+                        message_id=rid,
+                        token=str(token),
+                    )
+                    for rid in reply_to_ids
+                ),
+                return_exceptions=True,
+            )
+            for rid, r in zip(reply_to_ids, results, strict=False):
+                if isinstance(r, BaseException):
+                    if logger:
+                        logger.warning(
+                            "fetch_message failed for quoted id %s: %s: %s",
+                            rid,
+                            type(r).__name__,
+                            r,
+                        )
+                    continue
+                if r is not None:
+                    quoted.append(r)
+        meta["quoted_messages"] = quoted
+
     notification = JSONRPCNotification(
         jsonrpc="2.0",
         method="notifications/claude/channel",
         params={
             "content": message.get("content", ""),
-            "meta": {
-                "chat_id": resolved_chat_id,
-                "message_id": message.get("message_id", ""),
-                "user": message.get("from", "unknown"),
-                "ts": message.get("sent_at", ""),
-            },
+            "meta": meta,
         },
     )
     session_message = SessionMessage(message=JSONRPCMessage(notification))
