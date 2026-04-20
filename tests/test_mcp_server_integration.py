@@ -937,3 +937,159 @@ class TestBootstrapChat:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
             mcp_server._identity = old_identity
+
+
+# ---------------------------------------------------------------------------
+# Background poll task lifecycle — the fix for "new chats don't get polled"
+# ---------------------------------------------------------------------------
+# Historical bug: _init_poll only started _background_poll() when watched_chats
+# was non-empty at init time. If the MCP server booted with zero watched chats
+# (e.g. no default group chat configured) and a chat was added later via the
+# create_chat tool, the poll task was never created — so no notifications
+# pushed for that chat. Fix: _register_watched_chat lazily starts the poll
+# task if one isn't already running.
+
+
+class TestPollTaskAutoStart:
+    """_register_watched_chat should start the background poll task if
+    no task is currently running. This covers the case where the MCP server
+    boots with zero watched chats and a chat is added later via create_chat."""
+
+    @pytest.mark.asyncio
+    async def test_register_starts_poll_when_no_task_running(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("ENTRACLAW_SKIP_PROVISIONING", "true")
+
+        from entraclaw import mcp_server
+
+        old_state = mcp_server._state.copy()
+        try:
+            mcp_server._state.clear()
+            mcp_server._state["watched_chats"] = {}
+            mcp_server._state["poll_task"] = None
+
+            created: list = []
+
+            def fake_create_task(coro, *args, **kwargs):
+                # Close the coroutine to avoid "never awaited" warnings.
+                coro.close()
+                sentinel = MagicMock()
+                sentinel.done.return_value = False
+                created.append(sentinel)
+                return sentinel
+
+            loop = MagicMock()
+            loop.create_task.side_effect = fake_create_task
+            with patch("asyncio.get_event_loop", return_value=loop):
+                mcp_server._register_watched_chat(
+                    "19:new-chat@thread.v2", persist=False
+                )
+
+            assert len(created) == 1, (
+                "registering a chat when no poll task is running must "
+                "spin up _background_poll"
+            )
+            assert mcp_server._state.get("poll_task") is created[0]
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+
+    @pytest.mark.asyncio
+    async def test_register_does_not_double_start(self, monkeypatch) -> None:
+        """If a poll task is already running, registering another chat
+        must not start a second task."""
+        monkeypatch.setenv("ENTRACLAW_SKIP_PROVISIONING", "true")
+
+        from entraclaw import mcp_server
+
+        old_state = mcp_server._state.copy()
+        try:
+            mcp_server._state.clear()
+            mcp_server._state["watched_chats"] = {}
+            running_task = MagicMock()
+            running_task.done.return_value = False
+            mcp_server._state["poll_task"] = running_task
+
+            loop = MagicMock()
+            loop.create_task.side_effect = AssertionError(
+                "must not create a second poll task"
+            )
+            with patch("asyncio.get_event_loop", return_value=loop):
+                mcp_server._register_watched_chat(
+                    "19:second-chat@thread.v2", persist=False
+                )
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+
+    @pytest.mark.asyncio
+    async def test_register_restarts_if_task_done(self, monkeypatch) -> None:
+        """If the prior poll task has finished (e.g. crashed), registering
+        a new chat should spin up a fresh one."""
+        monkeypatch.setenv("ENTRACLAW_SKIP_PROVISIONING", "true")
+
+        from entraclaw import mcp_server
+
+        old_state = mcp_server._state.copy()
+        try:
+            mcp_server._state.clear()
+            mcp_server._state["watched_chats"] = {}
+            dead_task = MagicMock()
+            dead_task.done.return_value = True
+            mcp_server._state["poll_task"] = dead_task
+
+            created: list = []
+
+            def fake_create_task(coro, *args, **kwargs):
+                coro.close()
+                new_task = MagicMock()
+                new_task.done.return_value = False
+                created.append(new_task)
+                return new_task
+
+            loop = MagicMock()
+            loop.create_task.side_effect = fake_create_task
+            with patch("asyncio.get_event_loop", return_value=loop):
+                mcp_server._register_watched_chat(
+                    "19:resume@thread.v2", persist=False
+                )
+
+            assert len(created) == 1
+            assert mcp_server._state["poll_task"] is created[0]
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+
+    @pytest.mark.asyncio
+    async def test_bot_mode_does_not_start_graph_poll(
+        self, monkeypatch
+    ) -> None:
+        """In bot mode, the graph poll must not start — the bot gateway
+        handles inbound via _background_poll_bot instead."""
+        monkeypatch.setenv("ENTRACLAW_SKIP_PROVISIONING", "true")
+
+        from entraclaw import mcp_server
+
+        old_state = mcp_server._state.copy()
+        try:
+            mcp_server._state.clear()
+            mcp_server._state["watched_chats"] = {}
+            mcp_server._state["poll_task"] = None
+
+            fake_config = MagicMock()
+            fake_config.mode = "bot"
+            fake_config.data_dir = None
+            mcp_server._state["config"] = fake_config
+
+            loop = MagicMock()
+            loop.create_task.side_effect = AssertionError(
+                "bot mode must not spawn the graph poll"
+            )
+            with patch("asyncio.get_event_loop", return_value=loop):
+                mcp_server._register_watched_chat(
+                    "19:bot@thread.v2", persist=False
+                )
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)

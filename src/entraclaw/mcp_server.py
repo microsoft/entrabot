@@ -497,11 +497,11 @@ async def _init_poll() -> None:
     if config and config.mode == "bot":
         import asyncio
 
-        asyncio.get_event_loop().create_task(_background_poll_bot())
+        _state["poll_task"] = asyncio.get_event_loop().create_task(
+            _background_poll_bot()
+        )
     elif _state.get("watched_chats"):
-        import asyncio
-
-        asyncio.get_event_loop().create_task(_background_poll())
+        _ensure_poll_task_running()
 
     # Start email poll + daily summary when authenticated as the Agent User
     # (its own mailbox and outbound mail rights). In delegated mode /me/*
@@ -583,6 +583,29 @@ async def _background_poll_bot() -> None:
             await asyncio.sleep(BOT_POLL_INTERVAL)
 
 
+def _ensure_poll_task_running() -> None:
+    """Start the Graph background poll task if one isn't already running.
+
+    Idempotent. Bot mode is skipped — the bot gateway handles inbound via
+    _background_poll_bot which is started explicitly in _init_poll.
+    """
+    config = _state.get("config")
+    if config is not None and getattr(config, "mode", None) == "bot":
+        return
+
+    existing = _state.get("poll_task")
+    if existing is not None and not existing.done():
+        return
+
+    import asyncio
+
+    _state["poll_task"] = asyncio.get_event_loop().create_task(
+        _background_poll()
+    )
+    if logger:
+        logger.info("Started background Teams poll task")
+
+
 def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
     """Register a chat for background polling.
 
@@ -591,6 +614,11 @@ def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
 
     When ``persist`` is True (default), the chat ID is also appended to
     ``data_dir/watched_chats`` so it survives MCP server restarts.
+
+    If no background poll task is currently running (e.g. the MCP server
+    booted with zero watched chats and this is the first chat being added
+    via create_chat), lazily spins one up. Bot mode is excluded — the bot
+    gateway handles inbound via _background_poll_bot.
     """
     watched = _state.get("watched_chats", {})
     if chat_id not in watched:
@@ -598,6 +626,8 @@ def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
         _state["watched_chats"] = watched
         if logger:
             logger.info("Registered chat for background polling: %s", chat_id)
+
+    _ensure_poll_task_running()
 
     if persist:
         config = _state.get("config")
