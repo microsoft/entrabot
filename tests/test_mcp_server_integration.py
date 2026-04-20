@@ -23,27 +23,29 @@ from entraclaw.tools.teams import filter_human_messages
 
 
 # ---------------------------------------------------------------------------
-# _load_agent_instructions (mind-body split)
+# _load_agent_instructions (body-then-persona architecture)
 # ---------------------------------------------------------------------------
 class TestLoadAgentInstructions:
-    """_load_agent_instructions priority order:
+    """_load_agent_instructions composition:
 
-      1. persona-sati remote (if PERSONA_SATI_MCP_URL + token command set)
-      2. Local ``prompts/agent_system.md`` file (if it exists)
-      3. Hardcoded tool-description string (final fallback)
+      * **Body prompt** (``prompts/agent_system.md`` + ``@include`` expansion
+        of files under ``anatomy/``) is ALWAYS loaded first when present.
+        Body rules (security, channel discipline) cannot be overridden.
+      * **Persona** (from persona-sati, if configured and reachable) is
+        appended AFTER the body. Layers on personality, never overrides
+        body rules.
+      * **Hardcoded fallback** (one-liner tool description) is used only
+        when neither body nor persona is available. Boot never crashes.
     """
 
-    def test_returns_hardcoded_when_no_file_and_no_remote(
+    def test_returns_hardcoded_when_no_body_and_no_persona(
         self, monkeypatch, tmp_path
     ) -> None:
-        """With no persona-sati env and no local file, return the
-        hardcoded tool-description string."""
         monkeypatch.delenv("PERSONA_SATI_MCP_URL", raising=False)
         monkeypatch.delenv("PERSONA_SATI_MCP_TOKEN_COMMAND", raising=False)
 
         from entraclaw import mcp_server
 
-        # Point the prompt path at a non-existent file inside tmp_path.
         monkeypatch.setattr(
             mcp_server, "LOCAL_PROMPT_PATH", tmp_path / "missing.md"
         )
@@ -58,33 +60,29 @@ class TestLoadAgentInstructions:
 
         assert mcp.name == "EntraClaw Agent Identity"
 
-    def test_reads_local_file_when_present(
+    def test_body_alone_when_persona_unavailable(
         self, monkeypatch, tmp_path
     ) -> None:
-        """When persona-sati is not configured but prompts/agent_system.md
-        exists, its contents become the system prompt."""
+        """With only the body file present, it becomes the full prompt."""
         monkeypatch.delenv("PERSONA_SATI_MCP_URL", raising=False)
         monkeypatch.delenv("PERSONA_SATI_MCP_TOKEN_COMMAND", raising=False)
 
         prompt_file = tmp_path / "agent_system.md"
-        prompt_file.write_text(
-            "# Agent rules\n\nAlways respond in the channel you are pinged in.",
-            encoding="utf-8",
-        )
+        prompt_file.write_text("BODY_ONLY", encoding="utf-8")
 
         from entraclaw import mcp_server
 
         monkeypatch.setattr(mcp_server, "LOCAL_PROMPT_PATH", prompt_file)
 
         result = mcp_server._load_agent_instructions()
-        assert "Always respond in the channel" in result
+        assert "BODY_ONLY" in result
         assert "EntraClaw Teams Interface" not in result
 
-    def test_reads_local_file_when_remote_fails(
+    def test_body_is_prepended_to_persona(
         self, monkeypatch, tmp_path
     ) -> None:
-        """When persona-sati fetch fails but the local file exists, fall
-        back to the file contents (not the hardcoded string)."""
+        """When both body and persona are available, body loads FIRST
+        (before persona) so its rules can't be overridden."""
         import asyncio
         import subprocess
 
@@ -96,26 +94,108 @@ class TestLoadAgentInstructions:
             subprocess, "check_output", lambda *a, **kw: "fake.jwt.token\n"
         )
 
-        def _boom(coro):
+        def _fake_run(coro):
             coro.close()
-            raise RuntimeError("remote MCP unreachable")
+            return "PERSONA_CONTENT"
 
-        monkeypatch.setattr(asyncio, "run", _boom)
+        monkeypatch.setattr(asyncio, "run", _fake_run)
 
         prompt_file = tmp_path / "agent_system.md"
-        prompt_file.write_text("LOCAL_FILE_PROMPT", encoding="utf-8")
+        prompt_file.write_text("BODY_CONTENT", encoding="utf-8")
 
         from entraclaw import mcp_server
 
         monkeypatch.setattr(mcp_server, "LOCAL_PROMPT_PATH", prompt_file)
 
         result = mcp_server._load_agent_instructions()
-        assert result == "LOCAL_FILE_PROMPT"
 
-    def test_empty_local_file_uses_hardcoded(
+        body_at = result.find("BODY_CONTENT")
+        persona_at = result.find("PERSONA_CONTENT")
+        assert body_at >= 0, "body must be present"
+        assert persona_at > body_at, (
+            "body must precede persona so rules aren't overridden"
+        )
+
+    def test_persona_alone_when_body_missing(
         self, monkeypatch, tmp_path
     ) -> None:
-        """An empty prompt file doesn't count — fall through to hardcoded."""
+        """If the body file doesn't exist but persona works, return
+        persona alone (legacy behavior; real deployments ship a body)."""
+        import asyncio
+        import subprocess
+
+        monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
+        monkeypatch.setenv(
+            "PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/fake-token-cli"
+        )
+        monkeypatch.setattr(
+            subprocess, "check_output", lambda *a, **kw: "fake.jwt.token\n"
+        )
+        monkeypatch.setattr(
+            asyncio,
+            "run",
+            lambda c: (c.close(), "PERSONA_ONLY")[1],
+        )
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(
+            mcp_server, "LOCAL_PROMPT_PATH", tmp_path / "missing.md"
+        )
+
+        result = mcp_server._load_agent_instructions()
+        assert result == "PERSONA_ONLY"
+
+    def test_include_directive_expands_anatomy_files(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """@include lines in the body must be replaced with the target
+        file's contents so security/behavior modules actually load."""
+        monkeypatch.delenv("PERSONA_SATI_MCP_URL", raising=False)
+
+        anatomy = tmp_path / "anatomy"
+        anatomy.mkdir()
+        (anatomy / "security.md").write_text(
+            "SECURITY_RULES", encoding="utf-8"
+        )
+        prompt_file = tmp_path / "agent_system.md"
+        prompt_file.write_text(
+            "# Body\n@include anatomy/security.md\nAfter include.\n",
+            encoding="utf-8",
+        )
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(mcp_server, "LOCAL_PROMPT_PATH", prompt_file)
+
+        result = mcp_server._load_agent_instructions()
+        assert "SECURITY_RULES" in result
+        assert "@include" not in result, "directive must be consumed"
+        assert "After include." in result
+
+    def test_missing_include_does_not_crash(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """A missing @include target must not prevent the rest of the
+        body from loading."""
+        monkeypatch.delenv("PERSONA_SATI_MCP_URL", raising=False)
+
+        prompt_file = tmp_path / "agent_system.md"
+        prompt_file.write_text(
+            "# Body\n@include anatomy/does-not-exist.md\nstill here\n",
+            encoding="utf-8",
+        )
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(mcp_server, "LOCAL_PROMPT_PATH", prompt_file)
+
+        result = mcp_server._load_agent_instructions()
+        assert "still here" in result
+
+    def test_empty_body_file_uses_hardcoded(
+        self, monkeypatch, tmp_path
+    ) -> None:
         monkeypatch.delenv("PERSONA_SATI_MCP_URL", raising=False)
         monkeypatch.delenv("PERSONA_SATI_MCP_TOKEN_COMMAND", raising=False)
 

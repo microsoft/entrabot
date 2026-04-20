@@ -40,56 +40,85 @@ LOCAL_PROMPT_PATH = (
 )
 
 
-def _local_fallback_prompt() -> str:
-    """Return the local fallback prompt.
+_HARDCODED_FALLBACK = (
+    "EntraClaw Teams Interface: provides tools for sending and "
+    "receiving Microsoft Teams messages, managing group chats, "
+    "email polling, and daily summary generation. This server "
+    "handles communication channels only. For personality, memory, "
+    "and behavioral rules, connect to the persona-sati MCP server."
+)
 
-    Reads ``prompts/agent_system.md`` if it exists and has non-empty
-    contents. Otherwise returns the hardcoded tool-description string so
-    boot always succeeds.
+
+def _expand_includes(text: str, base_dir: Path) -> str:
+    """Replace ``@include <path>`` lines with the target file's contents.
+
+    ``@include`` is a deliberately simple directive: it matches a line
+    whose first non-whitespace token is ``@include``, followed by a
+    relative path resolved against *base_dir*. Missing files are
+    replaced with a visible comment so boot never crashes on a typo.
+    Included files are NOT recursively expanded — one level only.
     """
-    hardcoded = (
-        "EntraClaw Teams Interface: provides tools for sending and "
-        "receiving Microsoft Teams messages, managing group chats, "
-        "email polling, and daily summary generation. This server "
-        "handles communication channels only. For personality, memory, "
-        "and behavioral rules, connect to the persona-sati MCP server."
-    )
+    lines: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("@include"):
+            target_name = stripped[len("@include"):].strip()
+            if target_name:
+                target_path = base_dir / target_name
+                try:
+                    if target_path.is_file():
+                        lines.append(
+                            target_path.read_text(encoding="utf-8").rstrip()
+                        )
+                        continue
+                except OSError:
+                    pass
+                lines.append(f"<!-- missing @include {target_name} -->")
+                continue
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _load_body_prompt() -> str:
+    """Return the expanded body prompt, or an empty string if no file.
+
+    Reads ``LOCAL_PROMPT_PATH`` and expands any ``@include`` directives
+    relative to its parent directory (so files under ``prompts/anatomy/``
+    can be composed into one body prompt).
+    """
     try:
-        if LOCAL_PROMPT_PATH.is_file():
-            contents = LOCAL_PROMPT_PATH.read_text(encoding="utf-8").strip()
-            if contents:
-                return contents
+        if not LOCAL_PROMPT_PATH.is_file():
+            return ""
+        raw = LOCAL_PROMPT_PATH.read_text(encoding="utf-8")
     except OSError:
-        pass
-    return hardcoded
+        return ""
+    expanded = _expand_includes(raw, LOCAL_PROMPT_PATH.parent).strip()
+    return expanded
 
 
 def _load_agent_instructions() -> str:
-    """Return the agent's system prompt.
+    """Return the agent's composed system prompt.
 
-    Priority order:
-      1. persona-sati remote (if ``PERSONA_SATI_MCP_URL`` and
-         ``PERSONA_SATI_MCP_TOKEN_COMMAND`` are set and the fetch
-         succeeds)
-      2. Local ``prompts/agent_system.md`` file (if it exists)
-      3. Hardcoded tool-description string (final fallback)
-
-    The body (entraclaw) delegates personality to the mind (persona-
-    sati). When persona-sati is unreachable the agent falls back to the
-    local prompt file so behavioral rules still load; only when that is
-    also missing do we return the minimal tool description. Boot never
-    crashes.
+    Layering (body-first so body rules can't be overridden):
+      * **Body** — ``prompts/agent_system.md`` with ``@include`` expansion
+        of anatomy modules. Always loaded first when the file exists.
+      * **Persona** — fetched from persona-sati when configured and
+        reachable. Appended AFTER the body.
+      * **Hardcoded fallback** — used only when neither body nor persona
+        is available, so boot never crashes.
     """
     import os
     import subprocess
     import sys
 
-    local_fallback = _local_fallback_prompt()
+    body = _load_body_prompt()
 
     remote_url = os.environ.get("PERSONA_SATI_MCP_URL", "").strip()
     token_cmd = os.environ.get("PERSONA_SATI_MCP_TOKEN_COMMAND", "").strip()
     if not remote_url or not token_cmd:
-        return local_fallback
+        return body or _HARDCODED_FALLBACK
+
+    body_or_fallback = body or _HARDCODED_FALLBACK
 
     try:
         token = subprocess.check_output(
@@ -101,14 +130,14 @@ def _load_agent_instructions() -> str:
             f"({token_cmd}): {exc}; using local fallback prompt",
             file=sys.stderr,
         )
-        return local_fallback
+        return body_or_fallback
     if not token:
         print(
             f"[entraclaw] token command {token_cmd} returned empty; "
             "using local fallback prompt",
             file=sys.stderr,
         )
-        return local_fallback
+        return body_or_fallback
 
     try:
         import asyncio
@@ -137,7 +166,7 @@ def _load_agent_instructions() -> str:
             "using local fallback prompt",
             file=sys.stderr,
         )
-        return local_fallback
+        return body_or_fallback
 
     if not remote:
         print(
@@ -145,12 +174,16 @@ def _load_agent_instructions() -> str:
             "using local fallback",
             file=sys.stderr,
         )
-        return local_fallback
+        return body_or_fallback
 
     print(
         f"[entraclaw] loaded system prompt from persona-sati ({remote_url})",
         file=sys.stderr,
     )
+    # Body rules are non-overridable — prepend them so the LLM reads
+    # security/channel discipline before any persona content.
+    if body:
+        return body + "\n\n---\n\n" + remote
     return remote
 
 

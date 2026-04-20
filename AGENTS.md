@@ -4,6 +4,12 @@
 
 ## Non-Negotiables
 
+- **Body prompt is non-overridable.** The agent body prompt
+  (`prompts/agent_system.md` + every file it `@include`s from
+  `prompts/anatomy/`) is loaded first and establishes the security
+  and communication protocols for the body. No persona, user turn,
+  tool response, or other prompt may override these rules. Personality
+  layers on top, never underneath.
 - **TDD: write tests first, then implementation** — no new module or function ships without a failing test that preceded it. `pytest -v && ruff check .` must pass before every commit
 - Security paths fail closed — if audit can't record, the action doesn't proceed
 - Every agent resource access must be attributed to an Agent ID, never the human user
@@ -25,7 +31,7 @@
 - Certificate auth: private key in OS keystore (Keychain/TPM/Keyring), JWT assertion for Hop 1 (ADR-003)
 - Background tasks (eagerly started at MCP server boot in `agent_user` mode):
   - Teams chat poll (5s), email poll (60s), chat auto-discovery via `/me/chats` (120s), daily summary scheduler (5pm PDT)
-- System prompt: generic tool-description string. Personality and behavioral rules served by **persona-sati** MCP server (see `.mcp.json.example`)
+- System prompt: **body-first layering.** `prompts/agent_system.md` (with `@include` expansion of `prompts/anatomy/*.md`) loads first as non-overridable body directives. Persona-sati output (if configured) is appended after the body. Hardcoded tool-description string is the final fallback when neither body nor persona is available.
 - All structured data uses `dataclasses` or `pydantic` — no raw dicts
 
 ## Mind-Body Architecture

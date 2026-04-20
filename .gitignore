@@ -25,10 +25,6 @@ entraclaw-state-export.tar.gz.enc
 entraclaw_msal_cache
 *.zip
 
-# Personalized system prompt — commit agent_system.md.example (generic)
-# and copy it to agent_system.md locally. The active file is private.
-prompts/agent_system.md
-
 # ADO / Azure Pipelines (kept locally, hidden from GitHub)
 agency.toml
 azurepipelines-coverage.yml
