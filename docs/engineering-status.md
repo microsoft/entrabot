@@ -1,8 +1,43 @@
 # Openclaw Identity Research — Engineering Summary
 
-**Date:** April 20, 2026
+**Date:** April 21, 2026
 **Team:** Brandon Werner
-**Status:** v1 released. Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **484 tests.** MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat shipped. **Mind-body split complete** — body-first prompt architecture loads locally, persona-sati MCP wired for personality/memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped; blob-hosted operational storage is opt-in via `setup.sh --cloud-memory`.
+**Status:** v1 released. Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **~600 tests** across the suite. MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat shipped. **Mind-body split complete** — body-first prompt architecture loads locally, persona-sati MCP wired for personality/memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped; blob-hosted operational storage is opt-in via `setup.sh --cloud-memory`.
+
+---
+
+## What's New Apr 20–21 (mind-body-tools push)
+
+Twelve PRs merged across two days (#17–#28). Tooling and body-prompt discipline both hardened significantly.
+
+**New MCP tools / body surface**
+- **PR #17** — `read_teams_messages` now surfaces attachment metadata (list of `{id, content_type, content_url, name, thumbnail_url}`) so `<attachment id=...>` references resolve without extra Graph calls.
+- **PR #18** — Dual-host MCP support. `clientInfo.name` detection drives leader (Claude Code) vs. slave (Copilot CLI and other hosts) mode. Slave-mode adds a disclosure suffix to outbound tool responses. Original implementation gated background tasks on host identity at boot — see PRs #27/#28 below for the subsequent lifecycle fix.
+- **PR #19** — `post_thinking_placeholder` + `resolve_placeholder` MCP tools. When the agent decides to answer a Teams chat with real work behind it, it posts a placeholder first and edits/deletes-reposts when the reply is ready. Modes: `edit` (quiet, safer), `delete_repost` (fresh ping), `fallback_new` on Graph failure.
+- **PR #20** — `delete_teams_message` MCP tool (standalone soft-delete of the agent's own messages). Also fixes the Graph URL for softDelete: `/me/chats/{chat_id}/messages/{message_id}/softDelete` (the `/me/` prefix is mandatory — v1.0 returns 405 without it).
+- **PR #23** — PreToolUse hook at `scripts/hooks/block_local_memory_write.py` blocks `Write`/`Edit`/`NotebookEdit` to `~/.claude/projects/<slug>/memory/**` unless `ENTRACLAW_KEEP_MEMORY_LOCAL=true`. Reuses the existing `setup.sh --keep-memory-local` switch. Paired with a three-way memory-routing tree in `CLAUDE.md`: body/channel rules → `prompts/anatomy/` (PR); mind content → `mcp__persona-sati__write_memory_file`; operational state → openclaw blob.
+- **PR #24** — `_push_channel_notification` forwards `reply_to_ids` into the notification `meta` and concurrently fetches each quoted message body via new `fetch_message()` helper, attaching results as `meta.quoted_messages`. Fail-open: individual fetch failures drop from the list; total failure still pushes `reply_to_ids` without `quoted_messages`. The agent now has context for quote-replies without a round-trip.
+- **PR #25** — `send_email` MCP tool + new `src/entraclaw/tools/email.py` helper. Supports `reply_to_message_id` for thread-preserving replies via Graph's `/me/messages/{id}/reply`. `daily_summary.py` now routes through the same helper — one send path in the codebase. `Mail.Send` delegation was already granted on the Agent User token chain; no re-provisioning required.
+- **PR #26** — `add_promise` / `list_promises` / `resolve_promise` MCP tools backed by `promises.jsonl` in openclaw blob, identity-scoped. Supersedes the session-scoped `TaskCreate` pattern for human-facing commitments — promises now survive MCP server restart, Claude Code restart, and cross-session hand-off (terminal ↔ Teams). ETag-concurrency on writes, compaction at >1000 lines with 30-day resolved retention.
+
+**Body-prompt rules** (`prompts/anatomy/channel-discipline.md`)
+- **PR #21** — "No cross-chat context bleed." Outbound messages may only reference work that the specific chat has visible history of. Don't name-drop parallel work from another chat, even with the same human in both.
+- **PR #22** — "Promises become tasks." Any time the agent says "I'll report back / post the PR link / confirm when X lands," create a durable entry the same turn. Mark done only after the human-facing follow-up has been posted, not when the internal signal arrives. Superseded by PR #26 (promises become **durable**, backed by blob, not `TaskCreate`).
+- PR #19 — "Signal when you're working." When decides to answer a Teams chat and the response will involve real work, post a `post_thinking_placeholder` first and resolve via `resolve_placeholder` when the reply is ready.
+- PR #23 body rule — "Spawn sub-agents for side-work" and the memory-routing decision tree in `CLAUDE.md`.
+- PR #20 body rule — "Deleting your own messages." Use `delete_teams_message`, not `resolve_placeholder delete_repost` as a hack.
+
+**Lifecycle bug — slave-mode gate, two attempts, third-time-right**
+- **PR #27** — First attempt. `_init_poll()` had been gating all background-task startup on `_is_leader_host()`, which reads `clientInfo.name` from the live MCP request context. At boot time no `initialize` request has been processed yet, so `_current_host()` returned `"unknown"` and the entire background stack silently skipped — Teams poll, email poll, daily summary, chat auto-discovery. Fix: remove the boot-time gate; move it to `_push_channel_notification` where the decision is actually needed.
+- **PR #28** — Second attempt. PR #27 moved the gate from boot to push-time, but `_push_channel_notification` is called from the background poll task, which runs in an asyncio context **detached from any MCP request** — so `_current_host()` STILL returned `"unknown"` and the push gate silently dropped every inbound message. Fix: cache `clientInfo.name` in `_state["cached_host"]` at every tool invocation; `_is_leader_host()` prefers live context but falls back to the cached value. Background tasks now see the right answer after at least one leader-host tool call.
+
+**The footgun that hid the fix for hours (Learning #36)**
+Even with PRs #27 and #28 correctly merged to main, production stayed broken because the MCP server's Python process was importing `entraclaw` from a **sub-agent worktree** (`.claude/worktrees/agent-*/src/entraclaw/...`), not from the main tree. Worktrees don't have `.env`, so `_load_dotenv()` resolved `Path(__file__).resolve().parents[2] / ".env"` to a path inside the worktree with no `.env`, `ENTRACLAW_BLUEPRINT_APP_ID` never loaded, auth never initialized, every Graph call 401'd, and the poll loop's `except Exception` swallowed the error with no visible log. Root cause: several sub-agents ran `pip install -e .` from inside their worktree using the parent venv's `pip`, which silently re-points the parent venv's editable-install target at the worktree source tree. Fix: `cd /Volumes/Development\ HD/openclaw-identity-research && .venv/bin/pip install -e . --no-deps` to repoint. Prevention: any sub-agent dispatch that expects to install must create its own venv first. **See Learning #36 for the full writeup.**
+
+**Carry-forward TODO (prevention)**
+- Add a pre-boot assertion in `mcp_server.py::_load_dotenv` (or equivalent) that logs a fatal warning when the resolved `.env` path contains `.claude/worktrees/` — fail loud instead of silent-skip auth.
+- Standardize sub-agent dispatch prompts to MANDATE a worktree-local venv before any `pip install` operation.
+- Add a Learning #36 reference to CLAUDE.md and AGENTS.md under the Non-Negotiables so it's surfaced at session start.
 
 ---
 

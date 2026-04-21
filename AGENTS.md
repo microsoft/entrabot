@@ -21,6 +21,7 @@
 - Agent IDs are service principals, not users — never create fake user accounts with passwords
 - Parse `az` CLI output as JSON, not TSV — TSV can be corrupted by warnings (Learning #7)
 - Graph API `$filter`/`$orderby` are unreliable for chat messages — always filter client-side (Learning #16)
+- **Sub-agent worktree installs must use a worktree-local venv, never the parent venv** (Learning #36) — running `pip install -e .` from inside a git worktree against the main repo's `.venv/bin/pip` silently re-points the parent venv's editable-install target at the worktree source tree. Every subsequent MCP server boot then loads code from the worktree — which has no `.env`, no auth, no polling, and no visible error. Always create `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"` inside the worktree BEFORE any editable install. After any session that used sub-agent worktrees, verify the main venv's target via `.venv/bin/python3 -c "from entraclaw import config; print(config.__file__)"` — the path must not contain `.claude/worktrees/`.
 
 ## Current Runtime Model
 
