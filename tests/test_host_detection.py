@@ -94,6 +94,10 @@ class TestIsLeaderHost:
 
     Any other host (including ``"unknown"``) is a slave. Static designation —
     no dynamic election, no config switch.
+
+    ``_is_leader_host`` prefers the live request context but falls back to a
+    cached host populated by prior tool invocations, so background tasks
+    (which run outside any request context) still get the right answer.
     """
 
     def test_claude_code_is_leader(self) -> None:
@@ -116,12 +120,130 @@ class TestIsLeaderHost:
         ):
             assert mcp_server._is_leader_host() is False
 
-    def test_unknown_is_not_leader(self) -> None:
-        """Pre-initialize, default to slave. Safer: no accidental double-polling."""
+    def test_unknown_with_empty_cache_is_not_leader(self) -> None:
+        """Pre-initialize AND no cached host: default to slave (fail closed)."""
         from entraclaw import mcp_server
 
-        with patch.object(mcp_server, "_current_host", return_value="unknown"):
-            assert mcp_server._is_leader_host() is False
+        prior = mcp_server._state.get("cached_host", "")
+        mcp_server._state["cached_host"] = ""
+        try:
+            with patch.object(mcp_server, "_current_host", return_value="unknown"):
+                assert mcp_server._is_leader_host() is False
+        finally:
+            mcp_server._state["cached_host"] = prior
+
+    def test_unknown_with_cached_leader_is_leader(self) -> None:
+        """The fix: background pushes see no live context but cached host wins.
+
+        This is the exact failure mode PR #27 exposed — _push_channel_notification
+        runs in a detached asyncio task so _current_host() returns "unknown".
+        After any prior tool call from Claude Code, the cache holds "claude-code"
+        and the predicate correctly returns True.
+        """
+        from entraclaw import mcp_server
+
+        prior = mcp_server._state.get("cached_host", "")
+        mcp_server._state["cached_host"] = "claude-code"
+        try:
+            with patch.object(mcp_server, "_current_host", return_value="unknown"):
+                assert mcp_server._is_leader_host() is True
+        finally:
+            mcp_server._state["cached_host"] = prior
+
+    def test_unknown_with_cached_slave_is_not_leader(self) -> None:
+        """Cache faithfully records the last-seen host, even if it's a slave."""
+        from entraclaw import mcp_server
+
+        prior = mcp_server._state.get("cached_host", "")
+        mcp_server._state["cached_host"] = "github-copilot-cli"
+        try:
+            with patch.object(mcp_server, "_current_host", return_value="unknown"):
+                assert mcp_server._is_leader_host() is False
+        finally:
+            mcp_server._state["cached_host"] = prior
+
+    def test_live_context_wins_over_stale_cache(self) -> None:
+        """A live request context always overrides the cache — correctness over staleness."""
+        from entraclaw import mcp_server
+
+        prior = mcp_server._state.get("cached_host", "")
+        mcp_server._state["cached_host"] = "github-copilot-cli"
+        try:
+            with patch.object(mcp_server, "_current_host", return_value="claude-code"):
+                assert mcp_server._is_leader_host() is True
+        finally:
+            mcp_server._state["cached_host"] = prior
+
+
+# ---------------------------------------------------------------------------
+# _capture_host_from_context
+# ---------------------------------------------------------------------------
+class TestCaptureHostFromContext:
+    """``_capture_host_from_context()`` reads the live request context and
+    updates ``_state['cached_host']`` so background tasks (which run outside
+    any request context) can still answer the leader/slave question.
+
+    The cache is a no-op when there's no live context, preserving any value
+    set by a prior request.
+    """
+
+    def test_captures_live_host_into_cache(self) -> None:
+        from entraclaw import mcp_server
+
+        prior = mcp_server._state.get("cached_host", "")
+        mcp_server._state["cached_host"] = ""
+        try:
+            with patch.object(
+                mcp_server, "_current_host", return_value="claude-code"
+            ):
+                mcp_server._capture_host_from_context()
+            assert mcp_server._state["cached_host"] == "claude-code"
+        finally:
+            mcp_server._state["cached_host"] = prior
+
+    def test_no_live_context_preserves_existing_cache(self) -> None:
+        """Tool calls outside a request context (or during shutdown) must
+        not clobber a previously-captured leader host.
+        """
+        from entraclaw import mcp_server
+
+        prior = mcp_server._state.get("cached_host", "")
+        mcp_server._state["cached_host"] = "claude-code"
+        try:
+            with patch.object(mcp_server, "_current_host", return_value="unknown"):
+                mcp_server._capture_host_from_context()
+            assert mcp_server._state["cached_host"] == "claude-code"
+        finally:
+            mcp_server._state["cached_host"] = prior
+
+    def test_empty_live_host_preserves_existing_cache(self) -> None:
+        from entraclaw import mcp_server
+
+        prior = mcp_server._state.get("cached_host", "")
+        mcp_server._state["cached_host"] = "claude-code"
+        try:
+            with patch.object(mcp_server, "_current_host", return_value=""):
+                mcp_server._capture_host_from_context()
+            assert mcp_server._state["cached_host"] == "claude-code"
+        finally:
+            mcp_server._state["cached_host"] = prior
+
+    def test_slave_host_overwrites_cache(self) -> None:
+        """If the currently connected host really is a slave, the cache must
+        reflect that. Otherwise a stale leader value would mask the change.
+        """
+        from entraclaw import mcp_server
+
+        prior = mcp_server._state.get("cached_host", "")
+        mcp_server._state["cached_host"] = "claude-code"
+        try:
+            with patch.object(
+                mcp_server, "_current_host", return_value="github-copilot-cli"
+            ):
+                mcp_server._capture_host_from_context()
+            assert mcp_server._state["cached_host"] == "github-copilot-cli"
+        finally:
+            mcp_server._state["cached_host"] = prior
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +464,156 @@ class TestPushChannelNotificationSlaveGating:
             mcp_server._state.pop("_write_stream", None)
 
         mock_stream.send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_push_succeeds_from_detached_context_when_cache_has_leader(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Production regression (PR #27): background pushes from _background_poll
+        run in a detached asyncio task where ``_current_host()`` returns "unknown"
+        because no MCP request context exists. The live-only gate dropped every
+        push silently. With the cache populated by a prior tool call, the gate
+        must correctly allow the push through.
+        """
+        from unittest.mock import AsyncMock
+
+        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+
+        from entraclaw import mcp_server
+
+        # Simulate the exact production state: detached context, prior tool
+        # call left "claude-code" in the cache.
+        monkeypatch.setattr(mcp_server, "_current_host", lambda: "unknown")
+        prior_cache = mcp_server._state.get("cached_host", "")
+        mcp_server._state["cached_host"] = "claude-code"
+
+        mock_stream = AsyncMock()
+        mcp_server._state["_write_stream"] = mock_stream
+        try:
+            await mcp_server._push_channel_notification(
+                {
+                    "message_id": "m-bg-1",
+                    "from": "Brandon",
+                    "content": "background inbound",
+                    "sent_at": "2026-04-21T20:06:00Z",
+                },
+                chat_id="19:abc@unq.gbl.spaces",
+            )
+        finally:
+            mcp_server._state.pop("_write_stream", None)
+            mcp_server._state["cached_host"] = prior_cache
+
+        mock_stream.send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_push_skipped_from_detached_context_when_cache_has_slave(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Slave host connected then a background poll fires: the cache says
+        "github-copilot-cli" and the push must be skipped (no leader channel).
+        Interaction log write still happens above the gate.
+        """
+        from unittest.mock import AsyncMock
+
+        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+
+        from datetime import UTC, datetime
+
+        from entraclaw import mcp_server
+        from entraclaw.tools.interaction_log import read_day
+
+        monkeypatch.setattr(mcp_server, "_current_host", lambda: "unknown")
+        prior_cache = mcp_server._state.get("cached_host", "")
+        mcp_server._state["cached_host"] = "github-copilot-cli"
+
+        mock_stream = AsyncMock()
+        mcp_server._state["_write_stream"] = mock_stream
+        try:
+            await mcp_server._push_channel_notification(
+                {
+                    "message_id": "m-bg-slave-1",
+                    "from": "Brandon",
+                    "content": "background inbound (slave cached)",
+                    "sent_at": "2026-04-21T20:07:00Z",
+                },
+                chat_id="19:abc@unq.gbl.spaces",
+            )
+        finally:
+            mcp_server._state.pop("_write_stream", None)
+            mcp_server._state["cached_host"] = prior_cache
+
+        mock_stream.send.assert_not_awaited()
+
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        entries = read_day(today)
+        assert any(
+            e.get("content_ref") == "m-bg-slave-1" for e in entries
+        ), "interaction log write must still happen above the gate"
+
+
+# ---------------------------------------------------------------------------
+# Capture-on-tool-entry wiring
+#
+# Every @mcp.tool() wrapper calls await _initialize() at entry. _initialize()
+# must call _capture_host_from_context() so the cache is populated before the
+# tool does its work — that way, any subsequent background push (running in
+# a detached asyncio task with no live request context) can still answer the
+# leader/slave question correctly.
+# ---------------------------------------------------------------------------
+class TestInitializeCapturesHost:
+    @pytest.mark.asyncio
+    async def test_initialize_populates_cached_host(self, monkeypatch) -> None:
+        """After _initialize() runs inside a request context, the cache
+        must reflect the live ``clientInfo.name``.
+        """
+        from unittest.mock import AsyncMock
+
+        from entraclaw import mcp_server
+
+        # Stub out the real auth/poll work — we're testing the capture wiring.
+        monkeypatch.setattr(mcp_server, "_init_auth", AsyncMock(return_value=None))
+        monkeypatch.setattr(mcp_server, "_init_poll", AsyncMock(return_value=None))
+
+        # Force a fresh init path so the capture runs even if already initialized.
+        prior_initialized = mcp_server._state.get("initialized", False)
+        prior_cache = mcp_server._state.get("cached_host", "")
+        mcp_server._state["initialized"] = False
+        mcp_server._state["cached_host"] = ""
+
+        try:
+            with patch.object(
+                mcp_server, "_current_host", return_value="claude-code"
+            ):
+                await mcp_server._initialize()
+            assert mcp_server._state["cached_host"] == "claude-code"
+        finally:
+            mcp_server._state["initialized"] = prior_initialized
+            mcp_server._state["cached_host"] = prior_cache
+
+    @pytest.mark.asyncio
+    async def test_initialize_captures_even_when_already_initialized(
+        self, monkeypatch
+    ) -> None:
+        """Fast path: if the server already initialized, capture must still
+        run on every subsequent tool call (that's the whole point — the cache
+        must stay warm across the server's lifetime).
+        """
+        from entraclaw import mcp_server
+
+        prior_initialized = mcp_server._state.get("initialized", False)
+        prior_cache = mcp_server._state.get("cached_host", "")
+        mcp_server._state["initialized"] = True
+        mcp_server._state["cached_host"] = ""
+
+        try:
+            with patch.object(
+                mcp_server, "_current_host", return_value="claude-code"
+            ):
+                await mcp_server._initialize()
+            assert mcp_server._state["cached_host"] == "claude-code"
+        finally:
+            mcp_server._state["initialized"] = prior_initialized
+            mcp_server._state["cached_host"] = prior_cache
 
 
 # ---------------------------------------------------------------------------

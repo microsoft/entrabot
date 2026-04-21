@@ -193,7 +193,7 @@ mcp = FastMCP(
 )
 
 # ---------------------------------------------------------------------------
-# Host detection — per-call leader/slave gating for multi-MCP-client support.
+# Host detection — leader/slave gating for multi-MCP-client support.
 #
 # Claude Code is the canonical "leader" because it exposes the custom
 # ``notifications/claude/channel`` message mechanism. Every other MCP host
@@ -203,16 +203,32 @@ mcp = FastMCP(
 #
 #   - Background reads (Teams poll, email poll, chat discovery, daily
 #     summary) run ALWAYS. They're process-level observability, not
-#     per-connection behavior, and they write the audit + interaction log
-#     regardless of who's connected. Gating them at boot was a lifecycle
-#     bug: clientInfo isn't populated until after initialize, so the gate
-#     always read "unknown" at boot and the server went deaf.
+#     per-connection behavior. Gating them at boot was a lifecycle bug
+#     (PR #27 fix): clientInfo isn't populated until after initialize, so
+#     the gate always read "unknown" at boot and the server went deaf.
 #   - Channel pushes (``notifications/claude/channel``) are skipped when
-#     the current host is a slave — the slave has no channel to receive
+#     the connected host is a slave — the slave has no channel to receive
 #     them. The interaction log write still happens.
 #   - Outbound tool disclosure (``_slave_disclosure_suffix``) is appended
 #     to reply-expecting tool responses so the model can tell the user
 #     their reply won't surface in this host.
+#
+# Cached-host semantic (the key to this file):
+#
+#   ``_current_host()`` reads the live FastMCP request context — only
+#   valid inside a tool invocation. Background tasks run in detached
+#   asyncio contexts with no live request, so ``_current_host()`` returns
+#   ``"unknown"`` from them.
+#
+#   To answer "does a leader client hold this session?" from a background
+#   task, we cache the last-seen ``clientInfo.name`` in ``_state["cached_host"]``
+#   at every tool entry (via ``_capture_host_from_context`` called from
+#   ``_initialize``). ``_is_leader_host`` prefers the live context and
+#   falls back to the cache.
+#
+#   Boot order: at first MCP boot the cache is empty ("") and background
+#   tasks correctly treat the session as slave (fail closed). The cache
+#   populates on the first tool call, after which background pushes flow.
 #
 # Static designation via MCP ``clientInfo.name`` (not dynamic election).
 # Deny-by-default: unknown names are slaves, so a mislabeled host fails
@@ -232,8 +248,9 @@ def _current_host() -> str:
     """Return the active MCP client's ``clientInfo.name`` lowercased.
 
     Reads from the FastMCP request context. Returns ``"unknown"`` when no
-    active request context is available (e.g. module-load time) or when
-    ``clientInfo`` is not yet populated.
+    active request context is available (e.g. module-load time, background
+    asyncio tasks detached from any request) or when ``clientInfo`` is not
+    yet populated.
     """
     try:
         ctx = mcp.get_context()
@@ -258,12 +275,36 @@ def _current_host() -> str:
     return str(name).lower()
 
 
-def _is_leader_host() -> bool:
-    """True iff the active client is in the canonical leader set.
+def _capture_host_from_context() -> str:
+    """Cache the live request-context host into ``_state["cached_host"]``.
 
-    Deny-by-default: unknown hosts are slaves. Only Claude Code is a leader.
+    Called at every tool entry (from ``_initialize``). When there is no
+    live context (or ``clientInfo`` is not populated yet) this is a no-op
+    on the cache — so a stale but correct value from an earlier request
+    survives, which is exactly what lets background pushes work.
     """
-    return _current_host() in LEADER_HOSTS
+    host = _current_host()
+    if host and host != "unknown":
+        _state["cached_host"] = host
+    return host
+
+
+def _is_leader_host() -> bool:
+    """True iff the connected MCP client is in the canonical leader set.
+
+    Prefers the live request context. Falls back to the most recently
+    captured host in ``_state["cached_host"]`` so background tasks
+    (detached from any request context) still get the right answer as
+    long as the connected host has made at least one prior tool call.
+
+    Deny-by-default: an empty cache AND no live context is treated as
+    slave. Only Claude Code is a leader.
+    """
+    live = _current_host()
+    if live and live != "unknown":
+        return live in LEADER_HOSTS
+    cached = _state.get("cached_host", "")
+    return isinstance(cached, str) and cached in LEADER_HOSTS
 
 
 def _slave_disclosure_suffix() -> str:
@@ -273,8 +314,10 @@ def _slave_disclosure_suffix() -> str:
     return SLAVE_REPLY_DISCLOSURE
 
 
-# Module-level state populated by _initialize()
-_state: dict[str, object] = {}
+# Module-level state populated by _initialize().
+# ``cached_host`` is pre-seeded at module load so background tasks that
+# fire before the first tool call see an empty string (slave — fail closed).
+_state: dict[str, object] = {"cached_host": ""}
 _identity: IdentityStateMachine | None = None
 
 TOKEN_REFRESH_THRESHOLD = 3300  # 55 min (5-min buffer on 60-min expiry)
@@ -628,14 +671,25 @@ async def _init_poll() -> None:
 async def _initialize() -> None:
     """Acquire a token and start background polling.
 
-    Called lazily on the first tool invocation. Two phases:
+    Called at the top of every @mcp.tool() wrapper. Two phases:
     1. _init_auth() — authenticate (three-hop fast path or MSAL delegated)
     2. _init_poll() — load persisted watched chats and start background polls
+
+    Also captures the connected client's ``clientInfo.name`` into
+    ``_state["cached_host"]`` on every call (not just the first) — this
+    keeps the cache warm across the server's lifetime so background tasks
+    that run in detached asyncio contexts (no live request) can still
+    answer the leader/slave question correctly when deciding whether to
+    push on ``notifications/claude/channel``.
 
     There is no longer a default Teams chat. Callers must pass a chat_id to
     any Teams tool; chats to watch come from the watched_chats file or the
     create_chat tool at runtime.
     """
+    # Capture on every tool entry so background pushes can see the host
+    # even after the one-shot init block below short-circuits.
+    _capture_host_from_context()
+
     if _state.get("initialized"):
         return
 
@@ -1300,12 +1354,17 @@ async def _push_channel_notification(
     # Push is Claude-Code-only. Slaves (Copilot CLI, etc.) have no
     # ``notifications/claude/channel`` to receive on. Observation above
     # is unconditional so daily summaries still see everything.
+    #
+    # This runs in a detached asyncio task (_background_poll), so
+    # _current_host() returns "unknown"; _is_leader_host() falls back to
+    # _state["cached_host"], populated by every prior tool entry.
     if not _is_leader_host():
         if logger:
             logger.debug(
-                "Skipping channel push for %s — current host is slave (%s)",
+                "Skipping channel push for %s — host is slave (live=%s cached=%s)",
                 message.get("message_id", "?"),
                 _current_host(),
+                _state.get("cached_host", ""),
             )
         return
 
