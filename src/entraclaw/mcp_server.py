@@ -193,19 +193,30 @@ mcp = FastMCP(
 )
 
 # ---------------------------------------------------------------------------
-# Host detection — leader/slave gating for multi-MCP-client support.
+# Host detection — per-call leader/slave gating for multi-MCP-client support.
 #
 # Claude Code is the canonical "leader" because it exposes the custom
-# ``notifications/claude/channel`` message mechanism the background polls
-# push onto. Every other MCP host (Copilot CLI, any future host lacking a
-# channel) runs in slave mode: no background tasks, no channel pushes, and
-# reply-expecting tools (e.g. send_teams_message) gain a disclosure so the
-# model tells the user their reply won't push through.
+# ``notifications/claude/channel`` message mechanism. Every other MCP host
+# (Copilot CLI, any future host lacking a channel) is a slave.
+#
+# Scope of slave-mode gating:
+#
+#   - Background reads (Teams poll, email poll, chat discovery, daily
+#     summary) run ALWAYS. They're process-level observability, not
+#     per-connection behavior, and they write the audit + interaction log
+#     regardless of who's connected. Gating them at boot was a lifecycle
+#     bug: clientInfo isn't populated until after initialize, so the gate
+#     always read "unknown" at boot and the server went deaf.
+#   - Channel pushes (``notifications/claude/channel``) are skipped when
+#     the current host is a slave — the slave has no channel to receive
+#     them. The interaction log write still happens.
+#   - Outbound tool disclosure (``_slave_disclosure_suffix``) is appended
+#     to reply-expecting tool responses so the model can tell the user
+#     their reply won't surface in this host.
 #
 # Static designation via MCP ``clientInfo.name`` (not dynamic election).
-# TODO(verify): confirm the exact Copilot CLI clientInfo.name empirically;
-# the gating is deny-by-default (only the canonical leader set runs tasks)
-# so an unexpected name simply means "treat as slave" — safe.
+# Deny-by-default: unknown names are slaves, so a mislabeled host fails
+# safe (push-less) rather than double-pushing.
 # ---------------------------------------------------------------------------
 LEADER_HOSTS: frozenset[str] = frozenset({"claude-code", "claude code"})
 
@@ -580,21 +591,16 @@ async def _init_poll() -> None:
                     if logger:
                         logger.info("Loaded persisted watched chat: %s", cid)
 
-    # Start background polling — leader mode only.
+    # Start background polling unconditionally.
     #
-    # Slaves (Copilot CLI and any other host without a channel mechanism)
-    # do not run background tasks: there's no channel to push events onto,
-    # and running polls in parallel with the leader would double-write the
-    # interaction log / blob state. See _is_leader_host() docstring.
-    if not _is_leader_host():
-        if logger:
-            logger.info(
-                "Slave host detected (%s) — skipping background tasks",
-                _current_host(),
-            )
-        return
-
-    config = _state.get("config")
+    # Background reads (Teams chat poll, email poll, chat auto-discovery,
+    # daily summary) are process-level observability, not per-connection
+    # behavior. Gating them on _is_leader_host() at boot time was a bug:
+    # clientInfo isn't populated until after the MCP initialize handshake,
+    # so _current_host() returns "unknown" here and the gate locks polling
+    # off for the life of the process. Slave-mode now only affects channel
+    # pushes (see _push_channel_notification) and outbound tool disclosure
+    # (see _slave_disclosure_suffix), both evaluated per call.
     if config and config.mode == "bot":
         import asyncio
 
@@ -690,13 +696,7 @@ def _ensure_poll_task_running() -> None:
 
     Idempotent. Bot mode is skipped — the bot gateway handles inbound via
     _background_poll_bot which is started explicitly in _init_poll.
-
-    Also skipped in slave mode: only the leader (Claude Code) polls Teams,
-    since it's the only host with a channel to push events onto.
     """
-    if not _is_leader_host():
-        return
-
     config = _state.get("config")
     if config is not None and getattr(config, "mode", None) == "bot":
         return
@@ -1296,6 +1296,18 @@ async def _push_channel_notification(
             "ts": message.get("sent_at"),
         },
     )
+
+    # Push is Claude-Code-only. Slaves (Copilot CLI, etc.) have no
+    # ``notifications/claude/channel`` to receive on. Observation above
+    # is unconditional so daily summaries still see everything.
+    if not _is_leader_host():
+        if logger:
+            logger.debug(
+                "Skipping channel push for %s — current host is slave (%s)",
+                message.get("message_id", "?"),
+                _current_host(),
+            )
+        return
 
     write_stream = _state.get("_write_stream")
     if not write_stream:

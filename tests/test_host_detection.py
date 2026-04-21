@@ -147,26 +147,38 @@ class TestSlaveDisclosureSuffix:
 
 
 # ---------------------------------------------------------------------------
-# Background-task gating
+# Background-task lifecycle — start unconditionally
 #
-# In slave mode ``_init_poll`` must not spawn any of the four background
-# tasks (Teams poll, email poll, daily summary scheduler, chat discovery).
-# The leader-mode test is the symmetric control — same state, just the
-# leader predicate flipped — and the tasks DO spawn.
+# Regression guard (2026-04-20): the previous gating made _init_poll() skip
+# all background tasks when _is_leader_host() returned False. At boot time,
+# no MCP initialize request has been processed yet so _current_host() reads
+# "unknown" from a missing clientInfo and the leader predicate is False —
+# even for a real Claude Code client about to connect. Result: the server
+# silently ran no polls for 19+ hours in production.
+#
+# Background reads are process-level observability (they write to the audit
+# log and interaction log; they don't leak anything a slave shouldn't see),
+# so they must start unconditionally. Slave-mode gating now only applies to
+# channel pushes and outbound-tool disclosure.
 # ---------------------------------------------------------------------------
 class TestBackgroundTaskGating:
-    """_init_poll respects _is_leader_host."""
+    """_init_poll starts tasks regardless of host identity."""
 
     @pytest.mark.asyncio
-    async def test_background_tasks_not_spawned_in_slave_mode(
+    async def test_background_tasks_spawned_when_host_is_unknown(
         self, monkeypatch
     ) -> None:
+        """Regression for the boot-time lifecycle bug.
+
+        At ``_init_poll()`` time the MCP initialize request has not yet
+        populated ``clientInfo``, so ``_current_host()`` returns "unknown"
+        and ``_is_leader_host()`` returns False. Background tasks must
+        still start — they're process-level, not per-connection.
+        """
         from unittest.mock import MagicMock as _MM
 
         from entraclaw import mcp_server
 
-        # Pretend we're in agent_user mode with one watched chat so that
-        # the leader-path WOULD spawn tasks. Slave mode must short-circuit.
         fake_config = _MM()
         fake_config.mode = "agent_user"
         fake_config.data_dir = MagicMock()
@@ -178,7 +190,9 @@ class TestBackgroundTaskGating:
         fake_identity.session.auth_mode = "agent_user"
 
         monkeypatch.setitem(mcp_server._state, "config", fake_config)
+        monkeypatch.setitem(mcp_server._state, "watched_chats", {})
         monkeypatch.setattr(mcp_server, "_identity", fake_identity)
+        # Boot-time state: no initialize yet, _is_leader_host() is False.
         monkeypatch.setattr(mcp_server, "_is_leader_host", lambda: False)
 
         created: list[object] = []
@@ -195,15 +209,18 @@ class TestBackgroundTaskGating:
 
         await mcp_server._init_poll()
 
-        assert created == [], (
-            f"slave mode must not spawn background tasks; got {created!r}"
+        # agent_user identity: 3 tasks (email, daily summary, chat discovery).
+        # No watched chats so no Teams poll. Host-identity-independent.
+        assert len(created) >= 3, (
+            f"background tasks must start regardless of host; "
+            f"got {len(created)} (created={created!r})"
         )
 
     @pytest.mark.asyncio
-    async def test_background_tasks_spawned_in_leader_mode(
+    async def test_background_tasks_spawned_when_host_is_leader(
         self, monkeypatch
     ) -> None:
-        """Symmetric control: flip the leader predicate, tasks spawn."""
+        """Symmetric control: leader also spawns tasks (same path, same result)."""
         from unittest.mock import MagicMock as _MM
 
         from entraclaw import mcp_server
@@ -237,12 +254,94 @@ class TestBackgroundTaskGating:
 
         await mcp_server._init_poll()
 
-        # Leader + agent_user identity: 3 tasks (email, daily, discover).
-        # No watched chats so no Teams poll. The point is: leader path
-        # creates tasks, slave path does not.
         assert len(created) >= 3, (
             f"leader mode must spawn background tasks; got {len(created)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# _push_channel_notification — slave gates the push, not the observation
+#
+# The push target (``notifications/claude/channel``) is a Claude-Code-specific
+# JSON-RPC extension. Slaves have no such channel, so the push would be a
+# no-op at best and a noisy error at worst. But the interaction log write
+# is process-level observability — daily summaries must see every inbound
+# message regardless of which host is connected. Test both branches.
+# ---------------------------------------------------------------------------
+class TestPushChannelNotificationSlaveGating:
+    @pytest.mark.asyncio
+    async def test_slave_skips_push_but_still_logs_interaction(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Slave mode: interaction log still written, write_stream.send NOT called.
+
+        This preserves the "observe unconditionally, push conditionally"
+        invariant. Daily summary must not lose visibility just because the
+        connected host can't receive pushes.
+        """
+        from unittest.mock import AsyncMock
+
+        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+
+        from datetime import UTC, datetime
+
+        from entraclaw import mcp_server
+        from entraclaw.tools.interaction_log import read_day
+
+        monkeypatch.setattr(mcp_server, "_is_leader_host", lambda: False)
+
+        mock_stream = AsyncMock()
+        mcp_server._state["_write_stream"] = mock_stream
+        try:
+            await mcp_server._push_channel_notification(
+                {
+                    "message_id": "m-slave-1",
+                    "from": "Brandon",
+                    "content": "slave-mode inbound",
+                    "sent_at": "2026-04-20T23:40:32Z",
+                },
+                chat_id="19:abc@unq.gbl.spaces",
+            )
+        finally:
+            mcp_server._state.pop("_write_stream", None)
+
+        mock_stream.send.assert_not_awaited()
+
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        entries = read_day(today)
+        assert any(
+            e.get("content_ref") == "m-slave-1" for e in entries
+        ), f"slave mode must still write interaction log; got: {entries}"
+
+    @pytest.mark.asyncio
+    async def test_leader_pushes_notification(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Leader mode: push is sent. Regression guard for the happy path."""
+        from unittest.mock import AsyncMock
+
+        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(mcp_server, "_is_leader_host", lambda: True)
+
+        mock_stream = AsyncMock()
+        mcp_server._state["_write_stream"] = mock_stream
+        try:
+            await mcp_server._push_channel_notification(
+                {
+                    "message_id": "m-leader-1",
+                    "from": "Brandon",
+                    "content": "leader-mode inbound",
+                    "sent_at": "2026-04-20T23:41:00Z",
+                },
+                chat_id="19:abc@unq.gbl.spaces",
+            )
+        finally:
+            mcp_server._state.pop("_write_stream", None)
+
+        mock_stream.send.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

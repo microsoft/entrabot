@@ -752,6 +752,17 @@ class TestSendWithPrefix:
 # first, then push.
 
 class TestPushChannelNotificationObservability:
+    @pytest.fixture(autouse=True)
+    def _force_leader_host(self, monkeypatch):
+        """Default to leader mode for this class — push-path tests expect it.
+
+        Slave-mode push skipping is covered separately in
+        ``tests/test_host_detection.py::TestPushChannelNotificationSlaveGating``.
+        """
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(mcp_server, "_is_leader_host", lambda: True)
+
     @pytest.mark.asyncio
     async def test_logs_interaction_even_when_write_stream_missing(
         self, tmp_path, monkeypatch
