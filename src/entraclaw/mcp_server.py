@@ -790,6 +790,9 @@ async def _init_poll() -> None:
         asyncio.get_event_loop().create_task(_background_poll_email())
         asyncio.get_event_loop().create_task(_background_daily_summary())
         asyncio.get_event_loop().create_task(_background_discover_chats())
+        asyncio.get_event_loop().create_task(
+            _background_persona_sati_heartbeat()
+        )
 
 
 async def _initialize() -> None:
@@ -827,6 +830,149 @@ BACKGROUND_POLL_INTERVAL = 5  # seconds between polls
 BOT_POLL_INTERVAL = 2  # seconds between bot inbound file checks
 EMAIL_POLL_INTERVAL = 60  # seconds between /me/messages polls
 CHAT_DISCOVER_INTERVAL = 120  # seconds between /me/chats auto-discovery sweeps
+PERSONA_SATI_HEARTBEAT_INTERVAL = 300  # 5 min smoke test against persona-sati
+
+
+async def _persona_sati_list_files(url: str, token: str) -> list[str]:
+    """Call persona-sati's ``list_memory_files`` tool via SSE.
+
+    Factored out so tests can monkey-patch a fake without driving the
+    full MCP client stack. Returns the parsed JSON list on success;
+    raises on any failure so callers can classify.
+    """
+    import json as _json
+
+    from mcp import ClientSession
+    from mcp.client.sse import sse_client
+
+    sse_url = f"{url.rstrip('/')}/sse"
+    headers = {"Authorization": f"Bearer {token}"}
+    async with (
+        sse_client(sse_url, headers=headers) as (read, write),
+        ClientSession(read, write) as session,
+    ):
+        await session.initialize()
+        result = await session.call_tool("list_memory_files", {})
+        for item in result.content:
+            if hasattr(item, "text") and item.text:
+                parsed = _json.loads(item.text)
+                # persona-sati wraps the JSON array inside a dict with
+                # a "result" key whose value is itself the JSON string.
+                if isinstance(parsed, dict) and "result" in parsed:
+                    parsed = _json.loads(parsed["result"])
+                if isinstance(parsed, list):
+                    return parsed
+        return []
+
+
+async def _persona_sati_heartbeat_once() -> str:
+    """Single smoke test against persona-sati; returns an outcome string.
+
+    Outcomes:
+      * ``"skipped"`` — env not configured for persona-sati (no remote).
+      * ``"ok"`` — remote reachable, returned a file list. INFO-logged.
+      * ``"token_mint_failed"`` — the token command errored or returned
+        empty. WARNING-logged.
+      * ``"remote_failed"`` — SSE call raised. WARNING-logged.
+
+    Never raises: a broken heartbeat must not take down the MCP boot.
+
+    Resolves its own ``logging.getLogger("entraclaw")`` so it emits
+    records even when called before ``main()`` has configured the
+    module-global ``logger`` (e.g. unit tests, module-import-time
+    smoke checks).
+    """
+    import logging
+    import os
+    import subprocess
+    import time as _time
+
+    log = logging.getLogger("entraclaw")
+
+    remote_url = os.environ.get("PERSONA_SATI_MCP_URL", "").strip()
+    token_cmd = os.environ.get("PERSONA_SATI_MCP_TOKEN_COMMAND", "").strip()
+    if not remote_url or not token_cmd:
+        return "skipped"
+
+    try:
+        token = subprocess.check_output(
+            [token_cmd], text=True, timeout=30
+        ).strip()
+    except (subprocess.SubprocessError, OSError) as exc:
+        log.warning(
+            "persona-sati heartbeat FAILED: token_mint_failed "
+            "(%s): %s: %s",
+            token_cmd,
+            type(exc).__name__,
+            exc,
+        )
+        return "token_mint_failed"
+    if not token:
+        log.warning(
+            "persona-sati heartbeat FAILED: token_mint_failed "
+            "(%s returned empty output)",
+            token_cmd,
+        )
+        return "token_mint_failed"
+
+    started = _time.monotonic()
+    try:
+        files = await _persona_sati_list_files(remote_url, token)
+    except Exception as exc:  # noqa: BLE001 — classify but never raise
+        log.warning(
+            "persona-sati heartbeat FAILED: remote_failed (%s): "
+            "%s: %s",
+            remote_url,
+            type(exc).__name__,
+            exc,
+        )
+        return "remote_failed"
+
+    elapsed_ms = int((_time.monotonic() - started) * 1000)
+    log.info(
+        "persona-sati heartbeat ok (url=%s, file_count=%d, "
+        "elapsed_ms=%d)",
+        remote_url,
+        len(files),
+        elapsed_ms,
+    )
+    return "ok"
+
+
+async def _background_persona_sati_heartbeat() -> None:
+    """Schedule ``_persona_sati_heartbeat_once`` on a loop.
+
+    Fires immediately at boot (no initial wait) so the smoke test
+    surfaces misconfigurations right away rather than N minutes later.
+    Then sleeps PERSONA_SATI_HEARTBEAT_INTERVAL between ticks.
+
+    Detects silent-failure modes the one-shot boot load can't cover:
+    Claude Code's SSE session token aging out mid-session, cloud
+    endpoint going down after boot, persona-sati pod rolling. The
+    heartbeat uses its own freshly-minted token on every tick, so
+    what it exercises is "can entraclaw reach persona-sati right
+    now?" — a strict subset of "can Claude Code reach persona-sati?"
+    but enough to catch DNS / endpoint / auth-scope failures in both.
+    """
+    import asyncio
+
+    if logger:
+        logger.info(
+            "Starting persona-sati heartbeat (interval=%ds)",
+            PERSONA_SATI_HEARTBEAT_INTERVAL,
+        )
+
+    while True:
+        try:
+            await _persona_sati_heartbeat_once()
+        except Exception as exc:  # noqa: BLE001 — must never die
+            if logger:
+                logger.warning(
+                    "persona-sati heartbeat loop error: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
+        await asyncio.sleep(PERSONA_SATI_HEARTBEAT_INTERVAL)
 
 
 async def _background_poll_bot() -> None:
