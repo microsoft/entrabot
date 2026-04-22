@@ -427,6 +427,156 @@ class TestLoadAgentInstructionsPersonaSati:
 
 
 # ---------------------------------------------------------------------------
+# Persona-sati heartbeat — periodic smoke test that surfaces silent
+# token-expiration / endpoint-down failures. Runs every
+# PERSONA_SATI_HEARTBEAT_INTERVAL seconds, calls list_memory_files via
+# SSE, and logs success/failure to the structured logger so the agent
+# (and post-hoc grep) can tell persona-sati broke before the next user
+# ask actually needs it.
+# ---------------------------------------------------------------------------
+class TestPersonaSatiHeartbeat:
+    """_persona_sati_heartbeat_once is the single-shot unit — the
+    background loop is just a scheduler around it."""
+
+    async def test_skips_when_env_unset(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        monkeypatch.delenv("PERSONA_SATI_MCP_URL", raising=False)
+        monkeypatch.delenv("PERSONA_SATI_MCP_TOKEN_COMMAND", raising=False)
+
+        from entraclaw.mcp_server import _persona_sati_heartbeat_once
+
+        with caplog.at_level(logging.DEBUG, logger="entraclaw"):
+            outcome = await _persona_sati_heartbeat_once()
+        assert outcome == "skipped"
+
+    async def test_logs_info_on_success(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+        import subprocess
+
+        monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
+        monkeypatch.setenv(
+            "PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/fake-token-cli"
+        )
+        monkeypatch.setattr(
+            subprocess, "check_output", lambda *a, **kw: "fake.jwt.token\n"
+        )
+        # Stub asyncio.run inside the function if it uses it, or mock
+        # the SSE client; simplest: patch the fetch helper.
+        from entraclaw import mcp_server
+
+        async def fake_call():
+            return ["MEMORY.md", "f1.md", "f2.md", "f3.md"]
+
+        monkeypatch.setattr(
+            mcp_server, "_persona_sati_list_files",
+            lambda url, token: fake_call(),
+        )
+
+        with caplog.at_level(logging.INFO, logger="entraclaw"):
+            outcome = await mcp_server._persona_sati_heartbeat_once()
+
+        assert outcome == "ok"
+        msgs = [r.getMessage() for r in caplog.records if r.name == "entraclaw"]
+        assert any("persona-sati heartbeat ok" in m for m in msgs), msgs
+        assert any("file_count=4" in m for m in msgs), msgs
+
+    async def test_logs_warning_on_token_mint_failure(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+        import subprocess
+
+        monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
+        monkeypatch.setenv(
+            "PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/nope"
+        )
+
+        def _raise(*a, **kw):
+            raise subprocess.SubprocessError("mint blew up")
+
+        monkeypatch.setattr(subprocess, "check_output", _raise)
+
+        from entraclaw.mcp_server import _persona_sati_heartbeat_once
+
+        with caplog.at_level(logging.WARNING, logger="entraclaw"):
+            outcome = await _persona_sati_heartbeat_once()
+
+        assert outcome == "token_mint_failed"
+        msgs = [r.getMessage() for r in caplog.records if r.name == "entraclaw"]
+        assert any("persona-sati heartbeat FAILED" in m for m in msgs), msgs
+        assert any("token_mint_failed" in m for m in msgs), msgs
+
+    async def test_logs_warning_on_remote_failure(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+        import subprocess
+
+        monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
+        monkeypatch.setenv(
+            "PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/fake-token-cli"
+        )
+        monkeypatch.setattr(
+            subprocess, "check_output", lambda *a, **kw: "fake.jwt.token\n"
+        )
+
+        from entraclaw import mcp_server
+
+        async def fake_call():
+            raise RuntimeError("SSE 401 Unauthorized")
+
+        monkeypatch.setattr(
+            mcp_server, "_persona_sati_list_files",
+            lambda url, token: fake_call(),
+        )
+
+        with caplog.at_level(logging.WARNING, logger="entraclaw"):
+            outcome = await mcp_server._persona_sati_heartbeat_once()
+
+        assert outcome == "remote_failed"
+        msgs = [r.getMessage() for r in caplog.records if r.name == "entraclaw"]
+        assert any("persona-sati heartbeat FAILED" in m for m in msgs), msgs
+        assert any("RuntimeError" in m for m in msgs), msgs
+        assert any("SSE 401" in m for m in msgs), msgs
+
+    async def test_empty_token_is_failure(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+        import subprocess
+
+        monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
+        monkeypatch.setenv(
+            "PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/empty-tok"
+        )
+        monkeypatch.setattr(
+            subprocess, "check_output", lambda *a, **kw: "\n"
+        )
+
+        from entraclaw.mcp_server import _persona_sati_heartbeat_once
+
+        with caplog.at_level(logging.WARNING, logger="entraclaw"):
+            outcome = await _persona_sati_heartbeat_once()
+
+        assert outcome == "token_mint_failed"
+
+
+# ---------------------------------------------------------------------------
 # Initialize-time host capture (cached_host populates at MCP handshake,
 # not at first tool call) — closes the cold-start window where the first
 # background channel push after MCP boot would be dropped as slave.
