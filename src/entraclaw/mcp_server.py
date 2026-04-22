@@ -111,11 +111,27 @@ def _load_agent_instructions() -> str:
     import subprocess
     import sys
 
+    # Resolve the structured logger up front. setup_logging() is
+    # idempotent, so calling it here is safe even though main() also
+    # calls it — and it's necessary because _load_agent_instructions
+    # runs at module import time (FastMCP(...) call), well before
+    # main() configures the handlers. Without this, every
+    # persona-load outcome only surfaces as a transient stderr print
+    # that Claude Code discards, so post-hoc "did persona load at
+    # boot?" debugging has no trail.
+    log = setup_logging()
+
     body = _load_body_prompt()
 
     remote_url = os.environ.get("PERSONA_SATI_MCP_URL", "").strip()
     token_cmd = os.environ.get("PERSONA_SATI_MCP_TOKEN_COMMAND", "").strip()
     if not remote_url or not token_cmd:
+        log.info(
+            "persona-sati env unset; serving body-only "
+            "(body_loaded=%s, body_chars=%d)",
+            bool(body),
+            len(body) if body else 0,
+        )
         return body or _HARDCODED_FALLBACK
 
     body_or_fallback = body or _HARDCODED_FALLBACK
@@ -130,12 +146,22 @@ def _load_agent_instructions() -> str:
             f"({token_cmd}): {exc}; using local fallback prompt",
             file=sys.stderr,
         )
+        log.warning(
+            "persona-sati token mint failed (%s): %s: %s",
+            token_cmd,
+            type(exc).__name__,
+            exc,
+        )
         return body_or_fallback
     if not token:
         print(
             f"[entraclaw] token command {token_cmd} returned empty; "
             "using local fallback prompt",
             file=sys.stderr,
+        )
+        log.warning(
+            "persona-sati token command %s returned empty output",
+            token_cmd,
         )
         return body_or_fallback
 
@@ -166,6 +192,12 @@ def _load_agent_instructions() -> str:
             "using local fallback prompt",
             file=sys.stderr,
         )
+        log.warning(
+            "persona-sati fetch failed (%s): %s: %s",
+            remote_url,
+            type(exc).__name__,
+            exc,
+        )
         return body_or_fallback
 
     if not remote:
@@ -174,11 +206,21 @@ def _load_agent_instructions() -> str:
             "using local fallback",
             file=sys.stderr,
         )
+        log.warning(
+            "persona-sati returned empty prompt (%s); using local fallback",
+            remote_url,
+        )
         return body_or_fallback
 
     print(
         f"[entraclaw] loaded system prompt from persona-sati ({remote_url})",
         file=sys.stderr,
+    )
+    log.info(
+        "persona-sati prompt loaded (url=%s, body_chars=%d, persona_chars=%d)",
+        remote_url,
+        len(body) if body else 0,
+        len(remote),
     )
     # Body rules are non-overridable — prepend them so the LLM reads
     # security/channel discipline before any persona content.

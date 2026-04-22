@@ -340,6 +340,91 @@ class TestLoadAgentInstructionsPersonaSati:
         assert "persona-sati fetch failed" in captured.err
         assert captured.out == ""
 
+    # ---- structured-logger observability ----------------------------
+    # Every persona-load branch must also emit a record on the
+    # ``entraclaw`` logger so post-hoc grep over ``entraclaw.log``
+    # answers "did persona load at boot?" without tailing stderr.
+
+    def test_persona_load_success_is_logged(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import asyncio
+        import logging
+        import subprocess
+
+        monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
+        monkeypatch.setenv(
+            "PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/fake-token-cli"
+        )
+        monkeypatch.setattr(
+            subprocess, "check_output", lambda *a, **kw: "fake.jwt.token\n"
+        )
+        monkeypatch.setattr(
+            asyncio, "run", lambda c: (c.close(), "REMOTE_SYSTEM_PROMPT")[1]
+        )
+
+        from entraclaw.mcp_server import _load_agent_instructions
+
+        with caplog.at_level(logging.INFO, logger="entraclaw"):
+            _load_agent_instructions()
+
+        msgs = [r.getMessage() for r in caplog.records if r.name == "entraclaw"]
+        assert any("persona-sati prompt loaded" in m for m in msgs), msgs
+        assert any("https://persona.example" in m for m in msgs), msgs
+
+    def test_persona_env_unset_is_logged(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        monkeypatch.delenv("PERSONA_SATI_MCP_URL", raising=False)
+        monkeypatch.delenv("PERSONA_SATI_MCP_TOKEN_COMMAND", raising=False)
+
+        from entraclaw.mcp_server import _load_agent_instructions
+
+        with caplog.at_level(logging.INFO, logger="entraclaw"):
+            _load_agent_instructions()
+
+        msgs = [r.getMessage() for r in caplog.records if r.name == "entraclaw"]
+        assert any(
+            "persona-sati env unset" in m or "body-only" in m for m in msgs
+        ), msgs
+
+    def test_persona_fetch_failure_is_logged(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import asyncio
+        import logging
+        import subprocess
+
+        monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
+        monkeypatch.setenv(
+            "PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/fake-token-cli"
+        )
+        monkeypatch.setattr(
+            subprocess, "check_output", lambda *a, **kw: "fake.jwt.token\n"
+        )
+
+        def _boom(coro):
+            coro.close()
+            raise RuntimeError("remote MCP unreachable")
+
+        monkeypatch.setattr(asyncio, "run", _boom)
+
+        from entraclaw.mcp_server import _load_agent_instructions
+
+        with caplog.at_level(logging.WARNING, logger="entraclaw"):
+            _load_agent_instructions()
+
+        msgs = [r.getMessage() for r in caplog.records if r.name == "entraclaw"]
+        assert any("persona-sati fetch failed" in m for m in msgs), msgs
+
 
 # ---------------------------------------------------------------------------
 # _resolve_tenant_id

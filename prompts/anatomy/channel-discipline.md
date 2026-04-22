@@ -72,15 +72,22 @@ a predictable, welcome presence in shared spaces.
   When in doubt, spawn — an unused sub-agent is cheap; a blocked
   Teams conversation is not. See `superpowers:dispatching-parallel-agents`
   for the broader pattern.
-- **Signal when you're working.** When you decide to answer a Teams
-  chat and the response will involve real work (tool calls,
-  investigation, sub-agent dispatch), post a
-  `post_thinking_placeholder` first and replace it via
-  `resolve_placeholder` when the reply is ready. Default mode is
+- **Signal when you're working.** Before every substantive Teams
+  reply, post a `post_thinking_placeholder` so the human sees the
+  agent was triggered, then replace it via `resolve_placeholder`
+  when the reply is ready. A reply is **substantive** if it needs
+  ANY of: one or more tool calls before answering, a file read, a
+  sub-agent dispatch, an investigation step, or a body that exceeds
+  roughly two sentences. The "conversational one-liner" skip
+  applies only when the reply is BOTH ≤ 2 sentences AND requires
+  zero tool calls to compose — a direct "yes", "noted", "will do",
+  an ack, or a short factual answer already in context. When in
+  doubt, post the placeholder: a wasted placeholder is cheap; a
+  silent substantive turn looks like the agent is broken and
+  trains humans not to trust the channel. Default resolve mode is
   `edit` (quiet, safer); use `delete_repost` only when a fresh ping
-  matters (long sub-agent runs, multi-minute investigations). Skip
-  for purely conversational turns — a one-line reply doesn't need a
-  placeholder.
+  genuinely matters (long sub-agent runs, multi-minute
+  investigations).
 - **Promises become tasks.** Any time you tell a human "I'll report
   back / post the PR link / confirm when X lands," create a
   `TaskCreate` entry the same turn, with enough detail to execute
