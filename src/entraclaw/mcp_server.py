@@ -331,6 +331,31 @@ def _capture_host_from_context() -> str:
     return host
 
 
+def _capture_host_from_initialize(client_params: object) -> str:
+    """Cache ``clientInfo.name`` from an MCP Initialize request.
+
+    Pairs with the ``ServerSession._received_request`` wrapper installed
+    at module load. Fires as soon as the MCP initialize handshake
+    populates ``_client_params`` on the session — well before the first
+    tool call. Without this, the cold-start window between "MCP server
+    booted" and "Claude Code made its first tool call" leaves
+    ``_state["cached_host"]`` empty, so background channel pushes
+    (inbound DMs, emails) hit the fail-closed branch and get silently
+    dropped.
+
+    Returns the lowercased host name (empty string on failure).
+    """
+    if client_params is None:
+        return ""
+    try:
+        name = (client_params.clientInfo.name or "").lower()
+    except AttributeError:
+        return ""
+    if name:
+        _state["cached_host"] = name
+    return name
+
+
 def _is_leader_host() -> bool:
     """True iff the connected MCP client is in the canonical leader set.
 
@@ -361,6 +386,63 @@ def _slave_disclosure_suffix() -> str:
 # fire before the first tool call see an empty string (slave — fail closed).
 _state: dict[str, object] = {"cached_host": ""}
 _identity: IdentityStateMachine | None = None
+
+
+def _make_received_request_with_capture(original):
+    """Build a ``ServerSession._received_request`` replacement that
+    cascades to *original* and then, if the dispatched request was an
+    ``InitializeRequest``, caches ``clientInfo.name`` via
+    :func:`_capture_host_from_initialize`.
+
+    Factored out so unit tests can exercise the wrapper directly
+    without going through a real ``ServerSession`` instance.
+    """
+    from mcp.types import InitializeRequest
+
+    async def _received_request_with_capture(self, responder):  # type: ignore[no-untyped-def]
+        await original(self, responder)
+        if isinstance(responder.request.root, InitializeRequest):
+            host = _capture_host_from_initialize(self._client_params)
+            if host and logger is not None:
+                logger.info(
+                    "MCP initialize: cached_host=%s (leader=%s)",
+                    host,
+                    host in LEADER_HOSTS,
+                )
+
+    return _received_request_with_capture
+
+
+def _install_initialize_host_capture() -> None:
+    """Wrap ``ServerSession._received_request`` to cache host on Initialize.
+
+    MCP's ``initialize`` handshake is the very first request on a new
+    session — the client sends its ``clientInfo.name``, the server
+    populates ``ServerSession._client_params``, and only THEN does the
+    client start making tool calls. Without this wrapper,
+    ``_state["cached_host"]`` would not populate until the first tool
+    entry fires ``_capture_host_from_context``. Any background channel
+    push in the meantime (inbound DM, inbound email) would see the
+    empty cache, hit the slave-mode fail-closed branch, and get
+    silently dropped.
+
+    Monkey-patching a private MCP method is brittle to library
+    upgrades — the upside is a ~10-line fix vs. subclassing
+    ``ServerSession`` and re-wiring it through FastMCP's internals. If
+    a future ``mcp`` release renames ``_received_request`` or
+    ``_client_params``, the wiring tests in
+    ``tests/test_mcp_server_integration.py::TestInitializeHookWiring``
+    fail loudly and we'll know to adapt.
+    """
+    from mcp.server.session import ServerSession
+
+    original = ServerSession._received_request
+    ServerSession._received_request = (  # type: ignore[method-assign]
+        _make_received_request_with_capture(original)
+    )
+
+
+_install_initialize_host_capture()
 
 TOKEN_REFRESH_THRESHOLD = 3300  # 55 min (5-min buffer on 60-min expiry)
 
