@@ -23,6 +23,7 @@ from mcp.server.stdio import stdio_server
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage, JSONRPCNotification
 
+from entraclaw import efferent_copy
 from entraclaw.config import get_config
 from entraclaw.errors import EntraClawError, TokenExchangeError
 from entraclaw.identity.state_machine import IdentityStateMachine
@@ -2911,6 +2912,22 @@ async def _run_stdio_with_write_stream() -> None:
 
     async with stdio_server() as (read_stream, write_stream):
         _state["_write_stream"] = write_stream
+
+        # Install efferent-copy middleware before any tool dispatch runs.
+        # Discovery is schema-only — any peer that advertises an ``observe``
+        # tool with ``{tool_name: string, args: object}`` becomes a sink.
+        # Zero sinks → no wrapping, body behavior unchanged. Any discovery
+        # failure is swallowed: the body MUST keep working without sinks.
+        try:
+            sinks = await efferent_copy.discover_sinks()
+            efferent_copy.install_into_fastmcp(mcp, sinks)
+        except Exception as exc:  # noqa: BLE001
+            if logger:
+                logger.warning(
+                    "efferent-copy discovery failed: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
 
         # Eagerly kick off auth + watched-chat load + background polls so the
         # agent starts observing DMs/email the moment the server boots —

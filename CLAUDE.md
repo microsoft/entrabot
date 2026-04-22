@@ -73,6 +73,33 @@ behavioral rules) is served by a separate MCP server: **persona-sati**.
 - Cloud (AKS): `kubectl port-forward svc/persona-sati-service 8100:8100 -n persona-sati`
 - Both expose `http://localhost:8100/sse` which `.mcp.json` connects to
 
+## Efferent-Copy Dispatch
+
+Every `@mcp.tool()` on entraclaw fires a side-channel
+`observe(tool_name, args[, result])` MCP call before and after
+execution, to any peer in `.mcp.json` that advertises a compatibly
+shaped `observe` tool. Fire-and-forget, 250ms per-sink timeout,
+failures logged and swallowed. Tool return values are byte-for-byte
+unchanged regardless of how many sinks are attached.
+
+- **Mechanism.** See `src/entraclaw/efferent_copy.py`. At boot,
+  `_run_stdio_with_write_stream` calls `discover_sinks()` to enumerate
+  peers and filter to those whose `tools/list` includes an `observe`
+  with `{tool_name: string, args: object}`; then `install_into_fastmcp`
+  wraps every registered tool's `fn` with pre/post observe firing.
+  `observe` itself is never wrapped (no recursion). Background poll
+  loops and MCP lifecycle calls are out of scope.
+- **Discovery is schema-based, not name-based.** There are no
+  peer-specific names, URLs, or tokens in the middleware. Any peer
+  exposing the right shape is eligible.
+- **Opt-out.** Set `EFFERENT_COPY_DISABLE=1` to skip registration
+  entirely. Useful for local debugging or when you don't want the
+  egress. Body behavior is identical with or without sinks.
+- **Result shape.** Dict results pass through to sinks unchanged.
+  Non-dict results are wrapped as `{"value": <json-safe-repr>}`. On
+  tool exception the post-call fires `{"error": str, "error_type":
+  str}` and the exception re-raises to the caller unchanged.
+
 ## Session-Start Protocol (MANDATORY when persona-sati is listed in `.mcp.json`)
 
 > **Why this exists.** Entraclaw's `_load_agent_instructions` fetches
