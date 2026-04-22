@@ -659,6 +659,65 @@ async def post_thinking_placeholder(
         return msg_id
 
 
+async def update_placeholder(
+    chat_id: str,
+    placeholder_id: str,
+    progress_text: str,
+    token: str,
+) -> dict:
+    """PATCH an existing placeholder with a short italic progress note.
+
+    Pairs with :func:`post_thinking_placeholder` and
+    :func:`resolve_placeholder` to implement the three-stage Teams
+    pattern:
+
+      1. ``post_thinking_placeholder`` — ack the human immediately.
+      2. ``update_placeholder`` (zero or more) — surface progress so
+         the human sees the agent working, not frozen.
+      3. ``resolve_placeholder`` — commit the final answer (audit-logged).
+
+    Unlike ``resolve_placeholder``, this is NOT a final commitment: no
+    audit event, no fallback-to-new-message on Graph failure. A failed
+    PATCH is logged and returned as ``mode="edit_failed"`` so the caller
+    can see the degradation; the eventual ``resolve_placeholder`` call
+    handles the real fallback. A spurious progress message appearing as
+    a fresh chat ping would be worse UX than a stale placeholder.
+    """
+    payload = {
+        "body": {
+            "contentType": "html",
+            "content": f"<i>{progress_text}</i>",
+        },
+    }
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    async with httpx.AsyncClient(transport=transport) as client:
+        resp = await client.patch(
+            f"{GRAPH_BASE}/chats/{chat_id}/messages/{placeholder_id}",
+            json=payload,
+            headers=headers,
+        )
+        if resp.status_code == 401:
+            raise TokenExpiredError("Token expired — re-acquire")
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", "60"))
+            raise RateLimitError(retry_after)
+        if 200 <= resp.status_code < 300:
+            return {"message_id": placeholder_id, "mode": "edit"}
+
+    logger.warning(
+        "PATCH placeholder %s (progress update) failed (%d) — "
+        "skipping, resolve_placeholder will retry",
+        placeholder_id,
+        resp.status_code,
+    )
+    return {"message_id": placeholder_id, "mode": "edit_failed"}
+
+
 async def resolve_placeholder(
     chat_id: str,
     placeholder_id: str,

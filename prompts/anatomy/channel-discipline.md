@@ -72,22 +72,39 @@ a predictable, welcome presence in shared spaces.
   When in doubt, spawn — an unused sub-agent is cheap; a blocked
   Teams conversation is not. See `superpowers:dispatching-parallel-agents`
   for the broader pattern.
-- **Signal when you're working.** Before every substantive Teams
-  reply, post a `post_thinking_placeholder` so the human sees the
-  agent was triggered, then replace it via `resolve_placeholder`
-  when the reply is ready. A reply is **substantive** if it needs
-  ANY of: one or more tool calls before answering, a file read, a
-  sub-agent dispatch, an investigation step, or a body that exceeds
-  roughly two sentences. The "conversational one-liner" skip
-  applies only when the reply is BOTH ≤ 2 sentences AND requires
-  zero tool calls to compose — a direct "yes", "noted", "will do",
-  an ack, or a short factual answer already in context. When in
-  doubt, post the placeholder: a wasted placeholder is cheap; a
-  silent substantive turn looks like the agent is broken and
-  trains humans not to trust the channel. Default resolve mode is
-  `edit` (quiet, safer); use `delete_repost` only when a fresh ping
-  genuinely matters (long sub-agent runs, multi-minute
-  investigations).
+- **Placeholder is your FIRST action on a substantive DM — ack,
+  then work, then resolve.** The moment you decide to answer a
+  substantive Teams DM, call `post_thinking_placeholder` *before*
+  any other tool call (file reads, grep, sub-agent dispatch, even
+  reading recent chat history). The placeholder's job is to ack
+  that the agent got the message — not to label "now about to
+  finish." A human who just pinged shouldn't watch silence for 20s
+  while the agent investigates; they should see `thinking…` within
+  a second. A reply is **substantive** if it needs ANY of: one or
+  more tool calls before answering, a file read, a sub-agent
+  dispatch, an investigation step, or a body exceeding roughly two
+  sentences. The skip applies only when the reply is BOTH ≤ 2
+  sentences AND requires zero tool calls — a direct "yes",
+  "noted", "will do", an ack, or a short factual answer already in
+  context. When in doubt, ack first: a wasted placeholder is
+  cheap; a silent substantive turn looks like the agent is broken
+  and trains humans not to trust the channel.
+- **Surface progress if the work takes more than one round-trip.**
+  Between the initial ack and the final resolve, call
+  `update_placeholder` with a one-line italic progress note each
+  time you switch investigation modes — "reading the interaction
+  log", "grepping the last three commits", "dispatching a
+  sub-agent". The human sees momentum, not a frozen placeholder.
+  `update_placeholder` PATCHes the same message (no new ping) and
+  is best-effort: a failed update is logged but never posts a
+  fresh message, because a spurious progress ping is worse UX than
+  a stale placeholder. Keep each update short; stop updating once
+  you're drafting the final reply.
+- **Resolve once, with the final answer.** `resolve_placeholder`
+  fires exactly once per thread — this is the audit-logged event.
+  Default mode is `edit` (quiet, safer, PATCHes in place); use
+  `delete_repost` only when a fresh ping genuinely matters (long
+  sub-agent runs, multi-minute investigations).
 - **Promises become tasks.** Any time you tell a human "I'll report
   back / post the PR link / confirm when X lands," create a
   `TaskCreate` entry the same turn, with enough detail to execute

@@ -2254,6 +2254,137 @@ class TestThinkingPlaceholderTool:
         _json.loads("{}")  # silence unused
 
 
+class TestUpdatePlaceholderTool:
+    """MCP wrapper around tools.teams.update_placeholder. Unlike
+    resolve_placeholder, this one is NOT audit-logged — it surfaces
+    mid-flight progress, not a final commitment."""
+
+    @pytest.mark.asyncio
+    async def test_calls_teams_helper_with_args(
+        self, monkeypatch
+    ) -> None:
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_log_interaction_safe", lambda **kw: None
+        )
+
+        captured_kwargs: dict = {}
+
+        async def fake_retry(fn, **kwargs):
+            captured_kwargs.update(kwargs)
+            return {"message_id": "msg-p1", "mode": "edit"}
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+        result = await mcp_server.update_placeholder(
+            chat_id="c1",
+            placeholder_id="msg-p1",
+            progress_text="reading the interaction log",
+        )
+        parsed = _json.loads(result)
+        assert parsed == {"message_id": "msg-p1", "mode": "edit"}
+        assert captured_kwargs["chat_id"] == "c1"
+        assert captured_kwargs["placeholder_id"] == "msg-p1"
+        assert captured_kwargs["progress_text"] == "reading the interaction log"
+
+    @pytest.mark.asyncio
+    async def test_does_not_write_audit_event(self, monkeypatch) -> None:
+        """Progress updates are ephemeral — no audit event fires. Only
+        resolve_placeholder writes to the audit log."""
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_log_interaction_safe", lambda **kw: None
+        )
+        monkeypatch.setattr(
+            mcp_server, "_with_token_retry",
+            AsyncMock(return_value={"message_id": "msg-p1", "mode": "edit"}),
+        )
+
+        audit_events: list[dict] = []
+
+        def fake_audit(**kw):
+            audit_events.append(kw)
+            return {"event_id": "evt-y", **kw}
+
+        monkeypatch.setattr("entraclaw.tools.audit.log_event", fake_audit)
+
+        await mcp_server.update_placeholder(
+            chat_id="c1",
+            placeholder_id="msg-p1",
+            progress_text="reading",
+        )
+        assert audit_events == [], (
+            "update_placeholder must NOT audit-log; audit fires only on "
+            "resolve_placeholder"
+        )
+
+    @pytest.mark.asyncio
+    async def test_logs_interaction_with_progress_flag(
+        self, monkeypatch
+    ) -> None:
+        from entraclaw import mcp_server
+
+        captured: dict = {}
+
+        def fake_log(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr(mcp_server, "_log_interaction_safe", fake_log)
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_with_token_retry",
+            AsyncMock(return_value={"message_id": "msg-p1", "mode": "edit"}),
+        )
+
+        await mcp_server.update_placeholder(
+            chat_id="c1",
+            placeholder_id="msg-p1",
+            progress_text="grepping",
+        )
+        assert captured["action"] == "update_placeholder"
+        assert captured["metadata"]["progress"] is True
+        assert captured["metadata"]["placeholder"] is True
+        assert captured["metadata"]["placeholder_id"] == "msg-p1"
+
+    @pytest.mark.asyncio
+    async def test_requires_chat_id_and_placeholder_id(
+        self, monkeypatch
+    ) -> None:
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        result = await mcp_server.update_placeholder(
+            chat_id="", placeholder_id="msg-p1", progress_text="x"
+        )
+        parsed = _json.loads(result)
+        assert "error" in parsed
+
+
 # ---------------------------------------------------------------------------
 # delete_teams_message MCP wrapper
 # ---------------------------------------------------------------------------

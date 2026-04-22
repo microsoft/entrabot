@@ -1465,6 +1465,127 @@ class TestResolvePlaceholder:
 
 
 # ---------------------------------------------------------------------------
+# update_placeholder — PATCH placeholder mid-flight with italic progress note.
+# Unlike resolve_placeholder, update is NOT the final answer and NOT audit-logged.
+# ---------------------------------------------------------------------------
+
+
+class TestUpdatePlaceholder:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_patches_with_italic_progress_text(self) -> None:
+        import json as _json
+
+        from entraclaw.tools.teams import update_placeholder
+
+        route = respx.patch(
+            f"{GRAPH_BASE}/chats/c1/messages/msg-p1"
+        ).mock(return_value=httpx.Response(200, json={"id": "msg-p1"}))
+
+        result = await update_placeholder(
+            chat_id="c1",
+            placeholder_id="msg-p1",
+            progress_text="reading the last three commits",
+            token="tok",
+        )
+
+        assert result == {"message_id": "msg-p1", "mode": "edit"}
+        body = _json.loads(route.calls.last.request.content)
+        assert body["body"]["contentType"] == "html"
+        content = body["body"]["content"]
+        # Italic wrapping is applied around the progress text.
+        assert "<i>" in content or "<em>" in content
+        assert "reading the last three commits" in content
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_same_placeholder_id_across_multiple_updates(self) -> None:
+        """Calling update_placeholder N times PATCHes the same placeholder
+        N times — each call just re-edits in place."""
+        from entraclaw.tools.teams import update_placeholder
+
+        route = respx.patch(
+            f"{GRAPH_BASE}/chats/c1/messages/msg-p1"
+        ).mock(return_value=httpx.Response(200, json={"id": "msg-p1"}))
+
+        for text in ("reading log", "grepping docs", "drafting reply"):
+            await update_placeholder(
+                chat_id="c1",
+                placeholder_id="msg-p1",
+                progress_text=text,
+                token="tok",
+            )
+        assert route.call_count == 3
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_token_expired_raises(self) -> None:
+        from entraclaw.errors import TokenExpiredError
+        from entraclaw.tools.teams import update_placeholder
+
+        respx.patch(
+            f"{GRAPH_BASE}/chats/c1/messages/msg-p1"
+        ).mock(return_value=httpx.Response(401))
+
+        with pytest.raises(TokenExpiredError):
+            await update_placeholder(
+                chat_id="c1",
+                placeholder_id="msg-p1",
+                progress_text="whatever",
+                token="tok",
+            )
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_graph_error_does_not_fall_back_to_new_message(self) -> None:
+        """update_placeholder is best-effort progress. Unlike
+        resolve_placeholder, it must NOT post a fresh message on Graph
+        failure — a spurious progress message in the chat would be
+        worse than a stale placeholder. The eventual resolve_placeholder
+        handles the real fallback."""
+        from entraclaw.tools.teams import update_placeholder
+
+        patch_route = respx.patch(
+            f"{GRAPH_BASE}/chats/c1/messages/msg-p1"
+        ).mock(return_value=httpx.Response(500))
+        # If a POST to /chats/c1/messages fires, this mock catches it and
+        # the assertion below fails the test.
+        post_route = respx.post(
+            f"{GRAPH_BASE}/chats/c1/messages"
+        ).mock(return_value=httpx.Response(201, json={"id": "WRONG"}))
+
+        result = await update_placeholder(
+            chat_id="c1",
+            placeholder_id="msg-p1",
+            progress_text="progress",
+            token="tok",
+        )
+        assert result == {"message_id": "msg-p1", "mode": "edit_failed"}
+        assert patch_route.called
+        assert not post_route.called, (
+            "update_placeholder must NOT post a fresh message when PATCH fails"
+        )
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_rate_limited_raises(self) -> None:
+        from entraclaw.errors import RateLimitError
+        from entraclaw.tools.teams import update_placeholder
+
+        respx.patch(
+            f"{GRAPH_BASE}/chats/c1/messages/msg-p1"
+        ).mock(return_value=httpx.Response(429, headers={"Retry-After": "30"}))
+
+        with pytest.raises(RateLimitError):
+            await update_placeholder(
+                chat_id="c1",
+                placeholder_id="msg-p1",
+                progress_text="progress",
+                token="tok",
+            )
+
+
+# ---------------------------------------------------------------------------
 # delete_chat_message — Graph softDelete wrapper for the agent's own messages
 # ---------------------------------------------------------------------------
 

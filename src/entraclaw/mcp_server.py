@@ -1750,6 +1750,77 @@ async def post_thinking_placeholder(
 
 
 @mcp.tool()
+async def update_placeholder(
+    chat_id: str,
+    placeholder_id: str,
+    progress_text: str,
+) -> str:
+    """Patch a thinking placeholder with a short italic progress note.
+
+    Middle stage of the three-part placeholder flow:
+      1. ``post_thinking_placeholder`` — ack the human immediately.
+      2. ``update_placeholder`` (zero or more) — surface what you're
+         doing so the human sees work-in-progress, not a frozen
+         placeholder.
+      3. ``resolve_placeholder`` — commit the final answer (audit-logged).
+
+    Unlike ``resolve_placeholder``, this is NOT a final commitment:
+    no audit event, no fallback-to-new-message on Graph failure.
+    Progress updates are best-effort; a failed PATCH here is logged
+    and reported as ``mode="edit_failed"``, but no alternate message
+    is posted to avoid a spurious ping. The eventual
+    ``resolve_placeholder`` handles the real fallback.
+
+    Use one short phrase per call — "reading the interaction log",
+    "grepping docs", "drafting reply". One line; italic.
+
+    Args:
+        chat_id: The chat holding the placeholder. Required.
+        placeholder_id: The message_id returned by
+            ``post_thinking_placeholder``.
+        progress_text: One short progress phrase. Kept italic.
+
+    Returns:
+        JSON with ``message_id`` and ``mode`` (``edit`` on success,
+        ``edit_failed`` when the PATCH did not land).
+    """
+    await _initialize()
+
+    if not chat_id or not placeholder_id:
+        return json.dumps({
+            "error": "chat_id and placeholder_id are required."
+        })
+
+    from entraclaw.tools.teams import update_placeholder as _update
+
+    await _ensure_valid_token()
+    result = await _with_token_retry(
+        _update,
+        chat_id=chat_id,
+        placeholder_id=placeholder_id,
+        progress_text=progress_text,
+    )
+
+    _log_interaction_safe(
+        channel=detect_channel(chat_id),
+        direction="outbound",
+        sender="entraclaw-agent",
+        recipient=chat_id,
+        summary=f"progress: {progress_text}",
+        action="update_placeholder",
+        content_ref=result.get("message_id") if isinstance(result, dict) else None,
+        metadata={
+            "placeholder": True,
+            "progress": True,
+            "placeholder_id": placeholder_id,
+            "mode": result.get("mode") if isinstance(result, dict) else "edit",
+        },
+    )
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
 async def resolve_placeholder(
     chat_id: str,
     placeholder_id: str,
