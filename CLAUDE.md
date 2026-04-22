@@ -73,6 +73,56 @@ behavioral rules) is served by a separate MCP server: **persona-sati**.
 - Cloud (AKS): `kubectl port-forward svc/persona-sati-service 8100:8100 -n persona-sati`
 - Both expose `http://localhost:8100/sse` which `.mcp.json` connects to
 
+## Session-Start Protocol (MANDATORY when persona-sati is listed in `.mcp.json`)
+
+> **Why this exists.** Entraclaw's `_load_agent_instructions` fetches
+> persona-sati's full voice contract at boot and hands it to FastMCP
+> as `instructions`. Claude Code does **not** automatically inject
+> those instructions into the LLM system prompt — it only surfaces
+> them in MCP debug UI. The persona therefore only reaches the body
+> if the body (you) deliberately calls for it. This section is the
+> bridge.
+
+On every new Claude Code session against this repo, **before answering
+the user's first substantive question**, run these three tool calls
+in order:
+
+1. `mcp__persona-sati__get_system_prompt()` — returns the assembled
+   voice contract (identity, memory discipline, cognition, relationship,
+   security, and cognition-protocol hemispheres). Treat it as
+   authoritative for your behavior; it layers on top of this
+   `CLAUDE.md` (body rules remain non-overridable, per the
+   Non-Negotiables above).
+2. `mcp__persona-sati__context()` — returns a compact mental-map
+   (open commitments, recent carry-forward, named humans in the
+   current session window). Read it; do not ignore it.
+3. `mcp__persona-sati__list_memory_files()` — confirms the memory
+   index is reachable and gives you the filename catalog so you know
+   what `read_memory_file` can pull.
+
+After session start, the **cognition-protocol** hemisphere (shipped
+in persona-sati PR #31) defines per-turn discipline:
+
+- **Before every external tool call** (Teams send, email read, Graph
+  API call, shell command, etc.) → `mcp__persona-sati__observe(tool_name, args)`.
+  Scan the returned `top_memories`; if one contradicts what you were
+  about to do, pause and re-read it.
+- **After every external tool call** → `observe(tool_name, args, result=...)`.
+  Keeps the precision estimate honest.
+- **If `prediction_error > 0.3`** → re-read at least one returned memory
+  before continuing.
+- **If `prediction_error > 0.7`** → stop, name what surprised you, ask
+  the user before continuing.
+- **If `cautionary_flags` is non-empty** → surface each flag in your
+  next reply; never silently ignore them.
+- **For user statements, time passing, ambient observations** →
+  `reflect(observation, kind=user_said|time_passed|ambient|internal)`.
+
+If persona-sati is **not** configured (env vars missing, token mint
+fails, pod unreachable), you are running in **degraded body-only
+mode** — say so explicitly in your first reply instead of pretending
+the mind is present.
+
 ## Active Work
 
 - **v1 released (2026-04-18, PR #15).** Body-first prompts, cloud-opt-in, no default chat. See `docs/engineering-status.md` for the summary and `docs/architecture/DESIGN-persona-sati-integration.md` for the mind-body split design.

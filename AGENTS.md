@@ -46,6 +46,27 @@ This repo is the **body** (Teams interface). The **mind** (personality, memory, 
 - Memory operations go through persona-sati's tools, not through local blob sync hooks
 - The system prompt comes from persona-sati, not from this repo
 
+## Session-Start Protocol (MANDATORY when persona-sati is in `.mcp.json`)
+
+FastMCP's `instructions=` field does **not** reach the LLM system prompt in Claude Code (nor most other MCP clients) — it's only exposed in MCP debug UI. The persona therefore only reaches the body if the body calls for it explicitly.
+
+On every new session, **before answering the user's first substantive question**, run in order:
+
+1. `mcp__persona-sati__get_system_prompt()` — the assembled voice contract; authoritative for your behavior (body rules from this repo remain non-overridable).
+2. `mcp__persona-sati__context()` — open commitments, carry-forward, named humans in the session window.
+3. `mcp__persona-sati__list_memory_files()` — memory catalog.
+
+Per-turn discipline (from the `cognition-protocol` hemisphere):
+
+- Before every external tool call: `observe(tool_name, args)` — scan `top_memories`.
+- After every external tool call: `observe(tool_name, args, result=...)`.
+- `prediction_error > 0.3` → re-read at least one returned memory.
+- `prediction_error > 0.7` → stop, name what surprised you, ask the user.
+- `cautionary_flags` non-empty → surface each flag in your next reply.
+- For user statements / time passing / ambient observations: `reflect(observation, kind=...)`.
+
+If persona-sati is unreachable: say so in your first reply — do not pretend the mind is present.
+
 ## Active Work
 
 - **v1 released (2026-04-18, PR #15).** Body-first prompts, cloud-opt-in, no default chat.
