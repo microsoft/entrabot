@@ -577,223 +577,6 @@ class TestPersonaSatiHeartbeat:
 
 
 # ---------------------------------------------------------------------------
-# Initialize-time host capture (cached_host populates at MCP handshake,
-# not at first tool call) — closes the cold-start window where the first
-# background channel push after MCP boot would be dropped as slave.
-# ---------------------------------------------------------------------------
-class TestCaptureHostFromInitialize:
-    """_capture_host_from_initialize mirrors the shape of
-    ``ServerSession._client_params``: attribute access
-    ``client_params.clientInfo.name``. The function is the unit under
-    test; the ``_install_initialize_host_capture`` monkey-patch is the
-    wiring test (below).
-    """
-
-    def test_claude_code_populates_cached_host(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from types import SimpleNamespace
-
-        from entraclaw import mcp_server
-
-        monkeypatch.setitem(mcp_server._state, "cached_host", "")
-        params = SimpleNamespace(
-            clientInfo=SimpleNamespace(name="claude-code")
-        )
-        host = mcp_server._capture_host_from_initialize(params)
-        assert host == "claude-code"
-        assert mcp_server._state["cached_host"] == "claude-code"
-
-    def test_host_name_is_lowercased(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from types import SimpleNamespace
-
-        from entraclaw import mcp_server
-
-        monkeypatch.setitem(mcp_server._state, "cached_host", "")
-        params = SimpleNamespace(clientInfo=SimpleNamespace(name="Claude-Code"))
-        assert mcp_server._capture_host_from_initialize(params) == "claude-code"
-        assert mcp_server._state["cached_host"] == "claude-code"
-
-    def test_none_params_is_noop(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from entraclaw import mcp_server
-
-        monkeypatch.setitem(mcp_server._state, "cached_host", "existing")
-        assert mcp_server._capture_host_from_initialize(None) == ""
-        assert mcp_server._state["cached_host"] == "existing"
-
-    def test_missing_client_info_is_noop(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from types import SimpleNamespace
-
-        from entraclaw import mcp_server
-
-        monkeypatch.setitem(mcp_server._state, "cached_host", "existing")
-        params = SimpleNamespace()  # no clientInfo attribute
-        assert mcp_server._capture_host_from_initialize(params) == ""
-        assert mcp_server._state["cached_host"] == "existing"
-
-    def test_empty_name_is_noop(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from types import SimpleNamespace
-
-        from entraclaw import mcp_server
-
-        monkeypatch.setitem(mcp_server._state, "cached_host", "")
-        params = SimpleNamespace(clientInfo=SimpleNamespace(name=""))
-        assert mcp_server._capture_host_from_initialize(params) == ""
-        assert mcp_server._state["cached_host"] == ""
-
-    def test_copilot_populates_but_stays_slave(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Non-leader hosts still get cached — so _is_leader_host can
-        answer correctly — but the cache value itself is not in
-        LEADER_HOSTS, so the session is slave."""
-        from types import SimpleNamespace
-
-        from entraclaw import mcp_server
-
-        monkeypatch.setitem(mcp_server._state, "cached_host", "")
-        params = SimpleNamespace(clientInfo=SimpleNamespace(name="github-copilot"))
-        assert mcp_server._capture_host_from_initialize(params) == "github-copilot"
-        assert mcp_server._state["cached_host"] == "github-copilot"
-        assert "github-copilot" not in mcp_server.LEADER_HOSTS
-
-
-class TestInitializeHookWiring:
-    """``_make_received_request_with_capture`` builds the wrapper that
-    gets installed on ``ServerSession._received_request``. Unit-test the
-    wrapper directly with a fake ``original`` and a fake responder — no
-    real MCP session required.
-
-    The tests also serve as a regression guard for MCP library
-    upgrades: if a future release renames ``_client_params`` or moves
-    ``InitializeRequest``, import failures here will surface the break
-    loudly at CI time.
-    """
-
-    async def test_wrapper_captures_host_on_initialize(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from types import SimpleNamespace
-
-        from mcp.types import (
-            ClientCapabilities,
-            Implementation,
-            InitializeRequest,
-            InitializeRequestParams,
-        )
-
-        from entraclaw import mcp_server
-
-        monkeypatch.setitem(mcp_server._state, "cached_host", "")
-
-        # Fake the wrapped-over function. The wrapper calls it first,
-        # then runs its capture step.
-        async def _fake_original(self, responder):  # noqa: ARG001
-            return None
-
-        wrapper = mcp_server._make_received_request_with_capture(_fake_original)
-
-        params = InitializeRequestParams(
-            protocolVersion="2024-11-05",
-            capabilities=ClientCapabilities(),
-            clientInfo=Implementation(name="Claude-Code", version="1.2.3"),
-        )
-        init_request = InitializeRequest(method="initialize", params=params)
-        responder = SimpleNamespace(request=SimpleNamespace(root=init_request))
-        session = SimpleNamespace(_client_params=params)
-
-        await wrapper(session, responder)
-
-        assert mcp_server._state["cached_host"] == "claude-code"
-
-    async def test_wrapper_is_noop_for_non_initialize(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from types import SimpleNamespace
-
-        from mcp.types import PingRequest
-
-        from entraclaw import mcp_server
-
-        monkeypatch.setitem(mcp_server._state, "cached_host", "claude-code")
-
-        async def _fake_original(self, responder):  # noqa: ARG001
-            return None
-
-        wrapper = mcp_server._make_received_request_with_capture(_fake_original)
-
-        ping = PingRequest(method="ping")
-        responder = SimpleNamespace(request=SimpleNamespace(root=ping))
-        # _client_params points at a different host — wrapper must NOT
-        # overwrite cached_host on a PingRequest.
-        session = SimpleNamespace(
-            _client_params=SimpleNamespace(
-                clientInfo=SimpleNamespace(name="some-other-host")
-            ),
-        )
-
-        await wrapper(session, responder)
-
-        assert mcp_server._state["cached_host"] == "claude-code"
-
-    async def test_wrapper_logs_leader_status(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        import logging
-        from types import SimpleNamespace
-
-        from mcp.types import (
-            ClientCapabilities,
-            Implementation,
-            InitializeRequest,
-            InitializeRequestParams,
-        )
-
-        from entraclaw import mcp_server
-
-        # Ensure the module logger exists so the wrapper's `logger is
-        # not None` check passes.
-        monkeypatch.setattr(
-            mcp_server, "logger", logging.getLogger("entraclaw")
-        )
-        monkeypatch.setitem(mcp_server._state, "cached_host", "")
-
-        async def _fake_original(self, responder):  # noqa: ARG001
-            return None
-
-        wrapper = mcp_server._make_received_request_with_capture(_fake_original)
-
-        params = InitializeRequestParams(
-            protocolVersion="2024-11-05",
-            capabilities=ClientCapabilities(),
-            clientInfo=Implementation(name="claude-code", version="1.0.0"),
-        )
-        responder = SimpleNamespace(
-            request=SimpleNamespace(
-                root=InitializeRequest(method="initialize", params=params)
-            )
-        )
-        session = SimpleNamespace(_client_params=params)
-
-        with caplog.at_level(logging.INFO, logger="entraclaw"):
-            await wrapper(session, responder)
-
-        msgs = [r.getMessage() for r in caplog.records if r.name == "entraclaw"]
-        assert any("MCP initialize: cached_host=claude-code" in m for m in msgs), msgs
-        assert any("leader=True" in m for m in msgs), msgs
-
-
-# ---------------------------------------------------------------------------
 # _resolve_tenant_id
 # ---------------------------------------------------------------------------
 class TestResolveTenantId:
@@ -1211,9 +994,7 @@ class TestPushChannelNotificationObservability:
         Slave-mode push skipping is covered separately in
         ``tests/test_host_detection.py::TestPushChannelNotificationSlaveGating``.
         """
-        from entraclaw import mcp_server
 
-        monkeypatch.setattr(mcp_server, "_is_leader_host", lambda: True)
 
     @pytest.mark.asyncio
     async def test_logs_interaction_even_when_write_stream_missing(
@@ -1838,7 +1619,6 @@ class TestPollTaskAutoStart:
         from entraclaw import mcp_server
 
         # Leader mode required — slave hosts intentionally skip polling.
-        monkeypatch.setattr(mcp_server, "_is_leader_host", lambda: True)
 
         old_state = mcp_server._state.copy()
         try:
@@ -1880,7 +1660,6 @@ class TestPollTaskAutoStart:
 
         from entraclaw import mcp_server
 
-        monkeypatch.setattr(mcp_server, "_is_leader_host", lambda: True)
 
         old_state = mcp_server._state.copy()
         try:
@@ -1910,7 +1689,6 @@ class TestPollTaskAutoStart:
 
         from entraclaw import mcp_server
 
-        monkeypatch.setattr(mcp_server, "_is_leader_host", lambda: True)
 
         old_state = mcp_server._state.copy()
         try:

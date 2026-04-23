@@ -404,6 +404,101 @@ class TestDiscoverSinks:
         sinks = await ec.discover_sinks(cfg)
         assert sinks == []
 
+    async def test_self_referential_peer_is_skipped_without_spawning(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Regression: a peer whose stdio command resolves to our own
+        executable MUST NOT be opened — doing so spawns a child
+        entraclaw-mcp which itself runs discover_sinks, which spawns a
+        grandchild, recurring until every level's 5s timeout fires. The
+        April 2026 incident: ~30 child entraclaw-mcp subprocesses per
+        minute for 2h+, each reporting clientInfo.name='mcp' and
+        clobbering the leader-host cache, which silently dropped every
+        Teams DM push.
+
+        Assertion: discover_sinks MUST return empty AND MUST NOT call
+        the factory. "Eventually returns empty after a 5s timeout" is
+        insufficient — it still spawns the subprocess.
+        """
+        import sys
+
+        cfg = tmp_path / ".mcp.json"
+        cfg.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "self_stdio": {
+                            "type": "stdio",
+                            "command": sys.argv[0],  # "ourself"
+                            "args": [],
+                        }
+                    }
+                }
+            )
+        )
+        monkeypatch.delenv(ec.DISABLE_ENV, raising=False)
+
+        # Swap the factory builder so any attempt to open a stdio
+        # session is visible as a test failure.
+        factory_calls: list[dict] = []
+
+        def failing_builder(peer):
+            factory_calls.append(peer)
+            raise AssertionError(
+                f"self-referential peer MUST be skipped at build-factory "
+                f"time, never reaching stdio_client; got peer={peer!r}"
+            )
+
+        monkeypatch.setattr(ec, "_build_sink_factory", failing_builder)
+
+        sinks = await ec.discover_sinks(cfg)
+        assert sinks == []
+        # Zero attempts to build a factory for the self-referential peer.
+        # (If _build_sink_factory WERE called, failing_builder would raise
+        # and the await would propagate it. Belt: assert the list too.)
+        assert factory_calls == [], (
+            f"self-referential peer reached factory build: {factory_calls}"
+        )
+
+    async def test_stdio_factory_sets_efferent_copy_disable_in_child_env(
+        self, monkeypatch
+    ):
+        """Belt-and-suspenders: any subprocess we do spawn via stdio
+        MUST inherit ``EFFERENT_COPY_DISABLE=1`` so the child's own
+        discover_sinks short-circuits immediately. This bounds the
+        worst case at one subprocess, not a cascade.
+        """
+        captured: list[dict] = []
+
+        from mcp.client import stdio as stdio_mod
+
+        real_params_class = stdio_mod.StdioServerParameters
+
+        def spy_params(*args, **kwargs):
+            instance = real_params_class(*args, **kwargs)
+            captured.append(dict(instance.env or {}))
+            return instance
+
+        monkeypatch.setattr(stdio_mod, "StdioServerParameters", spy_params)
+
+        # Building the factory constructs StdioServerParameters; we
+        # don't actually open it (which would spawn a subprocess).
+        ec._build_sink_factory(
+            {
+                "name": "dummy",
+                "type": "stdio",
+                "command": "/bin/echo",
+                "args": [],
+            }
+        )
+
+        assert captured, "StdioServerParameters was never constructed"
+        env = captured[0]
+        assert env.get("EFFERENT_COPY_DISABLE") == "1", (
+            "Spawned stdio subprocess MUST inherit EFFERENT_COPY_DISABLE=1 "
+            f"to prevent cascade recursion; env keys: {sorted(env.keys())[:8]}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # install_into_fastmcp — the boot integration

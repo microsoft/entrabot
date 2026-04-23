@@ -300,7 +300,15 @@ def _stdio_factory(peer: dict) -> Callable[[], Any]:
     command = peer["command"]
     args = list(peer.get("args") or [])
     env_overrides = peer.get("env") or {}
-    env = {**os.environ, **env_overrides}
+    # Belt-and-suspenders for the self-referential-peer cascade (April
+    # 2026 incident). If a peer's command somehow points at an MCP
+    # server that ALSO runs ``discover_sinks`` against the same
+    # ``.mcp.json`` (e.g., entraclaw listed as a stdio peer of
+    # itself), the child's discovery would spawn a grandchild, and so
+    # on. The caller-side self-referential filter is the primary
+    # defense; this env var short-circuits the child's own discovery
+    # as a second line, bounding worst-case spawn depth at 1.
+    env = {**os.environ, **env_overrides, DISABLE_ENV: "1"}
     params = StdioServerParameters(command=command, args=args, env=env)
 
     @contextlib.asynccontextmanager
@@ -409,6 +417,48 @@ async def _has_compatible_observe(session: Any) -> bool:
     return False
 
 
+def _is_self_referential_peer(peer: dict) -> bool:
+    """True if the peer's stdio command points back at *this* process.
+
+    Opening a stdio session to a peer whose command is our own entry
+    point spawns a child of ourselves. The child boots and runs its
+    own ``discover_sinks``, which spawns a grandchild, recursing until
+    every level's 5-second timeout fires. The April 2026 incident:
+    ~30 child ``entraclaw-mcp`` subprocesses per minute for 2h+,
+    silently dropping every Teams DM push in the process.
+
+    Matching is on resolved absolute paths. Non-stdio peers return
+    False immediately; stdio peers with no ``command`` field also
+    return False (the transport construction will fail elsewhere).
+    """
+    import sys
+
+    transport = (peer.get("type") or peer.get("transport") or "").lower()
+    if transport != "stdio":
+        return False
+    command = peer.get("command")
+    if not command:
+        return False
+    try:
+        peer_resolved = Path(command).resolve()
+    except (OSError, ValueError):
+        return False
+
+    candidates: list[str] = []
+    if sys.argv and sys.argv[0]:
+        candidates.append(sys.argv[0])
+    if sys.executable:
+        candidates.append(sys.executable)
+
+    for cand in candidates:
+        try:
+            if Path(cand).resolve() == peer_resolved:
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
 async def discover_sinks(config_path: Path | None = None) -> list[Sink]:
     """Enumerate peers and return those that expose a compatible observe.
 
@@ -428,6 +478,13 @@ async def discover_sinks(config_path: Path | None = None) -> list[Sink]:
 
     for peer in peers:
         name = peer["name"]
+        if _is_self_referential_peer(peer):
+            log.debug(
+                "efferent-copy: peer %s points at our own entry point; "
+                "skipping to avoid spawn cascade",
+                name,
+            )
+            continue
         factory = _build_sink_factory(peer)
         if factory is None:
             continue
