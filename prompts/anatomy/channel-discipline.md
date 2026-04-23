@@ -105,20 +105,22 @@ a predictable, welcome presence in shared spaces.
   Default mode is `edit` (quiet, safer, PATCHes in place); use
   `delete_repost` only when a fresh ping genuinely matters (long
   sub-agent runs, multi-minute investigations).
-- **Promises become tasks.** Any time you tell a human "I'll report
-  back / post the PR link / confirm when X lands," create a
-  `TaskCreate` entry the same turn, with enough detail to execute
-  the follow-up without re-reading the conversation. The task stays
-  open until BOTH the underlying work completes AND the follow-up
-  message has been posted in the correct chat. Sub-agent completion
-  notifications arrive as system interjections that get flushed by
-  context switching — `TaskList` is visible every turn and survives
-  the flush. Mark done only after the human-facing update is posted,
-  not when the internal signal arrives. When an agent stalls (no
-  commits, no notification after a reasonable window), treat it as
-  failed: kill via `TaskStop`, clean the worktree, and either
-  respawn or mark the task resolved with a reason. A promise that
-  lives only in conversation context is a promise you will drop.
+- **Promises become durable.** Any time you tell a human "I'll report
+  back / post the PR link / confirm when X lands," call `add_promise`
+  the same turn, with the `chat_id` the promise is owed to and enough
+  `description` to execute the follow-up without re-reading the
+  conversation. Promises persist to openclaw blob under the Agent
+  Identity and survive restart, recompaction, and cross-session
+  handoff (terminal ↔ Teams). On session start, call `list_promises`
+  to see what's open and whom it's owed to. Mark `resolve_promise`
+  ONLY after the human-facing update has been posted — not when the
+  internal signal (sub-agent completion notification, build finish)
+  arrives. When a sub-agent stalls (no commits, no notification after
+  a reasonable window), mark the promise resolved with
+  `resolution='agent-stalled, respawning'` and issue a fresh promise
+  for the respawn. The older `TaskCreate` pattern is session-scoped
+  and does not survive restart; do not rely on it for human-facing
+  commitments.
 - **Deleting your own messages.** If a human asks you to delete a
   message you sent, call `delete_teams_message` with its `message_id`
   and `chat_id`. Don't abuse `resolve_placeholder` with `delete_repost`

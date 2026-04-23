@@ -2816,6 +2816,236 @@ async def run_daily_summary(
     return json.dumps(result, indent=2)
 
 
+# ---------------------------------------------------------------------------
+# Outstanding-promise store (durable, identity-scoped; see tools/promises.py)
+# ---------------------------------------------------------------------------
+def _promise_audit_ids() -> tuple[str, str]:
+    """Resolve (agent_id, attribution_type) for audit rows."""
+    config = get_config()
+    if _identity:
+        agent_id = (
+            _identity.session.user_id or config.agent_id
+            or config.blueprint_app_id or "unknown"
+        )
+        attribution = _identity.session.attribution_type
+    else:
+        agent_id = config.agent_id or config.blueprint_app_id or "unknown"
+        attribution = "agent"
+    return agent_id, attribution
+
+
+@mcp.tool()
+async def add_promise(
+    chat_id: str,
+    description: str,
+    due_by: str = "",
+) -> str:
+    """Record an outstanding human-facing commitment — survives restart.
+
+    Use instead of ``TaskCreate`` for "I'll report back when X lands"
+    shaped commitments. Persisted to the openclaw blob under the Agent
+    Identity (``promises.jsonl``). Resolve via ``resolve_promise`` once
+    both the underlying work completes AND the human-facing follow-up
+    has been posted in the correct chat.
+
+    Args:
+        chat_id: The chat the promise is owed to. Use "terminal" for
+            terminal-driven work and "email" for email threads when
+            there's no Teams chat to tie it to.
+        description: Enough detail to execute the follow-up without
+            re-reading the conversation.
+        due_by: Optional ISO-8601 deadline. Empty string means no due date.
+
+    Returns:
+        JSON of the persisted Promise, or ``{"error": "..."}`` on
+        validation failure.
+    """
+    await _initialize()
+
+    if not chat_id:
+        return json.dumps({
+            "error": (
+                "chat_id is required — pass the target chat_id, or "
+                "'terminal' / 'email' for non-Teams promises."
+            )
+        })
+    if not description or not description.strip():
+        return json.dumps({
+            "error": "description is required — describe the follow-up."
+        })
+
+    from entraclaw.tools.audit import log_event
+    from entraclaw.tools.promises import add_promise as _add
+
+    agent_id, attribution = _promise_audit_ids()
+    log_event(
+        action="promise.add",
+        resource="new",
+        outcome="pending",
+        agent_id=agent_id,
+        metadata={"chat_id": chat_id, "has_due_by": bool(due_by)},
+        attribution_type=attribution,
+    )
+
+    await _ensure_valid_token()
+
+    async def _call(token: str) -> object:  # noqa: ARG001 — token unused
+        return await _add(
+            chat_id=chat_id,
+            description=description,
+            due_by=due_by or None,
+        )
+
+    promise = await _with_token_retry(_call)
+
+    _log_interaction_safe(
+        channel=detect_channel(chat_id if chat_id not in {"terminal", "email"}
+                               else None if chat_id == "terminal" else "email"),
+        direction="outbound",
+        sender="entraclaw-agent",
+        recipient=chat_id,
+        summary=f"promise: {description[:120]}",
+        action="promise.add",
+        content_ref=promise.id,
+        metadata={
+            "promise_id": promise.id,
+            "chat_id": chat_id,
+            "due_by": due_by or None,
+        },
+    )
+
+    return json.dumps(promise.to_entry(), indent=2)
+
+
+@mcp.tool()
+async def list_promises(open_only: bool = True) -> str:
+    """List outstanding promises for this Agent Identity.
+
+    Returns JSON array of ``{id, chat_id, description, created_at,
+    due_by, status, resolved_at, resolution}``. Default shows only open
+    promises. Call at session start to see what you owe whom. Reads do
+    not write an interaction-log entry — only mutations do.
+    """
+    await _initialize()
+
+    from entraclaw.tools.audit import log_event
+    from entraclaw.tools.promises import list_promises as _list
+
+    agent_id, attribution = _promise_audit_ids()
+    log_event(
+        action="promise.list",
+        resource="all",
+        outcome="pending",
+        agent_id=agent_id,
+        metadata={"open_only": open_only},
+        attribution_type=attribution,
+    )
+
+    await _ensure_valid_token()
+
+    async def _call(token: str) -> list:  # noqa: ARG001 — token unused
+        return await _list(open_only=open_only)
+
+    promises = await _with_token_retry(_call)
+    return json.dumps(
+        [p.to_entry() for p in promises], indent=2
+    )
+
+
+@mcp.tool()
+async def resolve_promise(promise_id: str, resolution: str) -> str:
+    """Mark a promise resolved.
+
+    Only call AFTER the human-facing update has been posted in the
+    correct chat — not when the internal signal (sub-agent completion,
+    build finish) arrives.
+
+    Args:
+        promise_id: The id returned by ``add_promise`` (also visible in
+            ``list_promises``).
+        resolution: One-line closure reason, e.g. "PR #42 merged, reply
+            posted to c1" or "agent-stalled, respawning".
+
+    Returns:
+        JSON of the resolved Promise, or ``{"error": "..."}`` on
+        validation / not-found failure.
+    """
+    await _initialize()
+
+    if not promise_id:
+        return json.dumps({
+            "error": "promise_id is required — get it from list_promises."
+        })
+    if not resolution or not resolution.strip():
+        return json.dumps({
+            "error": "resolution is required — one-line closure reason."
+        })
+
+    from entraclaw.tools.audit import log_event
+    from entraclaw.tools.promises import (
+        PromiseNotFound,
+    )
+    from entraclaw.tools.promises import (
+        resolve_promise as _resolve,
+    )
+
+    agent_id, attribution = _promise_audit_ids()
+    log_event(
+        action="promise.resolve",
+        resource=promise_id,
+        outcome="pending",
+        agent_id=agent_id,
+        metadata={},
+        attribution_type=attribution,
+    )
+
+    await _ensure_valid_token()
+
+    async def _call(token: str) -> object:  # noqa: ARG001 — token unused
+        return await _resolve(
+            promise_id=promise_id,
+            resolution=resolution,
+        )
+
+    try:
+        promise = await _with_token_retry(_call)
+    except PromiseNotFound:
+        _log_interaction_safe(
+            channel="terminal",
+            direction="outbound",
+            sender="entraclaw-agent",
+            recipient="self",
+            summary=f"resolve_promise: {promise_id} not found",
+            action="promise.resolve",
+            content_ref=promise_id,
+            metadata={"promise_id": promise_id, "outcome": "not_found"},
+        )
+        return json.dumps({
+            "error": f"promise not found: {promise_id}"
+        })
+
+    _log_interaction_safe(
+        channel=detect_channel(
+            promise.chat_id
+            if promise.chat_id not in {"terminal", "email"}
+            else None if promise.chat_id == "terminal" else "email"
+        ),
+        direction="outbound",
+        sender="entraclaw-agent",
+        recipient=promise.chat_id,
+        summary=f"resolved: {resolution[:120]}",
+        action="promise.resolve",
+        content_ref=promise_id,
+        metadata={
+            "promise_id": promise_id,
+            "chat_id": promise.chat_id,
+            "resolution": resolution,
+        },
+    )
+
+    return json.dumps(promise.to_entry(), indent=2)
+
+
 def main() -> None:
     """Entry point for ``entraclaw-mcp`` console script."""
     import anyio

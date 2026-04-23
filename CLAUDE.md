@@ -32,7 +32,8 @@
   - Mind content (personality, relationships, philosophy, running
     jokes) → `mcp__persona-sati__write_memory_file`.
   - Operational state (interactions, summaries, watched chats, email
-    cursor) → openclaw blob; written by the MCP server, not by you.
+    cursor, outstanding promises) → openclaw blob; written by the MCP
+    server, not by you.
   The local auto-memory directory is ephemeral and off by default;
   treat it as read-only unless the user explicitly enables it.
 

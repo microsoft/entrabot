@@ -2778,3 +2778,368 @@ def _safe_json(obj) -> str:
         return _json.dumps(obj)
     except Exception:
         return str(obj)
+
+
+# ---------------------------------------------------------------------------
+# Promise MCP wrappers: add_promise / list_promises / resolve_promise
+# ---------------------------------------------------------------------------
+
+
+class TestPromiseTools:
+    @pytest.mark.asyncio
+    async def test_add_promise_rejects_empty_chat_id(self, monkeypatch) -> None:
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        result = await mcp_server.add_promise(
+            chat_id="", description="something"
+        )
+        parsed = _json.loads(result)
+        assert "error" in parsed
+        assert "chat_id" in parsed["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_add_promise_rejects_empty_description(
+        self, monkeypatch
+    ) -> None:
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        result = await mcp_server.add_promise(
+            chat_id="c1", description="   "
+        )
+        parsed = _json.loads(result)
+        assert "error" in parsed
+        assert "description" in parsed["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_add_promise_audits_before_blob_call(
+        self, monkeypatch
+    ) -> None:
+        """Audit event must land before the blob write (fail-closed)."""
+        from entraclaw import mcp_server
+
+        audit_events: list[dict] = []
+
+        def fake_log_event(**kwargs):
+            audit_events.append(kwargs)
+            return {"event_id": "evt-1", **kwargs}
+
+        monkeypatch.setattr(
+            "entraclaw.tools.audit.log_event", fake_log_event
+        )
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_log_interaction_safe", lambda **kw: None
+        )
+
+        blob_called = False
+
+        async def fake_retry(fn, **kwargs):
+            nonlocal blob_called
+            assert audit_events, (
+                "audit event must be written before the blob write"
+            )
+            blob_called = True
+            from entraclaw.tools.promises import Promise
+
+            return Promise(
+                id="abc123",
+                created_at="2026-04-20T00:00:00+00:00",
+                chat_id=kwargs.get("chat_id", ""),
+                description=kwargs.get("description", ""),
+            )
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+        await mcp_server.add_promise(
+            chat_id="c1", description="announce PR landing"
+        )
+        assert blob_called
+        assert audit_events[0]["action"] == "promise.add"
+        assert audit_events[0]["outcome"] == "pending"
+
+    @pytest.mark.asyncio
+    async def test_add_promise_writes_interaction_log_on_success(
+        self, monkeypatch
+    ) -> None:
+        from entraclaw import mcp_server
+
+        captured: dict = {}
+
+        def fake_log(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr(mcp_server, "_log_interaction_safe", fake_log)
+        monkeypatch.setattr(
+            "entraclaw.tools.audit.log_event",
+            lambda **kw: {"event_id": "evt-x"},
+        )
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+
+        from entraclaw.tools.promises import Promise
+
+        async def fake_retry(fn, **kwargs):
+            return Promise(
+                id="abc123",
+                created_at="2026-04-20T00:00:00+00:00",
+                chat_id="c1",
+                description="announce PR",
+            )
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+        await mcp_server.add_promise(chat_id="c1", description="announce PR")
+        assert captured["action"] == "promise.add"
+        assert captured["direction"] == "outbound"
+
+    @pytest.mark.asyncio
+    async def test_list_promises_returns_json_array(self, monkeypatch) -> None:
+        import json as _json
+
+        from entraclaw import mcp_server
+        from entraclaw.tools.promises import Promise
+
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            "entraclaw.tools.audit.log_event",
+            lambda **kw: {"event_id": "evt-x"},
+        )
+
+        promises_out = [
+            Promise(
+                id="p1",
+                created_at="2026-04-20T00:00:00+00:00",
+                chat_id="c1",
+                description="one",
+            ),
+            Promise(
+                id="p2",
+                created_at="2026-04-20T00:01:00+00:00",
+                chat_id="c2",
+                description="two",
+            ),
+        ]
+
+        async def fake_retry(fn, **kwargs):
+            return promises_out
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+        result = await mcp_server.list_promises()
+        parsed = _json.loads(result)
+        assert isinstance(parsed, list)
+        assert len(parsed) == 2
+        assert {p["id"] for p in parsed} == {"p1", "p2"}
+
+    @pytest.mark.asyncio
+    async def test_list_promises_does_not_write_interaction_log(
+        self, monkeypatch
+    ) -> None:
+        """Reads are not logged — mutations are."""
+        from entraclaw import mcp_server
+
+        calls: list[dict] = []
+
+        def fake_log(**kwargs):
+            calls.append(kwargs)
+
+        monkeypatch.setattr(mcp_server, "_log_interaction_safe", fake_log)
+        monkeypatch.setattr(
+            "entraclaw.tools.audit.log_event",
+            lambda **kw: {"event_id": "evt-x"},
+        )
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+
+        async def fake_retry(fn, **kwargs):
+            return []
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+        await mcp_server.list_promises()
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_resolve_promise_rejects_empty_id(self, monkeypatch) -> None:
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        result = await mcp_server.resolve_promise(
+            promise_id="", resolution="done"
+        )
+        parsed = _json.loads(result)
+        assert "error" in parsed
+        assert "promise_id" in parsed["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_resolve_promise_rejects_empty_resolution(
+        self, monkeypatch
+    ) -> None:
+        import json as _json
+
+        from entraclaw import mcp_server
+
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        result = await mcp_server.resolve_promise(
+            promise_id="abc", resolution=""
+        )
+        parsed = _json.loads(result)
+        assert "error" in parsed
+        assert "resolution" in parsed["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_resolve_promise_propagates_not_found_as_error(
+        self, monkeypatch
+    ) -> None:
+        import json as _json
+
+        from entraclaw import mcp_server
+        from entraclaw.tools.promises import PromiseNotFound
+
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_log_interaction_safe", lambda **kw: None
+        )
+        monkeypatch.setattr(
+            "entraclaw.tools.audit.log_event",
+            lambda **kw: {"event_id": "evt-x"},
+        )
+
+        async def fake_retry(fn, **kwargs):
+            raise PromiseNotFound("abc")
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+        result = await mcp_server.resolve_promise(
+            promise_id="abc", resolution="done"
+        )
+        parsed = _json.loads(result)
+        assert "error" in parsed
+        assert "not found" in parsed["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_round_trip_add_list_resolve_list(self, monkeypatch) -> None:
+        """End-to-end with a real in-memory backend wired through.
+
+        Patches ``get_backend`` so the MCP wrappers hit the same backend
+        the promises module does.
+        """
+        import json as _json
+
+        from entraclaw import mcp_server
+        from entraclaw.tools import promises as promises_mod
+
+        class InMem:
+            def __init__(self) -> None:
+                self._store: dict[str, str] = {}
+
+            def read_text(self, key):
+                return self._store.get(key)
+
+            def write_text(self, key, content):
+                self._store[key] = content
+
+            def append_text(self, key, content):
+                self._store[key] = (self._store.get(key) or "") + content
+
+            def exists(self, key):
+                return key in self._store
+
+            def list(self, prefix=""):
+                return [k for k in self._store if k.startswith(prefix)]
+
+        shared = InMem()
+        monkeypatch.setattr(
+            promises_mod, "get_backend", lambda: shared
+        )
+        monkeypatch.setattr(
+            promises_mod, "_get_conditional_store", lambda: None
+        )
+        monkeypatch.setattr(
+            mcp_server, "_initialize", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+        )
+        monkeypatch.setattr(
+            mcp_server, "_log_interaction_safe", lambda **kw: None
+        )
+        monkeypatch.setattr(
+            "entraclaw.tools.audit.log_event",
+            lambda **kw: {"event_id": "evt-x"},
+        )
+
+        # Pass-through retry: call the underlying promises helper directly.
+        # Real _with_token_retry supplies ``token=...``; our wrappers
+        # accept it and ignore it, so forward as-is.
+        async def fake_retry(fn, **kwargs):
+            kwargs.setdefault("token", "stub-token")
+            return await fn(**kwargs)
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+        add_out = await mcp_server.add_promise(
+            chat_id="c1", description="announce PR"
+        )
+        add_parsed = _json.loads(add_out)
+        promise_id = add_parsed["id"]
+
+        list_out = await mcp_server.list_promises()
+        open_list = _json.loads(list_out)
+        assert len(open_list) == 1
+        assert open_list[0]["id"] == promise_id
+
+        resolve_out = await mcp_server.resolve_promise(
+            promise_id=promise_id, resolution="merged"
+        )
+        resolved = _json.loads(resolve_out)
+        assert resolved["status"] == "resolved"
+        assert resolved["resolution"] == "merged"
+
+        list_all = _json.loads(
+            await mcp_server.list_promises(open_only=False)
+        )
+        assert len(list_all) == 1
+        assert list_all[0]["status"] == "resolved"
+
+        list_open = _json.loads(await mcp_server.list_promises())
+        assert list_open == []
