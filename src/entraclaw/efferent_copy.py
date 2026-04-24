@@ -417,6 +417,50 @@ async def _has_compatible_observe(session: Any) -> bool:
     return False
 
 
+SELF_REF_MARKER = "# entraclaw-self-ref-target:"
+SELF_REF_MAX_BYTES = 16 * 1024
+
+
+def _wrapper_self_ref_target(script_path: Path) -> Path | None:
+    """If ``script_path`` is a wrapper that declares its exec target via a
+    ``# entraclaw-self-ref-target: <path>`` comment, return the resolved
+    target path. Returns None for non-wrappers, missing markers, missing
+    files, or unreadable content.
+
+    The marker is opt-in. Arbitrary shell scripts (which may build their
+    target via ``$(cd ... && pwd)`` or other dynamic expressions) are not
+    parsed — that path is fragile and silently breaks. The marker is the
+    wrapper saying "the binary I exec into is at this path." Path resolves
+    relative to the script's own directory if not absolute.
+
+    Bounded reads: see ``SELF_REF_MAX_BYTES``. Wrappers are short shell
+    scripts; anything larger is presumed to be a real program, not a
+    wrapper, and is ignored.
+    """
+    try:
+        if script_path.stat().st_size > SELF_REF_MAX_BYTES:
+            return None
+        text = script_path.read_text(errors="replace")
+    except OSError:
+        return None
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(SELF_REF_MARKER):
+            continue
+        target = stripped[len(SELF_REF_MARKER):].strip()
+        if not target:
+            return None
+        target_path = Path(target)
+        if not target_path.is_absolute():
+            target_path = script_path.parent / target_path
+        try:
+            return target_path.resolve()
+        except (OSError, ValueError):
+            return None
+    return None
+
+
 def _is_self_referential_peer(peer: dict) -> bool:
     """True if the peer's stdio command points back at *this* process.
 
@@ -427,9 +471,17 @@ def _is_self_referential_peer(peer: dict) -> bool:
     ~30 child ``entraclaw-mcp`` subprocesses per minute for 2h+,
     silently dropping every Teams DM push in the process.
 
-    Matching is on resolved absolute paths. Non-stdio peers return
-    False immediately; stdio peers with no ``command`` field also
-    return False (the transport construction will fail elsewhere).
+    Matching is on resolved absolute paths against ``sys.argv[0]`` and
+    ``sys.executable``. Wrapper scripts that exec into the running
+    binary are also detected when they include a
+    ``# entraclaw-self-ref-target: <path>`` marker — see
+    ``_wrapper_self_ref_target``. The April 2026 sequel (Learning #45):
+    swapping ``.mcp.json``'s command to a stderr-capture wrapper
+    bypassed the path-only check and reintroduced the cascade.
+
+    Non-stdio peers return False immediately; stdio peers with no
+    ``command`` field also return False (the transport construction
+    will fail elsewhere).
     """
     import sys
 
@@ -450,12 +502,26 @@ def _is_self_referential_peer(peer: dict) -> bool:
     if sys.executable:
         candidates.append(sys.executable)
 
-    for cand in candidates:
-        try:
-            if Path(cand).resolve() == peer_resolved:
-                return True
-        except (OSError, ValueError):
-            continue
+    def _matches_running(path: Path) -> bool:
+        for cand in candidates:
+            try:
+                if Path(cand).resolve() == path:
+                    return True
+            except (OSError, ValueError):
+                continue
+        return False
+
+    if _matches_running(peer_resolved):
+        return True
+
+    # Wrapper detection: thin shell wrappers (e.g., debug stderr capture
+    # at scripts/entraclaw-mcp-debug.sh) may exec into the running binary.
+    # The wrapper opts in to detection by including the marker comment.
+    if peer_resolved.is_file():
+        wrapper_target = _wrapper_self_ref_target(peer_resolved)
+        if wrapper_target is not None and _matches_running(wrapper_target):
+            return True
+
     return False
 
 

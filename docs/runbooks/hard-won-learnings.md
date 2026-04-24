@@ -382,6 +382,40 @@ Append-only log of gotchas, surprises, and non-obvious behaviors discovered duri
 
 ---
 
+### Learning #45: Wrapper Scripts Bypass `_is_self_referential_peer` and Reintroduce the Self-Spawn Cascade
+
+**Date:** 2026-04-24
+**Status:** **CONFIRMED — root cause for the Apr 24 BrokenPipeError storm; wrapper-marker fix shipped in this PR.**
+**Context:** While debugging the morning's MCP-disconnect symptom, the entraclaw stderr was redirected through `scripts/entraclaw-mcp-debug.sh` (a thin wrapper that tees stderr to `/tmp/entraclaw-debug.log` then `exec`s `.venv/bin/entraclaw-mcp`). `.mcp.json`'s `command` was changed from `.venv/bin/entraclaw-mcp` to the wrapper for the duration of the debug session.
+**Problem:** Every entraclaw boot started spawning a duplicate entraclaw-mcp ~2 seconds in, with the duplicate dying ~5 seconds later via `BrokenPipeError: [Errno 32] Broken pipe` on `stdout.flush()` inside `mcp/server/stdio.py::stdout_writer`. Wrapper-start markers in `/tmp/entraclaw-debug.log` consistently appeared in pairs ("twin spawn"). Each boot pair did 2× the API work — two three-hop token acquisitions, two Teams chat registrations, two background polling loops, two persona-sati prompt fetches — burning login.microsoftonline.com round-trips and Graph API calls pointlessly. A fresh Claude Code session boot today produced four wrapper starts in 19 seconds.
+**Root cause:** This is the same self-spawn cascade originally fixed by PR #36 / commit `8a00939` ("kill efferent-copy self-spawn cascade"), reintroduced by changing the peer command. `_is_self_referential_peer` resolved the peer's `command` (the wrapper script path) and compared it against `sys.argv[0]` (the Python entry point at `.venv/bin/entraclaw-mcp`). The wrapper script's resolved path did not match the running binary, so the check returned False, the peer was NOT skipped, and `discover_sinks` opened a stdio_client to it — spawning a child entraclaw-mcp via the wrapper. The child completed its full init (prompt load, three-hop, polls), responded to `tools/list`, parent saw no `observe` tool, parent tore down the stdio_client → child's stdout closed → BrokenPipeError. Confirmed reproduction:
+
+```python
+sys.argv = ["/.../.venv/bin/entraclaw-mcp"]
+peer_wrapper = {"type": "stdio", "command": "/.../scripts/entraclaw-mcp-debug.sh"}
+peer_direct  = {"type": "stdio", "command": "/.../.venv/bin/entraclaw-mcp"}
+_is_self_referential_peer(peer_wrapper)  # False — bypasses the check
+_is_self_referential_peer(peer_direct)   # True  — correctly skipped
+```
+
+The April 22 fix (commit `8a00939`) addressed direct self-reference (peer command = our entry point). It did not anticipate wrapper indirection. PR #36's `EFFERENT_COPY_DISABLE=1`-in-child-env belt prevented infinite recursion (only 1 cascade level instead of N), so the bug presented as "double init" rather than "subprocess explosion" — quieter symptom, longer time to detection.
+**Investigation done:**
+1. Read `/tmp/entraclaw-debug.log` (the wrapper's output) — first explicit traceback found across all today's drops: `Exception Group → mcp/server/stdio.py:81 in stdout_writer → BrokenPipeError on stdout.flush()`.
+2. Counted wrapper-start markers: 14 in 6.5 hours, all in pairs 2-3s apart. New session at 11:25 PDT produced 4 starts in 19 seconds.
+3. Verified rename was NOT the cause (Brandon's initial hypothesis): `pyvenv.cfg`, `.pth` files, and `.venv/bin/entraclaw-mcp` shebang all clean per Learning #44; `python3 -c "from entraclaw import config; print(config.__file__)"` resolves to the parent src tree (no Learning #36 contamination).
+4. Confirmed propagate=False fix from PR #40 is active in the running code (no rich-format duplication of entraclaw events; only httpx/msal still go through root's RichHandler).
+5. Ran `_is_self_referential_peer` in a Python repl with the wrapper command — returned False, confirming the check bypass.
+6. Counted log doubling pattern: every entraclaw event line appeared twice with identical microsecond timestamps (two processes writing to the same `/tmp/entraclaw-debug.log` via separate `tee` instances spawned by separate wrapper invocations).
+**Fix (this PR):**
+1. **Hot fix (applied immediately):** Reverted `.mcp.json` command from `scripts/entraclaw-mcp-debug.sh` back to `.venv/bin/entraclaw-mcp`. Stops the cascade. Cost: lose stderr capture.
+2. **Durable fix (this PR):** Extended `_is_self_referential_peer` to detect wrapper scripts via an opt-in marker comment. Wrappers add `# entraclaw-self-ref-target: <path>` (path resolved relative to script's directory). The check reads up to 16KB of the script, looks for the marker line, and compares the declared target against `sys.argv[0]` / `sys.executable`. Matching wrappers are skipped at factory-build time, never reaching `stdio_client`. Arbitrary shell parsing is explicitly avoided — wrappers using `$(cd ... && pwd)` or other dynamic targets are too fragile to parse, so the marker is the wrapper telling us where it execs.
+3. Updated `scripts/entraclaw-mcp-debug.sh` to include the marker. The wrapper can now be safely activated in `.mcp.json` without re-triggering the cascade.
+
+**Prevention (for next time):** (1) When changing `.mcp.json`'s `command` for any peer that is or wraps the running MCP server, verify `_is_self_referential_peer` still detects the new command — easiest test is the repl snippet above. (2) `_is_self_referential_peer` is the ONLY guard against the cascade; treat it as a security-relevant invariant and write a test for any new wrapper variant before deploying. (3) Wrappers should always include the marker if they exec into a known MCP entry point. (4) Stderr capture is valuable but cheap — prefer wrappers that declare their target via the marker over wrappers that build the target dynamically. (5) When the symptom is "MCP keeps disconnecting" and the wrapper change is recent, suspect this regression first; check for paired wrapper-start timestamps (the twin-spawn signature) and `BrokenPipeError` in the captured stderr. (6) Track twin-spawn as a metric — `grep -c "wrapper start" /tmp/entraclaw-debug.log` over a known window should equal the number of Claude Code MCP reconnects (one wrapper per reconnect), not 2× that.
+**Evidence/references:** `/tmp/entraclaw-debug.log` lines 8891-8942 (the BrokenPipeError traceback); commit `8a00939` (the original self-spawn cascade fix); commit `9c74cd1` (PR #40 — adjacent change but unrelated to this regression); `tests/test_efferent_copy.py` `TestDiscoverSinks::test_wrapper_with_self_ref_marker_is_skipped` and the two unit tests for `_is_self_referential_peer` wrapper-marker behavior.
+
+---
+
 ## Historical Learnings
 
 ### [HISTORICAL] Learning #4: OBO Requires Matching Token Audience
