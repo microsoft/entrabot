@@ -34,7 +34,7 @@ nav:
     - System Overview: architecture/system-overview.md
     - Enforcement Flow: architecture/enforcement-flow.md
     - Bot Gateway Design: architecture/DESIGN-teams-bot-gateway.md
-    - "Four-Pager: Teams Augmented Token": architecture/FOURPAGER-openclaw-cli-teams-augmented-token.md
+    - "Four-Pager: Teams Augmented Token": architecture/FOURPAGER-entraclaw-cli-teams-augmented-token.md
     - Multi-Tenant Lightweight Chat: architecture/PLAN-multi-tenant-lightweight-chat.md
     - Dual-Track Agent Identity: architecture/SPEC-dual-track-agent-identity.md
     - Lightweight Teams Chat: architecture/NEXT-WhatsApp-lightweight-teams-chat.md

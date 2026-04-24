@@ -43,7 +43,7 @@ class TestWhoami:
 
     @pytest.mark.asyncio
     async def test_defaults_when_not_configured(self) -> None:
-        # Remove all Openclaw env vars
+        # Remove all Entraclaw env vars
         cleaned = {k: v for k, v in os.environ.items() if not k.startswith("ENTRACLAW_")}
         with patch.dict(os.environ, cleaned, clear=True):
             result = await whoami()

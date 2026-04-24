@@ -80,13 +80,13 @@ The service lives at bus name `org.freedesktop.secrets` with objects under `/org
 
 ```bash
 # Store a secret
-secret-tool store --label="Openclaw Agent Token" service openclaw account agent-001
+secret-tool store --label="Entraclaw Agent Token" service entraclaw account agent-001
 
 # Lookup a secret
-secret-tool lookup service openclaw account agent-001
+secret-tool lookup service entraclaw account agent-001
 
 # Clear a secret
-secret-tool clear service openclaw account agent-001
+secret-tool clear service entraclaw account agent-001
 ```
 
 ### Python Access via `secretstorage`
@@ -108,12 +108,12 @@ if collection.is_locked():
 
 # Store a credential
 attributes = {
-    'application': 'openclaw',
+    'application': 'entraclaw',
     'agent_id': 'agent-001',
     'credential_type': 'oauth_token'
 }
 collection.create_item(
-    label='Openclaw Agent Token',
+    label='Entraclaw Agent Token',
     attributes=attributes,
     secret=b'eyJhbGciOiJSUzI1NiIs...',
     replace=True  # update if exists
@@ -121,7 +121,7 @@ collection.create_item(
 
 # Retrieve a credential
 items = list(collection.search_items({
-    'application': 'openclaw',
+    'application': 'entraclaw',
     'agent_id': 'agent-001'
 }))
 if items:
@@ -147,13 +147,13 @@ The [`keyring`](https://pypi.org/project/keyring/) library provides a cross-plat
 import keyring
 
 # Store — maps to SecretService on Linux
-keyring.set_password("openclaw", "agent-001", "eyJhbGciOiJSUzI1NiIs...")
+keyring.set_password("entraclaw", "agent-001", "eyJhbGciOiJSUzI1NiIs...")
 
 # Retrieve
-token = keyring.get_password("openclaw", "agent-001")
+token = keyring.get_password("entraclaw", "agent-001")
 
 # Delete
-keyring.delete_password("openclaw", "agent-001")
+keyring.delete_password("entraclaw", "agent-001")
 
 # Check which backend is active
 print(keyring.get_keyring())
@@ -211,7 +211,7 @@ The Linux kernel has a built-in [Key Retention Service](https://docs.kernel.org/
 
 ```bash
 # Add a key to the user keyring
-keyctl add user openclaw-token "my-secret-token" @u
+keyctl add user entraclaw-token "my-secret-token" @u
 
 # List the user keyring
 keyctl list @u
@@ -240,7 +240,7 @@ import keyutils
 # Add a key to the session keyring
 key_id = keyutils.add_key(
     'user',                              # key type
-    'openclaw:agent-001:token',          # description (acts as key name)
+    'entraclaw:agent-001:token',          # description (acts as key name)
     b'eyJhbGciOiJSUzI1NiIs...',          # payload
     keyutils.KEY_SPEC_USER_KEYRING       # destination keyring (@u)
 )
@@ -256,7 +256,7 @@ keyutils.set_timeout(key_id, 3600)
 found_id = keyutils.search(
     keyutils.KEY_SPEC_USER_KEYRING,
     'user',
-    'openclaw:agent-001:token'
+    'entraclaw:agent-001:token'
 )
 ```
 
@@ -307,7 +307,7 @@ def kernel_keyring_read(name: str, keyring: str = "@u") -> str:
 | **Max payload** | ~32KB (`user`), larger with `big_key` | Unlimited |
 | **Attack surface** | Kernel memory (swap-protected) | User-space daemon memory |
 
-**Recommendation for Openclaw:** Use kernel keyring for **short-lived session tokens** (OAuth access tokens with TTL). Use Secret Service for **long-lived credentials** (refresh tokens, Agent ID keys) that must survive reboots.
+**Recommendation for Entraclaw:** Use kernel keyring for **short-lived session tokens** (OAuth access tokens with TTL). Use Secret Service for **long-lived credentials** (refresh tokens, Agent ID keys) that must survive reboots.
 
 ---
 
@@ -315,7 +315,7 @@ def kernel_keyring_read(name: str, keyring: str = "@u") -> str:
 
 ### Why systemd User Services
 
-For running Openclaw as a **user-level background agent** (no root required), systemd user services are the standard mechanism. They provide:
+For running Entraclaw as a **user-level background agent** (no root required), systemd user services are the standard mechanism. They provide:
 
 - Process lifecycle management (start, stop, restart on failure)
 - Logging via `journald`
@@ -328,22 +328,22 @@ For running Openclaw as a **user-level background agent** (no root required), sy
 ### Service File Location
 
 ```
-~/.config/systemd/user/openclaw-agent.service
+~/.config/systemd/user/entraclaw-agent.service
 ```
 
 ### Full Service File Example
 
 ```ini
 [Unit]
-Description=Openclaw Autonomous Agent
-Documentation=https://openclaw.dev/docs
+Description=Entraclaw Autonomous Agent
+Documentation=https://entraclaw.dev/docs
 # Ensure D-Bus session is available (needed for Secret Service access)
 Wants=dbus.socket
 After=dbus.socket
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 -m openclaw.agent --config %h/.config/openclaw/agent.toml
+ExecStart=/usr/bin/python3 -m entraclaw.agent --config %h/.config/entraclaw/agent.toml
 ExecReload=/bin/kill -HUP $MAINPID
 
 # Restart policy
@@ -355,8 +355,8 @@ StartLimitBurst=5
 
 # Environment
 Environment=PYTHONUNBUFFERED=1
-Environment=OPENCLAW_LOG_LEVEL=info
-EnvironmentFile=-%h/.config/openclaw/env
+Environment=ENTRACLAW_LOG_LEVEL=info
+EnvironmentFile=-%h/.config/entraclaw/env
 
 # Working directory
 WorkingDirectory=%h
@@ -364,13 +364,13 @@ WorkingDirectory=%h
 # Logging — all stdout/stderr goes to journal
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=openclaw-agent
+SyslogIdentifier=entraclaw-agent
 
 # Security hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/.local/share/openclaw %h/.cache/openclaw
+ReadWritePaths=%h/.local/share/entraclaw %h/.cache/entraclaw
 PrivateTmp=yes
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
@@ -384,8 +384,8 @@ CPUQuota=50%
 TasksMax=64
 
 # Credential injection (systemd v250+)
-# LoadCredential=agent-key:%h/.config/openclaw/agent-key.cred
-# LoadCredentialEncrypted=api-token:/etc/openclaw/api-token.cred
+# LoadCredential=agent-key:%h/.config/entraclaw/agent-key.cred
+# LoadCredentialEncrypted=api-token:/etc/entraclaw/api-token.cred
 
 [Install]
 WantedBy=default.target
@@ -398,17 +398,17 @@ WantedBy=default.target
 systemctl --user daemon-reload
 
 # Enable (auto-start) and start
-systemctl --user enable --now openclaw-agent.service
+systemctl --user enable --now entraclaw-agent.service
 
 # Status, logs, restart
-systemctl --user status openclaw-agent
-journalctl --user -u openclaw-agent -f          # follow logs
-journalctl --user -u openclaw-agent --since today
-systemctl --user restart openclaw-agent
+systemctl --user status entraclaw-agent
+journalctl --user -u entraclaw-agent -f          # follow logs
+journalctl --user -u entraclaw-agent --since today
+systemctl --user restart entraclaw-agent
 
 # Stop and disable
-systemctl --user stop openclaw-agent
-systemctl --user disable openclaw-agent
+systemctl --user stop entraclaw-agent
+systemctl --user disable entraclaw-agent
 ```
 
 ### Lingering (Run Without Login Session)
@@ -480,7 +480,7 @@ systemd-cgtop
 cat /proc/<pid>/cgroup
 
 # systemd tracks: PID, cgroup, start time, invocation ID
-systemctl --user show openclaw-agent --property=MainPID,InvocationID
+systemctl --user show entraclaw-agent --property=MainPID,InvocationID
 ```
 
 Each service invocation gets a unique **InvocationID** (UUID), useful for audit correlation:
@@ -500,7 +500,7 @@ Environment=INVOCATION_ID=%i
 
 ### PAM Module Types
 
-| Type | Purpose | Relevant for Openclaw? |
+| Type | Purpose | Relevant for Entraclaw? |
 |------|---------|----------------------|
 | `auth` | Verify identity (password, biometric, token) | Maybe — could verify agent identity |
 | `account` | Access restrictions (time, group, etc.) | Maybe — could restrict which agents can run |
@@ -509,7 +509,7 @@ Environment=INVOCATION_ID=%i
 
 ### PAM for GNOME Keyring Unlock
 
-The most relevant PAM use for Openclaw is **auto-unlocking the keyring at login** so the agent can access stored credentials without GUI prompts:
+The most relevant PAM use for Entraclaw is **auto-unlocking the keyring at login** so the agent can access stored credentials without GUI prompts:
 
 ```
 # /etc/pam.d/login (and /etc/pam.d/sshd)
@@ -529,7 +529,7 @@ This passes the login password to `gnome-keyring-daemon` to unlock the "login" k
 
 | Aspect | Assessment |
 |--------|-----------|
-| **Mechanism** | A custom PAM module (`pam_openclaw.so`) could intercept auth and present consent prompts |
+| **Mechanism** | A custom PAM module (`pam_entraclaw.so`) could intercept auth and present consent prompts |
 | **Implementation** | Requires writing a C shared library implementing `pam_sm_authenticate` |
 | **Conversation API** | PAM provides `pam_conv` for user prompts — supports `PAM_PROMPT_ECHO_ON`, `PAM_TEXT_INFO`, etc. |
 | **Problem 1** | PAM is designed for **login flows**, not arbitrary application consent |
@@ -550,7 +550,7 @@ PAM_EXTERN int pam_sm_authenticate(
 ) {
     struct pam_conv *conv;
     struct pam_message msg = { PAM_PROMPT_ECHO_ON,
-        "Openclaw agent requests access. Approve? (yes/no): " };
+        "Entraclaw agent requests access. Approve? (yes/no): " };
     const struct pam_message *msgp = &msg;
     struct pam_response *resp = NULL;
 
@@ -578,7 +578,7 @@ PAM_EXTERN int pam_sm_authenticate(
 
 ```
 ┌──────────────────┐     ┌──────────────────┐
-│  Openclaw Agent   │     │  User (Desktop)   │
+│  Entraclaw Agent   │     │  User (Desktop)   │
 │  (unprivileged)   │     │                   │
 └────────┬─────────┘     └────────┬──────────┘
          │ D-Bus                  │
@@ -599,9 +599,9 @@ PAM_EXTERN int pam_sm_authenticate(
          └──────────────────────┘
 ```
 
-### Creating a Custom polkit Policy for Openclaw
+### Creating a Custom polkit Policy for Entraclaw
 
-**Step 1: Define the action** — `/usr/share/polkit-1/actions/dev.openclaw.agent.policy`
+**Step 1: Define the action** — `/usr/share/polkit-1/actions/dev.entraclaw.agent.policy`
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -610,12 +610,12 @@ PAM_EXTERN int pam_sm_authenticate(
  "https://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <policyconfig>
 
-  <vendor>Openclaw</vendor>
-  <vendor_url>https://openclaw.dev</vendor_url>
+  <vendor>Entraclaw</vendor>
+  <vendor_url>https://entraclaw.dev</vendor_url>
 
-  <action id="dev.openclaw.agent.authorize-action">
-    <description>Allow Openclaw agent to perform an action on your behalf</description>
-    <message>Openclaw agent "$(agent_id)" wants to: $(action_description)</message>
+  <action id="dev.entraclaw.agent.authorize-action">
+    <description>Allow Entraclaw agent to perform an action on your behalf</description>
+    <message>Entraclaw agent "$(agent_id)" wants to: $(action_description)</message>
     <defaults>
       <allow_any>auth_admin</allow_any>
       <allow_inactive>auth_admin</allow_inactive>
@@ -624,9 +624,9 @@ PAM_EXTERN int pam_sm_authenticate(
     <annotate key="org.freedesktop.policykit.owner">unix-user:$(uid)</annotate>
   </action>
 
-  <action id="dev.openclaw.agent.manage-credentials">
-    <description>Allow Openclaw to manage stored credentials</description>
-    <message>Openclaw wants to access stored credentials for agent "$(agent_id)"</message>
+  <action id="dev.entraclaw.agent.manage-credentials">
+    <description>Allow Entraclaw to manage stored credentials</description>
+    <message>Entraclaw wants to access stored credentials for agent "$(agent_id)"</message>
     <defaults>
       <allow_any>no</allow_any>
       <allow_inactive>auth_admin</allow_inactive>
@@ -646,14 +646,14 @@ PAM_EXTERN int pam_sm_authenticate(
 | `auth_admin` | User must authenticate as an admin |
 | `auth_self_keep` | Like `auth_self` but caches for a short time |
 
-**Step 2: Custom rules** — `/etc/polkit-1/rules.d/50-openclaw.rules`
+**Step 2: Custom rules** — `/etc/polkit-1/rules.d/50-entraclaw.rules`
 
 ```javascript
-// Allow members of 'openclaw-agents' group to manage credentials
+// Allow members of 'entraclaw-agents' group to manage credentials
 // without repeated authentication prompts
 polkit.addRule(function(action, subject) {
-    if (action.id.indexOf("dev.openclaw.agent.") === 0 &&
-        subject.isInGroup("openclaw-agents")) {
+    if (action.id.indexOf("dev.entraclaw.agent.") === 0 &&
+        subject.isInGroup("entraclaw-agents")) {
         // Cache auth for 5 minutes
         return polkit.Result.AUTH_SELF_KEEP;
     }
@@ -661,7 +661,7 @@ polkit.addRule(function(action, subject) {
 
 // Auto-approve low-risk actions for the agent's own user
 polkit.addRule(function(action, subject) {
-    if (action.id === "dev.openclaw.agent.authorize-action" &&
+    if (action.id === "dev.entraclaw.agent.authorize-action" &&
         subject.user === action.lookup("agent_owner")) {
         return polkit.Result.YES;
     }
@@ -703,7 +703,7 @@ def check_polkit_authorization(action_id: str, details: dict = None) -> bool:
 
 
 # Usage
-if check_polkit_authorization('dev.openclaw.agent.authorize-action',
+if check_polkit_authorization('dev.entraclaw.agent.authorize-action',
                                {'agent_id': 'agent-001',
                                 'action_description': 'send email'}):
     print("Authorized — proceeding")
@@ -728,7 +728,7 @@ polkit requires a running **authentication agent** to present prompts:
 pkttyagent --notify-fd 5 --fallback &
 ```
 
-### Consent UX for Openclaw
+### Consent UX for Entraclaw
 
 polkit is the **recommended mechanism** for agent consent prompts because:
 1. It's designed for exactly this purpose (authorization decisions)
@@ -741,7 +741,7 @@ polkit is the **recommended mechanism** for agent consent prompts because:
 
 ## Integration Patterns
 
-### Recommended Architecture for Openclaw on Linux
+### Recommended Architecture for Entraclaw on Linux
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -751,7 +751,7 @@ polkit is the **recommended mechanism** for agent consent prompts because:
 │  │  systemd --user                                    │   │
 │  │                                                    │   │
 │  │  ┌────────────────────────────────────┐           │   │
-│  │  │  openclaw-agent.service             │           │   │
+│  │  │  entraclaw-agent.service             │           │   │
 │  │  │                                     │           │   │
 │  │  │  ┌─────────────────────────┐       │           │   │
 │  │  │  │  Credential Layer        │       │           │   │
@@ -769,7 +769,7 @@ polkit is the **recommended mechanism** for agent consent prompts because:
 │  └──────────────────────────────────────────────────┘   │
 │                                                           │
 │  cgroup: user.slice/user-1000.slice/user@1000.service/    │
-│          app.slice/openclaw-agent.service                  │
+│          app.slice/entraclaw-agent.service                  │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -777,7 +777,7 @@ polkit is the **recommended mechanism** for agent consent prompts because:
 
 ```python
 """
-Credential storage strategy for Openclaw on Linux.
+Credential storage strategy for Entraclaw on Linux.
 Adapts to available backends with graceful fallback.
 """
 import os
@@ -788,7 +788,7 @@ from typing import Optional
 class LinuxCredentialStore:
     """Multi-tier credential storage with fallback."""
 
-    def __init__(self, app_id: str = "openclaw"):
+    def __init__(self, app_id: str = "entraclaw"):
         self.app_id = app_id
         self._backend = self._detect_backend()
 
@@ -852,7 +852,7 @@ class LinuxCredentialStore:
         if collection.is_locked():
             collection.unlock()
         collection.create_item(
-            label=f'Openclaw: {key}',
+            label=f'Entraclaw: {key}',
             attributes={'application': self.app_id, 'key': key},
             secret=value.encode(),
             replace=True
@@ -926,21 +926,21 @@ class LinuxCredentialStore:
 
 ```bash
 #!/usr/bin/env bash
-# deploy-openclaw-linux.sh — Install Openclaw as a systemd user service
+# deploy-entraclaw-linux.sh — Install Entraclaw as a systemd user service
 set -euo pipefail
 
-INSTALL_DIR="$HOME/.local/lib/openclaw"
-CONFIG_DIR="$HOME/.config/openclaw"
-DATA_DIR="$HOME/.local/share/openclaw"
+INSTALL_DIR="$HOME/.local/lib/entraclaw"
+CONFIG_DIR="$HOME/.config/entraclaw"
+DATA_DIR="$HOME/.local/share/entraclaw"
 SERVICE_DIR="$HOME/.config/systemd/user"
 
-echo "=== Installing Openclaw Agent ==="
+echo "=== Installing Entraclaw Agent ==="
 
 # Create directories following XDG Base Directory spec
 mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$DATA_DIR" "$SERVICE_DIR"
 
 # Install Python package
-python3 -m pip install --user openclaw-agent
+python3 -m pip install --user entraclaw-agent
 
 # Write default config if not present
 if [ ! -f "$CONFIG_DIR/agent.toml" ]; then
@@ -958,11 +958,11 @@ EOF
 fi
 
 # Install systemd service
-cp "$INSTALL_DIR/share/openclaw-agent.service" "$SERVICE_DIR/"
+cp "$INSTALL_DIR/share/entraclaw-agent.service" "$SERVICE_DIR/"
 
 # Reload, enable, start
 systemctl --user daemon-reload
-systemctl --user enable --now openclaw-agent.service
+systemctl --user enable --now entraclaw-agent.service
 
 # Enable linger if possible (may need sudo)
 if command -v loginctl &>/dev/null; then
@@ -971,9 +971,9 @@ if command -v loginctl &>/dev/null; then
         echo "  ⚠ Could not enable linger. Service will stop on logout."
 fi
 
-echo "=== Openclaw Agent installed ==="
-echo "  Status: systemctl --user status openclaw-agent"
-echo "  Logs:   journalctl --user -u openclaw-agent -f"
+echo "=== Entraclaw Agent installed ==="
+echo "  Status: systemctl --user status entraclaw-agent"
+echo "  Logs:   journalctl --user -u entraclaw-agent -f"
 ```
 
 ---
@@ -1058,7 +1058,7 @@ echo "  Logs:   journalctl --user -u openclaw-agent -f"
 
 ## Open Questions
 
-### For the Openclaw Scenario
+### For the Entraclaw Scenario
 
 1. **Which Secret Service provider to require/recommend?** GNOME Keyring is most common, but should we support headless-only deployments (kernel keyring + encrypted file)?
 
@@ -1075,7 +1075,7 @@ echo "  Logs:   journalctl --user -u openclaw-agent -f"
 
 6. **Kernel keyring key limits.** The default per-user key quota is 200 keys and 20,000 bytes. For agents managing many credentials, may need to adjust `/proc/sys/kernel/keys/maxkeys` and `/proc/sys/kernel/keys/maxbytes`.
 
-7. **Multi-user agent isolation.** If multiple users run Openclaw agents, how do we ensure credential isolation? The kernel keyring and Secret Service both scope to the user — this is good. But what about system-level agent services?
+7. **Multi-user agent isolation.** If multiple users run Entraclaw agents, how do we ensure credential isolation? The kernel keyring and Secret Service both scope to the user — this is good. But what about system-level agent services?
 
 8. **Secret rotation coordination.** When a token is rotated, the agent service needs to pick up the new credential. Options:
    - `ExecReload` + `SIGHUP` handler

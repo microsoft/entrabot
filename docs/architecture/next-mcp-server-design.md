@@ -1,4 +1,4 @@
-# Next: Openclaw MCP Server Design
+# Next: Entraclaw MCP Server Design
 
 > The core deliverable — an MCP server that gives Copilot CLI agent identity, Teams communication, and audit.
 
@@ -17,7 +17,7 @@
 
 ## Overview
 
-Openclaw runs as an **MCP server** that Copilot CLI connects to. It exposes identity, Teams, and audit as MCP tools. When Copilot CLI does agentic work, it calls these tools to authenticate as the agent, communicate through Teams, and record audit events.
+Entraclaw runs as an **MCP server** that Copilot CLI connects to. It exposes identity, Teams, and audit as MCP tools. When Copilot CLI does agentic work, it calls these tools to authenticate as the agent, communicate through Teams, and record audit events.
 
 ## MCP Tools
 
@@ -25,26 +25,26 @@ Openclaw runs as an **MCP server** that Copilot CLI connects to. It exposes iden
 
 | Tool | Description | When Called |
 |------|-------------|------------|
-| `openclaw_bootstrap` | Discover human identity (WAM/PRT or device code), register Agent ID, perform OBO exchange. Returns agent token. | Once at session start |
-| `openclaw_whoami` | Return current agent identity: Agent ID, human sponsor, token scopes, token expiry | On demand |
-| `openclaw_refresh` | Silently refresh the OBO token if nearing expiry | Periodically or before API calls |
-| `openclaw_revoke` | Revoke the agent's token and clear cached credentials | When human says "stop" |
+| `entraclaw_bootstrap` | Discover human identity (WAM/PRT or device code), register Agent ID, perform OBO exchange. Returns agent token. | Once at session start |
+| `entraclaw_whoami` | Return current agent identity: Agent ID, human sponsor, token scopes, token expiry | On demand |
+| `entraclaw_refresh` | Silently refresh the OBO token if nearing expiry | Periodically or before API calls |
+| `entraclaw_revoke` | Revoke the agent's token and clear cached credentials | When human says "stop" |
 
 ### Teams Tools
 
 | Tool | Description | When Called |
 |------|-------------|------------|
-| `openclaw_teams_connect` | Create or resume a 1:1 Teams chat between the agent and the human | After bootstrap |
-| `openclaw_teams_send` | Send a message to the human in Teams (text or Adaptive Card JSON) | Whenever agent has status/results |
-| `openclaw_teams_poll` | Check for new messages from the human (delta query) | Every few seconds, or on demand |
-| `openclaw_teams_presence` | Set the agent's presence status (Available, Busy, Away, Offline) | On state changes |
+| `entraclaw_teams_connect` | Create or resume a 1:1 Teams chat between the agent and the human | After bootstrap |
+| `entraclaw_teams_send` | Send a message to the human in Teams (text or Adaptive Card JSON) | Whenever agent has status/results |
+| `entraclaw_teams_poll` | Check for new messages from the human (delta query) | Every few seconds, or on demand |
+| `entraclaw_teams_presence` | Set the agent's presence status (Available, Busy, Away, Offline) | On state changes |
 
 ### Audit Tools
 
 | Tool | Description | When Called |
 |------|-------------|------------|
-| `openclaw_audit_log` | Record an audit event (action, resource, outcome) | Before every resource access |
-| `openclaw_audit_query` | Query recent audit events for this session | On demand / debugging |
+| `entraclaw_audit_log` | Record an audit event (action, resource, outcome) | Before every resource access |
+| `entraclaw_audit_query` | Query recent audit events for this session | On demand / debugging |
 
 ## Architecture
 
@@ -55,16 +55,16 @@ Openclaw runs as an **MCP server** that Copilot CLI connects to. It exposes iden
 │                                  │
 │  User says: "deploy to staging"  │
 │  Copilot calls:                  │
-│    openclaw_audit_log(...)       │
+│    entraclaw_audit_log(...)       │
 │    <does the deploy>             │
-│    openclaw_teams_send(...)      │
-│    openclaw_teams_poll(...)      │
+│    entraclaw_teams_send(...)      │
+│    entraclaw_teams_poll(...)      │
 │                                  │
 └──────────────┬───────────────────┘
                │ MCP (stdio or HTTP)
                ▼
 ┌──────────────────────────────────┐
-│ Openclaw MCP Server              │
+│ Entraclaw MCP Server              │
 │ (Python process)                 │
 │                                  │
 │  ┌────────┐ ┌───────┐ ┌───────┐ │
@@ -73,13 +73,13 @@ Openclaw runs as an **MCP server** that Copilot CLI connects to. It exposes iden
 │  └────────┘ └───────┘ └───────┘ │
 │                                  │
 │  Token cache: OS Credential Mgr  │
-│  Audit log: ~/.openclaw/audit/   │
+│  Audit log: ~/.entraclaw/audit/   │
 └──────────────────────────────────┘
 ```
 
 ## MCP Server Configuration
 
-The user adds Openclaw to their Copilot CLI MCP config:
+The user adds Entraclaw to their Copilot CLI MCP config:
 
 ```json
 // ~/.copilot/mcp-config.json (or .vscode/mcp.json)
@@ -87,13 +87,13 @@ The user adds Openclaw to their Copilot CLI MCP config:
 //    Production must use split architecture (secret stays in cloud service).
 {
   "mcpServers": {
-    "openclaw": {
+    "entraclaw": {
       "command": "python",
-      "args": ["-m", "openclaw.mcp_server"],
+      "args": ["-m", "entraclaw.mcp_server"],
       "env": {
-        "OPENCLAW_TENANT_ID": "<entra-tenant-id>",
-        "OPENCLAW_CLIENT_ID": "<agent-app-client-id>",
-        "OPENCLAW_CLIENT_SECRET": "<agent-app-secret>"
+        "ENTRACLAW_TENANT_ID": "<entra-tenant-id>",
+        "ENTRACLAW_CLIENT_ID": "<agent-app-client-id>",
+        "ENTRACLAW_CLIENT_SECRET": "<agent-app-secret>"
       }
     }
   }
@@ -119,7 +119,7 @@ dependencies = [
 ## Bootstrap Sequence (Detailed)
 
 ```python
-# Pseudocode for openclaw_bootstrap tool
+# Pseudocode for entraclaw_bootstrap tool
 #
 # CRITICAL: The device code flow must request YOUR APP's custom scope,
 # not Graph scopes directly. The OBO exchange requires the incoming token's
@@ -133,7 +133,7 @@ AGENT_SCOPES = ["https://graph.microsoft.com/Chat.Create",
                 "https://graph.microsoft.com/ChatMessage.Send",
                 "https://graph.microsoft.com/Chat.ReadWrite"]
 
-async def openclaw_bootstrap():
+async def entraclaw_bootstrap():
     # 1. Try WAM/PRT (Windows Entra-joined devices)
     human_token = try_wam_acquire(scopes=HUMAN_SCOPES)
 
@@ -185,12 +185,12 @@ async def openclaw_bootstrap():
 ### Error Hierarchy
 
 ```python
-# src/openclaw/errors.py
+# src/entraclaw/errors.py
 
-class OpenclawError(Exception):
-    """Base class for all Openclaw errors."""
+class EntraclawError(Exception):
+    """Base class for all Entraclaw errors."""
 
-class AuthError(OpenclawError):
+class AuthError(EntraclawError):
     """Authentication/identity errors."""
 
 class MSALError(AuthError):
@@ -205,7 +205,7 @@ class ConsentDenied(AuthError): ...
 class OBOExchangeError(AuthError): ...
 class AgentIDNotAvailable(AuthError): ...
 
-class TeamsError(OpenclawError):
+class TeamsError(EntraclawError):
     """Teams Graph API errors."""
 
 class TeamsNotLicensed(TeamsError): ...
@@ -213,7 +213,7 @@ class ChatNotFound(TeamsError): ...
 class MessageTooLong(TeamsError): ...
 
 class TokenExpiredError(AuthError): ...
-class RateLimitError(OpenclawError):
+class RateLimitError(EntraclawError):
     def __init__(self, retry_after: int):
         self.retry_after = retry_after
         super().__init__(f"Rate limited. Retry after {retry_after}s")
@@ -222,12 +222,12 @@ class RateLimitError(OpenclawError):
 ## File Structure
 
 ```
-src/openclaw/
+src/entraclaw/
   mcp_server.py        # MCP server entry point
   tools/
-    identity.py        # openclaw_bootstrap, whoami, refresh, revoke
-    teams.py           # openclaw_teams_connect, send, poll, presence
-    audit.py           # openclaw_audit_log, query
+    identity.py        # entraclaw_bootstrap, whoami, refresh, revoke
+    teams.py           # entraclaw_teams_connect, send, poll, presence
+    audit.py           # entraclaw_audit_log, query
   platform/
     windows.py         # WAM/PRT, Credential Manager, Task Scheduler
     mac.py             # Keychain, launchd, osascript consent
@@ -243,9 +243,9 @@ src/openclaw/
 > "Run Copilot CLI on the Windows VM, type something, and see a message appear in Teams from the agent."
 
 Three tools. That's it:
-1. `openclaw_bootstrap` — get an agent-attributed token
-2. `openclaw_teams_connect` — create a 1:1 chat
-3. `openclaw_teams_send` — send a message
+1. `entraclaw_bootstrap` — get an agent-attributed token
+2. `entraclaw_teams_connect` — create a 1:1 chat
+3. `entraclaw_teams_send` — send a message
 
 Everything else (`audit_log`, `refresh`, `revoke`, `whoami`, `teams_poll`, `teams_presence`) is iteration.
 
@@ -255,6 +255,6 @@ Everything else (`audit_log`, `refresh`, `revoke`, `whoami`, `teams_poll`, `team
 2. `models.py` — Pydantic models for tokens, identity, audit events
 3. `platform/windows.py` — `keyring` integration for Credential Manager (identity needs this)
 4. `mcp_server.py` — bare MCP server with tool registration
-5. `tools/identity.py` — `openclaw_bootstrap` with device code flow (stores to credential store)
-6. `tools/teams.py` — `openclaw_teams_connect` + `openclaw_teams_send` (needs identity working first)
-7. `tools/audit.py` — `openclaw_audit_log` writing to JSON file (add after Teams works)
+5. `tools/identity.py` — `entraclaw_bootstrap` with device code flow (stores to credential store)
+6. `tools/teams.py` — `entraclaw_teams_connect` + `entraclaw_teams_send` (needs identity working first)
+7. `tools/audit.py` — `entraclaw_audit_log` writing to JSON file (add after Teams works)

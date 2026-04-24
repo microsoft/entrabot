@@ -10,7 +10,7 @@ Append-only log of gotchas, surprises, and non-obvious behaviors discovered duri
 **Context:** Running setup.sh to create Agent Identity Blueprint
 **Problem:** `az rest` calls to Agent Identity beta APIs returned 403
 **Root cause:** Azure CLI tokens always include `Directory.AccessAsUser.All` delegated permission. Agent Identity APIs explicitly reject any token containing this permission.
-**Fix:** Created a dedicated "Openclaw Provisioner" app registration. Use `ClientSecretCredential` from `azure-identity` to get a clean `client_credentials` token.
+**Fix:** Created a dedicated "Entraclaw Provisioner" app registration. Use `ClientSecretCredential` from `azure-identity` to get a clean `client_credentials` token.
 **Prevention:** Never use `az rest` or `DefaultAzureCredential` for Agent Identity APIs. Always use a dedicated app with `client_credentials`.
 
 ### Learning #2: BlueprintPrincipal Must Be Created Separately
@@ -115,9 +115,9 @@ Append-only log of gotchas, surprises, and non-obvious behaviors discovered duri
 ### Learning #14: MCP Tool Names Must Match User Intent
 
 **Date:** 2026-04-06
-**Context:** LLM client not calling `openclaw_teams_send` when user said "message brandon"
-**Problem:** The LLM read the tool descriptions but didn't connect "message brandon@werner.ac" with a tool named `openclaw_teams_send`
-**Root cause:** Namespaced tool names (`openclaw_teams_send`) are jargon. The LLM looks for intent matches, not namespace patterns.
+**Context:** LLM client not calling `entraclaw_teams_send` when user said "message brandon"
+**Problem:** The LLM read the tool descriptions but didn't connect "message brandon@werner.ac" with a tool named `entraclaw_teams_send`
+**Root cause:** Namespaced tool names (`entraclaw_teams_send`) are jargon. The LLM looks for intent matches, not namespace patterns.
 **Fix:** Renamed to `send_teams_message`, `read_teams_messages`, `whoami`, `audit_log`. Added trigger phrases to descriptions: "message", "notify", "tell", "ping", "contact". Added FastMCP `instructions` field with intent→tool mapping.
 **Prevention:** Name tools as verbs the user would say. Pack descriptions with synonyms.
 
@@ -209,8 +209,8 @@ Append-only log of gotchas, surprises, and non-obvious behaviors discovered duri
 
 **Date:** 2026-04-06
 **Context:** Researching human-to-agent auth alternatives
-**Discovery:** Microsoft documents an "Agent OBO" flow where a human user's token IS used — but it enters at Hop 2 as the OBO `assertion`, not at Hop 1 as the Blueprint credential. The Blueprint still authenticates with its own confidential credentials. This flow is for "interactive agents" that act on behalf of a signed-in user, NOT for autonomous agents like Openclaw.
-**Implication:** If Openclaw ever adds a mode where the agent acts on behalf of a specific human (not as its own digital worker), the Agent OBO flow provides that pattern. The human token + Blueprint credential together produce an Agent Identity token scoped to that human's permissions.
+**Discovery:** Microsoft documents an "Agent OBO" flow where a human user's token IS used — but it enters at Hop 2 as the OBO `assertion`, not at Hop 1 as the Blueprint credential. The Blueprint still authenticates with its own confidential credentials. This flow is for "interactive agents" that act on behalf of a signed-in user, NOT for autonomous agents like Entraclaw.
+**Implication:** If Entraclaw ever adds a mode where the agent acts on behalf of a specific human (not as its own digital worker), the Agent OBO flow provides that pattern. The human token + Blueprint credential together produce an Agent Identity token scoped to that human's permissions.
 
 ### Learning #26: Channel Notifications Require Experimental Capability + Startup Flag
 
@@ -221,7 +221,7 @@ Append-only log of gotchas, surprises, and non-obvious behaviors discovered duri
 1. Server must declare `experimental: {"claude/channel": {}}` capability during MCP initialization
 2. Claude Code must be started with `--dangerously-load-development-channels server:<name>` (or `--channels` for allowlisted plugins)
 3. Server must NOT be spoofed as a marketplace plugin — just use `.mcp.json` with the flag
-**Fix:** Added `experimental_capabilities={"claude/channel": {}}` to `create_initialization_options()`. User starts Claude Code with `claude --dangerously-load-development-channels server:openclaw`.
+**Fix:** Added `experimental_capabilities={"claude/channel": {}}` to `create_initialization_options()`. User starts Claude Code with `claude --dangerously-load-development-channels server:entraclaw`.
 **Prevention:** When implementing MCP notifications, check the iMessage channel plugin source for the exact capability declarations and startup requirements. The official docs at `code.claude.com/docs/en/channels-reference` document the flags.
 
 ### Learning #27: Background Poll Must Not Share State With Polling Tool
@@ -329,8 +329,8 @@ Append-only log of gotchas, surprises, and non-obvious behaviors discovered duri
 **Date:** 2026-04-21
 **Context:** After PRs #27 and #28 (lifecycle + cached-host fixes) merged to main, production MCP server kept behaving as if the fixes weren't there — Teams polling looked alive in logs, but zero inbound messages were ever pushed through. Spent hours writing more patches; none took effect.
 **Problem:** The MCP server's Python process imported `entraclaw` from one of the sub-agent worktrees (`.claude/worktrees/agent-*/src/entraclaw/...`), not from the main tree. Worktrees don't carry `.env`, so `_load_dotenv()` resolved `Path(__file__).resolve().parents[2] / ".env"` to a path inside the worktree where no `.env` exists — `ENTRACLAW_BLUEPRINT_APP_ID` never loaded, auth never initialized, and every Graph call 401'd silently inside the poll loop's `except Exception`.
-**Root cause:** Several sub-agents, when their isolated worktree didn't have a venv, ran `pip install -e .` using the **parent venv** (the main repo's `.venv/bin/pip`). `-e .` is a PATH-modifying operation: it rewrites the parent venv's editable-install pointer (`site-packages/_openclaw_identity_research.pth` / the equivalent `direct_url.json` entry) to point at the worktree's source tree. Every subsequent `entraclaw-mcp` boot from the parent venv loaded the worktree's code. The change is silent — no warning from pip, no diff visible in `git status`, no error at server boot.
-**Fix:** From the main repo, re-run `cd /Volumes/Development\ HD/openclaw-identity-research && .venv/bin/pip install -e . --no-deps`. That repoints the editable install back at the main tree. Verify with `.venv/bin/python3 -c "from entraclaw import config; print(config.__file__)"` — the path must not contain `.claude/worktrees/`.
+**Root cause:** Several sub-agents, when their isolated worktree didn't have a venv, ran `pip install -e .` using the **parent venv** (the main repo's `.venv/bin/pip`). `-e .` is a PATH-modifying operation: it rewrites the parent venv's editable-install pointer (`site-packages/_entraclaw_identity_research.pth` / the equivalent `direct_url.json` entry) to point at the worktree's source tree. Every subsequent `entraclaw-mcp` boot from the parent venv loaded the worktree's code. The change is silent — no warning from pip, no diff visible in `git status`, no error at server boot.
+**Fix:** From the main repo, re-run `cd /Volumes/Development\ HD/entraclaw-identity-research && .venv/bin/pip install -e . --no-deps`. That repoints the editable install back at the main tree. Verify with `.venv/bin/python3 -c "from entraclaw import config; print(config.__file__)"` — the path must not contain `.claude/worktrees/`.
 **Prevention:** (1) Every sub-agent dispatch prompt that expects to run `pip install -e .` MUST explicitly create a fresh venv inside the worktree first (`python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"`) and never invoke the parent venv's pip. (2) After any session that used sub-agent worktrees, verify the main venv's editable-install target via `.venv/bin/python3 -c "from entraclaw import config; print(config.__file__)"` before trusting the production server. (3) Consider a pre-boot assertion in `mcp_server.py::_load_dotenv` that logs a fatal warning when the resolved `.env` path contains `.claude/worktrees/` — the one place this fails silently is the one place it most needs to fail loud.
 
 ### Learning #37: Listing Yourself as an MCP Peer = Fork-Bomb at Boot

@@ -32,7 +32,7 @@ The script is **idempotent** — safe to re-run. State is persisted in `.entracl
 
 ```bash
 source .venv/bin/activate
-pytest -v --cov=openclaw --cov-report=term-missing
+pytest -v --cov=entraclaw --cov-report=term-missing
 ```
 
 ## Without an Entra Tenant

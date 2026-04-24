@@ -121,13 +121,13 @@ From the MCP spec and community:
 | Slack (jtalk22) | Session | Variable | Mutex-locked 4-layer fallback |
 | Teams (floriscornel) | OAuth delegated | ~1hr access, ~90d refresh | MSAL auto-refresh with file cache |
 | Teams (InditexTech) | Client credentials | ~1hr | Re-request on expiry |
-| **Teams (Openclaw)** | **OBO chain (3 hops)** | **~1hr per hop** | **Must refresh each hop independently** |
+| **Teams (Entraclaw)** | **OBO chain (3 hops)** | **~1hr per hop** | **Must refresh each hop independently** |
 
 Our three-hop flow is the most complex token lifecycle of any MCP messaging server studied. Eager refresh (55-min threshold) + lazy retry (catch 401) is the right strategy, confirmed by the pain points seen across all implementations.
 
 ---
 
-## Design Implications for Openclaw
+## Design Implications for Entraclaw
 
 ### Changes from original design
 

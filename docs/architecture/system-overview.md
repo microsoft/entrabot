@@ -60,10 +60,10 @@ Hop 3: Agent User token via user_fic grant
 
 | Module | Purpose | Location |
 |--------|---------|----------|
-| **`platform/`** | OS-specific credential storage (Keychain, Credential Manager, Secret Service) | `src/openclaw/platform/` |
-| **`auth/`** | Three-hop token exchange, Agent ID registration | `src/openclaw/auth/` |
-| **`audit/`** | Action tracking — every resource access emits an audit event before executing | `src/openclaw/audit/` |
-| **`teams/`** | Teams messaging via Graph API as the Agent User identity | `src/openclaw/teams/` |
+| **`platform/`** | OS-specific credential storage (Keychain, Credential Manager, Secret Service) | `src/entraclaw/platform/` |
+| **`auth/`** | Three-hop token exchange, Agent ID registration | `src/entraclaw/auth/` |
+| **`audit/`** | Action tracking — every resource access emits an audit event before executing | `src/entraclaw/audit/` |
+| **`teams/`** | Teams messaging via Graph API as the Agent User identity | `src/entraclaw/teams/` |
 
 ## Provisioning
 
@@ -72,7 +72,7 @@ Setup is handled by two Python scripts called from `setup.sh`:
 1. **`entra_provisioning.py`** — Creates/manages the dedicated provisioner app (client_credentials, avoids Azure CLI token rejection)
 2. **`create_entra_agent_ids.py`** — Creates Blueprint, BlueprintPrincipal, Agent Identity, Agent User, and grants consent
 
-State persists in `.openclaw-state.json` so re-runs are idempotent and don't reset secrets.
+State persists in `.entraclaw-state.json` so re-runs are idempotent and don't reset secrets.
 
 ## Testing
 

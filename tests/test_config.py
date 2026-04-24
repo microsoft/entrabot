@@ -69,7 +69,7 @@ class TestEntraClawConfig:
         assert cfg.authority == "https://login.microsoftonline.com/my-tenant"
 
     def test_from_env_with_no_vars(self) -> None:
-        # Remove any Openclaw env vars that might be set
+        # Remove any Entraclaw env vars that might be set
         cleaned = {k: v for k, v in os.environ.items() if not k.startswith("ENTRACLAW_")}
         with patch.dict(os.environ, cleaned, clear=True):
             cfg = EntraClawConfig.from_env()

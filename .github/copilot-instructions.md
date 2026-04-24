@@ -1,8 +1,8 @@
-# Copilot Instructions — openclaw-identity-research
+# Copilot Instructions — entraclaw-identity-research
 
 ## Project Overview
 
-Openclaw is a research project for securing agentic workflows on local devices (Mac/Linux/Windows) using Microsoft Entra Agent IDs and Agent Users. The goal: agents get their own identity — a real Entra user account with Teams presence — so audit logs distinguish agent actions from human actions.
+Entraclaw is a research project for securing agentic workflows on local devices (Mac/Linux/Windows) using Microsoft Entra Agent IDs and Agent Users. The goal: agents get their own identity — a real Entra user account with Teams presence — so audit logs distinguish agent actions from human actions.
 
 Key concepts:
 - **Agent ID**: An identity issued to an autonomous agent that distinguishes it from the human user
@@ -32,7 +32,7 @@ pip install -e ".[dev]"
 pytest -v --tb=short && ruff check .
 
 # Run with channel notifications
-claude --dangerously-load-development-channels server:openclaw
+claude --dangerously-load-development-channels server:entraclaw
 
 # Single test
 pytest tests/tools/test_teams.py::TestAcquireAgentUserToken::test_success -v
@@ -44,7 +44,7 @@ ruff format .
 ## Architecture
 
 ```
-src/openclaw/
+src/entraclaw/
   platform/       # OS-specific credential storage (CredentialStore protocol)
   auth/           # Certificate JWT builder (build_client_assertion)
   tools/          # MCP tools (teams.py: 3-hop flow + send/read/filter)

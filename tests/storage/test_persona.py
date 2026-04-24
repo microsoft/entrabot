@@ -27,14 +27,14 @@ class TestClaudeCodeMemoryDir:
     def test_slug_encoding_for_path_with_spaces(self, tmp_path: Path) -> None:
         # Mirrors the real Claude Code convention observed in this repo
         result = claude_code_memory_dir(
-            Path("/Volumes/Development HD/openclaw-identity-research"),
+            Path("/Volumes/Development HD/entraclaw-identity-research"),
             home=tmp_path,
         )
         expected = (
             tmp_path
             / ".claude"
             / "projects"
-            / "-Volumes-Development-HD-openclaw-identity-research"
+            / "-Volumes-Development-HD-entraclaw-identity-research"
             / "memory"
         )
         assert result == expected

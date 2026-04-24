@@ -7,7 +7,7 @@
 # error reporting stays intact.
 #
 # Replace .mcp.json's "command" with this script to enable capture:
-#   /Volumes/Development HD/openclaw-identity-research/scripts/entraclaw-mcp-debug.sh
+#   /Volumes/Development HD/entraclaw-identity-research/scripts/entraclaw-mcp-debug.sh
 set -u
 
 LOG=/tmp/entraclaw-debug.log

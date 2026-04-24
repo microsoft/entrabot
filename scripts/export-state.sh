@@ -117,8 +117,11 @@ except Exception as e:
 fi
 
 # 5. Copy Claude Code memory files
+# Glob matches both the current entraclaw project slug and any legacy openclaw
+# slug, so exports still round-trip for installs that renamed at different
+# times. Order checks entraclaw first; falls back to openclaw.
 MEMORY_DIR=""
-for candidate in "$HOME/.claude/projects/"*openclaw*/memory; do
+for candidate in "$HOME/.claude/projects/"*entraclaw*/memory "$HOME/.claude/projects/"*openclaw*/memory; do
     if [ -d "$candidate" ]; then
         MEMORY_DIR="$candidate"
         break

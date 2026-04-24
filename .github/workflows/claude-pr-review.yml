@@ -38,7 +38,7 @@ jobs:
             7. Push the commit.
             8. Reply to the PR with a top-level comment summarizing: (a) which inline comments you addressed and how, (b) which you left unaddressed and why.
 
-            Context for this repo (openclaw-identity-research / EntraClaw):
+            Context for this repo (entraclaw-identity-research / EntraClaw):
             - Private single-author research project
             - EntraClaw is the "body" — agent identity, Teams MCP, email, blob memory sync
             - Relates to persona-sati (the "mind") via cross-blueprint consent grants

@@ -1,4 +1,4 @@
-# CLAUDE.md — Openclaw Identity Research
+# CLAUDE.md — Entraclaw Identity Research
 
 > Root working context. Durable architecture lives in `docs/`.
 
@@ -32,7 +32,7 @@
   - Mind content (personality, relationships, philosophy, running
     jokes) → `mcp__persona-sati__write_memory_file`.
   - Operational state (interactions, summaries, watched chats, email
-    cursor, outstanding promises) → openclaw blob; written by the MCP
+    cursor, outstanding promises) → entraclaw blob; written by the MCP
     server, not by you.
   The local auto-memory directory is ephemeral and off by default;
   treat it as read-only unless the user explicitly enables it.
@@ -63,7 +63,7 @@ This repo is the **body** (Teams interface). The **mind** (personality, memory,
 behavioral rules) is served by a separate MCP server: **persona-sati**.
 
 - Both MCPs are listed in `.mcp.json` (see `.mcp.json.example` for the dual-server config)
-- If persona-sati is not configured, openclaw works standalone as a generic Teams tool
+- If persona-sati is not configured, entraclaw works standalone as a generic Teams tool
 - Memory operations go through persona-sati's tools, not through local blob sync hooks
 - The system prompt comes from persona-sati, not from this repo
 - The original prompt is archived at `prompts/agent_system.md.archive` for reference
@@ -199,7 +199,7 @@ pip install -e ".[dev]"
 pytest -v --tb=short && ruff check .
 
 # Test with coverage
-pytest -v --cov=openclaw --cov-report=term-missing --cov-fail-under=80
+pytest -v --cov=entraclaw --cov-report=term-missing --cov-fail-under=80
 
 # Single test
 pytest tests/tools/test_teams.py::TestAcquireAgentUserToken::test_success -v

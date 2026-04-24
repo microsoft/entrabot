@@ -2,7 +2,7 @@
 
 ## Overview
 
-macOS provides a layered security model that is highly relevant to Openclaw's autonomous agent architecture. The key subsystems are:
+macOS provides a layered security model that is highly relevant to Entraclaw's autonomous agent architecture. The key subsystems are:
 
 - **Keychain Services** — hardware-backed credential storage with per-process access control
 - **launchd** — the system and user process manager for background execution
@@ -11,7 +11,7 @@ macOS provides a layered security model that is highly relevant to Openclaw's au
 - **App Sandbox** — optional process-level capability restrictions
 - **XPC** — secure inter-process communication
 
-For an Openclaw agent running on macOS, the critical path is: the agent is a **code-signed, launchd-managed background process** that stores credentials in the **Keychain**, has a distinct **process identity** via its code signature, and requests necessary **TCC permissions** from the user.
+For an Entraclaw agent running on macOS, the critical path is: the agent is a **code-signed, launchd-managed background process** that stores credentials in the **Keychain**, has a distinct **process identity** via its code signature, and requests necessary **TCC permissions** from the user.
 
 ---
 
@@ -42,7 +42,7 @@ import Security
 func saveCredential(service: String, account: String, token: Data) -> OSStatus {
     let query: [String: Any] = [
         kSecClass as String:       kSecClassGenericPassword,
-        kSecAttrService as String: service,      // e.g. "com.openclaw.agent"
+        kSecAttrService as String: service,      // e.g. "com.entraclaw.agent"
         kSecAttrAccount as String: account,      // e.g. "agent-id-abc123"
         kSecValueData as String:   token,        // the OBO token bytes
         kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
@@ -102,7 +102,7 @@ OSStatus SecItemDelete(CFDictionaryRef query);
 | Key | Purpose |
 |-----|---------|
 | `kSecClass` | Item class: `kSecClassGenericPassword`, `kSecClassInternetPassword`, `kSecClassCertificate`, `kSecClassKey` |
-| `kSecAttrService` | Service identifier (reverse-DNS, e.g. `com.openclaw.agent`) |
+| `kSecAttrService` | Service identifier (reverse-DNS, e.g. `com.entraclaw.agent`) |
 | `kSecAttrAccount` | Account name (e.g. agent ID or username) |
 | `kSecValueData` | The secret data (password, token bytes) |
 | `kSecAttrAccessible` | When the item is accessible (e.g. `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`) |
@@ -125,7 +125,7 @@ let access = SecAccessControlCreateWithFlags(
 
 let query: [String: Any] = [
     kSecClass as String:          kSecClassGenericPassword,
-    kSecAttrService as String:    "com.openclaw.agent",
+    kSecAttrService as String:    "com.entraclaw.agent",
     kSecAttrAccount as String:    "obo-token",
     kSecValueData as String:      tokenData,
     kSecAttrAccessControl as String: access!,
@@ -146,13 +146,13 @@ The `keyring` library provides a cross-platform abstraction over OS credential s
 import keyring
 
 # Store an OBO token
-keyring.set_password("com.openclaw.agent", "agent-id-abc123", "eyJhbGciOi...")
+keyring.set_password("com.entraclaw.agent", "agent-id-abc123", "eyJhbGciOi...")
 
 # Retrieve it
-token = keyring.get_password("com.openclaw.agent", "agent-id-abc123")
+token = keyring.get_password("com.entraclaw.agent", "agent-id-abc123")
 
 # Delete it
-keyring.delete_password("com.openclaw.agent", "agent-id-abc123")
+keyring.delete_password("com.entraclaw.agent", "agent-id-abc123")
 ```
 
 **Installation:**
@@ -170,13 +170,13 @@ keyring.set_keyring(macOS.Keyring())
 **CLI usage:**
 ```bash
 # Store (prompts for password interactively)
-keyring set com.openclaw.agent agent-id-abc123
+keyring set com.entraclaw.agent agent-id-abc123
 
 # Retrieve
-keyring get com.openclaw.agent agent-id-abc123
+keyring get com.entraclaw.agent agent-id-abc123
 
 # Delete
-keyring del com.openclaw.agent agent-id-abc123
+keyring del com.entraclaw.agent agent-id-abc123
 ```
 
 ### Python Access: `security` CLI Tool
@@ -187,23 +187,23 @@ The `security` command-line tool provides direct Keychain manipulation from shel
 # Add a generic password
 security add-generic-password \
     -a "agent-id-abc123" \
-    -s "com.openclaw.agent" \
+    -s "com.entraclaw.agent" \
     -w "eyJhbGciOi..." \
     -U  # Update if exists
 
 # Retrieve (prints only the password)
 security find-generic-password \
     -a "agent-id-abc123" \
-    -s "com.openclaw.agent" \
+    -s "com.entraclaw.agent" \
     -w
 
 # Delete
 security delete-generic-password \
     -a "agent-id-abc123" \
-    -s "com.openclaw.agent"
+    -s "com.entraclaw.agent"
 
 # Use in scripts as environment variable
-export OBO_TOKEN=$(security find-generic-password -a "$USER" -s "com.openclaw.agent" -w 2>/dev/null)
+export OBO_TOKEN=$(security find-generic-password -a "$USER" -s "com.entraclaw.agent" -w 2>/dev/null)
 ```
 
 **Key flags:**
@@ -228,7 +228,7 @@ from Security import (
 # Store
 query = {
     kSecClass: kSecClassGenericPassword,
-    kSecAttrService: "com.openclaw.agent",
+    kSecAttrService: "com.entraclaw.agent",
     kSecAttrAccount: "agent-id-abc123",
     kSecValueData: b"eyJhbGciOi...",
 }
@@ -237,7 +237,7 @@ status, _ = SecItemAdd(query, None)
 # Retrieve
 query = {
     kSecClass: kSecClassGenericPassword,
-    kSecAttrService: "com.openclaw.agent",
+    kSecAttrService: "com.entraclaw.agent",
     kSecAttrAccount: "agent-id-abc123",
     kSecReturnData: True,
     kSecMatchLimit: kSecMatchLimitOne,
@@ -260,15 +260,15 @@ status, result = SecItemCopyMatching(query, None)
 | **GUI access** | ✅ Yes — can show dialogs | ❌ No |
 | **Keychain** | ✅ Login keychain available | ⚠️ System keychain only |
 | **Plist location** | `~/Library/LaunchAgents/` (per-user) or `/Library/LaunchAgents/` (all users) | `/Library/LaunchDaemons/` |
-| **Use for Openclaw** | ✅ **Primary choice** — needs Keychain + consent UI | ❌ Cannot show consent prompts |
+| **Use for Entraclaw** | ✅ **Primary choice** — needs Keychain + consent UI | ❌ Cannot show consent prompts |
 
-**For Openclaw: Use a Launch Agent**, not a Daemon. The agent needs access to the login keychain and may need to present consent dialogs.
+**For Entraclaw: Use a Launch Agent**, not a Daemon. The agent needs access to the login keychain and may need to present consent dialogs.
 
 ### Plist Configuration
 
-#### Openclaw Agent Plist Example
+#### Entraclaw Agent Plist Example
 
-**File:** `~/Library/LaunchAgents/com.openclaw.agent.plist`
+**File:** `~/Library/LaunchAgents/com.entraclaw.agent.plist`
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -278,14 +278,14 @@ status, result = SecItemCopyMatching(query, None)
 <dict>
     <!-- Unique identifier for the job -->
     <key>Label</key>
-    <string>com.openclaw.agent</string>
+    <string>com.entraclaw.agent</string>
 
     <!-- The program and arguments to run -->
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/openclaw-agent</string>
+        <string>/usr/local/bin/entraclaw-agent</string>
         <string>--config</string>
-        <string>~/.config/openclaw/config.toml</string>
+        <string>~/.config/entraclaw/config.toml</string>
     </array>
 
     <!-- Start when the plist is loaded (i.e., on user login) -->
@@ -306,19 +306,19 @@ status, result = SecItemCopyMatching(query, None)
     <!-- Environment variables -->
     <key>EnvironmentVariables</key>
     <dict>
-        <key>OPENCLAW_HOME</key>
-        <string>/Users/username/.config/openclaw</string>
+        <key>ENTRACLAW_HOME</key>
+        <string>/Users/username/.config/entraclaw</string>
     </dict>
 
     <!-- Working directory -->
     <key>WorkingDirectory</key>
-    <string>/Users/username/.config/openclaw</string>
+    <string>/Users/username/.config/entraclaw</string>
 
     <!-- Log output -->
     <key>StandardOutPath</key>
-    <string>/Users/username/.config/openclaw/logs/agent.out.log</string>
+    <string>/Users/username/.config/entraclaw/logs/agent.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/username/.config/openclaw/logs/agent.err.log</string>
+    <string>/Users/username/.config/entraclaw/logs/agent.err.log</string>
 
     <!-- Nice level (lower priority to not interfere with user) -->
     <key>Nice</key>
@@ -333,29 +333,29 @@ status, result = SecItemCopyMatching(query, None)
 
 ```bash
 # Load (register + start) — modern approach
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.openclaw.agent.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.entraclaw.agent.plist
 
 # Unload (stop + deregister) — modern approach
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.openclaw.agent.plist
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.entraclaw.agent.plist
 
 # Start/Stop a loaded job
-launchctl kickstart gui/$(id -u)/com.openclaw.agent
-launchctl kill SIGTERM gui/$(id -u)/com.openclaw.agent
+launchctl kickstart gui/$(id -u)/com.entraclaw.agent
+launchctl kill SIGTERM gui/$(id -u)/com.entraclaw.agent
 
 # Check status
-launchctl print gui/$(id -u)/com.openclaw.agent
+launchctl print gui/$(id -u)/com.entraclaw.agent
 
 # List all loaded user agents
-launchctl list | grep openclaw
+launchctl list | grep entraclaw
 ```
 
 #### Legacy commands (still functional but deprecated)
 
 ```bash
-launchctl load   ~/Library/LaunchAgents/com.openclaw.agent.plist
-launchctl unload ~/Library/LaunchAgents/com.openclaw.agent.plist
-launchctl start  com.openclaw.agent
-launchctl stop   com.openclaw.agent
+launchctl load   ~/Library/LaunchAgents/com.entraclaw.agent.plist
+launchctl unload ~/Library/LaunchAgents/com.entraclaw.agent.plist
+launchctl start  com.entraclaw.agent
+launchctl stop   com.entraclaw.agent
 ```
 
 ### Important Plist Keys Reference
@@ -385,11 +385,11 @@ import os
 import plistlib
 import subprocess
 
-def install_launch_agent(agent_binary: str, label: str = "com.openclaw.agent"):
-    """Install an Openclaw agent as a launchd LaunchAgent."""
+def install_launch_agent(agent_binary: str, label: str = "com.entraclaw.agent"):
+    """Install an Entraclaw agent as a launchd LaunchAgent."""
     home = os.path.expanduser("~")
     plist_path = os.path.join(home, "Library", "LaunchAgents", f"{label}.plist")
-    log_dir = os.path.join(home, ".config", "openclaw", "logs")
+    log_dir = os.path.join(home, ".config", "entraclaw", "logs")
     os.makedirs(log_dir, exist_ok=True)
 
     plist = {
@@ -410,8 +410,8 @@ def install_launch_agent(agent_binary: str, label: str = "com.openclaw.agent"):
         check=True,
     )
 
-def uninstall_launch_agent(label: str = "com.openclaw.agent"):
-    """Uninstall the Openclaw LaunchAgent."""
+def uninstall_launch_agent(label: str = "com.entraclaw.agent"):
+    """Uninstall the Entraclaw LaunchAgent."""
     home = os.path.expanduser("~")
     plist_path = os.path.join(home, "Library", "LaunchAgents", f"{label}.plist")
     uid = os.getuid()
@@ -444,23 +444,23 @@ macOS uses **code signatures** to establish process identity. Every process has 
 3. **Ad-hoc signed** — locally signed, no certificate authority (local testing only)
 4. **Unsigned** — blocked by Gatekeeper by default
 
-#### Signing an Openclaw agent binary
+#### Signing an Entraclaw agent binary
 
 ```bash
 # Ad-hoc signing (development/testing only)
-codesign --force --options=runtime --sign - /usr/local/bin/openclaw-agent
+codesign --force --options=runtime --sign - /usr/local/bin/entraclaw-agent
 
 # Developer ID signing (distribution)
 codesign --force --options=runtime --timestamp \
-    --entitlements openclaw.entitlements \
-    --sign "Developer ID Application: Openclaw Inc (TEAMID)" \
-    /usr/local/bin/openclaw-agent
+    --entitlements entraclaw.entitlements \
+    --sign "Developer ID Application: Entraclaw Inc (TEAMID)" \
+    /usr/local/bin/entraclaw-agent
 
 # Verify signature
-codesign --verify --verbose /usr/local/bin/openclaw-agent
+codesign --verify --verbose /usr/local/bin/entraclaw-agent
 
 # Display signing details
-codesign --display --verbose=4 /usr/local/bin/openclaw-agent
+codesign --display --verbose=4 /usr/local/bin/entraclaw-agent
 ```
 
 ### Bundle Identifiers
@@ -468,16 +468,16 @@ codesign --display --verbose=4 /usr/local/bin/openclaw-agent
 The **Bundle Identifier** (`CFBundleIdentifier`) is a reverse-DNS string that uniquely identifies an application within Apple's ecosystem. For command-line tools and agents without a `.app` bundle, the code signing identifier serves a similar purpose.
 
 ```
-com.openclaw.agent        — main agent process
-com.openclaw.agent.helper — privileged helper (if needed)
-com.openclaw.consent-ui   — consent prompt UI app
+com.entraclaw.agent        — main agent process
+com.entraclaw.agent.helper — privileged helper (if needed)
+com.entraclaw.consent-ui   — consent prompt UI app
 ```
 
 ### Entitlements
 
 Entitlements are key-value pairs embedded in the code signature that declare which system capabilities a process may use.
 
-**Example `openclaw.entitlements` plist:**
+**Example `entraclaw.entitlements` plist:**
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -488,7 +488,7 @@ Entitlements are key-value pairs embedded in the code signature that declare whi
     <!-- Access keychain items shared within the team -->
     <key>keychain-access-groups</key>
     <array>
-        <string>$(AppIdentifierPrefix)com.openclaw.shared</string>
+        <string>$(AppIdentifierPrefix)com.entraclaw.shared</string>
     </array>
 
     <!-- Network access (client) -->
@@ -509,21 +509,21 @@ For distribution, macOS requires the **hardened runtime** and **notarization**:
 ```bash
 # 1. Sign with hardened runtime
 codesign --force --options=runtime --timestamp \
-    --sign "Developer ID Application: Openclaw Inc (TEAMID)" \
-    /usr/local/bin/openclaw-agent
+    --sign "Developer ID Application: Entraclaw Inc (TEAMID)" \
+    /usr/local/bin/entraclaw-agent
 
 # 2. Package for notarization
-ditto -c -k --keepParent /usr/local/bin/openclaw-agent openclaw-agent.zip
+ditto -c -k --keepParent /usr/local/bin/entraclaw-agent entraclaw-agent.zip
 
 # 3. Submit for notarization
-xcrun notarytool submit openclaw-agent.zip \
-    --apple-id "dev@openclaw.com" \
+xcrun notarytool submit entraclaw-agent.zip \
+    --apple-id "dev@entraclaw.com" \
     --team-id "TEAMID" \
     --password "@keychain:AC_PASSWORD" \
     --wait
 
 # 4. Staple the ticket
-xcrun stapler staple /usr/local/bin/openclaw-agent
+xcrun stapler staple /usr/local/bin/entraclaw-agent
 ```
 
 ### How macOS Identifies Processes
@@ -555,7 +555,7 @@ These are tracked in TCC databases, Keychain ACLs, and firewall rules. Changing 
   - User: `~/Library/Application Support/com.apple.TCC/TCC.db`
   - System: `/Library/Application Support/com.apple.TCC/TCC.db` (SIP-protected)
 
-### Permissions Relevant to Openclaw
+### Permissions Relevant to Entraclaw
 
 | Permission | TCC Service Key | Needed? | Notes |
 |-----------|----------------|---------|-------|
@@ -599,12 +599,12 @@ For managed deployments, PPPC (Privacy Preferences Policy Control) profiles can 
     <key>Authorization</key>
     <string>Allow</string>
     <key>CodeRequirement</key>
-    <string>identifier "com.openclaw.agent" and anchor apple generic and
+    <string>identifier "com.entraclaw.agent" and anchor apple generic and
         certificate leaf[subject.OU] = "TEAMID"</string>
     <key>IdentifierType</key>
     <string>bundleID</string>
     <key>Identifier</key>
-    <string>com.openclaw.agent</string>
+    <string>com.entraclaw.agent</string>
     <key>Services</key>
     <dict>
         <key>SystemPolicyAllFiles</key>
@@ -620,10 +620,10 @@ For managed deployments, PPPC (Privacy Preferences Policy Control) profiles can 
 
 ```bash
 # Reset all TCC permissions for an app
-tccutil reset All com.openclaw.agent
+tccutil reset All com.entraclaw.agent
 
 # Reset specific service
-tccutil reset ScreenCapture com.openclaw.agent
+tccutil reset ScreenCapture com.entraclaw.agent
 
 # Reset all apps for a service
 tccutil reset ScreenCapture
@@ -637,9 +637,9 @@ tccutil reset ScreenCapture
 
 The App Sandbox is an opt-in macOS security mechanism that restricts what an application can do. It limits file system access, network access, hardware access, and IPC to only what the app declares via entitlements.
 
-### Implications for Openclaw Agents
+### Implications for Entraclaw Agents
 
-**Recommendation: Do NOT sandbox the Openclaw agent process.** Here's why:
+**Recommendation: Do NOT sandbox the Entraclaw agent process.** Here's why:
 
 | Factor | Sandboxed | Non-Sandboxed |
 |--------|-----------|---------------|
@@ -652,7 +652,7 @@ The App Sandbox is an opt-in macOS security mechanism that restricts what an app
 
 **Key considerations:**
 
-1. **Child process inheritance** — If a sandboxed app launches the Openclaw agent as a subprocess, the agent inherits the sandbox restrictions. The agent must be an independent launchd-managed process.
+1. **Child process inheritance** — If a sandboxed app launches the Entraclaw agent as a subprocess, the agent inherits the sandbox restrictions. The agent must be an independent launchd-managed process.
 2. **Keychain scope** — Sandboxed apps can only access their own keychain items (within their app group). Non-sandboxed agents can access any item the user has authorized.
 3. **File system** — Agents often need to read project files, config files, etc. A sandbox would require security-scoped bookmarks for each file path.
 
@@ -662,7 +662,7 @@ Even without App Sandbox, you can apply a custom sandbox profile for defense in 
 
 ```bash
 # Create a custom sandbox profile
-cat > /tmp/openclaw-sandbox.sb << 'EOF'
+cat > /tmp/entraclaw-sandbox.sb << 'EOF'
 (version 1)
 (allow default)
 (deny file-write*
@@ -673,7 +673,7 @@ cat > /tmp/openclaw-sandbox.sb << 'EOF'
 EOF
 
 # Run agent with custom profile
-sandbox-exec -f /tmp/openclaw-sandbox.sb /usr/local/bin/openclaw-agent
+sandbox-exec -f /tmp/entraclaw-sandbox.sb /usr/local/bin/entraclaw-agent
 ```
 
 > **Note:** `sandbox-exec` is technically deprecated but still functional. Apple has not provided a public replacement for CLI tools.
@@ -686,17 +686,17 @@ sandbox-exec -f /tmp/openclaw-sandbox.sb /usr/local/bin/openclaw-agent
 
 XPC (Cross-Process Communication) is macOS's preferred mechanism for inter-process communication. It enables privilege separation by allowing a main application to offload tasks to separate, isolated helper processes.
 
-### Architecture for Openclaw
+### Architecture for Entraclaw
 
 ```
 ┌─────────────────────────────┐
-│  Openclaw Consent UI (.app) │  ← GUI app for consent prompts
+│  Entraclaw Consent UI (.app) │  ← GUI app for consent prompts
 │     NSXPCConnection         │
 └──────────┬──────────────────┘
            │ XPC Protocol
            ▼
 ┌─────────────────────────────┐
-│  Openclaw Agent (launchd)   │  ← Background agent process
+│  Entraclaw Agent (launchd)   │  ← Background agent process
 │     NSXPCConnection         │
 └──────────┬──────────────────┘
            │ XPC Protocol
@@ -710,7 +710,7 @@ XPC (Cross-Process Communication) is macOS's preferred mechanism for inter-proce
 ### XPC Connection Types
 
 1. **XPC Service (bundled)** — Lives inside an app bundle, launched on demand, inherits app's sandbox. Terminates when parent exits.
-2. **Mach Service (launchd)** — Registered with launchd, independently managed, persists across app launches. This is what Openclaw should use.
+2. **Mach Service (launchd)** — Registered with launchd, independently managed, persists across app launches. This is what Entraclaw should use.
 3. **Anonymous connection** — Direct pipe between parent and child process.
 
 ### NSXPCConnection Example (Swift)
@@ -718,7 +718,7 @@ XPC (Cross-Process Communication) is macOS's preferred mechanism for inter-proce
 **Define a protocol:**
 
 ```swift
-@objc protocol OpenclawAgentProtocol {
+@objc protocol EntraclawAgentProtocol {
     func storeToken(_ token: String, forAgentID agentID: String,
                     reply: @escaping (Bool, String?) -> Void)
     func getToken(forAgentID agentID: String,
@@ -737,7 +737,7 @@ class AgentDelegate: NSObject, NSXPCListenerDelegate {
     func listener(_ listener: NSXPCListener,
                   shouldAcceptNewConnection conn: NSXPCConnection) -> Bool {
         conn.exportedInterface = NSXPCInterface(
-            with: OpenclawAgentProtocol.self
+            with: EntraclawAgentProtocol.self
         )
         conn.exportedObject = AgentService()
         conn.resume()
@@ -746,7 +746,7 @@ class AgentDelegate: NSObject, NSXPCListenerDelegate {
 }
 
 // Register as a Mach service (label must match launchd plist)
-let listener = NSXPCListener(machServiceName: "com.openclaw.agent.xpc")
+let listener = NSXPCListener(machServiceName: "com.entraclaw.agent.xpc")
 listener.delegate = AgentDelegate()
 listener.resume()
 RunLoop.main.run()
@@ -756,16 +756,16 @@ RunLoop.main.run()
 
 ```swift
 let connection = NSXPCConnection(
-    machServiceName: "com.openclaw.agent.xpc"
+    machServiceName: "com.entraclaw.agent.xpc"
 )
 connection.remoteObjectInterface = NSXPCInterface(
-    with: OpenclawAgentProtocol.self
+    with: EntraclawAgentProtocol.self
 )
 connection.resume()
 
 let proxy = connection.remoteObjectProxyWithErrorHandler { error in
     print("XPC error: \(error)")
-} as! OpenclawAgentProtocol
+} as! EntraclawAgentProtocol
 
 proxy.getToken(forAgentID: "abc123") { token in
     print("Got token: \(token ?? "nil")")
@@ -780,18 +780,18 @@ Python can't use `NSXPCConnection` directly, but it can communicate with XPC ser
 2. **Unix domain sockets** — simpler alternative for Python agents
 3. **Named pipes / stdin-stdout** — if spawned as a subprocess
 
-For a Python-based Openclaw agent, **Unix domain sockets** are the pragmatic choice for IPC with a Swift-based consent UI.
+For a Python-based Entraclaw agent, **Unix domain sockets** are the pragmatic choice for IPC with a Swift-based consent UI.
 
 ---
 
 ## Integration Patterns
 
-### Recommended Architecture for Openclaw on macOS
+### Recommended Architecture for Entraclaw on macOS
 
 ```
 Installation:
-  1. Install agent binary to /usr/local/bin/openclaw-agent (or ~/.local/bin/)
-  2. Install consent UI to /Applications/Openclaw.app
+  1. Install agent binary to /usr/local/bin/entraclaw-agent (or ~/.local/bin/)
+  2. Install consent UI to /Applications/Entraclaw.app
   3. Create launchd plist in ~/Library/LaunchAgents/
   4. Sign & notarize both binaries with Developer ID
   5. Load agent: launchctl bootstrap gui/$(id -u) <plist>
@@ -804,7 +804,7 @@ Runtime:
              │ IPC (socket/pipe)
              ▼
   ┌──────────────────────┐
-  │  openclaw-agent      │──── Keychain (login)
+  │  entraclaw-agent      │──── Keychain (login)
   │  (LaunchAgent)       │     ├── OBO tokens
   │  PID: distinct       │     ├── Agent private key
   │  Code-signed         │     └── Refresh tokens
@@ -812,7 +812,7 @@ Runtime:
              │ XPC / Socket
              ▼
   ┌──────────────────────┐
-  │  Openclaw.app        │──── TCC permissions
+  │  Entraclaw.app        │──── TCC permissions
   │  (Consent UI)        │     └── User approvals
   │  Shows dialogs       │
   └──────────────────────┘
@@ -828,7 +828,7 @@ import time
 class MacOSCredentialStore:
     """Credential store using macOS Keychain via keyring."""
 
-    SERVICE = "com.openclaw.agent"
+    SERVICE = "com.entraclaw.agent"
 
     def store_token(self, agent_id: str, token_data: dict) -> None:
         """Store an OBO token with metadata."""
@@ -875,9 +875,9 @@ import os
 import plistlib
 
 class MacOSAgentInstaller:
-    """Install/manage the Openclaw agent as a macOS LaunchAgent."""
+    """Install/manage the Entraclaw agent as a macOS LaunchAgent."""
 
-    LABEL = "com.openclaw.agent"
+    LABEL = "com.entraclaw.agent"
 
     @property
     def plist_path(self) -> str:
@@ -887,7 +887,7 @@ class MacOSAgentInstaller:
 
     def install(self, agent_binary: str) -> None:
         """Install and start the agent."""
-        log_dir = os.path.expanduser("~/.config/openclaw/logs")
+        log_dir = os.path.expanduser("~/.config/entraclaw/logs")
         os.makedirs(log_dir, exist_ok=True)
 
         plist = {
@@ -945,7 +945,7 @@ Since a LaunchAgent can technically display UI (it runs in the user's GUI sessio
 3. **If not, agent launches a consent dialog** — either:
    - A native macOS alert via `NSAlert` (requires a Swift helper)
    - A system notification via `terminal-notifier` or `osascript`
-   - A dedicated Openclaw.app consent window
+   - A dedicated Entraclaw.app consent window
 4. **User approves/denies** → decision is cached locally
 5. **Agent proceeds** with the OBO token exchange
 
@@ -959,7 +959,7 @@ def show_consent_dialog(scope: str, requesting_app: str) -> bool:
     script = f'''
     display dialog "The application '{requesting_app}' is requesting access to:\\n\\n{scope}\\n\\nAllow this agent to act on your behalf?" ¬
         buttons {{"Deny", "Allow"}} default button "Allow" ¬
-        with title "Openclaw Agent Consent" ¬
+        with title "Entraclaw Agent Consent" ¬
         with icon caution
     '''
     result = subprocess.run(
@@ -975,7 +975,7 @@ def show_consent_dialog(scope: str, requesting_app: str) -> bool:
 
 ### Keychain Gotchas
 
-1. **Binary-specific ACLs** — Keychain items are ACL'd to the specific binary that created them. If you update the Openclaw agent binary (new cdhash), the user may be prompted again to allow access. Mitigation: use the `keyring` library which handles ACL management, or store items with permissive ACLs during development.
+1. **Binary-specific ACLs** — Keychain items are ACL'd to the specific binary that created them. If you update the Entraclaw agent binary (new cdhash), the user may be prompted again to allow access. Mitigation: use the `keyring` library which handles ACL management, or store items with permissive ACLs during development.
 
 2. **Python binary fragmentation** — Credentials stored by `/usr/bin/python3` are NOT accessible from `/opt/homebrew/bin/python3` (different binaries = different ACL entries). Always use a consistent Python path or use a bundled interpreter.
 
@@ -1021,13 +1021,13 @@ def show_consent_dialog(scope: str, requesting_app: str) -> bool:
 
 ## Open Questions
 
-1. **Agent ID persistence** — Should the Openclaw Agent ID be stored in the Keychain as a credential, or as a configuration file? Keychain provides integrity guarantees but adds complexity.
+1. **Agent ID persistence** — Should the Entraclaw Agent ID be stored in the Keychain as a credential, or as a configuration file? Keychain provides integrity guarantees but adds complexity.
 
 2. **Consent caching** — Where should user consent decisions be cached? Options: Keychain (encrypted), a local SQLite database (simpler), or a signed plist (tamper-evident).
 
 3. **Token refresh in background** — When the LaunchAgent refreshes OBO tokens, will Keychain access work reliably without user interaction? Need to test with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` vs `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`.
 
-4. **Multi-user scenarios** — Each macOS user gets their own LaunchAgent and Keychain. How does Openclaw handle shared machines with multiple users who each have their own Agent ID?
+4. **Multi-user scenarios** — Each macOS user gets their own LaunchAgent and Keychain. How does Entraclaw handle shared machines with multiple users who each have their own Agent ID?
 
 5. **MDM deployment** — For enterprise customers, should we provide a PPPC profile template? How do we handle the case where IT pre-approves TCC permissions?
 

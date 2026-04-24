@@ -1,6 +1,6 @@
-# Openclaw Identity Research
+# Entraclaw Identity Research
 
-Openclaw brings cloud-style identity tracking to device-local agents. When an autonomous agent runs on your Mac, Linux, or Windows machine, it gets its own **Agent ID** and **Agent User** in Microsoft Entra — so audit logs always distinguish agent actions from human actions.
+Entraclaw brings cloud-style identity tracking to device-local agents. When an autonomous agent runs on your Mac, Linux, or Windows machine, it gets its own **Agent ID** and **Agent User** in Microsoft Entra — so audit logs always distinguish agent actions from human actions.
 
 ## Key Concepts
 

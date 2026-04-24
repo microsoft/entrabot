@@ -40,7 +40,7 @@ the user's login credentials.
 
 | Constant | Value | Use Case |
 |----------|-------|----------|
-| `CRED_TYPE_GENERIC` | 1 | Application-defined secrets (tokens, API keys) — **this is what Openclaw should use** |
+| `CRED_TYPE_GENERIC` | 1 | Application-defined secrets (tokens, API keys) — **this is what Entraclaw should use** |
 | `CRED_TYPE_DOMAIN_PASSWORD` | 2 | Windows domain authentication (NTLM/Kerberos) |
 | `CRED_TYPE_DOMAIN_CERTIFICATE` | 3 | Certificate-based domain auth |
 | `CRED_TYPE_DOMAIN_VISIBLE_PASSWORD` | 4 | Passport/Live ID |
@@ -67,7 +67,7 @@ system for each credential type.
 void StoreCredential(void) {
     CREDENTIALW cred = {0};
     cred.Type = CRED_TYPE_GENERIC;
-    cred.TargetName = L"Openclaw/AgentToken";
+    cred.TargetName = L"Entraclaw/AgentToken";
     cred.UserName = L"agent-abc123";
     const char* token = "eyJhbGciOiJSUzI1NiIs...";
     cred.CredentialBlobSize = (DWORD)strlen(token);
@@ -82,7 +82,7 @@ void StoreCredential(void) {
 // --- Read a credential ---
 void ReadCredential(void) {
     PCREDENTIALW pCred = NULL;
-    if (CredReadW(L"Openclaw/AgentToken", CRED_TYPE_GENERIC, 0, &pCred)) {
+    if (CredReadW(L"Entraclaw/AgentToken", CRED_TYPE_GENERIC, 0, &pCred)) {
         printf("User: %ws\n", pCred->UserName);
         printf("Token: %.*s\n", pCred->CredentialBlobSize, pCred->CredentialBlob);
         CredFree(pCred);
@@ -91,7 +91,7 @@ void ReadCredential(void) {
 
 // --- Delete a credential ---
 void DeleteCredential(void) {
-    CredDeleteW(L"Openclaw/AgentToken", CRED_TYPE_GENERIC, 0);
+    CredDeleteW(L"Entraclaw/AgentToken", CRED_TYPE_GENERIC, 0);
 }
 ```
 
@@ -101,7 +101,7 @@ void DeleteCredential(void) {
 import win32cred
 
 # --- Store ---
-target = "Openclaw/AgentToken"
+target = "Entraclaw/AgentToken"
 token = "eyJhbGciOiJSUzI1NiIs..."
 
 credential = {
@@ -110,7 +110,7 @@ credential = {
     'UserName': 'agent-abc123',
     'CredentialBlob': token,
     'Persist': win32cred.CRED_PERSIST_LOCAL_MACHINE,
-    'Comment': 'Openclaw agent OBO token',
+    'Comment': 'Entraclaw agent OBO token',
 }
 win32cred.CredWrite(credential, 0)
 
@@ -134,7 +134,7 @@ for c in creds:
 ```python
 import win32ctypes.pywin32.win32cred as win32cred
 
-target = "Openclaw/AgentToken"
+target = "Entraclaw/AgentToken"
 token = "eyJhbGciOiJSUzI1NiIs..."
 
 # Store — note: CredentialBlob must be bytes in UTF-16LE
@@ -158,13 +158,13 @@ retrieved = cred['CredentialBlob'].decode('utf-16-le')
 import keyring
 
 # Store
-keyring.set_password("openclaw", "agent-abc123", "eyJhbGciOiJSUzI1NiIs...")
+keyring.set_password("entraclaw", "agent-abc123", "eyJhbGciOiJSUzI1NiIs...")
 
 # Retrieve
-token = keyring.get_password("openclaw", "agent-abc123")
+token = keyring.get_password("entraclaw", "agent-abc123")
 
 # Delete
-keyring.delete_password("openclaw", "agent-abc123")
+keyring.delete_password("entraclaw", "agent-abc123")
 ```
 
 On Windows, `keyring` uses `WinVaultKeyring` backend by default, which maps to the
@@ -192,7 +192,7 @@ beyond what fits in a credential blob.
 | **CurrentUser** | `0` (default) | Only the same Windows user on the same machine |
 | **LocalMachine** | `CRYPTPROTECT_LOCAL_MACHINE` (0x4) | Any user/process on the same machine |
 
-For Openclaw agents, **CurrentUser scope is strongly preferred** — it ensures that
+For Entraclaw agents, **CurrentUser scope is strongly preferred** — it ensures that
 even a local admin on the machine cannot trivially decrypt the agent's secrets without
 impersonating the specific user.
 
@@ -216,11 +216,11 @@ impersonating the specific user.
 
 BOOL EncryptSecret(const BYTE* data, DWORD dataLen, DATA_BLOB* out) {
     DATA_BLOB input = { dataLen, (BYTE*)data };
-    DATA_BLOB entropy = { 8, (BYTE*)"openclaw" };  // optional extra entropy
+    DATA_BLOB entropy = { 8, (BYTE*)"entraclaw" };  // optional extra entropy
 
     return CryptProtectData(
         &input,
-        L"Openclaw Agent Secret",  // description (stored in cleartext!)
+        L"Entraclaw Agent Secret",  // description (stored in cleartext!)
         &entropy,                   // optional entropy
         NULL,                       // reserved
         NULL,                       // prompt struct (NULL = no UI)
@@ -230,7 +230,7 @@ BOOL EncryptSecret(const BYTE* data, DWORD dataLen, DATA_BLOB* out) {
 }
 
 BOOL DecryptSecret(DATA_BLOB* encrypted, DATA_BLOB* out) {
-    DATA_BLOB entropy = { 8, (BYTE*)"openclaw" };
+    DATA_BLOB entropy = { 8, (BYTE*)"entraclaw" };
     LPWSTR description = NULL;
 
     BOOL result = CryptUnprotectData(
@@ -249,12 +249,12 @@ import win32crypt
 
 # --- Encrypt (CurrentUser scope) ---
 plaintext = b'{"access_token": "eyJ...", "refresh_token": "dGhpcyBpcyBh..."}'
-entropy = b"openclaw-agent"
+entropy = b"entraclaw-agent"
 
 # CryptProtectData returns (description, encrypted_bytes)
 desc, encrypted = win32crypt.CryptProtectData(
     plaintext,
-    "Openclaw Agent Config",  # description (stored in cleartext)
+    "Entraclaw Agent Config",  # description (stored in cleartext)
     entropy,                   # optional entropy
     None,                      # reserved
     None,                      # prompt struct
@@ -287,10 +287,10 @@ For data too large for Credential Manager (e.g., cached tokens, agent config):
 import win32crypt
 import os
 
-CONFIG_PATH = os.path.join(os.environ['LOCALAPPDATA'], 'Openclaw', 'agent_config.enc')
+CONFIG_PATH = os.path.join(os.environ['LOCALAPPDATA'], 'Entraclaw', 'agent_config.enc')
 
 def save_encrypted(data: bytes, path: str):
-    _, encrypted = win32crypt.CryptProtectData(data, "Openclaw", b"entropy", None, None, 0)
+    _, encrypted = win32crypt.CryptProtectData(data, "Entraclaw", b"entropy", None, None, 0)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'wb') as f:
         f.write(encrypted)
@@ -313,9 +313,9 @@ def load_decrypted(path: str) -> bytes:
 | **LocalSystem** | Highest (root-equivalent) | Machine credentials | Machine-scope keys (weak protection) | Avoid unless absolutely necessary |
 | **NetworkService** | Low | Machine credentials (COMPUTERNAME$) | Has own profile, but limited | Network-facing services |
 | **LocalService** | Lowest | Anonymous | Has own profile, limited | Local-only services |
-| **Custom user** | Configurable | User's credentials | Full user-scope DPAPI | **Recommended for Openclaw** |
+| **Custom user** | Configurable | User's credentials | Full user-scope DPAPI | **Recommended for Entraclaw** |
 
-**Recommendation for Openclaw:** Create a dedicated `openclaw-agent` user account with
+**Recommendation for Entraclaw:** Create a dedicated `entraclaw-agent` user account with
 minimal privileges. This gives the agent its own DPAPI master key, its own Credential
 Manager vault, and proper identity isolation.
 
@@ -329,10 +329,10 @@ import servicemanager
 import time
 import os
 
-class OpenclawAgentService(win32serviceutil.ServiceFramework):
-    _svc_name_ = 'OpenclawAgent'
-    _svc_display_name_ = 'Openclaw Autonomous Agent'
-    _svc_description_ = 'Background service for the Openclaw autonomous agent.'
+class EntraclawAgentService(win32serviceutil.ServiceFramework):
+    _svc_name_ = 'EntraclawAgent'
+    _svc_display_name_ = 'Entraclaw Autonomous Agent'
+    _svc_description_ = 'Background service for the Entraclaw autonomous agent.'
 
     def __init__(self, args):
         win32serviceutil.ServiceFramework.__init__(self, args)
@@ -354,7 +354,7 @@ class OpenclawAgentService(win32serviceutil.ServiceFramework):
 
     def main(self):
         """Main agent loop."""
-        log_dir = os.path.join(os.environ.get('LOCALAPPDATA', 'C:\\'), 'Openclaw')
+        log_dir = os.path.join(os.environ.get('LOCALAPPDATA', 'C:\\'), 'Entraclaw')
         os.makedirs(log_dir, exist_ok=True)
         log_path = os.path.join(log_dir, 'agent.log')
 
@@ -369,25 +369,25 @@ class OpenclawAgentService(win32serviceutil.ServiceFramework):
                 break
 
 if __name__ == '__main__':
-    win32serviceutil.HandleCommandLine(OpenclawAgentService)
+    win32serviceutil.HandleCommandLine(EntraclawAgentService)
 ```
 
 ### Service Lifecycle Commands
 
 ```powershell
 # Install the service
-python openclaw_service.py install
+python entraclaw_service.py install
 
 # Set to run as a specific user (recommended)
-sc.exe config OpenclawAgent obj= ".\openclaw-agent" password= "SecurePassword"
+sc.exe config EntraclawAgent obj= ".\entraclaw-agent" password= "SecurePassword"
 
 # Start / Stop / Remove
-python openclaw_service.py start
-python openclaw_service.py stop
-python openclaw_service.py remove
+python entraclaw_service.py start
+python entraclaw_service.py stop
+python entraclaw_service.py remove
 
 # Debug mode (runs in console for development)
-python openclaw_service.py debug
+python entraclaw_service.py debug
 ```
 
 ### Alternative: NSSM (Non-Sucking Service Manager)
@@ -397,30 +397,30 @@ requiring pywin32 service code. This is simpler but less integrated.
 
 ```powershell
 # Install (from admin shell)
-nssm install OpenclawAgent "C:\path\to\venv\Scripts\python.exe" "C:\path\to\agent.py"
+nssm install EntraclawAgent "C:\path\to\venv\Scripts\python.exe" "C:\path\to\agent.py"
 
 # Configure working directory
-nssm set OpenclawAgent AppDirectory "C:\path\to\project"
+nssm set EntraclawAgent AppDirectory "C:\path\to\project"
 
 # Configure logging
-nssm set OpenclawAgent AppStdout "C:\path\to\logs\stdout.log"
-nssm set OpenclawAgent AppStderr "C:\path\to\logs\stderr.log"
+nssm set EntraclawAgent AppStdout "C:\path\to\logs\stdout.log"
+nssm set EntraclawAgent AppStderr "C:\path\to\logs\stderr.log"
 
 # Set service account
-nssm set OpenclawAgent ObjectName ".\openclaw-agent"
+nssm set EntraclawAgent ObjectName ".\entraclaw-agent"
 
 # Auto-start on boot
-nssm set OpenclawAgent Start SERVICE_AUTO_START
+nssm set EntraclawAgent Start SERVICE_AUTO_START
 
 # Set environment variables
-nssm set OpenclawAgent AppEnvironmentExtra OPENCLAW_ENV=production
+nssm set EntraclawAgent AppEnvironmentExtra ENTRACLAW_ENV=production
 
 # Control
-nssm start OpenclawAgent
-nssm stop OpenclawAgent
-nssm restart OpenclawAgent
-nssm edit OpenclawAgent     # Opens GUI for configuration
-nssm remove OpenclawAgent
+nssm start EntraclawAgent
+nssm stop EntraclawAgent
+nssm restart EntraclawAgent
+nssm edit EntraclawAgent     # Opens GUI for configuration
+nssm remove EntraclawAgent
 ```
 
 **NSSM advantages:** Auto-restart on failure, stdout/stderr capture, GUI editor,
@@ -441,7 +441,7 @@ service events (pause, custom commands).
 | **Restart on failure** | Built-in recovery options | Limited retry options |
 | **Best for** | Persistent agents, message queues | Periodic tasks, token refresh, cleanup |
 
-For Openclaw, a **hybrid approach** works well:
+For Entraclaw, a **hybrid approach** works well:
 - **Service** for the main agent loop (always running, processing tasks)
 - **Scheduled task** for periodic maintenance (token refresh, log rotation)
 
@@ -449,19 +449,19 @@ For Openclaw, a **hybrid approach** works well:
 
 ```powershell
 # Run a Python script every hour under the current user
-schtasks /create /tn "Openclaw\TokenRefresh" /tr "C:\path\to\venv\Scripts\python.exe C:\path\to\refresh_token.py" /sc hourly /ru "%USERNAME%" /rl HIGHEST
+schtasks /create /tn "Entraclaw\TokenRefresh" /tr "C:\path\to\venv\Scripts\python.exe C:\path\to\refresh_token.py" /sc hourly /ru "%USERNAME%" /rl HIGHEST
 
 # Run at system startup (requires admin)
-schtasks /create /tn "Openclaw\AgentStart" /tr "C:\path\to\start_agent.py" /sc onstart /ru "openclaw-agent" /rp "Password" /rl HIGHEST
+schtasks /create /tn "Entraclaw\AgentStart" /tr "C:\path\to\start_agent.py" /sc onstart /ru "entraclaw-agent" /rp "Password" /rl HIGHEST
 
 # Run when user logs on
-schtasks /create /tn "Openclaw\AgentUserStart" /tr "C:\path\to\agent.py" /sc onlogon
+schtasks /create /tn "Entraclaw\AgentUserStart" /tr "C:\path\to\agent.py" /sc onlogon
 
 # Query task status
-schtasks /query /tn "Openclaw\TokenRefresh" /fo LIST /v
+schtasks /query /tn "Entraclaw\TokenRefresh" /fo LIST /v
 
 # Delete a task
-schtasks /delete /tn "Openclaw\TokenRefresh" /f
+schtasks /delete /tn "Entraclaw\TokenRefresh" /f
 ```
 
 ### Creating Tasks via PowerShell (more control)
@@ -475,7 +475,7 @@ $action = New-ScheduledTaskAction `
 $trigger = New-ScheduledTaskTrigger -RepetitionInterval (New-TimeSpan -Hours 1) -Once -At (Get-Date)
 
 $principal = New-ScheduledTaskPrincipal `
-    -UserId "openclaw-agent" `
+    -UserId "entraclaw-agent" `
     -LogonType ServiceAccount `
     -RunLevel Highest
 
@@ -487,12 +487,12 @@ $settings = New-ScheduledTaskSettingsSet `
     -RestartInterval (New-TimeSpan -Minutes 1)
 
 Register-ScheduledTask `
-    -TaskName "Openclaw\TokenRefresh" `
+    -TaskName "Entraclaw\TokenRefresh" `
     -Action $action `
     -Trigger $trigger `
     -Principal $principal `
     -Settings $settings `
-    -Description "Periodic token refresh for Openclaw agent"
+    -Description "Periodic token refresh for Entraclaw agent"
 ```
 
 ### Python Task Scheduler via COM API
@@ -506,7 +506,7 @@ root = scheduler.GetFolder('\\')
 
 # Create a new task
 task_def = scheduler.NewTask(0)
-task_def.RegistrationInfo.Description = 'Openclaw token refresh'
+task_def.RegistrationInfo.Description = 'Entraclaw token refresh'
 
 # Create trigger (daily at 3 AM)
 trigger = task_def.Triggers.Create(2)  # 2 = TASK_TRIGGER_DAILY
@@ -521,10 +521,10 @@ action.WorkingDirectory = r'C:\path\to\project'
 
 # Register (TASK_CREATE_OR_UPDATE=6, TASK_LOGON_PASSWORD=1)
 root.RegisterTaskDefinition(
-    'Openclaw\\TokenRefresh',
+    'Entraclaw\\TokenRefresh',
     task_def,
     6,                    # TASK_CREATE_OR_UPDATE
-    'openclaw-agent',     # user
+    'entraclaw-agent',     # user
     'password',           # password
     1                     # TASK_LOGON_PASSWORD
 )
@@ -557,11 +557,11 @@ mechanism Windows uses for all integrated authentication.
 3. If Kerberos is unavailable (no domain, no SPN, workgroup), falls back to NTLM.
 4. The application never needs to know which protocol was selected.
 
-### Relevance to Openclaw
+### Relevance to Entraclaw
 
 SSPI is primarily relevant for:
 - **Agent-to-agent authentication** in enterprise/AD environments
-- **Service-to-service auth** where Openclaw agents need to call Windows-authenticated APIs
+- **Service-to-service auth** where Entraclaw agents need to call Windows-authenticated APIs
 - **OBO (On-Behalf-Of) token flows** — Kerberos delegation (`S4U2Proxy`) allows a
   service to act on behalf of a user
 
@@ -645,7 +645,7 @@ def run_elevated(script_path: str, args: str = ""):
         1              # SW_SHOWNORMAL
     )
 
-# Usage pattern for Openclaw consent
+# Usage pattern for Entraclaw consent
 if not is_elevated():
     print("Agent needs elevated privileges for initial setup.")
     run_elevated(__file__, "--setup")
@@ -672,10 +672,10 @@ For compiled executables, embed a manifest requesting elevation:
 </assembly>
 ```
 
-### Openclaw Consent Model
+### Entraclaw Consent Model
 
 UAC is **not** suitable for ongoing agent consent (it's designed for one-shot elevation).
-For Openclaw, the consent flow should be:
+For Entraclaw, the consent flow should be:
 
 1. **Installation** — One-time UAC elevation to install the service and create the
    service account.
@@ -735,12 +735,12 @@ from fido2.webauthn import (
     UserVerificationRequirement,
 )
 
-rp = PublicKeyCredentialRpEntity(name="Openclaw Agent", id="localhost")
+rp = PublicKeyCredentialRpEntity(name="Entraclaw Agent", id="localhost")
 server = Fido2Server(rp)
 
 # Registration (one-time setup)
 registration_data, state = server.register_begin(
-    user={"id": b"agent-abc123", "name": "openclaw-agent", "displayName": "Openclaw Agent"},
+    user={"id": b"agent-abc123", "name": "entraclaw-agent", "displayName": "Entraclaw Agent"},
     credentials=[],
     user_verification=UserVerificationRequirement.REQUIRED,
 )
@@ -754,7 +754,7 @@ auth_data, state = server.authenticate_begin(
 # Client triggers Windows Hello → returns assertion → server.authenticate_complete()
 ```
 
-### Practical Considerations for Openclaw
+### Practical Considerations for Entraclaw
 
 - Windows Hello requires a **browser or native WebAuthn caller** — it cannot be
   triggered from a pure CLI/headless Python process.
@@ -792,18 +792,18 @@ import win32api
 
 # Log on as a specific user
 handle = win32security.LogonUser(
-    'openclaw-agent',                    # username
+    'entraclaw-agent',                    # username
     '.',                                  # domain (. = local)
     'password',                           # password
     win32con.LOGON32_LOGON_INTERACTIVE,   # logon type
     win32con.LOGON32_PROVIDER_DEFAULT     # logon provider
 )
 
-# Impersonate that user (current thread now runs as openclaw-agent)
+# Impersonate that user (current thread now runs as entraclaw-agent)
 win32security.ImpersonateLoggedOnUser(handle)
 print(f"Now running as: {win32api.GetUserName()}")
 
-# Do work that requires openclaw-agent's credentials/DPAPI keys...
+# Do work that requires entraclaw-agent's credentials/DPAPI keys...
 
 # Revert to original identity
 win32security.RevertToSelf()
@@ -840,14 +840,14 @@ for priv_luid, priv_attr in privileges:
 
 ## Integration Patterns
 
-### Recommended Openclaw Deployment on Windows
+### Recommended Entraclaw Deployment on Windows
 
 ```
 ┌─────────────────────────────────────────────────────┐
 │                   Windows Machine                    │
 │                                                      │
 │  ┌──────────────────────┐  ┌──────────────────────┐ │
-│  │   Openclaw Service   │  │   Openclaw Tray App  │ │
+│  │   Entraclaw Service   │  │   Entraclaw Tray App  │ │
 │  │   (Background)       │  │   (User Session)     │ │
 │  │                      │  │                      │ │
 │  │  • Runs as dedicated │  │  • Shows status icon │ │
@@ -880,7 +880,7 @@ for priv_luid, priv_attr in privileges:
 #### 1. Credential Storage Layer
 
 ```python
-# credential_store_windows.py — Openclaw credential abstraction
+# credential_store_windows.py — Entraclaw credential abstraction
 
 import platform
 if platform.system() != 'Windows':
@@ -891,7 +891,7 @@ import win32crypt
 import json
 import os
 
-CREDENTIAL_PREFIX = "Openclaw"
+CREDENTIAL_PREFIX = "Entraclaw"
 
 class WindowsCredentialStore:
     """Windows-native credential storage using Credential Manager + DPAPI."""
@@ -906,7 +906,7 @@ class WindowsCredentialStore:
             'UserName': agent_id,
             'CredentialBlob': blob,
             'Persist': win32cred.CRED_PERSIST_LOCAL_MACHINE,
-            'Comment': f'Openclaw agent token for {agent_id}',
+            'Comment': f'Entraclaw agent token for {agent_id}',
         }
         win32cred.CredWrite(credential, 0)
 
@@ -932,14 +932,14 @@ class WindowsCredentialStore:
         """Store larger config data as DPAPI-encrypted file."""
         config_dir = os.path.join(
             os.environ.get('LOCALAPPDATA', ''),
-            'Openclaw', agent_id
+            'Entraclaw', agent_id
         )
         os.makedirs(config_dir, exist_ok=True)
         path = os.path.join(config_dir, 'config.enc')
 
         plaintext = json.dumps(config).encode('utf-8')
         _, encrypted = win32crypt.CryptProtectData(
-            plaintext, f"Openclaw:{agent_id}", None, None, None, 0
+            plaintext, f"Entraclaw:{agent_id}", None, None, None, 0
         )
         with open(path, 'wb') as f:
             f.write(encrypted)
@@ -948,7 +948,7 @@ class WindowsCredentialStore:
         """Load DPAPI-encrypted config."""
         path = os.path.join(
             os.environ.get('LOCALAPPDATA', ''),
-            'Openclaw', agent_id, 'config.enc'
+            'Entraclaw', agent_id, 'config.enc'
         )
         if not os.path.exists(path):
             return None
@@ -978,8 +978,8 @@ def create_service_account():
 
     # Create user
     subprocess.run([
-        'net', 'user', 'openclaw-agent', password,
-        '/add', '/comment:"Openclaw Agent Service Account"',
+        'net', 'user', 'entraclaw-agent', password,
+        '/add', '/comment:"Entraclaw Agent Service Account"',
         '/passwordchg:no', '/expires:never'
     ], check=True)
 
@@ -1000,13 +1000,13 @@ def install():
 
     # Install the service
     subprocess.run([
-        sys.executable, 'openclaw_service.py', 'install',
-        '--username', '.\\openclaw-agent',
+        sys.executable, 'entraclaw_service.py', 'install',
+        '--username', '.\\entraclaw-agent',
         '--password', password,
         '--startup', 'auto',
     ], check=True)
 
-    print("Openclaw agent service installed successfully.")
+    print("Entraclaw agent service installed successfully.")
 
 if __name__ == '__main__':
     install()
@@ -1049,11 +1049,11 @@ def show_consent_dialog(action: str, resource: str, agent_id: str) -> bool:
     import ctypes
     result = ctypes.windll.user32.MessageBoxW(
         0,
-        f"Openclaw agent '{agent_id}' wants to:\n\n"
+        f"Entraclaw agent '{agent_id}' wants to:\n\n"
         f"Action: {action}\n"
         f"Resource: {resource}\n\n"
         f"Allow this action?",
-        "Openclaw Agent Consent",
+        "Entraclaw Agent Consent",
         0x00000004 | 0x00000030  # MB_YESNO | MB_ICONWARNING
     )
     return result == 6  # IDYES
@@ -1065,9 +1065,9 @@ def create_tray_icon():
     draw.rectangle([16, 16, 48, 48], fill='white')
 
     icon = pystray.Icon(
-        "openclaw",
+        "entraclaw",
         img,
-        "Openclaw Agent",
+        "Entraclaw Agent",
         menu=pystray.Menu(
             pystray.MenuItem("Status: Running", lambda: None),
             pystray.MenuItem("View Logs", lambda: None),
@@ -1110,7 +1110,7 @@ if __name__ == '__main__':
   on older Windows versions (2560 bytes on newer). Long tokens may need to be split
   or stored via DPAPI files instead.
 - **TargetName uniqueness:** TargetName + Type must be unique per user. Use a
-  consistent naming convention: `Openclaw/{agent_id}/{purpose}`.
+  consistent naming convention: `Entraclaw/{agent_id}/{purpose}`.
 
 ### Service Account Quirks
 
@@ -1183,7 +1183,7 @@ if __name__ == '__main__':
 
 7. **MSA/gMSA for service identity?** Group Managed Service Accounts (gMSA)
    provide automatic password rotation and are the enterprise best practice for
-   service identity in AD environments. Investigate whether the Openclaw agent service
+   service identity in AD environments. Investigate whether the Entraclaw agent service
    can run as a gMSA.
 
 ---

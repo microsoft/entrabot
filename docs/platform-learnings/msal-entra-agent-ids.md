@@ -1,19 +1,19 @@
 # MSAL & Entra Agent IDs
 
 > **Last updated:** 2025-07-14
-> **Status:** Living reference document for Openclaw identity architecture
+> **Status:** Living reference document for Entraclaw identity architecture
 
 ## Overview
 
-MSAL (Microsoft Authentication Library) and Microsoft Entra Agent IDs form the **foundational auth layer** for Openclaw. Every Openclaw agent — whether running on Mac, Linux, or Windows — needs:
+MSAL (Microsoft Authentication Library) and Microsoft Entra Agent IDs form the **foundational auth layer** for Entraclaw. Every Entraclaw agent — whether running on Mac, Linux, or Windows — needs:
 
 1. **A distinct identity** in the enterprise directory (Entra Agent ID)
 2. **Token acquisition** to call APIs on behalf of humans or autonomously (MSAL)
 3. **On-behalf-of (OBO) delegation** so agents act with the human's permissions, not their own blanket access
 
-**Why this combination matters for Openclaw:**
+**Why this combination matters for Entraclaw:**
 
-- **Agent IDs** give each Openclaw agent instance a unique, auditable, governable identity in the customer's Entra tenant — separate from the human who deployed it.
+- **Agent IDs** give each Entraclaw agent instance a unique, auditable, governable identity in the customer's Entra tenant — separate from the human who deployed it.
 - **MSAL** handles the complex OAuth 2.0 token acquisition, caching, and refresh flows that make this work in production.
 - **OBO flow** is the critical bridge: a human authenticates once (e.g., via device code flow on a CLI), and the agent exchanges that token to call downstream APIs *as the human* — never exceeding the human's own permissions.
 
@@ -133,9 +133,9 @@ else:
 
 The OBO flow enables **delegated identity chaining**: when a middle-tier API receives a user's access token, it can exchange that token for a new access token to call a downstream API — preserving the user's identity and permissions throughout the chain.
 
-**This is Openclaw's core auth pattern:**
+**This is Entraclaw's core auth pattern:**
 ```
-Human → (device code auth) → Openclaw Agent → (OBO) → Microsoft Graph / other APIs
+Human → (device code auth) → Entraclaw Agent → (OBO) → Microsoft Graph / other APIs
 ```
 
 The agent never gets blanket permissions. It always acts within the bounds of what the human is authorized to do.
@@ -287,13 +287,13 @@ When an OBO token is issued, it contains claims identifying both the **user** an
 }
 ```
 
-**Key claims for Openclaw:**
+**Key claims for Entraclaw:**
 
-| Claim | What It Identifies | Openclaw Use |
+| Claim | What It Identifies | Entraclaw Use |
 |-------|--------------------|--------------|
 | `oid` | User's Object ID in the tenant | Identify the human operator |
 | `sub` | Subject — unique per (user, app, tenant) | Stable user identifier for your app |
-| `azp` | Authorized party — the client app that requested OBO | Identifies the Openclaw agent's app registration |
+| `azp` | Authorized party — the client app that requested OBO | Identifies the Entraclaw agent's app registration |
 | `tid` | Tenant ID | Multi-tenant routing |
 | `scp` | Scopes (delegated permissions) | Verify what the agent is allowed to do |
 | `azpacr` | Auth method of the calling app (0=public, 1=secret, 2=cert) | Security posture verification |
@@ -327,7 +327,7 @@ A **reusable template** that defines a "kind" of agent. Think of it as the app r
 
 - Defines the agent's name, publisher, roles, and permissions
 - Holds credentials (secrets, certs, federated identity credentials)
-- Created once per agent type (e.g., "Openclaw Code Assistant")
+- Created once per agent type (e.g., "Entraclaw Code Assistant")
 
 #### Agent Identity
 An **instance** created from a blueprint. Each deployed agent gets its own identity.
@@ -338,10 +338,10 @@ An **instance** created from a blueprint. Each deployed agent gets its own ident
 - Appears in sign-in logs, conditional access policies, and audit trails
 
 ```
-Blueprint: "Openclaw Agent"
-  ├── Agent Identity: "Openclaw-NorthAm-Jane" (sponsor: jane@contoso.com)
-  ├── Agent Identity: "Openclaw-EMEA-Bob" (sponsor: bob@contoso.com)
-  └── Agent Identity: "Openclaw-Dev-Test" (sponsor: devteam@contoso.com)
+Blueprint: "Entraclaw Agent"
+  ├── Agent Identity: "Entraclaw-NorthAm-Jane" (sponsor: jane@contoso.com)
+  ├── Agent Identity: "Entraclaw-EMEA-Bob" (sponsor: bob@contoso.com)
+  └── Agent Identity: "Entraclaw-Dev-Test" (sponsor: devteam@contoso.com)
 ```
 
 ### How to Register Agent Identities
@@ -358,9 +358,9 @@ POST https://graph.microsoft.com/beta/agentIdentityBlueprints
 Content-Type: application/json
 
 {
-    "displayName": "Openclaw Agent",
-    "description": "Autonomous coding agent for Openclaw platform",
-    "identifierUris": ["api://openclaw-agent-blueprint"],
+    "displayName": "Entraclaw Agent",
+    "description": "Autonomous coding agent for Entraclaw platform",
+    "identifierUris": ["api://entraclaw-agent-blueprint"],
     "appRoles": [
         {
             "displayName": "Code Assistant",
@@ -381,7 +381,7 @@ Content-Type: application/json
 
 {
     "agentIdentityBlueprintId": "{blueprint-id}",
-    "displayName": "Openclaw-Dev-Jane",
+    "displayName": "Entraclaw-Dev-Jane",
     "owner": "{owner-object-id}",
     "sponsor": "{sponsor-object-id}"
 }
@@ -394,12 +394,12 @@ POST https://graph.microsoft.com/beta/agentRegistry/agentInstances
 Content-Type: application/json
 
 {
-    "displayName": "Openclaw-Dev-Jane",
-    "endpointUrl": "https://openclaw-agent.contoso.com",
+    "displayName": "Entraclaw-Dev-Jane",
+    "endpointUrl": "https://entraclaw-agent.contoso.com",
     "identityId": "{agent-identity-id}",
     "skills": ["code-review", "code-generation"],
     "metadata": {
-        "platform": "openclaw",
+        "platform": "entraclaw",
         "version": "0.1.0"
     }
 }
@@ -479,7 +479,7 @@ import os
 import atexit
 import msal
 
-CACHE_FILE = os.path.expanduser("~/.openclaw/token_cache.bin")
+CACHE_FILE = os.path.expanduser("~/.entraclaw/token_cache.bin")
 
 cache = msal.SerializableTokenCache()
 
@@ -523,19 +523,19 @@ from msal_extensions import (
 import sys
 import msal
 
-CACHE_LOCATION = os.path.expanduser("~/.openclaw/token_cache.bin")
+CACHE_LOCATION = os.path.expanduser("~/.entraclaw/token_cache.bin")
 
 if sys.platform == "darwin":
     persistence = KeychainPersistence(
-        CACHE_LOCATION, "OpencalwTokenCache", "com.openclaw.agent"
+        CACHE_LOCATION, "OpencalwTokenCache", "com.entraclaw.agent"
     )
 elif sys.platform == "win32":
     persistence = FilePersistenceWithDataProtection(CACHE_LOCATION)
 else:
     persistence = LibsecretPersistence(
         CACHE_LOCATION,
-        schema_name="com.openclaw.tokencache",
-        attributes={"app": "openclaw"},
+        schema_name="com.entraclaw.tokencache",
+        attributes={"app": "entraclaw"},
     )
 
 cache = PersistedTokenCache(persistence)
@@ -568,7 +568,7 @@ MSAL handles refresh automatically in `acquire_token_silent()`:
 
 ## Device Code Flow
 
-The device code flow is Openclaw's **primary bootstrap authentication method** for CLI/headless scenarios where the agent runs in a terminal without a browser.
+The device code flow is Entraclaw's **primary bootstrap authentication method** for CLI/headless scenarios where the agent runs in a terminal without a browser.
 
 ### How It Works
 
@@ -690,10 +690,10 @@ Conditional Access policies can now be applied to **service principals** (includ
 | **MFA** | Multi-factor authentication | ❌ Not applicable to workloads |
 | **Device compliance** | Require compliant device | ❌ Not applicable to workloads |
 
-#### Openclaw Implications
+#### Entraclaw Implications
 
 - Agent IDs can be restricted to only authenticate from known networks
-- Conditional Access can enforce that Openclaw agents only operate from approved IP ranges
+- Conditional Access can enforce that Entraclaw agents only operate from approved IP ranges
 - Risk signals (anomalous sign-in patterns) can trigger automatic blocking
 - Blueprint-level policies apply to **all** agent identities from that blueprint
 
@@ -765,7 +765,7 @@ if "access_token" not in result:
 | `interaction_required` | User Interaction Needed | Silent auth failed; user must re-authenticate | Catch this and fall back to interactive auth |
 | `invalid_grant` | Token Exchange Failed | OBO assertion invalid, expired, or wrong audience | Verify incoming token's `aud` matches your app; check consent |
 
-### Error Handling Pattern for Openclaw
+### Error Handling Pattern for Entraclaw
 
 ```python
 def acquire_token_with_retry(app, scopes, account=None, max_retries=2):
@@ -852,7 +852,7 @@ def acquire_token_with_retry(app, scopes, account=None, max_retries=2):
 
 13. **Agent IDs are in preview.** APIs are beta-only and may change. Don't build production dependencies on current API shapes without a migration plan.
 
-14. **Agent IDs are single-tenant.** They can't access resources in other tenants. For multi-tenant Openclaw deployments, each tenant needs its own blueprint and agent identities.
+14. **Agent IDs are single-tenant.** They can't access resources in other tenants. For multi-tenant Entraclaw deployments, each tenant needs its own blueprint and agent identities.
 
 15. **Blueprint credentials control everything.** If the blueprint's credentials are compromised, ALL agent identities from that blueprint are compromised. Treat blueprint credentials with the same rigor as root certificates.
 
@@ -860,17 +860,17 @@ def acquire_token_with_retry(app, scopes, account=None, max_retries=2):
 
 ## Open Questions
 
-### For Openclaw Architecture
+### For Entraclaw Architecture
 
-1. **Can we use Agent IDs with OBO?** When a human authenticates, can the Openclaw agent (with its Agent ID) use OBO to call downstream APIs? Or does the Agent ID's blueprint credential perform its own separate token acquisition?
+1. **Can we use Agent IDs with OBO?** When a human authenticates, can the Entraclaw agent (with its Agent ID) use OBO to call downstream APIs? Or does the Agent ID's blueprint credential perform its own separate token acquisition?
 
-2. **Blueprint-per-tenant vs. shared blueprint?** For Openclaw's multi-tenant model, should each customer tenant have its own blueprint, or can one blueprint span tenants (likely no, given single-tenant constraint)?
+2. **Blueprint-per-tenant vs. shared blueprint?** For Entraclaw's multi-tenant model, should each customer tenant have its own blueprint, or can one blueprint span tenants (likely no, given single-tenant constraint)?
 
 3. **Agent ID + Device Code Flow interaction:** Can a human bootstrap an Agent ID via device code flow? Or is device code strictly for the human's identity, with the agent identity being separate?
 
-4. **Token cache isolation between agents:** If multiple Openclaw agents run on the same machine, how do we isolate their token caches? Separate cache files? Separate keychains?
+4. **Token cache isolation between agents:** If multiple Entraclaw agents run on the same machine, how do we isolate their token caches? Separate cache files? Separate keychains?
 
-5. **Graceful degradation:** If a customer's tenant doesn't have Agent ID licensing, can Openclaw fall back to standard service principals? What's the feature-detection mechanism?
+5. **Graceful degradation:** If a customer's tenant doesn't have Agent ID licensing, can Entraclaw fall back to standard service principals? What's the feature-detection mechanism?
 
 6. **Refresh token behavior for OBO:** OBO access tokens have short lifetimes. Does MSAL cache the OBO refresh token? Can `acquire_token_silent` silently refresh an OBO token?
 

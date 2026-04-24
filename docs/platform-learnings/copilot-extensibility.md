@@ -1,14 +1,14 @@
 # Microsoft 365 Copilot Extensibility
 
 > **Research date:** 2025-08  
-> **Relevance to Openclaw:** Agent identity, OBO flows, device-bound autonomous agents  
+> **Relevance to Entraclaw:** Agent identity, OBO flows, device-bound autonomous agents  
 > **Status:** Reference document — will evolve as Microsoft ships new capabilities
 
 ## Overview
 
 Microsoft 365 Copilot's extensibility model allows organizations to customize and extend Copilot beyond its out-of-the-box capabilities. The model is built on three composable pillars — **Connectors** (knowledge/memory), **Agents** (orchestration/persona), and **Plugins/Actions** (skills/workflows) — unified under a single governance and security framework.
 
-**Key architectural insight for Openclaw:** Microsoft has introduced **Entra Agent ID** — a first-class identity primitive for AI agents in Entra ID, directly analogous to Openclaw's Agent ID concept. This is the most significant finding from this research.
+**Key architectural insight for Entraclaw:** Microsoft has introduced **Entra Agent ID** — a first-class identity primitive for AI agents in Entra ID, directly analogous to Entraclaw's Agent ID concept. This is the most significant finding from this research.
 
 ### Extensibility Pillars at a Glance
 
@@ -25,7 +25,7 @@ Microsoft 365 Copilot's extensibility model allows organizations to customize an
 
 2. **Custom Engine Agents** — You bring your own orchestrator, models, and backend logic. Microsoft 365 acts as a channel (Teams, Outlook, etc.) while your service handles all AI reasoning. Maximum flexibility, maximum responsibility.
 
-**Openclaw relevance:** An Openclaw device agent would most likely integrate as a **Custom Engine Agent** — it has its own orchestration and identity, and M365 Copilot would serve as a presentation/channel layer.
+**Entraclaw relevance:** An Entraclaw device agent would most likely integrate as a **Custom Engine Agent** — it has its own orchestration and identity, and M365 Copilot would serve as a presentation/channel layer.
 
 ---
 
@@ -111,7 +111,7 @@ API Plugins connect Copilot (or a declarative agent) to external APIs for both d
 
 ### Authentication Model for Plugins
 
-This is directly relevant to Openclaw's OBO flow architecture.
+This is directly relevant to Entraclaw's OBO flow architecture.
 
 **Supported auth methods:**
 
@@ -130,7 +130,7 @@ This is directly relevant to Openclaw's OBO flow architecture.
 4. For OBO: plugin exchanges the token via Entra ID's OBO flow to call downstream APIs (e.g., Microsoft Graph) on behalf of the user
 5. Redirect URI for plugins: `https://teams.microsoft.com/api/platform/v1.0/oAuthRedirect`
 
-**Openclaw parallel:** This is strikingly similar to Openclaw's OBO model. The key difference is that in M365 Copilot, the *user* is always the authenticated principal — the plugin acts on behalf of the user. In Openclaw, the *agent* has its own identity and can act on its own behalf or on behalf of a user.
+**Entraclaw parallel:** This is strikingly similar to Entraclaw's OBO model. The key difference is that in M365 Copilot, the *user* is always the authenticated principal — the plugin acts on behalf of the user. In Entraclaw, the *agent* has its own identity and can act on its own behalf or on behalf of a user.
 
 ### OpenAPI Spec in Plugin Definition
 
@@ -176,9 +176,9 @@ Graph Connectors bring **read-only** external data into Microsoft 365's search i
 | **Synced** (common) | Content indexed into Microsoft Graph | Permissions set at ingestion via ACLs |
 | **Federated** (preview) | Live query to external system at search time | OAuth 2.0 or API key; external system checks permissions |
 
-### Relevance to Openclaw
+### Relevance to Entraclaw
 
-Graph Connectors are primarily a data ingestion mechanism. An Openclaw agent could:
+Graph Connectors are primarily a data ingestion mechanism. An Entraclaw agent could:
 - Use a Graph Connector to surface device-local data in Copilot (e.g., local files, sensor data)
 - Be the *source system* that a Graph Connector crawls
 - Not directly integrate *as* a connector — connectors don't have agent-like autonomy
@@ -225,11 +225,11 @@ Introduced at Build 2025, Copilot Studio supports:
 
 ## Agent Identity in M365 Copilot
 
-This section is the most critical for Openclaw's architecture comparison.
+This section is the most critical for Entraclaw's architecture comparison.
 
 ### Entra Agent ID — Microsoft's "Agent ID"
 
-**Announced at Build 2025**, Microsoft Entra Agent ID is a new identity primitive purpose-built for AI agents. This is the closest analog to Openclaw's Agent ID concept in the Microsoft ecosystem.
+**Announced at Build 2025**, Microsoft Entra Agent ID is a new identity primitive purpose-built for AI agents. This is the closest analog to Entraclaw's Agent ID concept in the Microsoft ecosystem.
 
 #### Key Properties
 
@@ -265,9 +265,9 @@ This section is the most critical for Openclaw's architecture comparison.
 - **Access control:** Only Audit Reader role or higher can view logs
 - **Current limitation:** Full auditing is available for Copilot Studio agents; prebuilt and third-party agents have limited audit coverage
 
-#### Comparison: Entra Agent ID vs. Openclaw Agent ID
+#### Comparison: Entra Agent ID vs. Entraclaw Agent ID
 
-| Aspect | Entra Agent ID | Openclaw Agent ID |
+| Aspect | Entra Agent ID | Entraclaw Agent ID |
 |---|---|---|
 | **Scope** | Tenant-wide (Entra directory) | Cross-platform (device-bound) |
 | **Identity basis** | Entra ID app registration + Agent ID overlay | Device attestation + cryptographic identity |
@@ -277,14 +277,14 @@ This section is the most critical for Openclaw's architecture comparison.
 | **Interop** | M365 ecosystem (Teams, Outlook, etc.) | Cross-platform (any API/service) |
 | **Maturity** | Preview (announced Build 2025) | Research/design phase |
 
-### Key Insight for Openclaw
+### Key Insight for Entraclaw
 
-Microsoft has validated the core Openclaw premise: **AI agents need their own identity, not just delegated user tokens.** Entra Agent ID is Microsoft's answer to this, but it's:
+Microsoft has validated the core Entraclaw premise: **AI agents need their own identity, not just delegated user tokens.** Entra Agent ID is Microsoft's answer to this, but it's:
 - Tenant-scoped (not cross-platform)
 - Admin-managed (not self-sovereign)
 - Cloud-first (not device-bound)
 
-Openclaw's Agent ID could potentially **register as an Entra Agent ID** within a tenant, bridging the gap between device-bound autonomous agents and the M365 ecosystem.
+Entraclaw's Agent ID could potentially **register as an Entra Agent ID** within a tenant, bridging the gap between device-bound autonomous agents and the M365 ecosystem.
 
 ---
 
@@ -326,7 +326,7 @@ MCP is the open standard (originally from Anthropic, adopted by Microsoft) for c
 - **Dynamic discovery** — agents can find new tools at runtime without redeployment
 - Copilot Studio supports MCP natively as of 2025
 
-**Openclaw opportunity:** An Openclaw device agent could expose an MCP server, making device-local capabilities available to Copilot agents. This is likely the simplest integration path.
+**Entraclaw opportunity:** An Entraclaw device agent could expose an MCP server, making device-local capabilities available to Copilot agents. This is likely the simplest integration path.
 
 ### Agent-to-Agent (A2A) Protocol
 
@@ -336,23 +336,23 @@ A2A focuses on inter-agent collaboration:
 - Designed for opaque agent-to-agent communication
 - Complementary to MCP (A2A = agent coordination; MCP = tool access)
 
-**Openclaw opportunity:** An Openclaw agent could participate in A2A orchestration, receiving delegated tasks from Copilot agents.
+**Entraclaw opportunity:** An Entraclaw agent could participate in A2A orchestration, receiving delegated tasks from Copilot agents.
 
 ---
 
 ## Integration Patterns
 
-### Could an Openclaw device agent be a Copilot extension?
+### Could an Entraclaw device agent be a Copilot extension?
 
 **Yes, via multiple paths:**
 
 #### Pattern 1: Custom Engine Agent (Recommended)
 
 ```
-User ↔ M365 Copilot (Teams/Outlook) ↔ M365 Agents SDK proxy ↔ Openclaw Agent (device)
+User ↔ M365 Copilot (Teams/Outlook) ↔ M365 Agents SDK proxy ↔ Entraclaw Agent (device)
 ```
 
-- Openclaw agent runs its own orchestrator on-device
+- Entraclaw agent runs its own orchestrator on-device
 - M365 acts as a channel — user interacts via Teams/Outlook
 - Agent authenticates with Entra Agent ID
 - Agent uses OBO flow for user-delegated operations
@@ -361,10 +361,10 @@ User ↔ M365 Copilot (Teams/Outlook) ↔ M365 Agents SDK proxy ↔ Openclaw Age
 #### Pattern 2: MCP Server on Device
 
 ```
-Copilot Agent → MCP Client → Openclaw MCP Server (device) → local tools/data
+Copilot Agent → MCP Client → Entraclaw MCP Server (device) → local tools/data
 ```
 
-- Openclaw agent exposes device capabilities as an MCP server
+- Entraclaw agent exposes device capabilities as an MCP server
 - A Copilot declarative agent connects to this MCP server
 - Device tools (file access, sensors, local apps) become Copilot actions
 - Simpler integration; Copilot handles orchestration
@@ -372,10 +372,10 @@ Copilot Agent → MCP Client → Openclaw MCP Server (device) → local tools/da
 #### Pattern 3: API Plugin
 
 ```
-Copilot Agent → API Plugin → Openclaw Agent API endpoint → device
+Copilot Agent → API Plugin → Entraclaw Agent API endpoint → device
 ```
 
-- Openclaw agent exposes an OpenAPI-described REST API
+- Entraclaw agent exposes an OpenAPI-described REST API
 - Registered as a plugin attached to a declarative agent
 - OAuth/SSO auth via Entra ID
 - More rigid than MCP; requires static OpenAPI spec
@@ -383,19 +383,19 @@ Copilot Agent → API Plugin → Openclaw Agent API endpoint → device
 #### Pattern 4: Graph Connector (Data Only)
 
 ```
-Openclaw Agent → Graph Connector → Microsoft Graph index → Copilot grounding
+Entraclaw Agent → Graph Connector → Microsoft Graph index → Copilot grounding
 ```
 
-- Openclaw agent pushes device data into Microsoft Graph
+- Entraclaw agent pushes device data into Microsoft Graph
 - Data becomes available for Copilot search and grounding
 - No real-time interaction; batch data sync only
 - ACLs map device permissions to Entra ID identities
 
 ### Recommended Architecture
 
-For full Openclaw integration with M365 Copilot:
+For full Entraclaw integration with M365 Copilot:
 
-1. **Register Openclaw Agent as Entra Agent ID** — gives the agent a first-class identity in the tenant
+1. **Register Entraclaw Agent as Entra Agent ID** — gives the agent a first-class identity in the tenant
 2. **Expose device capabilities via MCP server** — for dynamic tool discovery
 3. **Implement Custom Engine Agent pattern** — for scenarios requiring autonomous reasoning
 4. **Use OBO flow** — when the agent needs to act on behalf of the user in M365
@@ -435,23 +435,23 @@ For full Openclaw integration with M365 Copilot:
 
 ## Open Questions
 
-### For Openclaw's Scenario
+### For Entraclaw's Scenario
 
-1. **Can an Entra Agent ID represent a device-bound agent?** Entra Agent ID is designed for cloud-hosted agents. Can it be extended to represent an agent that lives on a specific device, or would Openclaw need a separate identity layer that maps *into* Entra Agent ID?
+1. **Can an Entra Agent ID represent a device-bound agent?** Entra Agent ID is designed for cloud-hosted agents. Can it be extended to represent an agent that lives on a specific device, or would Entraclaw need a separate identity layer that maps *into* Entra Agent ID?
 
-2. **OBO flow limitations for agents:** M365's OBO flow assumes the calling principal is a user-consented app. If an Openclaw agent has its own Agent ID, can it participate in OBO without a user being in the loop? Or does the flow always require a user context?
+2. **OBO flow limitations for agents:** M365's OBO flow assumes the calling principal is a user-consented app. If an Entraclaw agent has its own Agent ID, can it participate in OBO without a user being in the loop? Or does the flow always require a user context?
 
-3. **MCP server accessibility:** If an Openclaw agent runs an MCP server on a local device, how would Copilot (running in the cloud) reach it? This implies either a relay/tunnel service or a cloud-hosted proxy for the device agent.
+3. **MCP server accessibility:** If an Entraclaw agent runs an MCP server on a local device, how would Copilot (running in the cloud) reach it? This implies either a relay/tunnel service or a cloud-hosted proxy for the device agent.
 
 4. **Graph Connector ACL mapping:** If device-local data has its own permission model (not based on Entra ID users), how would ACLs be mapped? Custom identity mapping may be required.
 
 5. **Custom Engine Agent latency:** For device-bound agents, network latency between the M365 cloud orchestrator and the device could impact user experience. Is there a local-first fallback pattern?
 
-6. **Multi-tenant agents:** If an Openclaw agent needs to work across multiple M365 tenants (e.g., a user's personal and work tenants), what are the Entra Agent ID implications?
+6. **Multi-tenant agents:** If an Entraclaw agent needs to work across multiple M365 tenants (e.g., a user's personal and work tenants), what are the Entra Agent ID implications?
 
-7. **Agent autonomy limits:** Entra Agent ID enforces admin-managed lifecycle. Openclaw's vision includes self-sovereign agents. Is there a reconciliation path, or are these fundamentally different trust models?
+7. **Agent autonomy limits:** Entra Agent ID enforces admin-managed lifecycle. Entraclaw's vision includes self-sovereign agents. Is there a reconciliation path, or are these fundamentally different trust models?
 
-8. **A2A protocol maturity:** How mature is A2A for production use? Could Openclaw agents participate in A2A orchestration today, or is it still experimental?
+8. **A2A protocol maturity:** How mature is A2A for production use? Could Entraclaw agents participate in A2A orchestration today, or is it still experimental?
 
 ---
 

@@ -53,7 +53,7 @@ The persona-sati repo now has the cert-auth version. Read it to see the shape:
 - `persona-sati/docs/runbooks/identity-migration.md` — the user-facing migration runbook.
 - `persona-sati/pyproject.toml` — the `[provisioning]` optional-dep group adds `keyring>=24` + `cryptography>=42`.
 
-The file layout, naming, and migration path are all transferable to openclaw with the service name changed (`entraclaw-provisioner-cert` vs `persona-sati-provisioner-cert`) and the state-file name changed (`.entraclaw-state.json` vs `.persona-sati-state.json`).
+The file layout, naming, and migration path are all transferable to entraclaw with the service name changed (`entraclaw-provisioner-cert` vs `persona-sati-provisioner-cert`) and the state-file name changed (`.entraclaw-state.json` vs `.persona-sati-state.json`).
 
 ## Migration requirement (non-negotiable)
 

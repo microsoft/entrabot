@@ -67,7 +67,7 @@ if [ -f "$IMPORT_DIR/.env" ]; then
 fi
 
 # 2. Restore state file
-for state_file in .entraclaw-state.json .openclaw-state.json; do
+for state_file in .entraclaw-state.json .entraclaw-state.json; do
     if [ -f "$IMPORT_DIR/$state_file" ]; then
         cp "$IMPORT_DIR/$state_file" "$PROJECT_ROOT/$state_file"
         echo -e "  ${GREEN}✅ $state_file restored${NC}"

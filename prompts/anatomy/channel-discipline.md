@@ -109,7 +109,7 @@ a predictable, welcome presence in shared spaces.
   back / post the PR link / confirm when X lands," call `add_promise`
   the same turn, with the `chat_id` the promise is owed to and enough
   `description` to execute the follow-up without re-reading the
-  conversation. Promises persist to openclaw blob under the Agent
+  conversation. Promises persist to entraclaw blob under the Agent
   Identity and survive restart, recompaction, and cross-session
   handoff (terminal ↔ Teams). On session start, call `list_promises`
   to see what's open and whom it's owed to. Mark `resolve_promise`

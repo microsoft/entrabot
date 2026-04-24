@@ -1,7 +1,7 @@
 # Agent prompt: migrate Provisioner from secret-auth to cert-auth
 
 Paste the content below into Claude Code while working in the
-`openclaw-identity-research` repo directory. It is written to be
+`entraclaw-identity-research` repo directory. It is written to be
 self-contained — the agent does not need any prior conversation context.
 
 ---
@@ -17,7 +17,7 @@ Reference implementation that has already shipped this fix:
 and `/Volumes/Development HD/persona-sati/scripts/provisioner-token.py`.
 
 Read those two files. The shape is intentionally terse. Copy the same
-pattern into `openclaw-identity-research/scripts/entra_provisioning.py`
+pattern into `entraclaw-identity-research/scripts/entra_provisioning.py`
 and a new `scripts/provisioner-token.py`. Change:
 
 - `PROVISIONER_APP_DISPLAY_NAME` stays `EntraClaw Agent ID Provisioner` —

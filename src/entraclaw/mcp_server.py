@@ -2843,7 +2843,7 @@ async def add_promise(
     """Record an outstanding human-facing commitment — survives restart.
 
     Use instead of ``TaskCreate`` for "I'll report back when X lands"
-    shaped commitments. Persisted to the openclaw blob under the Agent
+    shaped commitments. Persisted to the entraclaw blob under the Agent
     Identity (``promises.jsonl``). Resolve via ``resolve_promise`` once
     both the underlying work completes AND the human-facing follow-up
     has been posted in the correct chat.

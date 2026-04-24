@@ -51,10 +51,10 @@ Authorization: Bearer <token>
 
 {
   "@odata.type": "microsoft.graph.agentUser",
-  "displayName": "Openclaw Agent",
-  "userPrincipalName": "openclaw-agent@tenant.onmicrosoft.com",
+  "displayName": "Entraclaw Agent",
+  "userPrincipalName": "entraclaw-agent@tenant.onmicrosoft.com",
   "identityParentId": "{agent-identity-object-id}",
-  "mailNickname": "openclaw-agent",
+  "mailNickname": "entraclaw-agent",
   "accountEnabled": true
 }
 ```
@@ -69,14 +69,14 @@ The token must come from the Blueprint (client_credentials) with the `AgentIdUse
 
 After assigning a license, resource provisioning (mailbox, OneDrive) typically completes within 10-15 minutes but can take up to 24 hours.
 
-### What This Means for Openclaw
+### What This Means for Entraclaw
 
 To give the agent its own Teams presence, we need:
 1. An Agent User created and linked to the Agent Identity
 2. A Teams-capable license assigned to the Agent User (E3, E5, or Teams Enterprise)
 3. Wait for mailbox/Teams provisioning to complete
 
-The agent then gets its own UPN (e.g., `openclaw-agent@tenant.onmicrosoft.com`), its own Teams identity, and can be @mentioned, receive messages, and participate in chats.
+The agent then gets its own UPN (e.g., `entraclaw-agent@tenant.onmicrosoft.com`), its own Teams identity, and can be @mentioned, receive messages, and participate in chats.
 
 ## Authentication: The Three-Hop Token Flow
 
@@ -172,7 +172,7 @@ The Agent User gets:
 - If the agent only needs to call other agents (use Agent Identity with app roles)
 - Scale-out replicas (share one Agent Identity, don't create per-replica)
 
-## Implications for Openclaw
+## Implications for Entraclaw
 
 ### What Changes
 1. **No device-code flow needed** — Agent User authenticates via the three-hop machine-to-machine flow

@@ -1,6 +1,6 @@
 # Next: Windows Dev Environment
 
-> Scriptable Azure VM setup for developing and demonstrating Openclaw on Windows.
+> Scriptable Azure VM setup for developing and demonstrating Entraclaw on Windows.
 
 ## Overview
 
@@ -22,7 +22,7 @@ For MVP, skip the Agent User — use your own account. The OBO token's `azp` cla
 
 ### 2. Entra App Registration
 
-Create an app registration for the Openclaw agent:
+Create an app registration for the Entraclaw agent:
 
 ```bash
 # Create the app registration
@@ -30,7 +30,7 @@ Create an app registration for the Openclaw agent:
 #   az ad sp show --id 00000003-0000-0000-c000-000000000000 \
 #     --query "oauth2PermissionScopes[?value=='Chat.Create' || value=='ChatMessage.Send' || value=='Chat.ReadWrite' || value=='User.Read' || value=='Presence.ReadWrite'].{name:value, id:id}" -o table
 az ad app create \
-  --display-name "Openclaw Agent" \
+  --display-name "Entraclaw Agent" \
   --sign-in-audience "AzureADMyOrg" \
   --required-resource-accesses '[{
     "resourceAppId": "00000003-0000-0000-c000-000000000000",
@@ -58,7 +58,7 @@ az ad app permission admin-consent --id <app-id>
 
 Generate a client secret (for OBO exchange):
 ```bash
-az ad app credential reset --id <app-id> --display-name "Openclaw MVP"
+az ad app credential reset --id <app-id> --display-name "Entraclaw MVP"
 # SAVE the password — this is the client secret for ConfidentialClientApplication
 # ⚠️ MVP ONLY — production must use split architecture or certificate auth.
 #    The client secret on a device is a crown-jewel credential (see proposals.md Risk #1).
@@ -70,14 +70,14 @@ az ad app credential reset --id <app-id> --display-name "Openclaw MVP"
 > If not available in your tenant, skip this step — OBO still works without Agent IDs
 > (the `azp` claim in sign-in logs still identifies the agent app).
 
-Register an Agent ID blueprint for the Openclaw agent type:
+Register an Agent ID blueprint for the Entraclaw agent type:
 
 ```http
 POST https://graph.microsoft.com/beta/agentIdentityBlueprints
 Content-Type: application/json
 
 {
-  "displayName": "Openclaw Code Agent",
+  "displayName": "Entraclaw Code Agent",
   "description": "Autonomous coding agent with Teams integration",
   "appId": "<app-registration-client-id>"
 }
@@ -87,12 +87,12 @@ Content-Type: application/json
 
 ```bash
 #!/bin/bash
-# provision-windows-vm.sh — Create an Entra-joined Windows 11 VM for Openclaw dev
+# provision-windows-vm.sh — Create an Entra-joined Windows 11 VM for Entraclaw dev
 
-RESOURCE_GROUP="openclaw-dev"
-VM_NAME="openclaw-win11"
+RESOURCE_GROUP="entraclaw-dev"
+VM_NAME="entraclaw-win11"
 LOCATION="westus2"
-ADMIN_USER="openclawadmin"
+ADMIN_USER="entraclawadmin"
 
 # Create resource group
 az group create --name $RESOURCE_GROUP --location $LOCATION
@@ -131,7 +131,7 @@ echo "VM created. Connect via: az ssh vm -n $VM_NAME -g $RESOURCE_GROUP"
 Run this inside the VM after RDP/SSH in:
 
 ```powershell
-# setup-openclaw.ps1 — Install Copilot CLI, Python, and Openclaw on Windows
+# setup-entraclaw.ps1 — Install Copilot CLI, Python, and Entraclaw on Windows
 
 # Install Python 3.12
 winget install Python.Python.3.12 --accept-package-agreements --accept-source-agreements
@@ -146,8 +146,8 @@ winget install Git.Git --accept-package-agreements --accept-source-agreements
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
 # Clone the repo
-git clone "https://YourOrg@dev.azure.com/YourOrg/Engineering/_git/AIM%20OpenClaw%20Research" C:\openclaw
-cd C:\openclaw
+git clone "https://YourOrg@dev.azure.com/YourOrg/Engineering/_git/AIM%20EntraClaw%20Research" C:\entraclaw
+cd C:\entraclaw
 
 # Create venv and install
 python -m venv .venv
@@ -159,25 +159,25 @@ python --version
 pytest --version
 copilot --version
 
-Write-Host "Openclaw dev environment ready. Launch 'copilot' to start."
+Write-Host "Entraclaw dev environment ready. Launch 'copilot' to start."
 ```
 
 ## Connection
 
 ```bash
 # RDP (traditional)
-az vm show -g openclaw-dev -n openclaw-win11 --show-details --query publicIps -o tsv
+az vm show -g entraclaw-dev -n entraclaw-win11 --show-details --query publicIps -o tsv
 # → RDP to that IP, sign in with your Entra credentials
 
 # SSH (if enabled)
-az ssh vm -n openclaw-win11 -g openclaw-dev
+az ssh vm -n entraclaw-win11 -g entraclaw-dev
 ```
 
 ## Teardown
 
 ```bash
 # Delete everything when done
-az group delete --name openclaw-dev --yes --no-wait
+az group delete --name entraclaw-dev --yes --no-wait
 ```
 
 ## Cost Estimate
@@ -189,4 +189,4 @@ az group delete --name openclaw-dev --yes --no-wait
 | Public IP | Standard | ~$4/month |
 | **Total (dev hours only)** | ~8 hrs/week | **~$8/week** |
 
-Deallocate the VM when not in use: `az vm deallocate -g openclaw-dev -n openclaw-win11`
+Deallocate the VM when not in use: `az vm deallocate -g entraclaw-dev -n entraclaw-win11`

@@ -1,4 +1,4 @@
-# AGENTS.md — Openclaw Identity Research
+# AGENTS.md — Entraclaw Identity Research
 
 > Instructions for AI agents working in this codebase (Copilot, Claude Code, Codex, etc.)
 
@@ -42,7 +42,7 @@
 This repo is the **body** (Teams interface). The **mind** (personality, memory, behavioral rules) is served by a separate MCP server: **persona-sati**.
 
 - Both MCPs are listed in `.mcp.json` (see `.mcp.json.example` for dual-server config)
-- If persona-sati is not configured, openclaw works standalone as a generic Teams tool
+- If persona-sati is not configured, entraclaw works standalone as a generic Teams tool
 - Memory operations go through persona-sati's tools, not through local blob sync hooks
 - The system prompt comes from persona-sati, not from this repo
 

@@ -881,7 +881,7 @@ fi
 # corrupt files) lives in ``scripts/mcp_config.py`` so it's unit-tested.
 #
 # To add persona-sati (mind server), see .mcp.json.example for the dual-
-# server configuration. persona-sati is optional — openclaw works
+# server configuration. persona-sati is optional — entraclaw works
 # standalone as a Teams tool server without it.
 ENTRACLAW_MCP_BIN="$PROJECT_ROOT/.venv/bin/entraclaw-mcp"
 "$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/scripts/mcp_config.py" \

@@ -428,7 +428,7 @@ claude_memory/unsent_drafts.md
 claude_memory/carry_forward.md
 ```
 
-Local path (unchanged): `~/.claude/projects/-Volumes-Development-HD-openclaw-identity-research/memory/<same_filenames>.md`
+Local path (unchanged): `~/.claude/projects/-Volumes-Development-HD-entraclaw-identity-research/memory/<same_filenames>.md`
 
 ### 4.2 Sync mechanics
 
@@ -658,7 +658,7 @@ Separate from this plan, the `fix/summary-self-emails` branch (commit `b462b32` 
 
 ```bash
 # After Phase 2 is on main:
-cd /Volumes/Development\ HD/openclaw-identity-research
+cd /Volumes/Development\ HD/entraclaw-identity-research
 git merge --ff-only fix/summary-self-emails
 git push origin main
 # Then optionally clean up the worktree:
@@ -670,7 +670,7 @@ git branch -d fix/summary-self-emails
 
 ## 10. Implementer notes — important context
 
-- **The existing memory dir is at** `~/.claude/projects/-Volumes-Development-HD-openclaw-identity-research/memory/` — note the URL-encoded-ish path. Use `os.path.expanduser` + the Claude Code project slug convention, don't hardcode.
+- **The existing memory dir is at** `~/.claude/projects/-Volumes-Development-HD-entraclaw-identity-research/memory/` — note the URL-encoded-ish path. Use `os.path.expanduser` + the Claude Code project slug convention, don't hardcode.
 - **The existing `BlobBackend` API is sync** (`write_text`, `read_text`, `append_text`, `exists`, `list`). If you add a `pull_all` that needs to be fast, use `asyncio` + `BlobStore` (Phase 1, which IS async) directly — not BlobBackend. That's fine; `BlobBackend` was always a sync convenience layer.
 - **Don't break existing file paths.** `interaction_log.py` and `daily_summary.py` currently route through `get_backend()`. Their keys (e.g., `interactions/2026-04-18.jsonl`) sit alongside the new `claude_memory/` prefix. No collision.
 - **CLAUDE.md non-negotiables apply** — TDD, no stderr-silencing, always check for `error` key on tokens, etc.

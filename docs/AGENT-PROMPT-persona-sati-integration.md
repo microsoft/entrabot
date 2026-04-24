@@ -4,7 +4,7 @@
 
 ---
 
-Paste this into a fresh Claude Code session running in the `openclaw-identity-research` directory.
+Paste this into a fresh Claude Code session running in the `entraclaw-identity-research` directory.
 
 ---
 

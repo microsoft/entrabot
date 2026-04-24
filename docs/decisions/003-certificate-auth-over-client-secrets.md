@@ -66,7 +66,7 @@ The private key never leaves the secure hardware. Only the public certificate is
 2. Upload the public cert to the Blueprint app registration (automate via Graph API)
 3. Store the private key in the OS credential store (extend `platform/` layer)
 4. Modify `acquire_agent_user_token()` Hop 1 to construct a JWT assertion instead of sending `client_secret`
-5. Remove `OPENCLAW_BLUEPRINT_SECRET` from `.env` — it's no longer needed
+5. Remove `ENTRACLAW_BLUEPRINT_SECRET` from `.env` — it's no longer needed
 
 ## Alternatives Considered
 

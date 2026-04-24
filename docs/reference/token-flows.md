@@ -2,7 +2,7 @@
 
 ## Overview
 
-Openclaw uses the **three-hop Agent User flow** for all Graph API calls. This is a fully autonomous machine-to-machine flow — no human authentication, no device-code prompts, no OBO exchange.
+Entraclaw uses the **three-hop Agent User flow** for all Graph API calls. This is a fully autonomous machine-to-machine flow — no human authentication, no device-code prompts, no OBO exchange.
 
 The result is a delegated token with `idtyp=user` that can call any Graph API requiring user context (Teams, Exchange, OneDrive).
 
