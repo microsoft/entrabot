@@ -460,6 +460,127 @@ class TestDiscoverSinks:
             f"self-referential peer reached factory build: {factory_calls}"
         )
 
+    async def test_wrapper_with_self_ref_marker_is_skipped(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """A peer whose `command` points at a thin shell wrapper that exec's
+        into our running binary MUST be skipped — same root cause as the
+        direct self-reference case. The wrapper declares its target via a
+        `# entraclaw-self-ref-target: <path>` comment so this check works
+        without parsing arbitrary shell.
+
+        Background: the debug wrapper at scripts/entraclaw-mcp-debug.sh tees
+        stderr to a log file and exec's into .venv/bin/entraclaw-mcp. Pointing
+        .mcp.json at the wrapper bypassed _is_self_referential_peer (the
+        wrapper path doesn't match sys.argv[0]), restoring the self-spawn
+        cascade that PR #36 originally fixed. Learning #45 has the writeup.
+        """
+        import sys
+
+        # Stage a fake "running binary" and a wrapper that exec's it.
+        fake_target = tmp_path / "entraclaw-mcp"
+        fake_target.write_text("#!/bin/sh\nexit 0\n")
+        fake_target.chmod(0o755)
+
+        wrapper = tmp_path / "wrapper.sh"
+        wrapper.write_text(
+            "#!/bin/bash\n"
+            f"# entraclaw-self-ref-target: {fake_target}\n"
+            f'exec "{fake_target}"\n'
+        )
+        wrapper.chmod(0o755)
+
+        # Make the running entry point look like fake_target.
+        monkeypatch.setattr(sys, "argv", [str(fake_target)])
+
+        cfg = tmp_path / ".mcp.json"
+        cfg.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "self_via_wrapper": {
+                            "type": "stdio",
+                            "command": str(wrapper),
+                            "args": [],
+                        }
+                    }
+                }
+            )
+        )
+        monkeypatch.delenv(ec.DISABLE_ENV, raising=False)
+
+        # If the peer reaches the factory builder, that's a regression.
+        factory_calls: list[dict] = []
+
+        def failing_builder(peer):
+            factory_calls.append(peer)
+            raise AssertionError(
+                f"wrapper-pointing peer MUST be skipped at build-factory "
+                f"time, never reaching stdio_client; got peer={peer!r}"
+            )
+
+        monkeypatch.setattr(ec, "_build_sink_factory", failing_builder)
+
+        sinks = await ec.discover_sinks(cfg)
+        assert sinks == []
+        assert factory_calls == [], (
+            f"wrapper-pointing peer reached factory build: {factory_calls}"
+        )
+
+    def test_is_self_referential_peer_recognizes_wrapper_marker(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Unit-level coverage for the wrapper-marker branch."""
+        import sys
+
+        fake_target = tmp_path / "entraclaw-mcp"
+        fake_target.write_text("#!/bin/sh\nexit 0\n")
+        fake_target.chmod(0o755)
+
+        # Marker uses a relative path; resolves against the script's dir.
+        wrapper = tmp_path / "wrapper.sh"
+        wrapper.write_text(
+            "#!/bin/bash\n"
+            "# entraclaw-self-ref-target: ./entraclaw-mcp\n"
+            f'exec "{fake_target}"\n'
+        )
+        wrapper.chmod(0o755)
+
+        monkeypatch.setattr(sys, "argv", [str(fake_target)])
+
+        assert ec._is_self_referential_peer(
+            {"type": "stdio", "command": str(wrapper)}
+        ) is True
+
+    def test_is_self_referential_peer_ignores_wrapper_without_marker(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """A wrapper without the marker is NOT auto-detected — the marker is
+        opt-in. Unmarked wrappers fall through to the existing direct-path
+        check, which won't match, and the peer goes through normal discovery.
+        This preserves backwards compatibility with arbitrary peer scripts
+        whose commands genuinely point elsewhere.
+        """
+        import sys
+
+        fake_target = tmp_path / "entraclaw-mcp"
+        fake_target.write_text("#!/bin/sh\nexit 0\n")
+        fake_target.chmod(0o755)
+
+        wrapper = tmp_path / "wrapper.sh"
+        # No marker line — just a regular wrapper.
+        wrapper.write_text(
+            "#!/bin/bash\n"
+            f'exec "{fake_target}"\n'
+        )
+        wrapper.chmod(0o755)
+
+        monkeypatch.setattr(sys, "argv", [str(fake_target)])
+
+        assert ec._is_self_referential_peer(
+            {"type": "stdio", "command": str(wrapper)}
+        ) is False
+
     async def test_stdio_factory_sets_efferent_copy_disable_in_child_env(
         self, monkeypatch
     ):
