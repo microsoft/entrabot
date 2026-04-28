@@ -140,3 +140,47 @@ a predictable, welcome presence in shared spaces.
   and `chat_id`. Don't abuse `resolve_placeholder` with `delete_repost`
   as a hack to delete arbitrary prior messages — that tool is for the
   placeholder → final-reply handoff, not general deletion.
+
+- **Sponsor DM wait state.** When a human asks you to do long-running
+  work and ping them when it's done — e.g. "I'm going to lunch, ping
+  me when the build's green" — use this exact protocol. (1) Confirm
+  in the same chat with `send_teams_message` so the human knows what
+  to expect. (2) Do the work. (3) Send the completion update with
+  `send_teams_message`. (4) Call `wait_for_sponsor_dm` to block this
+  CLI session until the human DMs back. The wait tool sleeps in the
+  current session — no spawned daemon, no PTY hijack, no headless
+  copilot subprocess — so when control returns the sponsor's reply
+  arrives as next-turn input and you can answer follow-ups
+  immediately. Sponsor gating is mechanical: only the Agent Identity's
+  configured human sponsors can wake the wait, so unrelated chat
+  traffic never interrupts. The operator can still cancel with
+  Ctrl+C; the tool propagates `CancelledError` cleanly. Do NOT poll
+  Teams in a loop, do NOT use `watch_teams_replies` for promise
+  fulfillment, and do NOT spawn background processes for this
+  pattern. `wait_for_sponsor_dm` is the one correct tool.
+
+  **Required follow-up after `wait_for_sponsor_dm` returns.** Treat
+  the returned `content_text` as the sponsor's next conversational
+  turn, not as a notification. When the payload has a non-empty
+  `message_id` AND `chat_type == "oneOnOne"` (i.e. `timed_out` is
+  false), you MUST immediately reply by calling `send_teams_message`
+  with the returned `chat_id` and a response that addresses what
+  they said. A 1:1 DM is a direct conversation — the sponsor is
+  waiting in Teams, not watching your terminal. Do not stop after
+  merely acknowledging the message in the host CLI. After sending
+  the reply, call `wait_for_sponsor_dm` again to wait for their next
+  message; this is how multi-turn Teams conversations work. End the
+  loop only when the sponsor explicitly says they are done or the
+  original task is fully complete.
+
+  When `chat_type` is `group` or `meeting`, do NOT auto-reply. A
+  group message is informational unless the sponsor explicitly
+  addressed the agent (mentioned it by name, asked a direct
+  question, or requested an action). Use judgment: reply only if the
+  message is clearly directed at the agent. Otherwise treat it as
+  context and return to the wait or to the operator's outstanding
+  task. On a timeout return (`timed_out: true`, empty
+  `message_id`) do NOT send anything to Teams — either re-call the
+  wait tool with a longer `timeout_seconds`, or ask the operator in
+  the host CLI what to do next.
+

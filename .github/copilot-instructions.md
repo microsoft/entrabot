@@ -72,3 +72,4 @@ scripts/          # setup.sh, teardown.sh, Entra provisioning
 - Secrets and tokens never appear in logs — use `repr` overrides on sensitive fields
 - Read `docs/runbooks/hard-won-learnings.md` (27 entries) before making auth/Teams changes
 - ADRs in `docs/decisions/` for all significant architectural choices
+- **Sponsor DM wait pattern (mandatory).** When the human says "ping me when X is done" / "I'm going AFK, let me know" / any equivalent: confirm in Teams with `send_teams_message`, do the work, send the completion update with `send_teams_message`, then call `wait_for_sponsor_dm` — that tool blocks this MCP session until the human's DM arrives and returns the message as next-turn input. NEVER poll in a loop. NEVER spawn `copilot -p` / headless subprocesses. NEVER use `watch_teams_replies` for this pattern. Only `wait_for_sponsor_dm`. Sponsor gating is mechanical; Ctrl+C cancels cleanly. Full protocol: `prompts/anatomy/channel-discipline.md`.

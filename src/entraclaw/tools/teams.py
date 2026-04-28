@@ -183,6 +183,75 @@ def acquire_agent_user_storage_token(config: EntraClawConfig) -> str:
     return acquire_agent_user_token(config, resource_scope=STORAGE_RESOURCE_SCOPE)
 
 
+def acquire_agent_identity_token(
+    config: EntraClawConfig,
+    *,
+    resource_scope: str = GRAPH_RESOURCE_SCOPE,
+) -> str:
+    """Acquire an app-only token as the Agent Identity via the Blueprint FIC.
+
+    Two hops only — stops at the Agent Identity (no user_fic grant). Used
+    by :mod:`entraclaw.identity.sponsors` to read the Agent Identity's
+    Graph sponsors relationship, which requires app-only auth.
+    """
+    if not all(
+        [
+            config.blueprint_app_id,
+            config.blueprint_cert_thumbprint,
+            config.tenant_id,
+            config.agent_id,
+        ]
+    ):
+        raise AgentIDNotAvailable(
+            "Agent Identity credentials not configured. Run ./scripts/setup.sh first."
+        )
+
+    url = _token_url(config.tenant_id)  # type: ignore[arg-type]
+    timeout = httpx.Timeout(15.0)
+
+    store = get_credential_store()
+    private_key_pem = store.retrieve("entraclaw", "blueprint-private-key")
+    if not private_key_pem:
+        raise AgentIDNotAvailable(
+            "Blueprint private key not found in credential store. "
+            "Run ./scripts/setup.sh to generate and store the certificate."
+        )
+
+    jwt_assertion = build_client_assertion(
+        private_key_pem=private_key_pem,
+        cert_thumbprint=config.blueprint_cert_thumbprint,
+        client_id=config.blueprint_app_id,
+        token_endpoint=url,
+    )
+
+    with httpx.Client(timeout=timeout) as client:
+        hop1_resp = client.post(
+            url,
+            data={
+                "client_id": config.blueprint_app_id,
+                "scope": "api://AzureADTokenExchange/.default",
+                "fmi_path": config.agent_id,
+                "grant_type": "client_credentials",
+                "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                "client_assertion": jwt_assertion,
+            },
+        )
+    t1_token = _check_token_response("hop1:blueprint", hop1_resp.json())
+
+    with httpx.Client(timeout=timeout) as client:
+        hop2_resp = client.post(
+            url,
+            data={
+                "client_id": config.agent_id,
+                "scope": resource_scope,
+                "grant_type": "client_credentials",
+                "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                "client_assertion": t1_token,
+            },
+        )
+    return _check_token_response("hop2:agent_identity", hop2_resp.json())
+
+
 async def create_one_on_one_chat(
     *,
     token: str,
@@ -940,6 +1009,28 @@ def extract_reply_to_ids(body_content: str) -> list[str]:
     return ids
 
 
+async def fetch_chat_type(*, chat_id: str, token: str) -> str:
+    """Look up a chat's ``chatType`` via Graph. Returns one of
+    ``"oneOnOne"``, ``"group"``, ``"meeting"``, or ``""`` on any
+    failure. Fail-open: never raises. Caller is responsible for
+    caching — Graph rate limits apply.
+    """
+    if not chat_id or not token:
+        return ""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{GRAPH_BASE}/chats/{chat_id}",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"$select": "id,chatType"},
+            )
+            if resp.status_code != 200:
+                return ""
+            return str(resp.json().get("chatType") or "")
+    except Exception:  # noqa: BLE001 - fail-open
+        return ""
+
+
 async def fetch_message(
     *,
     chat_id: str,
@@ -1037,13 +1128,21 @@ async def read(
                 }
                 for a in raw_attachments
             ]
+            user_obj = (m.get("from") or {}).get("user", {}) or {}
+            sender_id = str(user_obj.get("id") or "")
+            sender_email = (
+                user_obj.get("userPrincipalName")
+                or user_obj.get("mail")
+                or ""
+            )
             out.append(
                 {
                     "message_id": m["id"],
-                    "from": (m.get("from") or {}).get("user", {}).get(
-                        "displayName", "unknown"
-                    ),
+                    "from": user_obj.get("displayName", "unknown"),
+                    "sender": str(sender_email or ""),
+                    "sender_id": sender_id,
                     "content": body_content,
+                    "content_text": body_content,
                     "sent_at": m.get("createdDateTime"),
                     "reply_to_ids": extract_reply_to_ids(body_content),
                     "attachments": attachments,

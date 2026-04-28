@@ -1669,3 +1669,45 @@ class TestDeleteChatMessage:
                 chat_id="c1", message_id="msg-1", token="tok"
             )
 
+
+
+class TestFetchChatType:
+    """``fetch_chat_type`` returns Graph's ``chatType`` so the wait tool can
+    scope its must-reply rule to 1:1 DMs only."""
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_returns_one_on_one(self) -> None:
+        from entraclaw.tools.teams import fetch_chat_type
+
+        respx.get(f"{GRAPH_BASE}/chats/c1").mock(
+            return_value=httpx.Response(200, json={"id": "c1", "chatType": "oneOnOne"})
+        )
+        assert await fetch_chat_type(chat_id="c1", token="tok") == "oneOnOne"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_returns_group(self) -> None:
+        from entraclaw.tools.teams import fetch_chat_type
+
+        respx.get(f"{GRAPH_BASE}/chats/c2").mock(
+            return_value=httpx.Response(200, json={"id": "c2", "chatType": "group"})
+        )
+        assert await fetch_chat_type(chat_id="c2", token="tok") == "group"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_fails_open_on_404(self) -> None:
+        from entraclaw.tools.teams import fetch_chat_type
+
+        respx.get(f"{GRAPH_BASE}/chats/cX").mock(
+            return_value=httpx.Response(404)
+        )
+        assert await fetch_chat_type(chat_id="cX", token="tok") == ""
+
+    @pytest.mark.asyncio
+    async def test_empty_inputs_return_empty(self) -> None:
+        from entraclaw.tools.teams import fetch_chat_type
+
+        assert await fetch_chat_type(chat_id="", token="tok") == ""
+        assert await fetch_chat_type(chat_id="c1", token="") == ""

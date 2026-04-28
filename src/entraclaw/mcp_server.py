@@ -2590,6 +2590,232 @@ async def watch_teams_replies(
 
 
 @mcp.tool()
+async def wait_for_sponsor_dm(
+    timeout_seconds: int = 0,
+    ctx: Context | None = None,
+) -> str:
+    """Block until a Sponsor sends a Teams DM, then return their message.
+
+    Use this when the user asks the agent to do long-running work and
+    promise a Teams ping when it is done — e.g. "I'm going to lunch.
+    Ping me when the build's green." Send the human a heads-up via
+    ``send_teams_message`` first (so they know what to expect), do the
+    work, then call this tool. The tool sleeps INSIDE this MCP session
+    until the Sponsor (and only the Sponsor — the Agent Identity's
+    configured human sponsors, looked up at runtime via Graph) DMs the
+    agent in any watched chat. The Sponsor's message text becomes this
+    tool's return value, which the model then sees as next-turn input.
+
+    REQUIRED FOLLOW-UP — when this tool returns a payload with
+    ``chat_type == "oneOnOne"`` and a non-empty ``message_id``, you
+    MUST immediately reply to the Sponsor by calling
+    ``send_teams_message`` with that ``chat_id`` and a response that
+    addresses what they said. A 1:1 DM is a direct conversation: the
+    Sponsor is waiting in Teams, not watching your terminal. Treat
+    the returned ``content_text`` as the user's next turn — read it,
+    answer it, send the answer to ``chat_id``. After sending the
+    reply, call ``wait_for_sponsor_dm`` again to wait for their next
+    message. End the loop only when the Sponsor explicitly says they
+    are done, or the original task is fully complete.
+
+    For group chats (``chat_type == "group"`` or ``"meeting"``), do
+    NOT auto-reply. A group message is informational unless the
+    Sponsor explicitly addressed the agent or asked a question. Use
+    your judgment: reply only if the message is clearly directed at
+    you or requires a response. Otherwise, treat it as context and
+    return to the wait or to the operator's outstanding task.
+
+    On a timeout return (``timed_out`` is true, ``message_id`` empty),
+    do NOT send anything to Teams. Either call this tool again with a
+    longer ``timeout_seconds``, or ask the operator in the host CLI
+    what to do next.
+
+    Why this exists: Copilot CLI (and Claude Code) do not auto-display
+    asynchronous Teams notifications in the operator's terminal. This
+    tool turns the wait into a tool call so the next sponsor DM is
+    handled in-session — no spawned daemon, no PTY hijack, no screen
+    blanking. Ctrl+C in the host CLI cancels cleanly.
+
+    Sponsor gating is mechanical: non-Sponsor messages never reach the
+    return value. The wait silently dedupes already-returned messages
+    so reruns of the tool do not replay the same DM.
+
+    Args:
+        timeout_seconds: Optional cap. ``0`` (default) means block
+            indefinitely until a Sponsor DM arrives or the operator
+            cancels. Positive values cause the tool to return a
+            structured timeout payload (``timed_out: true``) when the
+            cap is hit, instead of raising.
+
+    Returns:
+        JSON string with the sponsor's message. Keys: ``chat_id``,
+        ``message_id``, ``sender``, ``sender_id``, ``sent_at``,
+        ``content_text``, ``content_html``, ``metadata``,
+        ``timed_out``. When ``timed_out`` is true all other fields are
+        empty strings.
+    """
+    import asyncio
+    import contextlib
+    from collections import deque
+
+    from entraclaw.identity.sponsors import (
+        SponsorGate,
+        load_agent_identity_sponsor_gate,
+    )
+    from entraclaw.tools.audit import log_event
+    from entraclaw.tools.teams import filter_human_messages, read
+    from entraclaw.tools.wait_tool import (
+        WaitForSponsorDmResult,
+        wait_loop,
+    )
+
+    await _initialize()
+
+    config = _state.get("config") or get_config()
+    agent_id = (
+        (_identity.session.user_id if _identity else None)
+        or config.agent_id
+        or config.blueprint_app_id
+        or "unknown"
+    )
+    attribution = (
+        _identity.session.attribution_type if _identity else "agent"
+    )
+
+    log_event(
+        action="wait_for_sponsor_dm.start",
+        resource="teams:watched_chats",
+        outcome="pending",
+        agent_id=agent_id,
+        metadata={"timeout_seconds": timeout_seconds},
+        attribution_type=attribution,
+    )
+
+    # Lazy-load and cache the sponsor gate. Cheap to compute, but we
+    # avoid hitting Graph on every wait_for_sponsor_dm invocation.
+    gate: SponsorGate | None = _state.get("sponsor_gate")  # type: ignore[assignment]
+    if gate is None:
+        try:
+            gate = load_agent_identity_sponsor_gate(config)
+            _state["sponsor_gate"] = gate
+        except Exception as exc:
+            log_event(
+                action="wait_for_sponsor_dm.start",
+                resource="teams:watched_chats",
+                outcome="error",
+                agent_id=agent_id,
+                metadata={"reason": "sponsor_gate_load_failed", "error": str(exc)},
+                attribution_type=attribution,
+            )
+            raise
+
+    dedup: deque[tuple[str, str]] = _state.setdefault(  # type: ignore[assignment]
+        "wait_tool_dedup", deque()
+    )
+
+    agent_display_name = (
+        (config.agent_user_upn or "").split("@", 1)[0] or "EntraClaw Agent"
+    )
+
+    def list_chat_ids() -> list[str]:
+        watched = _state.get("watched_chats") or {}
+        return list(watched.keys())
+
+    async def read_chat(chat_id: str) -> list[dict]:
+        raw = await _with_token_retry(read, chat_id=chat_id, count=10)
+        # Filter out the agent's own messages so the agent never gates
+        # on its own echo. Sponsor gate runs on top of this.
+        return filter_human_messages(raw, agent_display_name)
+
+    async def heartbeat() -> None:
+        if ctx is not None:
+            with contextlib.suppress(Exception):
+                await ctx.report_progress(progress=0.0, total=None)
+
+    coro = wait_loop(
+        list_chat_ids=list_chat_ids,
+        read_chat=read_chat,
+        gate=gate,
+        dedup=dedup,
+        heartbeat=heartbeat,
+    )
+    try:
+        if timeout_seconds and timeout_seconds > 0:
+            picked = await asyncio.wait_for(coro, timeout=float(timeout_seconds))
+        else:
+            picked = await coro
+    except asyncio.CancelledError:
+        log_event(
+            action="wait_for_sponsor_dm.cancelled",
+            resource="teams:watched_chats",
+            outcome="cancelled",
+            agent_id=agent_id,
+            metadata={},
+            attribution_type=attribution,
+        )
+        raise
+    except TimeoutError:
+        log_event(
+            action="wait_for_sponsor_dm.timeout",
+            resource="teams:watched_chats",
+            outcome="timeout",
+            agent_id=agent_id,
+            metadata={"timeout_seconds": timeout_seconds},
+            attribution_type=attribution,
+        )
+        return WaitForSponsorDmResult.timeout(timeout_seconds=int(timeout_seconds)).to_json()
+
+    body_html = picked.get("content") or picked.get("content_html") or ""
+    body_text = _summarize_content(body_html, limit=4000) if body_html else ""
+
+    chat_id_str = str(picked.get("chat_id") or "")
+    chat_type_cache = _state.setdefault("wait_tool_chat_type_cache", {})
+    chat_type = chat_type_cache.get(chat_id_str, "")
+    if not chat_type and chat_id_str:
+        try:
+            from entraclaw.tools.teams import (
+                acquire_agent_user_token,
+                fetch_chat_type,
+            )
+
+            cfg = config.load_config()
+            tok = acquire_agent_user_token(cfg)
+            chat_type = await fetch_chat_type(chat_id=chat_id_str, token=tok)
+            if chat_type:
+                chat_type_cache[chat_id_str] = chat_type
+        except Exception:  # noqa: BLE001 - fail-open: chat_type is best-effort
+            chat_type = ""
+
+    result = WaitForSponsorDmResult(
+        chat_id=chat_id_str,
+        message_id=str(picked.get("message_id") or ""),
+        sender=str(picked.get("sender") or picked.get("from") or ""),
+        sender_id=str(picked.get("sender_id") or ""),
+        sent_at=str(picked.get("sent_at") or ""),
+        content_text=body_text,
+        content_html=body_html or None,
+        metadata={
+            "reply_to_ids": picked.get("reply_to_ids") or [],
+        },
+        chat_type=chat_type,
+    )
+
+    log_event(
+        action="wait_for_sponsor_dm.return",
+        resource=f"teams:{result.chat_id}",
+        outcome="success",
+        agent_id=agent_id,
+        metadata={
+            "message_id": result.message_id,
+            "sender_id": result.sender_id,
+        },
+        attribution_type=attribution,
+    )
+
+    return result.to_json()
+
+
+@mcp.tool()
 def audit_log(
     action: str,
     resource: str,
