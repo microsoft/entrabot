@@ -114,6 +114,7 @@ def select_sponsor_message(
     """
     seen_keys = set(dedup)
     eligible: list[dict[str, Any]] = []
+    rejected_by_gate: list[dict[str, Any]] = []
     for msg in messages:
         if not isinstance(msg, dict):
             continue
@@ -125,9 +126,25 @@ def select_sponsor_message(
             if sent and sent <= after_iso:
                 continue
         if not gate.accepts(msg):
+            rejected_by_gate.append(msg)
             continue
         eligible.append(msg)
     if not eligible:
+        # Diagnostic: when we saw fresh, non-dedup'd messages but the gate
+        # rejected every one, log identity of rejections so the operator
+        # can compare against the loaded sponsor set. Common cause: B2B
+        # guest sponsors whose home-tenant identity does not match the
+        # guest UPN/object-id stored on the agent's sponsors collection.
+        if rejected_by_gate:
+            for msg in rejected_by_gate[:5]:
+                logger.info(
+                    "wait_for_sponsor_dm: gate rejected message "
+                    "chat=%s sender_id=%s sender=%s from=%s",
+                    msg.get("chat_id") or "",
+                    msg.get("sender_id") or "",
+                    msg.get("sender") or "",
+                    msg.get("from") or "",
+                )
         return None
     eligible.sort(key=lambda m: str(m.get("sent_at") or m.get("received_at") or ""))
     return eligible[0]

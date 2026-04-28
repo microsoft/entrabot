@@ -1564,7 +1564,24 @@ async def send_teams_message(
 
     After calling this, you don't need to call watch_teams_replies —
     the background poll pushes replies automatically via the channel
-    notification for every watched chat.
+    notification for every watched chat. NOTE: that push only reaches
+    Claude Code (`--dangerously-load-development-channels`). Copilot
+    CLI and other hosts that lack the channel push will NOT see
+    inbound Teams replies between turns.
+
+    **Keeping a sponsor conversation alive (host-agnostic).** When this
+    DM is the reply to a sponsor request and you expect them to write
+    back — e.g. they asked you to do work and you're sending the
+    completion update, or you're answering a question they asked in a
+    1:1 DM — call ``wait_for_sponsor_dm`` immediately after this
+    returns. The wait blocks the current MCP session until the sponsor
+    DMs back, then surfaces their message as next-turn input so you can
+    reply in-thread. Without it, control returns to the host CLI prompt
+    and the sponsor's next Teams message is invisible to you in Copilot
+    CLI. Calling ``wait_for_sponsor_dm`` is harmless in Claude Code
+    (the push channel still works) and required in Copilot CLI. Skip
+    the wait only when this DM is a one-shot notification with no
+    expected reply, or when the sponsor explicitly closed the loop.
 
     ``content_type`` defaults to ``"html"`` per the channel-discipline
     rule in ``prompts/anatomy/channel-discipline.md`` ("Always HTML in
@@ -2698,6 +2715,15 @@ async def wait_for_sponsor_dm(
         try:
             gate = load_agent_identity_sponsor_gate(config)
             _state["sponsor_gate"] = gate
+            # Diagnostic: dump the loaded sponsor set once so operators
+            # can correlate against rejection logs in wait_tool.
+            logger.info(
+                "wait_for_sponsor_dm: sponsor gate loaded "
+                "ids=%s upns=%s mails=%s",
+                sorted(gate.user_ids),
+                sorted(gate.upns),
+                sorted(gate.mails),
+            )
         except Exception as exc:
             log_event(
                 action="wait_for_sponsor_dm.start",

@@ -65,3 +65,30 @@ def test_wait_tool_docstring_reaches_model_via_tool_description() -> None:
     assert "wait_for_sponsor_dm" in mcp_src
     # The registered tool body or docstring must name the canonical pattern.
     assert "sponsor" in mcp_src.lower()
+
+
+def test_send_teams_message_docstring_directs_to_wait_for_sponsor_dm() -> None:
+    """``send_teams_message``'s docstring becomes its MCP tool description,
+    which Copilot CLI and Claude Code BOTH inject into the model's system
+    prompt (Learning #48). Hosts that lack a push channel (Copilot CLI) need
+    the wait-protocol delivered via tool descriptions, not via the body
+    prompt's ``instructions=`` field. Pin the doctrine here so a future
+    docstring rewrite can't silently regress it.
+    """
+    from entraclaw import mcp_server  # noqa: F401
+
+    # The decorated coroutine still carries the docstring at import time.
+    docstring = mcp_server.send_teams_message.__doc__ or ""
+    docstring_lower = docstring.lower()
+
+    assert "wait_for_sponsor_dm" in docstring, (
+        "send_teams_message docstring must name wait_for_sponsor_dm so "
+        "Copilot CLI sees the wait-protocol via the tool description "
+        "(it ignores FastMCP instructions=; see Learning #48)."
+    )
+    # And it must explain WHEN to call it, so the model doesn't wait after
+    # every send. The trigger is: this DM is a reply the sponsor expects.
+    assert "sponsor" in docstring_lower, (
+        "send_teams_message docstring must mention the sponsor trigger so "
+        "the model only waits when a reply is actually expected."
+    )
