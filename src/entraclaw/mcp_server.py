@@ -30,7 +30,7 @@ from entraclaw.identity.state_machine import IdentityStateMachine
 from entraclaw.logging_config import setup_logging
 from entraclaw.models import IdentityState
 from entraclaw.tools.interaction_log import detect_channel, log_interaction
-from entraclaw.tools.teams import acquire_agent_user_token, fetch_message
+from entraclaw.tools.teams import acquire_agent_user_token
 
 logger: logging.Logger | None = None
 
@@ -1505,65 +1505,19 @@ async def _push_channel_notification(
             )
         return
 
-    # Sanitize every string field that lands in JSON-RPC params. Claude's MCP
-    # client closes the connection on raw angle brackets anywhere in
-    # notification params, not just in `content` (see
-    # docs/runbooks/mcp-disconnect-investigation.md addendum 2026-04-28).
+    # The push envelope is restricted to {chat_id, message_id, user, ts}.
+    # Forensic envelope dumps on 2026-04-28 confirmed Claude Code's MCP
+    # client closes the stream whenever `params.meta` carries custom
+    # fields like `reply_to_ids` or `quoted_messages`, regardless of
+    # their content. The earlier 2026-04-24 sanitizer fix on
+    # `params.content` is still required as defense-in-depth — see
+    # docs/runbooks/mcp-disconnect-investigation.md.
     meta: dict = {
         "chat_id": resolved_chat_id,
         "message_id": message.get("message_id", ""),
         "user": _summarize_content(message.get("from", "unknown")),
         "ts": message.get("sent_at", ""),
     }
-
-    # Quote-reply enrichment: when Teams' Reply UI quotes a prior message,
-    # Graph encodes the source as <attachment id=...> inline in body HTML
-    # (parsed into reply_to_ids by read()). Forward the IDs and fetch each
-    # quoted body so the agent has context without a tool round-trip.
-    # Fail-open: a failed fetch must never block the primary push.
-    reply_to_ids = message.get("reply_to_ids") or []
-    if reply_to_ids:
-        import asyncio
-
-        meta["reply_to_ids"] = list(reply_to_ids)
-        token = _state.get("token") or (_identity.session.token if _identity else None)
-        quoted: list[dict] = []
-        if token:
-            results = await asyncio.gather(
-                *(
-                    fetch_message(
-                        chat_id=resolved_chat_id,
-                        message_id=rid,
-                        token=str(token),
-                    )
-                    for rid in reply_to_ids
-                ),
-                return_exceptions=True,
-            )
-            for rid, r in zip(reply_to_ids, results, strict=False):
-                if isinstance(r, BaseException):
-                    if logger:
-                        logger.warning(
-                            "fetch_message failed for quoted id %s: %s: %s",
-                            rid,
-                            type(r).__name__,
-                            r,
-                        )
-                    continue
-                if r is not None:
-                    # Strict allowlist: drop unknown Graph fields (attachments,
-                    # mentions, etc.) that may carry HTML, and sanitize every
-                    # string we keep. `from` can carry display-name shapes
-                    # like `Brandon Werner <brandon@werner.ac>`.
-                    quoted.append(
-                        {
-                            "message_id": r.get("message_id", ""),
-                            "from": _summarize_content(r.get("from", "")),
-                            "content": _summarize_content(r.get("content", "")),
-                            "sent_at": r.get("sent_at", ""),
-                        }
-                    )
-        meta["quoted_messages"] = quoted
 
     notification = JSONRPCNotification(
         jsonrpc="2.0",

@@ -1,17 +1,21 @@
 # Runbook — Entraclaw MCP dies after a few minutes under sustained activity
 
-**Status:** ROOT CAUSE IDENTIFIED — fix is a one-liner in `_push_channel_notification`.
-A prior identical bug existed on the email push path and was fixed 2026-04-17.
-The Teams push path was not sanitized, leaving the same vulnerability.
+**Status:** RESOLVED 2026-04-28. The actual root cause turned out to be
+the *shape* of `params.meta` in the channel push, not just its content.
+Earlier sanitizer fixes (2026-04-24, 2026-04-27) addressed real but
+insufficient surfaces. See the **2026-04-28 — RESOLVED** section below
+for the full trail and the definitive fix.
 
-**Owner rotation:** Anyone picking this up next — read this doc end to end
-before running anything. Do NOT start from scratch.
+**Owner rotation:** If a similar disconnect symptom recurs, read this
+doc end to end before running anything. The TL;DR has been preserved
+verbatim as of 2026-04-24 for historical accuracy — the real story is
+in the addenda.
 
-**Last update:** 2026-04-24 (root cause found via PTY soak + debug wrapper session).
+**Last update:** 2026-04-28 (final fix landed).
 
 ---
 
-## TL;DR for the next agent
+## TL;DR (HISTORICAL — superseded by 2026-04-28 RESOLVED section)
 
 - **Symptom.** Entraclaw MCP server (stdio child of Claude Code CLI) dies
   cleanly ~25 seconds after start, immediately after the first inbound
@@ -492,6 +496,100 @@ defense in `_summarize_content` is cheap to extend if needed.
 
 See `src/entraclaw/mcp_server.py` `_push_channel_notification` and
 `tests/test_mcp_server_integration.py::TestPushChannelNotificationObservability::test_channel_notification_meta_strips_html_everywhere`.
+
+---
+
+## 2026-04-28 — RESOLVED: the custom `meta.quoted_messages` field shape itself was the trigger
+
+**Status: RESOLVED.** Three rounds of investigation converged on a
+forensic envelope dump that disproved the angle-bracket theory and
+located the actual root cause.
+
+### What we tried (in order) and why each was wrong
+
+1. **Hypothesis: `meta.user` and quoted-message fields contained raw
+   angle brackets.** First fix shipped `_summarize_content` over
+   `meta.user` and a strict allowlist for quoted entries (commit
+   `de0a2d1` on main). Tests asserted no `<`/`>` in any string field.
+   The test passed, the symptom recurred. The theory had support but
+   wasn't sufficient.
+
+2. **Hypothesis: HTML entities (`&lt;`, `&gt;`) were round-tripping and
+   Claude Code's MCP client decoded them before its angle-bracket
+   safety check.** Second fix shipped `html.unescape` before tag-strip
+   in `_summarize_content` (commit `7e6ae8b` on main). Tests passed,
+   the symptom recurred.
+
+3. **Forensic envelope dump.** The `feature/copilot-cli-inbox` branch
+   added a temporary `logger.info("PUSH ENVELOPE %s: %s", ...)`
+   immediately before `write_stream.send()`. Next disconnect captured
+   the exact JSON Claude Code's MCP client closed on. The envelope had
+   **zero raw angle brackets and zero HTML entities** — completely
+   clean per both prior theories. The only thing populated relative to
+   surviving pushes was `meta.reply_to_ids` and `meta.quoted_messages`
+   (a list of dicts).
+
+4. **Actual root cause: the field shape itself.** Claude Code's MCP
+   client closes the stream when `params.meta` carries `reply_to_ids`
+   or `quoted_messages` — regardless of whether their content is
+   sanitized or empty. These were entraclaw-side conveniences (added
+   so the agent had quoted context inline) that the client doesn't
+   accept.
+
+### Final fix (this commit)
+
+`_push_channel_notification` no longer adds `reply_to_ids` or
+`quoted_messages` to `meta`. The push is restricted to the original
+`{chat_id, message_id, user, ts}` shape that round-trips reliably.
+
+The previous main-branch quoted-message fetch path is removed
+entirely on main since main does not persist quoted bodies elsewhere
+(unlike the feature branch, which routes them through
+`_safe_teams_payload` to the interaction log).
+
+### Trigger amplification by `927b718` (feature branch only)
+
+On the feature branch, commit `927b718` ("preserve Teams HTML") made
+the responder daemon emit raw `<p>…</p>` to Teams instead of always
+escaping. After that change, every Teams Reply UI on a responder
+reply triggered the quoted-message fetch path on the next inbound
+push, which exposed the field-shape bug. The earlier sanitization
+commits weren't useless — they're correct defense-in-depth — but
+they were chasing the wrong layer.
+
+### What the dossier got right
+
+- "Death is deterministic, triggered by a push" — yes, but specifically
+  pushes that populated `meta.quoted_messages`.
+- "Sanitizer is no longer the suspect" (2026-04-27 addendum) — correct
+  pivot, but the next surface wasn't the *contents* of those fields,
+  it was their *presence*.
+
+### What the dossier got wrong
+
+- "Claude's MCP client closes on angle-bracket content in notification
+  params" (2026-04-24 conclusion) — partial truth. That fix was
+  necessary for `params.content`. But the client also rejects unknown
+  fields in `meta` regardless of content, which the dossier didn't
+  predict.
+
+### What to verify if disconnects recur
+
+The push envelope is now `{chat_id, message_id, user, ts}` only. If a
+disconnect recurs:
+
+- Confirm no other custom field has crept into `meta`. Check
+  `_push_channel_notification` for new keys.
+- Confirm `_summarize_content` is still the gate on `params.content`
+  (entity-decode + tag-strip).
+- Add a temporary diagnostic envelope log before `write_stream.send()`
+  and capture the next death.
+
+### See also
+
+- `src/entraclaw/mcp_server.py::_push_channel_notification` (final shape)
+- `tests/test_mcp_server_integration.py::TestPushChannelNotificationObservability::test_reply_to_ids_omitted_from_meta`
+- `tests/test_mcp_server_integration.py::TestPushChannelNotificationObservability::test_quoted_messages_omitted_from_push_envelope`
 
 ---
 

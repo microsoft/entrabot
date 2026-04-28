@@ -1192,43 +1192,39 @@ class TestPushChannelNotificationObservability:
         )
 
     @pytest.mark.asyncio
-    async def test_reply_to_ids_forwarded_into_meta(
+    async def test_reply_to_ids_omitted_from_meta(
         self, tmp_path, monkeypatch
     ) -> None:
-        """When the inbound message has non-empty reply_to_ids, the push
-        notification's meta dict must include them so the agent can detect
-        quote-replies without re-parsing the attachment tag inline."""
+        """`meta.reply_to_ids` and `meta.quoted_messages` are intentionally
+        omitted from the channel push: 2026-04-28 forensic envelope dumps
+        proved Claude Code's MCP client closes the stream whenever these
+        custom fields are populated, regardless of content. See
+        docs/runbooks/mcp-disconnect-investigation.md.
+        """
         monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
 
         from entraclaw import mcp_server
 
         mock_stream = AsyncMock()
         mcp_server._state["_write_stream"] = mock_stream
-        mcp_server._state["token"] = "tok"
-        # fetch_message returns None for every quoted id so we don't need
-        # a Graph mock here — that path is exercised by a separate test.
-        with patch.object(
-            mcp_server, "fetch_message", new=AsyncMock(return_value=None)
-        ):
-            try:
-                await mcp_server._push_channel_notification(
-                    {
-                        "message_id": "m-reply-1",
-                        "from": "Brandon",
-                        "content": '<attachment id="SRC-1"></attachment><p>yes</p>',
-                        "sent_at": "2026-04-17T01:10:00Z",
-                        "reply_to_ids": ["SRC-1"],
-                    },
-                    chat_id="19:abc@unq.gbl.spaces",
-                )
-            finally:
-                mcp_server._state.pop("_write_stream", None)
+        try:
+            await mcp_server._push_channel_notification(
+                {
+                    "message_id": "m-reply-1",
+                    "from": "Brandon",
+                    "content": '<attachment id="SRC-1"></attachment><p>yes</p>',
+                    "sent_at": "2026-04-17T01:10:00Z",
+                    "reply_to_ids": ["SRC-1"],
+                },
+                chat_id="19:abc@unq.gbl.spaces",
+            )
+        finally:
+            mcp_server._state.pop("_write_stream", None)
 
         mock_stream.send.assert_awaited_once()
-        call = mock_stream.send.call_args
-        session_message = call.args[0]
-        notif_params = session_message.message.root.params
-        assert notif_params["meta"]["reply_to_ids"] == ["SRC-1"]
+        notif_params = mock_stream.send.call_args.args[0].message.root.params
+        assert "reply_to_ids" not in notif_params["meta"]
+        assert "quoted_messages" not in notif_params["meta"]
 
     @pytest.mark.asyncio
     async def test_reply_to_ids_absent_when_empty(
@@ -1261,155 +1257,14 @@ class TestPushChannelNotificationObservability:
         assert "quoted_messages" not in notif_params["meta"]
 
     @pytest.mark.asyncio
-    async def test_quoted_messages_inlined_when_fetch_succeeds(
+    async def test_quoted_messages_omitted_from_push_envelope(
         self, tmp_path, monkeypatch
     ) -> None:
-        """When reply_to_ids is non-empty and fetch_message returns dicts,
-        the push includes meta['quoted_messages'] so the agent has context
-        without a tool round-trip."""
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
-
-        from entraclaw import mcp_server
-
-        mock_stream = AsyncMock()
-        mcp_server._state["_write_stream"] = mock_stream
-        mcp_server._state["token"] = "tok"
-
-        async def _fake_fetch(*, chat_id, message_id, token):
-            return {
-                "message_id": message_id,
-                "from": "EntraClaw Agent",
-                "content": f"<p>orig {message_id}</p>",
-                "sent_at": "2026-04-17T00:55:00Z",
-            }
-
-        with patch.object(mcp_server, "fetch_message", new=AsyncMock(side_effect=_fake_fetch)):
-            try:
-                await mcp_server._push_channel_notification(
-                    {
-                        "message_id": "m-reply-2",
-                        "from": "Brandon",
-                        "content": (
-                            '<attachment id="SRC-A"></attachment>'
-                            '<attachment id="SRC-B"></attachment><p>hi</p>'
-                        ),
-                        "sent_at": "2026-04-17T01:12:00Z",
-                        "reply_to_ids": ["SRC-A", "SRC-B"],
-                    },
-                    chat_id="19:abc@unq.gbl.spaces",
-                )
-            finally:
-                mcp_server._state.pop("_write_stream", None)
-
-        notif_params = mock_stream.send.call_args.args[0].message.root.params
-        assert notif_params["meta"]["reply_to_ids"] == ["SRC-A", "SRC-B"]
-        quoted = notif_params["meta"]["quoted_messages"]
-        assert len(quoted) == 2
-        assert {q["message_id"] for q in quoted} == {"SRC-A", "SRC-B"}
-        assert all(q["from"] == "EntraClaw Agent" for q in quoted)
-        for q in quoted:
-            assert "<" not in q["content"], f"Raw HTML in quoted content: {q['content']!r}"
-            assert ">" not in q["content"], f"Raw HTML in quoted content: {q['content']!r}"
-            assert q["content"] == f"orig {q['message_id']}"
-
-    @pytest.mark.asyncio
-    async def test_failed_fetches_omitted_from_quoted_messages(
-        self, tmp_path, monkeypatch
-    ) -> None:
-        """One succeeds, one returns None → only the successful entry appears."""
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
-
-        from entraclaw import mcp_server
-
-        mock_stream = AsyncMock()
-        mcp_server._state["_write_stream"] = mock_stream
-        mcp_server._state["token"] = "tok"
-
-        async def _partial(*, chat_id, message_id, token):
-            if message_id == "GOOD":
-                return {
-                    "message_id": "GOOD",
-                    "from": "EntraClaw Agent",
-                    "content": "<p>fetched</p>",
-                    "sent_at": "2026-04-17T00:54:00Z",
-                }
-            return None
-
-        with patch.object(mcp_server, "fetch_message", new=AsyncMock(side_effect=_partial)):
-            try:
-                await mcp_server._push_channel_notification(
-                    {
-                        "message_id": "m-reply-3",
-                        "from": "Brandon",
-                        "content": "reply body",
-                        "sent_at": "2026-04-17T01:13:00Z",
-                        "reply_to_ids": ["GOOD", "MISSING"],
-                    },
-                    chat_id="19:abc@unq.gbl.spaces",
-                )
-            finally:
-                mcp_server._state.pop("_write_stream", None)
-
-        notif_params = mock_stream.send.call_args.args[0].message.root.params
-        assert notif_params["meta"]["reply_to_ids"] == ["GOOD", "MISSING"]
-        quoted = notif_params["meta"]["quoted_messages"]
-        assert len(quoted) == 1
-        assert quoted[0]["message_id"] == "GOOD"
-
-    @pytest.mark.asyncio
-    async def test_all_fetches_fail_still_pushes(
-        self, tmp_path, monkeypatch
-    ) -> None:
-        """Fail-open: if every fetch returns None or raises, the push still
-        fires — meta has reply_to_ids but quoted_messages is an empty list.
-        Choice: emit an empty list (not omit the key) so clients don't need
-        to branch on key-presence vs empty-list."""
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
-
-        from entraclaw import mcp_server
-
-        mock_stream = AsyncMock()
-        mcp_server._state["_write_stream"] = mock_stream
-        mcp_server._state["token"] = "tok"
-
-        async def _always_fail(*, chat_id, message_id, token):
-            raise RuntimeError("graph down")
-
-        with patch.object(
-            mcp_server, "fetch_message", new=AsyncMock(side_effect=_always_fail)
-        ):
-            try:
-                await mcp_server._push_channel_notification(
-                    {
-                        "message_id": "m-reply-4",
-                        "from": "Brandon",
-                        "content": "reply during outage",
-                        "sent_at": "2026-04-17T01:14:00Z",
-                        "reply_to_ids": ["X", "Y"],
-                    },
-                    chat_id="19:abc@unq.gbl.spaces",
-                )
-            finally:
-                mcp_server._state.pop("_write_stream", None)
-
-        mock_stream.send.assert_awaited_once()
-        notif_params = mock_stream.send.call_args.args[0].message.root.params
-        assert notif_params["meta"]["reply_to_ids"] == ["X", "Y"]
-        assert notif_params["meta"]["quoted_messages"] == []
-
-    @pytest.mark.asyncio
-    async def test_channel_notification_meta_strips_html_everywhere(
-        self, tmp_path, monkeypatch
-    ) -> None:
-        """No angle brackets anywhere in params — not just in content.
-
-        See ``docs/runbooks/mcp-disconnect-investigation.md`` 2026-04-28
-        addendum: after the params.content sanitizer was fixed, the next
-        suspect surface was meta.user (display names like
-        ``Brandon Werner <brandon@werner.ac>``) and quoted_messages
-        fields beyond content. The 927b718 commit (responder preserves
-        Teams HTML) made it routine for Teams Reply quotes to round-trip
-        raw HTML back through this push path — armed the trigger.
+        """Reply-to-ids and quoted-message bodies must NOT be inlined in the
+        push. Claude Code's MCP client closes the stream on those custom
+        fields. The fetch path is also gone on main — quoted bodies aren't
+        needed for any other purpose since they're not in the push.
+        See docs/runbooks/mcp-disconnect-investigation.md.
         """
         monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
 
@@ -1419,32 +1274,62 @@ class TestPushChannelNotificationObservability:
         mcp_server._state["_write_stream"] = mock_stream
         mcp_server._state["token"] = "tok"
 
-        async def _fake_fetch(*, chat_id, message_id, token):
-            return {
-                "message_id": message_id,
-                "from": "Brandon Werner <brandon@werner.ac>",
-                "content": '<attachment id="x"></attachment><p>quoted body</p>',
-                "sent_at": "2026-04-28T00:00:00Z",
-                "attachments": [{"content": "<p>card body</p>"}],
-                "mentions": [{"mentionText": "<at>name</at>"}],
-            }
+        try:
+            await mcp_server._push_channel_notification(
+                {
+                    "message_id": "m-reply-2",
+                    "from": "Brandon",
+                    "content": (
+                        '<attachment id="SRC-A"></attachment>'
+                        '<attachment id="SRC-B"></attachment><p>hi</p>'
+                    ),
+                    "sent_at": "2026-04-17T01:12:00Z",
+                    "reply_to_ids": ["SRC-A", "SRC-B"],
+                },
+                chat_id="19:abc@unq.gbl.spaces",
+            )
+        finally:
+            mcp_server._state.pop("_write_stream", None)
+            mcp_server._state.pop("token", None)
 
-        with patch.object(
-            mcp_server, "fetch_message", new=AsyncMock(side_effect=_fake_fetch)
-        ):
-            try:
-                await mcp_server._push_channel_notification(
-                    {
-                        "message_id": "m-1",
-                        "from": "Brandon Werner <brandon@werner.ac>",
-                        "content": "<p>plain reply</p>",
-                        "sent_at": "2026-04-28T00:01:00Z",
-                        "reply_to_ids": ["SRC-1"],
-                    },
-                    chat_id="19:abc@unq.gbl.spaces",
-                )
-            finally:
-                mcp_server._state.pop("_write_stream", None)
+        notif_params = mock_stream.send.call_args.args[0].message.root.params
+        assert "reply_to_ids" not in notif_params["meta"]
+        assert "quoted_messages" not in notif_params["meta"]
+
+    @pytest.mark.asyncio
+    async def test_channel_notification_meta_strips_html_everywhere(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """No angle brackets anywhere in params — not just in content.
+
+        Display names like ``Brandon Werner <brandon@werner.ac>`` and any
+        future Graph fields that creep into ``meta`` must be sanitized.
+        The walk-every-string assertion is stronger than per-field checks
+        — it catches new fields that future code might add.
+        See ``docs/runbooks/mcp-disconnect-investigation.md``.
+        """
+        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+
+        from entraclaw import mcp_server
+
+        mock_stream = AsyncMock()
+        mcp_server._state["_write_stream"] = mock_stream
+        mcp_server._state["token"] = "tok"
+
+        try:
+            await mcp_server._push_channel_notification(
+                {
+                    "message_id": "m-1",
+                    "from": "Brandon Werner <brandon@werner.ac>",
+                    "content": "<p>plain reply</p>",
+                    "sent_at": "2026-04-28T00:01:00Z",
+                    "reply_to_ids": ["SRC-1"],
+                },
+                chat_id="19:abc@unq.gbl.spaces",
+            )
+        finally:
+            mcp_server._state.pop("_write_stream", None)
+            mcp_server._state.pop("token", None)
 
         notif_params = mock_stream.send.call_args.args[0].message.root.params
 
@@ -1462,12 +1347,12 @@ class TestPushChannelNotificationObservability:
         _walk(notif_params, "params")
 
     @pytest.mark.asyncio
-    async def test_interaction_log_written_before_any_fetch(
+    async def test_interaction_log_written_even_without_stream(
         self, tmp_path, monkeypatch
     ) -> None:
         """Regression guard: the interaction log write must still happen
-        before the push (and before any quoted-message fetching). Daily
-        summaries stay blind-proof even when Graph is slow/down."""
+        when no write stream is present. Daily summaries stay blind-proof
+        even when push transport is broken."""
         monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
 
         from datetime import UTC, datetime
@@ -1476,25 +1361,19 @@ class TestPushChannelNotificationObservability:
         from entraclaw.tools.interaction_log import read_day
 
         # No write stream — push path is skipped entirely. The log write
-        # is the only observable effect. If the implementation moved the
-        # log call past fetch or the stream guard, this test fails.
+        # is the only observable effect.
         mcp_server._state.pop("_write_stream", None)
 
-        with patch.object(
-            mcp_server,
-            "fetch_message",
-            new=AsyncMock(side_effect=AssertionError("fetch must not run when no stream")),
-        ):
-            await mcp_server._push_channel_notification(
-                {
-                    "message_id": "m-log-first",
-                    "from": "Brandon",
-                    "content": "something",
-                    "sent_at": "2026-04-17T01:15:00Z",
-                    "reply_to_ids": ["SRC"],
-                },
-                chat_id="19:abc@unq.gbl.spaces",
-            )
+        await mcp_server._push_channel_notification(
+            {
+                "message_id": "m-log-first",
+                "from": "Brandon",
+                "content": "something",
+                "sent_at": "2026-04-17T01:15:00Z",
+                "reply_to_ids": ["SRC"],
+            },
+            chat_id="19:abc@unq.gbl.spaces",
+        )
 
         today = datetime.now(UTC).strftime("%Y-%m-%d")
         entries = read_day(today)
