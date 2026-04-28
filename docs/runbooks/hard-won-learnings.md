@@ -614,6 +614,18 @@ Regression tests in `tests/test_mcp_server_integration.py` cover both raw Teams 
 
 ---
 
+### Learning #51: Any Proactive 1:1 Teams DM Requires `wait_for_sponsor_dm` — Long-Running Was Just the Canonical Case
+
+**Date:** 2026-04-28
+**Status:** **CONFIRMED — empirically reproduced in Copilot CLI (bouncing-cat ASCII task).**
+**Context:** After shipping `wait_for_sponsor_dm` (Learning #49), the body prompt and the tool docstring both gated the "wait for sponsor reply" pattern on the canonical worked example: the human asks for *long-running work* and *promises a Teams ping when it's done* (e.g. "ping me when the build's green"). The model treated that wording as a literal trigger filter rather than as an example of a broader rule. When Brandon ran a quick task ("write a bouncing-cat ASCII script and message me in Teams when done"), the model classified the task as not-long-running, sent the completion DM via `send_teams_message`, said "Done" in the terminal, and ended the turn. Brandon's three Teams replies arrived in `~/.entraclaw/logs/entraclaw.log` as channel pushes but were never picked up — no `wait_for_sponsor_dm` call was blocking to receive them.
+**Problem:** The narrow trigger missed the actual structural property that makes Teams replies land in Teams: **the agent proactively opened a 1:1 conversation channel.** Once the agent sends a DM to a 1:1 sponsor chat, the human's natural next-turn reaction lives in Teams, not the host CLI's terminal — regardless of whether the prior task was 5 seconds or 5 hours. Ending the turn after the proactive DM strands the human in Teams with no listener, exactly the failure mode `wait_for_sponsor_dm` was built to prevent.
+**Fix:** Broadened the trigger language in *both* injection vectors. (1) `prompts/anatomy/channel-discipline.md` "Sponsor DM wait state" section now says: "Any time you proactively send a Teams DM to a 1:1 sponsor chat as part of completing the operator's request… immediately call `wait_for_sponsor_dm`. This applies even to short tasks." The long-running example is now framed as the *canonical worked example*, not the trigger. (2) The `wait_for_sponsor_dm` tool docstring in `src/entraclaw/mcp_server.py` carries the same wording — critical because Learning #48 established that Copilot CLI does NOT inject FastMCP `instructions=` into the LLM system prompt; only MCP tool descriptions reach the model reliably. Also wired `wait_animation_frame()` into the tool's heartbeat so the operator sees a cycling ASCII frame ("(•ᴗ•) zZz... listening for Teams DM [30s] (Ctrl+C to break)") via `Context.report_progress(message=...)` while the agent is parked, making the listening state visible instead of a silent terminal.
+**Prevention:** When writing trigger language for an MCP tool, frame the rule on the *structural side effect* of the action ("you opened a conversation channel"), not on the narrative shape of the user's request ("they asked for long-running work"). Models pattern-match on examples; bury the example beneath the rule. Always update both the prompt anatomy file AND the tool docstring — the docstring is the only vector that reliably reaches Copilot CLI per Learning #48.
+**Evidence/references:** Live failure in session 2026-04-28 (bouncing-cat task; three Teams replies stranded in `~/.entraclaw/logs/entraclaw.log`); fix shipped as `fix/wait-protocol-broadened-trigger`; new test classes `TestWaitAnimationFrame` and `TestBroadenedWaitDoctrine` in `tests/tools/test_wait_for_sponsor_dm.py`; `src/entraclaw/tools/wait_tool.py::wait_animation_frame`; `prompts/anatomy/channel-discipline.md` "Sponsor DM wait state".
+
+---
+
 ## Historical Learnings
 
 ### [HISTORICAL] Learning #4: OBO Requires Matching Token Audience

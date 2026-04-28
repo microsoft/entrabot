@@ -20,6 +20,7 @@ from entraclaw.tools.wait_tool import (
     WaitForSponsorDmResult,
     _injection_dedupe_key,
     select_sponsor_message,
+    wait_animation_frame,
     wait_loop,
 )
 
@@ -271,3 +272,88 @@ def test_wait_for_sponsor_dm_result_timeout_is_structured() -> None:
     assert payload["message_id"] == ""
     assert payload["metadata"]["timeout_seconds"] == 20
     assert payload["chat_type"] == ""
+
+
+# --- ASCII wait animation -----------------------------------------------
+
+
+class TestWaitAnimationFrame:
+    """The animation is the operator-facing signal that this CLI is parked
+    in a Teams wait. The terminal looks idle, the model has 'returned
+    control' from the operator's POV, but a Teams DM will land here as
+    next-turn input. The frame must scream 'I'M LISTENING TO TEAMS, NOT
+    YOUR KEYBOARD' so the operator knows to either wait or break out
+    with Ctrl+C."""
+
+    def test_returns_a_nonempty_string(self) -> None:
+        assert wait_animation_frame(elapsed_s=0.0)
+        assert isinstance(wait_animation_frame(elapsed_s=0.0), str)
+
+    def test_frame_advances_with_elapsed_time(self) -> None:
+        # Two distant elapsed values must not produce the same frame, or
+        # the animation looks frozen and the operator can't tell whether
+        # the wait is alive.
+        a = wait_animation_frame(elapsed_s=0.0)
+        b = wait_animation_frame(elapsed_s=10.0)
+        assert a != b
+
+    def test_frame_is_deterministic_for_same_elapsed(self) -> None:
+        # Pure function — same input, same output. Required for the test
+        # above to be meaningful and for the heartbeat to be replayable.
+        assert wait_animation_frame(elapsed_s=42.0) == wait_animation_frame(elapsed_s=42.0)
+
+    def test_frame_mentions_ctrl_c_break_path(self) -> None:
+        # The operator MUST know how to leave the wait. Hiding the escape
+        # hatch behind documentation is a footgun. Surface it in every frame.
+        frame = wait_animation_frame(elapsed_s=0.0)
+        assert "Ctrl" in frame or "ctrl" in frame.lower()
+
+    def test_frame_signals_teams_listening_state(self) -> None:
+        # The frame must name the channel so the operator knows their
+        # keyboard input won't reach the agent — Teams will.
+        frame = wait_animation_frame(elapsed_s=5.0).lower()
+        assert "teams" in frame or "dm" in frame or "sponsor" in frame
+
+    def test_frame_includes_elapsed_seconds(self) -> None:
+        # Elapsed-time hint helps the operator decide whether to wait
+        # another beat or break out and try a different approach.
+        frame = wait_animation_frame(elapsed_s=125.0)
+        # Either "2m" / "125s" / "2:05" — any human-readable elapsed
+        # marker counts; we just want the number to surface somewhere.
+        assert any(token in frame for token in ("125", "2m", "2:0"))
+
+
+# --- Anti-regression: tool doctrine names the broadened trigger ---------
+
+
+class TestBroadenedWaitDoctrine:
+    """After 2026-04-28 we broadened the wait protocol from 'long-running
+    work + ping me when done' to 'any proactive 1:1 Teams DM'. The
+    triggering rule must live (1) in the body prompt anatomy fragment
+    and (2) in the wait tool's MCP description, because per Learning #48
+    those are the only two reliable injection vectors into Copilot CLI."""
+
+    def test_channel_discipline_broadened_trigger_present(self) -> None:
+        from pathlib import Path
+
+        text = (
+            Path(__file__).resolve().parents[2]
+            / "prompts/anatomy/channel-discipline.md"
+        ).read_text(encoding="utf-8")
+        # The broadened rule must be findable as a single phrase. Lock
+        # to a canonical wording so the doctrine can't silently drift
+        # back to the narrow 'long-running' framing.
+        assert "any proactive" in text.lower() or "any time you proactively" in text.lower()
+        # And it must connect that broadened trigger to wait_for_sponsor_dm.
+        assert "wait_for_sponsor_dm" in text
+
+    def test_mcp_tool_docstring_carries_broadened_trigger(self) -> None:
+        from pathlib import Path
+
+        mcp_src = (
+            Path(__file__).resolve().parents[2] / "src/entraclaw/mcp_server.py"
+        ).read_text(encoding="utf-8")
+        # The wait_for_sponsor_dm tool body in mcp_server.py must
+        # surface the broadened rule, since Copilot CLI only reads tool
+        # descriptions reliably (Learning #48).
+        assert "any proactive" in mcp_src.lower() or "any time you proactively" in mcp_src.lower()

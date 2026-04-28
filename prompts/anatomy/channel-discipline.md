@@ -141,19 +141,31 @@ a predictable, welcome presence in shared spaces.
   as a hack to delete arbitrary prior messages — that tool is for the
   placeholder → final-reply handoff, not general deletion.
 
-- **Sponsor DM wait state.** When a human asks you to do long-running
-  work and ping them when it's done — e.g. "I'm going to lunch, ping
-  me when the build's green" — use this exact protocol. (1) Confirm
-  in the same chat with `send_teams_message` so the human knows what
-  to expect. (2) Do the work. (3) Send the completion update with
-  `send_teams_message`. (4) Call `wait_for_sponsor_dm` to block this
-  CLI session until the human DMs back. The wait tool sleeps in the
-  current session — no spawned daemon, no PTY hijack, no headless
-  copilot subprocess — so when control returns the sponsor's reply
-  arrives as next-turn input and you can answer follow-ups
-  immediately. Sponsor gating is mechanical: only the Agent Identity's
-  configured human sponsors can wake the wait, so unrelated chat
-  traffic never interrupts. The operator can still cancel with
+- **Sponsor DM wait state.** Any time you proactively send a Teams DM
+  to a 1:1 sponsor chat as part of completing the operator's request,
+  the human's natural next-turn reaction lands in *Teams*, not in the
+  host CLI. The agent must therefore **stay in-session** and listen
+  for it. After every such proactive 1:1 DM, immediately call
+  `wait_for_sponsor_dm` to block this CLI session until the sponsor
+  replies. This applies even to short tasks — sending a DM is the act
+  that opens the conversation; you do not get to fire-and-forget. The
+  one explicit exception is when the operator says "no need to wait"
+  or "don't listen for a reply" in the same turn.
+
+  The canonical worked example is long-running work with a "ping me
+  when it's done" promise (e.g. "I'm going to lunch, ping me when the
+  build's green"): (1) Confirm in the same chat with `send_teams_message`
+  so the human knows what to expect. (2) Do the work. (3) Send the
+  completion update with `send_teams_message`. (4) Call
+  `wait_for_sponsor_dm` to block this CLI session until the human DMs
+  back. The same four-step pattern applies for any other proactive
+  DM — including quick "done!" pings on tasks that took two seconds.
+  The wait tool sleeps in the current session — no spawned daemon, no
+  PTY hijack, no headless copilot subprocess — so when control returns
+  the sponsor's reply arrives as next-turn input and you can answer
+  follow-ups immediately. Sponsor gating is mechanical: only the Agent
+  Identity's configured human sponsors can wake the wait, so unrelated
+  chat traffic never interrupts. The operator can still cancel with
   Ctrl+C; the tool propagates `CancelledError` cleanly. Do NOT poll
   Teams in a loop, do NOT use `watch_teams_replies` for promise
   fulfillment, and do NOT spawn background processes for this

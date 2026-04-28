@@ -2613,15 +2613,28 @@ async def wait_for_sponsor_dm(
 ) -> str:
     """Block until a Sponsor sends a Teams DM, then return their message.
 
-    Use this when the user asks the agent to do long-running work and
-    promise a Teams ping when it is done — e.g. "I'm going to lunch.
-    Ping me when the build's green." Send the human a heads-up via
+    **When to call this tool.** Any time you proactively send a Teams
+    DM to a 1:1 sponsor chat as part of completing the operator's
+    request, the human's next-turn reaction lands in Teams, not in the
+    host CLI's terminal. You must therefore stay in-session and listen
+    for it. After every such proactive 1:1 DM, immediately call
+    `wait_for_sponsor_dm` — even when the task itself was trivial.
+    Sending a DM is what opens the conversation; you do not get to
+    fire-and-forget. The one explicit exception is when the operator
+    says "no need to wait" or "don't listen for a reply" in the same
+    turn.
+
+    The canonical worked example is long-running work with a "ping me
+    when it's done" promise — e.g. "I'm going to lunch. Ping me when
+    the build's green." Send the human a heads-up via
     ``send_teams_message`` first (so they know what to expect), do the
     work, then call this tool. The tool sleeps INSIDE this MCP session
     until the Sponsor (and only the Sponsor — the Agent Identity's
     configured human sponsors, looked up at runtime via Graph) DMs the
     agent in any watched chat. The Sponsor's message text becomes this
     tool's return value, which the model then sees as next-turn input.
+    The same pattern applies to any other proactive 1:1 DM, including
+    quick "done!" pings on two-second tasks.
 
     REQUIRED FOLLOW-UP — when this tool returns a payload with
     ``chat_type == "oneOnOne"`` and a non-empty ``message_id``, you
@@ -2753,10 +2766,15 @@ async def wait_for_sponsor_dm(
         # on its own echo. Sponsor gate runs on top of this.
         return filter_human_messages(raw, agent_display_name)
 
-    async def heartbeat() -> None:
+    async def heartbeat(elapsed_s: float = 0.0) -> None:
         if ctx is not None:
+            from entraclaw.tools.wait_tool import wait_animation_frame
+
+            frame = wait_animation_frame(elapsed_s=elapsed_s)
             with contextlib.suppress(Exception):
-                await ctx.report_progress(progress=0.0, total=None)
+                await ctx.report_progress(
+                    progress=elapsed_s, total=None, message=frame
+                )
 
     coro = wait_loop(
         list_chat_ids=list_chat_ids,

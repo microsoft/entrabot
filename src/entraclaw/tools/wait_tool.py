@@ -35,6 +35,64 @@ DEFAULT_POLL_INTERVAL_S = 5.0
 DEFAULT_HEARTBEAT_S = 30.0
 DEDUP_MAX = 1000
 
+# Cute frames cycled through MCP progress messages while the agent is
+# parked in ``wait_for_sponsor_dm``. The animation tells the operator
+# the CLI is alive but listening to TEAMS, not the keyboard. Each frame
+# carries the same three signals: (1) Teams/sponsor state, (2) elapsed
+# beat so the operator can see progress, (3) the Ctrl+C escape hatch.
+# These are intentionally short so the host CLI's progress line stays
+# on one terminal row.
+_WAIT_ANIMATION_FRAMES: tuple[str, ...] = (
+    "(•ᴗ•) zZz... listening for Teams DM",
+    "(•ᴗ•)╯ checking inbox",
+    "(•ᴗ•)~~~ Teams is the live channel",
+    "ʕ•ᴥ•ʔ waiting on sponsor",
+    "ʕ•ᴥ•ʔ╯ peeking at chats",
+    "(´･ω･`) sponsor hasn't replied yet",
+    "(╯°□°)╯ Teams DM = next turn",
+    "(◕‿◕) still here, still waiting",
+)
+
+
+def _format_elapsed(elapsed_s: float) -> str:
+    """Render an elapsed-seconds float as a compact ``Ns`` / ``Nm Ms``
+    badge for the operator-facing animation frame."""
+    seconds = int(max(0.0, elapsed_s))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, rem = divmod(seconds, 60)
+    if rem == 0:
+        return f"{minutes}m"
+    return f"{minutes}m{rem}s"
+
+
+def wait_animation_frame(
+    elapsed_s: float,
+    *,
+    sender_hint: str | None = None,
+) -> str:
+    """Pure function: render a single animation frame for the given
+    elapsed wait time.
+
+    The frame is what the host CLI shows the operator while the agent
+    is blocked inside ``wait_for_sponsor_dm``. Operators see the
+    terminal idle and may forget the agent is listening to Teams; the
+    frame must scream "I'M LISTENING TO TEAMS, NOT YOUR KEYBOARD" and
+    surface the Ctrl+C escape hatch every beat.
+
+    Deterministic for testability: same ``elapsed_s`` always yields the
+    same frame. Frame index advances roughly once per heartbeat tick
+    (~30s) so the animation does not flicker too fast on the operator's
+    terminal.
+    """
+    frame_index = int(max(0.0, elapsed_s) // DEFAULT_HEARTBEAT_S) % len(
+        _WAIT_ANIMATION_FRAMES
+    )
+    art = _WAIT_ANIMATION_FRAMES[frame_index]
+    elapsed = _format_elapsed(elapsed_s)
+    hint = f" — {sender_hint}" if sender_hint else ""
+    return f"{art} [{elapsed}{hint}] (Ctrl+C to break)"
+
 
 @dataclass
 class WaitForSponsorDmResult:
@@ -185,7 +243,7 @@ async def wait_loop(
     gate: Any,
     dedup: deque[tuple[str, str]],
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-    heartbeat: Callable[[], Awaitable[None]] | None = None,
+    heartbeat: Callable[..., Awaitable[None]] | None = None,
     started_at_iso: str | None = None,
     poll_interval_s: float | None = None,
     heartbeat_interval_s: float | None = None,
@@ -195,6 +253,10 @@ async def wait_loop(
     The caller injects ``list_chat_ids`` and ``read_chat`` so this loop
     can be tested without httpx, and so production code reuses the
     background poll's ``read``+token-retry path.
+
+    ``heartbeat`` is called periodically with the elapsed-seconds float
+    as a positional argument; if the callable doesn't accept arguments
+    it is called with no args (back-compat).
     """
     started_at = started_at_iso or _utcnow_iso()
     interval = poll_interval_s if poll_interval_s is not None else _poll_seconds()
@@ -239,7 +301,12 @@ async def wait_loop(
         elapsed += interval
         if heartbeat is not None and elapsed - last_heartbeat >= hb_interval:
             try:
-                await heartbeat()
+                # Try elapsed-aware signature first; fall back to no-arg
+                # for legacy callers and existing tests.
+                try:
+                    await heartbeat(elapsed)  # type: ignore[call-arg]
+                except TypeError:
+                    await heartbeat()  # type: ignore[call-arg]
             except Exception as exc:
                 logger.debug("wait_for_sponsor_dm: heartbeat failed: %s", exc)
             last_heartbeat = elapsed
