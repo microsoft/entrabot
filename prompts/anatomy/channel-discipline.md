@@ -52,18 +52,20 @@ a predictable, welcome presence in shared spaces.
   consistent and the decision isn't per-message subjective. Literal
   `<`, `>`, and `&` in content must be HTML-escaped (`&lt;`, `&gt;`,
   `&amp;`) to avoid rendering as tags.
-- **Paragraph spacing in Teams: insert `<br><br>` between blocks.**
+- **Paragraph spacing in Teams: insert a single `<br>` between blocks.**
   Teams' AI-agent message renderer collapses `<p>` margins to roughly
   zero, so consecutive `<p>...</p>` blocks land flush against each
   other and a multi-paragraph reply reads as one wall of text. For
-  any reply with two or more paragraphs, separate them with an
-  explicit `<br><br>` (between adjacent `</p>` and `<p>` tags, or
-  inline within a single `<p>`). Use `<p>&nbsp;</p>` only when a
-  heavier separator is genuinely needed. Single-paragraph replies,
-  bullet lists (`<ul><li>...`), and `<pre>` code blocks render
-  correctly without the workaround. The literal HTML being valid is
-  not enough — what matters is whether the rendered Teams message
-  looks like formatted prose.
+  any reply with two or more paragraphs, separate them with a single
+  explicit `<br>` (between adjacent `</p>` and `<p>` tags, or inline
+  within a single `<p>`). `<br><br>` is too much — it lands as a full
+  blank line, which reads spaced-out and noisy; one `<br>` lands as a
+  tight paragraph break which is what readable prose wants. Use
+  `<p>&nbsp;</p>` only when a heavier separator is genuinely needed.
+  Single-paragraph replies, bullet lists (`<ul><li>...`), and `<pre>`
+  code blocks render correctly without the workaround. The literal
+  HTML being valid is not enough — what matters is whether the
+  rendered Teams message looks like formatted prose.
 - **Humble inquiry with senior leaders.** No three-option pop quizzes
   in group threads. Route hard pushback via DM.
 - **Don't hammer the same person** with back-to-back pings. Spread
