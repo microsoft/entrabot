@@ -211,6 +211,55 @@ class SponsorGate:
             mails=self.mails,
         )
 
+    def with_watched_chat_ids(
+        self, chat_ids: list[str], agent_user_id: str
+    ) -> SponsorGate:
+        """Extract the cross-tenant sponsor's home-tenant userId from 1:1 chat IDs.
+
+        For federated B2B 1:1 chats, Microsoft Graph encodes both participants'
+        home-tenant userIds in the chat_id itself:
+
+            ``19:{user_a_id}_{user_b_id}@unq.gbl.spaces``
+
+        The chat-members API does NOT expose the cross-tenant guest's email,
+        so ``with_chat_members`` cannot match on it. The chat_id is the only
+        reliable carrier. If the agent's user_id is one half, the OTHER half
+        is the sponsor's home-tenant userId — add it to ``user_ids``.
+
+        This is safe because:
+        1. ``unq.gbl.spaces`` chats are 1:1 by construction (exactly two
+           participants); the non-agent half can only be the counterparty.
+        2. The agent only watches chats it explicitly registered, so the
+           counterparty was already vetted at chat-creation time.
+        """
+        agent_id = _normalize_id(agent_user_id)
+        if not agent_id:
+            return self
+        user_ids = set(self.user_ids)
+        for chat_id in chat_ids:
+            if not chat_id or "@unq.gbl.spaces" not in chat_id:
+                continue
+            local = chat_id.split("@", 1)[0]
+            if not local.startswith("19:"):
+                continue
+            local = local[len("19:") :]
+            parts = local.split("_")
+            if len(parts) != 2:
+                continue
+            left = _normalize_id(parts[0])
+            right = _normalize_id(parts[1])
+            if not left or not right:
+                continue
+            if left == agent_id and right != agent_id:
+                user_ids.add(right)
+            elif right == agent_id and left != agent_id:
+                user_ids.add(left)
+        return SponsorGate(
+            user_ids=frozenset(user_ids),
+            upns=self.upns,
+            mails=self.mails,
+        )
+
     def accepts(self, message: dict[str, Any]) -> bool:
         sender_id = _normalize_id(str(message.get("sender_id") or ""))
         sender = _normalize_email(str(message.get("sender") or ""))
@@ -355,4 +404,10 @@ def load_agent_identity_sponsor_gate(config: EntraClawConfig) -> SponsorGate:
     gate = SponsorGate.from_agent_identity_sponsors(
         fetch_agent_identity_sponsors(config)
     )
-    return gate.with_chat_members(fetch_watched_chat_members(config))
+    gate = gate.with_chat_members(fetch_watched_chat_members(config))
+    agent_user_id = config.agent_user_id or ""
+    if agent_user_id:
+        gate = gate.with_watched_chat_ids(
+            _watched_chat_ids(config.data_dir), agent_user_id
+        )
+    return gate

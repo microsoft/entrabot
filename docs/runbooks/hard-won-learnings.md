@@ -638,6 +638,18 @@ Regression tests in `tests/test_mcp_server_integration.py` cover both raw Teams 
 
 ---
 
+### Learning #53: Federated B2B Guests in 1:1 Teams Chats — Chat-Members API Hides the Email; Parse the chat_id Instead
+
+**Date:** 2026-04-28
+**Status:** **CONFIRMED — root cause for the Learning #50/#51/#52 sequence; empirically reproduced after PR #51 shipped.**
+**Context:** Learning #50 added `identities[].issuerAssignedId` extraction so the sponsor list contains both the guest UPN (`brandwe_microsoft.com#EXT#@brandwedir.onmicrosoft.com`) and the home SMTP (`brandwe@microsoft.com`). Learning #52 added cache invalidation so a freshly registered chat triggers gate rebuild. Both shipped, both correct, gate STILL rejected every reply: `sender_id=4d4a65ef-e9b3-4ec2-a1e2-b430a5855118 sender= from=Brandon Werner`.
+**Problem:** For cross-tenant federated B2B 1:1 chats, Microsoft Graph's `GET /chats/{id}/members` endpoint returns `aadUserConversationMember` records whose `email` field is **empty**. The `userId` field IS populated and equals the home-tenant userId (`4d4a65ef-…`), but `with_chat_members` requires an email match against sponsor identifiers to add a userId to the gate. No email → no match → no userId enriched. Inbound replies arrive with that home-tenant `sender_id` and an empty `sender` UPN, so neither pathway in `SponsorGate.accepts()` accepts the message.
+**Fix:** Parse the chat_id itself. Federated 1:1 chats use the format `19:{user_a_id}_{user_b_id}@unq.gbl.spaces` where one half is the agent's `user_id` and the other half is the cross-tenant counterparty's home-tenant userId. The chat_id is the only reliable carrier of that GUID when the email field is empty. Added `SponsorGate.with_watched_chat_ids(chat_ids, agent_user_id)` which strips the agent half from each `unq.gbl.spaces` chat and adds the remainder to `user_ids`. Wired into `load_agent_identity_sponsor_gate` so every gate rebuild benefits. Group chats (`@thread.v2`) are explicitly skipped — they have N members so trusting "the other half" is not meaningful.
+**Prevention:** When relying on a Graph property to enrich an authorization gate, verify that property is populated for **every** identity flavor you care about — especially federated B2B guests, which routinely have null/empty fields that are populated for in-tenant users. If the data isn't in the API response, check the resource's identifier; Microsoft tends to encode home-tenant identifiers in chat IDs, conversation IDs, and message IDs as a structural workaround for cross-tenant privacy. The chat_id format is documented in Teams Chat resource docs and is stable across the v1.0 Graph surface.
+**Evidence/references:** Live failure 2026-04-28 21:35 UTC: gate loaded with `ids=['963835fc…','9dc5ad9d…','aa144f49…']` (Brandon's three agent-tenant guest object IDs) but rejected every message from `sender_id=4d4a65ef-e9b3-4ec2-a1e2-b430a5855118` (his home-tenant Microsoft.com userId). Chat in question: `19:4d4a65ef-…_9e5d2c48-…@unq.gbl.spaces` where `9e5d2c48-…` matches `ENTRACLAW_AGENT_USER_ID`. Fix shipped as `fix/sponsor-gate-chatid-tenant-extraction`; new test class `TestUnqGblSpacesChatIdEnrichment` in `tests/identity/test_sponsor_federated_identities.py`; `src/entraclaw/identity/sponsors.py::SponsorGate.with_watched_chat_ids`.
+
+---
+
 ## Historical Learnings
 
 ### [HISTORICAL] Learning #4: OBO Requires Matching Token Audience
