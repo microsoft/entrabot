@@ -70,6 +70,34 @@ def _normalize_id(value: str | None) -> str:
     return (value or "").strip().lower()
 
 
+def _federated_email_identifiers(identities: Any) -> tuple[str, ...]:
+    """Extract email-shaped ``issuerAssignedId`` values from B2B ``identities``.
+
+    For B2B guests federated from a home tenant, Graph returns an entry
+    of the form::
+
+        {"signInType": "federated", "issuer": "<home-domain>",
+         "issuerAssignedId": "<home-tenant SMTP>"}
+
+    The home-tenant SMTP is the SAME value the chat-members API returns
+    as the member's ``email`` field (e.g. ``Brandon.Werner@microsoft.com``)
+    even when the agent-tenant guest record only carries the invitation
+    alias (e.g. ``brandwe@microsoft.com``). Pulling these into the sponsor
+    email set is what unlocks cross-tenant alias matching without an
+    operator override file (Learning #50).
+    """
+    if not isinstance(identities, list):
+        return ()
+    out: list[str] = []
+    for entry in identities:
+        if not isinstance(entry, dict):
+            continue
+        assigned = str(entry.get("issuerAssignedId") or "").strip()
+        if "@" in assigned:
+            out.append(assigned)
+    return tuple(out)
+
+
 @dataclass(frozen=True)
 class AgentIdentitySponsor:
     """User sponsor returned by the Agent Identity's Graph sponsors relationship."""
@@ -79,6 +107,7 @@ class AgentIdentitySponsor:
     mail: str | None
     other_mails: tuple[str, ...] = ()
     proxy_addresses: tuple[str, ...] = ()
+    federated_emails: tuple[str, ...] = ()
 
     @classmethod
     def from_graph_user(cls, user: dict[str, Any]) -> AgentIdentitySponsor | None:
@@ -93,12 +122,14 @@ class AgentIdentitySponsor:
             )
             if normalized
         )
+        federated_emails = _federated_email_identifiers(user.get("identities"))
         return cls(
             user_id=user_id,
             user_principal_name=str(user.get("userPrincipalName") or "").strip() or None,
             mail=str(user.get("mail") or next(iter(other_mails), "")).strip() or None,
             other_mails=other_mails,
             proxy_addresses=proxy_addresses,
+            federated_emails=federated_emails,
         )
 
     def merge(self, other: AgentIdentitySponsor) -> AgentIdentitySponsor:
@@ -110,6 +141,7 @@ class AgentIdentitySponsor:
             mail=self.mail or other.mail,
             other_mails=_merge_tuple(self.other_mails, other.other_mails),
             proxy_addresses=_merge_tuple(self.proxy_addresses, other.proxy_addresses),
+            federated_emails=_merge_tuple(self.federated_emails, other.federated_emails),
         )
 
     def email_identifiers(self) -> frozenset[str]:
@@ -118,6 +150,7 @@ class AgentIdentitySponsor:
             self.mail,
             *self.other_mails,
             *self.proxy_addresses,
+            *self.federated_emails,
         ]
         return frozenset(
             normalized

@@ -602,6 +602,16 @@ Regression tests in `tests/test_mcp_server_integration.py` cover both raw Teams 
 **Prevention:** For any "agent should wait for an external event before continuing" pattern in MCP-host CLIs, the correct shape is a long-blocking `@mcp.tool()` with internal polling/await. Do NOT spawn helper processes, do NOT hijack the host TTY, do NOT use background daemons that push notifications out-of-band. The host CLI's own MCP transport is the channel.
 **Evidence/references:** Live probe in session 2026-04-28 (`PROBE_SENTINEL_WAITTOOL_AXOLOTL_2026C` round-trip; `seconds=30` then Ctrl+C → clean abort, no blank screen); `src/entraclaw/tools/wait_tool.py::wait_loop`; PR #42 (PTY supervisor — superseded); `tests/tools/test_wait_for_sponsor_dm.py::test_wait_loop_cancellation_propagates`.
 
+### Learning #50: Federated B2B Guests Have Two Email Aliases — Match Both via `identities[].issuerAssignedId`
+
+**Date:** 2026-04-28
+**Status:** **CONFIRMED — fixes `wait_for_sponsor_dm` no-reply for cross-tenant sponsors.**
+**Context:** A sponsor was added as a B2B guest with invitation email `brandwe@microsoft.com` (the alias used at invite time), but their actual chat-member identity in Teams uses their home-tenant primary SMTP `Brandon.Werner@microsoft.com`. The sponsor gate compared the chat member's `email` field against `sponsor.mails`, missed the match, dropped the inbound DM, and `wait_for_sponsor_dm` silently never returned.
+**Problem:** B2B guest user records in Graph carry the invitation alias on `mail` / `userPrincipalName`, but the home-tenant SMTP only appears inside `identities[]` as a `signInType: "federated"` entry whose `issuerAssignedId` is the home SMTP. Same human, two email aliases, gate only knew about one.
+**Fix:** In `AgentIdentitySponsor.from_graph_user`, extract every `issuerAssignedId` that contains `@` from the `identities` array into a new `federated_emails` field, and include it in `email_identifiers()`. The chat-members API already returns the home-tenant SMTP as `email`, so the existing `with_chat_members` intersection now matches without an operator override file. Graph queries already requested `identities` in `$select`, so no API changes were needed.
+**Prevention:** Whenever sponsor or principal matching depends on email/UPN identity comparison across tenants, treat `identities[].issuerAssignedId` as a first-class alias source — never as metadata. Federated B2B is the default shape for cross-org collaboration; assuming one canonical email per user will silently break.
+**Evidence/references:** `src/entraclaw/identity/sponsors.py::_federated_email_identifiers`; `tests/identity/test_sponsor_federated_identities.py` (5 tests); diagnosed via `~/.entraclaw/logs/entraclaw.log` showing chat-member email `Brandon.Werner@microsoft.com` mismatching all three sponsor email sets in agent tenant.
+
 ---
 
 ## Historical Learnings
