@@ -1425,10 +1425,18 @@ def _summarize_content(content: str, limit: int = 200) -> str:
     markers before tags are stripped so the channel push doesn't lose
     the only signal in giphy embeds and link cards (regression
     2026-04-27 — see ``docs/runbooks/mcp-disconnect-investigation.md``).
+
+    HTML entities are unescaped *before* tag stripping so encoded
+    angles (``&lt;p&gt;``) survive a round-trip without leaving
+    decode-to-angle artifacts in the channel envelope. Claude Code's
+    MCP client closes the stream on angle brackets after entity
+    decoding (regression 2026-04-28 — same runbook).
     """
+    import html
     import re
 
     text = content or ""
+    text = html.unescape(text)
     text = re.sub(
         r"""<img\b[^>]*?\bsrc=["']([^"']+)["'][^>]*?/?>""",
         r" [image: \1] ",
