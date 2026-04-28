@@ -1398,6 +1398,70 @@ class TestPushChannelNotificationObservability:
         assert notif_params["meta"]["quoted_messages"] == []
 
     @pytest.mark.asyncio
+    async def test_channel_notification_meta_strips_html_everywhere(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """No angle brackets anywhere in params — not just in content.
+
+        See ``docs/runbooks/mcp-disconnect-investigation.md`` 2026-04-28
+        addendum: after the params.content sanitizer was fixed, the next
+        suspect surface was meta.user (display names like
+        ``Brandon Werner <brandon@werner.ac>``) and quoted_messages
+        fields beyond content. The 927b718 commit (responder preserves
+        Teams HTML) made it routine for Teams Reply quotes to round-trip
+        raw HTML back through this push path — armed the trigger.
+        """
+        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+
+        from entraclaw import mcp_server
+
+        mock_stream = AsyncMock()
+        mcp_server._state["_write_stream"] = mock_stream
+        mcp_server._state["token"] = "tok"
+
+        async def _fake_fetch(*, chat_id, message_id, token):
+            return {
+                "message_id": message_id,
+                "from": "Brandon Werner <brandon@werner.ac>",
+                "content": '<attachment id="x"></attachment><p>quoted body</p>',
+                "sent_at": "2026-04-28T00:00:00Z",
+                "attachments": [{"content": "<p>card body</p>"}],
+                "mentions": [{"mentionText": "<at>name</at>"}],
+            }
+
+        with patch.object(
+            mcp_server, "fetch_message", new=AsyncMock(side_effect=_fake_fetch)
+        ):
+            try:
+                await mcp_server._push_channel_notification(
+                    {
+                        "message_id": "m-1",
+                        "from": "Brandon Werner <brandon@werner.ac>",
+                        "content": "<p>plain reply</p>",
+                        "sent_at": "2026-04-28T00:01:00Z",
+                        "reply_to_ids": ["SRC-1"],
+                    },
+                    chat_id="19:abc@unq.gbl.spaces",
+                )
+            finally:
+                mcp_server._state.pop("_write_stream", None)
+
+        notif_params = mock_stream.send.call_args.args[0].message.root.params
+
+        def _walk(obj, path):
+            if isinstance(obj, str):
+                assert "<" not in obj, f"angle bracket leaked in {path}: {obj!r}"
+                assert ">" not in obj, f"angle bracket leaked in {path}: {obj!r}"
+            elif isinstance(obj, dict):
+                for key, value in obj.items():
+                    _walk(value, f"{path}.{key}")
+            elif isinstance(obj, list):
+                for index, value in enumerate(obj):
+                    _walk(value, f"{path}[{index}]")
+
+        _walk(notif_params, "params")
+
+    @pytest.mark.asyncio
     async def test_interaction_log_written_before_any_fetch(
         self, tmp_path, monkeypatch
     ) -> None:

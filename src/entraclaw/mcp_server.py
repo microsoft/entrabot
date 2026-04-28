@@ -1497,10 +1497,14 @@ async def _push_channel_notification(
             )
         return
 
+    # Sanitize every string field that lands in JSON-RPC params. Claude's MCP
+    # client closes the connection on raw angle brackets anywhere in
+    # notification params, not just in `content` (see
+    # docs/runbooks/mcp-disconnect-investigation.md addendum 2026-04-28).
     meta: dict = {
         "chat_id": resolved_chat_id,
         "message_id": message.get("message_id", ""),
-        "user": message.get("from", "unknown"),
+        "user": _summarize_content(message.get("from", "unknown")),
         "ts": message.get("sent_at", ""),
     }
 
@@ -1539,7 +1543,18 @@ async def _push_channel_notification(
                         )
                     continue
                 if r is not None:
-                    quoted.append({**r, "content": _summarize_content(r.get("content", ""))})
+                    # Strict allowlist: drop unknown Graph fields (attachments,
+                    # mentions, etc.) that may carry HTML, and sanitize every
+                    # string we keep. `from` can carry display-name shapes
+                    # like `Brandon Werner <brandon@werner.ac>`.
+                    quoted.append(
+                        {
+                            "message_id": r.get("message_id", ""),
+                            "from": _summarize_content(r.get("from", "")),
+                            "content": _summarize_content(r.get("content", "")),
+                            "sent_at": r.get("sent_at", ""),
+                        }
+                    )
         meta["quoted_messages"] = quoted
 
     notification = JSONRPCNotification(

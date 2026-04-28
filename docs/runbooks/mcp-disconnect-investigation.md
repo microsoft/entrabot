@@ -454,6 +454,47 @@ in `chat_id` or `message_id`. See `src/entraclaw/mcp_server.py`
 
 ---
 
+## 2026-04-28 addendum — `meta.user` and `meta.quoted_messages` sanitized
+
+The 2026-04-27 addendum predicted the next-suspect surface: angle
+brackets *outside* `params.content`, specifically `meta.user`
+(display names like `Brandon Werner <brandon@werner.ac>`) and the
+`quoted_messages` fields beyond `content`. A live 2026-04-28
+disconnect confirmed the prediction. Boot succeeded, the first push
+landed, the responder reply went out — and the second push tore down
+the MCP child despite `params.content` being clean.
+
+Trigger amplified by commit `927b718` ("preserve Teams HTML"): the
+responder daemon now emits raw `<p>…</p>` to Teams instead of always
+escaping. Any Teams Reply UI on a responder reply round-trips raw
+HTML through `fetch_message` into `meta.quoted_messages`, where it
+*was* unsanitized for every field except `content`.
+
+**Fix.** In `_push_channel_notification`:
+
+- `meta["user"]` runs through `_summarize_content` (was raw).
+- `quoted` entries are built from a strict allowlist
+  `{message_id, from, content, sent_at}` and `from` is sanitized
+  (was `{**graph_response, "content": …}` which leaked
+  `attachments`, `mentions`, and any other Graph-side field).
+
+**Test.** `test_channel_notification_meta_strips_html_everywhere`
+walks the entire `params` dict and asserts no `<` or `>` survives in
+*any* string field. Stronger guarantee than the per-field assertions
+that came before — if a future Graph response adds a new field, the
+test catches it before it reaches the wire.
+
+If disconnects recur again, the residual surfaces are: control
+characters or unescaped sequences in `chat_id` / `message_id`
+(structural, not from user content), and `meta.ts` (Graph-supplied
+ISO timestamp). All three are well-formed in the wild, but the
+defense in `_summarize_content` is cheap to extend if needed.
+
+See `src/entraclaw/mcp_server.py` `_push_channel_notification` and
+`tests/test_mcp_server_integration.py::TestPushChannelNotificationObservability::test_channel_notification_meta_strips_html_everywhere`.
+
+---
+
 - `docs/runbooks/hard-won-learnings.md` Learning #36 (venv corruption)
 - `docs/runbooks/hard-won-learnings.md` Learning #37 (self-spawn cascade)
 - `docs/runbooks/hard-won-learnings.md` Learning #38 (leader-cache overwrite)
