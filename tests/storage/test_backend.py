@@ -172,6 +172,8 @@ class TestGetBackend:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+        monkeypatch.delenv("ENTRACLAW_BLOB_ENDPOINT", raising=False)
+        monkeypatch.delenv("ENTRACLAW_BLOB_CONTAINER", raising=False)
         # Phase 5 will introduce cloud branching; for Phase 2 default = Local.
         backend = get_backend()
         assert isinstance(backend, LocalBackend)

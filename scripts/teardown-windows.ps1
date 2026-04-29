@@ -10,7 +10,7 @@
     - %LOCALAPPDATA%\entraclaw\ data dir.
     - .env BLUEPRINT_CERT_* lines (preserves the rest of the file).
     - MSAL cache.
-    - MCP registration (via mcp_config.py --unregister).
+    - MCP registration entries from .mcp.json and Copilot's mcp-config.json.
 
   Does NOT delete the Entra app registrations (Blueprint / Agent
   Identity / Agent User) — those persist in the tenant. Use the
@@ -58,10 +58,16 @@ if (Test-Path $envPath) {
     Write-Host "Stripped BLUEPRINT_CERT_* from .env."
 }
 
-# MCP unregister.
+# Remove entraclaw MCP entries (no unregister CLI; edit JSON directly).
 $VenvPython = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
-if (Test-Path $VenvPython) {
-    & $VenvPython (Join-Path $ProjectRoot 'scripts\mcp_config.py') --unregister 2>$null
+$pyExe = if (Test-Path $VenvPython) { $VenvPython } else { 'python' }
+$claudeMcp = Join-Path $ProjectRoot '.mcp.json'
+$copilotMcp = if ($env:COPILOT_HOME) { Join-Path $env:COPILOT_HOME 'mcp-config.json' } `
+              else { Join-Path $env:USERPROFILE '.copilot\mcp-config.json' }
+foreach ($target in @($claudeMcp, $copilotMcp)) {
+    if (Test-Path $target) {
+        & $pyExe -c "import json,sys,pathlib; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text() or '{}'); d.get('mcpServers',{}).pop('entraclaw',None); p.write_text(json.dumps(d, indent=2))" $target
+    }
 }
 
 Write-Host "Teardown complete." -ForegroundColor Green

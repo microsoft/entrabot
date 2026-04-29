@@ -217,7 +217,9 @@ Success ".env locked to $user (modify, per D10)"
 # ═══════════════════════════════════════════════════════════════════════════
 Step 8 "Registering MCP server"
 
-& $VenvPython (Join-Path $ScriptDir 'mcp_config.py') --register
+$mcpBinary = Join-Path $ProjectRoot '.venv\Scripts\entraclaw-mcp.exe'
+if (-not (Test-Path $mcpBinary)) { Fail "MCP binary not found at $mcpBinary" }
+& $VenvPython (Join-Path $ScriptDir 'mcp_config.py') --binary $mcpBinary --project-root $ProjectRoot
 if ($LASTEXITCODE -ne 0) { Fail "mcp_config.py failed" }
 Success "MCP server registered for Claude Code + Copilot CLI"
 
