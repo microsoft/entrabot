@@ -86,19 +86,56 @@ def _keyring_module():
 
 
 def _keychain_get_cert(account: str) -> str | None:
-    """Return the PEM (cert+key) bundle from Keychain, or None if absent."""
+    """Return the PEM (cert+key) bundle from Keychain/file, or None if absent."""
+    if sys.platform == "win32":
+        return _windows_file_get_cert(account)
     kr = _keyring_module()
     return kr.get_password(_KEYCHAIN_SERVICE_CERT, account)
 
 
 def _keychain_store_cert(account: str, pem_bundle: str) -> None:
-    """Store the PEM (cert+key) bundle in Keychain — overwrites if present."""
+    """Store the PEM (cert+key) bundle in Keychain/local file — overwrites if present.
+
+    On Windows, Credential Manager has a 2560-byte blob limit which PEM bundles
+    exceed. Fall back to a file in %LOCALAPPDATA%\\entraclaw\\ with strict ACLs.
+    """
+    if sys.platform == "win32":
+        _windows_file_store_cert(account, pem_bundle)
+        return
     kr = _keyring_module()
     kr.set_password(_KEYCHAIN_SERVICE_CERT, account, pem_bundle)
 
 
+def _windows_file_store_cert(account: str, pem_bundle: str) -> None:
+    """Store PEM in %LOCALAPPDATA%\\entraclaw\\provisioner-cert-<account>.pem."""
+    cert_dir = Path(os.environ.get("LOCALAPPDATA", ""), "entraclaw")
+    cert_dir.mkdir(parents=True, exist_ok=True)
+    cert_path = cert_dir / f"provisioner-cert-{account}.pem"
+    cert_path.write_text(pem_bundle, encoding="utf-8")
+    # Lock down ACLs: only current user gets modify
+    user = f"{os.environ.get('USERDOMAIN', '.')}\\{os.environ['USERNAME']}"
+    subprocess.run(
+        ["icacls", str(cert_path), "/inheritance:r", "/grant:r", f"{user}:M"],
+        capture_output=True, check=False,
+    )
+
+
+def _windows_file_get_cert(account: str) -> str | None:
+    """Read PEM from %LOCALAPPDATA%\\entraclaw\\provisioner-cert-<account>.pem."""
+    cert_path = Path(os.environ.get("LOCALAPPDATA", ""), "entraclaw",
+                     f"provisioner-cert-{account}.pem")
+    if cert_path.is_file():
+        return cert_path.read_text(encoding="utf-8")
+    return None
+
+
 def _keychain_delete_cert(account: str) -> None:
-    """Remove the Keychain entry. No-op if absent."""
+    """Remove the Keychain/file entry. No-op if absent."""
+    if sys.platform == "win32":
+        cert_path = Path(os.environ.get("LOCALAPPDATA", ""), "entraclaw",
+                         f"provisioner-cert-{account}.pem")
+        cert_path.unlink(missing_ok=True)
+        return
     kr = _keyring_module()
     with contextlib.suppress(kr.errors.PasswordDeleteError):
         kr.delete_password(_KEYCHAIN_SERVICE_CERT, account)
