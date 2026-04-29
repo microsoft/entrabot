@@ -140,7 +140,7 @@ def wait_listener_banner(*, color: bool = True, elapsed_s: float | None = None) 
     if elapsed_s is not None:
         title = f"{title} [{_format_elapsed(elapsed_s)}]"
     escape = "Press Ctrl+C to exit the wait."
-    note = "Full push experience: Claude Code (Copilot CLI works too)."
+    note = "Full push experience: Claude Code."
     if color:
         dog_colored = f"{_ANSI_YELLOW}{dog}{_ANSI_RESET}"
         title_colored = f"{_ANSI_BOLD}{_ANSI_CYAN}{title}{_ANSI_RESET}"
