@@ -27,6 +27,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "^mcp__entraclaw__(send_email|send_teams_message|send_card|add_teams_member|create_chat|delete_teams_message)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/hooks/require_body_prompt.py\"",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PostToolUse": [
