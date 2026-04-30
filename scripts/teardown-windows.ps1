@@ -1,4 +1,4 @@
-# requires -Version 7.0
+﻿# requires -Version 7.0
 <#
 .SYNOPSIS
   EntraClaw — Windows teardown. Reverse of setup-windows.ps1.

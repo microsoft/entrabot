@@ -1,4 +1,4 @@
-# requires -Version 5.1
+﻿# requires -Version 5.1
 <#
 .SYNOPSIS
   EntraClaw — Windows prerequisite installer.
@@ -106,21 +106,28 @@ if ($pwshPath) {
 Write-Step "Python 3.12+"
 
 $pythonOk = $false
-if (Test-CommandExists 'python') {
-    $pyVer = & python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
-    if ($pyVer -and [version]$pyVer -ge [version]'3.12') {
-        Write-Ok "Python $pyVer already installed"
-        $alreadyPresent += "Python $pyVer"
-        $pythonOk = $true
-
-        # Check it's not the Microsoft Store stub
-        $pyPrefix = & python -c "import sys; print(sys.base_prefix)" 2>$null
-        if ($pyPrefix -and $pyPrefix -match 'WindowsApps') {
-            Write-Warn "This is the Microsoft Store Python stub — it may not work correctly."
-            Write-Warn "Consider installing the full Python from python.org or via winget."
-            $pythonOk = $false
+$pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+# Microsoft ships a stub python.exe in WindowsApps that just opens the Store.
+# Treat that as not-installed so we fall through to a real winget install.
+if ($pythonCmd -and $pythonCmd.Source -notmatch 'WindowsApps') {
+    # Wrap the version probe: in PS 5.1, native stderr can surface as a
+    # terminating NativeCommandError under $ErrorActionPreference='Stop'.
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $pyVer = & python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
+        if ($LASTEXITCODE -eq 0 -and $pyVer -and [version]$pyVer -ge [version]'3.12') {
+            Write-Ok "Python $pyVer already installed ($($pythonCmd.Source))"
+            $alreadyPresent += "Python $pyVer"
+            $pythonOk = $true
         }
+    } catch {
+        # python.exe present but broken — fall through to install
+    } finally {
+        $ErrorActionPreference = $prevEAP
     }
+} elseif ($pythonCmd) {
+    Write-Skip "Ignoring Microsoft Store python.exe stub at $($pythonCmd.Source)"
 }
 
 if (-not $pythonOk) {

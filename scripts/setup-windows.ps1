@@ -1,4 +1,4 @@
-# requires -Version 7.0
+﻿# requires -Version 7.0
 <#
 .SYNOPSIS
   EntraClaw — Windows setup. Mirror of scripts/setup.sh for Windows.
