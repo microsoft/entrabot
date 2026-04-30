@@ -688,6 +688,72 @@ def grant_agent_user_consent(
         sys.exit(1)
 
 
+def grant_agent_identity_app_permissions(
+    token: str,
+    agent_identity_obj_id: str,
+) -> None:
+    """Grant Application.Read.All to the Agent Identity service principal.
+
+    The Agent Identity needs this app permission to call the sponsors API
+    (GET /servicePrincipals/{id}/microsoft.graph.agentIdentity/sponsors)
+    which is required for sponsor-gated flows like wait_for_sponsor_dm.
+
+    This is an app role assignment (application permission), not a delegated
+    permission grant — the Agent Identity calls Graph as itself, not on behalf
+    of the Agent User.
+    """
+    print("\n--- Granting Agent Identity app permissions ---\n")
+
+    graph_sp_id = _resolve_graph_sp_object_id(token)
+    if not graph_sp_id:
+        print("  ERROR: Could not resolve Microsoft Graph SP object ID")
+        print("  Application.Read.All grant will need to be done manually")
+        return
+
+    # Application.Read.All app role ID (well-known across all tenants)
+    APPLICATION_READ_ALL_ROLE_ID = "9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30"
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    # Check if already granted
+    check_url = (
+        f"https://graph.microsoft.com/v1.0/servicePrincipals/{agent_identity_obj_id}"
+        "/appRoleAssignments"
+    )
+    resp = requests.get(check_url, headers=headers)
+    if resp.status_code == 200:
+        existing = resp.json().get("value", [])
+        for assignment in existing:
+            if assignment.get("appRoleId") == APPLICATION_READ_ALL_ROLE_ID:
+                print("  [skip] Application.Read.All already granted")
+                return
+
+    # Grant the app role
+    body = {
+        "principalId": agent_identity_obj_id,
+        "resourceId": graph_sp_id,
+        "appRoleId": APPLICATION_READ_ALL_ROLE_ID,
+    }
+    resp = requests.post(
+        f"https://graph.microsoft.com/v1.0/servicePrincipals/{agent_identity_obj_id}"
+        "/appRoleAssignments",
+        headers=headers,
+        json=body,
+    )
+    if resp.status_code in (200, 201):
+        print("  [ok] Application.Read.All granted to Agent Identity")
+    elif resp.status_code == 409:
+        print("  [skip] Application.Read.All already granted (409 conflict)")
+    else:
+        print(f"  WARNING: Failed to grant Application.Read.All ({resp.status_code})")
+        print(f"  Response: {resp.text[:300]}")
+        print("  The sponsors API (wait_for_sponsor_dm) will fail with 403.")
+        print("  Grant manually: New-MgServicePrincipalAppRoleAssignment")
+
+
 def grant_agent_user_storage_consent(
     token: str,
     agent_identity_obj_id: str,
@@ -1035,6 +1101,7 @@ def main() -> int:
         agent_id, agent_obj_id = create_agent_identity(token, blueprint_app_id)
         agent_user_id, agent_user_upn = create_agent_user(token, agent_obj_id)
 
+    grant_agent_identity_app_permissions(token, agent_obj_id)
     grant_agent_user_consent(token, agent_obj_id, agent_user_id)
     grant_agent_user_storage_consent(token, agent_obj_id, agent_user_id)
     assign_license_to_agent_user(token, agent_user_id)
