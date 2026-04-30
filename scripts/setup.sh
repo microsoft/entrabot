@@ -34,6 +34,9 @@ CLOUD_MEMORY=false
 NEW_CHAIN=false
 USE_BLUEPRINT=""
 UPN_SUFFIX=""
+WITH_STORAGE_ACCOUNT=""
+WITH_CONTAINER=""
+CREATE_NEW_STORAGE=false
 
 for arg in "$@"; do
     case $arg in
@@ -61,6 +64,15 @@ for arg in "$@"; do
         --with-upn-suffix=*)
             UPN_SUFFIX="${arg#--with-upn-suffix=}"
             ;;
+        --with-storage-account=*)
+            WITH_STORAGE_ACCOUNT="${arg#--with-storage-account=}"
+            ;;
+        --with-container=*)
+            WITH_CONTAINER="${arg#--with-container=}"
+            ;;
+        --create-new-storage)
+            CREATE_NEW_STORAGE=true
+            ;;
         --diagnose)
             DIAGNOSE=true
             ;;
@@ -76,6 +88,13 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+# Mutex: --create-new-storage and --with-storage-account both pin the
+# storage account name; only one can win.
+if [ "$CREATE_NEW_STORAGE" = true ] && [ -n "$WITH_STORAGE_ACCOUNT" ]; then
+    echo "ERROR: --create-new-storage and --with-storage-account are mutually exclusive." >&2
+    exit 2
+fi
 
 if [ "$SHOW_HELP" = true ]; then
     echo "Usage: ./scripts/setup.sh [OPTIONS]"
@@ -119,6 +138,25 @@ if [ "$SHOW_HELP" = true ]; then
     echo "                         Also sets ENTRACLAW_KEEP_MEMORY_LOCAL=true, which"
     echo "                         opts the PreToolUse hook out so Claude Code's local"
     echo "                         auto-memory directory is writable again."
+    echo ""
+    echo "  Cloud storage targeting (used with --cloud-memory):"
+    echo "  --with-storage-account=NAME"
+    echo "                         Use the named Azure Storage Account instead of the"
+    echo "                         deterministic per-tenant default (entclaw<hash>)."
+    echo "                         The account is created if it doesn't exist, in"
+    echo "                         resource group 'entraclaw-rg'. Useful for attaching"
+    echo "                         to a pre-existing account in a different naming"
+    echo "                         convention. Mutually exclusive with"
+    echo "                         --create-new-storage."
+    echo "  --with-container=NAME  Use the named blob container instead of the"
+    echo "                         agent-<oid> default. The Agent User still gets"
+    echo "                         RBAC scoped to this container only."
+    echo "  --create-new-storage   Force creation of a fresh randomly-suffixed"
+    echo "                         storage account even when the deterministic-name"
+    echo "                         one already exists. Use this when you want a"
+    echo "                         second isolated cloud-memory store in the same"
+    echo "                         tenant. Mutually exclusive with"
+    echo "                         --with-storage-account."
     echo "  --help, -h             Show this help"
     echo ""
     echo "Diagnostics:"
@@ -816,9 +854,22 @@ else
     echo ""
     echo -e "${BLUE}[7b]${NC} Provisioning Azure Blob Storage for agent memory (ADR-005)"
 
+    PROVISION_ARGS=(
+        --tenant-id "$TENANT_ID"
+        --agent-user-object-id "$AGENT_USER_ID"
+    )
+    if [ -n "$WITH_STORAGE_ACCOUNT" ]; then
+        PROVISION_ARGS+=(--with-storage-account "$WITH_STORAGE_ACCOUNT")
+    fi
+    if [ -n "$WITH_CONTAINER" ]; then
+        PROVISION_ARGS+=(--with-container "$WITH_CONTAINER")
+    fi
+    if [ "$CREATE_NEW_STORAGE" = true ]; then
+        PROVISION_ARGS+=(--create-new-storage)
+    fi
+
     PROVISION_OUT=$("$PYTHON" "$PROJECT_ROOT/scripts/provision_blob_storage.py" \
-        --tenant-id "$TENANT_ID" \
-        --agent-user-object-id "$AGENT_USER_ID" \
+        "${PROVISION_ARGS[@]}" \
         2>&1 1>/tmp/entraclaw-provision-stdout.$$)
     PROVISION_RC=$?
     PROVISION_STDOUT=$(cat /tmp/entraclaw-provision-stdout.$$)

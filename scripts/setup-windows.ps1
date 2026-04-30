@@ -32,8 +32,26 @@
 .PARAMETER CloudMemory
   Provision Azure Blob Storage for operational data (default: local).
 
+.PARAMETER WithStorageAccount
+  Use the named Azure Storage Account instead of the deterministic
+  per-tenant default. Created if missing. Mutually exclusive with
+  -CreateNewStorage. Only meaningful with -CloudMemory.
+
+.PARAMETER WithContainer
+  Use the named blob container instead of the agent-<oid> default.
+  Only meaningful with -CloudMemory.
+
+.PARAMETER CreateNewStorage
+  Force creation of a fresh randomly-suffixed Storage Account even when
+  the deterministic-name one already exists. Mutually exclusive with
+  -WithStorageAccount. Only meaningful with -CloudMemory.
+
 .EXAMPLE
   .\scripts\setup-windows.ps1 -NewChain -UpnSuffix winagent
+
+.EXAMPLE
+  .\scripts\setup-windows.ps1 -NewChain -UpnSuffix winagent -CloudMemory `
+      -WithStorageAccount mycorpstg -WithContainer winagent-mem
 #>
 
 [CmdletBinding()]
@@ -42,9 +60,19 @@ param(
     [string]$UseBlueprint = "",
     [string]$UpnSuffix = "",
     [switch]$CloudMemory,
+    [string]$WithStorageAccount = "",
+    [string]$WithContainer = "",
+    [switch]$CreateNewStorage,
     [switch]$Migrate,
     [switch]$Help
 )
+
+# Mutex: -CreateNewStorage and -WithStorageAccount both pin the storage
+# account name; only one can win.
+if ($CreateNewStorage -and $WithStorageAccount) {
+    Write-Host "ERROR: -CreateNewStorage and -WithStorageAccount are mutually exclusive." -ForegroundColor Red
+    exit 2
+}
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -79,7 +107,7 @@ $VenvPython  = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
 
 function Step($n, $msg) {
     Write-Host ""
-    Write-Host "═══ Step $n / 8 — $msg" -ForegroundColor Cyan
+    Write-Host "═══ Step $n / 9 — $msg" -ForegroundColor Cyan
 }
 function Success($msg) { Write-Host "  ✓ $msg" -ForegroundColor Green }
 function Fail($msg)    { Write-Host "  ✗ $msg" -ForegroundColor Red; exit 1 }
@@ -168,6 +196,14 @@ if ($LASTEXITCODE -ne 0) { Fail "entra_provisioning.py failed" }
 & $VenvPython (Join-Path $ScriptDir 'create_entra_agent_ids.py') @args
 if ($LASTEXITCODE -ne 0) { Fail "create_entra_agent_ids.py failed" }
 
+# Read back IDs from .entraclaw-state.json — needed for cloud-memory step
+$statePath = Join-Path $ProjectRoot '.entraclaw-state.json'
+$AgentUserId = ""
+if (Test-Path $statePath) {
+    $state = Get-Content $statePath -Raw | ConvertFrom-Json
+    $AgentUserId = if ($state.PSObject.Properties['AGENT_USER_ID']) { $state.AGENT_USER_ID } else { "" }
+}
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 7. Generate Blueprint cert (TPM-first / software-fallback)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -213,9 +249,60 @@ icacls $envPath /inheritance:r /grant:r "${user}:M" | Out-Null
 Success ".env locked to $user (modify, per D10)"
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 8. Cloud memory — Azure Blob Storage provisioning (ADR-005, Phase 5)
+# ═══════════════════════════════════════════════════════════════════════════
+Step 8 "Cloud memory (Azure Blob Storage)"
+
+if (-not $CloudMemory) {
+    Add-Content -Path $envPath -Value ""
+    Add-Content -Path $envPath -Value "# ADR-005: keep agent memory local (skip cloud sync)"
+    Add-Content -Path $envPath -Value "ENTRACLAW_KEEP_MEMORY_LOCAL=true"
+    Success "Memory mode: LOCAL (pass -CloudMemory to opt in)"
+} elseif (-not $AgentUserId) {
+    Write-Host "  ⚠ Skipping blob storage — no Agent User ID found in state" -ForegroundColor Yellow
+    Add-Content -Path $envPath -Value ""
+    Add-Content -Path $envPath -Value "ENTRACLAW_KEEP_MEMORY_LOCAL=true"
+} else {
+    $provArgs = @(
+        '--tenant-id', $account.tenantId,
+        '--agent-user-object-id', $AgentUserId
+    )
+    if ($WithStorageAccount) { $provArgs += @('--with-storage-account', $WithStorageAccount) }
+    if ($WithContainer)      { $provArgs += @('--with-container', $WithContainer) }
+    if ($CreateNewStorage)   { $provArgs += '--create-new-storage' }
+
+    # Provisioner prints progress on stderr and KEY=VALUE lines on stdout.
+    # PS 5.1/7 native-stderr handling: capture stdout into a variable, let
+    # stderr stream to the console so the user sees az progress.
+    $provStdout = & $VenvPython (Join-Path $ScriptDir 'provision_blob_storage.py') @provArgs
+    $provRc = $LASTEXITCODE
+
+    if ($provRc -ne 0) {
+        Write-Host "  ⚠ Blob storage provisioning failed — falling back to local-only memory" -ForegroundColor Yellow
+        Add-Content -Path $envPath -Value ""
+        Add-Content -Path $envPath -Value "# ADR-005: provisioning failed, using local-only memory"
+        Add-Content -Path $envPath -Value "ENTRACLAW_KEEP_MEMORY_LOCAL=true"
+    } else {
+        $blobEndpoint  = ($provStdout | Select-String '^BLOB_ENDPOINT=(.+)$').Matches[0].Groups[1].Value
+        $blobContainer = ($provStdout | Select-String '^BLOB_CONTAINER=(.+)$').Matches[0].Groups[1].Value
+        if (-not $blobEndpoint -or -not $blobContainer) {
+            Write-Host "  ⚠ Provisioner returned no endpoint/container — using local-only memory" -ForegroundColor Yellow
+            Add-Content -Path $envPath -Value ""
+            Add-Content -Path $envPath -Value "ENTRACLAW_KEEP_MEMORY_LOCAL=true"
+        } else {
+            Add-Content -Path $envPath -Value ""
+            Add-Content -Path $envPath -Value "# ADR-005: cloud-hosted agent memory (Azure Blob Storage)"
+            Add-Content -Path $envPath -Value "ENTRACLAW_BLOB_ENDPOINT=$blobEndpoint"
+            Add-Content -Path $envPath -Value "ENTRACLAW_BLOB_CONTAINER=$blobContainer"
+            Success "Blob storage ready: $blobEndpoint/$blobContainer"
+        }
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
 # 9. Register MCP server via mcp_config.py
 # ═══════════════════════════════════════════════════════════════════════════
-Step 8 "Registering MCP server"
+Step 9 "Registering MCP server"
 
 $mcpBinary = Join-Path $ProjectRoot '.venv\Scripts\entraclaw-mcp.exe'
 if (-not (Test-Path $mcpBinary)) { Fail "MCP binary not found at $mcpBinary" }

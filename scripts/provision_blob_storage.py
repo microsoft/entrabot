@@ -9,9 +9,14 @@ What it does, in order:
      subscription, in a sensible region).
   2. Ensure a Storage Account exists (one per tenant — name derived from
      the tenant ID so multiple devs in the same tenant converge on the
-     same account without a global-unique-name race).
+     same account without a global-unique-name race). Override with
+     ``--with-storage-account NAME`` to attach to an existing/external
+     account, or ``--create-new-storage`` to force a fresh
+     randomly-suffixed account even when the deterministic-name one
+     already exists.
   3. Ensure a container exists for *this* Agent User (named with the
-     Agent User's object ID per ADR §"Resolved decisions" #1).
+     Agent User's object ID per ADR §"Resolved decisions" #1). Override
+     with ``--with-container NAME``.
   4. Assign ``Storage Blob Data Contributor`` to the Agent User on the
      container — scoped to the container, not the account, so each Agent
      User only sees its own slice.
@@ -31,6 +36,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -72,6 +79,18 @@ def storage_account_name_for_tenant(tenant_id: str) -> str:
     return f"entclaw{digest}"
 
 
+def random_storage_account_name_for_tenant(tenant_id: str) -> str:
+    """Generate a tenant-scoped but unique Storage Account name.
+
+    Used by ``--create-new-storage`` to force a fresh account even when
+    the deterministic-name one already exists. Prefix + 8 hex of tenant
+    hash + 8 random hex = 23 chars total, well under Azure's 24-char cap.
+    """
+    digest = hashlib.sha256(tenant_id.encode()).hexdigest()[:8]
+    suffix = secrets.token_hex(4)
+    return f"entclaw{digest}{suffix}"
+
+
 def container_name_for_agent_user(agent_user_object_id: str) -> str:
     """Derive a container name for an Agent User.
 
@@ -79,6 +98,28 @@ def container_name_for_agent_user(agent_user_object_id: str) -> str:
     are GUIDs (lowercase hex with dashes) — that's already valid input.
     """
     return f"agent-{agent_user_object_id.lower()}"
+
+
+_STORAGE_ACCOUNT_RE = re.compile(r"^[a-z0-9]{3,24}$")
+_CONTAINER_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{1,61}[a-z0-9])?$")
+
+
+def validate_storage_account_name(name: str) -> None:
+    """Azure: 3-24 chars, lowercase letters and digits only."""
+    if not _STORAGE_ACCOUNT_RE.match(name):
+        raise ValueError(
+            f"Invalid storage account name {name!r}: must be 3-24 chars, "
+            "lowercase letters and digits only."
+        )
+
+
+def validate_container_name(name: str) -> None:
+    """Azure: 3-63 chars, lowercase, alphanumeric + dashes (no consecutive)."""
+    if not _CONTAINER_RE.match(name) or "--" in name:
+        raise ValueError(
+            f"Invalid container name {name!r}: must be 3-63 chars, lowercase "
+            "alphanumeric and dashes, no leading/trailing/consecutive dashes."
+        )
 
 
 def ensure_resource_group(name: str, location: str) -> None:
@@ -193,23 +234,56 @@ def blob_endpoint_for_account(account: str) -> str:
 
 
 def provision(
-    *, tenant_id: str, agent_user_object_id: str, location: str = DEFAULT_LOCATION
+    *,
+    tenant_id: str,
+    agent_user_object_id: str,
+    location: str = DEFAULT_LOCATION,
+    storage_account: str | None = None,
+    container: str | None = None,
+    create_new_storage: bool = False,
 ) -> tuple[str, str]:
     """Run the full provisioning flow.
+
+    The storage account name is chosen as follows, in order:
+      1. ``storage_account`` argument, if provided (overrides everything).
+      2. A randomly-suffixed name if ``create_new_storage`` is True.
+      3. The deterministic per-tenant name (default behavior).
+
+    The container name defaults to ``agent-<agent_user_object_id>`` and
+    can be overridden with ``container``.
+
+    Mutex: ``storage_account`` and ``create_new_storage`` cannot both be
+    set; raises :class:`ValueError` if they are.
 
     Returns ``(blob_endpoint, container_name)`` on success.
     Raises :class:`RuntimeError` with the underlying ``az`` stderr on any
     step's failure.
     """
-    account = storage_account_name_for_tenant(tenant_id)
-    container = container_name_for_agent_user(agent_user_object_id)
+    if storage_account is not None and create_new_storage:
+        raise ValueError(
+            "storage_account and create_new_storage are mutually exclusive."
+        )
+
+    if storage_account is not None:
+        validate_storage_account_name(storage_account)
+        account = storage_account
+    elif create_new_storage:
+        account = random_storage_account_name_for_tenant(tenant_id)
+    else:
+        account = storage_account_name_for_tenant(tenant_id)
+
+    if container is not None:
+        validate_container_name(container)
+        container_name = container
+    else:
+        container_name = container_name_for_agent_user(agent_user_object_id)
 
     ensure_resource_group(RESOURCE_GROUP, location)
     ensure_storage_account(account, RESOURCE_GROUP, location)
-    ensure_container(account, container)
-    assign_container_rbac(account, container, RESOURCE_GROUP, agent_user_object_id)
+    ensure_container(account, container_name)
+    assign_container_rbac(account, container_name, RESOURCE_GROUP, agent_user_object_id)
 
-    return blob_endpoint_for_account(account), container
+    return blob_endpoint_for_account(account), container_name
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -225,15 +299,51 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--location", default=DEFAULT_LOCATION, help=f"Azure region (default {DEFAULT_LOCATION})."
     )
+    parser.add_argument(
+        "--with-storage-account",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Use the named storage account instead of the deterministic "
+            "per-tenant default. Will be created if it doesn't exist. "
+            "Mutually exclusive with --create-new-storage."
+        ),
+    )
+    parser.add_argument(
+        "--with-container",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Use the named container instead of agent-<oid>. Will be "
+            "created if it doesn't exist."
+        ),
+    )
+    parser.add_argument(
+        "--create-new-storage",
+        action="store_true",
+        help=(
+            "Force creation of a fresh randomly-suffixed storage account "
+            "even when the deterministic-name one already exists. Mutually "
+            "exclusive with --with-storage-account."
+        ),
+    )
     args = parser.parse_args(argv)
+
+    if args.create_new_storage and args.with_storage_account is not None:
+        parser.error(
+            "--create-new-storage and --with-storage-account are mutually exclusive."
+        )
 
     try:
         endpoint, container = provision(
             tenant_id=args.tenant_id,
             agent_user_object_id=args.agent_user_object_id,
             location=args.location,
+            storage_account=args.with_storage_account,
+            container=args.with_container,
+            create_new_storage=args.create_new_storage,
         )
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         _eprint(f"ERROR: {exc}")
         return 1
 
