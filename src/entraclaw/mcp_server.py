@@ -3767,6 +3767,20 @@ def main() -> None:
     """Entry point for ``entraclaw-mcp`` console script."""
     import anyio
 
+    from entraclaw.singleton import run_or_exit_if_held
+
+    # Acquire the process-singleton flock BEFORE any side-effecting work
+    # (logging, keychain reads, blob clients). When two MCP hosts attach to
+    # the same workstation simultaneously, every spawn after the first will
+    # exit(2) here with a clear stderr message naming the holder PID instead
+    # of dying silently between module import and main() — see GitHub
+    # issue #62.
+    #
+    # The handle is bound to ``_singleton_handle`` so the GC can't release
+    # it; the lock lives for the process lifetime and the kernel cleans up
+    # on exit.
+    _singleton_handle = run_or_exit_if_held()  # noqa: F841
+
     global logger
     logger = setup_logging()
     logger.info("Starting EntraClaw MCP server (progressive identity)")

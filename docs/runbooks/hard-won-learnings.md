@@ -673,6 +673,17 @@ Regression tests in `tests/test_mcp_server_integration.py` cover both raw Teams 
 **Prevention:** Never rely on git symlinks for content that must work on Windows. Windows has three symlink modes (native NTFS, developer mode, WSL) and none are the default. Assume `core.symlinks=false` on any Windows checkout. If shared content is needed cross-platform, use a script that copies/generates it at setup time.
 **Evidence/references:** `git ls-files -s .claude/skills/autoplan/SKILL.md` → mode `120000`; `git config core.symlinks` → `false`; file content: `/Volumes/Development HD/openclaw-identity-research/.claude/skills/gstack/autoplan/SKILL.md`. Deleted 36 directories locally during acceptance pass.
 
+### Learning #56: Two Simultaneous MCP Hosts Silently Double-Spawn `entraclaw-mcp` — flock-Singleton Is Mandatory
+
+**Date:** 2026-04-30
+**Status:** **CONFIRMED — issue #62, fixed in `fix/singleton-lock`.**
+**Context:** A user opened two Copilot CLI sessions on the same repo in different terminal tabs. Both sessions independently spawned `entraclaw-mcp` (correct per MCP stdio spec — one server per client; there is no shared-server mechanism for stdio transport). The two processes then raced on every shared resource: macOS Keychain item for the cert key, `~/.entraclaw/data/interaction_log.jsonl`, `watched_chats`, the Azure Blob container (ETag races), and Teams Graph polls (2× rate, extra 429 risk).
+**Problem:** The second spawn imported the module, logged `persona-sati env unset; serving body-only`, and **died before reaching `main()` / `Starting EntraClaw MCP server`**. Most likely cause: the older process was holding the Keychain during a token refresh; the new spawn's first cert-key read blocked long enough for Copilot CLI's MCP `initialize` handshake (~25–30s) to time out and SIGKILL the spawn. Copilot CLI 1.0.39 then sat at "Connecting" forever without surfacing the failure or auto-respawning. From the user's perspective: silent death.
+**Fix:** `src/entraclaw/singleton.py` acquires an exclusive `fcntl.flock(LOCK_EX | LOCK_NB)` on `<data_dir>/.singleton.lock` as the first action in `main()`. On contention it writes a one-line `[entraclaw]` stderr message naming the holder PID (read from `.holder.pid` sidecar) and exits with code 2 so the host surfaces the failure instead of timing out. The kernel releases the flock automatically on process death — even SIGKILL — so a dead lock-holder never strands the next spawn. The `.holder.pid` sidecar is a diagnostic; the flock itself is load-bearing.
+**Prevention:** Run only one MCP host per workstation per project. If two clients must share state, use the SSE (HTTP) transport instead of stdio — that's the only MCP transport designed for multi-client. The singleton lock is a *belt* against accidental double-spawn; don't treat it as authorization to run two on purpose.
+**Windows note:** The implementation degrades to a no-op on Windows (returns a handle that doesn't actually exclude). Cross-platform locking via `msvcrt.locking` is a follow-up tracked in issue #62. The original symptom was macOS-specific.
+**Evidence/references:** GitHub issue #62; `src/entraclaw/singleton.py`; `src/entraclaw/mcp_server.py:main()` calls `run_or_exit_if_held()` before `setup_logging()`; `tests/test_singleton.py` (12 tests including cross-process contention via `multiprocessing.Process`).
+
 ---
 
 ## Historical Learnings
