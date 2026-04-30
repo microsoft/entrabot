@@ -27,10 +27,10 @@ SHOW_HELP=false
 DIAGNOSE=false
 SKIP_SMOKE=false
 # Local is the default for operational storage; users opt in to cloud
-# via --cloud-memory. The old --keep-memory-local flag is accepted as a
+# via --use-cloud-memory. The old --keep-memory-local flag is accepted as a
 # no-op alias so existing scripts keep working.
 KEEP_MEMORY_LOCAL=true
-CLOUD_MEMORY=false
+USE_CLOUD_MEMORY=false
 NEW_CHAIN=false
 USE_BLUEPRINT=""
 UPN_SUFFIX=""
@@ -46,14 +46,14 @@ for arg in "$@"; do
         --teams-user=*)
             TEAMS_USER_EMAIL="${arg#--teams-user=}"
             ;;
-        --cloud-memory)
-            CLOUD_MEMORY=true
+        --use-cloud-memory)
+            USE_CLOUD_MEMORY=true
             KEEP_MEMORY_LOCAL=false
             ;;
         --keep-memory-local)
             # Kept for backwards compatibility; local is the default now.
             KEEP_MEMORY_LOCAL=true
-            CLOUD_MEMORY=false
+            USE_CLOUD_MEMORY=false
             ;;
         --new)
             NEW_CHAIN=true
@@ -123,7 +123,7 @@ if [ "$SHOW_HELP" = true ]; then
     echo "  --teams-user=EMAIL     Set a different user as the Teams chat recipient."
     echo "                         The az CLI user remains the admin/provisioner."
     echo "                         e.g., --teams-user=brandon@werner.ac"
-    echo "  --cloud-memory         Opt in to Azure Blob Storage for operational data"
+    echo "  --use-cloud-memory     Opt in to Azure Blob Storage for operational data"
     echo "                         (interactions log, watched chats, email cursor)."
     echo "                         Provisions a resource group, storage account, and"
     echo "                         container scoped to the Agent User. Recommended"
@@ -134,12 +134,12 @@ if [ "$SHOW_HELP" = true ]; then
     echo "  --keep-memory-local    [default] Operational data stays on the local"
     echo "                         filesystem (~/.entraclaw/data). Kept as an explicit"
     echo "                         flag for backwards compatibility; this is now the"
-    echo "                         default behavior. Pass --cloud-memory to override."
+    echo "                         default behavior. Pass --use-cloud-memory to override."
     echo "                         Also sets ENTRACLAW_KEEP_MEMORY_LOCAL=true, which"
     echo "                         opts the PreToolUse hook out so Claude Code's local"
     echo "                         auto-memory directory is writable again."
     echo ""
-    echo "  Cloud storage targeting (used with --cloud-memory):"
+    echo "  Cloud storage targeting (used with --use-cloud-memory):"
     echo "  --with-storage-account=NAME"
     echo "                         Use the named Azure Storage Account instead of the"
     echo "                         deterministic per-tenant default (entclaw<hash>)."

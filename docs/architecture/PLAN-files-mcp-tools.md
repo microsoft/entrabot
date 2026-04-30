@@ -92,7 +92,7 @@ PR2 adds:
 
 `Sites.Read.All` is **not** consented in V1 (because `search_files` and `list_sites` are deferred). If a P2 PR adds them, it adds the consent at the same time.
 
-A new helper in `create_entra_agent_ids.py` (mirror of `grant_agent_user_storage_consent`) names this `grant_agent_user_files_consent`. Setup adds a `--with-files` flag; running without it leaves files capability disabled. Default off until a tenant admin opts in — matches `--cloud-memory`.
+A new helper in `create_entra_agent_ids.py` (mirror of `grant_agent_user_storage_consent`) names this `grant_agent_user_files_consent`. Setup adds a `--with-files` flag; running without it leaves files capability disabled. Default off until a tenant admin opts in — matches `--use-cloud-memory`.
 
 ### Sponsor-only enforcement (Premise 3)
 

@@ -74,7 +74,7 @@ Both are at least as strong as the macOS Keychain baseline.
 .\scripts\setup-windows.ps1 -UseBlueprint <app-id>
 
 # Enable Azure Blob Storage for operational data
-.\scripts\setup-windows.ps1 -NewChain -UpnSuffix yourname -CloudMemory
+.\scripts\setup-windows.ps1 -NewChain -UpnSuffix yourname -UseCloudMemory
 ```
 
 ### Teardown
@@ -132,7 +132,7 @@ the `keyring` Python package. No PEM files on disk.
 #### With Azure Blob Storage
 
 ```bash
-./scripts/setup.sh --cloud-memory
+./scripts/setup.sh --use-cloud-memory
 ```
 
 ### Teardown

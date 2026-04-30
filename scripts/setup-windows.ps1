@@ -28,28 +28,28 @@
 .PARAMETER UpnSuffix
   Agent User UPN suffix (required with -NewChain).
 
-.PARAMETER CloudMemory
+.PARAMETER UseCloudMemory
   Provision Azure Blob Storage for operational data (default: local).
 
 .PARAMETER WithStorageAccount
   Use the named Azure Storage Account instead of the deterministic
   per-tenant default. Created if missing. Mutually exclusive with
-  -CreateNewStorage. Only meaningful with -CloudMemory.
+  -CreateNewStorage. Only meaningful with -UseCloudMemory.
 
 .PARAMETER WithContainer
   Use the named blob container instead of the agent-<oid> default.
-  Only meaningful with -CloudMemory.
+  Only meaningful with -UseCloudMemory.
 
 .PARAMETER CreateNewStorage
   Force creation of a fresh randomly-suffixed Storage Account even when
   the deterministic-name one already exists. Mutually exclusive with
-  -WithStorageAccount. Only meaningful with -CloudMemory.
+  -WithStorageAccount. Only meaningful with -UseCloudMemory.
 
 .EXAMPLE
   .\scripts\setup-windows.ps1 -NewChain -UpnSuffix winagent
 
 .EXAMPLE
-  .\scripts\setup-windows.ps1 -NewChain -UpnSuffix winagent -CloudMemory `
+  .\scripts\setup-windows.ps1 -NewChain -UpnSuffix winagent -UseCloudMemory `
       -WithStorageAccount mycorpstg -WithContainer winagent-mem
 #>
 
@@ -58,7 +58,7 @@ param(
     [switch]$NewChain,
     [string]$UseBlueprint = "",
     [string]$UpnSuffix = "",
-    [switch]$CloudMemory,
+    [switch]$UseCloudMemory,
     [string]$WithStorageAccount = "",
     [string]$WithContainer = "",
     [switch]$CreateNewStorage,
@@ -273,11 +273,11 @@ Success ".env locked to $user (modify, per D10)"
 # ═══════════════════════════════════════════════════════════════════════════
 Step 8 "Cloud memory (Azure Blob Storage)"
 
-if (-not $CloudMemory) {
+if (-not $UseCloudMemory) {
     Add-Content -Path $envPath -Value ""
     Add-Content -Path $envPath -Value "# ADR-005: keep agent memory local (skip cloud sync)"
     Add-Content -Path $envPath -Value "ENTRACLAW_KEEP_MEMORY_LOCAL=true"
-    Success "Memory mode: LOCAL (pass -CloudMemory to opt in)"
+    Success "Memory mode: LOCAL (pass -UseCloudMemory to opt in)"
 } elseif (-not $AgentUserId) {
     Write-Host "  ⚠ Skipping blob storage — no Agent User ID found in state" -ForegroundColor Yellow
     Add-Content -Path $envPath -Value ""

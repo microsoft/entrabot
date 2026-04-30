@@ -2,7 +2,7 @@
 
 **Date:** April 29, 2026
 **Team:** Brandon Werner
-**Status:** v1 released. Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **791 tests** across the suite. MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat shipped. **Mind-body split complete** — body-first prompt architecture loads locally, persona-sati MCP wired for personality/memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped; blob-hosted operational storage is opt-in via `setup.sh --cloud-memory`. Efferent-copy middleware shipped and immediately hot-fixed for self-spawn cascade (PRs #35/#36), then hardened again against wrapper indirection (PR #41), and is now opt-in (`EFFERENT_COPY_ENABLE=1`) so normal MCP runs do not mirror every tool call. Leader/slave gating ripped out per "one stdio client per process" reality. **Windows port (PR #58) acceptance-tested on ARM64 Windows 11 VM.** Full CNG signing via TPM-backed cert, three-hop flow live against Entra, Copilot CLI MCP registration, Teams DM round-trip confirmed. `send_teams_message` auto-wait merged — non-Claude-Code hosts block inline until sponsor replies (deterministic, not model-dependent). See Learning #54/#55.
+**Status:** v1 released. Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **791 tests** across the suite. MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat shipped. **Mind-body split complete** — body-first prompt architecture loads locally, persona-sati MCP wired for personality/memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped; blob-hosted operational storage is opt-in via `setup.sh --use-cloud-memory`. Efferent-copy middleware shipped and immediately hot-fixed for self-spawn cascade (PRs #35/#36), then hardened again against wrapper indirection (PR #41), and is now opt-in (`EFFERENT_COPY_ENABLE=1`) so normal MCP runs do not mirror every tool call. Leader/slave gating ripped out per "one stdio client per process" reality. **Windows port (PR #58) acceptance-tested on ARM64 Windows 11 VM.** Full CNG signing via TPM-backed cert, three-hop flow live against Entra, Copilot CLI MCP registration, Teams DM round-trip confirmed. `send_teams_message` auto-wait merged — non-Claude-Code hosts block inline until sponsor replies (deterministic, not model-dependent). See Learning #54/#55.
 
 ---
 
@@ -19,7 +19,7 @@
 ---
 
 ## Recently Resolved
-
+
 ## What's New Apr 29 — Windows Port Acceptance (PR #58)
 
 **Branch:** `feat/windows-port` — ARM64 Windows 11 VM acceptance pass. All 6 acceptance steps from `PLAN-windows-port.md` completed (Steps 1–5 live-verified, Step 6 teardown deferred by user).
@@ -286,7 +286,7 @@ Invariant: `pytest -v && ruff check .` passes before every commit.
 - Body-first prompt architecture with `@include` expansion — security, channel discipline, identity/tools layered under non-overridable body
 - Persona-sati MCP integration — body composes `body + persona` when `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` env vars are set; clean fallback when not
 - Adaptive Cards: `send_card` tool with `tool_activity`, `task_status`, `build_result` templates
-- Azure Blob Storage backend — opt-in via `./scripts/setup.sh --cloud-memory` (ADR-005 Phases 1, 2, 5, 6a)
+- Azure Blob Storage backend — opt-in via `./scripts/setup.sh --use-cloud-memory` (ADR-005 Phases 1, 2, 5, 6a)
 
 ### What's Not Started / Deferred
 

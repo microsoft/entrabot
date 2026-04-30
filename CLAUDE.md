@@ -27,7 +27,7 @@
 - **Memory routing is mechanically enforced.** A PreToolUse hook blocks
   `Write`/`Edit`/`NotebookEdit` to `~/.claude/projects/<slug>/memory/**`
   unless `ENTRACLAW_KEEP_MEMORY_LOCAL=true`. Cloud-memory setups (the
-  default after `setup.sh --cloud-memory`) route all memory writes
+  default after `setup.sh --use-cloud-memory`) route all memory writes
   through `mcp__persona-sati__write_memory_file`, which lands content
   in persona-sati's blob. Three-way decision tree for durable writes:
   - Agent body/channel behavior rule → `prompts/anatomy/*.md` via PR.
@@ -43,7 +43,7 @@
 
 - Python 3.12+ research project — no deployed service yet
 - Eight modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `bot/` (Bot Gateway) → `identity/` (state machine) → `storage/` (`LocalBackend`/`BlobBackend`/`PersonaBackend` + `migration` helper — ADR-005 Phases 1, 2, 5, 6a shipped) → `mcp_server.py` (FastMCP + background channel)
-- External dependencies: Microsoft Entra ID (identity), Microsoft Teams + Outlook mailbox (Graph API or Bot Framework), Azure Blob Storage (optional, opt-in via `setup.sh --cloud-memory`)
+- External dependencies: Microsoft Entra ID (identity), Microsoft Teams + Outlook mailbox (Graph API or Bot Framework), Azure Blob Storage (optional, opt-in via `setup.sh --use-cloud-memory`)
 - **No default group chat.** Every Teams tool requires an explicit `chat_id`. Chats come from `create_chat`, the persisted `watched_chats` file, or the auto-discovery sweep over `/me/chats`.
 - **Body-first prompt.** `prompts/agent_system.md` loads at boot with `@include` expansion of `prompts/anatomy/*.md`. Persona-sati output (if configured) is appended AFTER the body and cannot override body rules. See the "Body prompt is non-overridable" rule above.
 - Three auth modes via `ENTRACLAW_MODE` config switch:
@@ -56,7 +56,7 @@
   - Email poll (60s) — `/me/messages`, filters Teams/M365 noise, detects Purview-encrypted mail
   - Chat auto-discovery (120s) — `GET /me/chats`, registers any chat not in `watched_chats`
   - Daily summary scheduler — 5pm PDT triage email of the day's interactions
-- **Operational storage is local by default.** Cloud (Azure Blob) is opt-in via `./scripts/setup.sh --cloud-memory`; recommended for durability but not required. The backend resolves from env at tool-call time: `KEEP_MEMORY_LOCAL=true` → `LocalBackend`, else `BLOB_ENDPOINT`+`BLOB_CONTAINER` → `BlobBackend`, else `LocalBackend`.
+- **Operational storage is local by default.** Cloud (Azure Blob) is opt-in via `./scripts/setup.sh --use-cloud-memory`; recommended for durability but not required. The backend resolves from env at tool-call time: `KEEP_MEMORY_LOCAL=true` → `LocalBackend`, else `BLOB_ENDPOINT`+`BLOB_CONTAINER` → `BlobBackend`, else `LocalBackend`.
 - All structured data uses `dataclasses` or `pydantic` — no raw dicts
 
 ## Mind-Body Architecture

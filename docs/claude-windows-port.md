@@ -98,7 +98,7 @@ param(
     [string]$UseBlueprint,
     [string]$WithUpnSuffix,
     [string]$TeamsUser,
-    [switch]$CloudMemory,
+    [switch]$UseCloudMemory,
     [switch]$SwitchUser
 )
 
@@ -186,7 +186,7 @@ $envContent | Set-Content "$ProjectRoot\.env" -Encoding utf8
 icacls "$ProjectRoot\.env" /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
 
 # Step 7b: optional blob storage (delegate to Python — already portable)
-if ($CloudMemory) {
+if ($UseCloudMemory) {
     Step '7b' 'Provisioning Azure Blob Storage'
     & python "$ProjectRoot\scripts\provision_blob_storage.py" --tenant-id $tenantId --agent-user-object-id $agentUserId
 }

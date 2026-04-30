@@ -5,7 +5,7 @@ EntraClaw writes *operational* data — interactions log, watched chats, email c
 ## TL;DR
 
 - **Default: local filesystem** (`~/.entraclaw/data/`). Zero infra. Fine for single-machine research, offline demos, air-gapped dev loops.
-- **Recommended: Azure Blob Storage.** Opt in via `./scripts/setup.sh --cloud-memory`. Durable, cross-device, RBAC-scoped per Agent User.
+- **Recommended: Azure Blob Storage.** Opt in via `./scripts/setup.sh --use-cloud-memory`. Durable, cross-device, RBAC-scoped per Agent User.
 - Memory sync for *persona* (Claude Code memory, callbacks, relational context) is handled by the separate `persona-sati` MCP server, not by this project. EntraClaw's blob holds only operational data.
 
 ## The two backends
@@ -67,7 +67,7 @@ Fine for:
 
 ### What gets provisioned
 
-`setup.sh --cloud-memory` calls `scripts/provision_blob_storage.py`, which:
+`setup.sh --use-cloud-memory` calls `scripts/provision_blob_storage.py`, which:
 
 1. Ensures resource group `entraclaw-rg` exists (or reuses it)
 2. Ensures a storage account named `entclaw<tenant-hash>` exists (one per tenant — multiple devs in the same tenant converge on the same account)
@@ -84,16 +84,16 @@ ENTRACLAW_BLOB_ENDPOINT=https://entclaw<hash>.blob.core.windows.net
 ENTRACLAW_BLOB_CONTAINER=agent-<agent-user-oid>
 ```
 
-`setup.sh --cloud-memory` writes these for you. The backend reads them via `get_config()` on every call, so flipping between local and cloud is just an `.env` edit and an MCP server restart.
+`setup.sh --use-cloud-memory` writes these for you. The backend reads them via `get_config()` on every call, so flipping between local and cloud is just an `.env` edit and an MCP server restart.
 
 ### The storage-scope token
 
 The `BlobBackend` authenticates to Azure Blob via an Agent-User-scoped OAuth token for `https://storage.azure.com/.default`. The three-hop flow is parallel to the Graph-scoped flow used by the Teams tools, minted on demand via `acquire_agent_user_storage_token(config)`. Nothing about this is delegated back to you or to `az login`; the Agent User is the data plane principal.
 
-If the setup wasn't run with `--cloud-memory` and you want to flip later, you'll need to re-run:
+If the setup wasn't run with `--use-cloud-memory` and you want to flip later, you'll need to re-run:
 
 ```bash
-./scripts/setup.sh --cloud-memory
+./scripts/setup.sh --use-cloud-memory
 ```
 
 This grants the missing `user_impersonation` on Azure Storage, provisions the resources, and updates `.env`. It's idempotent.
@@ -103,7 +103,7 @@ This grants the missing `user_impersonation` on Azure Storage, provisions the re
 If you've been running local and want to move your history to the cloud:
 
 ```bash
-./scripts/setup.sh --cloud-memory
+./scripts/setup.sh --use-cloud-memory
 ```
 
 Near the end, the script will prompt you to migrate `~/.entraclaw/data` into the blob container. The migration:
@@ -141,11 +141,11 @@ Your MCP server is still running the process that booted with the old config. Re
 
 ### `403 This request is not authorized to perform this operation`
 
-Most common cause: **Azure RBAC propagation delay.** After `setup.sh --cloud-memory` grants `Storage Blob Data Contributor`, the role can take 1–5 minutes to take effect. Retry after a short wait.
+Most common cause: **Azure RBAC propagation delay.** After `setup.sh --use-cloud-memory` grants `Storage Blob Data Contributor`, the role can take 1–5 minutes to take effect. Retry after a short wait.
 
 Less common causes:
 
-- The Agent User has the wrong (or no) `user_impersonation` consent on Azure Storage. Re-run `setup.sh --cloud-memory` which calls `grant_agent_user_storage_consent`.
+- The Agent User has the wrong (or no) `user_impersonation` consent on Azure Storage. Re-run `setup.sh --use-cloud-memory` which calls `grant_agent_user_storage_consent`.
 - You're trying to read/write from a different principal (e.g. your `az login` user doesn't have a role on the container). `az storage blob list --auth-mode login` will hit this; the agent won't.
 
 ### I want to kill the cloud backend entirely

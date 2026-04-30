@@ -45,7 +45,7 @@ The 8-step flow:
 5. **Identity creation** — runs `scripts/create_entra_agent_ids.py`. Creates Blueprint, **explicitly** creates `BlueprintPrincipal` (Learning #2 — not auto-created), creates Agent Identity (sponsor = signed-in user; Learning #5 — sponsors must be users, not SPs), creates Agent User, grants `oauth2PermissionGrant` for Graph and (if cloud memory) Storage scopes. Uses retry/backoff for permission propagation (Learning #8). Persists everything to `.entraclaw-state.json`.
 6. **Blueprint cert** — creates `.venv` if missing, `pip install -e ".[dev]"`, generates self-signed RSA-2048 cert in Python, computes SHA-256/base64url thumbprint, stores PEM private key in `keyring` (`service="entraclaw"`, `key="blueprint-private-key"`), uploads public cert to Blueprint app via Graph `PATCH /applications/{id}` `keyCredentials`. Idempotent: cached thumbprint is verified against Entra; if missing, regenerates after warning the user.
 7. **Venv + .env** — full editable install, writes `.env` (`chmod 600`) with all `ENTRACLAW_*` config. **No secrets** — only IDs, the cert thumbprint, and config flags.
-   - **7b. Optional blob provisioning** (`--cloud-memory` flag) — `scripts/provision_blob_storage.py` ensures `entraclaw-rg` resource group, a tenant-scoped storage account, a per-Agent-User container, and `Storage Blob Data Contributor` RBAC scoped to the container. Storage scope also requires its own `oauth2PermissionGrant` (Learning #34) — handled in step 5.
+   - **7b. Optional blob provisioning** (`--use-cloud-memory` flag) — `scripts/provision_blob_storage.py` ensures `entraclaw-rg` resource group, a tenant-scoped storage account, a per-Agent-User container, and `Storage Blob Data Contributor` RBAC scoped to the container. Storage scope also requires its own `oauth2PermissionGrant` (Learning #34) — handled in step 5.
 8. **Summary + MCP wiring** — invokes `scripts/mcp_config.py` to write/upsert the entraclaw entry in both `.mcp.json` (project-local) and `~/.copilot/mcp-config.json`.
 
 State files: `.entraclaw-state.json` (provisioning state, idempotency keys), `.env` (runtime config, mode 600).
@@ -159,7 +159,7 @@ Both call into the same Python package, so the logic is shared.
     [string]$UpnSuffix,
     [string]$UseBlueprint,
     [switch]$New,
-    [switch]$CloudMemory,
+    [switch]$UseCloudMemory,
     [switch]$SwitchUser,
     [string]$TeamsUser
 )

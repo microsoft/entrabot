@@ -31,8 +31,8 @@ The `./scripts/setup.sh` script provisions and configures an EntraClaw agent end
 | Flag | Purpose |
 |------|---------|
 | *(none)* | **Default: local filesystem.** Operational data stays at `~/.entraclaw/data`. No Azure storage is provisioned. |
-| `--cloud-memory` | Opt in to Azure Blob Storage. Provisions resource group `entraclaw-rg`, a tenant-scoped storage account, a container scoped to this Agent User (`agent-<OID>`), and `Storage Blob Data Contributor` RBAC on the container. Sets the `ENTRACLAW_BLOB_*` env vars. Recommended for production-like setups and cross-device continuity. |
-| `--keep-memory-local` | Backward-compat alias for the default behavior. Explicit opt-out from cloud storage. No-op unless you also pass `--cloud-memory` on the same line. |
+| `--use-cloud-memory` | Opt in to Azure Blob Storage. Provisions resource group `entraclaw-rg`, a tenant-scoped storage account, a container scoped to this Agent User (`agent-<OID>`), and `Storage Blob Data Contributor` RBAC on the container. Sets the `ENTRACLAW_BLOB_*` env vars. Recommended for production-like setups and cross-device continuity. |
+| `--keep-memory-local` | Backward-compat alias for the default behavior. Explicit opt-out from cloud storage. No-op unless you also pass `--use-cloud-memory` on the same line. |
 
 ### Misc
 
@@ -53,7 +53,7 @@ Creates a new identity chain, stores everything locally, no cloud storage.
 ### Fresh setup with cloud storage from the start
 
 ```bash
-./scripts/setup.sh --new --with-upn-suffix=my-agent --cloud-memory
+./scripts/setup.sh --new --with-upn-suffix=my-agent --use-cloud-memory
 ```
 
 ### Add this machine to an existing Blueprint
@@ -67,7 +67,7 @@ The Blueprint's Agent Identity and Agent User are reused; this machine gets its 
 ### Promote an existing local setup to cloud
 
 ```bash
-./scripts/setup.sh --cloud-memory
+./scripts/setup.sh --use-cloud-memory
 ```
 
 Grants the missing `user_impersonation` consent on Azure Storage, provisions the resource group / account / container, and prompts to migrate `~/.entraclaw/data` into the blob (non-destructive). Idempotent — re-runnable.
@@ -99,13 +99,13 @@ ENTRACLAW_PROVISIONER_APP_ID=...
 ENTRACLAW_LOG_LEVEL=INFO
 ```
 
-Without `--cloud-memory` you'll also see:
+Without `--use-cloud-memory` you'll also see:
 
 ```
 ENTRACLAW_KEEP_MEMORY_LOCAL=true
 ```
 
-With `--cloud-memory`:
+With `--use-cloud-memory`:
 
 ```
 ENTRACLAW_KEEP_MEMORY_LOCAL=false
@@ -124,8 +124,8 @@ Private keys are **never** written to `.env` — they live in the OS keystore (K
 ## See also
 
 - [`scripts/setup.sh`](../../scripts/setup.sh) — the script itself
-- [`scripts/provision_blob_storage.py`](../../scripts/provision_blob_storage.py) — the Python callable that `--cloud-memory` invokes
+- [`scripts/provision_blob_storage.py`](../../scripts/provision_blob_storage.py) — the Python callable that `--use-cloud-memory` invokes
 - [`scripts/create_entra_agent_ids.py`](../../scripts/create_entra_agent_ids.py) — Agent Identity provisioning
 - [`docs/guides/storage-configuration.md`](../guides/storage-configuration.md) — more on the storage choice
 - [`docs/decisions/003-certificate-auth-over-client-secrets.md`](../decisions/003-certificate-auth-over-client-secrets.md) — why we use cert auth
-- [`docs/decisions/005-cloud-hosted-memory.md`](../decisions/005-cloud-hosted-memory.md) — the ADR behind `--cloud-memory`
+- [`docs/decisions/005-cloud-hosted-memory.md`](../decisions/005-cloud-hosted-memory.md) — the ADR behind `--use-cloud-memory`

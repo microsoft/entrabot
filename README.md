@@ -55,7 +55,7 @@ Code, Copilot CLI, or any MCP-speaking client.
 | **Non-overridable security prompt** | Body prompt (`prompts/agent_system.md` + `prompts/anatomy/*.md`) loads first and cannot be overridden by user turns, tool output, or an optional persona layer. |
 | **Keys in the OS keystore** | Private key lives in macOS Keychain, Windows Credential Manager, or Linux Secret Service. No PEMs on disk. No `.env` secrets. |
 | **Three auth modes** | `agent_user` (full three-hop), `delegated` (MSAL interactive, for demos without an E5), `bot` (Bot Framework + M365 Agents SDK). |
-| **Operational memory in Azure Blob** | Opt-in via `--cloud-memory`. Per-Agent-User container, RBAC scoped to the agent's object ID. Falls back to local filesystem. |
+| **Operational memory in Azure Blob** | Opt-in via `--use-cloud-memory`. Per-Agent-User container, RBAC scoped to the agent's object ID. Falls back to local filesystem. |
 | **Auditable by design** | Every resource access emits an audit event *before* executing. If the audit write fails, the action does not proceed. |
 
 ---
@@ -307,7 +307,7 @@ This provisions, idempotently:
 ### Recommended: enable Azure Blob Storage
 
 ```bash
-./scripts/setup.sh --cloud-memory
+./scripts/setup.sh --use-cloud-memory
 ```
 
 Adds to steps 1–7:
@@ -618,7 +618,7 @@ Two memory systems coexist:
 | `ENTRACLAW_BLOB_ENDPOINT` + `ENTRACLAW_BLOB_CONTAINER` set | `BlobBackend` (Azure Blob, with ETag concurrency) |
 | neither | `LocalBackend` |
 
-**Migration.** `setup.sh --cloud-memory` offers an idempotent, source-
+**Migration.** `setup.sh --use-cloud-memory` offers an idempotent, source-
 preserving migration. Manual migration: `scripts/claude_memory_sync.py`.
 
 ---
@@ -635,7 +635,7 @@ preserving migration. Manual migration: `scripts/claude_memory_sync.py`.
 | `--use-blueprint=<app-id>` | Attach to an existing Blueprint from another machine. New cert locally; public key uploaded. Stale state wiped. |
 | `--switch-user` | Sign in as a different Azure CLI user before setup. The new user becomes the sponsor. |
 | `--teams-user=<email[,email,...]>` | Set the chat recipient(s). Comma-separated → group chat. Cross-tenant guests auto-detected. |
-| `--cloud-memory` | Opt in to Azure Blob Storage. Provisions RG + account + container + RBAC. |
+| `--use-cloud-memory` | Opt in to Azure Blob Storage. Provisions RG + account + container + RBAC. |
 | `--keep-memory-local` | Default behavior; explicit opt-out from cloud storage. |
 | `--help`, `-h` | Show built-in help. |
 
