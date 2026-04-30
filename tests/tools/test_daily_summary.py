@@ -37,6 +37,8 @@ from entraclaw.tools.daily_summary import (
 @pytest.fixture
 def tmp_data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("ENTRACLAW_BLOB_ENDPOINT", raising=False)
+    monkeypatch.delenv("ENTRACLAW_BLOB_CONTAINER", raising=False)
     return tmp_path
 
 

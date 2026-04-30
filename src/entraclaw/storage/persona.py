@@ -39,7 +39,16 @@ def claude_code_memory_dir(
     :func:`Path.home`.
     """
     home_dir = home if home is not None else Path.home()
-    slug = str(project_root).replace("/", "-").replace(" ", "-")
+    # Replace both POSIX and Windows path separators so the Windows slug
+    # matches what Claude Code itself writes (Mac/Linux test fixtures
+    # pass POSIX-style absolute paths; Windows path stringification
+    # uses backslashes).
+    slug = (
+        str(project_root)
+        .replace("\\", "-")
+        .replace("/", "-")
+        .replace(" ", "-")
+    )
     return home_dir / ".claude" / "projects" / slug / "memory"
 
 

@@ -101,3 +101,53 @@ The private key never leaves the secure hardware. Only the public certificate is
 - ADR-002: Agent User Over OBO
 - Learning #3: Token responses return error dicts, not exceptions
 - Learning #12: Three-hop flow requires fmi_path parameter
+
+## 2026 amendment — per-platform reality
+
+The original ADR was written against the Mac/Linux baseline where the
+private key is stored as a PEM blob in ``keyring`` and JWT signing
+runs through ``cryptography.load_pem_private_key``. The Windows port
+(``feat/windows-port`` branch, see
+``docs/architecture/PLAN-windows-port.md``) materially diverges — the
+ADR's spirit holds, but the mechanics are now per-platform:
+
+| Aspect | Mac / Linux | Windows |
+|---|---|---|
+| Key storage | Keychain / Secret Service via ``keyring`` (PEM blob) | ``Cert:\\CurrentUser\\My`` via Windows CNG |
+| Key extractability | PEM is exportable; protected by OS access control | TPM KSP keys are **non-exportable**; software KSP is DPAPI-bound |
+| Signing path | ``cryptography.load_pem_private_key`` → ``rsa.sign`` | ``ncrypt.dll`` ``NCryptSignHash`` (PKCS1+SHA256) via ``auth/cncrypt_signer.py`` |
+| Cert generation | OpenSSL via ``scripts/generate_cert.py`` | ``New-SelfSignedCertificate`` via ``scripts/generate_windows_cert.py`` |
+| KSP selection | n/a — software-only on Mac/Linux | TPM-first (``Microsoft Platform Crypto Provider``), software-fallback (``Microsoft Software Key Storage Provider``) |
+| Thumbprint | SHA-256 b64url (used as JWT ``x5t#S256``) | SHA-1 hex (used to find cert in store) **plus** SHA-256 b64url (header) |
+| Rotation | ``deploy.sh`` | ``deploy-windows.ps1`` + ``rotate_cert_windows.py`` (transactional rollback per D7) |
+
+The dispatch lives in ``src/entraclaw/auth/certificate.py``:
+``build_client_assertion`` accepts either ``private_key_pem`` (Mac/Linux)
+or ``cert_sha1`` (Windows). Callers in ``tools/teams.py`` go through
+``_build_blueprint_assertion`` which selects by ``sys.platform``.
+
+The TPM-first/software-fallback decision is not a security weakness —
+the software KSP still binds the private key to the user profile via
+DPAPI, which matches the Mac/Linux baseline. The TPM path is strictly
+stronger because the key cannot leave the chip.
+
+The Windows port does NOT change the JWT shape, the audience, the
+scopes, or the three-hop flow. From Entra's perspective, the same
+``client_assertion_type`` arrives — only the local mechanics differ.
+
+### Rotation invariants (D7, D13)
+
+The rotation contract added with the Windows port hardens what the
+original ADR left implicit on Mac/Linux too:
+
+1. Capture the **old** public DER bytes BEFORE generating a new cert.
+   For non-exportable TPM keys this is the only chance.
+2. PATCH new DER → smoke test → on success delete old cert; on
+   failure re-PATCH old DER + restore ``.env`` + invalidate MSAL cache.
+3. If the rollback PATCH itself fails, halt loud
+   (``ManualInterventionRequired``) — do not attempt heuristic
+   recovery. Operator must triage by hand.
+
+These invariants are exercised by ``tests/test_deploy_rollback.py``
+on every host (cross-platform).
+

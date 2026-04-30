@@ -1566,33 +1566,25 @@ async def send_teams_message(
     content_type: str = "html",
     mentions: list[dict] | None = None,
     chat_id: str = "",
+    ctx: Context | None = None,
 ) -> str:
-    """Send a message via Microsoft Teams.
+    """Send a message via Microsoft Teams, then listen for the reply.
 
     You must pass ``chat_id`` — every Teams chat has its own ID. Get one
     from ``create_chat`` (for a new 1:1 DM) or from the ``meta.chat_id``
     of a channel notification that the background poll pushed to you.
 
-    After calling this, you don't need to call watch_teams_replies —
-    the background poll pushes replies automatically via the channel
-    notification for every watched chat. NOTE: that push only reaches
-    Claude Code (`--dangerously-load-development-channels`). Copilot
-    CLI and other hosts that lack the channel push will NOT see
-    inbound Teams replies between turns.
+    **Auto-wait behavior.** On hosts that lack a channel push (Copilot
+    CLI, Codex, and other non-Claude-Code hosts), this tool
+    automatically blocks after sending until the human sponsor DMs back
+    in the same chat — the sponsor's reply is returned in the result.
+    This is transparent on Claude Code (which has notifications/channel
+    push) — the tool returns immediately there.
 
-    **Keeping a sponsor conversation alive (host-agnostic).** When this
-    DM is the reply to a sponsor request and you expect them to write
-    back — e.g. they asked you to do work and you're sending the
-    completion update, or you're answering a question they asked in a
-    1:1 DM — call ``wait_for_sponsor_dm`` immediately after this
-    returns. The wait blocks the current MCP session until the sponsor
-    DMs back, then surfaces their message as next-turn input so you can
-    reply in-thread. Without it, control returns to the host CLI prompt
-    and the sponsor's next Teams message is invisible to you in Copilot
-    CLI. Calling ``wait_for_sponsor_dm`` is harmless in Claude Code
-    (the push channel still works) and required in Copilot CLI. Skip
-    the wait only when this DM is a one-shot notification with no
-    expected reply, or when the sponsor explicitly closed the loop.
+    The auto-wait uses the same mechanism as ``wait_for_sponsor_dm``
+    (sponsor-gated polling with the dog animation) but is built into
+    this tool so hosts that don't surface MCP instructions can't skip
+    it by accident.
 
     ``content_type`` defaults to ``"html"`` per the channel-discipline
     rule in ``prompts/anatomy/channel-discipline.md`` ("Always HTML in
@@ -1622,7 +1614,8 @@ async def send_teams_message(
         chat_id: The chat to send to. Required.
 
     Returns:
-        JSON with message_id and sent_at timestamp.
+        JSON with message_id, sent_at, and (when waiting) the sponsor's
+        reply in a ``sponsor_reply`` object.
     """
     await _initialize()
 
@@ -1688,6 +1681,129 @@ async def send_teams_message(
             "had_mentions": bool(mentions),
         },
     )
+
+    # Determine whether to auto-wait for a sponsor reply.
+    # Claude Code has the notifications/channel push so it doesn't need
+    # to block here. All other hosts (Copilot CLI, Codex, etc.) do.
+    _CHANNEL_PUSH_HOSTS = frozenset({"claude-code", "claude-ai", "claude code"})
+    host = _current_host()
+    cached = str(_state.get("cached_host") or "")
+    has_channel_push = host in _CHANNEL_PUSH_HOSTS or cached in _CHANNEL_PUSH_HOSTS
+
+    should_wait = not has_channel_push
+
+    if not should_wait:
+        return json.dumps(result, indent=2)
+
+    # --- Auto-wait: block until sponsor replies ---
+    import asyncio
+    import contextlib
+    from collections import deque
+
+    from entraclaw.identity.sponsors import (
+        SponsorGate,
+        load_agent_identity_sponsor_gate,
+    )
+    from entraclaw.tools.teams import filter_human_messages, read
+    from entraclaw.tools.wait_tool import (
+        WaitForSponsorDmResult,
+        wait_listener_banner,
+        wait_loop,
+    )
+
+    wait_config = _state.get("config") or get_config()
+
+    gate: SponsorGate | None = _state.get("sponsor_gate")  # type: ignore[assignment]
+    if gate is None:
+        try:
+            gate = load_agent_identity_sponsor_gate(wait_config)
+            _state["sponsor_gate"] = gate
+            if logger:
+                logger.info(
+                    "send_teams_message auto-wait: sponsor gate loaded "
+                    "ids=%s upns=%s mails=%s",
+                    sorted(gate.user_ids),
+                    sorted(gate.upns),
+                    sorted(gate.mails),
+                )
+        except Exception as exc:
+            # If we can't load the gate, return the send result without
+            # blocking — degrade gracefully rather than crash.
+            if logger:
+                logger.warning(
+                    "send_teams_message: could not load sponsor gate for "
+                    "auto-wait, returning without blocking: %s",
+                    exc,
+                )
+            if isinstance(result, dict):
+                result["wait_skipped"] = str(exc)
+            return json.dumps(result, indent=2)
+
+    dedup: deque[tuple[str, str]] = _state.setdefault(  # type: ignore[assignment]
+        "wait_tool_dedup", deque()
+    )
+
+    agent_display_name = (
+        (wait_config.agent_user_upn or "").split("@", 1)[0] or "EntraClaw Agent"
+    )
+
+    def list_chat_ids() -> list[str]:
+        watched = _state.get("watched_chats") or {}
+        return list(watched.keys())
+
+    async def read_chat_for_wait(cid: str) -> list[dict]:
+        raw = await _with_token_retry(read, chat_id=cid, count=10)
+        return filter_human_messages(raw, agent_display_name)
+
+    async def heartbeat(elapsed_s: float = 0.0) -> None:
+        if ctx is not None:
+            import os as _os
+
+            use_color = _os.environ.get("NO_COLOR", "") == ""
+            frame = wait_listener_banner(color=use_color, elapsed_s=elapsed_s)
+            with contextlib.suppress(Exception):
+                await ctx.report_progress(
+                    progress=elapsed_s, total=None, message=frame
+                )
+
+    # Show the dog splash
+    if ctx is not None:
+        import os as _os
+
+        use_color = _os.environ.get("NO_COLOR", "") == ""
+        banner = wait_listener_banner(color=use_color)
+        with contextlib.suppress(Exception):
+            await ctx.report_progress(progress=0.0, total=None, message=banner)
+
+    coro = wait_loop(
+        list_chat_ids=list_chat_ids,
+        read_chat=read_chat_for_wait,
+        gate=gate,
+        dedup=dedup,
+        heartbeat=heartbeat,
+    )
+    try:
+        picked = await coro
+    except asyncio.CancelledError:
+        # Ctrl+C — return the send result without the reply
+        if isinstance(result, dict):
+            result["wait_cancelled"] = True
+        return json.dumps(result, indent=2)
+
+    # Build the sponsor reply payload
+    body_html = picked.get("content") or picked.get("content_html") or ""
+    body_text = _summarize_content(body_html, limit=4000) if body_html else ""
+
+    if isinstance(result, dict):
+        result["sponsor_reply"] = {
+            "chat_id": str(picked.get("chat_id") or ""),
+            "message_id": str(picked.get("message_id") or ""),
+            "sender": str(picked.get("sender") or picked.get("from") or ""),
+            "sender_id": str(picked.get("sender_id") or ""),
+            "sent_at": str(picked.get("sent_at") or ""),
+            "content_text": body_text,
+            "content_html": body_html or None,
+        }
 
     return json.dumps(result, indent=2)
 

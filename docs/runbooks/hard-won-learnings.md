@@ -650,6 +650,31 @@ Regression tests in `tests/test_mcp_server_integration.py` cover both raw Teams 
 
 ---
 
+### Learning #54: MCP Tool Parameters Exposed to LLMs Will Be Overridden — Never Expose Behavioral Controls as Schema Parameters
+
+**Date:** 2026-04-29
+**Status:** **CONFIRMED — empirically reproduced on Copilot CLI + Windows VM acceptance pass.**
+**Context:** `send_teams_message` was refactored to auto-wait for a sponsor reply on hosts without channel push (Copilot CLI, Codex). The implementation added a `wait_for_reply: bool = True` parameter to the function signature, which FastMCP exposed in the MCP tool schema. The intent was to allow a "fire-and-forget" override for edge cases.
+**Problem:** The model (GPT-4.1 via Copilot CLI) immediately began passing `wait_for_reply=false` on every invocation, completely defeating the auto-wait mechanism. The tool returned instantly without blocking, exactly as if the feature didn't exist. This was invisible — no error, no log, the tool just... didn't wait. Debugging was extremely difficult because: (1) Copilot CLI swallows MCP server stderr so print-debugging is invisible, (2) file-based debug logging crashed the server due to a missing `os` import, (3) the tool "worked" (message sent successfully) so there was no error signal.
+**Fix:** Remove `wait_for_reply` from the function signature entirely. Make auto-wait unconditional for non-Claude-Code hosts, determined solely by host detection (`_current_host()` / `_state["cached_host"]` against `_CHANNEL_PUSH_HOSTS`). The model cannot override what it cannot see.
+**Prevention:** When designing MCP tools whose behavior should differ by host environment, NEVER expose the behavioral switch as a tool parameter. LLMs will override it in unpredictable ways — they optimize for speed/simplicity and will disable blocking/waiting/validation if given the option. Use server-side host detection, environment variables, or compile-time configuration instead. If you must expose a knob, make it an env var that the human sets, not a tool param the model sees.
+**Evidence/references:** Commits `ef83609` (added `wait_for_reply` param), `88fbaa7` (removed it). Live failure during Windows VM demo — auto-wait never triggered despite correct host detection logic. Fix verified immediately after parameter removal: auto-wait fires correctly on every `send_teams_message` call in Copilot CLI.
+
+---
+
+### Learning #55: Windows Git Symlinks — `core.symlinks=false` Silently Breaks Shared Content
+
+**Date:** 2026-04-29
+**Status:** **CONFIRMED — 36 broken Claude Code skills on Windows VM.**
+**Context:** The repo uses git symlinks in `.claude/skills/*/SKILL.md` to share skill definitions from a central Mac location (`/Volumes/Development HD/openclaw-identity-research/.claude/skills/...`). These are committed as symlinks (mode `120000` in the git index).
+**Problem:** Windows Git defaults to `core.symlinks=false`. Symlinks are checked out as **plain text files** containing the target path as their content. Claude Code's skill loader reads the SKILL.md, expects YAML frontmatter, gets `/Volumes/Development HD/...` instead, and reports "missing or malformed YAML frontmatter" for every symlinked skill. This produces a wall of 36 red error lines in the skills panel — unacceptable for demos.
+**Fix (local):** Delete the broken skill directories locally. They only contain the useless text-file "symlinks" on Windows.
+**Fix (proper):** Either (a) don't use symlinks for cross-repo shared content — copy the files and accept the duplication, or (b) use a build/setup step that resolves the links on Windows, or (c) add a `.gitattributes` rule that makes these files follow a merge driver that works on both platforms.
+**Prevention:** Never rely on git symlinks for content that must work on Windows. Windows has three symlink modes (native NTFS, developer mode, WSL) and none are the default. Assume `core.symlinks=false` on any Windows checkout. If shared content is needed cross-platform, use a script that copies/generates it at setup time.
+**Evidence/references:** `git ls-files -s .claude/skills/autoplan/SKILL.md` → mode `120000`; `git config core.symlinks` → `false`; file content: `/Volumes/Development HD/openclaw-identity-research/.claude/skills/gstack/autoplan/SKILL.md`. Deleted 36 directories locally during acceptance pass.
+
+---
+
 ## Historical Learnings
 
 ### [HISTORICAL] Learning #4: OBO Requires Matching Token Audience

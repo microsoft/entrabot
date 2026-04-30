@@ -1,1 +1,0 @@
-/Volumes/Development HD/openclaw-identity-research/.claude/skills/gstack/open-gstack-browser/SKILL.md

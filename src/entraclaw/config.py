@@ -9,6 +9,8 @@ dependency on ``python-dotenv``).
 from __future__ import annotations
 
 import os
+import shutil
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,8 +34,82 @@ def _parse_csv_preserve_empty(value: str | None) -> list[str]:
     return [v.strip() for v in value.split(",")]
 
 
+def _windows_root(home: Path | None = None) -> Path:
+    """Return the per-user data root on Windows.
+
+    Prefers ``%LOCALAPPDATA%``; falls back to ``<home>/AppData/Local`` when
+    the env var is missing (rare on stripped CI runners).
+    """
+    home = home or Path.home()
+    local = os.environ.get("LOCALAPPDATA")
+    base = Path(local) if local else home / "AppData" / "Local"
+    return base / "entraclaw"
+
+
 def _default_dir(subdir: str) -> Path:
+    if sys.platform == "win32":
+        return _windows_root() / subdir
     return Path.home() / ".entraclaw" / subdir
+
+
+def _has_content(path: Path) -> bool:
+    """True when ``path`` exists and contains at least one entry."""
+    return path.is_dir() and any(path.iterdir())
+
+
+def migrate_legacy_data_dir(*, home: Path | None = None) -> bool:
+    """One-shot move of legacy ``~/.entraclaw/`` to ``%LOCALAPPDATA%\\entraclaw\\``.
+
+    Idempotent and Windows-only. Returns ``True`` when content was moved,
+    ``False`` when no migration was needed (legacy missing/empty, or target
+    already populated and legacy gone).
+
+    Raises ``RuntimeError`` when both legacy and target contain data — that
+    means the user has been running on two roots and needs manual triage.
+    """
+    if sys.platform != "win32":
+        return False
+
+    home = home or Path.home()
+    legacy = home / ".entraclaw"
+    target = _windows_root(home=home)
+
+    if not _has_content(legacy):
+        return False
+
+    if _has_content(target):
+        raise RuntimeError(
+            "two entraclaw dirs detected: legacy "
+            f"{legacy} and current {target} both contain data. "
+            "Manual triage needed — pick one and remove the other."
+        )
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        target.rmdir()
+    shutil.move(str(legacy), str(target))
+    return True
+
+
+def check_legacy_data_dir(*, home: Path | None = None) -> None:
+    """MCP-boot guard: halt loud when migration is owed.
+
+    Raises ``RuntimeError`` on Windows when legacy ``~/.entraclaw/`` has
+    content while target ``%LOCALAPPDATA%\\entraclaw\\`` is empty/missing.
+    No-op on Mac/Linux.
+    """
+    if sys.platform != "win32":
+        return
+
+    home = home or Path.home()
+    legacy = home / ".entraclaw"
+    target = _windows_root(home=home)
+
+    if _has_content(legacy) and not _has_content(target):
+        raise RuntimeError(
+            f"Legacy entraclaw data found at {legacy} but target "
+            f"{target} is empty. Run setup-windows.cmd --migrate to move it."
+        )
 
 
 def _load_dotenv() -> None:
@@ -75,6 +151,8 @@ class EntraClawConfig:
     blueprint_app_id: str | None = field(default=None)
     blueprint_object_id: str | None = field(default=None)
     blueprint_cert_thumbprint: str | None = field(default=None)
+    blueprint_cert_sha1: str | None = field(default=None)
+    blueprint_ksp: str | None = field(default=None)
     agent_id: str | None = field(default=None)
     agent_object_id: str | None = field(default=None)
     agent_user_id: str | None = field(default=None)
@@ -109,6 +187,8 @@ class EntraClawConfig:
             blueprint_app_id=os.environ.get("ENTRACLAW_BLUEPRINT_APP_ID"),
             blueprint_object_id=os.environ.get("ENTRACLAW_BLUEPRINT_OBJECT_ID"),
             blueprint_cert_thumbprint=os.environ.get("ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT"),
+            blueprint_cert_sha1=os.environ.get("ENTRACLAW_BLUEPRINT_CERT_SHA1"),
+            blueprint_ksp=os.environ.get("ENTRACLAW_BLUEPRINT_KSP"),
             agent_id=os.environ.get("ENTRACLAW_AGENT_ID"),
             agent_object_id=os.environ.get("ENTRACLAW_AGENT_OBJECT_ID"),
             agent_user_id=os.environ.get("ENTRACLAW_AGENT_USER_ID"),

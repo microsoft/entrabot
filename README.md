@@ -261,6 +261,9 @@ Three runtime modes selected by `ENTRACLAW_MODE` in `.env`.
 
 ## Getting Started
 
+> **Full platform-specific instructions:** See **[INSTALL.md](INSTALL.md)** for
+> detailed prerequisites and setup for Windows, macOS, and Linux.
+
 ### Prerequisites
 
 - Azure CLI (`az`) logged in with admin access to your Entra tenant
@@ -269,7 +272,20 @@ Three runtime modes selected by `ENTRACLAW_MODE` in `.env`.
 - An M365 license available for the Agent User (E3, E5, or Teams Enterprise) — only needed for `agent_user` mode
 - macOS, Linux, or Windows with an accessible OS keystore (Keychain / TPM / Secret Service)
 
-### One-command setup
+### Quick start by platform
+
+**Windows** (fresh machine):
+```powershell
+.\scripts\prereqs-windows.ps1                              # installs Python, Git, az, pwsh, VS Build Tools
+.\scripts\setup-windows.ps1 -NewChain -UpnSuffix yourname  # provisions everything
+```
+
+**macOS / Linux:**
+```bash
+./scripts/setup.sh --new --with-upn-suffix=yourname
+```
+
+### One-command setup (Mac/Linux)
 
 ```bash
 ./scripts/setup.sh

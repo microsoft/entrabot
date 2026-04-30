@@ -2,6 +2,9 @@
 
 ## Status
 
+**SUPERSEDED 2026-04-28** by [`docs/architecture/PLAN-windows-port.md`](./architecture/PLAN-windows-port.md).
+Kept for the TPM/CNG signer design notes (which were adopted, with a software-KSP fallback added).
+
 Proposed — 2026-04-24, author: Claude (PM: Brandon).
 
 ## Problem statement

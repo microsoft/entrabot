@@ -40,6 +40,8 @@ def tmp_data_dir(tmp_path, monkeypatch):
     that from_env() reads each call. get_config() has no caching.
     """
     monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("ENTRACLAW_BLOB_ENDPOINT", raising=False)
+    monkeypatch.delenv("ENTRACLAW_BLOB_CONTAINER", raising=False)
     return tmp_path
 
 

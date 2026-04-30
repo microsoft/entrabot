@@ -1,1 +1,0 @@
-/Volumes/Development HD/openclaw-identity-research/.claude/skills/gstack/plan-devex-review/SKILL.md

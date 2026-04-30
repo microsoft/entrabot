@@ -1,0 +1,40 @@
+name: test-windows
+
+# Mandatory per PLAN-windows-port.md D3 — without this CI gate, the
+# Windows port rots silently. Mac developers can't run the win32-gated
+# tests locally, so this is the only place real Cert: store / CNG
+# behavior is exercised on every PR.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run pytest (full suite, including win32-gated tests)
+        run: pytest -v --tb=short
+        env:
+          # Force LocalBackend so blob-token paths don't accidentally fire
+          # in CI. (CI has no managed identity for the storage account.)
+          ENTRACLAW_KEEP_MEMORY_LOCAL: 'true'
+
+      - name: Lint
+        run: ruff check .

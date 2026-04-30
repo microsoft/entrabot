@@ -119,3 +119,23 @@ If live token swap (PR #2) proves too flaky in practice, implement a restart pat
 - **Effort:** S (CC: ~S)
 - **Depends on:** PR #2 (provisioner + live swap must ship first)
 - **Source:** Eng review + Codex outside voice, tension point #5
+
+---
+
+### Unify Mac/Linux/Windows orchestrators on Python (replace setup.sh + setup-windows.ps1)
+After Phase 1 of the Windows port ships, the repo will have two parallel orchestrators (`scripts/setup.sh` 1,032 lines bash for Mac/Linux, `scripts/setup-windows.ps1` ~250 lines PowerShell for Windows) calling the same Python helpers. Same learnings (e.g., Learning #7 az JSON-not-TSV) will need fixing in both shells. When the drift causes real bugs, replace both with a single Python orchestrator package (`scripts/entraclaw_setup/`).
+- **Why:** DRY, testable from pytest on all platforms, easier contributor onboarding.
+- **Pros:** One codepath for prereq probes, prompts, env wiring, logging.
+- **Cons:** Large refactor; touches working production setup; premature without operational evidence of drift.
+- **Effort:** L (CC: ~M-L)
+- **Depends on:** Phase 1 of Windows port shipping; ~3 months of operational signal.
+- **Source:** /plan-eng-review D1 (2026-04-28) rejected this as scope creep on the Windows port. See `docs/architecture/PLAN-windows-port.md.v1-bak` for the v1 file layout.
+
+### Re-evaluate ctypes ncrypt signer vs .NET subprocess signer (Windows Hop 1)
+After ~6 months of operational signal on `auth/cncrypt_signer.py` (ctypes binding to ncrypt.dll), reassess whether the ABI binding is causing maintenance pain. If yes, replace with a small C# console binary called via subprocess for Hop 1 JWT signing.
+- **Why:** Codex outside-voice flagged ctypes as fragile interop for security-critical code. We kept ctypes (stable Windows ABI, ~100 lines, no extra build pipeline) but the call could age.
+- **Pros:** Managed code more readable; .NET handles padding/struct layout; easier debugging.
+- **Cons:** Extra build pipeline (dotnet publish), ship a binary, IPC overhead (~5-20ms per signature), Windows-only complication.
+- **Effort:** M (CC: ~M)
+- **Depends on:** Windows port Phase 1 shipping with ctypes signer; operational signal of NTSTATUS bugs / struct drift.
+- **Source:** /plan-eng-review codex outside voice, tension #1 (2026-04-28).

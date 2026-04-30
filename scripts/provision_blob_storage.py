@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import shutil
 import subprocess
 import sys
 
@@ -50,7 +51,8 @@ def _run_az(args: list[str], *, capture: bool = True) -> subprocess.CompletedPro
     *args* should NOT include the leading ``"az"`` token. We capture both
     stdout and stderr so callers can inspect on failure.
     """
-    cmd = ["az", *args]
+    az_bin = shutil.which("az") or "az"
+    cmd = [az_bin, *args]
     return subprocess.run(  # noqa: S603 — args are constructed in this module only
         cmd,
         capture_output=capture,

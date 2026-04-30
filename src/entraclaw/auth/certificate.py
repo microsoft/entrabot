@@ -2,8 +2,17 @@
 
 Builds a JWT assertion signed by a private key, used in place of
 client_secret for the Blueprint's client_credentials grant (Hop 1).
-The private key lives in the OS credential store (Keychain/TPM/Keyring).
-The public certificate is registered on the Blueprint app in Entra.
+
+Per-platform key storage:
+
+- Mac/Linux: PEM private key in OS keystore (Keychain / Secret Service);
+  signed with ``cryptography`` via ``private_key_pem``.
+- Windows: non-exportable CNG key in ``Cert:\\CurrentUser\\My`` (TPM-
+  or software-backed); signed via ``cncrypt_signer.sign_pkcs1_sha256``
+  using the cert's SHA-1 thumbprint to locate the key.
+
+The JWT header always carries ``x5t#S256`` (SHA-256 b64url of the DER
+certificate, per RFC 7515 §4.1.8) — same shape on every platform.
 
 See ADR-003 for rationale.
 """
@@ -12,6 +21,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import time
 from uuid import uuid4
 
@@ -23,12 +33,17 @@ from cryptography.hazmat.primitives.serialization import load_pem_private_key
 ASSERTION_LIFETIME_SECONDS = 600  # 10 minutes
 
 
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
 def build_client_assertion(
     *,
-    private_key_pem: str,
+    private_key_pem: str | None = None,
     cert_thumbprint: str,
     client_id: str,
     token_endpoint: str,
+    cert_sha1: str | None = None,
 ) -> str:
     """Build a signed JWT assertion for certificate-based client_credentials.
 
@@ -36,17 +51,24 @@ def build_client_assertion(
     Entra validates the signature using the public certificate registered
     on the Blueprint app registration.
 
+    Mac/Linux callers pass ``private_key_pem``. Windows callers omit it
+    and pass ``cert_sha1`` (the 40-char hex SHA-1 thumbprint of the cert
+    in ``Cert:\\CurrentUser\\My``); signing happens via CNG against the
+    non-exportable key.
+
     Args:
-        private_key_pem: RSA private key in PEM format.
-        cert_thumbprint: Base64url-encoded SHA-256 of the DER certificate.
+        private_key_pem: RSA private key in PEM format (Mac/Linux).
+        cert_thumbprint: Base64url-encoded SHA-256 of the DER certificate
+            (becomes the ``x5t#S256`` header value).
         client_id: The Blueprint app's client ID.
         token_endpoint: The Entra token endpoint URL (used as JWT audience).
+        cert_sha1: 40-char hex SHA-1 thumbprint identifying the cert in
+            the Windows cert store. Required on Windows when
+            ``private_key_pem`` is None.
 
     Returns:
         Signed JWT string ready for the ``client_assertion`` parameter.
     """
-    private_key = load_pem_private_key(private_key_pem.encode(), password=None)
-
     now = int(time.time())
     payload = {
         "aud": token_endpoint,
@@ -61,12 +83,29 @@ def build_client_assertion(
         "x5t#S256": cert_thumbprint,
     }
 
-    return jwt.encode(
-        payload,
-        private_key,
-        algorithm="RS256",
-        headers=headers,
+    if private_key_pem is not None:
+        private_key = load_pem_private_key(private_key_pem.encode(), password=None)
+        return jwt.encode(payload, private_key, algorithm="RS256", headers=headers)
+
+    if cert_sha1 is None:
+        raise ValueError(
+            "build_client_assertion requires either private_key_pem (Mac/Linux) "
+            "or cert_sha1 (Windows)"
+        )
+
+    # Windows CNG path: build header + payload manually, sign the SHA-256
+    # of the signing input via ncrypt.dll PKCS1+SHA256.
+    from entraclaw.auth.cncrypt_signer import sign_pkcs1_sha256
+
+    header = {"alg": "RS256", "typ": "JWT", **headers}
+    signing_input = (
+        _b64url(json.dumps(header, separators=(",", ":")).encode())
+        + "."
+        + _b64url(json.dumps(payload, separators=(",", ":")).encode())
     )
+    digest = hashlib.sha256(signing_input.encode()).digest()
+    signature = sign_pkcs1_sha256(thumbprint=cert_sha1, hash_bytes=digest)
+    return signing_input + "." + _b64url(signature)
 
 
 def compute_cert_thumbprint(cert_pem: str) -> str:

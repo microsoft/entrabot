@@ -1,10 +1,18 @@
 """Tests for environment-based configuration."""
 
 import os
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
 from entraclaw.config import EntraClawConfig, get_config
+
+
+def _expected_default_root() -> Path:
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(local) / "entraclaw"
+    return Path.home() / ".entraclaw"
 
 
 class TestEntraClawConfig:
@@ -21,9 +29,10 @@ class TestEntraClawConfig:
         assert cfg.human_user_id is None
         assert cfg.human_upn is None
         assert cfg.log_level == "INFO"
-        assert cfg.log_dir == Path.home() / ".entraclaw" / "logs"
-        assert cfg.audit_dir == Path.home() / ".entraclaw" / "audit"
-        assert cfg.data_dir == Path.home() / ".entraclaw" / "data"
+        root = _expected_default_root()
+        assert cfg.log_dir == root / "logs"
+        assert cfg.audit_dir == root / "audit"
+        assert cfg.data_dir == root / "data"
         assert cfg.client_id is None
         assert cfg.skip_provisioning is False
         assert cfg.authority == "https://login.microsoftonline.com/common"

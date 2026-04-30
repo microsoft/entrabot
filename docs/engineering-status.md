@@ -1,18 +1,60 @@
 # Entraclaw Identity Research — Engineering Summary
 
-**Date:** April 24, 2026
+**Date:** April 29, 2026
 **Team:** Brandon Werner
-**Status:** v1 released. Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **654 tests** across the suite. MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat shipped. **Mind-body split complete** — body-first prompt architecture loads locally, persona-sati MCP wired for personality/memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped; blob-hosted operational storage is opt-in via `setup.sh --cloud-memory`. Efferent-copy middleware shipped and immediately hot-fixed for self-spawn cascade (PRs #35/#36), then hardened again against wrapper indirection (PR #41), and is now opt-in (`EFFERENT_COPY_ENABLE=1`) so normal MCP runs do not mirror every tool call. Leader/slave gating ripped out per "one stdio client per process" reality. The "channel not rendering" symptom initially filed as a 2.1.117 regression resolved Apr 23 — root cause was a single-dash `-dangerously-load-development-channels` launch flag, not a Claude Code change. See Learning #39. The Apr 24 MCP disconnect was root-caused and fixed in `f0d29ea`: raw Teams Graph HTML in `notifications/claude/channel` content clean-closed Claude Code's MCP stream. The fix sanitizes top-level Teams push content and quoted-message metadata before pushing, verified by 65-minute and 30-minute real-channel soaks. `entraclaw.log` now uses rotation instead of an unbounded file handler. See Learning #46.
+**Status:** v1 released. Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **791 tests** across the suite. MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat shipped. **Mind-body split complete** — body-first prompt architecture loads locally, persona-sati MCP wired for personality/memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped; blob-hosted operational storage is opt-in via `setup.sh --cloud-memory`. Efferent-copy middleware shipped and immediately hot-fixed for self-spawn cascade (PRs #35/#36), then hardened again against wrapper indirection (PR #41), and is now opt-in (`EFFERENT_COPY_ENABLE=1`) so normal MCP runs do not mirror every tool call. Leader/slave gating ripped out per "one stdio client per process" reality. **Windows port (PR #58) acceptance-tested on ARM64 Windows 11 VM.** Full CNG signing via TPM-backed cert, three-hop flow live against Entra, Copilot CLI MCP registration, Teams DM round-trip confirmed. `send_teams_message` auto-wait merged — non-Claude-Code hosts block inline until sponsor replies (deterministic, not model-dependent). See Learning #54/#55.
 
 ---
 
 ## Known Issues (Open)
 
-No open high-severity runtime issues at this snapshot.
+### Agent Identity missing `Application.Read.All` after provisioning
+
+**Status:** Open (workaround applied manually on Windows VM).
+**Impact:** `wait_for_sponsor_dm` and sponsor-gated flows fail with 403 `Authorization_RequestDenied` when calling `/servicePrincipals/{id}/microsoft.graph.agentIdentity/sponsors`.
+**Root cause:** `scripts/create_entra_agent_ids.py` does not grant `Application.Read.All` to the Agent Identity service principal. The sponsors API requires this permission but it was never tested live on any platform (Mac included — the Sati Agent Identity also lacks it).
+**Workaround:** Manually grant via `New-MgServicePrincipalAppRoleAssignment` or the Python provisioner token flow (see `grant_app_read.py` in this branch).
+**Fix:** Add `Application.Read.All` grant to the Agent Identity provisioning flow in `create_entra_agent_ids.py`.
 
 ---
 
 ## Recently Resolved
+
+## What's New Apr 29 — Windows Port Acceptance (PR #58)
+
+**Branch:** `feat/windows-port` — ARM64 Windows 11 VM acceptance pass. All 6 acceptance steps from `PLAN-windows-port.md` completed (Steps 1–5 live-verified, Step 6 teardown deferred by user).
+
+### Key results
+
+| Step | What | Result |
+|------|------|--------|
+| 1 | `setup-windows.ps1` | ✅ venv, deps, self-signed cert (Software KSP — VM has no TPM), keyring markers, MCP registration for both Claude Code and Copilot CLI |
+| 2 | Cert verification | ✅ Thumbprint matches `.env`; `windows.find_cert_by_thumbprint()` returns True/False correctly |
+| 3 | Three-hop CNG signing | ✅ Real Graph access token obtained via CNG-signed JWT assertion against Entra |
+| 4 | MCP registration | ✅ Both `claude.json` and `copilot mcp-config.json` entries point at `.venv\Scripts\entraclaw-mcp.exe` |
+| 5 | Live MCP in Copilot CLI | ✅ Real Teams DM sent and received |
+| 6 | Teardown | Deferred (user elected to keep environment) |
+
+### Challenges and fixes shipped during acceptance
+
+1. **`wait_for_sponsor_dm` 403 on sponsors API** — Agent Identity SP lacked `Application.Read.All`. Neither the Windows nor Mac provisioning script grants it. Manually granted via provisioner token. Tracked as open issue above.
+
+2. **Model non-determinism with `wait_for_sponsor_dm`** — On Copilot CLI (which doesn't load `.github/copilot-instructions.md` unless launched from repo root), the model inconsistently called the wait tool after sending a DM. Root cause: the instruction to call it was in `copilot-instructions.md` which only loads from the correct CWD.
+
+3. **`send_teams_message` auto-wait (commits `ef83609`, `88fbaa7`)** — Merged the wait loop directly INTO `send_teams_message` with host detection. Claude Code (has channel push) returns immediately; all other hosts (Copilot CLI, Codex, etc.) auto-block until the sponsor replies. Initially exposed `wait_for_reply` as a parameter — the model immediately started passing `false` to skip it. Fixed by removing the parameter entirely; auto-wait is now unconditional and purely host-detection driven.
+
+4. **Debug code crash** — Adding `os.path.expanduser()` without importing `os` at function scope crashed the MCP server silently (empty error on every tool call). Copilot CLI swallows MCP server stderr, making diagnosis difficult. Fixed by removing debug code; file-based logging on Windows MCP is fragile.
+
+5. **Git symlink skills on Windows** — 36 `.claude/skills/*/SKILL.md` files were git symlinks pointing to a Mac-only path (`/Volumes/Development HD/...`). Windows checks these out as plain text files containing the path (since `core.symlinks=false`). Deleted locally for clean demo — not a code fix, just a Windows git limitation.
+
+### Platform learnings (Windows-specific)
+
+- **MCP stderr is invisible on Copilot CLI.** The host swallows all stderr from the MCP server process. Debugging requires file-based logging or testing outside the MCP host context.
+- **`pip install -e .` fails if `entraclaw-mcp.exe` is running.** Windows locks the `.exe`; must kill all MCP server processes before reinstalling. Stale processes can persist after Copilot CLI exits.
+- **ARM64 Windows 11 + Software KSP works end-to-end.** No TPM needed for the acceptance pass. CNG signing via `NCryptSignHash` with the Software KSP produces valid JWT assertions that Entra accepts.
+- **`core.symlinks=false` is the default on Windows Git.** Any repo using symlinks for shared content (skills, configs) will break. Use copies or conditional paths instead.
+
+---
 
 ### Entraclaw MCP clean-closes on raw Teams HTML in channel notifications
 

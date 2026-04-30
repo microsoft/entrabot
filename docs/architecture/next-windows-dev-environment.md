@@ -1,5 +1,9 @@
 # Next: Windows Dev Environment
 
+> **SUPERSEDED 2026-04-28** by [`PLAN-windows-port.md`](./PLAN-windows-port.md).
+> Kept for the Azure VM provisioning recipe (still useful as a sub-step).
+> The three-hop port itself is covered by the new plan.
+
 > Scriptable Azure VM setup for developing and demonstrating Entraclaw on Windows.
 
 ## Overview

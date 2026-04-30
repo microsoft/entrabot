@@ -1,5 +1,8 @@
 # Windows Port: Agent Identity Provisioning Parity
 
+**SUPERSEDED 2026-04-28** by [`docs/architecture/PLAN-windows-port.md`](./architecture/PLAN-windows-port.md).
+Kept for the Python-orchestrator-with-PS1-shim recommendation (which was adopted).
+
 **Status:** Draft (architecture plan, no code) — written by Agent 2 / Product Manager review
 **Date:** 2026-04-24
 **Audience:** Brandon Werner, future Windows-machine contributor

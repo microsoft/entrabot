@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 import jwt
 import pytest
@@ -134,3 +135,42 @@ class TestComputeCertThumbprint:
         _, cert_pem, expected_thumbprint = keypair
         result = compute_cert_thumbprint(cert_pem)
         assert result == expected_thumbprint
+
+
+class TestWindowsDispatch:
+    """Mock-based: Windows path delegates to ``cncrypt_signer``."""
+
+    def test_windows_path_uses_cncrypt_signer_when_no_pem(self) -> None:
+        from entraclaw.auth import cncrypt_signer
+
+        with patch.object(
+            cncrypt_signer, "sign_pkcs1_sha256", return_value=b"\xab" * 256
+        ) as signer:
+            token = build_client_assertion(
+                cert_thumbprint="x5t-s256-b64url-value",
+                cert_sha1="A" * 40,
+                client_id="cid",
+                token_endpoint="https://login.microsoftonline.com/t/oauth2/v2.0/token",
+            )
+        signer.assert_called_once()
+        # Three dot-separated parts: header.payload.signature
+        assert token.count(".") == 2
+
+        # Header advertises RS256 + the x5t#S256 we passed in.
+        header = jwt.get_unverified_header(token)
+        assert header["alg"] == "RS256"
+        assert header["typ"] == "JWT"
+        assert header["x5t#S256"] == "x5t-s256-b64url-value"
+
+        # Payload is decodable and has our claims.
+        decoded = jwt.decode(token, options={"verify_signature": False})
+        assert decoded["iss"] == "cid"
+        assert decoded["sub"] == "cid"
+
+    def test_raises_when_neither_pem_nor_sha1_provided(self) -> None:
+        with pytest.raises(ValueError, match="(?i)private_key_pem.*cert_sha1"):
+            build_client_assertion(
+                cert_thumbprint="t",
+                client_id="cid",
+                token_endpoint="https://example.com",
+            )
