@@ -6,6 +6,7 @@ build/
 .eggs/
 *.egg
 .venv/
+.venv*/
 venv/
 .env
 .env.*
@@ -34,5 +35,6 @@ pip.conf
 pip.ini
 .config/
 .claude-plugin/
+.claude/settings.local.json
 .gstack/
 .worktrees/
