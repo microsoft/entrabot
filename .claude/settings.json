@@ -1,4 +1,10 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "PowerShell(git *)"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {
