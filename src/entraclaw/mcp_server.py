@@ -1586,6 +1586,21 @@ async def send_teams_message(
     this tool so hosts that don't surface MCP instructions can't skip
     it by accident.
 
+    REQUIRED FOLLOW-UP — when the returned JSON contains a non-empty
+    ``sponsor_reply.message_id``, you MUST immediately reply by calling
+    ``send_teams_message`` again with the same ``chat_id`` and a
+    response that addresses ``sponsor_reply.content_text``. A 1:1 DM is
+    a direct conversation: the sponsor is waiting in Teams, not
+    watching your terminal. Treat ``sponsor_reply.content_text`` as the
+    user's next turn — read it, answer it, send the answer back via
+    this tool. Do NOT respond in CLI text — the sponsor will not see
+    it. The next ``send_teams_message`` call will auto-wait again,
+    forming a turn-by-turn loop. End the loop only when the sponsor
+    explicitly says they're done, or the original task is fully
+    complete. The ``_next_action`` field on the result restates this
+    rule for hosts that don't surface tool docstrings into the LLM
+    system prompt.
+
     ``content_type`` defaults to ``"html"`` per the channel-discipline
     rule in ``prompts/anatomy/channel-discipline.md`` ("Always HTML in
     Teams — no exceptions"). Wrap paragraphs in ``<p>…</p>``; escape
@@ -1615,7 +1630,11 @@ async def send_teams_message(
 
     Returns:
         JSON with message_id, sent_at, and (when waiting) the sponsor's
-        reply in a ``sponsor_reply`` object.
+        reply in a ``sponsor_reply`` object. When ``sponsor_reply`` is
+        present, the result also includes a ``_next_action`` string
+        instructing you to call ``send_teams_message`` again with the
+        reply — this is the turn-by-turn conversation loop. Honor it
+        regardless of host.
     """
     await _initialize()
 
@@ -1795,8 +1814,9 @@ async def send_teams_message(
     body_text = _summarize_content(body_html, limit=4000) if body_html else ""
 
     if isinstance(result, dict):
+        reply_chat_id = str(picked.get("chat_id") or "")
         result["sponsor_reply"] = {
-            "chat_id": str(picked.get("chat_id") or ""),
+            "chat_id": reply_chat_id,
             "message_id": str(picked.get("message_id") or ""),
             "sender": str(picked.get("sender") or picked.get("from") or ""),
             "sender_id": str(picked.get("sender_id") or ""),
@@ -1804,6 +1824,21 @@ async def send_teams_message(
             "content_text": body_text,
             "content_html": body_html or None,
         }
+        # Loop-continuation hint surfaced regardless of whether the
+        # host CLI loaded the body prompt / AGENTS.md / docstring. This
+        # is the conversation contract: a 1:1 DM stays in Teams. The
+        # model must see this in the tool result, not just the
+        # docstring, because some hosts (Copilot CLI when launched
+        # outside the entraclaw repo) never surface MCP instructions.
+        result["_next_action"] = (
+            "REQUIRED: call send_teams_message again with "
+            f"chat_id={reply_chat_id!r} and a reply that addresses "
+            "sponsor_reply.content_text. Do NOT answer in CLI text — "
+            "the sponsor is waiting in Teams. The next call auto-waits "
+            "for their next reply, forming a turn-by-turn loop. End "
+            "only when the sponsor says they're done or the task is "
+            "complete."
+        )
 
     return json.dumps(result, indent=2)
 

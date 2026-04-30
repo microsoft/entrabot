@@ -2198,6 +2198,152 @@ class TestNoDefaultChat:
 
 
 # ---------------------------------------------------------------------------
+# send_teams_message auto-wait loop-continuation contract
+# ---------------------------------------------------------------------------
+#
+# Bug: when Copilot CLI is launched outside the entraclaw repo, neither
+# AGENTS.md / CLAUDE.md / channel-discipline.md nor the FastMCP
+# ``instructions=`` payload reach the LLM system prompt. The model sees
+# only the tool docstring + tool result. Without an explicit "REQUIRED:
+# call send_teams_message again" hint in BOTH places, the agent breaks
+# out of the conversation loop after the first sponsor reply and answers
+# in CLI text — invisible to the human waiting in Teams.
+#
+# These tests pin both halves of the contract: the docstring (so hosts
+# that DO surface tool docs see it) and the ``_next_action`` field on
+# the JSON return (so hosts that don't, still see it).
+
+
+class TestSendTeamsMessageLoopContinuation:
+    def test_docstring_states_required_followup_rule(self) -> None:
+        """The send_teams_message docstring must explicitly tell the
+        model to call send_teams_message again after a sponsor reply.
+        Hosts like Copilot CLI launched outside the entraclaw repo do
+        not load AGENTS.md / channel-discipline.md, so the loop rule
+        has to live on the tool itself."""
+        from entraclaw import mcp_server
+
+        doc = mcp_server.send_teams_message.__doc__ or ""
+        assert "REQUIRED FOLLOW-UP" in doc, (
+            "send_teams_message docstring must contain the REQUIRED "
+            "FOLLOW-UP block so non-Claude-Code hosts see the loop rule"
+        )
+        assert "send_teams_message`` again" in doc or (
+            "send_teams_message" in doc and "again" in doc
+        ), (
+            "Docstring must name the follow-up tool call explicitly"
+        )
+        assert "Do NOT respond in CLI" in doc or "not respond in CLI" in doc.lower(), (
+            "Docstring must forbid answering in CLI text"
+        )
+
+    @pytest.mark.asyncio
+    async def test_auto_wait_result_contains_next_action_hint(
+        self, monkeypatch
+    ) -> None:
+        """When auto-wait returns a sponsor_reply, the JSON result must
+        include a ``_next_action`` string instructing the model to call
+        send_teams_message again with the sponsor's chat_id. This is
+        the in-band channel that hosts (Copilot CLI in foreign cwd)
+        cannot bypass."""
+        import json as _json
+        from collections import deque
+
+        from entraclaw import mcp_server
+
+        old_state = mcp_server._state.copy()
+        try:
+            mcp_server._state.clear()
+            fake_config = MagicMock()
+            fake_config.mode = "agent_user"
+            fake_config.agent_user_upn = "agent@example.com"
+            mcp_server._state["config"] = fake_config
+            mcp_server._state["watched_chats"] = {"chat-A": {}}
+            mcp_server._state["wait_tool_dedup"] = deque()
+
+            # Cached gate — bypasses Graph load.
+            fake_gate = MagicMock()
+            fake_gate.user_ids = {"u-sponsor"}
+            fake_gate.upns = set()
+            fake_gate.mails = set()
+            mcp_server._state["sponsor_gate"] = fake_gate
+
+            # Pretend host has no channel push so auto-wait engages.
+            monkeypatch.setattr(mcp_server, "_current_host", lambda: "copilot")
+
+            async def fake_with_token_retry(fn, **kwargs):
+                # First call (the actual send) returns a normal result.
+                return {
+                    "message_id": "msg-out-1",
+                    "sent_at": "2026-04-30T15:00:00+00:00",
+                }
+
+            monkeypatch.setattr(
+                mcp_server, "_log_interaction_safe", lambda **kw: None
+            )
+            monkeypatch.setattr(
+                mcp_server, "_initialize", AsyncMock(return_value=None)
+            )
+            monkeypatch.setattr(
+                mcp_server, "_ensure_valid_token", AsyncMock(return_value=None)
+            )
+            monkeypatch.setattr(
+                mcp_server, "_with_token_retry", fake_with_token_retry
+            )
+
+            sponsor_msg = {
+                "message_id": "msg-in-1",
+                "chat_id": "chat-A",
+                "sender": "Sponsor",
+                "sender_id": "u-sponsor",
+                "sent_at": "2026-04-30T15:01:00+00:00",
+                "content": "<p>Make it color!</p>",
+            }
+
+            async def fake_wait_loop(**kwargs):
+                return sponsor_msg
+
+            from entraclaw.tools import wait_tool
+
+            monkeypatch.setattr(wait_tool, "wait_loop", fake_wait_loop)
+
+            result_str = await mcp_server.send_teams_message(
+                message="<p>hi</p>", chat_id="chat-A"
+            )
+            parsed = _json.loads(result_str)
+
+            assert "sponsor_reply" in parsed, (
+                "auto-wait must surface sponsor_reply when a reply "
+                "arrives"
+            )
+            assert parsed["sponsor_reply"]["chat_id"] == "chat-A"
+
+            assert "_next_action" in parsed, (
+                "auto-wait result must carry _next_action so hosts "
+                "that don't load tool docstrings (Copilot CLI outside "
+                "the entraclaw repo) still see the loop-continuation "
+                "rule"
+            )
+            next_action = parsed["_next_action"]
+            assert "send_teams_message" in next_action, (
+                "_next_action must name the follow-up tool call"
+            )
+            assert "chat-A" in next_action, (
+                "_next_action must echo the sponsor's chat_id so the "
+                "model knows where to reply"
+            )
+            assert (
+                "CLI" in next_action
+                or "terminal" in next_action.lower()
+            ), (
+                "_next_action must forbid answering in CLI text"
+            )
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+
+
+# ---------------------------------------------------------------------------
 # post_thinking_placeholder / resolve_placeholder MCP wrappers
 # ---------------------------------------------------------------------------
 
