@@ -27,9 +27,7 @@ def src_root(tmp_path: Path) -> Path:
     src = tmp_path / "src"
     src.mkdir()
     (src / "interactions").mkdir()
-    (src / "interactions" / "2026-04-17.jsonl").write_text(
-        '{"event": "msg"}\n{"event": "reply"}\n'
-    )
+    (src / "interactions" / "2026-04-17.jsonl").write_text('{"event": "msg"}\n{"event": "reply"}\n')
     (src / "summaries").mkdir()
     (src / "summaries" / "2026-04-17.html").write_text("<html>day</html>")
     (src / "state").mkdir()
@@ -45,9 +43,7 @@ class TestMigrateLocalToBackend:
     Claude Code persona memory with prefix ``"claude_memory"``.
     """
 
-    def test_copies_all_files_to_backend(
-        self, src_root: Path, tmp_path: Path
-    ) -> None:
+    def test_copies_all_files_to_backend(self, src_root: Path, tmp_path: Path) -> None:
         target = LocalBackend(tmp_path / "dst")
         report = migrate_local_to_backend([(src_root, "")], target)
 
@@ -59,13 +55,9 @@ class TestMigrateLocalToBackend:
         assert report.copied == 3
         assert report.skipped == 0
 
-    def test_idempotent_skips_existing_keys(
-        self, src_root: Path, tmp_path: Path
-    ) -> None:
+    def test_idempotent_skips_existing_keys(self, src_root: Path, tmp_path: Path) -> None:
         target = LocalBackend(tmp_path / "dst")
-        target.write_text(
-            "interactions/2026-04-17.jsonl", "ALREADY-IN-CLOUD"
-        )
+        target.write_text("interactions/2026-04-17.jsonl", "ALREADY-IN-CLOUD")
 
         report = migrate_local_to_backend([(src_root, "")], target)
 
@@ -74,9 +66,7 @@ class TestMigrateLocalToBackend:
         assert report.skipped == 1
         assert report.copied == 2
 
-    def test_does_not_delete_source_files(
-        self, src_root: Path, tmp_path: Path
-    ) -> None:
+    def test_does_not_delete_source_files(self, src_root: Path, tmp_path: Path) -> None:
         target = LocalBackend(tmp_path / "dst")
         migrate_local_to_backend([(src_root, "")], target)
         # Per ADR — local files remain
@@ -86,9 +76,7 @@ class TestMigrateLocalToBackend:
 
     def test_missing_source_returns_empty_report(self, tmp_path: Path) -> None:
         target = LocalBackend(tmp_path / "dst")
-        report = migrate_local_to_backend(
-            [(tmp_path / "does-not-exist", "")], target
-        )
+        report = migrate_local_to_backend([(tmp_path / "does-not-exist", "")], target)
         assert report.copied == 0
         assert report.skipped == 0
         assert report.errors == []
@@ -128,9 +116,7 @@ class TestMigrateMultipleSources:
         (persona / "user_brandon_role.md").write_text("Brandon")
 
         target = LocalBackend(tmp_path / "dst")
-        report = migrate_local_to_backend(
-            [(agent, ""), (persona, "claude_memory")], target
-        )
+        report = migrate_local_to_backend([(agent, ""), (persona, "claude_memory")], target)
 
         assert target.read_text("email_cursor.txt") == "cursor=42"
         assert target.read_text("claude_memory/MEMORY.md") == "index"
@@ -145,9 +131,7 @@ class TestMigrateMultipleSources:
         target = LocalBackend(tmp_path / "dst")
         target.write_text("claude_memory/MEMORY.md", "ALREADY-CLOUD")
 
-        report = migrate_local_to_backend(
-            [(persona, "claude_memory")], target
-        )
+        report = migrate_local_to_backend([(persona, "claude_memory")], target)
 
         assert target.read_text("claude_memory/MEMORY.md") == "ALREADY-CLOUD"
         assert report.skipped == 1
@@ -168,9 +152,7 @@ class TestMigrateMultipleSources:
         assert report.copied == 1
         assert report.errors == []
 
-    def test_empty_prefix_vs_populated_prefix_produce_distinct_keys(
-        self, tmp_path: Path
-    ) -> None:
+    def test_empty_prefix_vs_populated_prefix_produce_distinct_keys(self, tmp_path: Path) -> None:
         # If two sources had a collision on the same relative name but
         # one uses "" and the other uses "claude_memory", the full keys
         # must differ so both land.
@@ -182,9 +164,7 @@ class TestMigrateMultipleSources:
         (src_b / "README.md").write_text("B")
 
         target = LocalBackend(tmp_path / "dst")
-        migrate_local_to_backend(
-            [(src_a, ""), (src_b, "claude_memory")], target
-        )
+        migrate_local_to_backend([(src_a, ""), (src_b, "claude_memory")], target)
 
         assert target.read_text("README.md") == "A"
         assert target.read_text("claude_memory/README.md") == "B"

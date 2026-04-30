@@ -38,23 +38,23 @@ CheckStatus = Literal["pass", "warn", "fail", "skip"]
 # Teams to a user, including M365 E3/E5, Business Premium, Developer Pack, and
 # the standalone Teams SKUs.
 TEAMS_CAPABLE_SKUS: tuple[str, ...] = (
-    "ENTERPRISEPREMIUM",            # M365 E5 / Office 365 E5
-    "ENTERPRISEPACK",               # Office 365 E3
-    "SPE_E3",                       # M365 E3
-    "SPE_E5",                       # M365 E5 (alternate part number)
-    "SPE_F1",                       # M365 F1 (frontline)
-    "STANDARDPACK",                 # Office 365 E1
-    "DEVELOPERPACK",                # Office 365 E3 Developer
-    "DEVELOPERPACK_E5",             # M365 E5 Developer
-    "M365_BUSINESS_PREMIUM",        # M365 Business Premium
-    "O365_BUSINESS_PREMIUM",        # O365 Business Premium (legacy name)
+    "ENTERPRISEPREMIUM",  # M365 E5 / Office 365 E5
+    "ENTERPRISEPACK",  # Office 365 E3
+    "SPE_E3",  # M365 E3
+    "SPE_E5",  # M365 E5 (alternate part number)
+    "SPE_F1",  # M365 F1 (frontline)
+    "STANDARDPACK",  # Office 365 E1
+    "DEVELOPERPACK",  # Office 365 E3 Developer
+    "DEVELOPERPACK_E5",  # M365 E5 Developer
+    "M365_BUSINESS_PREMIUM",  # M365 Business Premium
+    "O365_BUSINESS_PREMIUM",  # O365 Business Premium (legacy name)
     "Microsoft_Teams_Enterprise",
     "Microsoft_Teams_Essentials",
     "TEAMS_ESSENTIALS_AAD",
     "TEAMS_EXPLORATORY",
     "TEAMS_PREMIUM",
     "M365_E5_SUITE_COMPONENTS",
-    "MICROSOFT_365_COPILOT",        # M365 Copilot (includes Teams)
+    "MICROSOFT_365_COPILOT",  # M365 Copilot (includes Teams)
 )
 
 
@@ -152,8 +152,7 @@ def _token_mint_check(config: EntraClawConfig) -> tuple[Check, str | None]:
                 status="fail",
                 detail=f"Agent identity not bootstrapped: {exc}",
                 remediation=(
-                    "Run ./scripts/setup.sh end-to-end — the state file or "
-                    "certificate is missing."
+                    "Run ./scripts/setup.sh end-to-end — the state file or certificate is missing."
                 ),
             ),
             None,
@@ -224,9 +223,7 @@ def _me_identity_check(
         return Check(
             name="Graph /me identity",
             status="fail",
-            detail=(
-                f"Token belongs to {upn!r}, expected {config.agent_user_upn!r}."
-            ),
+            detail=(f"Token belongs to {upn!r}, expected {config.agent_user_upn!r}."),
             remediation=(
                 "The .env state file points at a different agent user than "
                 "the token resolves to. Re-run setup.sh."
@@ -240,9 +237,7 @@ def _me_identity_check(
     )
 
 
-def _chats_scope_check(
-    token: str, *, transport: httpx.BaseTransport | None = None
-) -> Check:
+def _chats_scope_check(token: str, *, transport: httpx.BaseTransport | None = None) -> Check:
     url = f"{GRAPH_BASE}/me/chats?$top=1"
     try:
         with httpx.Client(transport=transport, timeout=15.0) as client:
@@ -461,13 +456,9 @@ def check_mcp_configs(
                 Check(
                     name="Claude Code MCP config",
                     status="fail",
-                    detail=(
-                        f"Entry points at {cmd!r}, expected {expected!r}. "
-                        "Worktree drift?"
-                    ),
+                    detail=(f"Entry points at {cmd!r}, expected {expected!r}. Worktree drift?"),
                     remediation=(
-                        "Re-run ./scripts/setup.sh from the main checkout to "
-                        "rewrite the MCP entry."
+                        "Re-run ./scripts/setup.sh from the main checkout to rewrite the MCP entry."
                     ),
                 )
             )

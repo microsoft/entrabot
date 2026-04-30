@@ -58,9 +58,7 @@ def _counterparty(entry: dict) -> str:
     return entry.get("recipient") or ""
 
 
-def triage_interactions(
-    entries: list[dict], *, agent_upn: str | None = None
-) -> SummaryBuckets:
+def triage_interactions(entries: list[dict], *, agent_upn: str | None = None) -> SummaryBuckets:
     """Sort *entries* into needs_you / handled / heads_up buckets.
 
     When *agent_upn* is provided, inbound entries whose ``sender`` matches
@@ -91,9 +89,7 @@ def triage_interactions(
         if outbounds and inbounds:
             handled.append(outbounds[-1])
             last_out_ts = outbounds[-1].get("ts", "")
-            unanswered = [
-                ib for ib in inbounds if ib.get("ts", "") > last_out_ts
-            ]
+            unanswered = [ib for ib in inbounds if ib.get("ts", "") > last_out_ts]
             if unanswered:
                 needs_you.append(unanswered[-1])
         elif outbounds:
@@ -129,9 +125,7 @@ def _render_bucket(title: str, entries: list[dict], *, emoji: str) -> str:
     else:
         items = "\n".join(_render_entry_li(e) for e in entries)
         body = f"<ul style='margin:4px 0 16px'>{items}</ul>"
-    return (
-        f"<h2 style='margin:20px 0 4px'>{emoji} {escape(title)}</h2>\n{body}"
-    )
+    return f"<h2 style='margin:20px 0 4px'>{emoji} {escape(title)}</h2>\n{body}"
 
 
 _CALIBRATION_FOOTER = """
@@ -194,9 +188,7 @@ async def send_summary_email(
 # ---------------------------------------------------------------------------
 # Archive
 # ---------------------------------------------------------------------------
-def archive_summary(
-    *, day: str, html: str, buckets: SummaryBuckets
-) -> str:
+def archive_summary(*, day: str, html: str, buckets: SummaryBuckets) -> str:
     """Persist the rendered summary + sidecar counts via the memory backend.
 
     Returns the backend key for the HTML body (e.g. ``"summaries/2026-04-17.html"``).

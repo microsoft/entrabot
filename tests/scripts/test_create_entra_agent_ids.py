@@ -24,9 +24,7 @@ SCRIPT_PATH = REPO_ROOT / "scripts" / "create_entra_agent_ids.py"
 
 @pytest.fixture
 def agent_ids_module():
-    spec = importlib.util.spec_from_file_location(
-        "create_entra_agent_ids", SCRIPT_PATH
-    )
+    spec = importlib.util.spec_from_file_location("create_entra_agent_ids", SCRIPT_PATH)
     module = importlib.util.module_from_spec(spec)
     sys.modules["create_entra_agent_ids"] = module
     spec.loader.exec_module(module)
@@ -59,16 +57,24 @@ class TestFindExistingAgentIdentity:
         self, agent_ids_module, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Two SPs share a display name — only the one under our Blueprint is returned."""
+
         def fake_graph_request(method, path, token, **kw):
-            return _resp(200, {"value": [
-                _sp("eba51655-0aed-4a79-a5f2-7167ec9b8fa0", BLUEPRINT_OURS),
-                _sp("22222222-2222-2222-2222-222222222222", BLUEPRINT_OTHER),
-            ]})
+            return _resp(
+                200,
+                {
+                    "value": [
+                        _sp("eba51655-0aed-4a79-a5f2-7167ec9b8fa0", BLUEPRINT_OURS),
+                        _sp("22222222-2222-2222-2222-222222222222", BLUEPRINT_OTHER),
+                    ]
+                },
+            )
 
         monkeypatch.setattr(agent_ids_module, "graph_request", fake_graph_request)
 
         result = agent_ids_module.find_existing_agent_identity(
-            token="tok", display_name=DISPLAY_NAME, blueprint_app_id=BLUEPRINT_OURS,
+            token="tok",
+            display_name=DISPLAY_NAME,
+            blueprint_app_id=BLUEPRINT_OURS,
         )
         assert result is not None
         assert result["appId"] == "eba51655-0aed-4a79-a5f2-7167ec9b8fa0"
@@ -86,12 +92,18 @@ class TestFindExistingAgentIdentity:
         AGENT_ID from an old Blueprint and the lookup returned it
         verbatim, silently pinning the chain to the wrong Blueprint.
         """
+
         def fake_graph_request(method, path, token, **kw):
             # stored_app_id query returns the old-Blueprint SP
             if "eq '52dff96e" in path:
-                return _resp(200, {"value": [
-                    _sp("22222222-2222-2222-2222-222222222222", BLUEPRINT_OTHER),
-                ]})
+                return _resp(
+                    200,
+                    {
+                        "value": [
+                            _sp("22222222-2222-2222-2222-222222222222", BLUEPRINT_OTHER),
+                        ]
+                    },
+                )
             # displayName fallback returns nothing under our Blueprint
             return _resp(200, {"value": []})
 
@@ -111,14 +123,21 @@ class TestFindExistingAgentIdentity:
         self, agent_ids_module, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         def fake_graph_request(method, path, token, **kw):
-            return _resp(200, {"value": [
-                _sp("22222222-2222-2222-2222-222222222222", BLUEPRINT_OTHER),
-            ]})
+            return _resp(
+                200,
+                {
+                    "value": [
+                        _sp("22222222-2222-2222-2222-222222222222", BLUEPRINT_OTHER),
+                    ]
+                },
+            )
 
         monkeypatch.setattr(agent_ids_module, "graph_request", fake_graph_request)
 
         result = agent_ids_module.find_existing_agent_identity(
-            token="tok", display_name=DISPLAY_NAME, blueprint_app_id=BLUEPRINT_OURS,
+            token="tok",
+            display_name=DISPLAY_NAME,
+            blueprint_app_id=BLUEPRINT_OURS,
         )
         assert result is None
 
@@ -131,20 +150,25 @@ class TestFindExistingAgentUser:
         self, agent_ids_module, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         def fake_graph_request(method, path, token, **kw):
-            return _resp(200, {
-                "id": "9e5d2c48-ca9c-4298-80cb-18fc382aa7b2",
-                "userPrincipalName": "entraclaw-agent-sati-agent@werner.ac",
-                "identityParentId": self._OUR_AI,
-            })
+            return _resp(
+                200,
+                {
+                    "id": "9e5d2c48-ca9c-4298-80cb-18fc382aa7b2",
+                    "userPrincipalName": "entraclaw-agent-sati-agent@werner.ac",
+                    "identityParentId": self._OUR_AI,
+                },
+            )
 
         monkeypatch.setattr(agent_ids_module, "graph_request", fake_graph_request)
         monkeypatch.setattr(
-            agent_ids_module, "get_state",
+            agent_ids_module,
+            "get_state",
             lambda k: "9e5d2c48-ca9c-4298-80cb-18fc382aa7b2" if k == "AGENT_USER_ID" else None,
         )
 
         result = agent_ids_module.find_existing_agent_user(
-            token="tok", agent_identity_obj_id=self._OUR_AI,
+            token="tok",
+            agent_identity_obj_id=self._OUR_AI,
         )
         assert result is not None
         assert result["identityParentId"] == self._OUR_AI
@@ -164,21 +188,26 @@ class TestFindExistingAgentUser:
             calls.append(path)
             if path.startswith("/users/9e5d2c48"):
                 # Fetched stored user — but it's under a DIFFERENT Agent Identity
-                return _resp(200, {
-                    "id": "9e5d2c48-ca9c-4298-80cb-18fc382aa7b2",
-                    "identityParentId": self._OTHER_AI,
-                })
+                return _resp(
+                    200,
+                    {
+                        "id": "9e5d2c48-ca9c-4298-80cb-18fc382aa7b2",
+                        "identityParentId": self._OTHER_AI,
+                    },
+                )
             # Fallback identityParentId filter finds nothing under OUR AI
             return _resp(200, {"value": []})
 
         monkeypatch.setattr(agent_ids_module, "graph_request", fake_graph_request)
         monkeypatch.setattr(
-            agent_ids_module, "get_state",
+            agent_ids_module,
+            "get_state",
             lambda k: "9e5d2c48-ca9c-4298-80cb-18fc382aa7b2" if k == "AGENT_USER_ID" else None,
         )
 
         result = agent_ids_module.find_existing_agent_user(
-            token="tok", agent_identity_obj_id=self._OUR_AI,
+            token="tok",
+            agent_identity_obj_id=self._OUR_AI,
         )
         assert result is None
         assert "parented by a different Agent Identity" in capsys.readouterr().out

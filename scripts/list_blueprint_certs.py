@@ -12,6 +12,7 @@ Output:
     stdout: a single integer (count of registered keyCredentials)
     stderr: one line per cert — "    - <displayName>  expires <YYYY-MM-DD>"
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -36,8 +37,7 @@ def main() -> int:
         token = get_graph_token(wait_for_propagation=False)
 
     resp = requests.get(
-        f"https://graph.microsoft.com/v1.0/applications/{blueprint_obj_id}"
-        "?$select=keyCredentials",
+        f"https://graph.microsoft.com/v1.0/applications/{blueprint_obj_id}?$select=keyCredentials",
         headers={"Authorization": f"Bearer {token}"},
     )
     creds = resp.json().get("keyCredentials", []) if resp.ok else []

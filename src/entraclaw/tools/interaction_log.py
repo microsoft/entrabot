@@ -80,9 +80,7 @@ def log_interaction(
     if not channel:
         raise ValueError("channel is required")
     if direction not in _VALID_DIRECTIONS:
-        raise ValueError(
-            f"direction must be one of {_VALID_DIRECTIONS}, got {direction!r}"
-        )
+        raise ValueError(f"direction must be one of {_VALID_DIRECTIONS}, got {direction!r}")
     if not summary or not summary.strip():
         raise ValueError("summary is required")
 
@@ -133,8 +131,6 @@ def read_day(day: str) -> list[dict]:
         try:
             entries.append(json.loads(line))
         except json.JSONDecodeError:
-            logger.warning(
-                "skipping corrupt line in %s.jsonl: %s", day, line[:80]
-            )
+            logger.warning("skipping corrupt line in %s.jsonl: %s", day, line[:80])
             continue
     return entries

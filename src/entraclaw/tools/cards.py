@@ -17,9 +17,9 @@ from __future__ import annotations
 _MAX_DETAIL_LENGTH = 200
 
 _STATUS_EMOJI = {
-    "running": "\u23f3",   # hourglass
+    "running": "\u23f3",  # hourglass
     "complete": "\u2705",  # green check
-    "error": "\u274c",     # red X
+    "error": "\u274c",  # red X
 }
 
 _STATUS_COLOR = {

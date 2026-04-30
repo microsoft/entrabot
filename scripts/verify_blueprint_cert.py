@@ -17,6 +17,7 @@ Exit codes:
     1 — thumbprint NOT present (cache is stale; setup.sh should regenerate)
     2 — usage error
 """
+
 from __future__ import annotations
 
 import base64
@@ -52,8 +53,7 @@ def main() -> int:
         token = get_graph_token(wait_for_propagation=False)
 
     resp = requests.get(
-        f"https://graph.microsoft.com/v1.0/applications/{blueprint_obj_id}"
-        "?$select=keyCredentials",
+        f"https://graph.microsoft.com/v1.0/applications/{blueprint_obj_id}?$select=keyCredentials",
         headers={"Authorization": f"Bearer {token}"},
     )
     if not resp.ok:

@@ -70,27 +70,36 @@ def _load_dlls() -> tuple[Any, Any]:
     don't get truncated to c_int on Win64.
     """
     if sys.platform != "win32":
-        raise RuntimeError(
-            "cncrypt_signer requires Windows; got platform=" + sys.platform
-        )
+        raise RuntimeError("cncrypt_signer requires Windows; got platform=" + sys.platform)
     crypt32 = ctypes.windll.crypt32  # pragma: no cover
     ncrypt = ctypes.windll.ncrypt  # pragma: no cover
 
     crypt32.CertOpenStore.argtypes = [
-        ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p,
-        ctypes.c_ulong, ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+        ctypes.c_void_p,
     ]
     crypt32.CertOpenStore.restype = ctypes.c_void_p
 
     crypt32.CertFindCertificateInStore.argtypes = [
-        ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong,
-        ctypes.c_ulong, ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
     ]
     crypt32.CertFindCertificateInStore.restype = ctypes.c_void_p
 
     crypt32.CryptAcquireCertificatePrivateKey.argtypes = [
-        ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p,
-        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
     ]
     crypt32.CryptAcquireCertificatePrivateKey.restype = wintypes.BOOL
 
@@ -101,9 +110,14 @@ def _load_dlls() -> tuple[Any, Any]:
     crypt32.CertCloseStore.restype = wintypes.BOOL
 
     ncrypt.NCryptSignHash.argtypes = [
-        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
-        ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong,
-        ctypes.c_void_p, ctypes.c_ulong,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+        ctypes.c_void_p,
+        ctypes.c_ulong,
     ]
     ncrypt.NCryptSignHash.restype = ctypes.c_long  # SECURITY_STATUS
 

@@ -52,8 +52,7 @@ class MemoryBackend(Protocol):
         """Append *content* to *key*. Creates the key (and parents) if missing."""
         ...
 
-    def exists(self, key: str) -> bool:
-        ...
+    def exists(self, key: str) -> bool: ...
 
     def list(self, prefix: str = "") -> list[str]:
         """Return keys whose path starts with *prefix*."""

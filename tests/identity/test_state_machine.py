@@ -312,9 +312,7 @@ class TestListeners:
         called = AsyncMock()
         sm.add_listener(called)
         await sm.transition(IdentityState.DELEGATED)
-        called.assert_called_once_with(
-            IdentityState.UNAUTHENTICATED, IdentityState.DELEGATED
-        )
+        called.assert_called_once_with(IdentityState.UNAUTHENTICATED, IdentityState.DELEGATED)
 
     @pytest.mark.asyncio
     async def test_listener_error_does_not_block(self) -> None:

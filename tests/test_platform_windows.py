@@ -41,10 +41,7 @@ class TestCertStoreLookup:
         crypt32.CertOpenStore.return_value = 0xDEAD
         crypt32.CertFindCertificateInStore.return_value = 0xCEC0
         with patch.object(windows, "_load_crypt32", return_value=crypt32):
-            assert (
-                windows.WindowsCredentialStore().find_cert_by_thumbprint("A" * 40)
-                is True
-            )
+            assert windows.WindowsCredentialStore().find_cert_by_thumbprint("A" * 40) is True
         crypt32.CertFreeCertificateContext.assert_called_once()
         crypt32.CertCloseStore.assert_called_once()
 
@@ -53,10 +50,7 @@ class TestCertStoreLookup:
         crypt32.CertOpenStore.return_value = 0xDEAD
         crypt32.CertFindCertificateInStore.return_value = 0
         with patch.object(windows, "_load_crypt32", return_value=crypt32):
-            assert (
-                windows.WindowsCredentialStore().find_cert_by_thumbprint("B" * 40)
-                is False
-            )
+            assert windows.WindowsCredentialStore().find_cert_by_thumbprint("B" * 40) is False
         crypt32.CertFreeCertificateContext.assert_not_called()
         crypt32.CertCloseStore.assert_called_once()
 

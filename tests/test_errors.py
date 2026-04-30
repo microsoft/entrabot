@@ -156,9 +156,7 @@ class TestTransitionError:
 
     def test_stores_fields(self) -> None:
         cause = RuntimeError("something broke")
-        err = TransitionError(
-            from_state="unauthenticated", to_state="delegated", cause=cause
-        )
+        err = TransitionError(from_state="unauthenticated", to_state="delegated", cause=cause)
         assert err.from_state == "unauthenticated"
         assert err.to_state == "delegated"
         assert err.cause is cause

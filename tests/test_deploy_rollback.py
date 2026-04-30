@@ -78,9 +78,7 @@ class TestPatchOkSmokeOk:
 
 
 class TestPatchOkSmokeFail:
-    def test_rollback_repatches_and_restores_env_and_invalidates_msal(
-        self, tmp_path: Path
-    ) -> None:
+    def test_rollback_repatches_and_restores_env_and_invalidates_msal(self, tmp_path: Path) -> None:
         state = _make_state(tmp_path)
         graph_patch = MagicMock(return_value=200)
         smoke_test = MagicMock(return_value=False)

@@ -24,9 +24,7 @@ from entraclaw.errors import TokenExpiredError
 logger = logging.getLogger("entraclaw.tools.email_poll")
 
 GRAPH_MESSAGES_URL = "https://graph.microsoft.com/v1.0/me/messages"
-GRAPH_ATTACHMENTS_URL_TMPL = (
-    "https://graph.microsoft.com/v1.0/me/messages/{msg_id}/attachments"
-)
+GRAPH_ATTACHMENTS_URL_TMPL = "https://graph.microsoft.com/v1.0/me/messages/{msg_id}/attachments"
 RPMSG_ATTACHMENT_NAME = "message.rpmsg"
 
 _NOISE_DOMAINS = (
@@ -104,9 +102,7 @@ async def poll_once(
     async with httpx.AsyncClient() as client:
         resp = await client.get(GRAPH_MESSAGES_URL, params=params, headers=headers)
         if resp.status_code == 401:
-            raise TokenExpiredError(
-                "Agent User token expired — re-acquire via three-hop flow"
-            )
+            raise TokenExpiredError("Agent User token expired — re-acquire via three-hop flow")
         resp.raise_for_status()
 
         messages = resp.json().get("value", [])
@@ -120,11 +116,7 @@ async def poll_once(
             if received and (latest_ts is None or received > latest_ts):
                 latest_ts = received
 
-            sender_addr = (
-                (msg.get("from") or {})
-                .get("emailAddress", {})
-                .get("address", "")
-            )
+            sender_addr = (msg.get("from") or {}).get("emailAddress", {}).get("address", "")
             if not is_substantive(sender_addr):
                 continue
 

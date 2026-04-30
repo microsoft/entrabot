@@ -153,9 +153,7 @@ class AgentIdentitySponsor:
             *self.federated_emails,
         ]
         return frozenset(
-            normalized
-            for normalized in (_normalize_email(value) for value in values)
-            if normalized
+            normalized for normalized in (_normalize_email(value) for value in values) if normalized
         )
 
 
@@ -181,10 +179,7 @@ class SponsorGate:
             if sponsor.user_principal_name
         )
         mails = frozenset(
-            email
-            for sponsor in sponsors
-            for email in sponsor.email_identifiers()
-            if email
+            email for sponsor in sponsors for email in sponsor.email_identifiers() if email
         )
         if not user_ids and not upns and not mails:
             raise ValueError("no sponsor identifiers configured")
@@ -195,9 +190,7 @@ class SponsorGate:
         user_ids = set(self.user_ids)
         sponsor_emails = self.upns | self.mails
         for member in members:
-            member_user_id = _normalize_id(
-                str(member.get("user_id") or member.get("userId") or "")
-            )
+            member_user_id = _normalize_id(str(member.get("user_id") or member.get("userId") or ""))
             member_emails = {
                 _normalize_email(str(member.get("email") or "")),
                 _normalize_email(str(member.get("mail") or "")),
@@ -211,9 +204,7 @@ class SponsorGate:
             mails=self.mails,
         )
 
-    def with_watched_chat_ids(
-        self, chat_ids: list[str], agent_user_id: str
-    ) -> SponsorGate:
+    def with_watched_chat_ids(self, chat_ids: list[str], agent_user_id: str) -> SponsorGate:
         """Extract the cross-tenant sponsor's home-tenant userId from 1:1 chat IDs.
 
         For federated B2B 1:1 chats, Microsoft Graph encodes both participants'
@@ -296,9 +287,7 @@ def fetch_agent_identity_sponsors(
             "Agent Identity token expired while reading Agent Identity sponsors"
         )
     if resp.status_code != 200:
-        raise GraphApiError(
-            resp.status_code, resp.text or "failed to read Agent Identity sponsors"
-        )
+        raise GraphApiError(resp.status_code, resp.text or "failed to read Agent Identity sponsors")
 
     sponsors: list[AgentIdentitySponsor] = []
     with httpx.Client(**client_kwargs) as client:
@@ -328,9 +317,7 @@ def _fetch_sponsor_user_details(
     if resp.status_code == 200:
         return AgentIdentitySponsor.from_graph_user(resp.json())
     if resp.status_code == 401:
-        raise TokenExpiredError(
-            "Agent Identity token expired while reading sponsor user details"
-        )
+        raise TokenExpiredError("Agent Identity token expired while reading sponsor user details")
     return None
 
 
@@ -338,11 +325,7 @@ def _watched_chat_ids(data_dir: Path) -> list[str]:
     watched_file = data_dir / "watched_chats"
     if not watched_file.is_file():
         return []
-    return [
-        line.strip()
-        for line in watched_file.read_text().splitlines()
-        if line.strip()
-    ]
+    return [line.strip() for line in watched_file.read_text().splitlines() if line.strip()]
 
 
 def fetch_watched_chat_members(
@@ -370,9 +353,7 @@ def fetch_watched_chat_members(
                     headers={"Authorization": f"Bearer {token}"},
                 )
             except httpx.HTTPError as exc:
-                logger.warning(
-                    "failed to read watched chat members for %s: %s", chat_id, exc
-                )
+                logger.warning("failed to read watched chat members for %s: %s", chat_id, exc)
                 continue
             if resp.status_code == 401:
                 raise TokenExpiredError(
@@ -401,13 +382,9 @@ def fetch_watched_chat_members(
 
 def load_agent_identity_sponsor_gate(config: EntraClawConfig) -> SponsorGate:
     """Build the sponsor gate from the Agent Identity's Graph sponsors."""
-    gate = SponsorGate.from_agent_identity_sponsors(
-        fetch_agent_identity_sponsors(config)
-    )
+    gate = SponsorGate.from_agent_identity_sponsors(fetch_agent_identity_sponsors(config))
     gate = gate.with_chat_members(fetch_watched_chat_members(config))
     agent_user_id = config.agent_user_id or ""
     if agent_user_id:
-        gate = gate.with_watched_chat_ids(
-            _watched_chat_ids(config.data_dir), agent_user_id
-        )
+        gate = gate.with_watched_chat_ids(_watched_chat_ids(config.data_dir), agent_user_id)
     return gate

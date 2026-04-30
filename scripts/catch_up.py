@@ -2,6 +2,7 @@
 
 Run as Agent User to see what landed while we weren't polling.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -37,9 +38,7 @@ async def main() -> None:
     watched = Path.home() / ".entraclaw" / "data" / "watched_chats"
     chat_ids: list[str] = []
     if watched.exists():
-        chat_ids = [
-            ln.strip() for ln in watched.read_text().splitlines() if ln.strip()
-        ]
+        chat_ids = [ln.strip() for ln in watched.read_text().splitlines() if ln.strip()]
     default_chat = Path.home() / ".entraclaw" / "data" / "chat_id"
     if default_chat.exists():
         cid = default_chat.read_text().strip()
@@ -59,9 +58,7 @@ async def main() -> None:
                 print(f"  ERROR {data['_error']}: {data['_body'][:200]}")
                 continue
             for m in data.get("value", [])[:15]:
-                who = (m.get("from") or {}).get("user", {}).get(
-                    "displayName", "system/unknown"
-                )
+                who = (m.get("from") or {}).get("user", {}).get("displayName", "system/unknown")
                 ts = m.get("createdDateTime", "")
                 body = (m.get("body") or {}).get("content", "")
                 body = body.replace("\n", " ")[:300]
@@ -82,9 +79,7 @@ async def main() -> None:
             print(f"  ERROR {mail['_error']}: {mail['_body'][:200]}")
         else:
             for m in mail.get("value", []):
-                sender = (
-                    (m.get("from") or {}).get("emailAddress", {}).get("address", "?")
-                )
+                sender = (m.get("from") or {}).get("emailAddress", {}).get("address", "?")
                 subj = m.get("subject", "?")
                 ts = m.get("receivedDateTime", "")
                 prev = (m.get("bodyPreview", "") or "").replace("\n", " ")[:200]

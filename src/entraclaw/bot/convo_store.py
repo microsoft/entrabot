@@ -39,9 +39,7 @@ def _read_refs() -> dict[str, dict[str, Any]]:
 def _write_refs(refs: dict[str, dict[str, Any]]) -> None:
     """Write refs dict to disk, creating parent dirs if needed."""
     CONVO_REFS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONVO_REFS_PATH.write_text(
-        json.dumps(refs, indent=2, default=str), encoding="utf-8"
-    )
+    CONVO_REFS_PATH.write_text(json.dumps(refs, indent=2, default=str), encoding="utf-8")
 
 
 def save_reference(conversation_id: str, reference: dict[str, Any]) -> None:

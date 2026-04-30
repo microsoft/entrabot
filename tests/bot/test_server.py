@@ -35,9 +35,7 @@ def _make_activity(
         id=activity_id,
         text=text,
         timestamp="2026-04-10T20:00:00Z",
-        from_property=ChannelAccount(
-            id=from_id, name=from_name, aad_object_id=from_aad_id
-        ),
+        from_property=ChannelAccount(id=from_id, name=from_name, aad_object_id=from_aad_id),
         recipient=ChannelAccount(id="bot-id", name="EntraClaw Bot"),
         conversation=ConversationAccount(id=conversation_id),
         channel_id="msteams",

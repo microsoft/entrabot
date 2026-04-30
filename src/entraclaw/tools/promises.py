@@ -160,9 +160,7 @@ def _get_conditional_store() -> Any | None:
             BlobStore(
                 endpoint=cfg.blob_endpoint,
                 container=cfg.blob_container,
-                token_provider=lambda: acquire_agent_user_storage_token(
-                    get_config()
-                ),
+                token_provider=lambda: acquire_agent_user_storage_token(get_config()),
             )
         )
     return None
@@ -193,9 +191,7 @@ class _ConditionalBlobAdapter:
             if resp.status_code == 401:
                 from entraclaw.errors import TokenExpiredError
 
-                raise TokenExpiredError(
-                    "Storage token expired or missing scope"
-                )
+                raise TokenExpiredError("Storage token expired or missing scope")
             resp.raise_for_status()
             return resp.content, resp.headers.get("ETag", "")
 
@@ -227,9 +223,7 @@ async def _run_conditional_write(
 
     for attempt in range(2):
         raw_bytes, etag = await store.get(PROMISES_KEY)
-        entries = _parse_lines(
-            raw_bytes.decode("utf-8") if raw_bytes else ""
-        )
+        entries = _parse_lines(raw_bytes.decode("utf-8") if raw_bytes else "")
         new_entries, result = mutator(entries)
         payload = "".join(json.dumps(e) + "\n" for e in new_entries)
         try:
@@ -241,9 +235,7 @@ async def _run_conditional_write(
             return new_entries, result
         except ConcurrencyError:
             if attempt == 0:
-                logger.warning(
-                    "promises.jsonl ETag mismatch; re-reading and retrying"
-                )
+                logger.warning("promises.jsonl ETag mismatch; re-reading and retrying")
                 continue
             raise PromiseStoreConflict(
                 "promises.jsonl: optimistic concurrency retry exhausted"
@@ -292,6 +284,7 @@ async def add_promise(
     if backend is None:
         store = _get_conditional_store()
         if store is not None:
+
             def mutator(
                 entries: list[dict[str, Any]],
             ) -> tuple[list[dict[str, Any]], Promise]:
@@ -311,9 +304,7 @@ async def add_promise(
         payload = "".join(json.dumps(e) + "\n" for e in compacted)
         backend.write_text(PROMISES_KEY, payload)
     else:
-        backend.append_text(
-            PROMISES_KEY, json.dumps(promise.to_entry()) + "\n"
-        )
+        backend.append_text(PROMISES_KEY, json.dumps(promise.to_entry()) + "\n")
     return promise
 
 
@@ -327,9 +318,7 @@ async def list_promises(
         store = _get_conditional_store()
         if store is not None:
             raw_bytes, _etag = await store.get(PROMISES_KEY)
-            entries = _parse_lines(
-                raw_bytes.decode("utf-8") if raw_bytes else ""
-            )
+            entries = _parse_lines(raw_bytes.decode("utf-8") if raw_bytes else "")
         else:
             backend = get_backend()
             entries = _load_entries(backend)

@@ -74,10 +74,7 @@ def _cmd_push() -> int:
     backend = _resolve_backend()
     persona = PersonaBackend(backend, local_root=mem_dir)
     report = persona.push_all()
-    _log(
-        f"push: {report.copied} copied, {report.skipped} skipped "
-        f"(from {mem_dir})"
-    )
+    _log(f"push: {report.copied} copied, {report.skipped} skipped (from {mem_dir})")
     if report.errors:
         for key, err in report.errors[:5]:
             _log(f"error: {key}: {err}")

@@ -89,9 +89,7 @@ class InvalidTransitionError(EntraClawError):
     def __init__(self, from_state: str, to_state: str) -> None:
         self.from_state = from_state
         self.to_state = to_state
-        super().__init__(
-            f"Invalid transition: {from_state} \u2192 {to_state}"
-        )
+        super().__init__(f"Invalid transition: {from_state} \u2192 {to_state}")
 
 
 class TransitionTimeoutError(EntraClawError):
@@ -101,15 +99,11 @@ class TransitionTimeoutError(EntraClawError):
 class TransitionError(EntraClawError):
     """Exception during state transition (rollback)."""
 
-    def __init__(
-        self, from_state: str, to_state: str, cause: Exception
-    ) -> None:
+    def __init__(self, from_state: str, to_state: str, cause: Exception) -> None:
         self.from_state = from_state
         self.to_state = to_state
         self.cause = cause
-        super().__init__(
-            f"Transition {from_state} \u2192 {to_state} failed: {cause}"
-        )
+        super().__init__(f"Transition {from_state} \u2192 {to_state} failed: {cause}")
 
 
 class ProvisioningError(EntraClawError):

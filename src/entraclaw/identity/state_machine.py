@@ -64,9 +64,7 @@ class IdentityStateMachine:
     def session(self) -> IdentitySession:
         return self._session
 
-    def add_listener(
-        self, callback: Callable[[IdentityState, IdentityState], Any]
-    ) -> None:
+    def add_listener(self, callback: Callable[[IdentityState, IdentityState], Any]) -> None:
         """Register a callback for state transitions. Called with (from_state, to_state)."""
         self._listeners.append(callback)
 

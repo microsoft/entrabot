@@ -22,9 +22,7 @@ from entraclaw.storage.backend import MemoryBackend
 PERSONA_PREFIX = "claude_memory"
 
 
-def claude_code_memory_dir(
-    project_root: Path, *, home: Path | None = None
-) -> Path:
+def claude_code_memory_dir(project_root: Path, *, home: Path | None = None) -> Path:
     """Resolve the Claude Code per-project auto-memory directory.
 
     Claude Code stores each project's memory at
@@ -43,12 +41,7 @@ def claude_code_memory_dir(
     # matches what Claude Code itself writes (Mac/Linux test fixtures
     # pass POSIX-style absolute paths; Windows path stringification
     # uses backslashes).
-    slug = (
-        str(project_root)
-        .replace("\\", "-")
-        .replace("/", "-")
-        .replace(" ", "-")
-    )
+    slug = str(project_root).replace("\\", "-").replace("/", "-").replace(" ", "-")
     return home_dir / ".claude" / "projects" / slug / "memory"
 
 
@@ -93,9 +86,7 @@ class PersonaBackend:
         try:
             rel = full.relative_to(self._root.resolve())
         except ValueError:
-            raise ValueError(
-                f"path {path} is outside persona root {self._root}"
-            ) from None
+            raise ValueError(f"path {path} is outside persona root {self._root}") from None
         if not full.exists() or not full.is_file():
             return
         key = f"{self.prefix}{rel.as_posix()}"
@@ -134,7 +125,7 @@ class PersonaBackend:
         for key in self._backend.list(self.prefix):
             if not key.startswith(self.prefix):
                 continue
-            rel = key[len(self.prefix):]
+            rel = key[len(self.prefix) :]
             content = self._backend.read_text(key)
             if content is None:
                 continue

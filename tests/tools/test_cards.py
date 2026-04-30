@@ -82,32 +82,24 @@ class TestToolActivityCard:
         assert "42 lines" in body_text
 
     def test_status_emoji_running(self) -> None:
-        card = tool_activity_card(
-            tool_name="build", status="running", detail="compiling"
-        )
+        card = tool_activity_card(tool_name="build", status="running", detail="compiling")
         body_text = json.dumps(card["body"], ensure_ascii=False)
         # Running should have a spinner/clock indicator
         assert any(c in body_text for c in ["\u23f3", "\u26a1", "\u25b6"])
 
     def test_status_emoji_complete(self) -> None:
-        card = tool_activity_card(
-            tool_name="build", status="complete", detail="done"
-        )
+        card = tool_activity_card(tool_name="build", status="complete", detail="done")
         body_text = json.dumps(card["body"], ensure_ascii=False)
         assert "\u2705" in body_text
 
     def test_status_emoji_error(self) -> None:
-        card = tool_activity_card(
-            tool_name="build", status="error", detail="failed"
-        )
+        card = tool_activity_card(tool_name="build", status="error", detail="failed")
         body_text = json.dumps(card["body"], ensure_ascii=False)
         assert "\u274c" in body_text
 
     def test_long_detail_truncated(self) -> None:
         long_detail = "x" * 500
-        card = tool_activity_card(
-            tool_name="read_file", status="complete", detail=long_detail
-        )
+        card = tool_activity_card(tool_name="read_file", status="complete", detail=long_detail)
         body_text = json.dumps(card["body"], ensure_ascii=False)
         # Should not include the full 500 chars
         assert len(body_text) < 1000

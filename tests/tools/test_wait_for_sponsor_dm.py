@@ -146,9 +146,7 @@ async def test_wait_loop_skips_non_sponsor_until_sponsor_arrives() -> None:
                     sender="bob@example.com",
                 )
             ]
-        return [
-            _msg("m-1", "sponsor-user-1", "2026-04-28T12:00:05Z", chat_id="chat-1")
-        ]
+        return [_msg("m-1", "sponsor-user-1", "2026-04-28T12:00:05Z", chat_id="chat-1")]
 
     picked = await wait_loop(
         list_chat_ids=lambda: ["chat-1"],
@@ -166,9 +164,7 @@ async def test_wait_loop_skips_non_sponsor_until_sponsor_arrives() -> None:
 @pytest.mark.asyncio
 async def test_wait_loop_dedup_evicts_oldest_when_full() -> None:
     gate = _make_gate()
-    dedup: deque[tuple[str, str]] = deque(
-        [(f"chat-{i}", f"m-{i}") for i in range(DEDUP_MAX)]
-    )
+    dedup: deque[tuple[str, str]] = deque([(f"chat-{i}", f"m-{i}") for i in range(DEDUP_MAX)])
     sponsor_msg = _msg("m-new", "sponsor-user-1", "2026-04-28T12:00:01Z", chat_id="chat-x")
 
     async def read_chat(chat_id: str) -> list[dict]:
@@ -411,8 +407,7 @@ class TestBroadenedWaitDoctrine:
         from pathlib import Path
 
         text = (
-            Path(__file__).resolve().parents[2]
-            / "prompts/anatomy/channel-discipline.md"
+            Path(__file__).resolve().parents[2] / "prompts/anatomy/channel-discipline.md"
         ).read_text(encoding="utf-8")
         # The broadened rule must be findable as a single phrase. Lock
         # to a canonical wording so the doctrine can't silently drift
@@ -424,9 +419,9 @@ class TestBroadenedWaitDoctrine:
     def test_mcp_tool_docstring_carries_broadened_trigger(self) -> None:
         from pathlib import Path
 
-        mcp_src = (
-            Path(__file__).resolve().parents[2] / "src/entraclaw/mcp_server.py"
-        ).read_text(encoding="utf-8")
+        mcp_src = (Path(__file__).resolve().parents[2] / "src/entraclaw/mcp_server.py").read_text(
+            encoding="utf-8"
+        )
         # The wait_for_sponsor_dm tool body in mcp_server.py must
         # surface the broadened rule, since Copilot CLI only reads tool
         # descriptions reliably (Learning #48).

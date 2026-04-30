@@ -50,13 +50,9 @@ class TestBuildEntraclawEntry:
 
 
 class TestUpsertMcpEntry:
-    def test_creates_file_when_missing(
-        self, mcp_config, tmp_path: Path
-    ) -> None:
+    def test_creates_file_when_missing(self, mcp_config, tmp_path: Path) -> None:
         target = tmp_path / "mcp-config.json"
-        mcp_config.upsert_mcp_entry(
-            target, "entraclaw", {"type": "stdio", "command": "/x"}
-        )
+        mcp_config.upsert_mcp_entry(target, "entraclaw", {"type": "stdio", "command": "/x"})
 
         data = json.loads(target.read_text())
         assert data == {
@@ -80,9 +76,7 @@ class TestUpsertMcpEntry:
         data = json.loads(second)
         assert list(data["mcpServers"].keys()) == ["entraclaw"]
 
-    def test_merges_alongside_existing_entries(
-        self, mcp_config, tmp_path: Path
-    ) -> None:
+    def test_merges_alongside_existing_entries(self, mcp_config, tmp_path: Path) -> None:
         """Unrelated servers (e.g. persona-sati) are preserved."""
         target = tmp_path / "mcp-config.json"
         target.write_text(
@@ -98,17 +92,13 @@ class TestUpsertMcpEntry:
             )
         )
 
-        mcp_config.upsert_mcp_entry(
-            target, "entraclaw", {"type": "stdio", "command": "/x"}
-        )
+        mcp_config.upsert_mcp_entry(target, "entraclaw", {"type": "stdio", "command": "/x"})
 
         data = json.loads(target.read_text())
         assert set(data["mcpServers"]) == {"persona-sati", "entraclaw"}
         assert data["mcpServers"]["persona-sati"]["url"] == "http://localhost:8100/sse"
 
-    def test_updates_existing_entraclaw_entry(
-        self, mcp_config, tmp_path: Path
-    ) -> None:
+    def test_updates_existing_entraclaw_entry(self, mcp_config, tmp_path: Path) -> None:
         """If the entraclaw entry already exists with a stale binary path,
         upserting a new entry overwrites it rather than duplicating."""
         target = tmp_path / "mcp-config.json"
@@ -122,16 +112,12 @@ class TestUpsertMcpEntry:
             )
         )
 
-        mcp_config.upsert_mcp_entry(
-            target, "entraclaw", {"type": "stdio", "command": "/new/bin"}
-        )
+        mcp_config.upsert_mcp_entry(target, "entraclaw", {"type": "stdio", "command": "/new/bin"})
 
         data = json.loads(target.read_text())
         assert data["mcpServers"]["entraclaw"]["command"] == "/new/bin"
 
-    def test_preserves_top_level_keys(
-        self, mcp_config, tmp_path: Path
-    ) -> None:
+    def test_preserves_top_level_keys(self, mcp_config, tmp_path: Path) -> None:
         """If Copilot's config has top-level keys other than ``mcpServers``
         (e.g. user settings), the upsert leaves them untouched."""
         target = tmp_path / "mcp-config.json"
@@ -144,37 +130,27 @@ class TestUpsertMcpEntry:
             )
         )
 
-        mcp_config.upsert_mcp_entry(
-            target, "entraclaw", {"type": "stdio", "command": "/x"}
-        )
+        mcp_config.upsert_mcp_entry(target, "entraclaw", {"type": "stdio", "command": "/x"})
 
         data = json.loads(target.read_text())
         assert data["telemetry"] == {"enabled": False}
         assert "entraclaw" in data["mcpServers"]
 
-    def test_handles_missing_parent_directory(
-        self, mcp_config, tmp_path: Path
-    ) -> None:
+    def test_handles_missing_parent_directory(self, mcp_config, tmp_path: Path) -> None:
         target = tmp_path / "nested" / "dir" / "mcp-config.json"
         assert not target.parent.exists()
 
-        mcp_config.upsert_mcp_entry(
-            target, "entraclaw", {"type": "stdio", "command": "/x"}
-        )
+        mcp_config.upsert_mcp_entry(target, "entraclaw", {"type": "stdio", "command": "/x"})
 
         assert target.is_file()
 
-    def test_corrupt_file_is_replaced(
-        self, mcp_config, tmp_path: Path
-    ) -> None:
+    def test_corrupt_file_is_replaced(self, mcp_config, tmp_path: Path) -> None:
         """A file that isn't valid JSON shouldn't crash setup. The writer
         backs up the corrupt file and writes a fresh config."""
         target = tmp_path / "mcp-config.json"
         target.write_text("{not valid json")
 
-        mcp_config.upsert_mcp_entry(
-            target, "entraclaw", {"type": "stdio", "command": "/x"}
-        )
+        mcp_config.upsert_mcp_entry(target, "entraclaw", {"type": "stdio", "command": "/x"})
 
         data = json.loads(target.read_text())
         assert "entraclaw" in data["mcpServers"]

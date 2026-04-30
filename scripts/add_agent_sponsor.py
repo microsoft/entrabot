@@ -66,8 +66,7 @@ def _resolve_user_id(token: str, email: str) -> tuple[str, str]:
         f"proxyAddresses/any(p: p eq 'SMTP:{quoted}')",
     ):
         url = f"{GRAPH_BASE}/users?$filter={filt}&$select={select}"
-        resp = requests.get(url, headers=headers, params={"$count": "true"},
-                            timeout=15)
+        resp = requests.get(url, headers=headers, params={"$count": "true"}, timeout=15)
         # ConsistencyLevel is required for some advanced queries
         if resp.status_code == 400:
             resp = requests.get(
@@ -94,12 +93,9 @@ def _list_sponsors(token: str, agent_object_id: str) -> list[dict]:
         "/microsoft.graph.agentIdentity/sponsors"
         "?$select=id,displayName,userPrincipalName,mail"
     )
-    resp = requests.get(url, headers={"Authorization": f"Bearer {token}"},
-                        timeout=15)
+    resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
     if resp.status_code != 200:
-        raise SystemExit(
-            f"Failed to read sponsors: {resp.status_code} {resp.text}"
-        )
+        raise SystemExit(f"Failed to read sponsors: {resp.status_code} {resp.text}")
     return resp.json().get("value", [])
 
 
@@ -123,16 +119,13 @@ def _add_sponsor(token: str, agent_object_id: str, user_id: str) -> None:
     if resp.status_code == 400 and "already exist" in resp.text.lower():
         print("  (already a sponsor — no change)")
         return
-    raise SystemExit(
-        f"Failed to add sponsor: {resp.status_code} {resp.text}"
-    )
+    raise SystemExit(f"Failed to add sponsor: {resp.status_code} {resp.text}")
 
 
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print(__doc__, file=sys.stderr)
-        print("\nERROR: exactly one email argument is required.",
-              file=sys.stderr)
+        print("\nERROR: exactly one email argument is required.", file=sys.stderr)
         return 2
     email = argv[1].strip()
 
@@ -162,9 +155,11 @@ def main(argv: list[str]) -> int:
 
     print("Current sponsors:")
     for sp in _list_sponsors(token, agent_object_id):
-        print(f"  - {sp.get('displayName')} ({sp.get('id')}) "
-              f"upn={sp.get('userPrincipalName')!r} "
-              f"mail={sp.get('mail')!r}")
+        print(
+            f"  - {sp.get('displayName')} ({sp.get('id')}) "
+            f"upn={sp.get('userPrincipalName')!r} "
+            f"mail={sp.get('mail')!r}"
+        )
     print("")
 
     print(f"Adding {display_name} ({user_id}) as sponsor...")
@@ -174,14 +169,13 @@ def main(argv: list[str]) -> int:
 
     print("Sponsors after update:")
     for sp in _list_sponsors(token, agent_object_id):
-        print(f"  - {sp.get('displayName')} ({sp.get('id')}) "
-              f"upn={sp.get('userPrincipalName')!r} "
-              f"mail={sp.get('mail')!r}")
+        print(
+            f"  - {sp.get('displayName')} ({sp.get('id')}) "
+            f"upn={sp.get('userPrincipalName')!r} "
+            f"mail={sp.get('mail')!r}"
+        )
     print("")
-    print(
-        "Restart the entraclaw MCP server so the sponsor gate is "
-        "reloaded with the new sponsor:"
-    )
+    print("Restart the entraclaw MCP server so the sponsor gate is reloaded with the new sponsor:")
     print("  killall -TERM Python 2>/dev/null; copilot")
     return 0
 

@@ -67,9 +67,7 @@ class RetryOn429Transport(httpx.AsyncBaseTransport):
         while retries < self._max_retries:
             if response.status_code == 429:
                 retries += 1
-                retry_after = int(
-                    response.headers.get("Retry-After", str(DEFAULT_RETRY_AFTER))
-                )
+                retry_after = int(response.headers.get("Retry-After", str(DEFAULT_RETRY_AFTER)))
                 retry_after = min(retry_after, self._max_wait)
 
                 logger.warning(

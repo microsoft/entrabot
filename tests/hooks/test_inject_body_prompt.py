@@ -34,9 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 HOOK_SCRIPT = REPO_ROOT / "scripts" / "hooks" / "inject_body_prompt.py"
 
 
-def _run_hook(
-    project_dir: Path, payload: dict | None = None
-) -> subprocess.CompletedProcess:
+def _run_hook(project_dir: Path, payload: dict | None = None) -> subprocess.CompletedProcess:
     env = {k: v for k, v in os.environ.items()}
     env["CLAUDE_PROJECT_DIR"] = str(project_dir)
     return subprocess.run(
@@ -59,20 +57,10 @@ def _write_prompt(project_dir: Path, body: str, includes: dict[str, str]) -> Non
 
 
 class TestHookEmitsBodyPrompt:
-    def test_hook_emits_expanded_body_as_additional_context(
-        self, tmp_path: Path
-    ) -> None:
+    def test_hook_emits_expanded_body_as_additional_context(self, tmp_path: Path) -> None:
         _write_prompt(
             tmp_path,
-            body=(
-                "# body\n"
-                "\n"
-                "rule A\n"
-                "\n"
-                "@include anatomy/channel.md\n"
-                "\n"
-                "rule B\n"
-            ),
+            body=("# body\n\nrule A\n\n@include anatomy/channel.md\n\nrule B\n"),
             includes={"channel.md": "ALWAYS HTML in Teams"},
         )
 
@@ -90,9 +78,7 @@ class TestHookEmitsBodyPrompt:
         # Source trail so the reader can find the file.
         assert "prompts/agent_system.md" in ctx
 
-    def test_missing_include_leaves_placeholder_and_still_exits_zero(
-        self, tmp_path: Path
-    ) -> None:
+    def test_missing_include_leaves_placeholder_and_still_exits_zero(self, tmp_path: Path) -> None:
         _write_prompt(
             tmp_path,
             body="body rule\n\n@include anatomy/missing.md\n",
@@ -109,9 +95,7 @@ class TestHookEmitsBodyPrompt:
 
 
 class TestHookGracefulDegradation:
-    def test_no_prompt_file_exits_zero_with_empty_stdout(
-        self, tmp_path: Path
-    ) -> None:
+    def test_no_prompt_file_exits_zero_with_empty_stdout(self, tmp_path: Path) -> None:
         # No prompts/ directory at all.
         result = _run_hook(tmp_path)
         assert result.returncode == 0, result.stderr
@@ -133,9 +117,7 @@ class TestHookGracefulDegradation:
         assert result.stdout.strip() == ""
 
     def test_malformed_stdin_payload_does_not_crash(self, tmp_path: Path) -> None:
-        _write_prompt(
-            tmp_path, body="ok\n", includes={}
-        )
+        _write_prompt(tmp_path, body="ok\n", includes={})
         result = subprocess.run(
             [sys.executable, str(HOOK_SCRIPT)],
             input="not-json",

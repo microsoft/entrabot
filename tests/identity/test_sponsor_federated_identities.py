@@ -93,9 +93,7 @@ class TestCrossTenantChatMemberMatching:
         assert "4d4a65ef-e9b3-4ec2-a1e2-b430a5855118" in gate2.user_ids
 
         # Inbound message with that home-tenant senderId is now accepted.
-        assert gate2.accepts(
-            {"sender_id": "4d4a65ef-e9b3-4ec2-a1e2-b430a5855118", "sender": ""}
-        )
+        assert gate2.accepts({"sender_id": "4d4a65ef-e9b3-4ec2-a1e2-b430a5855118", "sender": ""})
 
     def test_invitation_alias_chat_member_still_works(self) -> None:
         """Pre-existing path: chat member email matches sponsor.mail directly."""
@@ -127,24 +125,16 @@ class TestUnqGblSpacesChatIdEnrichment:
         return SponsorGate.from_agent_identity_sponsors([sponsor])
 
     def test_extracts_non_agent_half_from_unq_gbl_spaces_chat_id(self) -> None:
-        chat_id = (
-            f"19:{self.SPONSOR_HOME_USER_ID}_{self.AGENT_USER_ID}@unq.gbl.spaces"
-        )
+        chat_id = f"19:{self.SPONSOR_HOME_USER_ID}_{self.AGENT_USER_ID}@unq.gbl.spaces"
         gate = self._gate().with_watched_chat_ids([chat_id], self.AGENT_USER_ID)
         assert self.SPONSOR_HOME_USER_ID in gate.user_ids
-        assert gate.accepts(
-            {"sender_id": self.SPONSOR_HOME_USER_ID, "sender": ""}
-        )
+        assert gate.accepts({"sender_id": self.SPONSOR_HOME_USER_ID, "sender": ""})
 
     def test_handles_agent_id_in_either_position(self) -> None:
         # Sponsor first, agent second.
-        chat_a = (
-            f"19:{self.SPONSOR_HOME_USER_ID}_{self.AGENT_USER_ID}@unq.gbl.spaces"
-        )
+        chat_a = f"19:{self.SPONSOR_HOME_USER_ID}_{self.AGENT_USER_ID}@unq.gbl.spaces"
         # Agent first, sponsor second (rarer but format-legal).
-        chat_b = (
-            f"19:{self.AGENT_USER_ID}_{self.SPONSOR_HOME_USER_ID}@unq.gbl.spaces"
-        )
+        chat_b = f"19:{self.AGENT_USER_ID}_{self.SPONSOR_HOME_USER_ID}@unq.gbl.spaces"
         gate_a = self._gate().with_watched_chat_ids([chat_a], self.AGENT_USER_ID)
         gate_b = self._gate().with_watched_chat_ids([chat_b], self.AGENT_USER_ID)
         assert self.SPONSOR_HOME_USER_ID in gate_a.user_ids
@@ -170,9 +160,7 @@ class TestUnqGblSpacesChatIdEnrichment:
         assert "22222222-2222-2222-2222-222222222222" not in enriched.user_ids
 
     def test_no_agent_user_id_is_no_op(self) -> None:
-        chat_id = (
-            f"19:{self.SPONSOR_HOME_USER_ID}_{self.AGENT_USER_ID}@unq.gbl.spaces"
-        )
+        chat_id = f"19:{self.SPONSOR_HOME_USER_ID}_{self.AGENT_USER_ID}@unq.gbl.spaces"
         gate = self._gate().with_watched_chat_ids([chat_id], "")
         assert self.SPONSOR_HOME_USER_ID not in gate.user_ids
 

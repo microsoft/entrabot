@@ -76,9 +76,7 @@ def status_card(
     ]
 
     if message:
-        body.append(
-            {"type": "TextBlock", "text": message, "wrap": True, "spacing": "small"}
-        )
+        body.append({"type": "TextBlock", "text": message, "wrap": True, "spacing": "small"})
 
     if details:
         body.append(
@@ -151,9 +149,7 @@ def pr_card(
     ]
 
     if description:
-        body.append(
-            {"type": "TextBlock", "text": description, "wrap": True, "spacing": "small"}
-        )
+        body.append({"type": "TextBlock", "text": description, "wrap": True, "spacing": "small"})
 
     if files_changed:
         body.append(
@@ -193,9 +189,7 @@ def build_card(
         "cancelled": "warning",
     }
 
-    emoji = {"succeeded": "✅", "failed": "❌", "cancelled": "⚠️"}.get(
-        status.lower(), "🔵"
-    )
+    emoji = {"succeeded": "✅", "failed": "❌", "cancelled": "⚠️"}.get(status.lower(), "🔵")
 
     body: list[dict] = [
         {
@@ -286,8 +280,6 @@ def task_complete_card(
             }
         )
         for step in next_steps:
-            body.append(
-                {"type": "TextBlock", "text": f"→ {step}", "wrap": True, "spacing": "none"}
-            )
+            body.append({"type": "TextBlock", "text": f"→ {step}", "wrap": True, "spacing": "none"})
 
     return _attachment(_card_envelope(body))

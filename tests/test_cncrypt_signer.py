@@ -73,9 +73,7 @@ class TestSignPkcs1Sha256:
     def test_happy_path_returns_signature_bytes(self) -> None:
         crypt32, ncrypt = _make_mock_dlls()
         with patch.object(cncrypt_signer, "_load_dlls", return_value=(crypt32, ncrypt)):
-            result = cncrypt_signer.sign_pkcs1_sha256(
-                thumbprint="A" * 40, hash_bytes=b"\x00" * 32
-            )
+            result = cncrypt_signer.sign_pkcs1_sha256(thumbprint="A" * 40, hash_bytes=b"\x00" * 32)
         assert result == b"\xab" * 256
         assert ncrypt.NCryptSignHash.call_count == 2
 

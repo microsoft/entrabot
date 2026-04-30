@@ -120,9 +120,7 @@ def _throttled_warn(sink: Sink, msg: str) -> None:
     log.warning("efferent-copy sink %s %s", sink.name, msg)
 
 
-async def _fire_one(
-    sink: Sink, tool_name: str, args: dict, result: dict | None
-) -> None:
+async def _fire_one(sink: Sink, tool_name: str, args: dict, result: dict | None) -> None:
     """Fire a single observe call to one sink. Swallows all exceptions."""
     payload: dict[str, Any] = {"tool_name": tool_name, "args": args}
     if result is not None:
@@ -174,9 +172,7 @@ def _collect_kwargs(fn: Callable, args: tuple, kwargs: dict) -> dict:
         }
 
 
-def wrap_tool_fn(
-    sinks: list[Sink], tool_name: str, fn: Callable
-) -> Callable:
+def wrap_tool_fn(sinks: list[Sink], tool_name: str, fn: Callable) -> Callable:
     """Wrap ``fn`` with pre/post observe firing.
 
     The wrapped function:
@@ -192,10 +188,7 @@ def wrap_tool_fn(
     middleware MUST NOT be applied to observe itself.
     """
     if tool_name == OBSERVE_TOOL:
-        raise ValueError(
-            f"refusing to wrap the {OBSERVE_TOOL!r} tool "
-            "(would recurse infinitely)"
-        )
+        raise ValueError(f"refusing to wrap the {OBSERVE_TOOL!r} tool (would recurse infinitely)")
     if not sinks:
         # Transparent pass-through. Preserves identity so FastMCP's
         # fn_metadata introspection still sees the original function.
@@ -355,8 +348,7 @@ def _http_factory(peer: dict) -> Callable[[], Any]:
 
     if streamablehttp_client is None:
         log.debug(
-            "efferent-copy: mcp SDK lacks streamable_http client; "
-            "skipping http peer %s",
+            "efferent-copy: mcp SDK lacks streamable_http client; skipping http peer %s",
             peer.get("name"),
         )
 
@@ -451,7 +443,7 @@ def _wrapper_self_ref_target(script_path: Path) -> Path | None:
         stripped = line.strip()
         if not stripped.startswith(SELF_REF_MARKER):
             continue
-        target = stripped[len(SELF_REF_MARKER):].strip()
+        target = stripped[len(SELF_REF_MARKER) :].strip()
         if not target:
             return None
         target_path = Path(target)
@@ -607,9 +599,7 @@ def install_into_fastmcp(mcp: Any, sinks: list[Sink]) -> None:
 
     tool_manager = getattr(mcp, "_tool_manager", None)
     if tool_manager is None or not hasattr(tool_manager, "_tools"):
-        log.warning(
-            "efferent-copy: FastMCP instance has no tool manager; skipping install"
-        )
+        log.warning("efferent-copy: FastMCP instance has no tool manager; skipping install")
         return
 
     for name, tool in list(tool_manager._tools.items()):

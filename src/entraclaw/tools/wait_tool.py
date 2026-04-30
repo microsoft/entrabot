@@ -85,9 +85,7 @@ def wait_animation_frame(
     (~30s) so the animation does not flicker too fast on the operator's
     terminal.
     """
-    frame_index = int(max(0.0, elapsed_s) // DEFAULT_HEARTBEAT_S) % len(
-        _WAIT_ANIMATION_FRAMES
-    )
+    frame_index = int(max(0.0, elapsed_s) // DEFAULT_HEARTBEAT_S) % len(_WAIT_ANIMATION_FRAMES)
     art = _WAIT_ANIMATION_FRAMES[frame_index]
     elapsed = _format_elapsed(elapsed_s)
     hint = f" — {sender_hint}" if sender_hint else ""
@@ -316,11 +314,7 @@ async def wait_loop(
     """
     started_at = started_at_iso or _utcnow_iso()
     interval = poll_interval_s if poll_interval_s is not None else _poll_seconds()
-    hb_interval = (
-        heartbeat_interval_s
-        if heartbeat_interval_s is not None
-        else _heartbeat_seconds()
-    )
+    hb_interval = heartbeat_interval_s if heartbeat_interval_s is not None else _heartbeat_seconds()
     last_heartbeat = 0.0
     elapsed = 0.0
     while True:

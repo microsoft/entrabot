@@ -107,9 +107,7 @@ async def test_md_file_no_comment(load_trace, install_responses):
             transport=httpx.AsyncHTTPTransport(),
         )
         actual_tools.append("read_file")
-        content = await read_file(
-            ref, token=TOKEN, transport=httpx.AsyncHTTPTransport()
-        )
+        content = await read_file(ref, token=TOKEN, transport=httpx.AsyncHTTPTransport())
         final = {
             "name": content.name,
             "page_count": content.page_count,
@@ -235,9 +233,7 @@ async def test_list_then_read(load_trace, install_responses):
         )
 
         actual_tools.append("read_file")
-        content = await read_file(
-            ref, token=TOKEN, transport=httpx.AsyncHTTPTransport()
-        )
+        content = await read_file(ref, token=TOKEN, transport=httpx.AsyncHTTPTransport())
         final = {
             "name": content.name,
             "page_count": content.page_count,

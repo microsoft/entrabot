@@ -47,14 +47,12 @@ def _expand_includes(text: str, base_dir: Path) -> str:
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith("@include"):
-            target_name = stripped[len("@include"):].strip()
+            target_name = stripped[len("@include") :].strip()
             if target_name:
                 target_path = base_dir / target_name
                 try:
                     if target_path.is_file():
-                        lines.append(
-                            target_path.read_text(encoding="utf-8").rstrip()
-                        )
+                        lines.append(target_path.read_text(encoding="utf-8").rstrip())
                         continue
                 except OSError:
                     pass

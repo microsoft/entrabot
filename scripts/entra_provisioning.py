@@ -77,11 +77,11 @@ def _keyring_module():
     """Import keyring lazily so missing dep produces a clear error."""
     try:
         import keyring as _kr
+
         return _kr
     except ImportError as exc:
         raise ProvisionerBootstrapError(
-            "keyring is required for cert-auth. Install with: "
-            "pip install -e '.[provisioning]'"
+            "keyring is required for cert-auth. Install with: pip install -e '.[provisioning]'"
         ) from exc
 
 
@@ -116,14 +116,16 @@ def _windows_file_store_cert(account: str, pem_bundle: str) -> None:
     user = f"{os.environ.get('USERDOMAIN', '.')}\\{os.environ['USERNAME']}"
     subprocess.run(
         ["icacls", str(cert_path), "/inheritance:r", "/grant:r", f"{user}:M"],
-        capture_output=True, check=False,
+        capture_output=True,
+        check=False,
     )
 
 
 def _windows_file_get_cert(account: str) -> str | None:
     """Read PEM from %LOCALAPPDATA%\\entraclaw\\provisioner-cert-<account>.pem."""
-    cert_path = Path(os.environ.get("LOCALAPPDATA", ""), "entraclaw",
-                     f"provisioner-cert-{account}.pem")
+    cert_path = Path(
+        os.environ.get("LOCALAPPDATA", ""), "entraclaw", f"provisioner-cert-{account}.pem"
+    )
     if cert_path.is_file():
         return cert_path.read_text(encoding="utf-8")
     return None
@@ -132,8 +134,9 @@ def _windows_file_get_cert(account: str) -> str | None:
 def _keychain_delete_cert(account: str) -> None:
     """Remove the Keychain/file entry. No-op if absent."""
     if sys.platform == "win32":
-        cert_path = Path(os.environ.get("LOCALAPPDATA", ""), "entraclaw",
-                         f"provisioner-cert-{account}.pem")
+        cert_path = Path(
+            os.environ.get("LOCALAPPDATA", ""), "entraclaw", f"provisioner-cert-{account}.pem"
+        )
         cert_path.unlink(missing_ok=True)
         return
     kr = _keyring_module()
@@ -158,15 +161,16 @@ def _generate_provisioner_cert() -> tuple[str, str, str]:
         from cryptography.x509.oid import NameOID
     except ImportError as exc:
         raise ProvisionerBootstrapError(
-            "cryptography is required for cert-auth. Install with: "
-            "pip install -e '.[provisioning]'"
+            "cryptography is required for cert-auth. Install with: pip install -e '.[provisioning]'"
         ) from exc
 
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    subject = issuer = x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, "entraclaw-provisioner"),
-        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "EntraClaw"),
-    ])
+    subject = issuer = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COMMON_NAME, "entraclaw-provisioner"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "EntraClaw"),
+        ]
+    )
     cert = (
         x509.CertificateBuilder()
         .subject_name(subject)
@@ -195,23 +199,27 @@ def _upload_cert_to_app(app_id: str, cert_pem: str) -> None:
     only for the duration of the az CLI call; private key is NEVER
     touched.
     """
-    with tempfile.NamedTemporaryFile(
-        suffix=".crt", mode="w", delete=False
-    ) as tf:
+    with tempfile.NamedTemporaryFile(suffix=".crt", mode="w", delete=False) as tf:
         tf.write(cert_pem)
         cert_path = tf.name
     try:
-        rc, out, err = run_az([
-            "ad", "app", "credential", "reset",
-            "--id", app_id,
-            "--cert", f"@{cert_path}",
-            "--append",
-            "-o", "json",
-        ])
+        rc, out, err = run_az(
+            [
+                "ad",
+                "app",
+                "credential",
+                "reset",
+                "--id",
+                app_id,
+                "--cert",
+                f"@{cert_path}",
+                "--append",
+                "-o",
+                "json",
+            ]
+        )
         if rc != 0:
-            raise ProvisionerBootstrapError(
-                err or "failed to upload cert to Provisioner app"
-            )
+            raise ProvisionerBootstrapError(err or "failed to upload cert to Provisioner app")
         # az prints a JSON blob on success; we just care that rc == 0
         _ = out
     finally:
@@ -230,34 +238,42 @@ def _remove_legacy_password_credentials(app_id: str) -> int:
     credentials; with ``--cert`` it targets key credentials. We only
     delete passwords here.
     """
-    rc, out, err = run_az([
-        "ad", "app", "show",
-        "--id", app_id,
-        "--query", "passwordCredentials[].keyId",
-        "-o", "json",
-    ])
+    rc, out, err = run_az(
+        [
+            "ad",
+            "app",
+            "show",
+            "--id",
+            app_id,
+            "--query",
+            "passwordCredentials[].keyId",
+            "-o",
+            "json",
+        ]
+    )
     if rc != 0:
-        raise ProvisionerBootstrapError(
-            err or "could not list Provisioner password credentials"
-        )
+        raise ProvisionerBootstrapError(err or "could not list Provisioner password credentials")
     try:
         key_ids = json.loads(out) if out else []
     except json.JSONDecodeError as exc:
-        raise ProvisionerBootstrapError(
-            f"failed to parse passwordCredentials list: {exc}"
-        ) from exc
+        raise ProvisionerBootstrapError(f"failed to parse passwordCredentials list: {exc}") from exc
 
     removed = 0
     for key_id in key_ids:
-        rc, _, err = run_az([
-            "ad", "app", "credential", "delete",
-            "--id", app_id,
-            "--key-id", key_id,
-        ])
+        rc, _, err = run_az(
+            [
+                "ad",
+                "app",
+                "credential",
+                "delete",
+                "--id",
+                app_id,
+                "--key-id",
+                key_id,
+            ]
+        )
         if rc != 0:
-            raise ProvisionerBootstrapError(
-                err or f"failed to delete password credential {key_id}"
-            )
+            raise ProvisionerBootstrapError(err or f"failed to delete password credential {key_id}")
         removed += 1
     return removed
 
@@ -316,9 +332,7 @@ def run_az(args: list[str], capture: bool = True) -> tuple[int, str, str]:
 
 def get_signed_in_user_id() -> str | None:
     """Get the object ID of the currently signed-in Azure CLI user."""
-    rc, out, _ = run_az(
-        ["ad", "signed-in-user", "show", "--query", "id", "-o", "tsv"]
-    )
+    rc, out, _ = run_az(["ad", "signed-in-user", "show", "--query", "id", "-o", "tsv"])
     if rc == 0 and out:
         return out
     return None
@@ -339,31 +353,31 @@ def build_sponsors_bind() -> list[str]:
 
 def _load_graph_app_roles() -> list[dict]:
     """Load all app roles from the Microsoft Graph service principal."""
-    rc, out, err = run_az([
-        "ad", "sp", "show", "--id", MS_GRAPH_API_ID,
-        "--query", "appRoles[].{id:id,value:value}",
-        "-o", "json",
-    ])
+    rc, out, err = run_az(
+        [
+            "ad",
+            "sp",
+            "show",
+            "--id",
+            MS_GRAPH_API_ID,
+            "--query",
+            "appRoles[].{id:id,value:value}",
+            "-o",
+            "json",
+        ]
+    )
     if rc != 0 or not out:
-        raise ProvisionerBootstrapError(
-            err or "could not query Microsoft Graph app roles"
-        )
+        raise ProvisionerBootstrapError(err or "could not query Microsoft Graph app roles")
     try:
         return json.loads(out)
     except json.JSONDecodeError as exc:
-        raise ProvisionerBootstrapError(
-            f"failed to parse Graph role list: {exc}"
-        ) from exc
+        raise ProvisionerBootstrapError(f"failed to parse Graph role list: {exc}") from exc
 
 
 def resolve_graph_permissions() -> dict[str, str]:
     """Return a map of permission value -> role ID for all Graph app roles."""
     roles = _load_graph_app_roles()
-    return {
-        role["value"]: role["id"]
-        for role in roles
-        if role.get("value") and role.get("id")
-    }
+    return {role["value"]: role["id"] for role in roles if role.get("value") and role.get("id")}
 
 
 def build_required_permission_values() -> list[str]:
@@ -413,14 +427,20 @@ def _resolve_permission_specs(required_values: list[str]) -> list[tuple[str, str
 
 def _get_existing_permission_role_ids(client_id: str) -> set[str]:
     """Get the set of role IDs already assigned to an app."""
-    rc, out, err = run_az([
-        "ad", "app", "show",
-        "--id", client_id,
-        "--query",
-        "requiredResourceAccess[?resourceAppId=='00000003-0000-0000-c000-000000000000']"
-        ".resourceAccess[].id",
-        "-o", "json",
-    ])
+    rc, out, err = run_az(
+        [
+            "ad",
+            "app",
+            "show",
+            "--id",
+            client_id,
+            "--query",
+            "requiredResourceAccess[?resourceAppId=='00000003-0000-0000-c000-000000000000']"
+            ".resourceAccess[].id",
+            "-o",
+            "json",
+        ]
+    )
     if rc != 0 or not out:
         if err:
             raise ProvisionerBootstrapError(err)
@@ -428,9 +448,7 @@ def _get_existing_permission_role_ids(client_id: str) -> set[str]:
     try:
         data = json.loads(out)
     except json.JSONDecodeError as exc:
-        raise ProvisionerBootstrapError(
-            f"failed to parse existing app permissions: {exc}"
-        ) from exc
+        raise ProvisionerBootstrapError(f"failed to parse existing app permissions: {exc}") from exc
     return {item for item in data if item}
 
 
@@ -465,19 +483,20 @@ def _ensure_permissions_and_consent(client_id: str, required_values: list[str]) 
     permission_specs = _resolve_permission_specs(required_values)
     existing_role_ids = _get_existing_permission_role_ids(client_id)
     missing_specs = [
-        spec for _, spec in permission_specs
-        if spec.split("=", 1)[0] not in existing_role_ids
+        spec for _, spec in permission_specs if spec.split("=", 1)[0] not in existing_role_ids
     ]
-    print(
-        f"  Ensuring {len(permission_specs)} Graph application "
-        f"permissions on provisioner app..."
-    )
+    print(f"  Ensuring {len(permission_specs)} Graph application permissions on provisioner app...")
 
     if missing_specs:
         cmd = [
-            "ad", "app", "permission", "add",
-            "--id", client_id,
-            "--api", MS_GRAPH_API_ID,
+            "ad",
+            "app",
+            "permission",
+            "add",
+            "--id",
+            client_id,
+            "--api",
+            MS_GRAPH_API_ID,
             "--api-permissions",
             *missing_specs,
         ]
@@ -532,9 +551,7 @@ def ensure_app_registration(
     """
     tenant_id = os.environ.get("ENTRACLAW_TENANT_ID") or get_state("TENANT_ID")
     if not tenant_id:
-        rc, out, err = run_az(
-            ["account", "show", "--query", "tenantId", "-o", "tsv"]
-        )
+        rc, out, err = run_az(["account", "show", "--query", "tenantId", "-o", "tsv"])
         if rc != 0 or not out:
             raise ProvisionerBootstrapError(
                 err or "cannot determine tenant ID; run 'az login' first"
@@ -567,34 +584,47 @@ def ensure_app_registration(
 
     # Find-or-create the Provisioner app registration
     if not client_id:
-        rc, out, _ = run_az([
-            "ad", "app", "list",
-            "--display-name", PROVISIONER_APP_DISPLAY_NAME,
-            "--query", "[0].appId",
-            "-o", "tsv",
-        ])
+        rc, out, _ = run_az(
+            [
+                "ad",
+                "app",
+                "list",
+                "--display-name",
+                PROVISIONER_APP_DISPLAY_NAME,
+                "--query",
+                "[0].appId",
+                "-o",
+                "tsv",
+            ]
+        )
         if rc == 0 and out:
             client_id = out
             print(f"  Found existing provisioner app: {client_id}")
             set_state("PROVISIONER_CLIENT_ID", client_id)
         else:
             print("  Creating dedicated EntraClaw provisioner app...")
-            rc, out, err = run_az([
-                "ad", "app", "create",
-                "--display-name", PROVISIONER_APP_DISPLAY_NAME,
-                "--sign-in-audience", "AzureADMyOrg",
-                "--query", "appId",
-                "-o", "tsv",
-            ])
+            rc, out, err = run_az(
+                [
+                    "ad",
+                    "app",
+                    "create",
+                    "--display-name",
+                    PROVISIONER_APP_DISPLAY_NAME,
+                    "--sign-in-audience",
+                    "AzureADMyOrg",
+                    "--query",
+                    "appId",
+                    "-o",
+                    "tsv",
+                ]
+            )
             if rc != 0 or not out:
                 lowered = (err or "").lower()
                 if any(
                     term in lowered
                     for term in ["insufficient", "authorization", "privilege", "permission"]
                 ):
-                    _print_admin_required(
-                        "create the dedicated provisioner app registration", err
-                    )
+                    _print_admin_required("create the dedicated provisioner app registration", err)
                 raise ProvisionerBootstrapError(err or "app registration creation failed")
             client_id = out
             print(f"  Created provisioner app: {client_id}")
@@ -660,8 +690,7 @@ def get_graph_token(
         from azure.identity import CertificateCredential
     except ImportError as exc:
         raise ProvisionerBootstrapError(
-            "azure-identity is required. Install with: "
-            "pip install -e '.[provisioning]'"
+            "azure-identity is required. Install with: pip install -e '.[provisioning]'"
         ) from exc
 
     credential = CertificateCredential(

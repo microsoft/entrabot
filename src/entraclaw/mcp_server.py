@@ -11,6 +11,7 @@ configuration — just call the tools directly.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import time
@@ -36,9 +37,7 @@ logger: logging.Logger | None = None
 
 # Local system-prompt file used when persona-sati isn't reachable. Kept as a
 # module attribute so tests can monkey-patch it at an isolated path.
-LOCAL_PROMPT_PATH = (
-    Path(__file__).resolve().parents[2] / "prompts" / "agent_system.md"
-)
+LOCAL_PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "agent_system.md"
 
 
 _HARDCODED_FALLBACK = (
@@ -63,14 +62,12 @@ def _expand_includes(text: str, base_dir: Path) -> str:
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith("@include"):
-            target_name = stripped[len("@include"):].strip()
+            target_name = stripped[len("@include") :].strip()
             if target_name:
                 target_path = base_dir / target_name
                 try:
                     if target_path.is_file():
-                        lines.append(
-                            target_path.read_text(encoding="utf-8").rstrip()
-                        )
+                        lines.append(target_path.read_text(encoding="utf-8").rstrip())
                         continue
                 except OSError:
                     pass
@@ -128,8 +125,7 @@ def _load_agent_instructions() -> str:
     token_cmd = os.environ.get("PERSONA_SATI_MCP_TOKEN_COMMAND", "").strip()
     if not remote_url or not token_cmd:
         log.info(
-            "persona-sati env unset; serving body-only "
-            "(body_loaded=%s, body_chars=%d)",
+            "persona-sati env unset; serving body-only (body_loaded=%s, body_chars=%d)",
             bool(body),
             len(body) if body else 0,
         )
@@ -138,9 +134,7 @@ def _load_agent_instructions() -> str:
     body_or_fallback = body or _HARDCODED_FALLBACK
 
     try:
-        token = subprocess.check_output(
-            [token_cmd], text=True, timeout=30
-        ).strip()
+        token = subprocess.check_output([token_cmd], text=True, timeout=30).strip()
     except (subprocess.SubprocessError, OSError) as exc:
         print(
             f"[entraclaw] could not mint persona-sati token "
@@ -156,8 +150,7 @@ def _load_agent_instructions() -> str:
         return body_or_fallback
     if not token:
         print(
-            f"[entraclaw] token command {token_cmd} returned empty; "
-            "using local fallback prompt",
+            f"[entraclaw] token command {token_cmd} returned empty; using local fallback prompt",
             file=sys.stderr,
         )
         log.warning(
@@ -189,8 +182,7 @@ def _load_agent_instructions() -> str:
         remote = asyncio.run(_fetch_remote_prompt())
     except Exception as exc:  # noqa: BLE001 — never break boot
         print(
-            f"[entraclaw] persona-sati fetch failed: {exc}; "
-            "using local fallback prompt",
+            f"[entraclaw] persona-sati fetch failed: {exc}; using local fallback prompt",
             file=sys.stderr,
         )
         log.warning(
@@ -203,8 +195,7 @@ def _load_agent_instructions() -> str:
 
     if not remote:
         print(
-            "[entraclaw] persona-sati returned empty prompt; "
-            "using local fallback",
+            "[entraclaw] persona-sati returned empty prompt; using local fallback",
             file=sys.stderr,
         )
         log.warning(
@@ -316,9 +307,7 @@ async def _resolve_tenant_id(email: str, our_domain: str) -> str | None:
         return None
 
     try:
-        oidc_url = (
-            f"https://login.microsoftonline.com/{domain}/.well-known/openid-configuration"
-        )
+        oidc_url = f"https://login.microsoftonline.com/{domain}/.well-known/openid-configuration"
         async with httpx.AsyncClient() as client:
             resp = await client.get(oidc_url, timeout=10)
         if resp.status_code == 200:
@@ -379,7 +368,8 @@ async def _ensure_valid_token() -> None:
                 if result and "access_token" in result:
                     token = result["access_token"]
                     _identity.update_session(
-                        token=token, token_acquired_at=time.monotonic(),
+                        token=token,
+                        token_acquired_at=time.monotonic(),
                     )
                     _state["token"] = token
                 else:
@@ -387,7 +377,8 @@ async def _ensure_valid_token() -> None:
                     result = auth.authenticate()
                     token = result["access_token"]
                     _identity.update_session(
-                        token=token, token_acquired_at=time.monotonic(),
+                        token=token,
+                        token_acquired_at=time.monotonic(),
                     )
                     _state["token"] = token
             except Exception as exc:
@@ -516,7 +507,8 @@ async def _init_auth() -> None:
         except (TokenExchangeError, EntraClawError) as exc:
             if logger:
                 logger.warning(
-                    "Three-hop flow failed, falling back to MSAL delegated: %s", exc,
+                    "Three-hop flow failed, falling back to MSAL delegated: %s",
+                    exc,
                 )
         except Exception as exc:
             if logger:
@@ -613,28 +605,20 @@ async def _init_poll() -> None:
     if config and config.mode == "bot":
         import asyncio
 
-        _state["poll_task"] = asyncio.get_event_loop().create_task(
-            _background_poll_bot()
-        )
+        _state["poll_task"] = asyncio.get_event_loop().create_task(_background_poll_bot())
     elif _state.get("watched_chats"):
         _ensure_poll_task_running()
 
     # Start email poll + daily summary when authenticated as the Agent User
     # (its own mailbox and outbound mail rights). In delegated mode /me/*
     # would target the human's mailbox — not what we want.
-    if (
-        _identity
-        and _identity.session
-        and _identity.session.auth_mode == "agent_user"
-    ):
+    if _identity and _identity.session and _identity.session.auth_mode == "agent_user":
         import asyncio
 
         asyncio.get_event_loop().create_task(_background_poll_email())
         asyncio.get_event_loop().create_task(_background_daily_summary())
         asyncio.get_event_loop().create_task(_background_discover_chats())
-        asyncio.get_event_loop().create_task(
-            _background_persona_sati_heartbeat()
-        )
+        asyncio.get_event_loop().create_task(_background_persona_sati_heartbeat())
 
 
 async def _initialize() -> None:
@@ -737,13 +721,10 @@ async def _persona_sati_heartbeat_once() -> str:
         return "skipped"
 
     try:
-        token = subprocess.check_output(
-            [token_cmd], text=True, timeout=30
-        ).strip()
+        token = subprocess.check_output([token_cmd], text=True, timeout=30).strip()
     except (subprocess.SubprocessError, OSError) as exc:
         log.warning(
-            "persona-sati heartbeat FAILED: token_mint_failed "
-            "(%s): %s: %s",
+            "persona-sati heartbeat FAILED: token_mint_failed (%s): %s: %s",
             token_cmd,
             type(exc).__name__,
             exc,
@@ -751,8 +732,7 @@ async def _persona_sati_heartbeat_once() -> str:
         return "token_mint_failed"
     if not token:
         log.warning(
-            "persona-sati heartbeat FAILED: token_mint_failed "
-            "(%s returned empty output)",
+            "persona-sati heartbeat FAILED: token_mint_failed (%s returned empty output)",
             token_cmd,
         )
         return "token_mint_failed"
@@ -762,8 +742,7 @@ async def _persona_sati_heartbeat_once() -> str:
         files = await _persona_sati_list_files(remote_url, token)
     except Exception as exc:  # noqa: BLE001 — classify but never raise
         log.warning(
-            "persona-sati heartbeat FAILED: remote_failed (%s): "
-            "%s: %s",
+            "persona-sati heartbeat FAILED: remote_failed (%s): %s: %s",
             remote_url,
             type(exc).__name__,
             exc,
@@ -772,8 +751,7 @@ async def _persona_sati_heartbeat_once() -> str:
 
     elapsed_ms = int((_time.monotonic() - started) * 1000)
     log.info(
-        "persona-sati heartbeat ok (url=%s, file_count=%d, "
-        "elapsed_ms=%d)",
+        "persona-sati heartbeat ok (url=%s, file_count=%d, elapsed_ms=%d)",
         remote_url,
         len(files),
         elapsed_ms,
@@ -844,7 +822,8 @@ async def _background_poll_bot() -> None:
                 seen_ids.add(msg_id)
 
                 await _push_channel_notification(
-                    msg, chat_id=msg.get("conversation_id"),
+                    msg,
+                    chat_id=msg.get("conversation_id"),
                 )
 
             # Bounded cleanup
@@ -873,9 +852,7 @@ def _ensure_poll_task_running() -> None:
 
     import asyncio
 
-    _state["poll_task"] = asyncio.get_event_loop().create_task(
-        _background_poll()
-    )
+    _state["poll_task"] = asyncio.get_event_loop().create_task(_background_poll())
     if logger:
         logger.info("Started background Teams poll task")
 
@@ -923,9 +900,7 @@ def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
             existing = set()
             if watched_file.is_file():
                 existing = {
-                    line.strip()
-                    for line in watched_file.read_text().splitlines()
-                    if line.strip()
+                    line.strip() for line in watched_file.read_text().splitlines() if line.strip()
                 }
             if chat_id not in existing:
                 existing.add(chat_id)
@@ -1008,7 +983,8 @@ async def _background_poll() -> None:
 
             # Skip polling if not authenticated
             if _identity and _identity.state in (
-                IdentityState.UNAUTHENTICATED, IdentityState.ERROR,
+                IdentityState.UNAUTHENTICATED,
+                IdentityState.ERROR,
             ):
                 continue
 
@@ -1025,13 +1001,18 @@ async def _background_poll() -> None:
                         continue
 
                     raw_messages = await _with_token_retry(
-                        read, chat_id=chat_id, count=10,
+                        read,
+                        chat_id=chat_id,
+                        count=10,
                     )
                     human_msgs = filter_human_messages(
-                        raw_messages, agent_display_name,
+                        raw_messages,
+                        agent_display_name,
                     )
                     new_msgs = _filter_new_messages(
-                        human_msgs, chat_state["last_ts"], chat_state["seen_ids"],
+                        human_msgs,
+                        chat_state["last_ts"],
+                        chat_state["seen_ids"],
                     )
 
                     if new_msgs:
@@ -1042,12 +1023,11 @@ async def _background_poll() -> None:
 
                         # Bounded cleanup (keep last 500)
                         if len(chat_state["seen_ids"]) > SEEN_SET_MAX:
-                            chat_state["seen_ids"] = set(
-                                sorted(chat_state["seen_ids"])[-100:]
-                            )
+                            chat_state["seen_ids"] = set(sorted(chat_state["seen_ids"])[-100:])
 
                         for m in sorted(
-                            new_msgs, key=lambda m: m.get("sent_at", ""),
+                            new_msgs,
+                            key=lambda m: m.get("sent_at", ""),
                         ):
                             await _push_channel_notification(m, chat_id=chat_id)
                 except Exception as chat_exc:
@@ -1085,9 +1065,7 @@ async def _background_poll_email() -> None:
     from entraclaw.tools.email_poll import load_cursor, poll_once, save_cursor
 
     if logger:
-        logger.info(
-            "Starting background email poll (interval=%ds)", EMAIL_POLL_INTERVAL
-        )
+        logger.info("Starting background email poll (interval=%ds)", EMAIL_POLL_INTERVAL)
 
     cursor = load_cursor()
     if cursor is None:
@@ -1110,9 +1088,7 @@ async def _background_poll_email() -> None:
     # channel-notification stream. (Discovered 2026-04-17 when the
     # "EntraClaw email pipeline test" email I sent to Brandon got
     # echoed back as an inbound notification ~10s later.)
-    agent_self_upn = (
-        (_state.get("config") or get_config()).agent_user_upn or ""
-    ).lower()
+    agent_self_upn = ((_state.get("config") or get_config()).agent_user_upn or "").lower()
 
     while True:
         try:
@@ -1127,7 +1103,8 @@ async def _background_poll_email() -> None:
             await _ensure_valid_token()
 
             messages, new_cursor = await _with_token_retry(
-                poll_once, cursor=cursor,
+                poll_once,
+                cursor=cursor,
             )
 
             if new_cursor and new_cursor != cursor:
@@ -1141,10 +1118,7 @@ async def _background_poll_email() -> None:
                 # Skip emails the agent itself sent (Sent Items folder
                 # echoes through /me/messages; would create a self-push loop).
                 sender_addr = (
-                    (msg.get("from") or {})
-                    .get("emailAddress", {})
-                    .get("address", "")
-                    .lower()
+                    (msg.get("from") or {}).get("emailAddress", {}).get("address", "").lower()
                 )
                 if agent_self_upn and sender_addr == agent_self_upn:
                     if msg_id:
@@ -1267,9 +1241,7 @@ async def _push_email_notification(msg: dict) -> None:
             f"(Purview-encrypted; body inaccessible without IRM decryption)"
         )
     else:
-        content = (
-            f"[email] {sender_name} ({sender_addr}) — {subject}\n{preview[:400]}"
-        )
+        content = f"[email] {sender_name} ({sender_addr}) — {subject}\n{preview[:400]}"
 
     write_stream = _state.get("_write_stream")
     if write_stream:
@@ -1339,9 +1311,7 @@ def _log_interaction_safe(**kwargs) -> None:
             logger.warning("interaction log failed: %s", exc)
 
 
-async def _run_daily_summary_internal(
-    *, day: str | None = None, send: bool = True
-) -> dict:
+async def _run_daily_summary_internal(*, day: str | None = None, send: bool = True) -> dict:
     """Read today's log → triage → render → archive → optionally send."""
     from entraclaw.tools.daily_summary import (
         archive_summary,
@@ -1468,7 +1438,9 @@ def _summarize_content(content: str, limit: int = 200) -> str:
 
 
 async def _push_channel_notification(
-    message: dict, *, chat_id: str | None = None,
+    message: dict,
+    *,
+    chat_id: str | None = None,
 ) -> None:
     """Observe + push an inbound Teams message.
 
@@ -1652,22 +1624,27 @@ async def send_teams_message(
         if mentions:
             outbound_msg["mentions"] = mentions
         write_outbound(outbound_msg)
-        return json.dumps({
-            "message_id": f"bot-outbound-{id(outbound_msg)}",
-            "sent_at": datetime.now(UTC).isoformat(),
-            "mode": "bot",
-        }, indent=2)
+        return json.dumps(
+            {
+                "message_id": f"bot-outbound-{id(outbound_msg)}",
+                "sent_at": datetime.now(UTC).isoformat(),
+                "mode": "bot",
+            },
+            indent=2,
+        )
 
     from entraclaw.tools.teams import send
 
     target_chat = chat_id
     if not target_chat:
-        return json.dumps({
-            "error": (
-                "chat_id is required — pass the chat_id of the target Teams "
-                "chat (create one via create_chat if needed)."
-            )
-        })
+        return json.dumps(
+            {
+                "error": (
+                    "chat_id is required — pass the chat_id of the target Teams "
+                    "chat (create one via create_chat if needed)."
+                )
+            }
+        )
 
     await _ensure_valid_token()
 
@@ -1738,8 +1715,7 @@ async def send_teams_message(
             _state["sponsor_gate"] = gate
             if logger:
                 logger.info(
-                    "send_teams_message auto-wait: sponsor gate loaded "
-                    "ids=%s upns=%s mails=%s",
+                    "send_teams_message auto-wait: sponsor gate loaded ids=%s upns=%s mails=%s",
                     sorted(gate.user_ids),
                     sorted(gate.upns),
                     sorted(gate.mails),
@@ -1761,9 +1737,7 @@ async def send_teams_message(
         "wait_tool_dedup", deque()
     )
 
-    agent_display_name = (
-        (wait_config.agent_user_upn or "").split("@", 1)[0] or "EntraClaw Agent"
-    )
+    agent_display_name = (wait_config.agent_user_upn or "").split("@", 1)[0] or "EntraClaw Agent"
 
     def list_chat_ids() -> list[str]:
         watched = _state.get("watched_chats") or {}
@@ -1780,9 +1754,7 @@ async def send_teams_message(
             use_color = _os.environ.get("NO_COLOR", "") == ""
             frame = wait_listener_banner(color=use_color, elapsed_s=elapsed_s)
             with contextlib.suppress(Exception):
-                await ctx.report_progress(
-                    progress=elapsed_s, total=None, message=frame
-                )
+                await ctx.report_progress(progress=elapsed_s, total=None, message=frame)
 
     # Show the dog splash
     if ctx is not None:
@@ -1866,12 +1838,9 @@ async def post_thinking_placeholder(
     await _initialize()
 
     if not chat_id:
-        return json.dumps({
-            "error": (
-                "chat_id is required — pass the chat_id of the target "
-                "Teams chat."
-            )
-        })
+        return json.dumps(
+            {"error": ("chat_id is required — pass the chat_id of the target Teams chat.")}
+        )
 
     from entraclaw.tools.teams import post_thinking_placeholder as _post
 
@@ -1934,9 +1903,7 @@ async def update_placeholder(
     await _initialize()
 
     if not chat_id or not placeholder_id:
-        return json.dumps({
-            "error": "chat_id and placeholder_id are required."
-        })
+        return json.dumps({"error": "chat_id and placeholder_id are required."})
 
     from entraclaw.tools.teams import update_placeholder as _update
 
@@ -2002,22 +1969,18 @@ async def resolve_placeholder(
     await _initialize()
 
     if not chat_id or not placeholder_id:
-        return json.dumps({
-            "error": "chat_id and placeholder_id are required."
-        })
+        return json.dumps({"error": "chat_id and placeholder_id are required."})
     if mode not in ("edit", "delete_repost"):
-        return json.dumps({
-            "error": f"invalid mode: {mode!r} (expected 'edit' or 'delete_repost')"
-        })
+        return json.dumps({"error": f"invalid mode: {mode!r} (expected 'edit' or 'delete_repost')"})
 
     # Audit before mutating — per security.md "Audit before acting". Fail
     # closed: if the audit write raises, the Graph call does not proceed.
     from entraclaw.tools.audit import log_event
+
     config = get_config()
     if _identity:
         agent_id = (
-            _identity.session.user_id or config.agent_id
-            or config.blueprint_app_id or "unknown"
+            _identity.session.user_id or config.agent_id or config.blueprint_app_id or "unknown"
         )
         attribution = _identity.session.attribution_type
     else:
@@ -2094,28 +2057,27 @@ async def delete_teams_message(
     await _initialize()
 
     if not chat_id:
-        return json.dumps({
-            "error": (
-                "chat_id is required — pass the chat_id of the target "
-                "Teams chat."
-            )
-        })
+        return json.dumps(
+            {"error": ("chat_id is required — pass the chat_id of the target Teams chat.")}
+        )
     if not message_id:
-        return json.dumps({
-            "error": (
-                "message_id is required — pass the message_id of the "
-                "agent's own message to delete."
-            )
-        })
+        return json.dumps(
+            {
+                "error": (
+                    "message_id is required — pass the message_id of the "
+                    "agent's own message to delete."
+                )
+            }
+        )
 
     # Audit before mutating — per security.md "Audit before acting". Fail
     # closed: if the audit write raises, the Graph call does not proceed.
     from entraclaw.tools.audit import log_event
+
     config = get_config()
     if _identity:
         agent_id = (
-            _identity.session.user_id or config.agent_id
-            or config.blueprint_app_id or "unknown"
+            _identity.session.user_id or config.agent_id or config.blueprint_app_id or "unknown"
         )
         attribution = _identity.session.attribution_type
     else:
@@ -2144,8 +2106,7 @@ async def delete_teams_message(
         direction="outbound",
         sender="entraclaw-agent",
         recipient=chat_id,
-        summary=f"deleted message {message_id}" if deleted
-        else f"delete failed for {message_id}",
+        summary=f"deleted message {message_id}" if deleted else f"delete failed for {message_id}",
         action="delete_teams_message",
         content_ref=message_id,
         metadata={
@@ -2156,9 +2117,7 @@ async def delete_teams_message(
     )
 
     if deleted:
-        return json.dumps(
-            {"deleted": True, "message_id": message_id}, indent=2
-        )
+        return json.dumps({"deleted": True, "message_id": message_id}, indent=2)
     return json.dumps(
         {
             "deleted": False,
@@ -2219,11 +2178,9 @@ async def send_email(
     bcc_list = _split_addrs(bcc)
 
     if not to_list:
-        return json.dumps({
-            "error": (
-                "to is required — pass a comma-separated list of email addresses."
-            )
-        })
+        return json.dumps(
+            {"error": ("to is required — pass a comma-separated list of email addresses.")}
+        )
     if not subject or not subject.strip():
         # Graph accepts empty subjects on replies, but reject uniformly —
         # audit resource needs something to key on, and a blank subject
@@ -2233,11 +2190,11 @@ async def send_email(
     # Audit before mutating — per security.md "Audit before acting". Fail
     # closed: if the audit write raises, the Graph call does not proceed.
     from entraclaw.tools.audit import log_event
+
     config = get_config()
     if _identity:
         agent_id = (
-            _identity.session.user_id or config.agent_id
-            or config.blueprint_app_id or "unknown"
+            _identity.session.user_id or config.agent_id or config.blueprint_app_id or "unknown"
         )
         attribution = _identity.session.attribution_type
     else:
@@ -2400,12 +2357,14 @@ async def send_card(
 
     target_chat = chat_id
     if not target_chat:
-        return json.dumps({
-            "error": (
-                "chat_id is required — pass the chat_id of the target Teams "
-                "chat (create one via create_chat if needed)."
-            )
-        })
+        return json.dumps(
+            {
+                "error": (
+                    "chat_id is required — pass the chat_id of the target Teams "
+                    "chat (create one via create_chat if needed)."
+                )
+            }
+        )
 
     await _ensure_valid_token()
 
@@ -2459,12 +2418,14 @@ async def list_chat_members(chat_id: str) -> str:
 
     target_chat = chat_id
     if not target_chat:
-        return json.dumps({
-            "error": (
-                "chat_id is required — pass the chat_id of the chat whose "
-                "members you want to list."
-            )
-        })
+        return json.dumps(
+            {
+                "error": (
+                    "chat_id is required — pass the chat_id of the chat whose "
+                    "members you want to list."
+                )
+            }
+        )
 
     await _ensure_valid_token()
     result = await _with_token_retry(
@@ -2475,9 +2436,7 @@ async def list_chat_members(chat_id: str) -> str:
 
 
 @mcp.tool()
-async def add_teams_member(
-    email: str, chat_id: str, tenant_id: str = ""
-) -> str:
+async def add_teams_member(email: str, chat_id: str, tenant_id: str = "") -> str:
     """Add a new member to a Teams chat.
 
     Just provide the email address and the chat_id. For external users
@@ -2495,12 +2454,14 @@ async def add_teams_member(
     from entraclaw.tools.teams import add_member
 
     if not chat_id:
-        return json.dumps({
-            "error": (
-                "chat_id is required — pass the chat_id of the target Teams "
-                "chat (create one via create_chat if needed)."
-            )
-        })
+        return json.dumps(
+            {
+                "error": (
+                    "chat_id is required — pass the chat_id of the target Teams "
+                    "chat (create one via create_chat if needed)."
+                )
+            }
+        )
 
     # Auto-resolve tenant ID from email domain if not provided
     if not tenant_id and "@" in email:
@@ -2612,12 +2573,14 @@ async def read_teams_messages(chat_id: str, count: int = 5) -> str:
 
     target_chat = chat_id
     if not target_chat:
-        return json.dumps({
-            "error": (
-                "chat_id is required — pass the chat_id of the chat to read "
-                "from (create one via create_chat if needed)."
-            )
-        })
+        return json.dumps(
+            {
+                "error": (
+                    "chat_id is required — pass the chat_id of the chat to read "
+                    "from (create one via create_chat if needed)."
+                )
+            }
+        )
 
     await _ensure_valid_token()
     result = await _with_token_retry(
@@ -2662,12 +2625,14 @@ async def watch_teams_replies(
     from entraclaw.tools.teams import filter_human_messages, read
 
     if not chat_id:
-        return json.dumps({
-            "error": (
-                "chat_id is required — pass the chat_id of the Teams chat "
-                "to watch (create one via create_chat if needed)."
-            )
-        })
+        return json.dumps(
+            {
+                "error": (
+                    "chat_id is required — pass the chat_id of the Teams chat "
+                    "to watch (create one via create_chat if needed)."
+                )
+            }
+        )
 
     # Must match the displayName that Graph API returns in message.from.user.displayName
     # NOT the UPN — Graph returns "EntraClaw Agent", not "entraclaw-agent@werner.ac"
@@ -2869,9 +2834,7 @@ async def wait_for_sponsor_dm(
         or config.blueprint_app_id
         or "unknown"
     )
-    attribution = (
-        _identity.session.attribution_type if _identity else "agent"
-    )
+    attribution = _identity.session.attribution_type if _identity else "agent"
 
     log_event(
         action="wait_for_sponsor_dm.start",
@@ -2892,8 +2855,7 @@ async def wait_for_sponsor_dm(
             # Diagnostic: dump the loaded sponsor set once so operators
             # can correlate against rejection logs in wait_tool.
             logger.info(
-                "wait_for_sponsor_dm: sponsor gate loaded "
-                "ids=%s upns=%s mails=%s",
+                "wait_for_sponsor_dm: sponsor gate loaded ids=%s upns=%s mails=%s",
                 sorted(gate.user_ids),
                 sorted(gate.upns),
                 sorted(gate.mails),
@@ -2913,9 +2875,7 @@ async def wait_for_sponsor_dm(
         "wait_tool_dedup", deque()
     )
 
-    agent_display_name = (
-        (config.agent_user_upn or "").split("@", 1)[0] or "EntraClaw Agent"
-    )
+    agent_display_name = (config.agent_user_upn or "").split("@", 1)[0] or "EntraClaw Agent"
 
     def list_chat_ids() -> list[str]:
         watched = _state.get("watched_chats") or {}
@@ -2939,9 +2899,7 @@ async def wait_for_sponsor_dm(
             # so a single-line cycling frame would erase the dog.
             frame = wait_listener_banner(color=use_color, elapsed_s=elapsed_s)
             with contextlib.suppress(Exception):
-                await ctx.report_progress(
-                    progress=elapsed_s, total=None, message=frame
-                )
+                await ctx.report_progress(progress=elapsed_s, total=None, message=frame)
 
     if ctx is not None:
         # One-shot startup splash. Honors NO_COLOR per the de-facto
@@ -3070,8 +3028,7 @@ def audit_log(
     # Identity-aware attribution (eng review Tension 1)
     if _identity:
         agent_id = (
-            _identity.session.user_id or config.agent_id
-            or config.blueprint_app_id or "unknown"
+            _identity.session.user_id or config.agent_id or config.blueprint_app_id or "unknown"
         )
         attribution = _identity.session.attribution_type
     else:
@@ -3134,16 +3091,16 @@ async def view_image(url: str) -> str:
     elif ".gif" in url:
         ext = ".gif"
 
-    with tempfile.NamedTemporaryFile(
-        suffix=ext, prefix="entraclaw_img_", delete=False
-    ) as tmp:
+    with tempfile.NamedTemporaryFile(suffix=ext, prefix="entraclaw_img_", delete=False) as tmp:
         tmp.write(image_bytes)
         tmp_path = tmp.name
 
-    return json.dumps({
-        "file_path": tmp_path,
-        "size_bytes": len(image_bytes),
-    })
+    return json.dumps(
+        {
+            "file_path": tmp_path,
+            "size_bytes": len(image_bytes),
+        }
+    )
 
 
 @mcp.tool()
@@ -3271,8 +3228,7 @@ def _promise_audit_ids() -> tuple[str, str]:
     config = get_config()
     if _identity:
         agent_id = (
-            _identity.session.user_id or config.agent_id
-            or config.blueprint_app_id or "unknown"
+            _identity.session.user_id or config.agent_id or config.blueprint_app_id or "unknown"
         )
         attribution = _identity.session.attribution_type
     else:
@@ -3310,16 +3266,16 @@ async def add_promise(
     await _initialize()
 
     if not chat_id:
-        return json.dumps({
-            "error": (
-                "chat_id is required — pass the target chat_id, or "
-                "'terminal' / 'email' for non-Teams promises."
-            )
-        })
+        return json.dumps(
+            {
+                "error": (
+                    "chat_id is required — pass the target chat_id, or "
+                    "'terminal' / 'email' for non-Teams promises."
+                )
+            }
+        )
     if not description or not description.strip():
-        return json.dumps({
-            "error": "description is required — describe the follow-up."
-        })
+        return json.dumps({"error": "description is required — describe the follow-up."})
 
     from entraclaw.tools.audit import log_event
     from entraclaw.tools.promises import add_promise as _add
@@ -3346,8 +3302,13 @@ async def add_promise(
     promise = await _with_token_retry(_call)
 
     _log_interaction_safe(
-        channel=detect_channel(chat_id if chat_id not in {"terminal", "email"}
-                               else None if chat_id == "terminal" else "email"),
+        channel=detect_channel(
+            chat_id
+            if chat_id not in {"terminal", "email"}
+            else None
+            if chat_id == "terminal"
+            else "email"
+        ),
         direction="outbound",
         sender="entraclaw-agent",
         recipient=chat_id,
@@ -3394,9 +3355,7 @@ async def list_promises(open_only: bool = True) -> str:
         return await _list(open_only=open_only)
 
     promises = await _with_token_retry(_call)
-    return json.dumps(
-        [p.to_entry() for p in promises], indent=2
-    )
+    return json.dumps([p.to_entry() for p in promises], indent=2)
 
 
 @mcp.tool()
@@ -3420,13 +3379,9 @@ async def resolve_promise(promise_id: str, resolution: str) -> str:
     await _initialize()
 
     if not promise_id:
-        return json.dumps({
-            "error": "promise_id is required — get it from list_promises."
-        })
+        return json.dumps({"error": "promise_id is required — get it from list_promises."})
     if not resolution or not resolution.strip():
-        return json.dumps({
-            "error": "resolution is required — one-line closure reason."
-        })
+        return json.dumps({"error": "resolution is required — one-line closure reason."})
 
     from entraclaw.tools.audit import log_event
     from entraclaw.tools.promises import (
@@ -3467,15 +3422,15 @@ async def resolve_promise(promise_id: str, resolution: str) -> str:
             content_ref=promise_id,
             metadata={"promise_id": promise_id, "outcome": "not_found"},
         )
-        return json.dumps({
-            "error": f"promise not found: {promise_id}"
-        })
+        return json.dumps({"error": f"promise not found: {promise_id}"})
 
     _log_interaction_safe(
         channel=detect_channel(
             promise.chat_id
             if promise.chat_id not in {"terminal", "email"}
-            else None if promise.chat_id == "terminal" else "email"
+            else None
+            if promise.chat_id == "terminal"
+            else "email"
         ),
         direction="outbound",
         sender="entraclaw-agent",
@@ -3650,9 +3605,7 @@ async def read_file(
     from entraclaw.tools.files import read_file as _read
 
     if not drive_id or not item_id or not name:
-        return json.dumps(
-            {"error": "drive_id, item_id, and name are required"}
-        )
+        return json.dumps({"error": "drive_id, item_id, and name are required"})
 
     ref = FileRef(
         drive_id=drive_id,
@@ -3668,7 +3621,9 @@ async def read_file(
     await _ensure_valid_token()
     try:
         content = await _with_token_retry(
-            _read, file_ref=ref, as_format=as_format  # type: ignore[arg-type]
+            _read,
+            file_ref=ref,
+            as_format=as_format,  # type: ignore[arg-type]
         )
     except FilesError as exc:
         return json.dumps({"error": str(exc), "error_type": type(exc).__name__})
@@ -3730,9 +3685,7 @@ async def add_file_comment(
     from entraclaw.tools.files import add_file_comment as _comment
 
     if not drive_id or not item_id or not name:
-        return json.dumps(
-            {"error": "drive_id, item_id, and name are required"}
-        )
+        return json.dumps({"error": "drive_id, item_id, and name are required"})
     if not content or not content.strip():
         return json.dumps({"error": "content is required (non-empty)"})
 
@@ -3747,9 +3700,7 @@ async def add_file_comment(
 
     await _ensure_valid_token()
     try:
-        result = await _with_token_retry(
-            _comment, file_ref=ref, content=content
-        )
+        result = await _with_token_retry(_comment, file_ref=ref, content=content)
     except FilesError as exc:
         return json.dumps({"error": str(exc), "error_type": type(exc).__name__})
 
@@ -3758,6 +3709,230 @@ async def add_file_comment(
             "comment_id": result.comment_id,
             "content": result.content,
             "web_url": result.web_url,
+        },
+        indent=2,
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────
+# PR2: Author / Upload / Share Tools
+# ───────────────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def write_text_file(
+    target_type: str,  # "onedrive" or "sharepoint"
+    file_name: str,
+    content: str,
+    folder_path: str = "/",
+    drive_id: str = "",
+    site_id: str = "",
+    conflict_behavior: str = "fail",
+) -> str:
+    """Write text to a file (create or update per conflict_behavior).
+
+    Args:
+        target_type: "onedrive" or "sharepoint"
+        file_name: Name of file to create/overwrite
+        content: Text content to write
+        folder_path: Target folder path (default "/")
+        drive_id: (SharePoint only) Drive ID
+        site_id: (SharePoint only) Site ID
+        conflict_behavior: rename / replace / fail
+
+    Returns:
+        JSON with file metadata (drive_id, item_id, name, web_url, size_bytes)
+        or ``{"error": "..."}``.
+    """
+    await _initialize()
+    from entraclaw.errors import FilesError
+    from entraclaw.tools.files import (
+        OneDriveTarget,
+        SharePointTarget,
+    )
+    from entraclaw.tools.files import (
+        write_text_file as _write,
+    )
+
+    if not file_name or not content:
+        return json.dumps({"error": "file_name and content are required"})
+    if target_type not in ("onedrive", "sharepoint"):
+        return json.dumps({"error": "target_type must be 'onedrive' or 'sharepoint'"})
+    if target_type == "sharepoint" and not (drive_id and site_id):
+        return json.dumps({"error": "SharePoint requires drive_id and site_id"})
+
+    target = (
+        SharePointTarget(site_id=site_id, drive_id=drive_id, folder_path=folder_path)
+        if target_type == "sharepoint"
+        else OneDriveTarget(folder_path=folder_path)
+    )
+
+    await _ensure_valid_token()
+    try:
+        result = await _with_token_retry(
+            _write,
+            target=target,
+            file_name=file_name,
+            content=content,
+            conflict_behavior=conflict_behavior,  # type: ignore[arg-type]
+        )
+    except FilesError as exc:
+        return json.dumps({"error": str(exc), "error_type": type(exc).__name__})
+
+    return json.dumps(
+        {
+            "drive_id": result.drive_id,
+            "item_id": result.item_id,
+            "name": result.name,
+            "mime_type": result.mime_type,
+            "kind": result.kind,
+            "site_id": result.site_id,
+            "web_url": result.web_url,
+            "size_bytes": result.size_bytes,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+async def upload_file(
+    target_type: str,
+    file_name: str,
+    content_base64: str,
+    folder_path: str = "/",
+    drive_id: str = "",
+    site_id: str = "",
+    conflict_behavior: str = "fail",
+) -> str:
+    """Upload binary file with automatic chunking for large files.
+
+    Args:
+        target_type: "onedrive" or "sharepoint"
+        file_name: Name of file to create/upload
+        content_base64: Base64-encoded file content
+        folder_path: Target folder path (default "/")
+        drive_id: (SharePoint only) Drive ID
+        site_id: (SharePoint only) Site ID
+        conflict_behavior: rename / replace / fail
+
+    Returns:
+        JSON with file metadata (drive_id, item_id, name, web_url, size_bytes)
+        or ``{"error": "..."}``.
+    """
+    await _initialize()
+    from entraclaw.errors import FilesError
+    from entraclaw.tools.files import (
+        OneDriveTarget,
+        SharePointTarget,
+    )
+    from entraclaw.tools.files import (
+        upload_file as _upload,
+    )
+
+    if not file_name or not content_base64:
+        return json.dumps({"error": "file_name and content_base64 are required"})
+    if target_type not in ("onedrive", "sharepoint"):
+        return json.dumps({"error": "target_type must be 'onedrive' or 'sharepoint'"})
+    if target_type == "sharepoint" and not (drive_id and site_id):
+        return json.dumps({"error": "SharePoint requires drive_id and site_id"})
+
+    try:
+        content_bytes = base64.b64decode(content_base64)
+    except Exception:
+        return json.dumps({"error": "content_base64 is not valid base64"})
+
+    target = (
+        SharePointTarget(site_id=site_id, drive_id=drive_id, folder_path=folder_path)
+        if target_type == "sharepoint"
+        else OneDriveTarget(folder_path=folder_path)
+    )
+
+    await _ensure_valid_token()
+    try:
+        result = await _with_token_retry(
+            _upload,
+            target=target,
+            file_name=file_name,
+            content_bytes=content_bytes,
+            conflict_behavior=conflict_behavior,  # type: ignore[arg-type]
+        )
+    except FilesError as exc:
+        return json.dumps({"error": str(exc), "error_type": type(exc).__name__})
+
+    return json.dumps(
+        {
+            "drive_id": result.drive_id,
+            "item_id": result.item_id,
+            "name": result.name,
+            "mime_type": result.mime_type,
+            "kind": result.kind,
+            "site_id": result.site_id,
+            "web_url": result.web_url,
+            "size_bytes": result.size_bytes,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+async def share_file(
+    drive_id: str,
+    item_id: str,
+    name: str,
+    recipient_email: str,
+    role: str = "read",
+    mime_type: str = "application/octet-stream",
+    kind: str = "sharepoint",
+    site_id: str = "",
+) -> str:
+    """Share a file with a recipient (sponsor-allowlist enforced).
+
+    Args:
+        drive_id, item_id, name, mime_type, kind, site_id: ``FileRef`` fields.
+        recipient_email: Email to share with (must be in sponsor allowlist).
+        role: read / write
+
+    Returns:
+        JSON with permission metadata (permission_id, role, recipient_email,
+        web_url, expiration_at) or ``{"error": "..."}``.
+    """
+    await _initialize()
+    from entraclaw.errors import FilesError
+    from entraclaw.tools.files import FileRef
+    from entraclaw.tools.files import share_file as _share
+
+    if not drive_id or not item_id or not name or not recipient_email:
+        return json.dumps({"error": "drive_id, item_id, name, and recipient_email are required"})
+    if role not in ("read", "write"):
+        return json.dumps({"error": "role must be 'read' or 'write'"})
+
+    ref = FileRef(
+        drive_id=drive_id,
+        item_id=item_id,
+        name=name,
+        mime_type=mime_type,
+        kind=kind,  # type: ignore[arg-type]
+        site_id=site_id or None,
+    )
+
+    await _ensure_valid_token()
+    try:
+        result = await _with_token_retry(
+            _share,
+            file_ref=ref,
+            recipient_email=recipient_email,
+            role=role,  # type: ignore[arg-type]
+        )
+    except FilesError as exc:
+        return json.dumps({"error": str(exc), "error_type": type(exc).__name__})
+
+    return json.dumps(
+        {
+            "permission_id": result.permission_id,
+            "role": result.role,
+            "recipient_email": result.recipient_email,
+            "web_url": result.web_url,
+            "expiration_at": result.expiration_at,
         },
         indent=2,
     )

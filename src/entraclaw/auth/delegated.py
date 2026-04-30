@@ -123,9 +123,7 @@ class MsalDelegatedAuth:
             if result and "access_token" in result:
                 return result
         except (AuthTimeoutError, OSError) as exc:
-            logger.warning(
-                "Localhost redirect failed: %s, falling back to device code", exc
-            )
+            logger.warning("Localhost redirect failed: %s, falling back to device code", exc)
 
         return self._try_device_code()
 
@@ -172,9 +170,7 @@ class MsalDelegatedAuth:
         result = self._app.acquire_token_by_device_flow(flow)
         return self._check_result(result, method="device_code")
 
-    def _check_result(
-        self, result: dict[str, Any], *, method: str
-    ) -> dict[str, Any]:
+    def _check_result(self, result: dict[str, Any], *, method: str) -> dict[str, Any]:
         """Validate an MSAL token result.
 
         Raises appropriate errors for failures.
@@ -190,14 +186,10 @@ class MsalDelegatedAuth:
             description = result.get("error_description", "")
 
             if error == "authentication_cancelled" or "cancel" in description.lower():
-                raise AuthCancelledError(
-                    f"User cancelled {method} auth: {description}"
-                )
+                raise AuthCancelledError(f"User cancelled {method} auth: {description}")
 
             if "timeout" in error.lower() or "timeout" in description.lower():
-                raise AuthTimeoutError(
-                    f"{method} auth timed out: {description}"
-                )
+                raise AuthTimeoutError(f"{method} auth timed out: {description}")
 
             raise MsalAuthError(error=error, error_description=description)
 

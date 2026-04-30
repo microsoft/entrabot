@@ -114,9 +114,7 @@ class TestLoadAllReferences:
             result = convo_store.load_all_references()
 
         assert result == {}
-        assert any(
-            "corrupt" in r.message.lower() for r in caplog.records
-        )
+        assert any("corrupt" in r.message.lower() for r in caplog.records)
         # File must NOT be deleted — user can inspect
         assert refs_path.exists()
 

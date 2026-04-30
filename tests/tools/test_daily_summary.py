@@ -202,9 +202,7 @@ class TestTriage:
                 summary="Actually needs attention",
             ),
         ]
-        buckets = triage_interactions(
-            entries, agent_upn="entraclaw-agent@werner.ac"
-        )
+        buckets = triage_interactions(entries, agent_upn="entraclaw-agent@werner.ac")
         assert len(buckets["needs_you"]) == 1
         assert buckets["needs_you"][0]["sender"] == "diana@microsoft.com"
 
@@ -218,9 +216,7 @@ class TestTriage:
                 summary="self-echo with mixed case",
             ),
         ]
-        buckets = triage_interactions(
-            entries, agent_upn="entraclaw-agent@werner.ac"
-        )
+        buckets = triage_interactions(entries, agent_upn="entraclaw-agent@werner.ac")
         assert buckets == {"needs_you": [], "handled": [], "heads_up": []}
 
     def test_no_agent_upn_means_no_filtering(self) -> None:
@@ -318,9 +314,7 @@ class TestSendSummary:
         from entraclaw.errors import TokenExpiredError
 
         with respx.mock:
-            respx.post(GRAPH_SENDMAIL_URL).mock(
-                return_value=httpx.Response(401)
-            )
+            respx.post(GRAPH_SENDMAIL_URL).mock(return_value=httpx.Response(401))
             with pytest.raises(TokenExpiredError):
                 await send_summary_email(
                     token="tok",

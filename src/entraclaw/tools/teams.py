@@ -491,7 +491,9 @@ async def create_or_find_chat(
                     tid = m.get("tenantId", "")
                     logger.info(
                         "  Chat member: %s (roles=%s, tenantId=%s)",
-                        display, roles, tid,
+                        display,
+                        roles,
+                        tid,
                     )
             else:
                 logger.warning("Could not verify chat members: HTTP %d", verify_resp.status_code)
@@ -937,9 +939,7 @@ async def delete_chat_message(
     """
     headers = {"Authorization": f"Bearer {token}"}
 
-    owned_transport = transport or RetryOn429Transport(
-        wrapped=httpx.AsyncHTTPTransport()
-    )
+    owned_transport = transport or RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
     async with httpx.AsyncClient(transport=owned_transport) as client:
         resp = await client.post(
             f"{GRAPH_BASE}/me/chats/{chat_id}/messages/{message_id}/softDelete",
@@ -1141,11 +1141,7 @@ async def read(
             ]
             user_obj = (m.get("from") or {}).get("user", {}) or {}
             sender_id = str(user_obj.get("id") or "")
-            sender_email = (
-                user_obj.get("userPrincipalName")
-                or user_obj.get("mail")
-                or ""
-            )
+            sender_email = user_obj.get("userPrincipalName") or user_obj.get("mail") or ""
             out.append(
                 {
                     "message_id": m["id"],
@@ -1185,9 +1181,7 @@ def filter_human_messages(
     def _is_agent(sender: str) -> bool:
         if not agent_user_display_name:
             return False
-        return sender == agent_user_display_name or sender.startswith(
-            agent_user_display_name + " "
-        )
+        return sender == agent_user_display_name or sender.startswith(agent_user_display_name + " ")
 
     return [
         m

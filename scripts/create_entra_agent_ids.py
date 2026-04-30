@@ -325,9 +325,7 @@ def create_agent_identity(token: str, blueprint_app_id: str) -> tuple[str, str]:
         "agentIdentityBlueprintId": blueprint_app_id,
     }
     if sponsor_id:
-        body["sponsors@odata.bind"] = [
-            f"https://graph.microsoft.com/beta/users/{sponsor_id}"
-        ]
+        body["sponsors@odata.bind"] = [f"https://graph.microsoft.com/beta/users/{sponsor_id}"]
 
     for attempt in range(3):
         resp = graph_request("POST", "/servicePrincipals", token, json_body=body)
@@ -392,9 +390,7 @@ def _agent_user_upn(token: str) -> str:
         domains = resp.json().get("value", [])
         # Prefer custom domain (not .onmicrosoft.com)
         custom = [
-            d["id"]
-            for d in domains
-            if d.get("isVerified") and ".onmicrosoft.com" not in d["id"]
+            d["id"] for d in domains if d.get("isVerified") and ".onmicrosoft.com" not in d["id"]
         ]
         # When --new, add a unique suffix to avoid UPN collision
         upn_suffix = os.environ.get("_ENTRACLAW_UPN_SUFFIX", "")
@@ -647,7 +643,6 @@ def grant_agent_user_consent(
             )
             print("  Falling through to create new grant...")
 
-
     body = {
         "clientId": agent_identity_obj_id,
         "consentType": "Principal",
@@ -880,13 +875,15 @@ def _get_available_skus(token: str) -> list[dict]:
         consumed = sku.get("consumedUnits", 0)
         remaining = enabled - consumed
         if remaining > 0:
-            available.append({
-                "skuId": sku["skuId"],
-                "skuPartNumber": sku.get("skuPartNumber", ""),
-                "displayName": sku.get("skuPartNumber", sku["skuId"]),
-                "remaining": remaining,
-                "total": enabled,
-            })
+            available.append(
+                {
+                    "skuId": sku["skuId"],
+                    "skuPartNumber": sku.get("skuPartNumber", ""),
+                    "displayName": sku.get("skuPartNumber", sku["skuId"]),
+                    "remaining": remaining,
+                    "total": enabled,
+                }
+            )
     return available
 
 
@@ -905,10 +902,7 @@ def _check_existing_licenses(token: str, user_id: str) -> list[str]:
     """Check what licenses are already assigned to the user."""
     resp = graph_request("GET", f"/users/{user_id}?$select=assignedLicenses", token)
     if resp.status_code == 200:
-        return [
-            lic.get("skuId", "")
-            for lic in resp.json().get("assignedLicenses", [])
-        ]
+        return [lic.get("skuId", "") for lic in resp.json().get("assignedLicenses", [])]
     return []
 
 
@@ -952,10 +946,7 @@ def assign_license_to_agent_user(token: str, agent_user_id: str) -> None:
         return
 
     # Filter to Teams-capable SKUs
-    teams_skus = [
-        s for s in all_skus
-        if s["skuPartNumber"] in TEAMS_CAPABLE_SKUS
-    ]
+    teams_skus = [s for s in all_skus if s["skuPartNumber"] in TEAMS_CAPABLE_SKUS]
 
     # If no Teams-capable SKUs, show all available and let user decide
     if not teams_skus:
@@ -972,14 +963,15 @@ def assign_license_to_agent_user(token: str, agent_user_id: str) -> None:
     # If exactly one Teams-capable SKU, auto-assign it
     if len(teams_skus) == 1:
         chosen = teams_skus[0]
-        print(f"  Found 1 Teams-capable license: {chosen['displayName']}"
-              f" ({chosen['remaining']}/{chosen['total']} available)")
+        print(
+            f"  Found 1 Teams-capable license: {chosen['displayName']}"
+            f" ({chosen['remaining']}/{chosen['total']} available)"
+        )
     else:
         # Multiple options — ask the user
         print("  Teams-capable licenses available:")
         for i, sku in enumerate(teams_skus, 1):
-            print(f"    {i}. {sku['displayName']}"
-                  f" ({sku['remaining']}/{sku['total']} available)")
+            print(f"    {i}. {sku['displayName']} ({sku['remaining']}/{sku['total']} available)")
         print("")
         while True:
             try:
@@ -1083,11 +1075,7 @@ def main() -> int:
         agent_user_id = existing_user["id"]
         agent_user_upn = existing_user["userPrincipalName"]
         agent_obj_id = existing_user.get("identityParentId", "")
-        sp = (
-            _servicePrincipal_by_object_id(token, agent_obj_id)
-            if agent_obj_id
-            else None
-        )
+        sp = _servicePrincipal_by_object_id(token, agent_obj_id) if agent_obj_id else None
         agent_id = sp.get("appId", "") if sp else ""
         parent_name = sp.get("displayName", "?") if sp else "?"
         print("\n--- Reusing existing Agent User ---\n")

@@ -1,4 +1,5 @@
 """Fetch and print one or more emails by subject match."""
+
 from __future__ import annotations
 
 import asyncio
@@ -34,6 +35,7 @@ async def main() -> None:
             print(f"\n\n======== [{ts}] {sender} ========")
             print(f"Subject: {subj}")
             import re
+
             text = re.sub(r"<[^>]+>", " ", body)
             text = re.sub(r"\s+", " ", text).strip()
             print(text[:3000])

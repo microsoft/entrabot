@@ -123,9 +123,7 @@ class TestMigrateLegacyDataDir:
         ):
             config.migrate_legacy_data_dir(home=tmp_path)
 
-    def test_idempotent_when_target_already_populated_and_legacy_gone(
-        self, tmp_path: Path
-    ) -> None:
+    def test_idempotent_when_target_already_populated_and_legacy_gone(self, tmp_path: Path) -> None:
         local = tmp_path / "Local"
         target = local / "entraclaw" / "logs"
         target.mkdir(parents=True)

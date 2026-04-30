@@ -11,6 +11,7 @@ Usage:
 
 Exits 0 on success (token on stdout). Exits 1 with the error on stderr.
 """
+
 from __future__ import annotations
 
 import contextlib

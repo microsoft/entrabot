@@ -47,9 +47,13 @@ def fresh_software_cert(tmp_path: Path):
     yield result
     # Cleanup — don't fail the test if removal fails.
     import subprocess
+
+    cleanup_cmd = (
+        f"Remove-Item Cert:\\CurrentUser\\My\\{result.thumbprint} "
+        f"-ErrorAction SilentlyContinue"
+    )
     subprocess.run(  # noqa: S603,S607
-        ["pwsh", "-NoProfile", "-Command",
-         f"Remove-Item Cert:\\CurrentUser\\My\\{result.thumbprint} -ErrorAction SilentlyContinue"],
+        ["pwsh", "-NoProfile", "-Command", cleanup_cmd],
         check=False,
     )
 
@@ -63,6 +67,7 @@ def test_full_signer_chain_software_ksp(fresh_software_cert) -> None:
 
     # cncrypt_signer signs an arbitrary 32-byte hash (the SHA-256 of "hello").
     import hashlib
+
     digest = hashlib.sha256(b"hello").digest()
     sig = cncrypt_signer.sign_pkcs1_sha256(thumbprint=sha1, hash_bytes=digest)
     assert isinstance(sig, bytes) and len(sig) == 256  # RSA-2048 = 256 bytes

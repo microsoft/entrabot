@@ -194,9 +194,7 @@ class TestGetBackend:
         keep_memory_local is False, get_backend() returns a BlobBackend.
         """
         monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
-        monkeypatch.setenv(
-            "ENTRACLAW_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net"
-        )
+        monkeypatch.setenv("ENTRACLAW_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net")
         monkeypatch.setenv("ENTRACLAW_BLOB_CONTAINER", "agent-abc-123")
         monkeypatch.delenv("ENTRACLAW_KEEP_MEMORY_LOCAL", raising=False)
         # Stub the storage-token acquisition so this doesn't hit Entra
@@ -214,9 +212,7 @@ class TestGetBackend:
         to Local — better safe than panicking inside the hot path.
         """
         monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
-        monkeypatch.setenv(
-            "ENTRACLAW_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net"
-        )
+        monkeypatch.setenv("ENTRACLAW_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net")
         monkeypatch.delenv("ENTRACLAW_BLOB_CONTAINER", raising=False)
         monkeypatch.delenv("ENTRACLAW_KEEP_MEMORY_LOCAL", raising=False)
         assert isinstance(get_backend(), LocalBackend)
@@ -226,9 +222,7 @@ class TestGetBackend:
     ) -> None:
         """Even with blob endpoint configured, the escape-hatch flag wins."""
         monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
-        monkeypatch.setenv(
-            "ENTRACLAW_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net"
-        )
+        monkeypatch.setenv("ENTRACLAW_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net")
         monkeypatch.setenv("ENTRACLAW_BLOB_CONTAINER", "agent-abc-123")
         monkeypatch.setenv("ENTRACLAW_KEEP_MEMORY_LOCAL", "true")
         assert isinstance(get_backend(), LocalBackend)

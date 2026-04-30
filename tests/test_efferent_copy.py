@@ -144,9 +144,7 @@ class TestFireObserve:
         await ec.fire_observe(sinks, "t", {})
         elapsed = time.monotonic() - t0
 
-        assert elapsed < 0.100, (
-            f"fire_observe blocked {elapsed:.3f}s; must be fire-and-forget"
-        )
+        assert elapsed < 0.100, f"fire_observe blocked {elapsed:.3f}s; must be fire-and-forget"
         # Give the timeout machinery a chance to fire (should be ~250ms).
         await asyncio.sleep(0.4)
         # Call never completed because it timed out; no record.
@@ -350,9 +348,7 @@ class TestDiscoverSinks:
         sinks = await ec.discover_sinks(tmp_path / "nope.json")
         assert sinks == []
 
-    async def test_default_disabled_does_not_contact_peers(
-        self, tmp_path: Path, monkeypatch
-    ):
+    async def test_default_disabled_does_not_contact_peers(self, tmp_path: Path, monkeypatch):
         """Efferent copy is opt-in so routine tool calls are not mirrored.
 
         This protects disk-backed observer sinks from receiving pre/post
@@ -362,11 +358,7 @@ class TestDiscoverSinks:
         cfg = tmp_path / ".mcp.json"
         cfg.write_text(
             json.dumps(
-                {
-                    "mcpServers": {
-                        "peer": {"type": "sse", "url": "http://localhost:9999/sse"}
-                    }
-                }
+                {"mcpServers": {"peer": {"type": "sse", "url": "http://localhost:9999/sse"}}}
             )
         )
         monkeypatch.delenv(ec.DISABLE_ENV, raising=False)
@@ -386,11 +378,7 @@ class TestDiscoverSinks:
         cfg = tmp_path / ".mcp.json"
         cfg.write_text(
             json.dumps(
-                {
-                    "mcpServers": {
-                        "peer": {"type": "sse", "url": "http://localhost:9999/sse"}
-                    }
-                }
+                {"mcpServers": {"peer": {"type": "sse", "url": "http://localhost:9999/sse"}}}
             )
         )
         monkeypatch.setenv(ec.DISABLE_ENV, "1")
@@ -423,13 +411,7 @@ class TestDiscoverSinks:
     async def test_unknown_transport_is_skipped(self, tmp_path: Path, monkeypatch):
         cfg = tmp_path / ".mcp.json"
         cfg.write_text(
-            json.dumps(
-                {
-                    "mcpServers": {
-                        "weird": {"type": "telepathy", "url": "mindwave://x"}
-                    }
-                }
-            )
+            json.dumps({"mcpServers": {"weird": {"type": "telepathy", "url": "mindwave://x"}}})
         )
         monkeypatch.delenv(ec.DISABLE_ENV, raising=False)
         monkeypatch.setenv(ec.ENABLE_ENV, "1")
@@ -490,13 +472,9 @@ class TestDiscoverSinks:
         # Zero attempts to build a factory for the self-referential peer.
         # (If _build_sink_factory WERE called, failing_builder would raise
         # and the await would propagate it. Belt: assert the list too.)
-        assert factory_calls == [], (
-            f"self-referential peer reached factory build: {factory_calls}"
-        )
+        assert factory_calls == [], f"self-referential peer reached factory build: {factory_calls}"
 
-    async def test_wrapper_with_self_ref_marker_is_skipped(
-        self, tmp_path: Path, monkeypatch
-    ):
+    async def test_wrapper_with_self_ref_marker_is_skipped(self, tmp_path: Path, monkeypatch):
         """A peer whose `command` points at a thin shell wrapper that exec's
         into our running binary MUST be skipped — same root cause as the
         direct self-reference case. The wrapper declares its target via a
@@ -518,9 +496,7 @@ class TestDiscoverSinks:
 
         wrapper = tmp_path / "wrapper.sh"
         wrapper.write_text(
-            "#!/bin/bash\n"
-            f"# entraclaw-self-ref-target: {fake_target}\n"
-            f'exec "{fake_target}"\n'
+            f'#!/bin/bash\n# entraclaw-self-ref-target: {fake_target}\nexec "{fake_target}"\n'
         )
         wrapper.chmod(0o755)
 
@@ -558,13 +534,9 @@ class TestDiscoverSinks:
 
         sinks = await ec.discover_sinks(cfg)
         assert sinks == []
-        assert factory_calls == [], (
-            f"wrapper-pointing peer reached factory build: {factory_calls}"
-        )
+        assert factory_calls == [], f"wrapper-pointing peer reached factory build: {factory_calls}"
 
-    def test_is_self_referential_peer_recognizes_wrapper_marker(
-        self, tmp_path: Path, monkeypatch
-    ):
+    def test_is_self_referential_peer_recognizes_wrapper_marker(self, tmp_path: Path, monkeypatch):
         """Unit-level coverage for the wrapper-marker branch."""
         import sys
 
@@ -575,17 +547,13 @@ class TestDiscoverSinks:
         # Marker uses a relative path; resolves against the script's dir.
         wrapper = tmp_path / "wrapper.sh"
         wrapper.write_text(
-            "#!/bin/bash\n"
-            "# entraclaw-self-ref-target: ./entraclaw-mcp\n"
-            f'exec "{fake_target}"\n'
+            f'#!/bin/bash\n# entraclaw-self-ref-target: ./entraclaw-mcp\nexec "{fake_target}"\n'
         )
         wrapper.chmod(0o755)
 
         monkeypatch.setattr(sys, "argv", [str(fake_target)])
 
-        assert ec._is_self_referential_peer(
-            {"type": "stdio", "command": str(wrapper)}
-        ) is True
+        assert ec._is_self_referential_peer({"type": "stdio", "command": str(wrapper)}) is True
 
     def test_is_self_referential_peer_ignores_wrapper_without_marker(
         self, tmp_path: Path, monkeypatch
@@ -604,21 +572,14 @@ class TestDiscoverSinks:
 
         wrapper = tmp_path / "wrapper.sh"
         # No marker line — just a regular wrapper.
-        wrapper.write_text(
-            "#!/bin/bash\n"
-            f'exec "{fake_target}"\n'
-        )
+        wrapper.write_text(f'#!/bin/bash\nexec "{fake_target}"\n')
         wrapper.chmod(0o755)
 
         monkeypatch.setattr(sys, "argv", [str(fake_target)])
 
-        assert ec._is_self_referential_peer(
-            {"type": "stdio", "command": str(wrapper)}
-        ) is False
+        assert ec._is_self_referential_peer({"type": "stdio", "command": str(wrapper)}) is False
 
-    async def test_stdio_factory_sets_efferent_copy_disable_in_child_env(
-        self, monkeypatch
-    ):
+    async def test_stdio_factory_sets_efferent_copy_disable_in_child_env(self, monkeypatch):
         """Belt-and-suspenders: any subprocess we do spawn via stdio
         MUST inherit ``EFFERENT_COPY_DISABLE=1`` so the child's own
         discover_sinks short-circuits immediately. This bounds the
@@ -689,9 +650,7 @@ class TestInstall:
         # observe itself must remain untouched — calling it doesn't
         # recursively produce more observe calls.
         rec.calls.clear()
-        await mcp._tool_manager._tools["observe"].fn(
-            tool_name="x", args={}
-        )
+        await mcp._tool_manager._tools["observe"].fn(tool_name="x", args={})
         await asyncio.sleep(0.05)
         assert rec.calls == []
 

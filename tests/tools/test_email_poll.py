@@ -116,9 +116,7 @@ class TestPollOnce:
     @pytest.mark.asyncio
     async def test_empty_response_returns_empty_and_nil_cursor(self) -> None:
         with respx.mock:
-            respx.get(GRAPH_MESSAGES_URL).mock(
-                return_value=httpx.Response(200, json={"value": []})
-            )
+            respx.get(GRAPH_MESSAGES_URL).mock(return_value=httpx.Response(200, json={"value": []}))
             msgs, new_cursor = await poll_once(token="tok", cursor=None)
         assert msgs == []
         assert new_cursor is None
@@ -210,9 +208,9 @@ class TestPollOnce:
             respx.get(GRAPH_MESSAGES_URL).mock(
                 return_value=httpx.Response(200, json={"value": [main_msg]})
             )
-            respx.get(
-                "https://graph.microsoft.com/v1.0/me/messages/enc-1/attachments"
-            ).mock(return_value=httpx.Response(200, json=attachments))
+            respx.get("https://graph.microsoft.com/v1.0/me/messages/enc-1/attachments").mock(
+                return_value=httpx.Response(200, json=attachments)
+            )
             msgs, _ = await poll_once(token="tok", cursor=None)
 
         assert len(msgs) == 1
@@ -230,9 +228,7 @@ class TestPollOnce:
             respx.get(GRAPH_MESSAGES_URL).mock(
                 return_value=httpx.Response(200, json={"value": [main_msg]})
             )
-            respx.get(
-                "https://graph.microsoft.com/v1.0/me/messages/plain-1/attachments"
-            ).mock(
+            respx.get("https://graph.microsoft.com/v1.0/me/messages/plain-1/attachments").mock(
                 return_value=httpx.Response(
                     200,
                     json={

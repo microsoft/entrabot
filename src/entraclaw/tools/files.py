@@ -47,6 +47,7 @@ from entraclaw.errors import (
     FileTooLargeError,
     GraphFilesError,
     MissingPermissionError,
+    NotASponsorError,
     SiteNotAllowedError,
     TokenExpiredError,
     UnsupportedCommentFormatError,
@@ -70,11 +71,40 @@ DEFAULT_MAX_PDF_BYTES = 52_428_800  # 50 MiB
 
 DriveKind = Literal["onedrive_personal", "onedrive_business", "sharepoint"]
 ReadFormat = Literal["raw", "auto"]
+ConflictBehavior = Literal["rename", "replace", "fail"]
+ShareRole = Literal["read", "write"]
 
 
 # ───────────────────────────────────────────────────────────────────────
 # Public dataclasses
 # ───────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class OneDriveTarget:
+    """Upload target: agent's own OneDrive (no SharePoint permission needed)."""
+
+    folder_path: str = "/"
+
+
+@dataclass(frozen=True)
+class SharePointTarget:
+    """Upload target: named SharePoint site library (site_id denylist applied)."""
+
+    site_id: str
+    drive_id: str
+    folder_path: str = "/"
+
+
+@dataclass(frozen=True)
+class SharePermission:
+    """Result of ``share_file`` — permission metadata for V1.1 revocation."""
+
+    permission_id: str
+    role: ShareRole
+    recipient_email: str
+    web_url: str | None = None
+    expiration_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -302,8 +332,7 @@ def _raise_for_files_error(resp: httpx.Response, *, target: str, scope: str) -> 
     status = resp.status_code
     if status == 401:
         raise TokenExpiredError(
-            "Agent User token expired during Files Graph call — "
-            "re-acquire via three-hop flow"
+            "Agent User token expired during Files Graph call — re-acquire via three-hop flow"
         )
     if status == 404:
         raise FileNotFoundError(target)
@@ -453,9 +482,7 @@ async def list_recent_files(
             resp = await client.get(request_url, headers=_bearer(token))
 
         if resp.status_code != 200:
-            _raise_for_files_error(
-                resp, target="sharedWithMe", scope="Files.Read.All"
-            )
+            _raise_for_files_error(resp, target="sharedWithMe", scope="Files.Read.All")
 
         denied = _denied_sites()
         for raw in resp.json().get("value", []):
@@ -519,8 +546,7 @@ async def _check_size_or_raise(
         size = file_ref.size_bytes
     else:
         meta_url = (
-            f"{GRAPH_V1_HOST}/drives/{file_ref.drive_id}/items/{file_ref.item_id}"
-            "?$select=size"
+            f"{GRAPH_V1_HOST}/drives/{file_ref.drive_id}/items/{file_ref.item_id}?$select=size"
         )
         resp = await client.get(meta_url, headers=_bearer(token))
         if resp.status_code != 200:
@@ -566,9 +592,7 @@ async def read_file(
     resource = f"{file_ref.drive_id}:{file_ref.item_id}"
 
     if ext in _EXCEL_EXTENSIONS:
-        raise UnsupportedReadFormatError(
-            ext, "Use read_workbook_range for Excel data (PR3)."
-        )
+        raise UnsupportedReadFormatError(ext, "Use read_workbook_range for Excel data (PR3).")
     if ext in _PPT_EXTENSIONS:
         raise UnsupportedReadFormatError(
             ext,
@@ -581,17 +605,19 @@ async def read_file(
             "Only .md/.txt/.html, .pdf, and .docx are supported in V1.",
         )
 
-    async with _audit_graph_call(
-        "read_file",
-        resource,
-        metadata={"name": file_ref.name, "extension": ext, "as_format": as_format},
-    ), _client(transport, allow_5xx_retry=True) as client:
+    async with (
+        _audit_graph_call(
+            "read_file",
+            resource,
+            metadata={"name": file_ref.name, "extension": ext, "as_format": as_format},
+        ),
+        _client(transport, allow_5xx_retry=True) as client,
+    ):
         page_count: int | None = None
 
         if ext in _RAW_TEXT_EXTENSIONS:
             content_url = (
-                f"{GRAPH_V1_HOST}/drives/{file_ref.drive_id}"
-                f"/items/{file_ref.item_id}/content"
+                f"{GRAPH_V1_HOST}/drives/{file_ref.drive_id}/items/{file_ref.item_id}/content"
             )
             resp = await client.get(content_url, headers=_bearer(token))
             if resp.status_code not in (200, 302):
@@ -601,12 +627,9 @@ async def read_file(
 
         elif ext == ".pdf":
             # P1: refuse to download PDFs over the size cap.
-            await _check_size_or_raise(
-                client=client, file_ref=file_ref, token=token
-            )
+            await _check_size_or_raise(client=client, file_ref=file_ref, token=token)
             content_url = (
-                f"{GRAPH_V1_HOST}/drives/{file_ref.drive_id}"
-                f"/items/{file_ref.item_id}/content"
+                f"{GRAPH_V1_HOST}/drives/{file_ref.drive_id}/items/{file_ref.item_id}/content"
             )
             resp = await client.get(content_url, headers=_bearer(token))
             if resp.status_code != 200:
@@ -684,9 +707,7 @@ async def add_file_comment(
         "folder",
         "application/vnd.microsoft.graph.folder",
     ):
-        raise UnsupportedCommentFormatError(
-            "cannot comment on a folder driveItem"
-        )
+        raise UnsupportedCommentFormatError("cannot comment on a folder driveItem")
 
     # A5 reject: format
     if ext not in _COMMENT_SUPPORTED_EXTENSIONS:
@@ -704,10 +725,7 @@ async def add_file_comment(
         )
 
     resource = f"{file_ref.drive_id}:{file_ref.item_id}"
-    request_url = (
-        f"{GRAPH_BETA_HOST}/drives/{file_ref.drive_id}"
-        f"/items/{file_ref.item_id}/comments"
-    )
+    request_url = f"{GRAPH_BETA_HOST}/drives/{file_ref.drive_id}/items/{file_ref.item_id}/comments"
     payload = {"content": {"contentType": "text", "content": content}}
 
     async with _audit_graph_call(
@@ -734,11 +752,447 @@ async def add_file_comment(
         )
 
 
+# ───────────────────────────────────────────────────────────────────────
+# PR2: Author / Upload / Share Tools
+# ───────────────────────────────────────────────────────────────────────
+
+
+# Implementation template for write_text_file
+
+
+async def write_text_file(
+    target: OneDriveTarget | SharePointTarget,
+    file_name: str,
+    content: str,
+    conflict_behavior: ConflictBehavior = "fail",
+    token: str | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> FileRef:
+    """Write text to a file (create or update per conflict_behavior).
+
+    Args:
+        target: OneDrive or SharePoint upload target
+        file_name: Name of file to create/overwrite
+        content: Text content to write
+        conflict_behavior: rename / replace / fail
+        token: Optional pre-fetched token; else refreshed
+        transport: Optional test transport
+
+    Returns:
+        FileRef to the written file
+
+    Raises:
+        SiteNotAllowedError: Site on operator denylist
+        GraphFilesError: 403 Forbidden, 5xx, or other Graph errors
+    """
+    if not token:
+        raise ValueError("token is required")
+
+    # For SharePoint, check site allowed
+    if isinstance(target, SharePointTarget):
+        _check_site_allowed(target.site_id)
+        drive_id = target.drive_id
+        site_id = target.site_id
+    else:
+        drive_id = None  # Fetch from /me/drive
+        site_id = None
+
+    # Resource identifier for audit
+    resource = f"{drive_id or 'me/drive'}:{target.folder_path}/{file_name}"
+
+    # Build Graph URL
+    # For OneDrive: PUT /me/drive/root:/{folder_path}/{file_name}:/content
+    # For SharePoint: PUT /drives/{drive_id}/root:/{folder_path}/{file_name}:/content
+    if isinstance(target, SharePointTarget):
+        drive_prefix = f"/drives/{target.drive_id}"
+    else:
+        drive_prefix = "/me/drive"
+
+    # Clean up folder path
+    folder = target.folder_path.rstrip("/") or "/"
+    path_spec = f"{folder}/{file_name}" if folder != "/" else f"/{file_name}"
+
+    url = (
+        f"{GRAPH_V1_HOST}{drive_prefix}/root:{path_spec}:/content"
+        f"?@microsoft.graph.conflictBehavior={conflict_behavior}"
+    )
+
+    async with _audit_graph_call(
+        "write_text_file",
+        resource,
+        metadata={
+            "file_name": file_name,
+            "conflict_behavior": conflict_behavior,
+            "site_id": site_id,
+        },
+    ):
+        async with _client(transport, allow_5xx_retry=False) as client:
+            # Write text content as UTF-8 bytes
+            resp = await client.put(
+                url,
+                content=content.encode("utf-8"),
+                headers=_bearer(token),
+            )
+
+        if resp.status_code not in (200, 201):
+            _raise_for_files_error(resp, target=resource, scope="Files.ReadWrite")
+
+        body = resp.json()
+        return FileRef(
+            drive_id=str(body.get("parentReference", {}).get("driveId") or ""),
+            item_id=str(body.get("id") or ""),
+            name=str(body.get("name") or file_name),
+            mime_type=str(body.get("file", {}).get("mimeType") or "text/plain"),
+            kind="sharepoint" if site_id else "onedrive_business",
+            site_id=site_id,
+            web_url=body.get("webUrl"),
+            size_bytes=int(body.get("size") or 0),
+        )
+
+
+async def upload_file(
+    target: OneDriveTarget | SharePointTarget,
+    file_name: str,
+    content_bytes: bytes,
+    conflict_behavior: ConflictBehavior = "fail",
+    token: str | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> FileRef:
+    """Upload binary file with automatic chunking for large files.
+
+    Args:
+        target: OneDrive or SharePoint upload target
+        file_name: Name of file to create/upload
+        content_bytes: File content bytes
+        conflict_behavior: rename / replace / fail
+        token: Optional pre-fetched token; else refreshed
+        transport: Optional test transport
+
+    Returns:
+        FileRef to the uploaded file
+
+    Raises:
+        SiteNotAllowedError: Site on operator denylist
+        GraphFilesError: 403 Forbidden, 429 throttle, 5xx, or other errors
+    """
+    if not token:
+        raise ValueError("token is required")
+
+    # Check site allowed (SharePoint only)
+    if isinstance(target, SharePointTarget):
+        _check_site_allowed(target.site_id)
+        drive_id = target.drive_id
+        site_id = target.site_id
+    else:
+        drive_id = None
+        site_id = None
+
+    resource = f"{drive_id or 'me/drive'}:{target.folder_path}/{file_name}"
+
+    # Decide single-PUT vs chunked based on file size
+    CHUNK_SIZE = 5 * 1024 * 1024  # 5 MiB per chunk
+    use_chunked = len(content_bytes) >= CHUNK_SIZE
+
+    if not use_chunked:
+        # Small file: single PUT to /content endpoint
+        if isinstance(target, SharePointTarget):
+            drive_prefix = f"/drives/{target.drive_id}"
+        else:
+            drive_prefix = "/me/drive"
+
+        folder = target.folder_path.rstrip("/") or "/"
+        path_spec = f"{folder}/{file_name}" if folder != "/" else f"/{file_name}"
+
+        url = (
+            f"{GRAPH_V1_HOST}{drive_prefix}/root:{path_spec}:/content"
+            f"?@microsoft.graph.conflictBehavior={conflict_behavior}"
+        )
+
+        async with _audit_graph_call(
+            "upload_file",
+            resource,
+            metadata={
+                "file_name": file_name,
+                "conflict_behavior": conflict_behavior,
+                "site_id": site_id,
+                "size_bytes": len(content_bytes),
+            },
+        ):
+            async with _client(transport, allow_5xx_retry=False) as client:
+                resp = await client.put(
+                    url,
+                    content=content_bytes,
+                    headers=_bearer(token),
+                )
+
+            if resp.status_code not in (200, 201):
+                _raise_for_files_error(resp, target=resource, scope="Files.ReadWrite")
+
+            body = resp.json()
+            return FileRef(
+                drive_id=str(body.get("parentReference", {}).get("driveId") or ""),
+                item_id=str(body.get("id") or ""),
+                name=str(body.get("name") or file_name),
+                mime_type=str(body.get("file", {}).get("mimeType") or "application/octet-stream"),
+                kind="sharepoint" if site_id else "onedrive_business",
+                site_id=site_id,
+                web_url=body.get("webUrl"),
+                size_bytes=int(body.get("size") or len(content_bytes)),
+            )
+    else:
+        # Large file: createUploadSession + chunked upload
+        return await _upload_chunked_session(
+            target=target,
+            file_name=file_name,
+            content_bytes=content_bytes,
+            conflict_behavior=conflict_behavior,
+            token=token,
+            transport=transport,
+            resource=resource,
+            site_id=site_id,
+        )
+
+
+async def _upload_chunked_session(
+    target: OneDriveTarget | SharePointTarget,
+    file_name: str,
+    content_bytes: bytes,
+    conflict_behavior: ConflictBehavior,
+    token: str,
+    transport: httpx.AsyncBaseTransport | None,
+    resource: str,
+    site_id: str | None,
+) -> FileRef:
+    """Chunked upload via createUploadSession + resumable PUT."""
+    # Build createUploadSession request
+    if isinstance(target, SharePointTarget):
+        drive_prefix = f"/drives/{target.drive_id}"
+    else:
+        drive_prefix = "/me/drive"
+
+    folder = target.folder_path.rstrip("/") or "/"
+    path_spec = f"{folder}/{file_name}" if folder != "/" else f"/{file_name}"
+
+    create_url = f"{GRAPH_V1_HOST}{drive_prefix}/root:{path_spec}:/createUploadSession"
+
+    payload = {
+        "item": {
+            "@microsoft.graph.conflictBehavior": conflict_behavior,
+        }
+    }
+
+    async with _client(transport, allow_5xx_retry=False) as client:
+        resp = await client.post(
+            create_url,
+            json=payload,
+            headers={**_bearer(token), "Content-Type": "application/json"},
+        )
+
+    if resp.status_code != 200:
+        _raise_for_files_error(resp, target=resource, scope="Files.ReadWrite")
+
+    session_data = resp.json()
+    upload_url = session_data.get("uploadUrl")
+    if not upload_url:
+        raise GraphFilesError(500, "No uploadUrl in createUploadSession response")
+
+    # Upload chunks
+    CHUNK_SIZE = 5 * 1024 * 1024
+    total_bytes = len(content_bytes)
+
+    async with _audit_graph_call(
+        "upload_file",
+        resource,
+        metadata={
+            "file_name": file_name,
+            "size_bytes": total_bytes,
+            "chunked": True,
+        },
+    ):
+        offset = 0
+        while offset < total_bytes:
+            chunk_end = min(offset + CHUNK_SIZE, total_bytes)
+            chunk = content_bytes[offset:chunk_end]
+            is_last = chunk_end == total_bytes
+
+            content_range = f"bytes {offset}-{chunk_end - 1}/{total_bytes}"
+
+            retry_count = 0
+            max_retries = 3
+
+            while retry_count < max_retries:
+                async with _client(transport, allow_5xx_retry=False) as client:
+                    resp = await client.put(
+                        upload_url,
+                        content=chunk,
+                        headers={
+                            **_bearer(token),
+                            "Content-Length": str(len(chunk)),
+                            "Content-Range": content_range,
+                        },
+                    )
+
+                # 200/201 (intermediate/final success)
+                if resp.status_code in (200, 201):
+                    if is_last:
+                        body = resp.json()
+                        return FileRef(
+                            drive_id=str(body.get("parentReference", {}).get("driveId") or ""),
+                            item_id=str(body.get("id") or ""),
+                            name=str(body.get("name") or file_name),
+                            mime_type=str(
+                                body.get("file", {}).get("mimeType") or "application/octet-stream"
+                            ),
+                            kind="sharepoint" if site_id else "onedrive_business",
+                            site_id=site_id,
+                            web_url=body.get("webUrl"),
+                            size_bytes=int(body.get("size") or total_bytes),
+                        )
+                    else:
+                        # Intermediate chunk accepted; move to next
+                        offset = chunk_end
+                        break
+
+                # 5xx or 429: retry with exponential backoff
+                elif resp.status_code in (503, 504, 502, 429):
+                    retry_count += 1
+                    if retry_count >= max_retries:
+                        _raise_for_files_error(resp, target=resource, scope="Files.ReadWrite")
+                    # Exponential backoff: 1s, 2s, 4s
+                    import asyncio
+
+                    await asyncio.sleep(2 ** (retry_count - 1))
+                    continue
+
+                # Other errors: fail immediately
+                else:
+                    _raise_for_files_error(resp, target=resource, scope="Files.ReadWrite")
+
+        # Should never reach here
+        raise GraphFilesError(500, "Upload loop exited without final response")
+
+
+async def _get_sponsor_allowlist() -> set[str]:
+    """Fetch Agent Identity sponsor email addresses from Graph.
+
+    Uses fetch_agent_identity_sponsors to list all sponsor UPNs, mail, otherMails,
+    proxyAddresses, and federated identities. Returns normalized set of all
+    canonical email forms.
+    """
+    import asyncio
+
+    from entraclaw.config import get_config
+    from entraclaw.identity.sponsors import fetch_agent_identity_sponsors
+
+    config = get_config()
+    sponsors = await asyncio.to_thread(fetch_agent_identity_sponsors, config)
+
+    canonical_emails: set[str] = set()
+    for sponsor in sponsors:
+        canonical_emails.update(sponsor.email_identifiers())
+
+    return canonical_emails
+
+
+async def share_file(
+    file_ref: FileRef,
+    recipient_email: str,
+    role: ShareRole = "read",
+    token: str | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> SharePermission:
+    """Share a file with a recipient (sponsor-allowlist enforced).
+
+    Args:
+        file_ref: FileRef from resolve_file_url or read_file
+        recipient_email: Email to share with (must be in sponsor allowlist)
+        role: read / write
+        token: Optional pre-fetched token; else refreshed
+        transport: Optional test transport
+
+    Returns:
+        SharePermission with permission_id and metadata
+
+    Raises:
+        NotASponsorError: Recipient not in Agent Identity sponsor allowlist
+        SiteNotAllowedError: (SharePoint only) Site on operator denylist
+        GraphFilesError: 403 Forbidden, 5xx, or other Graph errors
+    """
+    if not token:
+        raise ValueError("token is required")
+
+    # For SharePoint, check site allowed
+    if file_ref.site_id:
+        _check_site_allowed(file_ref.site_id)
+
+    # Validate recipient is in sponsor allowlist
+    sponsor_emails = await _get_sponsor_allowlist()
+    recipient_lower = recipient_email.lower()
+
+    if not any(email.lower() == recipient_lower for email in sponsor_emails):
+        raise NotASponsorError(
+            recipient=recipient_email,
+            sponsors=sorted(sponsor_emails),
+        )
+
+    resource = f"{file_ref.drive_id}:{file_ref.item_id}"
+    request_url = f"{GRAPH_V1_HOST}/drives/{file_ref.drive_id}/items/{file_ref.item_id}/invite"
+
+    payload = {
+        "recipients": [
+            {
+                "email": recipient_email,
+            }
+        ],
+        "roles": [role],
+        "requireSignIn": True,
+    }
+
+    async with _audit_graph_call(
+        "share_file",
+        resource,
+        metadata={
+            "recipient_email": recipient_email,
+            "role": role,
+            "site_id": file_ref.site_id,
+        },
+    ):
+        async with _client(transport, allow_5xx_retry=False) as client:
+            resp = await client.post(
+                request_url,
+                json=payload,
+                headers={**_bearer(token), "Content-Type": "application/json"},
+            )
+
+        if resp.status_code not in (200, 201):
+            _raise_for_files_error(resp, target=resource, scope="Files.ReadWrite")
+
+        body = resp.json()
+
+        # Extract permission from response
+        # POST /invite returns array of permission objects
+        perms = body.get("value", [])
+        if perms:
+            perm = perms[0]
+            return SharePermission(
+                permission_id=str(perm.get("id") or ""),
+                role=role,
+                recipient_email=recipient_email,
+                web_url=perm.get("webUrl"),
+                expiration_at=perm.get("expirationDateTime"),
+            )
+        else:
+            raise GraphFilesError(500, "No permission returned from invite endpoint")
+
+
 __all__ = [
     "GRAPH_V1_HOST",
     "GRAPH_BETA_HOST",
     "DEFAULT_MAX_PDF_BYTES",
     "DEFAULT_MAX_TEXT_BYTES",
+    "OneDriveTarget",
+    "SharePointTarget",
+    "SharePermission",
     "FileRef",
     "FileSummary",
     "RecentFilesPage",
@@ -748,4 +1202,7 @@ __all__ = [
     "list_recent_files",
     "read_file",
     "add_file_comment",
+    "write_text_file",
+    "upload_file",
+    "share_file",
 ]

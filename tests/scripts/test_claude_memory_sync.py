@@ -24,9 +24,7 @@ SCRIPT_PATH = REPO_ROOT / "scripts" / "claude_memory_sync.py"
 
 @pytest.fixture
 def sync_module():
-    spec = importlib.util.spec_from_file_location(
-        "claude_memory_sync", SCRIPT_PATH
-    )
+    spec = importlib.util.spec_from_file_location("claude_memory_sync", SCRIPT_PATH)
     module = importlib.util.module_from_spec(spec)
     sys.modules["claude_memory_sync"] = module
     spec.loader.exec_module(module)
@@ -68,17 +66,12 @@ class TestPushOneSubcommand:
         target.write_text("Product Architect")
 
         monkeypatch.setattr(sync_module, "_resolve_backend", lambda: backend)
-        monkeypatch.setattr(
-            sync_module, "_resolve_memory_dir", lambda: mem_dir
-        )
+        monkeypatch.setattr(sync_module, "_resolve_memory_dir", lambda: mem_dir)
 
         rc = sync_module.main(["push-one", str(target)])
 
         assert rc == 0
-        assert (
-            backend.read_text("claude_memory/user_brandon_role.md")
-            == "Product Architect"
-        )
+        assert backend.read_text("claude_memory/user_brandon_role.md") == "Product Architect"
 
     def test_push_one_ignores_path_outside_memory_dir(
         self,
@@ -122,9 +115,7 @@ class TestPushSubcommand:
 
         assert rc == 0
         assert backend.read_text("claude_memory/MEMORY.md") == "index"
-        assert (
-            backend.read_text("claude_memory/user_brandon_role.md") == "Brandon"
-        )
+        assert backend.read_text("claude_memory/user_brandon_role.md") == "Brandon"
 
 
 class TestPullSubcommand:
@@ -165,9 +156,7 @@ class TestFeatureFlag:
             raise AssertionError("must not reach backend when flag is off")
 
         monkeypatch.setattr(sync_module, "_resolve_backend", boom)
-        monkeypatch.setattr(
-            sync_module, "_resolve_memory_dir", lambda: tmp_path / "memory"
-        )
+        monkeypatch.setattr(sync_module, "_resolve_memory_dir", lambda: tmp_path / "memory")
 
         rc = sync_module.main(["pull"])
         assert rc == 0

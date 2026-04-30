@@ -77,9 +77,7 @@ class EntraClawBot(ActivityHandler):
             if member.id == bot_id:
                 ref = TurnContext.get_conversation_reference(activity)
                 _save_convo_ref(ref)
-                logger.info(
-                    "Bot installed in conversation %s", activity.conversation.id
-                )
+                logger.info("Bot installed in conversation %s", activity.conversation.id)
 
     async def on_turn(self, turn_context: TurnContext) -> None:
         """Called on every turn — save convo ref, then dispatch."""
@@ -143,9 +141,7 @@ def _dict_to_convo_ref(d: dict) -> ConversationReference:
 OUTBOUND_POLL_INTERVAL = 2  # seconds
 
 
-async def _outbound_pump(
-    adapter: BotFrameworkAdapter, bot: EntraClawBot
-) -> None:
+async def _outbound_pump(adapter: BotFrameworkAdapter, bot: EntraClawBot) -> None:
     """Poll outbound.jsonl and send proactive messages via the adapter."""
     while True:
         try:
@@ -208,9 +204,7 @@ async def _outbound_pump(
                             )
                             logger.info("Sent proactive message: %s", content[:50])
                         except Exception as exc:
-                            logger.error(
-                                "Failed to send proactive message: %s", exc
-                            )
+                            logger.error("Failed to send proactive message: %s", exc)
                     else:
                         logger.warning(
                             "No conversation reference — cannot send: %s",
@@ -225,9 +219,7 @@ async def _outbound_pump(
 # ── aiohttp app factory ───────────────────────────────────────────
 
 
-def create_bot_app(
-    adapter: BotFrameworkAdapter, bot: EntraClawBot
-) -> web.Application:
+def create_bot_app(adapter: BotFrameworkAdapter, bot: EntraClawBot) -> web.Application:
     """Create the aiohttp web application for the bot server.
 
     Routes ``/api/messages`` to the Bot Framework adapter which
@@ -246,13 +238,9 @@ def create_bot_app(
         activity = Activity().deserialize(json.loads(body))
 
         try:
-            response = await adapter.process_activity(
-                activity, auth_header, bot.on_turn
-            )
+            response = await adapter.process_activity(activity, auth_header, bot.on_turn)
             if response:
-                return web.Response(
-                    status=response.status, body=response.body
-                )
+                return web.Response(status=response.status, body=response.body)
             return web.Response(status=200)
         except PermissionError:
             logger.error("Auth failed for activity (check bot app ID / secret)")
@@ -281,9 +269,7 @@ async def run_bot_server(port: int = 3978) -> None:
     bot_app_password = os.environ.get("ENTRACLAW_BOT_APP_PASSWORD", "")
     tenant_id = os.environ.get("ENTRACLAW_TENANT_ID", "")
 
-    adapter = _create_adapter(
-        bot_app_id, bot_cert_thumbprint, bot_app_password, tenant_id
-    )
+    adapter = _create_adapter(bot_app_id, bot_cert_thumbprint, bot_app_password, tenant_id)
 
     async def on_error(context: TurnContext, error: Exception) -> None:
         logger.error("Bot adapter error: %s", error)

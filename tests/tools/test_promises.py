@@ -105,17 +105,9 @@ class TestAddPromise:
     @pytest.mark.asyncio
     async def test_multiple_adds_append(self) -> None:
         backend = InMemoryBackend()
-        p1 = await add_promise(
-            chat_id="c1", description="first", backend=backend
-        )
-        p2 = await add_promise(
-            chat_id="c2", description="second", backend=backend
-        )
-        lines = [
-            line
-            for line in backend.read_text(PROMISES_KEY).splitlines()
-            if line.strip()
-        ]
+        p1 = await add_promise(chat_id="c1", description="first", backend=backend)
+        p2 = await add_promise(chat_id="c2", description="second", backend=backend)
+        lines = [line for line in backend.read_text(PROMISES_KEY).splitlines() if line.strip()]
         assert len(lines) == 2
         ids = [json.loads(line)["id"] for line in lines]
         assert ids == [p1.id, p2.id]
@@ -133,15 +125,9 @@ class TestListPromises:
     @pytest.mark.asyncio
     async def test_open_only_filters_resolved(self) -> None:
         backend = InMemoryBackend()
-        p1 = await add_promise(
-            chat_id="c1", description="first", backend=backend
-        )
-        p2 = await add_promise(
-            chat_id="c2", description="second", backend=backend
-        )
-        await resolve_promise(
-            promise_id=p1.id, resolution="shipped", backend=backend
-        )
+        p1 = await add_promise(chat_id="c1", description="first", backend=backend)
+        p2 = await add_promise(chat_id="c2", description="second", backend=backend)
+        await resolve_promise(promise_id=p1.id, resolution="shipped", backend=backend)
 
         open_only = await list_promises(backend=backend, open_only=True)
         assert len(open_only) == 1
@@ -151,15 +137,9 @@ class TestListPromises:
     @pytest.mark.asyncio
     async def test_all_includes_resolved(self) -> None:
         backend = InMemoryBackend()
-        p1 = await add_promise(
-            chat_id="c1", description="first", backend=backend
-        )
-        p2 = await add_promise(
-            chat_id="c2", description="second", backend=backend
-        )
-        await resolve_promise(
-            promise_id=p1.id, resolution="shipped", backend=backend
-        )
+        p1 = await add_promise(chat_id="c1", description="first", backend=backend)
+        p2 = await add_promise(chat_id="c2", description="second", backend=backend)
+        await resolve_promise(promise_id=p1.id, resolution="shipped", backend=backend)
 
         all_promises = await list_promises(backend=backend, open_only=False)
         assert len(all_promises) == 2
@@ -172,9 +152,7 @@ class TestListPromises:
     async def test_last_line_wins_per_id(self) -> None:
         """Multiple entries for same id → most recent reflects state."""
         backend = InMemoryBackend()
-        p = await add_promise(
-            chat_id="c1", description="first", backend=backend
-        )
+        p = await add_promise(chat_id="c1", description="first", backend=backend)
         # Manually craft a second "update" line to simulate a resolve.
         newer = json.dumps(
             {
@@ -202,9 +180,7 @@ class TestResolvePromise:
     @pytest.mark.asyncio
     async def test_appends_resolved_entry(self) -> None:
         backend = InMemoryBackend()
-        promise = await add_promise(
-            chat_id="c1", description="ship it", backend=backend
-        )
+        promise = await add_promise(chat_id="c1", description="ship it", backend=backend)
         resolved = await resolve_promise(
             promise_id=promise.id,
             resolution="PR #42 merged",
@@ -215,11 +191,7 @@ class TestResolvePromise:
         assert resolved.resolution == "PR #42 merged"
         assert resolved.resolved_at
 
-        lines = [
-            line
-            for line in backend.read_text(PROMISES_KEY).splitlines()
-            if line.strip()
-        ]
+        lines = [line for line in backend.read_text(PROMISES_KEY).splitlines() if line.strip()]
         assert len(lines) == 2
         # Final line carries the resolution.
         final = json.loads(lines[-1])
@@ -240,9 +212,7 @@ class TestResolvePromise:
     @pytest.mark.asyncio
     async def test_idempotent_on_already_resolved(self) -> None:
         backend = InMemoryBackend()
-        promise = await add_promise(
-            chat_id="c1", description="ship it", backend=backend
-        )
+        promise = await add_promise(chat_id="c1", description="ship it", backend=backend)
         first = await resolve_promise(
             promise_id=promise.id,
             resolution="done",
@@ -258,11 +228,7 @@ class TestResolvePromise:
         assert second.status == "resolved"
         assert second.resolution == first.resolution == "done"
 
-        lines = [
-            line
-            for line in backend.read_text(PROMISES_KEY).splitlines()
-            if line.strip()
-        ]
+        lines = [line for line in backend.read_text(PROMISES_KEY).splitlines() if line.strip()]
         assert len(lines) == 2  # open + resolved, not a third.
 
 
@@ -360,11 +326,7 @@ class TestCompaction:
             backend=backend,
         )
 
-        post_lines = [
-            line
-            for line in backend.read_text(PROMISES_KEY).splitlines()
-            if line.strip()
-        ]
+        post_lines = [line for line in backend.read_text(PROMISES_KEY).splitlines() if line.strip()]
         # Should now carry: 100 recent resolved + 3 open + 1 new = 104.
         # Ancient resolved should be gone.
         assert len(post_lines) == 104
@@ -472,11 +434,14 @@ class TestETagContention:
             async def put(self, path, data, *, if_match=None):
                 raise ConcurrencyError("always conflicts")
 
-        with patch.object(
-            promises_mod,
-            "_get_conditional_store",
-            lambda: AlwaysConflictBackend(),
-        ), pytest.raises(PromiseStoreConflict):
+        with (
+            patch.object(
+                promises_mod,
+                "_get_conditional_store",
+                lambda: AlwaysConflictBackend(),
+            ),
+            pytest.raises(PromiseStoreConflict),
+        ):
             await add_promise(
                 chat_id="c1",
                 description="doomed",

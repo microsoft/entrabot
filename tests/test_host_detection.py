@@ -94,9 +94,7 @@ class TestCaptureHostFromContext:
         prior = mcp_server._state.get("cached_host", "")
         mcp_server._state["cached_host"] = ""
         try:
-            with patch.object(
-                mcp_server, "_current_host", return_value="claude-code"
-            ):
+            with patch.object(mcp_server, "_current_host", return_value="claude-code"):
                 mcp_server._capture_host_from_context()
             assert mcp_server._state["cached_host"] == "claude-code"
         finally:
@@ -133,9 +131,7 @@ class TestCaptureHostFromContext:
         prior = mcp_server._state.get("cached_host", "")
         mcp_server._state["cached_host"] = "claude-code"
         try:
-            with patch.object(
-                mcp_server, "_current_host", return_value="github-copilot-cli"
-            ):
+            with patch.object(mcp_server, "_current_host", return_value="github-copilot-cli"):
                 mcp_server._capture_host_from_context()
             assert mcp_server._state["cached_host"] == "github-copilot-cli"
         finally:

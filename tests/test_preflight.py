@@ -134,9 +134,10 @@ class TestRunSmokeChecks:
 
     def test_all_pass(self) -> None:
         config = _config_complete()
-        with patch(
-            "entraclaw.preflight.acquire_agent_user_token", return_value="tok-123"
-        ), respx.mock:
+        with (
+            patch("entraclaw.preflight.acquire_agent_user_token", return_value="tok-123"),
+            respx.mock,
+        ):
             respx.get(self.ME_URL).mock(
                 return_value=httpx.Response(
                     200,
@@ -187,9 +188,7 @@ class TestRunSmokeChecks:
 
     def test_me_upn_mismatch_fails(self) -> None:
         config = _config_complete()
-        with patch(
-            "entraclaw.preflight.acquire_agent_user_token", return_value="tok"
-        ), respx.mock:
+        with patch("entraclaw.preflight.acquire_agent_user_token", return_value="tok"), respx.mock:
             respx.get(self.ME_URL).mock(
                 return_value=httpx.Response(
                     200,
@@ -210,9 +209,7 @@ class TestRunSmokeChecks:
 
     def test_chats_403_replication_lag(self) -> None:
         config = _config_complete()
-        with patch(
-            "entraclaw.preflight.acquire_agent_user_token", return_value="tok"
-        ), respx.mock:
+        with patch("entraclaw.preflight.acquire_agent_user_token", return_value="tok"), respx.mock:
             respx.get(self.ME_URL).mock(
                 return_value=httpx.Response(
                     200,
@@ -229,9 +226,7 @@ class TestRunSmokeChecks:
 
         chats = next(c for c in checks if c.name.startswith("Teams scope"))
         assert chats.status == "fail"
-        assert "10-15" in (chats.remediation or "") or "license" in (
-            chats.remediation or ""
-        )
+        assert "10-15" in (chats.remediation or "") or "license" in (chats.remediation or "")
 
 
 # ─── Phase 3: diagnostics (state + MCP) ──────────────────────────────────────
@@ -266,9 +261,7 @@ class TestCheckStateFile:
 
 
 class TestCheckMcpConfigs:
-    def test_pass_when_both_configs_point_at_binary(
-        self, tmp_path: Path
-    ) -> None:
+    def test_pass_when_both_configs_point_at_binary(self, tmp_path: Path) -> None:
         binary = tmp_path / "bin" / "entraclaw-mcp"
         binary.parent.mkdir()
         binary.write_text("#!/bin/sh\n")
@@ -330,9 +323,7 @@ class TestCheckMcpConfigs:
         # Copilot missing → warn (not every dev installs Copilot)
         assert statuses["Copilot CLI MCP config"] == "warn"
 
-    def test_relative_command_path_resolves_against_config_parent(
-        self, tmp_path: Path
-    ) -> None:
+    def test_relative_command_path_resolves_against_config_parent(self, tmp_path: Path) -> None:
         """The Claude .mcp.json deliberately writes a relative path."""
         binary = tmp_path / ".venv" / "bin" / "entraclaw-mcp"
         binary.parent.mkdir(parents=True)
@@ -369,19 +360,13 @@ class TestCheckMcpConfigs:
         binary = tmp_path / "bin" / "entraclaw-mcp"
         binary.parent.mkdir()
         binary.write_text("")
-        claude_cfg.write_text(
-            json.dumps(
-                {"mcpServers": {"entraclaw": {"command": str(binary)}}}
-            )
-        )
+        claude_cfg.write_text(json.dumps({"mcpServers": {"entraclaw": {"command": str(binary)}}}))
         copilot_cfg = tmp_path / "copilot.json"
         copilot_cfg.write_text(
             json.dumps(
                 {
                     "mcpServers": {
-                        "entraclaw": {
-                            "command": "/other/worktree/.venv/bin/entraclaw-mcp"
-                        }
+                        "entraclaw": {"command": "/other/worktree/.venv/bin/entraclaw-mcp"}
                     }
                 }
             )
@@ -396,10 +381,7 @@ class TestCheckMcpConfigs:
         assert statuses["Claude Code MCP config"] == "pass"
         assert statuses["Copilot CLI MCP config"] == "warn"
 
-
-    def test_warn_when_claude_missing_and_copilot_missing(
-        self, tmp_path: Path
-    ) -> None:
+    def test_warn_when_claude_missing_and_copilot_missing(self, tmp_path: Path) -> None:
         binary = tmp_path / "entraclaw-mcp"
         binary.write_text("")
         checks = check_mcp_configs(
@@ -428,16 +410,18 @@ class TestRunDiagnostics:
                 }
             )
         )
-        with patch(
-            "entraclaw.preflight.acquire_agent_user_token", return_value="tok"
-        ), patch(
-            "entraclaw.preflight._check_cert_in_keystore",
-            return_value=Check(
-                name="Blueprint cert in OS keystore",
-                status="pass",
-                detail="present",
+        with (
+            patch("entraclaw.preflight.acquire_agent_user_token", return_value="tok"),
+            patch(
+                "entraclaw.preflight._check_cert_in_keystore",
+                return_value=Check(
+                    name="Blueprint cert in OS keystore",
+                    status="pass",
+                    detail="present",
+                ),
             ),
-        ), respx.mock:
+            respx.mock,
+        ):
             respx.get("https://graph.microsoft.com/v1.0/me").mock(
                 return_value=httpx.Response(
                     200,
@@ -447,9 +431,9 @@ class TestRunDiagnostics:
                     },
                 )
             )
-            respx.get(
-                url__startswith="https://graph.microsoft.com/v1.0/me/chats"
-            ).mock(return_value=httpx.Response(200, json={"value": []}))
+            respx.get(url__startswith="https://graph.microsoft.com/v1.0/me/chats").mock(
+                return_value=httpx.Response(200, json={"value": []})
+            )
 
             checks = run_diagnostics(
                 config,

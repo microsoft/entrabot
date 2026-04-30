@@ -98,7 +98,8 @@ class TestFilterHumanMessages:
             },
         ]
         result = filter_human_messages(
-            messages, agent_user_display_name="EntraClaw Agent",
+            messages,
+            agent_user_display_name="EntraClaw Agent",
         )
         assert len(result) == 1
         assert result[0]["message_id"] == "m2"
@@ -305,9 +306,7 @@ class TestExistingToolsRetrofitted:
                 "entraclaw.mcp_server.acquire_agent_user_token",
                 mock_acquire,
             ):
-                result_json = await mcp_server.send_teams_message(
-                    "hello", chat_id="c1"
-                )
+                result_json = await mcp_server.send_teams_message("hello", chat_id="c1")
 
             result = json.loads(result_json)
             assert result["message_id"] == "msg-1"
@@ -357,9 +356,7 @@ class TestExistingToolsRetrofitted:
                 }
             )
 
-            result_json = await mcp_server.send_teams_message(
-                "hello team", chat_id="c1"
-            )
+            result_json = await mcp_server.send_teams_message("hello team", chat_id="c1")
             result = json.loads(result_json)
             assert result["message_id"] == "msg-pfx"
 
@@ -419,9 +416,7 @@ class TestExistingToolsRetrofitted:
                 "entraclaw.mcp_server.acquire_agent_user_token",
                 mock_acquire,
             ):
-                result_json = await mcp_server.send_teams_message(
-                    "hello team", chat_id="c1"
-                )
+                result_json = await mcp_server.send_teams_message("hello team", chat_id="c1")
 
             result = json.loads(result_json)
             assert result["message_id"] == "msg-no-pfx"
@@ -489,9 +484,7 @@ class TestExistingToolsRetrofitted:
                 "entraclaw.mcp_server.acquire_agent_user_token",
                 mock_acquire,
             ):
-                result_json = await mcp_server.read_teams_messages(
-                    chat_id="c1", count=5
-                )
+                result_json = await mcp_server.read_teams_messages(chat_id="c1", count=5)
 
             result = json.loads(result_json)
             assert len(result) == 1
@@ -627,7 +620,9 @@ class TestWatchTeamsReplies:
 
             with patch("entraclaw.mcp_server.acquire_agent_user_token", mock_acquire):
                 result_json = await mcp_server.watch_teams_replies(
-                    chat_id="c1", timeout=5, interval=0,
+                    chat_id="c1",
+                    timeout=5,
+                    interval=0,
                 )
 
             result = json.loads(result_json)
@@ -681,7 +676,9 @@ class TestWatchTeamsReplies:
 
             with patch("entraclaw.mcp_server.acquire_agent_user_token", MagicMock()):
                 result_json = await mcp_server.watch_teams_replies(
-                    chat_id="c1", timeout=1, interval=0,
+                    chat_id="c1",
+                    timeout=1,
+                    interval=0,
                 )
 
             result = json.loads(result_json)

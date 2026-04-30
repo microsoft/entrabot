@@ -77,9 +77,7 @@ class TestResolveFileUrl:
             )
         )
 
-        ref = await resolve_file_url(
-            url, token=TOKEN, transport=httpx.AsyncHTTPTransport()
-        )
+        ref = await resolve_file_url(url, token=TOKEN, transport=httpx.AsyncHTTPTransport())
 
         assert route.called
         assert ref.drive_id == "b!drive"
@@ -142,9 +140,7 @@ class TestResolveFileUrl:
     @pytest.mark.asyncio
     async def test_unsupported_scheme_raises_url_not_resolvable(self) -> None:
         with pytest.raises(UrlNotResolvableError):
-            await resolve_file_url(
-                "ftp://example.com/file", token=TOKEN
-            )
+            await resolve_file_url("ftp://example.com/file", token=TOKEN)
 
     @pytest.mark.asyncio
     @respx.mock
@@ -279,9 +275,7 @@ class TestListRecentFiles:
                 [_drive_item(name="a.docx"), _drive_item(item_id="02", name="b.docx")]
             )
         )
-        page = await list_recent_files(
-            limit=10, token=TOKEN, transport=httpx.AsyncHTTPTransport()
-        )
+        page = await list_recent_files(limit=10, token=TOKEN, transport=httpx.AsyncHTTPTransport())
         assert len(page.files) == 2
         assert page.files[0].name == "a.docx"
         assert page.denied_count == 0
@@ -299,9 +293,7 @@ class TestListRecentFiles:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_denylist_increments_denied_count(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_denylist_increments_denied_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
         denied_site = "tenant.sharepoint.com,bad-guid,web-guid"
         ok_site = "tenant.sharepoint.com,good-guid,web-guid"
         monkeypatch.setenv("ENTRACLAW_FILES_DENIED_SITES", denied_site)
@@ -313,9 +305,7 @@ class TestListRecentFiles:
                 ]
             )
         )
-        page = await list_recent_files(
-            token=TOKEN, transport=httpx.AsyncHTTPTransport()
-        )
+        page = await list_recent_files(token=TOKEN, transport=httpx.AsyncHTTPTransport())
         assert [f.name for f in page.files] == ["ok.docx"]
         assert page.denied_count == 1
 
@@ -363,17 +353,13 @@ class TestReadFile:
     @respx.mock
     async def test_reads_md_as_raw_text(self, make_file_ref) -> None:
         ref = make_file_ref(name="spec.md", mime_type="text/markdown")
-        url = (
-            f"{GRAPH_V1_HOST}/drives/{ref.drive_id}/items/{ref.item_id}/content"
-        )
+        url = f"{GRAPH_V1_HOST}/drives/{ref.drive_id}/items/{ref.item_id}/content"
         respx.get(url).mock(
             return_value=httpx.Response(
                 200, content=b"# Spec\n\nHello world.", headers={"content-type": "text/markdown"}
             )
         )
-        content = await read_file(
-            ref, token=TOKEN, transport=httpx.AsyncHTTPTransport()
-        )
+        content = await read_file(ref, token=TOKEN, transport=httpx.AsyncHTTPTransport())
         assert content.text == "# Spec\n\nHello world."
         assert content.page_count is None
         assert content.truncated is False
@@ -382,12 +368,8 @@ class TestReadFile:
     @respx.mock
     async def test_reads_txt_as_raw_text(self, make_file_ref) -> None:
         ref = make_file_ref(name="notes.txt", mime_type="text/plain")
-        url = (
-            f"{GRAPH_V1_HOST}/drives/{ref.drive_id}/items/{ref.item_id}/content"
-        )
-        respx.get(url).mock(
-            return_value=httpx.Response(200, content=b"line1\nline2")
-        )
+        url = f"{GRAPH_V1_HOST}/drives/{ref.drive_id}/items/{ref.item_id}/content"
+        respx.get(url).mock(return_value=httpx.Response(200, content=b"line1\nline2"))
         content = await read_file(ref, token=TOKEN, transport=httpx.AsyncHTTPTransport())
         assert content.text == "line1\nline2"
 
@@ -396,9 +378,7 @@ class TestReadFile:
     async def test_reads_html_as_raw_text(self, make_file_ref) -> None:
         ref = make_file_ref(name="page.html", mime_type="text/html")
         url = f"{GRAPH_V1_HOST}/drives/{ref.drive_id}/items/{ref.item_id}/content"
-        respx.get(url).mock(
-            return_value=httpx.Response(200, content=b"<h1>hi</h1>")
-        )
+        respx.get(url).mock(return_value=httpx.Response(200, content=b"<h1>hi</h1>"))
         content = await read_file(ref, token=TOKEN, transport=httpx.AsyncHTTPTransport())
         assert "<h1>hi</h1>" in content.text
 
@@ -410,9 +390,7 @@ class TestReadFile:
         monkeypatch.setenv("ENTRACLAW_FILES_MAX_TEXT_BYTES", "10")
         ref = make_file_ref(name="big.txt", mime_type="text/plain")
         url = f"{GRAPH_V1_HOST}/drives/{ref.drive_id}/items/{ref.item_id}/content"
-        respx.get(url).mock(
-            return_value=httpx.Response(200, content=b"a" * 100)
-        )
+        respx.get(url).mock(return_value=httpx.Response(200, content=b"a" * 100))
         content = await read_file(ref, token=TOKEN, transport=httpx.AsyncHTTPTransport())
         assert content.truncated is True
         assert len(content.text.encode("utf-8")) <= 10
@@ -421,10 +399,7 @@ class TestReadFile:
     async def test_rejects_xlsx(self, make_file_ref) -> None:
         ref = make_file_ref(
             name="data.xlsx",
-            mime_type=(
-                "application/vnd.openxmlformats-officedocument."
-                "spreadsheetml.sheet"
-            ),
+            mime_type=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
         )
         with pytest.raises(UnsupportedReadFormatError):
             await read_file(ref, token=TOKEN)
@@ -478,9 +453,7 @@ class TestReadFile:
     ) -> None:
         """When ``size_bytes`` is None, read_file MUST query /items/{id}?$select=size first."""
         monkeypatch.setenv("ENTRACLAW_FILES_MAX_PDF_BYTES", "1024")
-        ref = make_file_ref(
-            name="huge.pdf", mime_type="application/pdf", size_bytes=None
-        )
+        ref = make_file_ref(name="huge.pdf", mime_type="application/pdf", size_bytes=None)
         meta_route = respx.get(
             f"{GRAPH_V1_HOST}/drives/{ref.drive_id}/items/{ref.item_id}?$select=size"
         ).mock(return_value=httpx.Response(200, json={"size": 5 * 1024 * 1024}))
@@ -490,27 +463,19 @@ class TestReadFile:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_403_on_content_raises_missing_permission(
-        self, make_file_ref
-    ) -> None:
+    async def test_403_on_content_raises_missing_permission(self, make_file_ref) -> None:
         ref = make_file_ref(name="spec.md")
         url = f"{GRAPH_V1_HOST}/drives/{ref.drive_id}/items/{ref.item_id}/content"
-        respx.get(url).mock(
-            return_value=httpx.Response(403, json={"error": {"message": "no"}})
-        )
+        respx.get(url).mock(return_value=httpx.Response(403, json={"error": {"message": "no"}}))
         with pytest.raises(MissingPermissionError):
             await read_file(ref, token=TOKEN, transport=httpx.AsyncHTTPTransport())
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_401_on_content_raises_token_expired(
-        self, make_file_ref
-    ) -> None:
+    async def test_401_on_content_raises_token_expired(self, make_file_ref) -> None:
         ref = make_file_ref(name="spec.md")
         url = f"{GRAPH_V1_HOST}/drives/{ref.drive_id}/items/{ref.item_id}/content"
-        respx.get(url).mock(
-            return_value=httpx.Response(401, json={"error": {"message": "no"}})
-        )
+        respx.get(url).mock(return_value=httpx.Response(401, json={"error": {"message": "no"}}))
         with pytest.raises(TokenExpiredError):
             await read_file(ref, token=TOKEN, transport=httpx.AsyncHTTPTransport())
 
@@ -535,9 +500,7 @@ class TestAddFileComment:
     @respx.mock
     async def test_comments_on_docx(self, make_file_ref) -> None:
         ref = make_file_ref(name="spec.docx", kind="sharepoint")
-        url = (
-            f"{GRAPH_BETA_HOST}/drives/{ref.drive_id}/items/{ref.item_id}/comments"
-        )
+        url = f"{GRAPH_BETA_HOST}/drives/{ref.drive_id}/items/{ref.item_id}/comments"
         route = respx.post(url).mock(return_value=_comment_response("c1", "What is X?"))
         result = await add_file_comment(
             ref, "What is X?", token=TOKEN, transport=httpx.AsyncHTTPTransport()
@@ -555,10 +518,7 @@ class TestAddFileComment:
         ref = make_file_ref(
             name="data.xlsx",
             kind="sharepoint",
-            mime_type=(
-                "application/vnd.openxmlformats-officedocument."
-                "spreadsheetml.sheet"
-            ),
+            mime_type=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
         )
         url = f"{GRAPH_BETA_HOST}/drives/{ref.drive_id}/items/{ref.item_id}/comments"
         respx.post(url).mock(return_value=_comment_response())
@@ -587,9 +547,7 @@ class TestAddFileComment:
 
     @pytest.mark.asyncio
     async def test_rejects_personal_onedrive(self, make_file_ref) -> None:
-        ref = make_file_ref(
-            name="spec.docx", kind="onedrive_personal", site_id=None
-        )
+        ref = make_file_ref(name="spec.docx", kind="onedrive_personal", site_id=None)
         with pytest.raises(UnsupportedCommentFormatError):
             await add_file_comment(ref, "no", token=TOKEN)
 
@@ -624,39 +582,27 @@ class TestAddFileComment:
     async def test_403_raises_missing_permission(self, make_file_ref) -> None:
         ref = make_file_ref(name="spec.docx", kind="sharepoint")
         url = f"{GRAPH_BETA_HOST}/drives/{ref.drive_id}/items/{ref.item_id}/comments"
-        respx.post(url).mock(
-            return_value=httpx.Response(403, json={"error": {"message": "no"}})
-        )
+        respx.post(url).mock(return_value=httpx.Response(403, json={"error": {"message": "no"}}))
         with pytest.raises(MissingPermissionError):
-            await add_file_comment(
-                ref, "Q?", token=TOKEN, transport=httpx.AsyncHTTPTransport()
-            )
+            await add_file_comment(ref, "Q?", token=TOKEN, transport=httpx.AsyncHTTPTransport())
 
     @pytest.mark.asyncio
     @respx.mock
     async def test_401_raises_token_expired(self, make_file_ref) -> None:
         ref = make_file_ref(name="spec.docx", kind="sharepoint")
         url = f"{GRAPH_BETA_HOST}/drives/{ref.drive_id}/items/{ref.item_id}/comments"
-        respx.post(url).mock(
-            return_value=httpx.Response(401, json={"error": {"message": "no"}})
-        )
+        respx.post(url).mock(return_value=httpx.Response(401, json={"error": {"message": "no"}}))
         with pytest.raises(TokenExpiredError):
-            await add_file_comment(
-                ref, "Q?", token=TOKEN, transport=httpx.AsyncHTTPTransport()
-            )
+            await add_file_comment(ref, "Q?", token=TOKEN, transport=httpx.AsyncHTTPTransport())
 
     @pytest.mark.asyncio
     @respx.mock
     async def test_500_raises_graph_files_error(self, make_file_ref) -> None:
         ref = make_file_ref(name="spec.docx", kind="sharepoint")
         url = f"{GRAPH_BETA_HOST}/drives/{ref.drive_id}/items/{ref.item_id}/comments"
-        respx.post(url).mock(
-            return_value=httpx.Response(500, json={"error": {"message": "boom"}})
-        )
+        respx.post(url).mock(return_value=httpx.Response(500, json={"error": {"message": "boom"}}))
         with pytest.raises(GraphFilesError):
-            await add_file_comment(
-                ref, "Q?", token=TOKEN, transport=httpx.AsyncHTTPTransport()
-            )
+            await add_file_comment(ref, "Q?", token=TOKEN, transport=httpx.AsyncHTTPTransport())
 
     @pytest.mark.asyncio
     @respx.mock

@@ -87,9 +87,7 @@ class TestRetryOn429Transport:
             ]
         )
         # max_wait=1 caps to 1s; Retry-After=0 for test speed
-        transport = RetryOn429Transport(
-            wrapped=httpx.AsyncHTTPTransport(), max_wait=1
-        )
+        transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport(), max_wait=1)
         async with httpx.AsyncClient(transport=transport) as client:
             resp = await client.get("https://graph.microsoft.com/v1.0/me")
         assert resp.status_code == 200
@@ -116,9 +114,7 @@ class TestRetryOn429Transport:
     @pytest.mark.asyncio
     async def test_non_429_errors_pass_through(self) -> None:
         """Non-429 errors (401, 404, 500) are not retried."""
-        respx.get("https://graph.microsoft.com/v1.0/me").mock(
-            return_value=httpx.Response(500)
-        )
+        respx.get("https://graph.microsoft.com/v1.0/me").mock(return_value=httpx.Response(500))
         transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
         async with httpx.AsyncClient(transport=transport) as client:
             resp = await client.get("https://graph.microsoft.com/v1.0/me")
@@ -166,13 +162,9 @@ class TestAllow5xxRetry:
                 httpx.Response(200, json={"value": []}),
             ]
         )
-        transport = RetryOn429Transport(
-            wrapped=httpx.AsyncHTTPTransport(), allow_5xx_retry=True
-        )
+        transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport(), allow_5xx_retry=True)
         async with httpx.AsyncClient(transport=transport) as client:
-            resp = await client.get(
-                "https://graph.microsoft.com/v1.0/me/drive/sharedWithMe"
-            )
+            resp = await client.get("https://graph.microsoft.com/v1.0/me/drive/sharedWithMe")
         assert resp.status_code == 200
         assert resp.json() == {"value": []}
 
@@ -191,9 +183,7 @@ class TestAllow5xxRetry:
                 httpx.Response(200, json={"id": "ok"}),
             ]
         )
-        transport = RetryOn429Transport(
-            wrapped=httpx.AsyncHTTPTransport(), allow_5xx_retry=True
-        )
+        transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport(), allow_5xx_retry=True)
         async with httpx.AsyncClient(transport=transport) as client:
             resp = await client.get("https://graph.microsoft.com/v1.0/me")
         assert resp.status_code == 200
@@ -214,9 +204,7 @@ class TestAllow5xxRetry:
                 httpx.Response(503),
             ]
         )
-        transport = RetryOn429Transport(
-            wrapped=httpx.AsyncHTTPTransport(), allow_5xx_retry=True
-        )
+        transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport(), allow_5xx_retry=True)
         async with httpx.AsyncClient(transport=transport) as client:
             resp = await client.get("https://graph.microsoft.com/v1.0/me")
         assert resp.status_code == 503
@@ -237,9 +225,7 @@ class TestAllow5xxRetry:
             return httpx.Response(500)
 
         respx.get("https://graph.microsoft.com/v1.0/me").mock(side_effect=handler)
-        transport = RetryOn429Transport(
-            wrapped=httpx.AsyncHTTPTransport(), allow_5xx_retry=True
-        )
+        transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport(), allow_5xx_retry=True)
         async with httpx.AsyncClient(transport=transport) as client:
             resp = await client.get("https://graph.microsoft.com/v1.0/me")
         assert resp.status_code == 500
@@ -260,9 +246,7 @@ class TestAllow5xxRetry:
                 httpx.Response(200, json={"ok": True}),
             ]
         )
-        transport = RetryOn429Transport(
-            wrapped=httpx.AsyncHTTPTransport(), allow_5xx_retry=True
-        )
+        transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport(), allow_5xx_retry=True)
         async with httpx.AsyncClient(transport=transport) as client:
             resp = await client.get("https://graph.microsoft.com/v1.0/me")
         assert resp.status_code == 200

@@ -40,26 +40,18 @@ class TestClaudeCodeMemoryDir:
         assert result == expected
 
     def test_slug_encoding_for_simple_path(self, tmp_path: Path) -> None:
-        result = claude_code_memory_dir(
-            Path("/home/alice/code/myproj"), home=tmp_path
-        )
-        expected = (
-            tmp_path / ".claude" / "projects" / "-home-alice-code-myproj" / "memory"
-        )
+        result = claude_code_memory_dir(Path("/home/alice/code/myproj"), home=tmp_path)
+        expected = tmp_path / ".claude" / "projects" / "-home-alice-code-myproj" / "memory"
         assert result == expected
 
-    def test_returns_path_even_if_it_does_not_exist(
-        self, tmp_path: Path
-    ) -> None:
+    def test_returns_path_even_if_it_does_not_exist(self, tmp_path: Path) -> None:
         # Caller is responsible for checking .exists() — helper just resolves
         result = claude_code_memory_dir(Path("/nope"), home=tmp_path)
         assert not result.exists()
 
 
 class TestPersonaBackendPushOne:
-    def test_uploads_single_file_under_claude_memory_prefix(
-        self, tmp_path: Path
-    ) -> None:
+    def test_uploads_single_file_under_claude_memory_prefix(self, tmp_path: Path) -> None:
         backend = LocalBackend(tmp_path / "blob")
         mem_dir = tmp_path / "memory"
         mem_dir.mkdir()
@@ -73,9 +65,7 @@ class TestPersonaBackendPushOne:
             == "# Brandon\nProduct Architect"
         )
 
-    def test_push_one_rejects_path_outside_local_root(
-        self, tmp_path: Path
-    ) -> None:
+    def test_push_one_rejects_path_outside_local_root(self, tmp_path: Path) -> None:
         backend = LocalBackend(tmp_path / "blob")
         mem_dir = tmp_path / "memory"
         mem_dir.mkdir()
@@ -86,9 +76,7 @@ class TestPersonaBackendPushOne:
         with pytest.raises(ValueError, match="outside"):
             persona.push_one(other)
 
-    def test_push_one_silently_noops_on_missing_file(
-        self, tmp_path: Path
-    ) -> None:
+    def test_push_one_silently_noops_on_missing_file(self, tmp_path: Path) -> None:
         backend = LocalBackend(tmp_path / "blob")
         mem_dir = tmp_path / "memory"
         mem_dir.mkdir()
@@ -130,9 +118,7 @@ class TestPersonaBackendPushAll:
         assert report.copied == 0
         assert backend.read_text("claude_memory/MEMORY.md") == "cloud version"
 
-    def test_push_all_missing_local_dir_returns_empty_report(
-        self, tmp_path: Path
-    ) -> None:
+    def test_push_all_missing_local_dir_returns_empty_report(self, tmp_path: Path) -> None:
         backend = LocalBackend(tmp_path / "blob")
         persona = PersonaBackend(backend, local_root=tmp_path / "missing")
         report = persona.push_all()

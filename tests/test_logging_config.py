@@ -64,9 +64,7 @@ class TestSetupLogging:
 
         logger = setup_logging()
 
-        file_handlers = [
-            h for h in logger.handlers if isinstance(h, RotatingFileHandler)
-        ]
+        file_handlers = [h for h in logger.handlers if isinstance(h, RotatingFileHandler)]
         assert len(file_handlers) == 1
         handler = file_handlers[0]
         assert handler.baseFilename == str(tmp_path / "entraclaw.log")

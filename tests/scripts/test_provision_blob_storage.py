@@ -114,13 +114,15 @@ class TestEndToEndProvisionAllNew:
     def test_creates_in_order_and_assigns_rbac(self) -> None:
         results = [
             _err("not found"),  # group show
-            _ok(),              # group create
+            _ok(),  # group create
             _err("not found"),  # account show
-            _ok(),              # account create
+            _ok(),  # account create
             _err("not found"),  # container show
-            _ok(),              # container create
-            _ok("/subscriptions/sub/resourceGroups/entraclaw-rg/providers/Microsoft.Storage/storageAccounts/acct"),  # noqa: E501
-            _ok(),              # role assignment create
+            _ok(),  # container create
+            _ok(
+                "/subscriptions/sub/resourceGroups/entraclaw-rg/providers/Microsoft.Storage/storageAccounts/acct"
+            ),  # noqa: E501
+            _ok(),  # role assignment create
         ]
         with patch.object(provision_blob_storage, "_run_az", side_effect=results) as m:
             endpoint, container = provision_blob_storage.provision(
@@ -143,7 +145,9 @@ class TestEndToEndProvisionAllNew:
             _ok(),  # group show
             _ok(),  # account show
             _ok(),  # container show
-            _ok("/subscriptions/sub/resourceGroups/entraclaw-rg/providers/Microsoft.Storage/storageAccounts/acct"),  # noqa: E501
+            _ok(
+                "/subscriptions/sub/resourceGroups/entraclaw-rg/providers/Microsoft.Storage/storageAccounts/acct"
+            ),  # noqa: E501
             _ok(),  # role assignment create (idempotent itself)
         ]
         with patch.object(provision_blob_storage, "_run_az", side_effect=results) as m:
@@ -168,9 +172,7 @@ class TestRoleAssignmentBenignErrors:
         ]
         with patch.object(provision_blob_storage, "_run_az", side_effect=results):
             # Should NOT raise
-            provision_blob_storage.provision(
-                tenant_id="tid-123", agent_user_object_id="oid-abc"
-            )
+            provision_blob_storage.provision(tenant_id="tid-123", agent_user_object_id="oid-abc")
 
 
 class TestFailures:
@@ -180,15 +182,11 @@ class TestFailures:
             patch.object(provision_blob_storage, "_run_az", side_effect=results),
             pytest.raises(RuntimeError, match="az group create failed"),
         ):
-            provision_blob_storage.provision(
-                tenant_id="tid-123", agent_user_object_id="oid-abc"
-            )
+            provision_blob_storage.provision(tenant_id="tid-123", agent_user_object_id="oid-abc")
 
 
 class TestMain:
-    def test_main_prints_kv_lines_on_success(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_main_prints_kv_lines_on_success(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch.object(
             provision_blob_storage,
             "provision",
@@ -202,9 +200,7 @@ class TestMain:
         assert "BLOB_ENDPOINT=https://acct.blob.core.windows.net" in out
         assert "BLOB_CONTAINER=agent-oid" in out
 
-    def test_main_returns_nonzero_on_failure(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_main_returns_nonzero_on_failure(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch.object(
             provision_blob_storage,
             "provision",

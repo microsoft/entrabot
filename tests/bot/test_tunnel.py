@@ -21,9 +21,7 @@ class TestTunnelManager:
         assert mgr.is_running
 
     def test_start_raises_if_devtunnel_not_found(self) -> None:
-        with patch(
-            "subprocess.Popen", side_effect=FileNotFoundError("devtunnel not found")
-        ):
+        with patch("subprocess.Popen", side_effect=FileNotFoundError("devtunnel not found")):
             mgr = TunnelManager(port=3978)
             with pytest.raises(TunnelError, match="devtunnel CLI not found"):
                 mgr.start()
@@ -39,9 +37,7 @@ class TestTunnelManager:
 
     def test_stop_terminates_process(self) -> None:
         mock_proc = MagicMock()
-        mock_proc.stdout.readline.return_value = (
-            b"Connect via browser: https://x.devtunnels.ms\n"
-        )
+        mock_proc.stdout.readline.return_value = b"Connect via browser: https://x.devtunnels.ms\n"
         mock_proc.poll.return_value = None
         with patch("subprocess.Popen", return_value=mock_proc):
             mgr = TunnelManager(port=3978)

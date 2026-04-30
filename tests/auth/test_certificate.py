@@ -21,9 +21,11 @@ from entraclaw.auth.certificate import build_client_assertion, compute_cert_thum
 def keypair():
     """Generate a fresh RSA keypair + self-signed cert for testing."""
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    subject = issuer = x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, "test-cert"),
-    ])
+    subject = issuer = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COMMON_NAME, "test-cert"),
+        ]
+    )
     cert = (
         x509.CertificateBuilder()
         .subject_name(subject)
@@ -42,11 +44,7 @@ def keypair():
     cert_pem = cert.public_bytes(serialization.Encoding.PEM).decode()
     # Compute thumbprint
     der_bytes = cert.public_bytes(serialization.Encoding.DER)
-    thumbprint = (
-        base64.urlsafe_b64encode(hashlib.sha256(der_bytes).digest())
-        .rstrip(b"=")
-        .decode()
-    )
+    thumbprint = base64.urlsafe_b64encode(hashlib.sha256(der_bytes).digest()).rstrip(b"=").decode()
     return private_key_pem, cert_pem, thumbprint
 
 

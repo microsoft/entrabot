@@ -63,9 +63,7 @@ def build_entraclaw_entry(binary_path: str) -> dict:
     }
 
 
-def upsert_mcp_entry(
-    target: Path, server_name: str, entry: dict
-) -> None:
+def upsert_mcp_entry(target: Path, server_name: str, entry: dict) -> None:
     """Insert or update an MCP server entry in a JSON config file.
 
     Idempotent: if ``server_name`` already exists with the same value,
@@ -86,14 +84,10 @@ def upsert_mcp_entry(
             data = json.loads(raw)
             if not isinstance(data, dict):
                 raise ValueError("top-level JSON must be an object")
-            if "mcpServers" not in data or not isinstance(
-                data["mcpServers"], dict
-            ):
+            if "mcpServers" not in data or not isinstance(data["mcpServers"], dict):
                 data["mcpServers"] = {}
         except (json.JSONDecodeError, ValueError, OSError) as exc:
-            backup = target.with_suffix(
-                target.suffix + f".bak.{int(time.time())}"
-            )
+            backup = target.with_suffix(target.suffix + f".bak.{int(time.time())}")
             # If rename fails, we still try to overwrite below.
             with contextlib.suppress(OSError):
                 target.rename(backup)

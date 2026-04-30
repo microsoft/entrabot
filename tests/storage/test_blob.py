@@ -74,9 +74,7 @@ class TestBlobGet:
         """404 means the blob doesn't exist — raise KeyError so callers can
         distinguish 'missing' from 'transport failure'."""
         with respx.mock:
-            respx.get(f"{BLOB_URL}/missing.md").mock(
-                return_value=httpx.Response(404)
-            )
+            respx.get(f"{BLOB_URL}/missing.md").mock(return_value=httpx.Response(404))
             store = _make_store()
             with pytest.raises(KeyError):
                 await store.get("missing.md")
@@ -86,9 +84,7 @@ class TestBlobGet:
         """Token provider is called on every request — rotating tokens
         stay fresh without the caller threading them through."""
         with respx.mock:
-            route = respx.get(f"{BLOB_URL}/x").mock(
-                return_value=httpx.Response(200, content=b"")
-            )
+            route = respx.get(f"{BLOB_URL}/x").mock(return_value=httpx.Response(200, content=b""))
             store = _make_store()
             await store.get("x")
             assert route.calls.last.request.headers["authorization"] == "Bearer stub-token"
@@ -98,18 +94,14 @@ class TestBlobExists:
     @pytest.mark.asyncio
     async def test_exists_true_on_200(self) -> None:
         with respx.mock:
-            respx.head(f"{BLOB_URL}/present").mock(
-                return_value=httpx.Response(200)
-            )
+            respx.head(f"{BLOB_URL}/present").mock(return_value=httpx.Response(200))
             store = _make_store()
             assert await store.exists("present") is True
 
     @pytest.mark.asyncio
     async def test_exists_false_on_404(self) -> None:
         with respx.mock:
-            respx.head(f"{BLOB_URL}/missing").mock(
-                return_value=httpx.Response(404)
-            )
+            respx.head(f"{BLOB_URL}/missing").mock(return_value=httpx.Response(404))
             store = _make_store()
             assert await store.exists("missing") is False
 
@@ -118,9 +110,7 @@ class TestBlobExists:
         """HEAD avoids pulling the body — important for large blobs just
         being probed for presence."""
         with respx.mock:
-            head_route = respx.head(f"{BLOB_URL}/big").mock(
-                return_value=httpx.Response(200)
-            )
+            head_route = respx.head(f"{BLOB_URL}/big").mock(return_value=httpx.Response(200))
             get_route = respx.get(f"{BLOB_URL}/big").mock(
                 return_value=httpx.Response(200, content=b"x" * 10**6)
             )
@@ -212,18 +202,14 @@ class TestBlobDelete:
         """Deleting a non-existent blob should NOT raise — idempotent
         delete is a safer default (callers don't have to check exists first)."""
         with respx.mock:
-            respx.delete(f"{BLOB_URL}/missing").mock(
-                return_value=httpx.Response(404)
-            )
+            respx.delete(f"{BLOB_URL}/missing").mock(return_value=httpx.Response(404))
             store = _make_store()
             await store.delete("missing")  # must not raise
 
     @pytest.mark.asyncio
     async def test_delete_sends_bearer_token(self) -> None:
         with respx.mock:
-            route = respx.delete(f"{BLOB_URL}/x").mock(
-                return_value=httpx.Response(202)
-            )
+            route = respx.delete(f"{BLOB_URL}/x").mock(return_value=httpx.Response(202))
             store = _make_store()
             await store.delete("x")
             assert route.calls.last.request.headers["authorization"] == "Bearer stub-token"
@@ -255,9 +241,7 @@ class TestBlobETag:
         from entraclaw.storage.blob import ConcurrencyError
 
         with respx.mock:
-            respx.put(f"{BLOB_URL}/manifest.json").mock(
-                return_value=httpx.Response(412)
-            )
+            respx.put(f"{BLOB_URL}/manifest.json").mock(return_value=httpx.Response(412))
             store = _make_store()
             with pytest.raises(ConcurrencyError):
                 await store.put("manifest.json", b"x", if_match='"stale"')
@@ -315,9 +299,7 @@ class TestBlobAuth:
         from entraclaw.errors import TokenExpiredError
 
         with respx.mock:
-            respx.get(f"{ENDPOINT}/{CONTAINER}").mock(
-                return_value=httpx.Response(401)
-            )
+            respx.get(f"{ENDPOINT}/{CONTAINER}").mock(return_value=httpx.Response(401))
             store = _make_store()
             with pytest.raises(TokenExpiredError):
                 await store.list("")

@@ -58,10 +58,7 @@ class TestDetectChannel:
         )
 
     def test_group_chat_id(self) -> None:
-        assert (
-            detect_channel("19:4c8d47b5ea0b4177810fbdb1103ab013@thread.v2")
-            == "teams_group"
-        )
+        assert detect_channel("19:4c8d47b5ea0b4177810fbdb1103ab013@thread.v2") == "teams_group"
 
     def test_none_is_terminal(self) -> None:
         assert detect_channel(None) == "terminal"
@@ -181,9 +178,7 @@ class TestInteractionSchema:
             summary="hi",
         )
         day = datetime.now(UTC).strftime("%Y-%m-%d")
-        entry = json.loads(
-            (tmp_data_dir / "interactions" / f"{day}.jsonl").read_text().strip()
-        )
+        entry = json.loads((tmp_data_dir / "interactions" / f"{day}.jsonl").read_text().strip())
         # Required fields
         assert "id" in entry
         assert "ts" in entry
@@ -206,9 +201,7 @@ class TestInteractionSchema:
             metadata={"subject": "Re: Project Apollo", "conversationId": "AAQk..."},
         )
         day = datetime.now(UTC).strftime("%Y-%m-%d")
-        entry = json.loads(
-            (tmp_data_dir / "interactions" / f"{day}.jsonl").read_text().strip()
-        )
+        entry = json.loads((tmp_data_dir / "interactions" / f"{day}.jsonl").read_text().strip())
         assert entry["recipient"] == "entraclaw-agent@werner.ac"
         assert entry["action"] == "noted"
         assert entry["content_ref"] == "AAMk...message-id"

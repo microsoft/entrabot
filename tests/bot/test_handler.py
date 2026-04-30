@@ -62,16 +62,14 @@ class TestReadInbound:
         assert result == []
 
     def test_corrupted_line_skipped(
-        self, tmp_path: object, caplog: pytest.LogCaptureFixture,
+        self,
+        tmp_path: object,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         fpath = tmp_path / "inbound.jsonl"
         valid = {"message_id": "1", "from": "a", "content": "ok", "sent_at": "t"}
         valid2 = {"message_id": "2", "from": "b", "content": "also ok", "sent_at": "t2"}
-        fpath.write_text(
-            json.dumps(valid) + "\n"
-            + "NOT VALID JSON\n"
-            + json.dumps(valid2) + "\n"
-        )
+        fpath.write_text(json.dumps(valid) + "\n" + "NOT VALID JSON\n" + json.dumps(valid2) + "\n")
 
         result = read_inbound()
         assert len(result) == 2
@@ -116,14 +114,13 @@ class TestReadOutbound:
         assert result == []
 
     def test_corrupted_line_skipped(
-        self, tmp_path: object, caplog: pytest.LogCaptureFixture,
+        self,
+        tmp_path: object,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         fpath = tmp_path / "outbound.jsonl"
         valid = {"content": "ok", "chat_id": "c1"}
-        fpath.write_text(
-            json.dumps(valid) + "\n"
-            + "{broken\n"
-        )
+        fpath.write_text(json.dumps(valid) + "\n" + "{broken\n")
 
         result = read_outbound()
         assert len(result) == 1

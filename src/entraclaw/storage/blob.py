@@ -23,9 +23,8 @@ def _check_auth(resp: httpx.Response) -> None:
     the same way it handles Graph calls. Call this at the top of
     every response-handling path."""
     if resp.status_code == 401:
-        raise TokenExpiredError(
-            "Storage token expired or missing storage.azure.com scope"
-        )
+        raise TokenExpiredError("Storage token expired or missing storage.azure.com scope")
+
 
 # Azure Storage's list-blobs response is XML. We only need <Name>…</Name>
 # from each <Blob>; a full XML parser adds a dep + attack surface for no
@@ -91,9 +90,7 @@ class BlobStore:
             resp = await client.put(self._url(path), headers=headers, content=data)
             _check_auth(resp)
             if resp.status_code == 412:
-                raise ConcurrencyError(
-                    f"put({path!r}) refused: If-Match={if_match!r} is stale"
-                )
+                raise ConcurrencyError(f"put({path!r}) refused: If-Match={if_match!r} is stale")
             resp.raise_for_status()
             return resp.headers.get("ETag", "")
 

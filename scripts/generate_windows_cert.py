@@ -139,9 +139,7 @@ def generate(*, subject: str, days_valid: int, ksp: str) -> GenerateResult:
             f"thumbprint stdout contains line breaks (corruption suspected): {raw!r}"
         )
     if not THUMBPRINT_RE.match(raw):
-        raise ThumbprintValidationError(
-            f"thumbprint validation failed — not 40 hex chars: {raw!r}"
-        )
+        raise ThumbprintValidationError(f"thumbprint validation failed — not 40 hex chars: {raw!r}")
 
     return GenerateResult(thumbprint=raw, ksp=ksp)
 
@@ -155,9 +153,7 @@ def export_der(thumbprint: str, dest: Path) -> Path:
     )
     result = _run_pwsh(pwsh)
     if result.returncode != 0:
-        raise PowerShellError(
-            f"Cert export failed: {result.stderr.strip() or '(no stderr)'}"
-        )
+        raise PowerShellError(f"Cert export failed: {result.stderr.strip() or '(no stderr)'}")
     return dest
 
 
@@ -172,8 +168,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--subject", default="CN=entraclaw-blueprint")
     parser.add_argument("--days", type=int, default=365)
     parser.add_argument(
-        "--ksp", choices=sorted(VALID_KSPS), default=None,
-        help="If omitted, auto-probes TPM and falls back to software."
+        "--ksp",
+        choices=sorted(VALID_KSPS),
+        default=None,
+        help="If omitted, auto-probes TPM and falls back to software.",
     )
     parser.add_argument("--export-der", type=Path, default=None)
     args = parser.parse_args(argv)

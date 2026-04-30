@@ -144,14 +144,23 @@ def ensure_storage_account(name: str, resource_group: str, location: str) -> Non
         return
     res = _run_az(
         [
-            "storage", "account", "create",
-            "--name", name,
-            "--resource-group", resource_group,
-            "--location", location,
-            "--sku", "Standard_LRS",
-            "--kind", "StorageV2",
-            "--allow-blob-public-access", "false",
-            "--min-tls-version", "TLS1_2",
+            "storage",
+            "account",
+            "create",
+            "--name",
+            name,
+            "--resource-group",
+            resource_group,
+            "--location",
+            location,
+            "--sku",
+            "Standard_LRS",
+            "--kind",
+            "StorageV2",
+            "--allow-blob-public-access",
+            "false",
+            "--min-tls-version",
+            "TLS1_2",
         ]
     )
     if res.returncode != 0:
@@ -164,10 +173,15 @@ def ensure_container(account: str, container: str) -> None:
     # --auth-mode login uses the AAD identity instead of account keys
     res = _run_az(
         [
-            "storage", "container", "show",
-            "--account-name", account,
-            "--name", container,
-            "--auth-mode", "login",
+            "storage",
+            "container",
+            "show",
+            "--account-name",
+            account,
+            "--name",
+            container,
+            "--auth-mode",
+            "login",
         ]
     )
     if res.returncode == 0:
@@ -175,10 +189,15 @@ def ensure_container(account: str, container: str) -> None:
         return
     res = _run_az(
         [
-            "storage", "container", "create",
-            "--account-name", account,
-            "--name", container,
-            "--auth-mode", "login",
+            "storage",
+            "container",
+            "create",
+            "--account-name",
+            account,
+            "--name",
+            container,
+            "--auth-mode",
+            "login",
         ]
     )
     if res.returncode != 0:
@@ -188,9 +207,19 @@ def ensure_container(account: str, container: str) -> None:
 
 def get_storage_account_id(account: str, resource_group: str) -> str:
     res = _run_az(
-        ["storage", "account", "show",
-         "--name", account, "--resource-group", resource_group,
-         "--query", "id", "-o", "tsv"]
+        [
+            "storage",
+            "account",
+            "show",
+            "--name",
+            account,
+            "--resource-group",
+            resource_group,
+            "--query",
+            "id",
+            "-o",
+            "tsv",
+        ]
     )
     if res.returncode != 0:
         raise RuntimeError(f"az storage account show failed: {res.stderr.strip()}")
@@ -211,11 +240,17 @@ def assign_container_rbac(
     # assignment) when the assignment already exists, so no pre-check needed.
     res = _run_az(
         [
-            "role", "assignment", "create",
-            "--assignee-object-id", principal_object_id,
-            "--assignee-principal-type", "User",
-            "--role", STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE,
-            "--scope", scope,
+            "role",
+            "assignment",
+            "create",
+            "--assignee-object-id",
+            principal_object_id,
+            "--assignee-principal-type",
+            "User",
+            "--role",
+            STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE,
+            "--scope",
+            scope,
         ]
     )
     if res.returncode != 0:

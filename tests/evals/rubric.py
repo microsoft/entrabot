@@ -66,9 +66,7 @@ class RubricScore:
             bits.append("output_shape_ok=False (subset mismatch)")
         if not self.no_errors:
             bits.append(f"no_errors=False ({self.failure_reason!r})")
-        raise AssertionError(
-            f"Eval trace {self.trace_name!r} failed: " + "; ".join(bits)
-        )
+        raise AssertionError(f"Eval trace {self.trace_name!r} failed: " + "; ".join(bits))
 
 
 def score_trace(
@@ -83,9 +81,8 @@ def score_trace(
     """Compute a RubricScore from a trace's actual + expected behavior."""
 
     tool_calls_match = expected_tools == actual_tools
-    no_extra_calls = (
-        len(actual_tools) == len(expected_tools)
-        and all(a == e for a, e in zip(actual_tools, expected_tools, strict=False))
+    no_extra_calls = len(actual_tools) == len(expected_tools) and all(
+        a == e for a, e in zip(actual_tools, expected_tools, strict=False)
     )
     output_shape_ok = True
     if expected_output_subset is not None:

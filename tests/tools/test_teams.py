@@ -84,10 +84,15 @@ class TestAcquireAgentUserToken:
 
     @respx.mock
     def test_hop1_failure_raises(self) -> None:
-        respx.post(TOKEN_URL).mock(return_value=httpx.Response(200, json={
-            "error": "invalid_client",
-            "error_description": "Bad secret",
-        }))
+        respx.post(TOKEN_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "error": "invalid_client",
+                    "error_description": "Bad secret",
+                },
+            )
+        )
         with (
             patch.dict(os.environ, FULL_ENV, clear=False),
             patch(_P_STORE, return_value=_mock_credential_store()),
@@ -101,13 +106,18 @@ class TestAcquireAgentUserToken:
     @respx.mock
     def test_hop2_failure_raises(self) -> None:
         # Hop 1 succeeds
-        respx.post(TOKEN_URL).mock(side_effect=[
-            httpx.Response(200, json={"access_token": "bp-token"}),
-            httpx.Response(200, json={
-                "error": "invalid_grant",
-                "error_description": "FIC not configured",
-            }),
-        ])
+        respx.post(TOKEN_URL).mock(
+            side_effect=[
+                httpx.Response(200, json={"access_token": "bp-token"}),
+                httpx.Response(
+                    200,
+                    json={
+                        "error": "invalid_grant",
+                        "error_description": "FIC not configured",
+                    },
+                ),
+            ]
+        )
         with (
             patch.dict(os.environ, FULL_ENV, clear=False),
             patch(_P_STORE, return_value=_mock_credential_store()),
@@ -120,14 +130,19 @@ class TestAcquireAgentUserToken:
 
     @respx.mock
     def test_hop3_failure_raises(self) -> None:
-        respx.post(TOKEN_URL).mock(side_effect=[
-            httpx.Response(200, json={"access_token": "bp-token"}),
-            httpx.Response(200, json={"access_token": "agent-id-token"}),
-            httpx.Response(200, json={
-                "error": "invalid_grant",
-                "error_description": "Agent User not found",
-            }),
-        ])
+        respx.post(TOKEN_URL).mock(
+            side_effect=[
+                httpx.Response(200, json={"access_token": "bp-token"}),
+                httpx.Response(200, json={"access_token": "agent-id-token"}),
+                httpx.Response(
+                    200,
+                    json={
+                        "error": "invalid_grant",
+                        "error_description": "Agent User not found",
+                    },
+                ),
+            ]
+        )
         with (
             patch.dict(os.environ, FULL_ENV, clear=False),
             patch(_P_STORE, return_value=_mock_credential_store()),
@@ -140,11 +155,13 @@ class TestAcquireAgentUserToken:
 
     @respx.mock
     def test_success(self) -> None:
-        respx.post(TOKEN_URL).mock(side_effect=[
-            httpx.Response(200, json={"access_token": "bp-token"}),
-            httpx.Response(200, json={"access_token": "agent-id-token"}),
-            httpx.Response(200, json={"access_token": "agent-user-token-123"}),
-        ])
+        respx.post(TOKEN_URL).mock(
+            side_effect=[
+                httpx.Response(200, json={"access_token": "bp-token"}),
+                httpx.Response(200, json={"access_token": "agent-id-token"}),
+                httpx.Response(200, json={"access_token": "agent-user-token-123"}),
+            ]
+        )
         with (
             patch.dict(os.environ, FULL_ENV, clear=False),
             patch(_P_STORE, return_value=_mock_credential_store()),
@@ -158,11 +175,13 @@ class TestAcquireAgentUserToken:
     @respx.mock
     def test_correct_hop_payloads(self) -> None:
         """Verify each hop sends the right grant_type and parameters."""
-        route = respx.post(TOKEN_URL).mock(side_effect=[
-            httpx.Response(200, json={"access_token": "bp-token"}),
-            httpx.Response(200, json={"access_token": "agent-id-token"}),
-            httpx.Response(200, json={"access_token": "final-token"}),
-        ])
+        route = respx.post(TOKEN_URL).mock(
+            side_effect=[
+                httpx.Response(200, json={"access_token": "bp-token"}),
+                httpx.Response(200, json={"access_token": "agent-id-token"}),
+                httpx.Response(200, json={"access_token": "final-token"}),
+            ]
+        )
         with (
             patch.dict(os.environ, FULL_ENV, clear=False),
             patch(_P_STORE, return_value=_mock_credential_store()),
@@ -177,10 +196,7 @@ class TestAcquireAgentUserToken:
         assert hop1_body["grant_type"] == "client_credentials"
         assert hop1_body["client_id"] == "bp-id"
         assert hop1_body["fmi_path"] == "agent-id"
-        expected_type = (
-            "urn%3Aietf%3Aparams%3Aoauth%3A"
-            "client-assertion-type%3Ajwt-bearer"
-        )
+        expected_type = "urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer"
         assert hop1_body["client_assertion_type"] == expected_type
         assert hop1_body["client_assertion"] == "mocked-jwt-assertion"
         assert "client_secret" not in hop1_body
@@ -202,11 +218,13 @@ class TestAcquireAgentUserToken:
     @respx.mock
     def test_default_resource_scope_is_graph(self) -> None:
         """Default scope at Hop 3 must remain Graph for backward compatibility."""
-        route = respx.post(TOKEN_URL).mock(side_effect=[
-            httpx.Response(200, json={"access_token": "bp-token"}),
-            httpx.Response(200, json={"access_token": "agent-id-token"}),
-            httpx.Response(200, json={"access_token": "graph-token"}),
-        ])
+        route = respx.post(TOKEN_URL).mock(
+            side_effect=[
+                httpx.Response(200, json={"access_token": "bp-token"}),
+                httpx.Response(200, json={"access_token": "agent-id-token"}),
+                httpx.Response(200, json={"access_token": "graph-token"}),
+            ]
+        )
         with (
             patch.dict(os.environ, FULL_ENV, clear=False),
             patch(_P_STORE, return_value=_mock_credential_store()),
@@ -216,9 +234,7 @@ class TestAcquireAgentUserToken:
 
             acquire_agent_user_token(get_config())
 
-        hop3_body = dict(
-            x.split("=") for x in route.calls[2].request.content.decode().split("&")
-        )
+        hop3_body = dict(x.split("=") for x in route.calls[2].request.content.decode().split("&"))
         # URL-encoded "https://graph.microsoft.com/.default"
         assert "graph.microsoft.com" in hop3_body["scope"]
 
@@ -227,11 +243,13 @@ class TestAcquireAgentUserToken:
         """Explicit resource_scope must replace the Hop 3 scope only."""
         from entraclaw.tools.teams import STORAGE_RESOURCE_SCOPE
 
-        route = respx.post(TOKEN_URL).mock(side_effect=[
-            httpx.Response(200, json={"access_token": "bp-token"}),
-            httpx.Response(200, json={"access_token": "agent-id-token"}),
-            httpx.Response(200, json={"access_token": "storage-token"}),
-        ])
+        route = respx.post(TOKEN_URL).mock(
+            side_effect=[
+                httpx.Response(200, json={"access_token": "bp-token"}),
+                httpx.Response(200, json={"access_token": "agent-id-token"}),
+                httpx.Response(200, json={"access_token": "storage-token"}),
+            ]
+        )
         with (
             patch.dict(os.environ, FULL_ENV, clear=False),
             patch(_P_STORE, return_value=_mock_credential_store()),
@@ -239,24 +257,16 @@ class TestAcquireAgentUserToken:
         ):
             from entraclaw.config import get_config
 
-            token = acquire_agent_user_token(
-                get_config(), resource_scope=STORAGE_RESOURCE_SCOPE
-            )
+            token = acquire_agent_user_token(get_config(), resource_scope=STORAGE_RESOURCE_SCOPE)
 
         assert token == "storage-token"
         # Hops 1 and 2 still target the FIC exchange scope
-        hop1_body = dict(
-            x.split("=") for x in route.calls[0].request.content.decode().split("&")
-        )
-        hop2_body = dict(
-            x.split("=") for x in route.calls[1].request.content.decode().split("&")
-        )
+        hop1_body = dict(x.split("=") for x in route.calls[0].request.content.decode().split("&"))
+        hop2_body = dict(x.split("=") for x in route.calls[1].request.content.decode().split("&"))
         assert "AzureADTokenExchange" in hop1_body["scope"]
         assert "AzureADTokenExchange" in hop2_body["scope"]
         # Hop 3 carries the storage resource
-        hop3_body = dict(
-            x.split("=") for x in route.calls[2].request.content.decode().split("&")
-        )
+        hop3_body = dict(x.split("=") for x in route.calls[2].request.content.decode().split("&"))
         assert "storage.azure.com" in hop3_body["scope"]
 
 
@@ -265,11 +275,13 @@ class TestAcquireAgentUserStorageToken:
     def test_uses_storage_scope(self) -> None:
         from entraclaw.tools.teams import acquire_agent_user_storage_token
 
-        route = respx.post(TOKEN_URL).mock(side_effect=[
-            httpx.Response(200, json={"access_token": "bp-token"}),
-            httpx.Response(200, json={"access_token": "agent-id-token"}),
-            httpx.Response(200, json={"access_token": "storage-tok"}),
-        ])
+        route = respx.post(TOKEN_URL).mock(
+            side_effect=[
+                httpx.Response(200, json={"access_token": "bp-token"}),
+                httpx.Response(200, json={"access_token": "agent-id-token"}),
+                httpx.Response(200, json={"access_token": "storage-tok"}),
+            ]
+        )
         with (
             patch.dict(os.environ, FULL_ENV, clear=False),
             patch(_P_STORE, return_value=_mock_credential_store()),
@@ -280,9 +292,7 @@ class TestAcquireAgentUserStorageToken:
             token = acquire_agent_user_storage_token(get_config())
 
         assert token == "storage-tok"
-        hop3_body = dict(
-            x.split("=") for x in route.calls[2].request.content.decode().split("&")
-        )
+        hop3_body = dict(x.split("=") for x in route.calls[2].request.content.decode().split("&"))
         assert "storage.azure.com" in hop3_body["scope"]
 
 
@@ -395,9 +405,7 @@ class TestCreateOrFindChat:
 
         body = json.loads(route.calls.last.request.content)
         # Find the in-tenant member (uses object ID, no tenantId)
-        member_entry = [
-            m for m in body["members"] if "member-uid" in m.get("user@odata.bind", "")
-        ]
+        member_entry = [m for m in body["members"] if "member-uid" in m.get("user@odata.bind", "")]
         assert len(member_entry) == 1
         assert "tenantId" not in member_entry[0]
         # Find the guest (uses email, has tenantId)
@@ -426,9 +434,7 @@ class TestCreateOrFindChat:
         import json
 
         body = json.loads(route.calls.last.request.content)
-        human_members = [
-            m for m in body["members"] if "local-uid" in m.get("user@odata.bind", "")
-        ]
+        human_members = [m for m in body["members"] if "local-uid" in m.get("user@odata.bind", "")]
         assert len(human_members) == 1
         assert "tenantId" not in human_members[0]
         # Uses object ID, not email
@@ -500,9 +506,7 @@ class TestCreateOrFindChat:
         body = json.loads(route.calls.last.request.content)
         # Group because 2 humans
         assert body["chatType"] == "group"
-        member_entry = [
-            m for m in body["members"] if "member-uid" in m.get("user@odata.bind", "")
-        ]
+        member_entry = [m for m in body["members"] if "member-uid" in m.get("user@odata.bind", "")]
         assert member_entry[0]["roles"] == ["owner"]
         assert "tenantId" not in member_entry[0]
         # Guest uses federated: email + tenantId
@@ -531,9 +535,7 @@ class TestCreateOrFindChat:
         body = json.loads(route.calls.last.request.content)
         # Single user without types → oneOnOne, owner role
         assert body["chatType"] == "oneOnOne"
-        human_members = [
-            m for m in body["members"] if "user-1" in m.get("user@odata.bind", "")
-        ]
+        human_members = [m for m in body["members"] if "user-1" in m.get("user@odata.bind", "")]
         assert human_members[0]["roles"] == ["owner"]
 
 
@@ -549,9 +551,7 @@ class TestAddMember:
         """Add a federated user to an existing chat."""
         from entraclaw.tools.teams import add_member
 
-        route = respx.post(
-            f"{GRAPH_BASE}/chats/19:chat-id@thread.v2/members"
-        ).mock(
+        route = respx.post(f"{GRAPH_BASE}/chats/19:chat-id@thread.v2/members").mock(
             return_value=httpx.Response(
                 201,
                 json={
@@ -581,9 +581,7 @@ class TestAddMember:
         """Add an in-tenant member by object ID (no tenantId)."""
         from entraclaw.tools.teams import add_member
 
-        route = respx.post(
-            f"{GRAPH_BASE}/chats/19:chat-id@thread.v2/members"
-        ).mock(
+        route = respx.post(f"{GRAPH_BASE}/chats/19:chat-id@thread.v2/members").mock(
             return_value=httpx.Response(
                 201,
                 json={
@@ -611,9 +609,7 @@ class TestAddMember:
         """404 when user email doesn't resolve."""
         from entraclaw.tools.teams import add_member
 
-        respx.post(
-            f"{GRAPH_BASE}/chats/19:chat-id@thread.v2/members"
-        ).mock(
+        respx.post(f"{GRAPH_BASE}/chats/19:chat-id@thread.v2/members").mock(
             return_value=httpx.Response(
                 404,
                 json={"error": {"message": "User not found"}},
@@ -814,9 +810,7 @@ class TestListMembers:
     async def test_token_expired(self) -> None:
         from entraclaw.tools.teams import list_members
 
-        respx.get(f"{GRAPH_BASE}/chats/c1/members").mock(
-            return_value=httpx.Response(401)
-        )
+        respx.get(f"{GRAPH_BASE}/chats/c1/members").mock(return_value=httpx.Response(401))
         with pytest.raises(TokenExpiredError):
             await list_members(chat_id="c1", token="tok")
 
@@ -932,12 +926,7 @@ class TestTeamsRead:
                         {
                             "id": "img-1",
                             "from": {"user": {"displayName": "Brandon"}},
-                            "body": {
-                                "content": (
-                                    '<p><attachment id="abc-uuid">'
-                                    "</attachment></p>"
-                                )
-                            },
+                            "body": {"content": ('<p><attachment id="abc-uuid"></attachment></p>')},
                             "createdDateTime": "2026-04-20T12:00:00Z",
                             "attachments": [
                                 {
@@ -1067,9 +1056,7 @@ class TestFetchMessage:
         """Fail-open: quoted message missing (e.g. soft-deleted) → None, no raise."""
         from entraclaw.tools.teams import fetch_message
 
-        respx.get(f"{GRAPH_BASE}/chats/c1/messages/gone").mock(
-            return_value=httpx.Response(404)
-        )
+        respx.get(f"{GRAPH_BASE}/chats/c1/messages/gone").mock(return_value=httpx.Response(404))
         result = await fetch_message(chat_id="c1", message_id="gone", token="tok")
         assert result is None
 
@@ -1079,9 +1066,7 @@ class TestFetchMessage:
         """Fail-open: Graph transient failure → None. Observability, not security."""
         from entraclaw.tools.teams import fetch_message
 
-        respx.get(f"{GRAPH_BASE}/chats/c1/messages/m1").mock(
-            return_value=httpx.Response(500)
-        )
+        respx.get(f"{GRAPH_BASE}/chats/c1/messages/m1").mock(return_value=httpx.Response(500))
         result = await fetch_message(chat_id="c1", message_id="m1", token="tok")
         assert result is None
 
@@ -1249,9 +1234,7 @@ class TestFetchHostedImage:
         from entraclaw.tools.teams import fetch_hosted_image
 
         with pytest.raises(ValueError, match="not a Graph API"):
-            await fetch_hosted_image(
-                token="tok", url="https://evil.com/steal-token"
-            )
+            await fetch_hosted_image(token="tok", url="https://evil.com/steal-token")
 
 
 # ---------------------------------------------------------------------------
@@ -1266,13 +1249,9 @@ class TestPostThinkingPlaceholder:
         from entraclaw.tools.teams import post_thinking_placeholder
 
         respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
-            return_value=httpx.Response(
-                201, json={"id": "msg-p1", "createdDateTime": "2024-01-01"}
-            )
+            return_value=httpx.Response(201, json={"id": "msg-p1", "createdDateTime": "2024-01-01"})
         )
-        result = await post_thinking_placeholder(
-            chat_id="c1", token="tok"
-        )
+        result = await post_thinking_placeholder(chat_id="c1", token="tok")
         assert result == "msg-p1"
 
     @respx.mock
@@ -1284,9 +1263,7 @@ class TestPostThinkingPlaceholder:
         from entraclaw.tools.teams import post_thinking_placeholder
 
         route = respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
-            return_value=httpx.Response(
-                201, json={"id": "msg-p2", "createdDateTime": "2024-01-01"}
-            )
+            return_value=httpx.Response(201, json={"id": "msg-p2", "createdDateTime": "2024-01-01"})
         )
         await post_thinking_placeholder(chat_id="c1", token="tok")
 
@@ -1304,13 +1281,9 @@ class TestPostThinkingPlaceholder:
         from entraclaw.tools.teams import post_thinking_placeholder
 
         route = respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
-            return_value=httpx.Response(
-                201, json={"id": "msg-p3", "createdDateTime": "2024-01-01"}
-            )
+            return_value=httpx.Response(201, json={"id": "msg-p3", "createdDateTime": "2024-01-01"})
         )
-        await post_thinking_placeholder(
-            chat_id="c1", token="tok", text="researching…"
-        )
+        await post_thinking_placeholder(chat_id="c1", token="tok", text="researching…")
         body = _json.loads(route.calls.last.request.content)
         assert "researching" in body["body"]["content"]
 
@@ -1324,9 +1297,9 @@ class TestResolvePlaceholder:
 
         from entraclaw.tools.teams import resolve_placeholder
 
-        route = respx.patch(
-            f"{GRAPH_BASE}/chats/c1/messages/msg-p1"
-        ).mock(return_value=httpx.Response(200, json={"id": "msg-p1"}))
+        route = respx.patch(f"{GRAPH_BASE}/chats/c1/messages/msg-p1").mock(
+            return_value=httpx.Response(200, json={"id": "msg-p1"})
+        )
 
         result = await resolve_placeholder(
             chat_id="c1",
@@ -1347,9 +1320,9 @@ class TestResolvePlaceholder:
 
         from entraclaw.tools.teams import resolve_placeholder
 
-        route = respx.patch(
-            f"{GRAPH_BASE}/chats/c1/messages/msg-p1"
-        ).mock(return_value=httpx.Response(200, json={"id": "msg-p1"}))
+        route = respx.patch(f"{GRAPH_BASE}/chats/c1/messages/msg-p1").mock(
+            return_value=httpx.Response(200, json={"id": "msg-p1"})
+        )
 
         mentions = [
             {
@@ -1381,9 +1354,9 @@ class TestResolvePlaceholder:
         """If PATCH fails 4xx/5xx, post the final message as NEW, return fallback_new."""
         from entraclaw.tools.teams import resolve_placeholder
 
-        respx.patch(
-            f"{GRAPH_BASE}/chats/c1/messages/msg-p1"
-        ).mock(return_value=httpx.Response(403, json={"error": "forbidden"}))
+        respx.patch(f"{GRAPH_BASE}/chats/c1/messages/msg-p1").mock(
+            return_value=httpx.Response(403, json={"error": "forbidden"})
+        )
         respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
             return_value=httpx.Response(
                 201, json={"id": "msg-new", "createdDateTime": "2024-01-01"}
@@ -1410,9 +1383,9 @@ class TestResolvePlaceholder:
         """
         from entraclaw.tools.teams import resolve_placeholder
 
-        sd_route = respx.post(
-            f"{GRAPH_BASE}/me/chats/c1/messages/msg-p1/softDelete"
-        ).mock(return_value=httpx.Response(204))
+        sd_route = respx.post(f"{GRAPH_BASE}/me/chats/c1/messages/msg-p1/softDelete").mock(
+            return_value=httpx.Response(204)
+        )
         respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
             return_value=httpx.Response(
                 201, json={"id": "msg-new", "createdDateTime": "2024-01-01"}
@@ -1438,9 +1411,9 @@ class TestResolvePlaceholder:
         """If softDelete fails, post final as NEW and return fallback_new."""
         from entraclaw.tools.teams import resolve_placeholder
 
-        respx.post(
-            f"{GRAPH_BASE}/me/chats/c1/messages/msg-p1/softDelete"
-        ).mock(return_value=httpx.Response(500))
+        respx.post(f"{GRAPH_BASE}/me/chats/c1/messages/msg-p1/softDelete").mock(
+            return_value=httpx.Response(500)
+        )
         respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
             return_value=httpx.Response(
                 201, json={"id": "msg-new2", "createdDateTime": "2024-01-01"}
@@ -1487,9 +1460,9 @@ class TestUpdatePlaceholder:
 
         from entraclaw.tools.teams import update_placeholder
 
-        route = respx.patch(
-            f"{GRAPH_BASE}/chats/c1/messages/msg-p1"
-        ).mock(return_value=httpx.Response(200, json={"id": "msg-p1"}))
+        route = respx.patch(f"{GRAPH_BASE}/chats/c1/messages/msg-p1").mock(
+            return_value=httpx.Response(200, json={"id": "msg-p1"})
+        )
 
         result = await update_placeholder(
             chat_id="c1",
@@ -1513,9 +1486,9 @@ class TestUpdatePlaceholder:
         N times — each call just re-edits in place."""
         from entraclaw.tools.teams import update_placeholder
 
-        route = respx.patch(
-            f"{GRAPH_BASE}/chats/c1/messages/msg-p1"
-        ).mock(return_value=httpx.Response(200, json={"id": "msg-p1"}))
+        route = respx.patch(f"{GRAPH_BASE}/chats/c1/messages/msg-p1").mock(
+            return_value=httpx.Response(200, json={"id": "msg-p1"})
+        )
 
         for text in ("reading log", "grepping docs", "drafting reply"):
             await update_placeholder(
@@ -1532,9 +1505,7 @@ class TestUpdatePlaceholder:
         from entraclaw.errors import TokenExpiredError
         from entraclaw.tools.teams import update_placeholder
 
-        respx.patch(
-            f"{GRAPH_BASE}/chats/c1/messages/msg-p1"
-        ).mock(return_value=httpx.Response(401))
+        respx.patch(f"{GRAPH_BASE}/chats/c1/messages/msg-p1").mock(return_value=httpx.Response(401))
 
         with pytest.raises(TokenExpiredError):
             await update_placeholder(
@@ -1554,14 +1525,14 @@ class TestUpdatePlaceholder:
         handles the real fallback."""
         from entraclaw.tools.teams import update_placeholder
 
-        patch_route = respx.patch(
-            f"{GRAPH_BASE}/chats/c1/messages/msg-p1"
-        ).mock(return_value=httpx.Response(500))
+        patch_route = respx.patch(f"{GRAPH_BASE}/chats/c1/messages/msg-p1").mock(
+            return_value=httpx.Response(500)
+        )
         # If a POST to /chats/c1/messages fires, this mock catches it and
         # the assertion below fails the test.
-        post_route = respx.post(
-            f"{GRAPH_BASE}/chats/c1/messages"
-        ).mock(return_value=httpx.Response(201, json={"id": "WRONG"}))
+        post_route = respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            return_value=httpx.Response(201, json={"id": "WRONG"})
+        )
 
         result = await update_placeholder(
             chat_id="c1",
@@ -1574,6 +1545,7 @@ class TestUpdatePlaceholder:
         assert not post_route.called, (
             "update_placeholder must NOT post a fresh message when PATCH fails"
         )
+
 
 # ---------------------------------------------------------------------------
 # delete_chat_message — Graph softDelete wrapper for the agent's own messages
@@ -1589,13 +1561,11 @@ class TestDeleteChatMessage:
         """
         from entraclaw.tools.teams import delete_chat_message
 
-        route = respx.post(
-            f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete"
-        ).mock(return_value=httpx.Response(204))
-
-        result = await delete_chat_message(
-            chat_id="c1", message_id="msg-1", token="tok"
+        route = respx.post(f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete").mock(
+            return_value=httpx.Response(204)
         )
+
+        result = await delete_chat_message(chat_id="c1", message_id="msg-1", token="tok")
         assert result is True
         assert route.called
         # Explicitly assert we did NOT hit the broken, non-/me/ URL.
@@ -1609,12 +1579,10 @@ class TestDeleteChatMessage:
     async def test_returns_true_on_204(self) -> None:
         from entraclaw.tools.teams import delete_chat_message
 
-        respx.post(
-            f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete"
-        ).mock(return_value=httpx.Response(204))
-        assert await delete_chat_message(
-            chat_id="c1", message_id="msg-1", token="tok"
-        ) is True
+        respx.post(f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete").mock(
+            return_value=httpx.Response(204)
+        )
+        assert await delete_chat_message(chat_id="c1", message_id="msg-1", token="tok") is True
 
     @respx.mock
     @pytest.mark.asyncio
@@ -1622,12 +1590,10 @@ class TestDeleteChatMessage:
         """Some Graph paths return 200 with an empty body."""
         from entraclaw.tools.teams import delete_chat_message
 
-        respx.post(
-            f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete"
-        ).mock(return_value=httpx.Response(200, json={}))
-        assert await delete_chat_message(
-            chat_id="c1", message_id="msg-1", token="tok"
-        ) is True
+        respx.post(f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete").mock(
+            return_value=httpx.Response(200, json={})
+        )
+        assert await delete_chat_message(chat_id="c1", message_id="msg-1", token="tok") is True
 
     @respx.mock
     @pytest.mark.asyncio
@@ -1635,40 +1601,31 @@ class TestDeleteChatMessage:
         """403 = trying to delete someone else's message. Log, don't raise."""
         from entraclaw.tools.teams import delete_chat_message
 
-        respx.post(
-            f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete"
-        ).mock(
+        respx.post(f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete").mock(
             return_value=httpx.Response(403, json={"error": {"code": "Forbidden"}})
         )
-        assert await delete_chat_message(
-            chat_id="c1", message_id="msg-1", token="tok"
-        ) is False
+        assert await delete_chat_message(chat_id="c1", message_id="msg-1", token="tok") is False
 
     @respx.mock
     @pytest.mark.asyncio
     async def test_returns_false_on_404(self) -> None:
         from entraclaw.tools.teams import delete_chat_message
 
-        respx.post(
-            f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete"
-        ).mock(return_value=httpx.Response(404))
-        assert await delete_chat_message(
-            chat_id="c1", message_id="msg-1", token="tok"
-        ) is False
+        respx.post(f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete").mock(
+            return_value=httpx.Response(404)
+        )
+        assert await delete_chat_message(chat_id="c1", message_id="msg-1", token="tok") is False
 
     @respx.mock
     @pytest.mark.asyncio
     async def test_raises_token_expired_on_401(self) -> None:
         from entraclaw.tools.teams import delete_chat_message
 
-        respx.post(
-            f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete"
-        ).mock(return_value=httpx.Response(401))
+        respx.post(f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete").mock(
+            return_value=httpx.Response(401)
+        )
         with pytest.raises(TokenExpiredError):
-            await delete_chat_message(
-                chat_id="c1", message_id="msg-1", token="tok"
-            )
-
+            await delete_chat_message(chat_id="c1", message_id="msg-1", token="tok")
 
 
 class TestFetchChatType:
@@ -1700,9 +1657,7 @@ class TestFetchChatType:
     async def test_fails_open_on_404(self) -> None:
         from entraclaw.tools.teams import fetch_chat_type
 
-        respx.get(f"{GRAPH_BASE}/chats/cX").mock(
-            return_value=httpx.Response(404)
-        )
+        respx.get(f"{GRAPH_BASE}/chats/cX").mock(return_value=httpx.Response(404))
         assert await fetch_chat_type(chat_id="cX", token="tok") == ""
 
     @pytest.mark.asyncio
