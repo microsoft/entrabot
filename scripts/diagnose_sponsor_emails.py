@@ -1,40 +1,65 @@
-"""Diagnose why the sponsor email allowlist is empty.
+"""Diagnose sponsor email allowlist gaps. Read-only.
 
-Run from the project root with the venv active:
-
+Run from project root with venv active:
     .\\.venv\\Scripts\\python.exe scripts\\diagnose_sponsor_emails.py
     ./.venv/bin/python scripts/diagnose_sponsor_emails.py
 
-Prints the raw Graph response from three calls so we can see exactly
-which projection fields are missing and which token is unauthorized:
-
-1. ``/users/{sponsor_id}`` with the Agent Identity FIC token
-2. ``/users/{sponsor_id}`` with the Agent User token
-3. ``/servicePrincipals/{agent_object_id}/microsoft.graph.agentIdentity/sponsors``
-   with the Agent Identity FIC token
-
-This is a no-op diagnostic: it does NOT mutate anything. Safe to run on
-any tenant. Tokens are not printed.
+Probes 8 things to pinpoint why the sponsor's email fields come back null:
+1. /sponsors raw nav-collection projection
+2. /sponsors with $select
+3. /users/{sid} via Agent Identity FIC token
+4. /users/{sid} via Agent User token (with $select)
+5. /users/{sid} via Agent User token (no $select)
+6. /users (search) with $filter=id eq '{sid}' via Agent User token
+7. Agent User /me — what does the token see itself as
+8. Decode the Agent User token to show its scopes (no signature verify)
 """
 
 from __future__ import annotations
 
+import base64
+import json
 import sys
 
 import httpx
 
 from entraclaw.config import get_config
-from entraclaw.identity.sponsors import fetch_agent_identity_sponsors
 from entraclaw.tools.teams import acquire_agent_identity_token, acquire_agent_user_token
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 SELECT = "$select=id,userPrincipalName,mail,otherMails,proxyAddresses,identities"
 
 
+def _b64url_decode(seg: str) -> bytes:
+    pad = 4 - (len(seg) % 4)
+    if pad < 4:
+        seg = seg + "=" * pad
+    return base64.urlsafe_b64decode(seg.encode("ascii"))
+
+
+def _jwt_payload(tok: str) -> dict:
+    parts = tok.split(".")
+    if len(parts) < 2:
+        return {"_error": "not a JWT"}
+    try:
+        return json.loads(_b64url_decode(parts[1]))
+    except Exception as exc:  # noqa: BLE001
+        return {"_error": f"decode failed: {exc}"}
+
+
+def _show(label: str, status: int, body: str, *, max_len: int = 1500) -> None:
+    print("=" * 78)
+    print(label)
+    print("=" * 78)
+    print(f"status: {status}")
+    print(f"body:   {body[:max_len]}")
+    print()
+
+
 def main() -> int:
     cfg = get_config()
     if not cfg.agent_object_id:
-        print("ERROR: agent_object_id is not configured in .env", file=sys.stderr)
+        print("ERROR: agent_object_id is not configured", file=sys.stderr)
         return 2
 
     print(f"agent_object_id: {cfg.agent_object_id}")
@@ -42,32 +67,21 @@ def main() -> int:
     print()
 
     print("Acquiring Agent Identity FIC token (Hop 2)...")
-    ai_token = acquire_agent_identity_token(cfg)
+    ai = acquire_agent_identity_token(cfg)
     print("Acquiring Agent User token (Hop 3)...")
-    au_token = acquire_agent_user_token(cfg)
+    au = acquire_agent_user_token(cfg)
     print()
 
     sponsors_url = (
         f"{GRAPH}/servicePrincipals/{cfg.agent_object_id}"
         "/microsoft.graph.agentIdentity/sponsors"
     )
-    sponsors_url_with_select = f"{sponsors_url}?{SELECT}"
 
-    print("=" * 78)
-    print("[1] /sponsors WITHOUT $select (raw nav-collection projection)")
-    print("=" * 78)
-    r0 = httpx.get(sponsors_url, headers={"Authorization": f"Bearer {ai_token}"})
-    print(f"status: {r0.status_code}")
-    print(f"body:   {r0.text[:1500]}")
-    print()
+    r0 = httpx.get(sponsors_url, headers={"Authorization": f"Bearer {ai}"})
+    _show("[1] /sponsors WITHOUT $select", r0.status_code, r0.text)
 
-    print("=" * 78)
-    print("[2] /sponsors WITH $select=id,userPrincipalName,mail,...")
-    print("=" * 78)
-    r1 = httpx.get(sponsors_url_with_select, headers={"Authorization": f"Bearer {ai_token}"})
-    print(f"status: {r1.status_code}")
-    print(f"body:   {r1.text[:1500]}")
-    print()
+    r1 = httpx.get(f"{sponsors_url}?{SELECT}", headers={"Authorization": f"Bearer {ai}"})
+    _show("[2] /sponsors WITH $select", r1.status_code, r1.text)
 
     sponsor_ids: list[str] = []
     if r1.status_code == 200:
@@ -76,59 +90,71 @@ def main() -> int:
                 sponsor_ids.append(str(item["id"]))
 
     if not sponsor_ids:
-        print("No sponsor ids parsed from /sponsors. Cannot continue with /users probes.")
+        print("No sponsor ids found.")
         return 1
 
-    print(f"Sponsor ids found: {sponsor_ids}")
+    sid = sponsor_ids[0]
+
+    r2 = httpx.get(f"{GRAPH}/users/{sid}?{SELECT}", headers={"Authorization": f"Bearer {ai}"})
+    _show(f"[3] /users/{sid} via AI token", r2.status_code, r2.text)
+
+    r3 = httpx.get(f"{GRAPH}/users/{sid}?{SELECT}", headers={"Authorization": f"Bearer {au}"})
+    _show(f"[4] /users/{sid} via AU token (with $select)", r3.status_code, r3.text)
+
+    r4 = httpx.get(f"{GRAPH}/users/{sid}", headers={"Authorization": f"Bearer {au}"})
+    _show(f"[5] /users/{sid} via AU token (no $select)", r4.status_code, r4.text)
+
+    # /users with $filter often has different permission semantics than direct GET
+    r5 = httpx.get(
+        f"{GRAPH}/users?$filter=id eq '{sid}'&{SELECT}",
+        headers={"Authorization": f"Bearer {au}"},
+    )
+    _show(f"[6] /users?$filter=id eq '{sid}' via AU token", r5.status_code, r5.text)
+
+    r6 = httpx.get(f"{GRAPH}/me?{SELECT}", headers={"Authorization": f"Bearer {au}"})
+    _show("[7] /me via AU token", r6.status_code, r6.text)
+
+    print("=" * 78)
+    print("[8] Agent User token JWT payload (scope/roles only)")
+    print("=" * 78)
+    payload = _jwt_payload(au)
+    interesting = {
+        k: payload.get(k)
+        for k in (
+            "aud",
+            "iss",
+            "appid",
+            "tid",
+            "oid",
+            "upn",
+            "scp",
+            "roles",
+            "idtyp",
+            "amr",
+        )
+    }
+    print(json.dumps(interesting, indent=2))
     print()
 
-    for sid in sponsor_ids:
-        users_url = f"{GRAPH}/users/{sid}?{SELECT}"
-
-        print("=" * 78)
-        print(f"[3] /users/{sid} via Agent Identity FIC token")
-        print("=" * 78)
-        ru1 = httpx.get(users_url, headers={"Authorization": f"Bearer {ai_token}"})
-        print(f"status: {ru1.status_code}")
-        print(f"body:   {ru1.text[:1500]}")
-        print()
-
-        print("=" * 78)
-        print(f"[4] /users/{sid} via Agent User token")
-        print("=" * 78)
-        ru2 = httpx.get(users_url, headers={"Authorization": f"Bearer {au_token}"})
-        print(f"status: {ru2.status_code}")
-        print(f"body:   {ru2.text[:1500]}")
-        print()
-
-        # Also try without $select in case Graph drops fields when $select
-        # is applied to a guest / federated user.
-        users_url_no_select = f"{GRAPH}/users/{sid}"
-
-        print("=" * 78)
-        print(f"[5] /users/{sid} via Agent User token (NO $select)")
-        print("=" * 78)
-        ru3 = httpx.get(users_url_no_select, headers={"Authorization": f"Bearer {au_token}"})
-        print(f"status: {ru3.status_code}")
-        print(f"body:   {ru3.text[:1500]}")
-        print()
-
     print("=" * 78)
-    print("[6] fetch_agent_identity_sponsors() result with user_token_provider")
+    print("[9] Agent Identity FIC token JWT payload (scope/roles only)")
     print("=" * 78)
-    try:
-        sponsors = fetch_agent_identity_sponsors(
-            cfg, user_token_provider=acquire_agent_user_token
+    ai_payload = _jwt_payload(ai)
+    ai_interesting = {
+        k: ai_payload.get(k)
+        for k in (
+            "aud",
+            "iss",
+            "appid",
+            "tid",
+            "oid",
+            "upn",
+            "scp",
+            "roles",
+            "idtyp",
         )
-        for s in sponsors:
-            print(
-                f"  user_id={s.user_id} upn={s.user_principal_name} mail={s.mail}"
-                f" other_mails={s.other_mails} proxy={s.proxy_addresses}"
-                f" federated={s.federated_emails}"
-                f" -> identifiers={sorted(s.email_identifiers())}"
-            )
-    except Exception as exc:
-        print(f"  ERROR: {type(exc).__name__}: {exc}")
+    }
+    print(json.dumps(ai_interesting, indent=2))
 
     return 0
 
