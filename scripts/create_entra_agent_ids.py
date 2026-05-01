@@ -595,7 +595,13 @@ def grant_agent_user_consent(
 
     # Scopes the Agent Identity can request when impersonating the Agent User:
     #   Chat.*, ChatMessage.Send  — Teams chat send/read/manage (the original use case)
-    #   User.Read                 — basic profile lookup
+    #   User.Read                 — basic profile lookup (self only)
+    #   User.ReadBasic.All        — read basic profile of OTHER users in the tenant
+    #                               (mail/UPN/identities). Required for share_file
+    #                               sponsor email allowlist (Learning #57, 2026-04-30):
+    #                               /sponsors nav-collection returns sparse user objects
+    #                               with all email fields null, so /users/{id} enrichment
+    #                               is mandatory and needs at minimum User.ReadBasic.All.
     #   Files.ReadWrite           — OneDrive file ops (e.g., upload PDFs, share links)
     #   Files.Read.All            — SharedWithMe + cross-drive reads (Files MCP V1 PR1)
     #   Sites.Read.All            — SharePoint site/driveItem reads (Files MCP V1 PR1)
@@ -603,7 +609,7 @@ def grant_agent_user_consent(
     #   Mail.Read                 — read Agent User's mailbox (inbound email)
     #   Mail.Send                 — send email from Agent User (e.g., daily activity summary)
     scopes = (
-        "Chat.Create Chat.ReadWrite ChatMessage.Send User.Read "
+        "Chat.Create Chat.ReadWrite ChatMessage.Send User.Read User.ReadBasic.All "
         "Files.ReadWrite Files.Read.All Sites.Read.All Sites.ReadWrite.All "
         "Mail.Read Mail.Send"
     )

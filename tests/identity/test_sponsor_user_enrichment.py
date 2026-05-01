@@ -211,3 +211,131 @@ class TestGetSponsorAllowlistPassesUserTokenProvider:
             _, kwargs = mock_fetch.call_args
             assert kwargs.get("user_token_provider") is acquire_agent_user_token
             assert allowlist == {"brandon@werner.ac"}
+
+
+@pytest.mark.asyncio
+class TestGetSponsorAllowlistChatMembersFallback:
+    """When ``/users/{id}`` enrichment returns 403 (Agent User lacks
+    ``User.ReadBasic.All`` — happens on tenants whose setup predates the
+    2026-04-30 grant fix), the sponsor allowlist falls back to scanning
+    chat members of watched chats."""
+
+    async def test_chat_members_fallback_recovers_sponsor_email(self):
+        from unittest.mock import patch
+
+        from entraclaw.tools.files import _get_sponsor_allowlist
+
+        sponsor_id = "33333333-3333-3333-3333-333333333333"
+        unenriched_sponsor = AgentIdentitySponsor(
+            user_id=sponsor_id, user_principal_name=None, mail=None
+        )
+
+        with (
+            patch("entraclaw.config.get_config") as mock_get_config,
+            patch("entraclaw.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
+            patch("entraclaw.identity.sponsors.fetch_watched_chat_members") as mock_chat_members,
+        ):
+            mock_get_config.return_value = object()
+            mock_fetch.return_value = [unenriched_sponsor]
+            mock_chat_members.return_value = [
+                # The Agent User itself — must NOT pollute the allowlist.
+                {
+                    "user_id": "agent-user-oid",
+                    "email": "entraclaw-agent@werner.ac",
+                    "name": "Entraclaw Agent",
+                },
+                # The sponsor — its email is recovered from chat metadata.
+                {
+                    "user_id": sponsor_id,
+                    "email": "brandon@werner.ac",
+                    "name": "Brandon Werner",
+                },
+                # An unrelated chat member — must NOT enter the allowlist.
+                {
+                    "user_id": "stranger-oid",
+                    "email": "stranger@example.com",
+                    "name": "Stranger Danger",
+                },
+            ]
+
+            allowlist = await _get_sponsor_allowlist()
+
+            assert allowlist == {"brandon@werner.ac"}
+            mock_chat_members.assert_called_once()
+
+    async def test_chat_members_fallback_skipped_when_enrichment_succeeds(self):
+        """If ``fetch_agent_identity_sponsors`` already returned populated
+        emails, we must NOT spend a Graph round-trip enumerating chats."""
+        from unittest.mock import patch
+
+        from entraclaw.tools.files import _get_sponsor_allowlist
+
+        enriched_sponsor = AgentIdentitySponsor(
+            user_id="u1",
+            mail="brandon@werner.ac",
+            user_principal_name="brandon@werner.ac",
+        )
+
+        with (
+            patch("entraclaw.config.get_config") as mock_get_config,
+            patch("entraclaw.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
+            patch("entraclaw.identity.sponsors.fetch_watched_chat_members") as mock_chat_members,
+        ):
+            mock_get_config.return_value = object()
+            mock_fetch.return_value = [enriched_sponsor]
+
+            allowlist = await _get_sponsor_allowlist()
+
+            assert allowlist == {"brandon@werner.ac"}
+            mock_chat_members.assert_not_called()
+
+    async def test_chat_members_fallback_swallows_errors(self):
+        """If the chat-members hop itself blows up (e.g., 401, transport
+        error), share_file should still get a clean empty allowlist and
+        fail loudly with NotASponsorError rather than crashing on a
+        Graph exception."""
+        from unittest.mock import patch
+
+        from entraclaw.tools.files import _get_sponsor_allowlist
+
+        unenriched_sponsor = AgentIdentitySponsor(user_id="u1", user_principal_name=None, mail=None)
+
+        with (
+            patch("entraclaw.config.get_config") as mock_get_config,
+            patch("entraclaw.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
+            patch("entraclaw.identity.sponsors.fetch_watched_chat_members") as mock_chat_members,
+        ):
+            mock_get_config.return_value = object()
+            mock_fetch.return_value = [unenriched_sponsor]
+            mock_chat_members.side_effect = RuntimeError("Graph exploded")
+
+            allowlist = await _get_sponsor_allowlist()
+
+            assert allowlist == set()
+
+    async def test_chat_members_fallback_only_for_unenriched_sponsors(self):
+        """Mixed case: one sponsor enriched via /users/{id}, another not.
+        Allowlist must contain emails from BOTH sources."""
+        from unittest.mock import patch
+
+        from entraclaw.tools.files import _get_sponsor_allowlist
+
+        enriched = AgentIdentitySponsor(
+            user_id="u1", user_principal_name="alice@werner.ac", mail="alice@werner.ac"
+        )
+        unenriched = AgentIdentitySponsor(user_id="u2", user_principal_name=None, mail=None)
+
+        with (
+            patch("entraclaw.config.get_config") as mock_get_config,
+            patch("entraclaw.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
+            patch("entraclaw.identity.sponsors.fetch_watched_chat_members") as mock_chat_members,
+        ):
+            mock_get_config.return_value = object()
+            mock_fetch.return_value = [enriched, unenriched]
+            mock_chat_members.return_value = [
+                {"user_id": "u2", "email": "bob@werner.ac", "name": "Bob"},
+            ]
+
+            allowlist = await _get_sponsor_allowlist()
+
+            assert allowlist == {"alice@werner.ac", "bob@werner.ac"}

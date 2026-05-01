@@ -702,6 +702,28 @@ The unenriched `AgentIdentitySponsor(user_id=…)` had `email_identifiers() == f
 
 ---
 
+### Learning #58: Agent User Needs `User.ReadBasic.All` for `/users/{id}` Enrichment — and a Chat-Members Fallback for Pre-Grant Tenants
+
+**Date:** 2026-04-30
+**Status:** **CONFIRMED — fixed in `fix/sponsor-emails-fallback-via-chat-members`.**
+**Context:** Learning #57 routed sponsor enrichment through the Agent User token, but on the production tenant the Agent User token *also* failed `/users/{sponsor_id}` with 403. JWT decode of the Agent User token showed `scp = "Chat.Create Chat.ReadWrite ChatMessage.Send Files.ReadWrite Mail.Read Mail.Send User.Read profile openid email"` — `User.Read` is *self-only* (`/me` works, `/users/{other-oid}` does not). The provisioning script had never granted `User.Read.All` or `User.ReadBasic.All`, so every existing tenant had a hard 403 on the enrichment hop, and the allowlist stayed empty.
+**Problem (compounding):**
+1. The Graph nav-property collection at `/sponsors` returns `microsoft.graph.user` shapes with EVERY field null (`displayName`, `givenName`, `mail`, `userPrincipalName`, …) regardless of `$select` — verified with `scripts/diagnose_sponsor_emails.py`. Only `id` is materialized.
+2. `User.Read` (self only) is insufficient for `/users/{other-oid}`. Need at minimum `User.ReadBasic.All`.
+3. The setup scripts had no way to communicate "your existing setup needs a re-run to gain a new scope" — silent.
+
+**Fix (two layers):**
+- **A. Provisioning grant.** Added `User.ReadBasic.All` to the Agent User's delegated consent scope string in `scripts/create_entra_agent_ids.py:_grant_agent_user_consent`. The existing PATCH-merge logic auto-upgrades existing oAuth2PermissionGrants when setup is re-run, so users just re-run `setup.sh` / `setup-windows.ps1` and gain the new scope without manual intervention.
+- **B. Chat-members fallback.** `_get_sponsor_allowlist` now detects sponsors that came back without email fields and consults `fetch_watched_chat_members` (`/chats/{id}/members` via Agent User token; needs only `Chat.ReadWrite`). Any chat member whose `user_id` matches an unenriched sponsor's `user_id` contributes their email to the allowlist. This covers tenants that haven't re-run setup yet — as long as the sponsor has DM'd the agent at least once, sharing works.
+
+**Prevention:**
+- When adding a delegated permission, audit which Graph endpoints the existing tokens can hit. `User.Read` ≠ `User.ReadBasic.All`. Self-only scopes do not generalize.
+- For features that depend on a new scope, ship a runtime fallback that degrades gracefully on tenants whose provisioning hasn't been re-run yet.
+- Always JWT-decode `scp`/`roles` before debugging "why can't I read X" — the answer is usually in the token, not the API.
+**Evidence/references:** `scripts/diagnose_sponsor_emails.py` (probes 1–9 — sponsors null projection, both tokens 403 on `/users/{id}`, AU JWT shows `User.Read` only). Fix: `scripts/create_entra_agent_ids.py:605–609` (added `User.ReadBasic.All`); `src/entraclaw/tools/files.py:_get_sponsor_allowlist` (chat-members fallback). Tests: `tests/identity/test_sponsor_user_enrichment.py::TestGetSponsorAllowlistChatMembersFallback` (4 tests covering recovery, skip-when-unneeded, error swallowing, mixed enriched/unenriched).
+
+---
+
 ## Historical Learnings
 
 ### [HISTORICAL] Learning #4: OBO Requires Matching Token Audience

@@ -1075,19 +1075,38 @@ async def _upload_chunked_session(
 async def _get_sponsor_allowlist() -> set[str]:
     """Fetch Agent Identity sponsor email addresses from Graph.
 
-    Uses fetch_agent_identity_sponsors to list all sponsor UPNs, mail, otherMails,
-    proxyAddresses, and federated identities. Returns normalized set of all
-    canonical email forms.
+    Two-stage strategy:
 
-    The ``/users/{id}`` enrichment hop is routed through the Agent User
-    token because the Agent Identity FIC token only carries
-    ``AgentIdentity.ReadWrite.All`` and would 403 on ``/users/{id}``,
-    leaving the allowlist empty (Learning #55, 2026-04-30 bug).
+    **Stage 1 (preferred):** ``fetch_agent_identity_sponsors`` enumerates
+    sponsor user IDs via the Agent Identity FIC token, then enriches
+    each via ``/users/{id}`` using the Agent User token. The Agent User
+    needs ``User.ReadBasic.All`` (delegated) for the enrichment to
+    return populated email fields (``userPrincipalName``, ``mail``,
+    ``identities``). When that scope is granted (post-2026-04-30
+    setup.sh / setup-windows.ps1), this stage is sufficient.
+
+    **Stage 2 (fallback):** When the enrichment hop returns 403 because
+    the scope wasn't granted, sponsors come back with only ``user_id``
+    and empty email identifiers. We fall back to scanning chat members
+    of all watched chats — the Agent User has ``Chat.ReadWrite`` and
+    ``/chats/{id}/members`` exposes member emails for chats the agent
+    participates in. Any chat member whose ``user_id`` matches a
+    sponsor's ``user_id`` contributes their email to the allowlist.
+
+    The fallback covers the common case where a sponsor has DM'd the
+    agent at least once. Sponsors who haven't been in a chat with the
+    agent will not appear in the allowlist via the fallback — re-run
+    ``setup.sh`` / ``setup-windows.ps1`` (or grant
+    ``User.ReadBasic.All`` manually) to enable Stage 1 for them.
     """
     import asyncio
+    import logging
 
     from entraclaw.config import get_config
-    from entraclaw.identity.sponsors import fetch_agent_identity_sponsors
+    from entraclaw.identity.sponsors import (
+        fetch_agent_identity_sponsors,
+        fetch_watched_chat_members,
+    )
     from entraclaw.tools.teams import acquire_agent_user_token
 
     config = get_config()
@@ -1098,8 +1117,29 @@ async def _get_sponsor_allowlist() -> set[str]:
     )
 
     canonical_emails: set[str] = set()
+    unenriched_user_ids: set[str] = set()
     for sponsor in sponsors:
-        canonical_emails.update(sponsor.email_identifiers())
+        emails = sponsor.email_identifiers()
+        if emails:
+            canonical_emails.update(emails)
+        elif sponsor.user_id:
+            unenriched_user_ids.add(sponsor.user_id.lower())
+
+    if unenriched_user_ids:
+        try:
+            members = await asyncio.to_thread(fetch_watched_chat_members, config)
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger(__name__).warning(
+                "chat-members sponsor email fallback failed: %s", exc
+            )
+            members = []
+
+        for member in members:
+            member_user_id = (member.get("user_id") or "").strip().lower()
+            if member_user_id and member_user_id in unenriched_user_ids:
+                member_email = (member.get("email") or "").strip().lower()
+                if member_email:
+                    canonical_emails.add(member_email)
 
     return canonical_emails
 
