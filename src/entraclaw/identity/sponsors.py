@@ -413,6 +413,32 @@ def fetch_watched_chat_members(
     chat_ids = _watched_chat_ids(config.data_dir)
     if not chat_ids:
         return []
+    return fetch_chat_members(
+        config,
+        chat_ids,
+        token_provider=token_provider,
+        transport=transport,
+    )
+
+
+def fetch_chat_members(
+    config: EntraClawConfig,
+    chat_ids: str | list[str],
+    *,
+    token_provider: Callable[[EntraClawConfig], str] = acquire_agent_user_token,
+    transport: httpx.BaseTransport | None = None,
+) -> list[dict[str, Any]]:
+    """Return Graph chat members for one or more chat IDs.
+
+    Each member dict has keys ``user_id``, ``name``, ``email``, ``roles``.
+
+    Used by ``share_file`` to verify the requester is actually a member
+    of the chat they claim is the active context (Learning #59 design).
+    """
+    if isinstance(chat_ids, str):
+        chat_ids = [chat_ids]
+    if not chat_ids:
+        return []
 
     token = token_provider(config)
     client_kwargs: dict[str, Any] = {"timeout": httpx.Timeout(15.0)}
@@ -428,15 +454,15 @@ def fetch_watched_chat_members(
                     headers={"Authorization": f"Bearer {token}"},
                 )
             except httpx.HTTPError as exc:
-                logger.warning("failed to read watched chat members for %s: %s", chat_id, exc)
+                logger.warning("failed to read chat members for %s: %s", chat_id, exc)
                 continue
             if resp.status_code == 401:
                 raise TokenExpiredError(
-                    "Agent User token expired while reading watched chat members"
+                    "Agent User token expired while reading chat members"
                 )
             if resp.status_code != 200:
                 logger.warning(
-                    "failed to read watched chat members for %s: HTTP %s %s",
+                    "failed to read chat members for %s: HTTP %s %s",
                     chat_id,
                     resp.status_code,
                     resp.text[:200],

@@ -1,12 +1,12 @@
-"""Tests for share_file tool (PR2).
+"""Tests for the inverted-gate ``share_file`` (2026-04-30 refactor).
 
-TDD: all tests written before implementation.
-Tests cover:
-  - Happy path: recipient in sponsor allowlist (table test UPN/mail/otherMails/proxyAddresses)
-  - Non-sponsor rejection with NotASponsorError
-  - Role variations (read, write)
-  - Denylist rejection (site)
-  - Federated identity detection
+Authorization model:
+- The REQUESTER (who asked the agent to share) MUST be in the static
+  Agent Identity sponsor allowlist.
+- The REQUESTER MUST be a member of the Teams chat (``chat_id``) that
+  initiated the request — defends against an LLM fabricating a
+  sponsor email that doesn't match the active conversation.
+- The RECIPIENT is unrestricted. Sponsors may share with anyone.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,248 +14,371 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from entraclaw.errors import (
-    NotASponsorError,
+    RequesterNotInChatError,
+    RequesterNotSponsorError,
     SiteNotAllowedError,
 )
+from entraclaw.identity.sponsors import AgentIdentitySponsor
 from entraclaw.tools.files import (
     FileRef,
     share_file,
 )
 
 
+def _file_ref(site_id: str | None = None) -> FileRef:
+    return FileRef(
+        drive_id="drive_123",
+        item_id="item_456",
+        name="spec.docx",
+        mime_type=(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+        kind="sharepoint" if site_id else "onedrive_business",
+        site_id=site_id,
+        web_url="https://contoso.sharepoint.com/spec.docx",
+        size_bytes=1024,
+    )
+
+
+def _sponsor(
+    user_id: str = "sponsor-uid",
+    upn: str = "sponsor@contoso.com",
+    mail: str | None = "sponsor@contoso.com",
+) -> AgentIdentitySponsor:
+    return AgentIdentitySponsor(
+        user_id=user_id,
+        user_principal_name=upn,
+        mail=mail,
+    )
+
+
+def _patch_graph_invite_ok(
+    permission_id: str = "perm_789",
+    web_url: str = "https://contoso.sharepoint.com/spec.docx",
+    expiration: str | None = None,
+):
+    """Helper context manager — Graph /invite returns success."""
+    payload = {
+        "value": [
+            {
+                "id": permission_id,
+                "roles": ["read"],
+                "webUrl": web_url,
+                **({"expirationDateTime": expiration} if expiration else {}),
+            }
+        ]
+    }
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = payload
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    ctx = patch("entraclaw.tools.files._client")
+    ctx_obj = ctx.start()
+    ctx_obj.return_value.__aenter__.return_value = mock_client
+    ctx_obj.return_value.__aexit__.return_value = None
+    return ctx, mock_client
+
+
 @pytest.mark.asyncio
-class TestShareFile:
-    """Tests for share_file mutation tool."""
+class TestRequesterMustBeSponsor:
+    """Gate 1 — requester_email must be in the static sponsor allowlist."""
 
-    def _make_file_ref(self, site_id=None):
-        """Helper to create test FileRef."""
-        return FileRef(
-            drive_id="drive_123",
-            item_id="item_456",
-            name="spec.docx",
-            mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            kind="sharepoint" if site_id else "onedrive_business",
-            site_id=site_id,
-            web_url="https://contoso.sharepoint.com/spec.docx",
-            size_bytes=1024,
-        )
-
-    async def test_share_with_sponsor_by_upn(self):
-        """Share succeeds when recipient is sponsor (matched by UPN)."""
-        file_ref = self._make_file_ref()
-        token = "mock_token_123"
-
-        with patch("entraclaw.tools.files._get_sponsor_allowlist") as mock_sponsors:
-            mock_sponsors.return_value = {
-                "user@contoso.com",
-                "user@other.com",
-            }
-
-            with patch("entraclaw.tools.files._client") as mock_client_ctx:
-                mock_response = MagicMock()
-                mock_response.status_code = 200
-                mock_response.json.return_value = {
-                    "value": [
-                        {
-                            "id": "perm_789",
-                            "roles": ["read"],
-                            "grantedTo": {"user": {"email": "user@contoso.com"}},
-                            "webUrl": "https://contoso.sharepoint.com/spec.docx",
-                        }
-                    ]
-                }
-
-                mock_client = MagicMock()
-                mock_client.post = AsyncMock(return_value=mock_response)
-                mock_client_ctx.return_value.__aenter__.return_value = mock_client
-                mock_client_ctx.return_value.__aexit__.return_value = None
-
+    async def test_happy_path_sponsor_in_chat_can_share_to_anyone(self):
+        sponsor = _sponsor()
+        with (
+            patch("entraclaw.tools.files._get_sponsor_records") as mock_records,
+            patch("entraclaw.identity.sponsors.fetch_chat_members") as mock_members,
+        ):
+            mock_records.return_value = [sponsor]
+            mock_members.return_value = [
+                {"user_id": "sponsor-uid", "email": "sponsor@contoso.com"}
+            ]
+            ctx, _ = _patch_graph_invite_ok()
+            try:
                 result = await share_file(
-                    file_ref=file_ref,
-                    recipient_email="user@contoso.com",
+                    file_ref=_file_ref(),
+                    # Recipient is a non-sponsor stranger — that's fine.
+                    recipient_email="stranger@example.com",
+                    requester_email="sponsor@contoso.com",
+                    chat_id="19:abcd@thread.v2",
                     role="read",
-                    token=token,
+                    token="t",
                 )
+            finally:
+                ctx.stop()
 
-                assert result.permission_id == "perm_789"
-                assert result.role == "read"
-                assert result.recipient_email == "user@contoso.com"
+        assert result.permission_id == "perm_789"
+        assert result.recipient_email == "stranger@example.com"
 
-    async def test_share_with_sponsor_by_mail(self):
-        """Share succeeds when recipient is sponsor (matched by mail attribute)."""
-        file_ref = self._make_file_ref()
-        token = "mock_token_123"
-
-        with patch("entraclaw.tools.files._get_sponsor_allowlist") as mock_sponsors:
-            # Mock returns set of canonical addresses
-            mock_sponsors.return_value = {
-                "user@contoso.com",
-                "alt@company.com",
-            }
-
-            with patch("entraclaw.tools.files._client") as mock_client_ctx:
-                mock_response = MagicMock()
-                mock_response.status_code = 200
-                mock_response.json.return_value = {
-                    "value": [
-                        {
-                            "id": "perm_abc",
-                            "roles": ["write"],
-                            "grantedTo": {"user": {"email": "alt@company.com"}},
-                        }
-                    ]
-                }
-
-                mock_client = MagicMock()
-                mock_client.post = AsyncMock(return_value=mock_response)
-                mock_client_ctx.return_value.__aenter__.return_value = mock_client
-                mock_client_ctx.return_value.__aexit__.return_value = None
-
-                result = await share_file(
-                    file_ref=file_ref,
-                    recipient_email="alt@company.com",
-                    role="write",
-                    token=token,
-                )
-
-                assert result.permission_id == "perm_abc"
-                assert result.role == "write"
-
-    async def test_non_sponsor_rejection(self):
-        """Non-sponsor recipient raises NotASponsorError."""
-        file_ref = self._make_file_ref()
-        token = "mock_token_123"
-
-        with patch("entraclaw.tools.files._get_sponsor_allowlist") as mock_sponsors:
-            mock_sponsors.return_value = {
-                "allowed@contoso.com",
-            }
-
-            with pytest.raises(NotASponsorError) as exc_info:
+    async def test_non_sponsor_requester_rejected(self):
+        sponsor = _sponsor()
+        with patch("entraclaw.tools.files._get_sponsor_records") as mock_records:
+            mock_records.return_value = [sponsor]
+            with pytest.raises(RequesterNotSponsorError) as exc_info:
                 await share_file(
-                    file_ref=file_ref,
-                    recipient_email="unauthorized@gmail.com",
+                    file_ref=_file_ref(),
+                    recipient_email="stranger@example.com",
+                    requester_email="impostor@example.com",
+                    chat_id="19:abcd@thread.v2",
                     role="read",
-                    token=token,
+                    token="t",
                 )
 
-            assert "unauthorized@gmail.com" in str(exc_info.value)
-            # Error must NOT enumerate valid sponsors — that gives the
-            # calling LLM a menu to retry against, leading to rogue
-            # auto-share with a different address (Learning #59).
-            assert "allowed@contoso.com" not in str(exc_info.value)
-            assert "Valid sponsors:" not in str(exc_info.value)
-            # Stop-instruction must be loud and clear so the agent
-            # doesn't iterate.
-            assert "Stop and ask the user" in str(exc_info.value)
+        msg = str(exc_info.value)
+        assert "impostor@example.com" in msg
+        # Must NOT enumerate alternatives — that gives the LLM a menu (Learning #59).
+        assert "sponsor@contoso.com" not in msg
+        assert "Stop and ask the user" in msg
 
-    async def test_role_write(self):
-        """Role write is passed through to Graph."""
-        file_ref = self._make_file_ref()
-        token = "mock_token_123"
-
-        with patch("entraclaw.tools.files._get_sponsor_allowlist") as mock_sponsors:
-            mock_sponsors.return_value = {
-                "user@contoso.com",
-            }
-
-            with patch("entraclaw.tools.files._client") as mock_client_ctx:
-                mock_response = MagicMock()
-                mock_response.status_code = 200
-                mock_response.json.return_value = {
-                    "value": [
-                        {
-                            "id": "perm_write",
-                            "roles": ["write"],
-                            "grantedTo": {"user": {"email": "user@contoso.com"}},
-                        }
-                    ]
-                }
-
-                mock_client = MagicMock()
-                mock_client.post = AsyncMock(return_value=mock_response)
-                mock_client_ctx.return_value.__aenter__.return_value = mock_client
-                mock_client_ctx.return_value.__aexit__.return_value = None
-
+    async def test_sponsor_matched_via_decoded_b2b_ext_upn(self):
+        """Requester types home address; sponsor record carries only the EXT UPN."""
+        msa_sponsor = AgentIdentitySponsor(
+            user_id="msa-uid",
+            user_principal_name="brandwe_outlook.com#EXT#@brandwedir.onmicrosoft.com",
+            mail=None,
+        )
+        with (
+            patch("entraclaw.tools.files._get_sponsor_records") as mock_records,
+            patch("entraclaw.identity.sponsors.fetch_chat_members") as mock_members,
+        ):
+            mock_records.return_value = [msa_sponsor]
+            mock_members.return_value = [
+                {"user_id": "msa-uid", "email": "brandwe@outlook.com"}
+            ]
+            ctx, _ = _patch_graph_invite_ok()
+            try:
+                # User typed the home address — the EXT-UPN decoder must
+                # translate the sponsor record's UPN into this form.
                 result = await share_file(
-                    file_ref=file_ref,
-                    recipient_email="user@contoso.com",
-                    role="write",
-                    token=token,
+                    file_ref=_file_ref(),
+                    recipient_email="anyone@example.com",
+                    requester_email="brandwe@outlook.com",
+                    chat_id="19:abcd@thread.v2",
+                    role="read",
+                    token="t",
+                )
+            finally:
+                ctx.stop()
+
+        assert result.permission_id == "perm_789"
+
+
+@pytest.mark.asyncio
+class TestRequesterMustBeChatMember:
+    """Gate 2 — sponsor must be a MEMBER of the cited chat."""
+
+    async def test_sponsor_not_in_chat_rejected(self):
+        sponsor = _sponsor()
+        with (
+            patch("entraclaw.tools.files._get_sponsor_records") as mock_records,
+            patch("entraclaw.identity.sponsors.fetch_chat_members") as mock_members,
+        ):
+            mock_records.return_value = [sponsor]
+            # Chat exists but the sponsor isn't a member — the LLM may
+            # have fabricated either the email or the chat_id.
+            mock_members.return_value = [
+                {"user_id": "different-user", "email": "stranger@example.com"}
+            ]
+
+            with pytest.raises(RequesterNotInChatError) as exc_info:
+                await share_file(
+                    file_ref=_file_ref(),
+                    recipient_email="anyone@example.com",
+                    requester_email="sponsor@contoso.com",
+                    chat_id="19:wrong-chat@thread.v2",
+                    role="read",
+                    token="t",
                 )
 
-                assert result.role == "write"
+        msg = str(exc_info.value)
+        assert "sponsor@contoso.com" in msg
+        assert "19:wrong-chat@thread.v2" in msg
 
-    async def test_sharepoint_denylist_rejection(self):
-        """SharePoint file on denylist cannot be shared."""
-        file_ref = self._make_file_ref(site_id="site_denied")
-        token = "mock_token_123"
+    async def test_empty_chat_members_rejected(self):
+        """Graph returned 403/404 for the chat — no membership = no auth."""
+        sponsor = _sponsor()
+        with (
+            patch("entraclaw.tools.files._get_sponsor_records") as mock_records,
+            patch("entraclaw.identity.sponsors.fetch_chat_members") as mock_members,
+        ):
+            mock_records.return_value = [sponsor]
+            mock_members.return_value = []
 
-        with patch("entraclaw.tools.files._check_site_allowed") as mock_check:
-            mock_check.side_effect = SiteNotAllowedError("site_denied")
+            with pytest.raises(RequesterNotInChatError):
+                await share_file(
+                    file_ref=_file_ref(),
+                    recipient_email="anyone@example.com",
+                    requester_email="sponsor@contoso.com",
+                    chat_id="19:fake-chat@thread.v2",
+                    role="read",
+                    token="t",
+                )
+
+
+@pytest.mark.asyncio
+class TestRequiredArguments:
+    """Required-arg defaults + missing-arg rejection."""
+
+    async def test_missing_requester_email_raises_value_error(self):
+        with pytest.raises(ValueError, match="requester_email"):
+            await share_file(
+                file_ref=_file_ref(),
+                recipient_email="anyone@example.com",
+                requester_email="",
+                chat_id="19:abcd@thread.v2",
+                role="read",
+                token="t",
+            )
+
+    async def test_missing_chat_id_raises_value_error(self):
+        with pytest.raises(ValueError, match="chat_id"):
+            await share_file(
+                file_ref=_file_ref(),
+                recipient_email="anyone@example.com",
+                requester_email="sponsor@contoso.com",
+                chat_id="",
+                role="read",
+                token="t",
+            )
+
+    async def test_missing_token_raises_value_error(self):
+        with pytest.raises(ValueError, match="token"):
+            await share_file(
+                file_ref=_file_ref(),
+                recipient_email="anyone@example.com",
+                requester_email="sponsor@contoso.com",
+                chat_id="19:abcd@thread.v2",
+                role="read",
+                token=None,
+            )
+
+
+@pytest.mark.asyncio
+class TestRecipientUnrestricted:
+    """Recipient can be ANY address — no sponsor check, no chat-member check."""
+
+    async def test_share_with_external_recipient_succeeds(self):
+        sponsor = _sponsor()
+        with (
+            patch("entraclaw.tools.files._get_sponsor_records") as mock_records,
+            patch("entraclaw.identity.sponsors.fetch_chat_members") as mock_members,
+        ):
+            mock_records.return_value = [sponsor]
+            mock_members.return_value = [
+                {"user_id": "sponsor-uid", "email": "sponsor@contoso.com"}
+            ]
+            ctx, mock_client = _patch_graph_invite_ok()
+            try:
+                result = await share_file(
+                    file_ref=_file_ref(),
+                    recipient_email="external@gmail.com",
+                    requester_email="sponsor@contoso.com",
+                    chat_id="19:abcd@thread.v2",
+                    role="read",
+                    token="t",
+                )
+            finally:
+                ctx.stop()
+
+        # Recipient passed to Graph unchanged.
+        post_kwargs = mock_client.post.call_args.kwargs
+        assert post_kwargs["json"]["recipients"] == [{"email": "external@gmail.com"}]
+        assert result.recipient_email == "external@gmail.com"
+
+
+@pytest.mark.asyncio
+class TestRoleAndDenylist:
+    """Existing semantics that survive the gate inversion."""
+
+    async def test_role_write_passed_through(self):
+        sponsor = _sponsor()
+        with (
+            patch("entraclaw.tools.files._get_sponsor_records") as mock_records,
+            patch("entraclaw.identity.sponsors.fetch_chat_members") as mock_members,
+        ):
+            mock_records.return_value = [sponsor]
+            mock_members.return_value = [
+                {"user_id": "sponsor-uid", "email": "sponsor@contoso.com"}
+            ]
+            ctx, mock_client = _patch_graph_invite_ok()
+            try:
+                result = await share_file(
+                    file_ref=_file_ref(),
+                    recipient_email="anyone@example.com",
+                    requester_email="sponsor@contoso.com",
+                    chat_id="19:abcd@thread.v2",
+                    role="write",
+                    token="t",
+                )
+            finally:
+                ctx.stop()
+
+        post_kwargs = mock_client.post.call_args.kwargs
+        assert post_kwargs["json"]["roles"] == ["write"]
+        assert result.role == "write"
+
+    async def test_sharepoint_denylist_rejection_runs_first(self):
+        """Site denylist still rejects before any sponsor lookup."""
+        denied_site_id = "denied-site-id"
+        with (
+            patch("entraclaw.tools.files._check_site_allowed") as mock_deny,
+            patch("entraclaw.tools.files._get_sponsor_records") as mock_records,
+        ):
+            mock_deny.side_effect = SiteNotAllowedError(site_id=denied_site_id)
+            mock_records.return_value = []
 
             with pytest.raises(SiteNotAllowedError):
                 await share_file(
-                    file_ref=file_ref,
-                    recipient_email="user@contoso.com",
+                    file_ref=_file_ref(site_id=denied_site_id),
+                    recipient_email="anyone@example.com",
+                    requester_email="sponsor@contoso.com",
+                    chat_id="19:abcd@thread.v2",
                     role="read",
-                    token=token,
+                    token="t",
                 )
 
-    async def test_permission_metadata(self):
-        """SharePermission includes web_url and expiration_at when available."""
-        file_ref = self._make_file_ref()
-        token = "mock_token_123"
+            # Sponsor records should NEVER have been fetched — denylist is first.
+            mock_records.assert_not_called()
 
-        with patch("entraclaw.tools.files._get_sponsor_allowlist") as mock_sponsors:
-            mock_sponsors.return_value = {
-                "user@contoso.com",
-            }
-
-            with patch("entraclaw.tools.files._client") as mock_client_ctx:
-                mock_response = MagicMock()
-                mock_response.status_code = 200
-                mock_response.json.return_value = {
-                    "value": [
-                        {
-                            "id": "perm_metadata",
-                            "roles": ["read"],
-                            "grantedTo": {"user": {"email": "user@contoso.com"}},
-                            "webUrl": "https://contoso.sharepoint.com/spec.docx",
-                            "expirationDateTime": "2099-12-31T23:59:59Z",
-                        }
-                    ]
-                }
-
-                mock_client = MagicMock()
-                mock_client.post = AsyncMock(return_value=mock_response)
-                mock_client_ctx.return_value.__aenter__.return_value = mock_client
-                mock_client_ctx.return_value.__aexit__.return_value = None
-
+    async def test_permission_metadata_includes_web_url_and_expiration(self):
+        sponsor = _sponsor()
+        with (
+            patch("entraclaw.tools.files._get_sponsor_records") as mock_records,
+            patch("entraclaw.identity.sponsors.fetch_chat_members") as mock_members,
+        ):
+            mock_records.return_value = [sponsor]
+            mock_members.return_value = [
+                {"user_id": "sponsor-uid", "email": "sponsor@contoso.com"}
+            ]
+            ctx, _ = _patch_graph_invite_ok(
+                permission_id="perm_metadata",
+                expiration="2099-12-31T23:59:59Z",
+            )
+            try:
                 result = await share_file(
-                    file_ref=file_ref,
-                    recipient_email="user@contoso.com",
+                    file_ref=_file_ref(),
+                    recipient_email="anyone@example.com",
+                    requester_email="sponsor@contoso.com",
+                    chat_id="19:abcd@thread.v2",
                     role="read",
-                    token=token,
+                    token="t",
                 )
+            finally:
+                ctx.stop()
 
-                assert result.permission_id == "perm_metadata"
-                assert result.web_url == "https://contoso.sharepoint.com/spec.docx"
-                assert result.expiration_at == "2099-12-31T23:59:59Z"
+        assert result.permission_id == "perm_metadata"
+        assert result.web_url == "https://contoso.sharepoint.com/spec.docx"
+        assert result.expiration_at == "2099-12-31T23:59:59Z"
 
 
 @pytest.mark.asyncio
-class TestGetSponsorAllowlist:
-    """Regression tests for _get_sponsor_allowlist itself.
-
-    The sibling TestShareFile class mocks _get_sponsor_allowlist whole,
-    so it cannot catch signature drift between the wrapper and the
-    underlying fetch_agent_identity_sponsors. These tests exercise the
-    real wrapper with only the sync inner call mocked.
-    """
+class TestGetSponsorAllowlistCompat:
+    """``_get_sponsor_allowlist`` is retained as a back-compat shim."""
 
     async def test_aggregates_all_email_identifiers(self):
-        from entraclaw.identity.sponsors import AgentIdentitySponsor
         from entraclaw.tools.files import _get_sponsor_allowlist
 
         sponsor = AgentIdentitySponsor(
@@ -276,10 +399,6 @@ class TestGetSponsorAllowlist:
 
             allowlist = await _get_sponsor_allowlist()
 
-            # _get_sponsor_allowlist must route the /users/{id} enrichment
-            # hop through the Agent User token (the Agent Identity FIC
-            # token lacks User.Read.All) — see Learning #55, 2026-04-30
-            # sponsor-allowlist-empty bug.
             from entraclaw.tools.teams import acquire_agent_user_token
 
             call_args, call_kwargs = mock_fetch.call_args

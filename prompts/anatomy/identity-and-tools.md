@@ -52,6 +52,28 @@ report back via Teams.
 - **`whoami`** — Check identity and connection status.
 - **`audit_log`** — Record an action before performing it.
 
+### Files (SharePoint / OneDrive) authorization
+
+When sharing a file via `share_file`:
+
+- **`requester_email` is REQUIRED.** Pass the email of the **human
+  who asked you to share** — the sender of the Teams message that
+  triggered this turn. NEVER use your own address. NEVER fabricate.
+  If unsure who the requester is, ask in Teams; do not guess.
+- **`chat_id` is REQUIRED.** Pass the `chat_id` of the active Teams
+  conversation that triggered the share. There is no no-chat
+  bypass. The server cross-checks that the requester is a member of
+  this chat to defend against a fabricated requester email.
+- The **recipient** can be any address. Sponsors may share with
+  anyone they choose, including non-sponsors. Do not second-guess
+  the recipient — if the requester said "share with X", share
+  with X.
+- If `share_file` returns `RequesterNotSponsorError` or
+  `RequesterNotInChatError`, **STOP and tell the human in Teams**.
+  Do NOT retry with a different `requester_email`, do NOT enumerate
+  alternates, do NOT loop. The error is the truth: you don't have
+  authority to perform this share.
+
 ### Python tool-call hygiene
 
 When I run Python through `Bash` tool calls, I prefer

@@ -37,7 +37,7 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -47,7 +47,8 @@ from entraclaw.errors import (
     FileTooLargeError,
     GraphFilesError,
     MissingPermissionError,
-    NotASponsorError,
+    RequesterNotInChatError,
+    RequesterNotSponsorError,
     SiteNotAllowedError,
     TokenExpiredError,
     UnsupportedCommentFormatError,
@@ -1072,59 +1073,51 @@ async def _upload_chunked_session(
         raise GraphFilesError(500, "Upload loop exited without final response")
 
 
-async def _get_sponsor_allowlist() -> set[str]:
-    """Fetch Agent Identity sponsor email addresses from Graph.
+async def _get_sponsor_records() -> list[Any]:
+    """Fetch the Agent Identity sponsor records (with user_id + emails).
 
-    Two-stage strategy:
+    Two-stage strategy (mirrors the email-allowlist logic from before
+    the 2026-04-30 share_file gate inversion):
 
-    **Stage 1 (preferred):** ``fetch_agent_identity_sponsors`` enumerates
-    sponsor user IDs via the Agent Identity FIC token, then enriches
-    each via ``/users/{id}`` using the Agent User token. The Agent User
-    needs ``User.ReadBasic.All`` (delegated) for the enrichment to
-    return populated email fields (``userPrincipalName``, ``mail``,
-    ``identities``). When that scope is granted (post-2026-04-30
-    setup.sh / setup-windows.ps1), this stage is sufficient.
+    **Stage 1:** ``fetch_agent_identity_sponsors`` enumerates sponsor
+    user IDs via the Agent Identity FIC token, then enriches each via
+    ``/users/{id}`` using the Agent User token. Needs ``User.ReadBasic.All``
+    delegated.
 
-    **Stage 2 (fallback):** When the enrichment hop returns 403 because
-    the scope wasn't granted, sponsors come back with only ``user_id``
-    and empty email identifiers. We fall back to scanning chat members
-    of all watched chats — the Agent User has ``Chat.ReadWrite`` and
-    ``/chats/{id}/members`` exposes member emails for chats the agent
-    participates in. Any chat member whose ``user_id`` matches a
-    sponsor's ``user_id`` contributes their email to the allowlist.
+    **Stage 2:** When the enrichment hop returns 403 because the scope
+    wasn't granted, sponsors come back with only ``user_id`` and empty
+    email identifiers. We patch the returned sponsor records by scanning
+    chat members of all watched chats — any chat member whose ``user_id``
+    matches a sponsor's ``user_id`` contributes their email back to the
+    sponsor record.
 
-    The fallback covers the common case where a sponsor has DM'd the
-    agent at least once. Sponsors who haven't been in a chat with the
-    agent will not appear in the allowlist via the fallback — re-run
-    ``setup.sh`` / ``setup-windows.ps1`` (or grant
-    ``User.ReadBasic.All`` manually) to enable Stage 1 for them.
+    Returns the full sponsor records (not just emails) because
+    ``share_file`` now needs to match by ``user_id`` for the chat
+    membership check, in addition to email-based authorization.
     """
     import asyncio
     import logging
 
     from entraclaw.config import get_config
     from entraclaw.identity.sponsors import (
+        AgentIdentitySponsor,
         fetch_agent_identity_sponsors,
         fetch_watched_chat_members,
     )
     from entraclaw.tools.teams import acquire_agent_user_token
 
     config = get_config()
-    sponsors = await asyncio.to_thread(
+    sponsors: list[AgentIdentitySponsor] = await asyncio.to_thread(
         fetch_agent_identity_sponsors,
         config,
         user_token_provider=acquire_agent_user_token,
     )
 
-    canonical_emails: set[str] = set()
-    unenriched_user_ids: set[str] = set()
-    for sponsor in sponsors:
-        emails = sponsor.email_identifiers()
-        if emails:
-            canonical_emails.update(emails)
-        elif sponsor.user_id:
-            unenriched_user_ids.add(sponsor.user_id.lower())
-
+    unenriched_user_ids = {
+        s.user_id.lower()
+        for s in sponsors
+        if s.user_id and not s.email_identifiers()
+    }
     if unenriched_user_ids:
         try:
             members = await asyncio.to_thread(fetch_watched_chat_members, config)
@@ -1134,56 +1127,146 @@ async def _get_sponsor_allowlist() -> set[str]:
             )
             members = []
 
+        member_email_by_user_id: dict[str, str] = {}
         for member in members:
-            member_user_id = (member.get("user_id") or "").strip().lower()
-            if member_user_id and member_user_id in unenriched_user_ids:
-                member_email = (member.get("email") or "").strip().lower()
-                if member_email:
-                    canonical_emails.add(member_email)
+            mid = (member.get("user_id") or "").strip().lower()
+            email = (member.get("email") or "").strip().lower()
+            if mid and email and mid in unenriched_user_ids:
+                member_email_by_user_id[mid] = email
 
-    return canonical_emails
+        # Patch each unenriched sponsor with the chat-members email by
+        # rebuilding the dataclass with ``other_mails`` populated.
+        if member_email_by_user_id:
+            patched: list[AgentIdentitySponsor] = []
+            for sponsor in sponsors:
+                key = sponsor.user_id.lower()
+                fallback_email = member_email_by_user_id.get(key)
+                if fallback_email and not sponsor.email_identifiers():
+                    patched.append(
+                        AgentIdentitySponsor(
+                            user_id=sponsor.user_id,
+                            user_principal_name=sponsor.user_principal_name,
+                            mail=sponsor.mail or fallback_email,
+                            other_mails=tuple(
+                                sorted(set(sponsor.other_mails) | {fallback_email})
+                            ),
+                            proxy_addresses=sponsor.proxy_addresses,
+                            federated_emails=sponsor.federated_emails,
+                        )
+                    )
+                else:
+                    patched.append(sponsor)
+            sponsors = patched
+
+    return sponsors
+
+
+async def _get_sponsor_allowlist() -> set[str]:
+    """Return the union of all email-shaped identifiers across sponsors.
+
+    Retained for back-compat with existing callers and tests. Internally
+    delegates to ``_get_sponsor_records``.
+    """
+    sponsors = await _get_sponsor_records()
+    canonical: set[str] = set()
+    for sponsor in sponsors:
+        canonical.update(sponsor.email_identifiers())
+    return canonical
 
 
 async def share_file(
     file_ref: FileRef,
     recipient_email: str,
+    *,
+    requester_email: str,
+    chat_id: str,
     role: ShareRole = "read",
     token: str | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> SharePermission:
-    """Share a file with a recipient (sponsor-allowlist enforced).
+    """Share a file. The REQUESTER is sponsor-gated; the recipient is not.
+
+    Authorization model (2026-04-30 inverted gate):
+    Only Agent Identity sponsors are authorized to direct the agent to
+    share files. A sponsor may share with anyone they choose. The
+    recipient is passed straight through to Graph ``/invite``.
+
+    Two checks are enforced before the Graph call:
+
+    1. **Requester is a sponsor.** ``requester_email`` is matched
+       against the static sponsor allowlist (Entra-configured sponsors
+       on the Agent Identity object). All email forms are accepted —
+       UPN, mail, otherMails, proxyAddresses, federated identities, and
+       decoded B2B EXT UPN home addresses.
+
+    2. **Requester is a member of ``chat_id``.** The sponsor's
+       ``user_id`` MUST appear in the chat's member list. This catches
+       an LLM fabricating a sponsor email that doesn't match the
+       conversation it's actually in. Both ``requester_email`` and
+       ``chat_id`` are required parameters; the LLM cannot bypass the
+       chat-context binding by omitting it.
 
     Args:
-        file_ref: FileRef from resolve_file_url or read_file
-        recipient_email: Email to share with (must be in sponsor allowlist)
-        role: read / write
-        token: Optional pre-fetched token; else refreshed
-        transport: Optional test transport
+        file_ref: ``FileRef`` from ``resolve_file_url`` or ``read_file``.
+        recipient_email: Address to share with (any address allowed —
+            sponsors may share with non-sponsors).
+        requester_email: Email of the human (sponsor) who asked the
+            agent to share. Required. The LLM should derive this from
+            the active conversation context — never use the agent's own
+            address.
+        chat_id: Teams chat ID that initiated this share request.
+            Required. Used to verify the requester is genuinely in the
+            conversation we're acting on.
+        role: ``read`` or ``write``.
+        token: Optional pre-fetched token; else refreshed.
+        transport: Optional test transport for the Graph ``/invite``
+            call. Sponsor-record fetching uses its own transport.
 
     Returns:
-        SharePermission with permission_id and metadata
+        ``SharePermission`` with ``permission_id`` and metadata.
 
     Raises:
-        NotASponsorError: Recipient not in Agent Identity sponsor allowlist
-        SiteNotAllowedError: (SharePoint only) Site on operator denylist
-        GraphFilesError: 403 Forbidden, 5xx, or other Graph errors
+        RequesterNotSponsorError: ``requester_email`` not in sponsor allowlist.
+        RequesterNotInChatError: requester is a sponsor but not a member of ``chat_id``.
+        SiteNotAllowedError: (SharePoint only) site on operator denylist.
+        GraphFilesError: 403 Forbidden, 5xx, or other Graph errors.
     """
     if not token:
         raise ValueError("token is required")
+    if not requester_email:
+        raise ValueError("requester_email is required")
+    if not chat_id:
+        raise ValueError("chat_id is required")
 
-    # For SharePoint, check site allowed
     if file_ref.site_id:
         _check_site_allowed(file_ref.site_id)
 
-    # Validate recipient is in sponsor allowlist
-    sponsor_emails = await _get_sponsor_allowlist()
-    recipient_lower = recipient_email.lower()
+    # Gate 1: requester must be in the static sponsor allowlist.
+    sponsors = await _get_sponsor_records()
+    requester_lower = requester_email.strip().lower()
+    matched_sponsor = next(
+        (
+            s
+            for s in sponsors
+            if any(email.lower() == requester_lower for email in s.email_identifiers())
+        ),
+        None,
+    )
+    if matched_sponsor is None or not matched_sponsor.user_id:
+        raise RequesterNotSponsorError(requester=requester_email)
 
-    if not any(email.lower() == recipient_lower for email in sponsor_emails):
-        raise NotASponsorError(
-            recipient=recipient_email,
-            sponsors=sorted(sponsor_emails),
-        )
+    # Gate 2: matched sponsor must be a member of the cited chat.
+    import asyncio
+
+    from entraclaw.config import get_config
+    from entraclaw.identity.sponsors import fetch_chat_members
+
+    members = await asyncio.to_thread(fetch_chat_members, get_config(), chat_id)
+    matched_user_id = matched_sponsor.user_id.lower()
+    if not any(
+        (m.get("user_id") or "").strip().lower() == matched_user_id for m in members
+    ):
+        raise RequesterNotInChatError(requester=requester_email, chat_id=chat_id)
 
     resource = f"{file_ref.drive_id}:{file_ref.item_id}"
     request_url = f"{GRAPH_V1_HOST}/drives/{file_ref.drive_id}/items/{file_ref.item_id}/invite"
@@ -1202,6 +1285,8 @@ async def share_file(
         "share_file",
         resource,
         metadata={
+            "requester_email": requester_email,
+            "chat_id": chat_id,
             "recipient_email": recipient_email,
             "role": role,
             "site_id": file_ref.site_id,
@@ -1219,7 +1304,6 @@ async def share_file(
 
         body = resp.json()
 
-        # Extract permission from response
         # POST /invite returns array of permission objects
         perms = body.get("value", [])
         if perms:

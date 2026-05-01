@@ -191,14 +191,10 @@ class FileTooLargeError(FilesError):
 class NotASponsorError(FilesError):
     """``share_file`` recipient is not in the Agent Identity sponsor list.
 
-    Note: the error message intentionally does NOT enumerate the allowed
-    sponsor addresses. Listing alternatives gave the calling LLM a menu
-    to try — when one address failed, the agent would retry with a
-    different one without user consent (Learning #59, 2026-04-30). The
-    sponsor allowlist is a fixed identity-binding, not a routing hint.
-    The user supplied a recipient; if it's not allowed, fail loudly and
-    stop. The user (the human) can re-issue the request with a different
-    address themselves.
+    DEPRECATED in favor of ``RequesterNotSponsorError``. The 2026-04-30
+    refactor inverted the gate: the *requester* is now validated against
+    sponsors, not the recipient. This class is retained for backward
+    compatibility but is no longer raised.
     """
 
     def __init__(self, recipient: str, sponsors: list[str]) -> None:
@@ -207,6 +203,46 @@ class NotASponsorError(FilesError):
         super().__init__(
             f"Cannot share with {recipient!r}: not an Agent Identity sponsor. "
             "Stop and ask the user — do not retry with a different address."
+        )
+
+
+class RequesterNotSponsorError(FilesError):
+    """The human who asked the agent to share is not an Agent Identity sponsor.
+
+    Only Agent Identity sponsors are authorized to direct the agent to
+    share files. Sponsors may share with anyone they choose; non-sponsors
+    cannot share at all.
+
+    Note: this error message intentionally does NOT enumerate the
+    allowed sponsor addresses. Listing alternatives gives the calling
+    LLM a menu to retry against (Learning #59).
+    """
+
+    def __init__(self, requester: str) -> None:
+        self.requester = requester
+        super().__init__(
+            f"{requester!r} is not authorized to ask the agent to share files. "
+            "Only Agent Identity sponsors may initiate sharing. "
+            "Stop and ask the user to confirm who is requesting this."
+        )
+
+
+class RequesterNotInChatError(FilesError):
+    """The requester claimed to be a sponsor but is not a member of the cited chat.
+
+    Defends against an LLM fabricating ``requester_email`` to match a
+    real sponsor address while the actual conversation is happening with
+    someone else. The requester's user_id MUST appear in the chat's
+    member list, not merely in the sponsor allowlist.
+    """
+
+    def __init__(self, requester: str, chat_id: str) -> None:
+        self.requester = requester
+        self.chat_id = chat_id
+        super().__init__(
+            f"{requester!r} is a sponsor but is not a member of chat "
+            f"{chat_id!r}. Refusing to share — verify which chat actually "
+            "initiated this request, then re-call with the correct chat_id."
         )
 
 

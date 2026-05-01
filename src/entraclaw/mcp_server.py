@@ -3880,21 +3880,38 @@ async def share_file(
     item_id: str,
     name: str,
     recipient_email: str,
+    requester_email: str,
+    chat_id: str,
     role: str = "read",
     mime_type: str = "application/octet-stream",
     kind: str = "sharepoint",
     site_id: str = "",
 ) -> str:
-    """Share a file with a recipient (sponsor-allowlist enforced).
+    """Share a file. The REQUESTER must be an Agent Identity sponsor; the recipient is unrestricted.
+
+    Authorization model: only sponsors can ask the agent to share. A
+    sponsor may share with anyone they choose. The recipient is passed
+    straight through to Microsoft Graph.
 
     Args:
         drive_id, item_id, name, mime_type, kind, site_id: ``FileRef`` fields.
-        recipient_email: Email to share with (must be in sponsor allowlist).
+        recipient_email: Address to share with (any address — sponsors may share with non-sponsors).
+        requester_email: REQUIRED. Email of the human (sponsor) who asked
+            the agent to share. Derive this from the active conversation
+            context — the sender of the Teams message that triggered
+            this turn. NEVER use the agent's own address. NEVER fabricate.
+        chat_id: REQUIRED. The Teams chat ID that initiated this share
+            request. Used to verify the requester is genuinely a member
+            of that conversation. There is no "no-chat" bypass.
         role: read / write
 
     Returns:
         JSON with permission metadata (permission_id, role, recipient_email,
         web_url, expiration_at) or ``{"error": "..."}``.
+
+    Errors:
+        RequesterNotSponsorError: requester_email is not in the sponsor allowlist.
+        RequesterNotInChatError: requester is a sponsor but not a member of chat_id.
     """
     await _initialize()
     from entraclaw.errors import FilesError
@@ -3903,6 +3920,26 @@ async def share_file(
 
     if not drive_id or not item_id or not name or not recipient_email:
         return json.dumps({"error": "drive_id, item_id, name, and recipient_email are required"})
+    if not requester_email:
+        return json.dumps(
+            {
+                "error": (
+                    "requester_email is required — pass the email of the human "
+                    "who asked you to share. Never use the agent's own address."
+                ),
+                "error_type": "ValueError",
+            }
+        )
+    if not chat_id:
+        return json.dumps(
+            {
+                "error": (
+                    "chat_id is required — pass the Teams chat ID that initiated "
+                    "this request. There is no no-chat bypass."
+                ),
+                "error_type": "ValueError",
+            }
+        )
     if role not in ("read", "write"):
         return json.dumps({"error": "role must be 'read' or 'write'"})
 
@@ -3921,6 +3958,8 @@ async def share_file(
             _share,
             file_ref=ref,
             recipient_email=recipient_email,
+            requester_email=requester_email,
+            chat_id=chat_id,
             role=role,  # type: ignore[arg-type]
         )
     except FilesError as exc:

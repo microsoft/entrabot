@@ -724,7 +724,30 @@ The unenriched `AgentIdentitySponsor(user_id=…)` had `email_identifiers() == f
 
 ---
 
-## Historical Learnings
+### Learning #59: `share_file` Authorization Was Inverted — Gate the Requester, Not the Recipient
+
+**Date:** 2026-05-01
+**Status:** **CONFIRMED — fixed in `refactor/share-file-requester-gate`.**
+**Context:** PR2's original `share_file` validated the **recipient** against the sponsor allowlist: "you can only share with sponsors." This shipped because it sounded like a defense-in-depth ("limit who the agent can leak files to"). It is the wrong defense. The threat model for an Agent Identity is *unauthorized requesters*, not unauthorized recipients. A sponsor — the human authorized to direct the agent — should be able to share a spec they wrote with their lawyer, their kid's teacher, or anyone else. Restricting the recipient to a static allowlist makes the tool useless: the LLM started rotating through sponsor email forms (`brandwe@outlook.com` → `brandwe_outlook.com#EXT#@brandwedir.onmicrosoft.com`) trying to find one Graph would accept for a recipient it had no business gating in the first place.
+
+**Problem (compounding):**
+1. **Wrong principal gated.** `share_file(file_ref, recipient_email, ...)` checked `recipient_email in sponsor_allowlist`. If the sponsor's only registered identity was an EXT UPN, sharing with their home email failed — even though the sponsor was the requester.
+2. **NotASponsorError enumerated alternatives.** The error message included the full sponsor list, which the LLM treated as a menu and immediately tried the next entry. Classic prompt-injection-via-error-message. (See Learning #54: never give the model behavioral knobs it can iterate over.)
+3. **No conversation binding.** Even after inverting the gate, an LLM can fabricate `requester_email="<some sponsor>"` for a chat the sponsor isn't actually in. The static allowlist doesn't catch this — it only knows *who is a sponsor*, not *who is in the room right now*.
+
+**Fix (two-gate model):**
+- **Gate 1 — requester is a sponsor.** `share_file` now requires `requester_email: str` (kwargs-only, REQUIRED). The email must match a record in `_get_sponsor_records()` via any identifier in `email_identifiers()` (UPN, mail, otherMails, proxyAddresses, federated identities, decoded EXT-UPN form). Recipient is no longer gated at all — passes straight to Graph.
+- **Gate 2 — requester is in the cited chat.** `share_file` also requires `chat_id: str` (kwargs-only, REQUIRED). After matching the sponsor record by email, we fetch `fetch_chat_members(config, chat_id)` and verify the matched sponsor's `user_id` appears in the chat's member list. Match by `user_id`, not email — aliases (home + EXT UPN) collapse to a single user_id.
+- **Errors are quiet.** New `RequesterNotSponsorError(requester)` and `RequesterNotInChatError(requester, chat_id)` deliberately do NOT enumerate alternatives. The body prompt teaches the LLM that these errors mean "stop and ask the human in Teams" — not "retry with a different argument."
+- **No no-chat bypass in v1.** Server-side enforcement of "this turn was Teams-triggered" is deferred to a future PR; v1 makes both kwargs `REQUIRED` so any caller (including the LLM) must supply them.
+
+**Prevention:**
+- When designing an authorization gate, name the principal: *who is asserting this action?* The gate goes there. Recipients are downstream of intent.
+- Authorization errors must NEVER enumerate the allowlist. Treat error messages as part of the LLM's input — anything you list is an attack surface.
+- Cross-check the static allowlist against active conversation context. Chat membership is the cheapest way to bind "who's a sponsor on paper" to "who's in this room right now."
+- Match by `user_id` on the membership side. Email aliasing (home + EXT UPN, mail + UPN, federated identities) makes email a brittle join key — `user_id` is the one stable identifier across all of them.
+
+**Evidence/references:** `src/entraclaw/tools/files.py:share_file` (rewritten signature, two-gate logic), `src/entraclaw/errors.py:RequesterNotSponsorError|RequesterNotInChatError`, `src/entraclaw/identity/sponsors.py:fetch_chat_members` (factored out of `fetch_watched_chat_members`), `prompts/anatomy/identity-and-tools.md` (LLM contract: requester_email + chat_id always come from active Teams turn). Tests: `tests/tools/test_files_pr2_share_file.py` (13 tests covering happy path, both gates, EXT-UPN decode, missing args, recipient unrestricted, role/denylist passthrough).
 
 ### [HISTORICAL] Learning #4: OBO Requires Matching Token Audience
 
