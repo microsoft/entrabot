@@ -189,14 +189,24 @@ class FileTooLargeError(FilesError):
 
 
 class NotASponsorError(FilesError):
-    """``share_file`` recipient is not in the Agent Identity sponsor list."""
+    """``share_file`` recipient is not in the Agent Identity sponsor list.
+
+    Note: the error message intentionally does NOT enumerate the allowed
+    sponsor addresses. Listing alternatives gave the calling LLM a menu
+    to try — when one address failed, the agent would retry with a
+    different one without user consent (Learning #59, 2026-04-30). The
+    sponsor allowlist is a fixed identity-binding, not a routing hint.
+    The user supplied a recipient; if it's not allowed, fail loudly and
+    stop. The user (the human) can re-issue the request with a different
+    address themselves.
+    """
 
     def __init__(self, recipient: str, sponsors: list[str]) -> None:
         self.recipient = recipient
         self.sponsors = sponsors
         super().__init__(
             f"Cannot share with {recipient!r}: not an Agent Identity sponsor. "
-            f"Valid sponsors: {sponsors}"
+            "Stop and ask the user — do not retry with a different address."
         )
 
 

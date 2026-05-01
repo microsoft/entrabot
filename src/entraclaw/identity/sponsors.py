@@ -70,6 +70,53 @@ def _normalize_id(value: str | None) -> str:
     return (value or "").strip().lower()
 
 
+def _decode_b2b_ext_upn(upn: str | None) -> str | None:
+    """Decode a B2B guest's EXT UPN back to its home address.
+
+    Azure AD encodes a guest user's home address into their tenant UPN by
+    replacing ``@`` with ``_`` and appending ``#EXT#@<tenant>.onmicrosoft.com``.
+    For example::
+
+        brandwe_outlook.com#EXT#@brandwedir.onmicrosoft.com
+            decodes to → brandwe@outlook.com
+
+        charlie_smith.ac#EXT#@sara.onmicrosoft.com
+            decodes to → brandon@werner.ac
+
+    The home-address portion (left of ``#EXT#@``) is split at the LAST
+    ``_`` since the original local-part may contain underscores. Returns
+    ``None`` if ``upn`` does not look like a B2B EXT UPN.
+
+    This matters because Microsoft-Account B2B guests (and some federated
+    guests) come back from ``/users/{id}`` with ``mail``, ``otherMails``,
+    ``proxyAddresses``, and federated ``identities[].issuerAssignedId``
+    all null — the EXT UPN is the ONLY email-shaped field on the user
+    object. Humans never type that form; they type the home address. The
+    sponsor allowlist must accept both.
+    """
+    if not upn:
+        return None
+    normalized = upn.strip()
+    if not normalized:
+        return None
+    # Case-insensitive ``#EXT#@`` separator — Graph emits ``#EXT#@`` in
+    # production but tooling/casing varies, so be lenient.
+    lower = normalized.lower()
+    sep = "#ext#@"
+    sep_index = lower.find(sep)
+    if sep_index < 0:
+        return None
+    encoded_local = normalized[:sep_index]
+    last_underscore = encoded_local.rfind("_")
+    if last_underscore < 0:
+        return None
+    home_local = encoded_local[:last_underscore]
+    home_domain = encoded_local[last_underscore + 1 :]
+    if not home_local or "." not in home_domain:
+        return None
+    return f"{home_local}@{home_domain}"
+
+
 def _federated_email_identifiers(identities: Any) -> tuple[str, ...]:
     """Extract email-shaped ``issuerAssignedId`` values from B2B ``identities``.
 
@@ -145,8 +192,10 @@ class AgentIdentitySponsor:
         )
 
     def email_identifiers(self) -> frozenset[str]:
+        decoded_upn = _decode_b2b_ext_upn(self.user_principal_name)
         values = [
             self.user_principal_name,
+            decoded_upn,
             self.mail,
             *self.other_mails,
             *self.proxy_addresses,

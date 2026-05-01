@@ -140,6 +140,14 @@ class TestShareFile:
                 )
 
             assert "unauthorized@gmail.com" in str(exc_info.value)
+            # Error must NOT enumerate valid sponsors — that gives the
+            # calling LLM a menu to retry against, leading to rogue
+            # auto-share with a different address (Learning #59).
+            assert "allowed@contoso.com" not in str(exc_info.value)
+            assert "Valid sponsors:" not in str(exc_info.value)
+            # Stop-instruction must be loud and clear so the agent
+            # doesn't iterate.
+            assert "Stop and ask the user" in str(exc_info.value)
 
     async def test_role_write(self):
         """Role write is passed through to Graph."""
