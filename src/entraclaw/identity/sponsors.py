@@ -265,13 +265,39 @@ def fetch_agent_identity_sponsors(
     config: EntraClawConfig,
     *,
     token_provider: Callable[[EntraClawConfig], str] = acquire_agent_identity_token,
+    user_token_provider: Callable[[EntraClawConfig], str] | None = None,
     transport: httpx.BaseTransport | None = None,
 ) -> list[AgentIdentitySponsor]:
-    """Read user sponsors from the Agent Identity service principal in Graph."""
+    """Read user sponsors from the Agent Identity service principal in Graph.
+
+    Two Graph hops happen here, and they need different scopes:
+
+    * ``/servicePrincipals/{id}/microsoft.graph.agentIdentity/sponsors``
+      requires app-only ``AgentIdentity.ReadWrite.All`` (Learning #43),
+      which only the Agent Identity FIC token holds. ``token_provider``
+      mints this token.
+
+    * ``/users/{sponsor_id}`` enrichment requires ``User.Read.All`` to
+      project the email-shaped fields (``userPrincipalName``, ``mail``,
+      ``otherMails``, ``identities``) — Graph's nav-property collection
+      at ``/sponsors`` returns only ``id`` regardless of ``$select``,
+      so the enrichment is the only way to populate emails. The Agent
+      Identity FIC token does NOT have ``User.Read.All``; passing
+      ``user_token_provider=acquire_agent_user_token`` routes this hop
+      through the Agent User's delegated token, which does. Without
+      this, callers that match sponsors by email (``share_file``) see
+      an empty allowlist (Learning #55, 2026-04-30 production bug).
+
+    When ``user_token_provider`` is omitted (or None), both hops reuse
+    the same Agent Identity token. This is fine for callers that match
+    sponsors by ``user_id`` only (the wait-tool / supervisor gate),
+    where empty email fields are harmless.
+    """
     if not config.agent_object_id:
         raise ValueError("Agent Identity object id is not configured")
 
     token = token_provider(config)
+    user_token = user_token_provider(config) if user_token_provider is not None else token
     client_kwargs: dict[str, Any] = {"timeout": httpx.Timeout(15.0)}
     if transport is not None:
         client_kwargs["transport"] = transport
@@ -297,7 +323,7 @@ def fetch_agent_identity_sponsors(
             sponsor = AgentIdentitySponsor.from_graph_user(item)
             if sponsor is None:
                 continue
-            enriched = _fetch_sponsor_user_details(token, sponsor.user_id, client)
+            enriched = _fetch_sponsor_user_details(user_token, sponsor.user_id, client)
             sponsors.append(sponsor.merge(enriched) if enriched is not None else sponsor)
     if not sponsors:
         raise ValueError("Agent Identity has no user sponsors")

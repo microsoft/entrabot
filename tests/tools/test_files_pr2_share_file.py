@@ -268,7 +268,15 @@ class TestGetSponsorAllowlist:
 
             allowlist = await _get_sponsor_allowlist()
 
-            mock_fetch.assert_called_once_with(mock_get_config.return_value)
+            # _get_sponsor_allowlist must route the /users/{id} enrichment
+            # hop through the Agent User token (the Agent Identity FIC
+            # token lacks User.Read.All) — see Learning #55, 2026-04-30
+            # sponsor-allowlist-empty bug.
+            from entraclaw.tools.teams import acquire_agent_user_token
+
+            call_args, call_kwargs = mock_fetch.call_args
+            assert call_args == (mock_get_config.return_value,)
+            assert call_kwargs == {"user_token_provider": acquire_agent_user_token}
             assert allowlist == {
                 "alice@contoso.com",
                 "alice.mail@contoso.com",

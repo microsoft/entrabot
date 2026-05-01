@@ -686,6 +686,22 @@ Regression tests in `tests/test_mcp_server_integration.py` cover both raw Teams 
 
 ---
 
+### Learning #57: Sponsor Email Allowlist Was Empty — Agent Identity FIC Token Can't Read `/users/{id}`
+
+**Date:** 2026-04-30
+**Status:** **CONFIRMED — fixed in `fix/sponsor-email-enrichment-via-agent-user`.**
+**Context:** PR #64 shipped `share_file`, which gates recipients against the Agent Identity sponsor email allowlist. In production it failed with `Cannot share with 'brandon@werner.ac': not an Agent Identity sponsor. Valid sponsors: []` — the allowlist came back empty even though `brandon@werner.ac` was a sponsor on the Agent Identity service principal.
+**Problem:** `fetch_agent_identity_sponsors` does two Graph hops: (1) `/servicePrincipals/{id}/microsoft.graph.agentIdentity/sponsors?$select=id,userPrincipalName,mail,otherMails,...` for the relationship, and (2) `/users/{sponsor_id}` enrichment. The Agent Identity FIC token only carries `AgentIdentity.ReadWrite.All`, NOT `User.Read.All`. Two failures combined silently:
+1. Graph's nav-property collection at `/sponsors` projects only `{id}` for each member regardless of `$select` — the email-shaped fields never appear in the relationship response.
+2. The `/users/{id}` enrichment hop using the Agent Identity FIC token returns 403 (Forbidden), and `_fetch_sponsor_user_details` silently returns None on non-200/401.
+
+The unenriched `AgentIdentitySponsor(user_id=…)` had `email_identifiers() == frozenset()`, so the allowlist was empty. The wait-tool / supervisor sponsor gate never noticed this because **it only matches by `user_id`** — it doesn't need email fields. `share_file` was the first feature that matched sponsors by email, and it surfaced the latent gap.
+**Fix:** Add `user_token_provider: Callable | None` kwarg to `fetch_agent_identity_sponsors`. When provided, the `/users/{id}` enrichment hop uses that token instead of the Agent Identity FIC token. `share_file` (`_get_sponsor_allowlist`) passes `acquire_agent_user_token` — the third-hop Agent User token has `User.Read.All` delegated and successfully reads `/users/{id}` for any user in the tenant including B2B guests.
+**Prevention:** When a Graph nav-property collection projects only `id`, do NOT assume `$select` will populate sub-fields. Always plan the enrichment hop with a separately-scoped token. The principle: **`AgentIdentity.ReadWrite.All` reads relationships; `User.Read.All` reads users. Match the token to the endpoint.**
+**Evidence/references:** Diagnostic showed `id=aa144f49-… upn=None mail=None other=()` in production tenant. `src/entraclaw/identity/sponsors.py:fetch_agent_identity_sponsors` (now accepts `user_token_provider`); `src/entraclaw/tools/files.py:_get_sponsor_allowlist` passes `acquire_agent_user_token`. Tests: `tests/identity/test_sponsor_user_enrichment.py` (4 tests covering token routing, back-compat, and the unenriched-sponsor regression).
+
+---
+
 ## Historical Learnings
 
 ### [HISTORICAL] Learning #4: OBO Requires Matching Token Audience

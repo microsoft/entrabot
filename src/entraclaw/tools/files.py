@@ -1078,14 +1078,24 @@ async def _get_sponsor_allowlist() -> set[str]:
     Uses fetch_agent_identity_sponsors to list all sponsor UPNs, mail, otherMails,
     proxyAddresses, and federated identities. Returns normalized set of all
     canonical email forms.
+
+    The ``/users/{id}`` enrichment hop is routed through the Agent User
+    token because the Agent Identity FIC token only carries
+    ``AgentIdentity.ReadWrite.All`` and would 403 on ``/users/{id}``,
+    leaving the allowlist empty (Learning #55, 2026-04-30 bug).
     """
     import asyncio
 
     from entraclaw.config import get_config
     from entraclaw.identity.sponsors import fetch_agent_identity_sponsors
+    from entraclaw.tools.teams import acquire_agent_user_token
 
     config = get_config()
-    sponsors = await asyncio.to_thread(fetch_agent_identity_sponsors, config)
+    sponsors = await asyncio.to_thread(
+        fetch_agent_identity_sponsors,
+        config,
+        user_token_provider=acquire_agent_user_token,
+    )
 
     canonical_emails: set[str] = set()
     for sponsor in sponsors:
