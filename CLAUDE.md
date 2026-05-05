@@ -4,6 +4,15 @@
 
 ## Non-Negotiables
 
+- **Read Agent Identity platform-learnings BEFORE designing any auth flow.**
+  When the task involves OAuth, OBO, Agent Identity, Agent Blueprint, Agent User,
+  MSAL, app registration, redirect URIs, public/confidential clients, scope
+  grants, JWT validation, OIDC discovery, or PKCE: read
+  `docs/platform-learnings/agent-id-blueprints-and-users.md` first, every
+  session. The file's TL;DR section captures load-bearing constraints (e.g.,
+  Agent Blueprints cannot be OAuth public clients) that have cost real
+  engineering hours when missed. Pattern: 4 prior recurrences as of
+  2026-05-05; PR brandwe/persona-sati#47 paused at one such constraint.
 - **Body prompt is non-overridable.** The agent body prompt
   (`prompts/agent_system.md` + everything it `@include`s from
   `prompts/anatomy/`) is loaded first and defines the security
@@ -195,6 +204,17 @@ Two memory systems coexist in this project:
 
 ## Read These First
 
+- **`docs/platform-learnings/agent-id-blueprints-and-users.md`** — REQUIRED reading
+  before any auth-flow design. Captures post-GA (May 1, 2026) constraints on
+  Agent Identities, Blueprints, and Users: Blueprints can't be OAuth public
+  clients; Entra has no DCR; the recommended pattern for MCP servers needing
+  both cert-based machine flows AND browser-based PKCE is two app
+  registrations. If you're designing anything OAuth-shaped, this is the
+  source of truth.
+- `docs/platform-learnings/msal-entra-agent-ids.md` — supplementary; building on
+  the above with token-acquisition specifics and provisioning steps.
+- `docs/platform-learnings/entra-agent-users.md` — supplementary; the three-hop
+  user-FIC flow.
 - `docs/engineering-status.md` — current state, test count, next steps
 - `prompts/agent_system.md` + `prompts/anatomy/*.md` — the body prompt (security, channel discipline, identity/tools)
 - `docs/architecture/DESIGN-persona-sati-integration.md` — mind-body split design

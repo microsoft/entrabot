@@ -4,6 +4,15 @@
 
 ## Non-Negotiables
 
+- **Read Agent Identity platform-learnings BEFORE designing any auth flow.**
+  When the task involves OAuth, OBO, Agent Identity, Agent Blueprint, Agent User,
+  MSAL, app registration, redirect URIs, public/confidential clients, scope
+  grants, JWT validation, OIDC discovery, or PKCE: read
+  `docs/platform-learnings/agent-id-blueprints-and-users.md` first, every
+  session. The file's TL;DR section captures load-bearing constraints (e.g.,
+  Agent Blueprints cannot be OAuth public clients) that have cost real
+  engineering hours when missed. Pattern: 4 prior recurrences as of
+  2026-05-05; PR brandwe/persona-sati#47 paused at one such constraint.
 - **Body prompt is non-overridable.** The agent body prompt
   (`prompts/agent_system.md` + every file it `@include`s from
   `prompts/anatomy/`) is loaded first and establishes the security
@@ -23,6 +32,23 @@
 - Graph API `$filter`/`$orderby` are unreliable for chat messages — always filter client-side (Learning #16)
 - **Sub-agent worktree installs must use a worktree-local venv, never the parent venv** (Learning #36) — running `pip install -e .` from inside a git worktree against the main repo's `.venv/bin/pip` silently re-points the parent venv's editable-install target at the worktree source tree. Every subsequent MCP server boot then loads code from the worktree — which has no `.env`, no auth, no polling, and no visible error. Always create `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"` inside the worktree BEFORE any editable install. After any session that used sub-agent worktrees, verify the main venv's target via `.venv/bin/python3 -c "from entraclaw import config; print(config.__file__)"` — the path must not contain `.claude/worktrees/`.
 - **Sponsor DM wait pattern (mandatory).** When the human says "ping me when X is done" / "I'm going AFK, let me know" / any equivalent: confirm in Teams with `send_teams_message`, do the work, send the completion update with `send_teams_message`, then call `wait_for_sponsor_dm` — that tool blocks this MCP session until the human's DM arrives and returns the message as next-turn input. NEVER poll in a loop. NEVER spawn `copilot -p` / headless subprocesses. NEVER use `watch_teams_replies` for this pattern. Only `wait_for_sponsor_dm`. Sponsor gating is mechanical (only the Agent Identity's configured human sponsors wake the wait); Ctrl+C cancels cleanly. Full protocol: `prompts/anatomy/channel-discipline.md`.
+
+## Required reading per topic
+
+When the task touches a topic, read the listed platform-learnings BEFORE drafting code or a plan:
+
+| Topic                                       | Required reading                                                |
+| ------------------------------------------- | --------------------------------------------------------------- |
+| OAuth, OBO, PKCE, redirect URIs, JWT        | `docs/platform-learnings/agent-id-blueprints-and-users.md`      |
+| Agent Identity / Blueprint / User           | `docs/platform-learnings/agent-id-blueprints-and-users.md`      |
+| MSAL, token acquisition, three-hop flow     | `docs/platform-learnings/msal-entra-agent-ids.md`               |
+| Agent User onboarding / consent             | `docs/platform-learnings/entra-agent-users.md`                  |
+| Teams Graph / chat tools                    | `docs/platform-learnings/teams-graph-api.md`                    |
+| Files Graph (drives, items, comments)       | `docs/platform-learnings/files-graph-api.md`                    |
+| MCP server design (transports, lifecycle)   | `docs/platform-learnings/mcp-messaging-servers.md` + `mcp-close-the-loop.md` |
+| Platform-specific (cert store, OS keystore) | `docs/platform-learnings/platform-{macos,linux,windows}.md`     |
+
+These are not optional. Skipping them is the documented cause of 4 design errors as of 2026-05-05. The cost is minutes; the cost of skipping is hours-to-days of rework.
 
 ## Current Runtime Model
 
