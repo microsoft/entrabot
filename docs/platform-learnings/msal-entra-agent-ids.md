@@ -344,33 +344,34 @@ Blueprint: "Entraclaw Agent"
   └── Agent Identity: "Entraclaw-Dev-Test" (sponsor: devteam@contoso.com)
 ```
 
+> **Important post-GA constraint:** Agent Identity Blueprints inherit from `application` but Microsoft excludes the `publicClient`, `spa`, and `isFallbackPublicClient` surfaces. Blueprints **cannot** be OAuth public clients, cannot have native/desktop redirect URIs, and cannot be flipped to fallback-public-client mode. Browser-based OAuth 2.1 PKCE flows that need a Blueprint as their `client_id` are blocked at the Graph API layer. For browser/CLI/SPA OAuth, create a **separate** ordinary application registration (NOT an `agentIdentityBlueprint`) and configure it as a delegated client of the Blueprint's `access_agent` scope. See `agent-id-blueprints-and-users.md` Section 3.1 for the recommended pattern.
+
 ### How to Register Agent Identities
 
 #### Prerequisites
 - **Licensing:** Microsoft 365 Copilot with "Frontier" program enabled, or Entra Workload Identities Premium
-- **Roles:** `Agent ID Developer` or `Agent ID Administrator`
-- **Permissions:** Microsoft Graph beta API scopes: `AgentIdentityBlueprint.Create`, `AgentIdentityBlueprint.ReadWrite.All`
+- **Permissions (post-GA, Microsoft Graph v1.0):** `AgentIdentityBlueprint.Create`, `AgentIdentityBlueprint.AddRemoveCreds.All`, `AgentIdentityBlueprint.UpdateAuthProperties.All`, `AgentIdentityBlueprintPrincipal.Create`. Roles: Privileged Role Administrator (least privilege for granting Graph application permissions); Agent ID Developer or Agent ID Administrator (for the Blueprint operations). Source: [learn.microsoft.com/entra/agent-id/create-blueprint](https://learn.microsoft.com/en-us/entra/agent-id/create-blueprint) updated 2026-05-01.
 
 #### Step 1: Create an Agent Identity Blueprint
 
 ```http
-POST https://graph.microsoft.com/beta/agentIdentityBlueprints
+POST https://graph.microsoft.com/v1.0/applications/
+OData-Version: 4.0
 Content-Type: application/json
 
 {
-    "displayName": "Entraclaw Agent",
-    "description": "Autonomous coding agent for Entraclaw platform",
-    "identifierUris": ["api://entraclaw-agent-blueprint"],
-    "appRoles": [
-        {
-            "displayName": "Code Assistant",
-            "value": "CodeAssistant",
-            "allowedMemberTypes": ["Application"]
-        }
-    ],
-    "owners": ["{owner-object-id}"],
-    "sponsors": ["{sponsor-object-id}"]
+  "@odata.type": "Microsoft.Graph.AgentIdentityBlueprint",
+  "displayName": "Entraclaw Agent",
+  "sponsors@odata.bind": ["https://graph.microsoft.com/v1.0/users/<sponsor-oid>"],
+  "owners@odata.bind": ["https://graph.microsoft.com/v1.0/users/<owner-oid>"]
 }
+```
+
+The Blueprint is now created on the standard `applications` collection with an `@odata.type` discriminator, and exists in Microsoft Graph v1.0 (not beta). Then explicitly create the BlueprintPrincipal:
+
+```http
+POST https://graph.microsoft.com/v1.0/serviceprincipals/microsoft.graph.agentIdentityBlueprintPrincipal
+{ "appId": "<blueprint-appId>" }
 ```
 
 #### Step 2: Create an Agent Identity from the Blueprint
@@ -387,7 +388,9 @@ Content-Type: application/json
 }
 ```
 
-#### Step 3: Register to the Agent Registry (Optional)
+> **Note (post-GA, May 2026):** This endpoint remains in Microsoft Graph beta — `agentIdentity` itself has not been promoted to v1.0 yet (only `agentIdentityBlueprint` was). The body schema is correct. `servicePrincipalType` will be set to `ServiceIdentity` automatically on the resulting service principal.
+
+#### Step 3: Register to the Agent Registry (Optional) [HISTORICAL — preview-era, deprecated 2026-05-01]
 
 ```http
 POST https://graph.microsoft.com/beta/agentRegistry/agentInstances
@@ -405,6 +408,8 @@ Content-Type: application/json
 }
 ```
 
+> **[HISTORICAL — preview-era, deprecated 2026-05-01]** The Agent Registry and Agent Collections blades and APIs are being retired and replaced by Agent 365-powered registry APIs. From the Microsoft Graph docs (April 2026): *"Starting May 2026, the Agent Registry APIs in Microsoft Graph will be replaced by newer Agent Registry APIs powered by Microsoft Agent 365... Agents registered via the current API will need to be re-registered."* Don't build new code against `/beta/agentRegistry`. See `agent-id-blueprints-and-users.md` for the current Agent 365 registry guidance.
+
 ### Agent ID vs Service Principal vs Managed Identity
 
 | Feature | Service Principal | Managed Identity | Agent Identity |
@@ -417,7 +422,7 @@ Content-Type: application/json
 | **Purpose-built for AI?** | No | No | **Yes** |
 | **Audit/sponsor** | Limited | N/A | Built-in sponsor + audit |
 | **Conditional Access** | Yes (with premium) | No | Yes |
-| **Identity type** | `servicePrincipal` | `managedIdentity` | Special `servicePrincipal` subtype |
+| **Identity type** | `servicePrincipal` | `managedIdentity` | `servicePrincipalType = ServiceIdentity` (post-GA) |
 
 ### Key Characteristics of Agent Identities
 
@@ -437,14 +442,16 @@ Agent identities support two token patterns:
 
 The **Microsoft Entra SDK for Agent Identities** provides simplified token acquisition in containerized environments via HTTP APIs.
 
-### Current Limitations (Preview)
+### Post-GA capabilities and remaining constraints (May 1, 2026)
 
-- **Public preview only** — APIs and behavior may change before GA
-- **Microsoft Graph beta API required** — not yet in v1.0
-- **Limited platform support** — initially Azure AI Foundry, Copilot Studio; third-party support expanding in late 2025
-- **Single-tenant only** — agents can't access cross-tenant resources
-- **No MSAL native support yet** — must use Graph API for identity management; token acquisition uses the Entra SDK or standard MSAL with the blueprint credentials
-- **Licensing requirements** — requires specific Microsoft 365/Entra licensing
+- **GA as of 2026-05-01.** Microsoft Agent 365 (which includes Entra Agent ID) is generally available. Standalone $15/user/month or part of M365 E7 ($99/user/month).
+- **`agentIdentityBlueprint` is in Graph v1.0;** `agentIdentity` and `agentUser` remain in beta but are stable.
+- **Single-tenant Agent Identities, regardless of Blueprint tenancy.** Agent Identities are always single-tenant even if the Blueprint is multi-tenant.
+- **No public-client capabilities for any agent entity.** Confidential clients only. No native, mobile, SPA, or device-code flows for Blueprints or Agent Identities.
+- **No `/authorize` flows for any agent entity.** Authorization-code flows for an interactive agent run on a separate client app reg, not the Blueprint.
+- **Conditional Access GA, ID Protection GA, ID Governance GA** for Agent Identities and Agent Users.
+- **Sponsor group-type restriction:** Only dynamic-membership groups and M365 groups accepted as group sponsors. Role-assignable groups and fixed-membership security groups rejected (existing assignments grandfather).
+- **Blocked permissions table** is published at [agentid-platform-overview](https://learn.microsoft.com/en-us/graph/api/resources/agentid-platform-overview?view=graph-rest-beta). High-risk Graph permissions (Application.ReadWrite.All, Directory.ReadWrite.All, ~50 more) cannot be granted to Agent Identities.
 
 ---
 
@@ -860,27 +867,7 @@ def acquire_token_with_retry(app, scopes, account=None, max_retries=2):
 
 ## Open Questions
 
-### For Entraclaw Architecture
-
-1. **Can we use Agent IDs with OBO?** When a human authenticates, can the Entraclaw agent (with its Agent ID) use OBO to call downstream APIs? Or does the Agent ID's blueprint credential perform its own separate token acquisition?
-
-2. **Blueprint-per-tenant vs. shared blueprint?** For Entraclaw's multi-tenant model, should each customer tenant have its own blueprint, or can one blueprint span tenants (likely no, given single-tenant constraint)?
-
-3. **Agent ID + Device Code Flow interaction:** Can a human bootstrap an Agent ID via device code flow? Or is device code strictly for the human's identity, with the agent identity being separate?
-
-4. **Token cache isolation between agents:** If multiple Entraclaw agents run on the same machine, how do we isolate their token caches? Separate cache files? Separate keychains?
-
-5. **Graceful degradation:** If a customer's tenant doesn't have Agent ID licensing, can Entraclaw fall back to standard service principals? What's the feature-detection mechanism?
-
-6. **Refresh token behavior for OBO:** OBO access tokens have short lifetimes. Does MSAL cache the OBO refresh token? Can `acquire_token_silent` silently refresh an OBO token?
-
-7. **Agent ID GA timeline:** When will Agent ID move from preview to GA? Should we build against the beta API now or wait?
-
-8. **Rate limiting:** What are Microsoft Graph's rate limits for agent identity management APIs? Can we create/delete agent identities programmatically at scale?
-
-9. **Cross-platform Entra SDK:** The Entra SDK for Agent Identities targets containerized environments. Does it work on bare-metal Mac/Linux/Windows (our target)?
-
-10. **Conditional Access interaction:** If a CA policy blocks an Agent ID, does the error propagate cleanly through MSAL, or do we need to handle it at the Graph API level?
+See [`docs/platform-learnings/agent-id-blueprints-and-users.md`](agent-id-blueprints-and-users.md) Section 6 for the current open-questions list. Most preview-era questions (GA timeline, OBO + Agent ID interaction, Conditional Access maturity) are now resolved as of the May 1, 2026 GA. Residual unknowns relate to v1.0 promotion of `agentIdentity`/`agentUser`, the Agent 365 registry API surface, and CIMD/DCR additions to Entra OIDC discovery.
 
 ---
 

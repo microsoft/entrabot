@@ -15,6 +15,8 @@ Agent Identity Blueprint (application)
           └─ Agent User (user object, optional, 1:1)
 ```
 
+> **Note:** The BlueprintPrincipal must be **explicitly created** after the Blueprint via a separate `POST /v1.0/serviceprincipals/microsoft.graph.agentIdentityBlueprintPrincipal` call. It is NOT auto-created when the Blueprint is created. This is a load-bearing detail — see the entraclaw `CLAUDE.md` Non-Negotiables and `msal-entra-agent-ids.md` Step 1 for the canonical creation flow.
+
 The Agent User is:
 - Created via `POST /beta/users` with `@odata.type: microsoft.graph.agentUser`
 - Always linked to exactly one Agent Identity via `identityParentId`
@@ -41,6 +43,8 @@ The Blueprint must be granted `AgentIdUser.ReadWrite.IdentityParentedBy` (applic
 
 Alternatively, a different client (not the Blueprint) can use `AgentIdUser.ReadWrite.All`.
 
+> **Least-privilege note:** `AgentIdUser.ReadWrite.All` is broader (it can create Agent Users for any Blueprint in the tenant) and is correspondingly more sensitive. For least-privilege deployments, prefer `AgentIdUser.ReadWrite.IdentityParentedBy` granted only to the Blueprint that's creating its own Agent Users — this scopes the permission to the Blueprint's own descendants and avoids granting tenant-wide Agent User creation to a single client.
+
 ### API Call
 
 ```http
@@ -60,6 +64,8 @@ Authorization: Bearer <token>
 ```
 
 The token must come from the Blueprint (client_credentials) with the `AgentIdUser.ReadWrite.IdentityParentedBy` permission.
+
+> **Endpoint status (May 2026):** `POST /beta/users` for Agent User creation remains in Microsoft Graph beta as of May 2026; v1.0 promotion is not yet announced. Continue building against beta but be aware that schema may evolve. The `agentIdentityBlueprint` resource was promoted to v1.0 at GA; `agentIdentity` and `agentUser` were not.
 
 ## Licensing
 
@@ -124,6 +130,27 @@ The result is a **delegated access token** with `idtyp=user` that can call any G
 
 **No human in the loop. No device-code flow. No OBO. Fully autonomous.**
 
+### Parameter naming reconciliation (Microsoft canonical doc vs. entraclaw)
+
+The Microsoft GA doc [`agent-user-oauth-flow`](https://learn.microsoft.com/en-us/entra/agent-id/identity-platform/autonomous-agent-request-agent-user-tokens) (updated 2026-05-01) shows the third hop with these parameter names:
+
+```
+&grant_type=user_fic
+&client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer
+&client_assertion={T1}                          # Blueprint→Agent Identity token
+&user_federated_identity_credential={T2}        # Agent Identity self-impersonation token
+&username=agentuser@contoso.com                 # UPN, not object ID
+&requested_token_use=on_behalf_of               # explicit
+```
+
+Notable differences from this document's Hop 3 example above:
+
+- Microsoft uses `&username=` (the Agent User's UPN), not `&user_id=` (the object ID).
+- Microsoft adds an explicit `&requested_token_use=on_behalf_of` parameter.
+- Microsoft naming convention: T1 (Blueprint→Agent Identity), T2 (Agent Identity self-impersonation), then Hop 3 is the OBO-style call passing both T1 (as `client_assertion`) and T2 (as `user_federated_identity_credential`).
+
+**Recommended action:** Verify the entraclaw implementation against the Microsoft canonical doc and harmonize parameter names. If `&user_id=` works against the live Entra endpoint, document it as an undocumented-but-functional alias and note that Microsoft's preferred parameter is `&username=`. Don't depend on either parameter being permanently aliased — the `user_fic` parameter naming may converge in a future post-GA migration.
+
 ## Consent for Agent User
 
 Before the Agent Identity can get tokens as the Agent User, an `oAuth2PermissionGrant` must be created:
@@ -142,7 +169,9 @@ Content-Type: application/json
 }
 ```
 
-This grants the Agent Identity permission to act as the Agent User when calling Graph. This is a one-time admin operation.
+This grants the Agent Identity permission to act as the Agent User when calling Graph. This is a **one-time admin operation per Agent User** — not per session, not per token acquisition, not per scope-superset. Once granted, the Agent Identity can mint Agent User tokens with the granted scopes for that specific Agent User indefinitely (until the grant is revoked or the Agent User is deleted).
+
+The `consentType: "Principal"` + `principalId: <agent-user-oid>` combination is the correct shape for Agent User consent. This is **per-principal consent**, distinct from tenant-wide admin consent (`consentType: "AllPrincipals"`). Tenant-wide consent for Agent User scopes would grant the Agent Identity the right to mint Agent User tokens for *every* Agent User in the tenant — almost certainly broader than intended.
 
 ## Security Constraints
 
