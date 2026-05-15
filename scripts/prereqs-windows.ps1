@@ -9,9 +9,11 @@
     2. Python 3.12+ (winget install Python.Python.3.12)
     3. Git (winget install Git.Git)
     4. Azure CLI (winget install Microsoft.AzureCLI)
-    5. Visual Studio Build Tools with C++ workload (needed for native Python
+    5. .NET SDK (needed for the Microsoft Agent 365 DevTools CLI)
+    6. Microsoft Agent 365 DevTools CLI (`a365`)
+    7. Visual Studio Build Tools with C++ workload (needed for native Python
        packages like cffi/cryptography that compile C extensions)
-    6. Windows SDK (included with VS Build Tools C++ workload)
+    8. Windows SDK (included with VS Build Tools C++ workload)
 
   Run this BEFORE setup-windows.ps1. It's safe to re-run — skips anything
   already installed.
@@ -60,6 +62,13 @@ function Refresh-PathEnv {
     $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
     $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
     $env:Path = "$machinePath;$userPath"
+}
+
+function Add-DotNetToolsPath {
+    $dotnetTools = Join-Path $env:USERPROFILE ".dotnet\tools"
+    if ($env:Path -notlike "*$dotnetTools*") {
+        $env:Path = "$env:Path;$dotnetTools"
+    }
 }
 
 $installed = @()
@@ -170,7 +179,59 @@ if (Test-CommandExists 'az') {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 5. Visual Studio Build Tools + C++ workload (for native Python packages)
+# 5. .NET SDK (required for the Microsoft Agent 365 DevTools CLI)
+# ═══════════════════════════════════════════════════════════════════════════
+Write-Step ".NET SDK"
+
+if (Test-CommandExists 'dotnet') {
+    $dotnetVer = (& dotnet --version)
+    Write-Ok ".NET SDK $dotnetVer already installed"
+    $alreadyPresent += ".NET SDK"
+} else {
+    Write-Install "Installing .NET SDK 9..."
+    winget install --id Microsoft.DotNet.SDK.9 --source winget --accept-package-agreements --accept-source-agreements
+    Refresh-PathEnv
+    if ($LASTEXITCODE -eq 0) { $installed += ".NET SDK 9" } else { $failed += ".NET SDK" }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 6. Microsoft Agent 365 DevTools CLI
+# ═══════════════════════════════════════════════════════════════════════════
+Write-Step "Microsoft Agent 365 DevTools CLI (a365)"
+
+Refresh-PathEnv
+Add-DotNetToolsPath
+
+if (-not (Test-CommandExists 'dotnet')) {
+    Write-Err "dotnet not found; cannot install a365"
+    $failed += "Agent 365 DevTools CLI"
+} elseif (Test-CommandExists 'a365') {
+    Write-Ok "a365 already installed"
+    $alreadyPresent += "Agent 365 DevTools CLI"
+    Write-Install "Checking for a365 update..."
+    $updateOutput = & dotnet tool update --global Microsoft.Agents.A365.DevTools.Cli 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "a365 updated"
+    } else {
+        Write-Skip "a365 is on PATH; update skipped or not managed by dotnet global tools"
+        if ($updateOutput) { Write-Skip ($updateOutput | Select-Object -First 1) }
+    }
+} else {
+    Write-Install "Installing a365..."
+    & dotnet tool install --global Microsoft.Agents.A365.DevTools.Cli
+    Add-DotNetToolsPath
+    if ($LASTEXITCODE -eq 0 -and (Test-CommandExists 'a365')) {
+        $installed += "Agent 365 DevTools CLI"
+    } elseif ($LASTEXITCODE -eq 0) {
+        Write-Warn "a365 installed but is not on PATH yet; restart your terminal if final validation fails"
+        $installed += "Agent 365 DevTools CLI"
+    } else {
+        $failed += "Agent 365 DevTools CLI"
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 7. Visual Studio Build Tools + C++ workload (for native Python packages)
 # ═══════════════════════════════════════════════════════════════════════════
 Write-Step "Visual Studio Build Tools (C++ workload for native Python packages)"
 
@@ -224,18 +285,21 @@ if ($SkipBuildTools) {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 6. Refresh PATH and final validation
+# 8. Refresh PATH and final validation
 # ═══════════════════════════════════════════════════════════════════════════
 Write-Step "Final validation"
 
 Refresh-PathEnv
+Add-DotNetToolsPath
 
 $allGood = $true
 $checks = @(
     @{ Name = "pwsh";   Cmd = "pwsh";   MinVer = $null },
     @{ Name = "python"; Cmd = "python"; MinVer = "3.12" },
     @{ Name = "git";    Cmd = "git";    MinVer = $null },
-    @{ Name = "az";     Cmd = "az";     MinVer = $null }
+    @{ Name = "az";     Cmd = "az";     MinVer = $null },
+    @{ Name = "dotnet"; Cmd = "dotnet"; MinVer = $null },
+    @{ Name = "a365";   Cmd = "a365";   MinVer = $null }
 )
 
 foreach ($check in $checks) {

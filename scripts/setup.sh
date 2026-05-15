@@ -34,9 +34,14 @@ USE_CLOUD_MEMORY=false
 NEW_CHAIN=false
 USE_BLUEPRINT=""
 UPN_SUFFIX=""
+AGENT_USER_UPN=""
 WITH_STORAGE_ACCOUNT=""
 WITH_CONTAINER=""
 CREATE_NEW_STORAGE=false
+WITH_A365_WORK_IQ=false
+CONFIGURE_A365_WORK_IQ=false
+A365_AGENT_NAME="EntraClaw Code Agent"
+A365_WORK_IQ_MCP_SERVERS=(mcp_WordServer mcp_ODSPRemoteServer)
 
 for arg in "$@"; do
     case $arg in
@@ -64,6 +69,9 @@ for arg in "$@"; do
         --with-upn-suffix=*)
             UPN_SUFFIX="${arg#--with-upn-suffix=}"
             ;;
+        --agent-user-upn=*)
+            AGENT_USER_UPN="${arg#--agent-user-upn=}"
+            ;;
         --with-storage-account=*)
             WITH_STORAGE_ACCOUNT="${arg#--with-storage-account=}"
             ;;
@@ -72,6 +80,16 @@ for arg in "$@"; do
             ;;
         --create-new-storage)
             CREATE_NEW_STORAGE=true
+            ;;
+        --with-a365-work-iq)
+            WITH_A365_WORK_IQ=true
+            ;;
+        --configure-a365-work-iq)
+            WITH_A365_WORK_IQ=true
+            CONFIGURE_A365_WORK_IQ=true
+            ;;
+        --a365-agent-name=*)
+            A365_AGENT_NAME="${arg#--a365-agent-name=}"
             ;;
         --diagnose)
             DIAGNOSE=true
@@ -116,8 +134,13 @@ if [ "$SHOW_HELP" = true ]; then
     echo ""
     echo "  --with-upn-suffix=NAME Agent User UPN suffix (required with --new)."
     echo "                         e.g., --with-upn-suffix=sati-agent"
-    echo "                         produces: entraclaw-sati-agent@yourdomain.com"
+    echo "                         produces: entraclaw-agent-sati-agent@yourdomain.com"
     echo "                         If omitted with --new, you will be prompted."
+    echo "                         Also supported with --use-blueprint to select"
+    echo "                         an existing suffixed Agent User under that Blueprint."
+    echo "  --agent-user-upn=UPN   Explicit existing Agent User UPN to reuse with"
+    echo "                         --use-blueprint, e.g."
+    echo "                         entraclaw-agent-sati-agent@werner.ac."
     echo "  --switch-user          Sign in as a different user before setup."
     echo "                         The new user becomes the agent's owner and sponsor."
     echo "  --teams-user=EMAIL     Set a different user as the Teams chat recipient."
@@ -157,6 +180,18 @@ if [ "$SHOW_HELP" = true ]; then
     echo "                         second isolated cloud-memory store in the same"
     echo "                         tenant. Mutually exclusive with"
     echo "                         --with-storage-account."
+    echo ""
+    echo "  Agent 365 Work IQ:"
+    echo "  --with-a365-work-iq    Install or update the Microsoft Agent 365"
+    echo "                         DevTools CLI (a365) via dotnet global tools."
+    echo "                         Requires a .NET SDK on PATH."
+    echo "  --configure-a365-work-iq"
+    echo "                         Run the interactive developer setup for Work IQ"
+    echo "                         Word: a365 develop add-mcp-servers mcp_WordServer,"
+    echo "                         a365 setup permissions mcp against the existing"
+    echo "                         Entraclaw Blueprint, then manifest validation."
+    echo "  --a365-agent-name=NAME Deprecated compatibility flag; Work IQ setup now"
+    echo "                         uses the existing Entraclaw Blueprint from state."
     echo "  --help, -h             Show this help"
     echo ""
     echo "Diagnostics:"
@@ -287,6 +322,10 @@ if ! command -v git &>/dev/null; then
     MISSING+=("git")
 fi
 
+if [ "$CONFIGURE_A365_WORK_IQ" = true ] && ! command -v pwsh &>/dev/null; then
+    MISSING+=("PowerShell 7+ (pwsh) - macOS: brew install powershell")
+fi
+
 if [ ${#MISSING[@]} -gt 0 ]; then
     for m in "${MISSING[@]}"; do
         echo -e "  ${RED}✗ $m${NC}"
@@ -297,6 +336,124 @@ fi
 success "az CLI found ($(az version --query '"azure-cli"' -o tsv || echo '?'))"
 success "$PYTHON found ($PY_VER)"
 success "git found ($(git --version | awk '{print $3}'))"
+
+ensure_a365_cli() {
+    if ! command -v dotnet &>/dev/null; then
+        fail "--with-a365-work-iq requires a .NET SDK. Install it from https://dotnet.microsoft.com/download and re-run."
+    fi
+
+    export PATH="$PATH:$HOME/.dotnet/tools"
+    if command -v a365 &>/dev/null; then
+        echo "  Updating Microsoft Agent 365 DevTools CLI (a365)..."
+        if dotnet tool update --global Microsoft.Agents.A365.DevTools.Cli; then
+            success "a365 CLI updated"
+        else
+            warn "a365 is already on PATH, but dotnet global-tool update did not complete"
+        fi
+    else
+        echo "  Installing Microsoft Agent 365 DevTools CLI (a365)..."
+        dotnet tool install --global Microsoft.Agents.A365.DevTools.Cli
+        export PATH="$PATH:$HOME/.dotnet/tools"
+        if ! command -v a365 &>/dev/null; then
+            fail "a365 installed but is not on PATH. Add ~/.dotnet/tools to PATH and re-run."
+        fi
+        success "a365 CLI installed"
+    fi
+}
+
+if [ "$WITH_A365_WORK_IQ" = true ]; then
+    ensure_a365_cli
+fi
+
+ensure_a365_tooling_manifest() {
+    local manifest="$PROJECT_ROOT/ToolingManifest.json"
+    if [ -f "$manifest" ]; then
+        return
+    fi
+    printf '{"mcpServers":[]}\n' > "$manifest"
+    success "Created minimal ToolingManifest.json for A365 Work IQ"
+}
+
+write_a365_config() {
+    local client_app_id
+    local agent_identity_display_name
+    client_app_id=$(az ad app list --display-name "Agent 365 CLI" --query "[0].appId" -o tsv 2>/dev/null || echo "")
+    if [ -z "$client_app_id" ]; then
+        fail "Agent 365 CLI app was not found. Re-run and choose C during 'a365 setup requirements', or create the app before configuring Work IQ."
+    fi
+    if [ -z "${BLUEPRINT_APP_ID:-}" ]; then
+        fail "Blueprint ID not found. Entraclaw provisioning must complete before configuring A365 Work IQ."
+    fi
+    agent_identity_display_name=$(az ad sp show --id "$AGENT_ID" --query displayName -o tsv 2>/dev/null || echo "")
+    if [ -z "$agent_identity_display_name" ]; then
+        fail "Agent Identity display name not found for $AGENT_ID. Entraclaw provisioning must complete before configuring A365 Work IQ."
+    fi
+
+    "$PYTHON" - "$PROJECT_ROOT" "$TENANT_ID" "$client_app_id" "$BLUEPRINT_APP_ID" "${BLUEPRINT_OBJECT_ID:-}" "${AGENT_ID:-}" "$agent_identity_display_name" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+project_root = Path(sys.argv[1])
+tenant_id, client_app_id, blueprint_app_id, blueprint_object_id, agent_id = sys.argv[2:7]
+agent_identity_display_name = sys.argv[7]
+config_path = project_root / "a365.config.json"
+
+data = {}
+if config_path.is_file():
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+
+data.update(
+    {
+        "tenantId": tenant_id,
+        "clientAppId": client_app_id,
+        "agentBlueprintId": blueprint_app_id,
+        "agentBlueprintDisplayName": "EntraClaw Code Agent",
+        "agentIdentityDisplayName": agent_identity_display_name,
+        "deploymentProjectPath": str(project_root),
+    }
+)
+if blueprint_object_id:
+    data["agentBlueprintObjectId"] = blueprint_object_id
+if agent_id:
+    data["agentIdentityId"] = agent_id
+
+config_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+PY
+    success "A365 config points to existing Entraclaw Blueprint"
+}
+
+configure_a365_work_iq() {
+    echo "  Configuring Microsoft Agent 365 Work IQ Word + OneDrive/SharePoint..."
+    echo "  This may open an interactive Microsoft sign-in/device-code flow."
+    echo "  If the Agent 365 CLI app is missing, choose C when prompted to create it."
+    ensure_a365_tooling_manifest
+    write_a365_config
+    if ! a365 setup requirements; then
+        fail "a365 setup requirements failed"
+    fi
+    a365 develop add-mcp-servers "${A365_WORK_IQ_MCP_SERVERS[@]}" --project-path "$PROJECT_ROOT"
+    "$SCRIPT_PYTHON" "$PROJECT_ROOT/scripts/ensure_a365_work_iq_permissions.py" \
+        --blueprint-app-id "$BLUEPRINT_APP_ID"
+    A365_PERMISSIONS_LOG=$(mktemp)
+    set +e
+    a365 setup permissions mcp 2>&1 | tee "$A365_PERMISSIONS_LOG"
+    A365_PERMISSIONS_RC=${PIPESTATUS[0]}
+    set -e
+    if [ "$A365_PERMISSIONS_RC" -ne 0 ]; then
+        rm -f "$A365_PERMISSIONS_LOG"
+        fail "a365 setup permissions mcp failed"
+    fi
+    if grep -q "OAuth2 grants failed" "$A365_PERMISSIONS_LOG"; then
+        rm -f "$A365_PERMISSIONS_LOG"
+        fail "a365 setup permissions mcp reported OAuth2 grants failed; Work IQ permissions are incomplete. Resolve the Agent 365 Tools service principal/admin-consent issue, then rerun setup.sh."
+    fi
+    rm -f "$A365_PERMISSIONS_LOG"
+    if ! "$SCRIPT_PYTHON" "$PROJECT_ROOT/scripts/spike_a365_work_iq.py"; then
+        fail "A365 Work IQ manifest validation failed"
+    fi
+    success "A365 Work IQ Word manifest configured"
+}
 
 # ════════════════════════════════════════════════════════════════════════════
 # Step 2: Verify Azure login
@@ -322,25 +479,33 @@ if [ -z "$HUMAN_USER_ID" ]; then
 fi
 
 # ── License preflight (informational, never blocks) ────────────────────────
-# Check whether this tenant has a Teams-capable SKU with free seats *before*
-# we provision anything. A warn here is non-fatal — setup.sh will still
-# complete, but the agent user won't be able to sign into Teams without a
-# license. Surface the warning early so the VP knows what to expect.
+# Check whether this tenant has Teams and Copilot seats *before* we provision
+# anything. Warns are non-fatal — create_entra_agent_ids.py performs the actual
+# assignment later, after the Agent User exists.
 if command -v az >/dev/null 2>&1 && [ -d "$PROJECT_ROOT/.venv" ]; then
     GRAPH_TOKEN=$(az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv 2>/dev/null || echo "")
     if [ -n "$GRAPH_TOKEN" ]; then
         set +e
         "$PROJECT_ROOT/.venv/bin/python" - "$GRAPH_TOKEN" <<'PY' 2>&1 || true
 import sys
-from entraclaw.preflight import check_teams_license_availability, format_report
+from entraclaw.preflight import (
+    check_copilot_license_availability,
+    check_teams_license_availability,
+    format_report,
+)
 
 token = sys.argv[1]
-result = check_teams_license_availability(token)
+teams_result = check_teams_license_availability(token)
+copilot_result = check_copilot_license_availability(token)
 # Only print warn/skip — pass is silent so we don't add noise on green runs.
-if result.status == "pass":
-    print(f"  \033[0;32m✅ Teams license available: {result.detail}\033[0m")
+if teams_result.status == "pass":
+    print(f"  \033[0;32m✅ Teams license available: {teams_result.detail}\033[0m")
 else:
-    print(format_report([result], color=sys.stdout.isatty()))
+    print(format_report([teams_result], color=sys.stdout.isatty()))
+if copilot_result.status == "pass":
+    print(f"  \033[0;32m✅ Copilot license available: {copilot_result.detail}\033[0m")
+else:
+    print(format_report([copilot_result], color=sys.stdout.isatty()))
 PY
         set -e
     fi
@@ -532,6 +697,13 @@ sf.write_text(json.dumps(data, indent=2))
 "
         echo "  State file updated with Blueprint ID"
     fi
+    if [ -n "$AGENT_USER_UPN" ]; then
+        export ENTRACLAW_AGENT_USER_UPN="$AGENT_USER_UPN"
+        echo -e "  ${GREEN}Using existing Agent User UPN: ${AGENT_USER_UPN}${NC}"
+    elif [ -n "$UPN_SUFFIX" ]; then
+        export _ENTRACLAW_UPN_SUFFIX="$UPN_SUFFIX"
+        echo -e "  ${GREEN}Using existing Agent User suffix: ${UPN_SUFFIX}${NC}"
+    fi
     # From here create_entra_agent_ids.py discovers Agent Identity + Agent User
     # under the chosen Blueprint. Step 6 generates/reuses a cert as appropriate.
 fi
@@ -615,6 +787,10 @@ success "Blueprint: $BLUEPRINT_APP_ID"
 success "Agent ID:  $AGENT_ID"
 success "Agent User: ${AGENT_USER_UPN:-not created} (${AGENT_USER_ID:-n/a})"
 
+if [ "$CONFIGURE_A365_WORK_IQ" = true ]; then
+    configure_a365_work_iq
+fi
+
 # ════════════════════════════════════════════════════════════════════════════
 # Step 6: Generate Blueprint certificate (for three-hop flow)
 # ════════════════════════════════════════════════════════════════════════════
@@ -653,6 +829,22 @@ if [ -n "$CERT_THUMBPRINT" ]; then
         echo -e "  Another machine replaced it since last run. Regenerating here."
         echo ""
         CERT_THUMBPRINT=""
+    fi
+fi
+
+if [ -z "$CERT_THUMBPRINT" ]; then
+    if RECOVERED_THUMBPRINT=$(PYTHONPATH="$PROJECT_ROOT/scripts" "$VENV_PY" \
+        "$PROJECT_ROOT/scripts/find_local_blueprint_cert.py" "$BLUEPRINT_OBJECT_ID"); then
+        CERT_THUMBPRINT="$RECOVERED_THUMBPRINT"
+        "$PYTHON" -c "
+import json, pathlib
+state_file = pathlib.Path('$PROJECT_ROOT/.entraclaw-state.json')
+data = json.loads(state_file.read_text()) if state_file.is_file() else {}
+data['BLUEPRINT_CERT_THUMBPRINT'] = '$CERT_THUMBPRINT'
+data.pop('BLUEPRINT_SECRET', None)
+state_file.write_text(json.dumps(data, indent=2) + '\n')
+"
+        success "Using registered local certificate (thumbprint: ${CERT_THUMBPRINT:0:16}...)"
     fi
 fi
 

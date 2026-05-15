@@ -8,6 +8,16 @@
 
 ## Known Issues (Open)
 
+### `add_file_comment` is non-functional for Word — `/beta/drives/{id}/items/{id}/comments` returns 404
+
+**Status:** Work IQ Word implementation exists on `a365-upgrade`; live setup
+and smoke passed on 2026-05-15. Graph beta `/comments` is no longer
+considered the Word-comment reply path.
+**Impact:** Any production use of `add_file_comment` against a `.docx` file 404s with `itemNotFound`. The tool ships against an endpoint that does not expose Word document comments at all — confirmed live 2026-05-04 against the agent's own ODB doc, in multiple URL variants (drives-direct, v1.0, /me/drive, sites→drives), with both POST and GET, both with and without an actual comment in the doc body. The endpoint family appears to be SharePoint list-item metadata comments, not document-content comments. For `.xlsx` the existing code targets the wrong path entirely (correct surface is `/workbook/comments`).
+**Why it shipped:** All `TestAddFileComment` tests are respx-mocked; nothing exercised the live endpoint. PR1 eng-review note "Microsoft's beta surface uses one path for both Word and Excel" was incorrect.
+**Pivot direction:** Microsoft Agent 365's Work IQ Word MCP server (`mcp_WordServer`) exposes the right primitives (`WordCreateNewComment`, `WordReplyToComment`, `WordGetDocumentContent`, `WordCreateNewDocument`). Auth model uses Entra Agent ID — same identity primitive entraclaw already implements. The branch adds an `entraclaw.a365` provider, Word adapter, ODSP metadata adapter, and MCP wrappers. Live validation created a Word document, read it back, resolved ODSP metadata, added a Word comment, and replied to that comment as the Agent User.
+**Reference:** Learning #60 in `docs/runbooks/hard-won-learnings.md`.
+
 ### CLI commitment-language detection — unenforced
 
 **Status:** Open by design. Server-side commitment-language detection

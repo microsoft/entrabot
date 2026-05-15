@@ -672,6 +672,52 @@ async def read_file(
 _COMMENT_SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({".docx", ".xlsx"})
 
 
+def _check_comment_target_allowed(file_ref: FileRef) -> None:
+    """Apply comment-tool guards: site allowlist, format, kind, folder.
+
+    Raises:
+        SiteNotAllowedError: site is in the operator denylist
+        UnsupportedCommentFormatError: extension, kind, or driveItem type
+            does not support comments
+
+    Rejected kinds:
+    - ``onedrive_personal`` — Microsoft does not GA personal-OneDrive
+      comments on any surface.
+    - ``onedrive_business`` — beta ``/drives/{id}/items/{id}/comments``
+      returns ``404 itemNotFound`` on MySite drives (POST and GET
+      both); only real SharePoint team sites work. Verified live
+      2026-05-04 against the agent's own ODB doc.
+    """
+    _check_site_allowed(file_ref.site_id)
+
+    if (file_ref.mime_type or "").lower() in (
+        "folder",
+        "application/vnd.microsoft.graph.folder",
+    ):
+        raise UnsupportedCommentFormatError("cannot comment on a folder driveItem")
+
+    ext = _extension(file_ref.name)
+    if ext not in _COMMENT_SUPPORTED_EXTENSIONS:
+        raise UnsupportedCommentFormatError(
+            f"file extension {ext or '(none)'} does not support comments — "
+            "only .docx and .xlsx files can receive document comments"
+        )
+
+    if file_ref.kind == "onedrive_personal":
+        raise UnsupportedCommentFormatError(
+            "comments on personal OneDrive files are not GA in Graph; "
+            "ask the user to share the file from a SharePoint team site"
+        )
+
+    if file_ref.kind == "onedrive_business":
+        raise UnsupportedCommentFormatError(
+            "comments on OneDrive-for-Business (MySite) files are not "
+            "supported by the Graph beta /comments endpoint — it returns "
+            "404 itemNotFound on POST and GET. Move the file to a "
+            "SharePoint team site, or share it from one."
+        )
+
+
 async def add_file_comment(
     file_ref: FileRef,
     content: str,
@@ -679,7 +725,14 @@ async def add_file_comment(
     token: str,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> CommentResult:
-    """Add a document comment to a Word or Excel file (BETA endpoint).
+    """Add a document comment through the legacy Graph beta endpoint; for Word UI
+    comments and replies, use the Agent 365 Work IQ Word tools
+    (`read_word_document`, `add_word_comment`, `reply_to_word_comment`).
+
+    This tool is retained for compatibility with the existing Files surface.
+    It is NOT the production path for Word UI comments. Use the Agent 365
+    Work IQ Word tools (`read_word_document`, `add_word_comment`,
+    `reply_to_word_comment`) for Word document comments and replies.
 
     Files-only after eng-review A1 — there is no chat-reply leg here.
     The model orchestrates the chat reply via ``send_teams_message``.
@@ -691,39 +744,14 @@ async def add_file_comment(
       personal-OneDrive comments)
     - ``file_ref.mime_type`` indicates a folder
 
-    Endpoint: ``POST /beta/drives/{drive-id}/items/{item-id}/comments``
-    (eng-review A4 — Microsoft's beta surface uses one path for both
-    Word and Excel; the older ``/workbook/comments`` /
-    ``/document/comments`` shapes from earlier drafts are wrong).
+    Legacy endpoint:
+    ``POST /beta/drives/{drive-id}/items/{item-id}/comments``
     """
     if not content or not isinstance(content, str):
         raise UnsupportedCommentFormatError("content is empty or non-string")
 
-    _check_site_allowed(file_ref.site_id)
-
+    _check_comment_target_allowed(file_ref)
     ext = _extension(file_ref.name)
-
-    # A5 reject: folder
-    if (file_ref.mime_type or "").lower() in (
-        "folder",
-        "application/vnd.microsoft.graph.folder",
-    ):
-        raise UnsupportedCommentFormatError("cannot comment on a folder driveItem")
-
-    # A5 reject: format
-    if ext not in _COMMENT_SUPPORTED_EXTENSIONS:
-        raise UnsupportedCommentFormatError(
-            f"file extension {ext or '(none)'} does not support comments — "
-            "only .docx and .xlsx files can receive document comments"
-        )
-
-    # A5 reject: personal OneDrive
-    if file_ref.kind == "onedrive_personal":
-        raise UnsupportedCommentFormatError(
-            "comments on personal OneDrive files are not GA in Graph; "
-            "ask the user to share the file from OneDrive-for-Business "
-            "or SharePoint"
-        )
 
     resource = f"{file_ref.drive_id}:{file_ref.item_id}"
     request_url = f"{GRAPH_BETA_HOST}/drives/{file_ref.drive_id}/items/{file_ref.item_id}/comments"
@@ -1279,6 +1307,17 @@ async def share_file(
         ],
         "roles": [role],
         "requireSignIn": True,
+        # sendInvitation=True is required for cross-MySite shares: without
+        # it Graph creates the permission record but never registers the
+        # recipient in the target SharePoint site's user list, so the
+        # recipient gets a 500 "something went wrong" page when opening
+        # the doc, and the share never surfaces in their Outlook /
+        # OneDrive "shared with me" view (because no invitation email
+        # is sent). Verified live 2026-05-04 against an agent-owned
+        # ODB doc shared to a tenant user — without sendInvitation,
+        # SP returned a "SharePoint Foundation" 500 server error;
+        # with sendInvitation, the share appears and opens normally.
+        "sendInvitation": True,
     }
 
     async with _audit_graph_call(

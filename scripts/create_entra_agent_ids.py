@@ -43,7 +43,7 @@ from entra_provisioning import (  # noqa: E402 — sys.path insert precedes this
 
 # The repo root is one directory up; src/ contains the entraclaw package.
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent / "src"))
-from entraclaw.preflight import TEAMS_CAPABLE_SKUS  # noqa: E402
+from entraclaw.preflight import COPILOT_CAPABLE_SKUS, TEAMS_CAPABLE_SKUS  # noqa: E402
 
 GRAPH_BASE = "https://graph.microsoft.com/beta"
 
@@ -381,6 +381,11 @@ def _agent_user_upn(token: str) -> str:
     accounts like brandwe@outlook.com — the domain is outlook.com, not the
     tenant's verified domain.
     """
+    explicit_upn = os.environ.get("ENTRACLAW_AGENT_USER_UPN", "").strip()
+    if explicit_upn:
+        print(f"  Using explicit Agent User UPN: {explicit_upn}")
+        return explicit_upn
+
     # Query verified domains via Provisioner token (not az CLI — Learning #1)
     resp = requests.get(
         "https://graph.microsoft.com/v1.0/domains?$select=id,isDefault,isVerified",
@@ -862,9 +867,8 @@ def grant_agent_user_storage_consent(
 # ---------------------------------------------------------------------------
 # License assignment
 # ---------------------------------------------------------------------------
-# TEAMS_CAPABLE_SKUS is imported from entraclaw.preflight — single source of
-# truth so setup.sh's preflight check and the actual license assignment use
-# the same SKU list.
+# License SKU constants are imported from entraclaw.preflight — single source of
+# truth so setup.sh's preflight checks and actual assignment use the same lists.
 
 
 def _get_available_skus(token: str) -> list[dict]:
@@ -912,38 +916,95 @@ def _check_existing_licenses(token: str, user_id: str) -> list[str]:
     return []
 
 
-def assign_license_to_agent_user(token: str, agent_user_id: str) -> None:
-    """Assign a Teams-capable M365 license to the Agent User.
+def _get_all_sku_part_numbers(token: str) -> dict[str, str] | None:
+    resp = graph_request("GET", "/subscribedSkus", token)
+    if resp.status_code != 200:
+        print(f"  WARNING: Could not resolve subscribed SKU names ({resp.status_code})")
+        return None
+    return {
+        sku["skuId"]: sku.get("skuPartNumber", sku["skuId"])
+        for sku in resp.json().get("value", [])
+    }
 
-    Lists available SKUs, checks if agent already has one, and either
-    auto-assigns a Teams-capable SKU or prompts the user to choose.
+
+def _ensure_usage_location(token: str, agent_user_id: str) -> bool:
+    print("  Setting usageLocation on Agent User (waiting for Entra replication)...")
+    for attempt in range(5):
+        if _set_usage_location(token, agent_user_id):
+            return True
+        wait = 5 * (attempt + 1)
+        print(f"  Agent User not ready yet, retrying in {wait}s...")
+        time.sleep(wait)
+    print("  WARNING: Could not set usageLocation after retries")
+    print("  The Agent User may not have replicated to M365 yet.")
+    print("  Re-run setup.sh in a few minutes to assign the license.")
+    return False
+
+
+def _assign_license(token: str, agent_user_id: str, sku: dict, label: str) -> bool:
+    print(f"  Assigning {sku['displayName']} to Agent User...")
+    for attempt in range(3):
+        resp = graph_request(
+            "POST",
+            f"/users/{agent_user_id}/assignLicense",
+            token,
+            json_body={
+                "addLicenses": [{"skuId": sku["skuId"]}],
+                "removeLicenses": [],
+            },
+        )
+        if resp.status_code in (200, 201):
+            print(f"  [done] {label} license assigned: {sku['displayName']}")
+            return True
+        if attempt < 2:
+            wait = 10 * (attempt + 1)
+            print(f"  License assignment returned {resp.status_code}, retrying in {wait}s...")
+            time.sleep(wait)
+
+    print(f"  WARNING: {label} license assignment failed after retries ({resp.status_code})")
+    print(f"  Response: {resp.text[:300]}")
+    print("  Re-run setup.sh in a few minutes or assign manually in the Entra admin center")
+    return False
+
+
+def assign_license_to_agent_user(token: str, agent_user_id: str) -> None:
+    """Assign Teams/mailbox and Work IQ licenses to the Agent User.
+
+    Teams presence needs a Teams-capable SKU. Work IQ MCP servers need
+    Microsoft 365 Copilot as a distinct license, so this must not return early
+    just because the Agent User already has E3/E5/Teams.
     """
     print("\n--- License Assignment ---\n")
 
-    # Check if already licensed with a Teams-capable SKU
     existing_sku_ids = _check_existing_licenses(token, agent_user_id)
+    sku_id_to_name = _get_all_sku_part_numbers(token)
+    if existing_sku_ids and sku_id_to_name is None:
+        print("  WARNING: Could not resolve existing Agent User license SKU names.")
+        print("  Skipping automatic license assignment to avoid duplicate assignment.")
+        print("  Re-run setup.sh after Graph /subscribedSkus is available.")
+        return
+    sku_id_to_name = sku_id_to_name or {}
+    existing_names = [sku_id_to_name.get(sid, sid) for sid in existing_sku_ids]
+    has_teams = any(name in TEAMS_CAPABLE_SKUS for name in existing_names)
+    has_copilot = any(name in COPILOT_CAPABLE_SKUS for name in existing_names)
+
     if existing_sku_ids:
-        # Resolve SKU IDs to part numbers to check if any are Teams-capable
-        resp = graph_request("GET", "/subscribedSkus", token)
-        sku_id_to_name = {}
-        if resp.status_code == 200:
-            for sku in resp.json().get("value", []):
-                sku_id_to_name[sku["skuId"]] = sku.get("skuPartNumber", sku["skuId"])
-
-        existing_names = [sku_id_to_name.get(sid, sid) for sid in existing_sku_ids]
-        has_teams = any(name in TEAMS_CAPABLE_SKUS for name in existing_names)
-
         if has_teams:
             teams_name = next(n for n in existing_names if n in TEAMS_CAPABLE_SKUS)
             print(f"  [skip] Agent User already has Teams-capable license: {teams_name}")
-            return
         else:
             print(f"  Agent User has {len(existing_sku_ids)} license(s) but none include Teams:")
             for name in existing_names:
                 print(f"    - {name}")
             print("  Will assign a Teams-capable license...")
+        if has_copilot:
+            copilot_name = next(n for n in existing_names if n in COPILOT_CAPABLE_SKUS)
+            print(f"  [skip] Agent User already has Work IQ license: {copilot_name}")
 
-    # Get available SKUs
+    if has_teams and has_copilot:
+        print("  [skip] Agent User already has Teams and Work IQ licenses")
+        return
+
     all_skus = _get_available_skus(token)
     if not all_skus:
         print("  ERROR: No subscribed SKUs found in this tenant, or no available licenses.")
@@ -951,94 +1012,65 @@ def assign_license_to_agent_user(token: str, agent_user_id: str) -> None:
         print("  Then re-run setup.sh to assign a license to the Agent User.")
         return
 
-    # Filter to Teams-capable SKUs
-    teams_skus = [s for s in all_skus if s["skuPartNumber"] in TEAMS_CAPABLE_SKUS]
-
-    # If no Teams-capable SKUs, show all available and let user decide
-    if not teams_skus:
-        print("  No Teams-capable licenses found with available seats.")
-        print("  Available SKUs in this tenant:")
-        for i, sku in enumerate(all_skus, 1):
-            print(f"    {i}. {sku['displayName']} ({sku['remaining']}/{sku['total']} available)")
-        print("")
-        print("  To assign a license to the Agent User, either:")
-        print("  - Purchase a Teams-capable license (E3/E5/Teams Enterprise)")
-        print("  - Or assign one manually in the Entra admin center")
+    if not _ensure_usage_location(token, agent_user_id):
         return
 
-    # If exactly one Teams-capable SKU, auto-assign it
-    if len(teams_skus) == 1:
-        chosen = teams_skus[0]
+    assigned_teams = False
+    assigned_copilot = False
+    if not has_teams:
+        teams_skus = [s for s in all_skus if s["skuPartNumber"] in TEAMS_CAPABLE_SKUS]
+        if not teams_skus:
+            print("  No Teams-capable licenses found with available seats.")
+            print("  Available SKUs in this tenant:")
+            for i, sku in enumerate(all_skus, 1):
+                print(
+                    f"    {i}. {sku['displayName']}"
+                    f" ({sku['remaining']}/{sku['total']} available)"
+                )
+            print("")
+            print("  To assign a license to the Agent User, either:")
+            print("  - Purchase a Teams-capable license (E3/E5/Teams Enterprise)")
+            print("  - Or assign one manually in the Entra admin center")
+        else:
+            chosen = teams_skus[0]
+            if len(teams_skus) == 1:
+                print(
+                    f"  Found 1 Teams-capable license: {chosen['displayName']}"
+                    f" ({chosen['remaining']}/{chosen['total']} available)"
+                )
+            else:
+                print("  Teams-capable licenses available; auto-selecting first available:")
+                for i, sku in enumerate(teams_skus, 1):
+                    print(
+                        f"    {i}. {sku['displayName']}"
+                        f" ({sku['remaining']}/{sku['total']} available)"
+                    )
+            if _assign_license(token, agent_user_id, chosen, "Teams-capable"):
+                set_state("AGENT_USER_LICENSE_SKU", chosen["skuPartNumber"])
+                assigned_teams = True
+
+    if not has_copilot:
+        copilot_skus = [s for s in all_skus if s["skuPartNumber"] in COPILOT_CAPABLE_SKUS]
+        if not copilot_skus:
+            print("  No Microsoft 365 Copilot licenses found with available seats.")
+            print("  Work IQ MCP servers require Microsoft 365 Copilot for the Agent User.")
+            print("  Purchase or free a Copilot seat, then re-run setup.sh.")
+            return
+        chosen = copilot_skus[0]
         print(
-            f"  Found 1 Teams-capable license: {chosen['displayName']}"
+            f"  Found Work IQ license: {chosen['displayName']}"
             f" ({chosen['remaining']}/{chosen['total']} available)"
         )
-    else:
-        # Multiple options — ask the user
-        print("  Teams-capable licenses available:")
-        for i, sku in enumerate(teams_skus, 1):
-            print(f"    {i}. {sku['displayName']} ({sku['remaining']}/{sku['total']} available)")
-        print("")
-        while True:
-            try:
-                choice = input(f"  Which license? [1-{len(teams_skus)}]: ").strip()
-                idx = int(choice) - 1
-                if 0 <= idx < len(teams_skus):
-                    chosen = teams_skus[idx]
-                    break
-                print(f"  Please enter a number between 1 and {len(teams_skus)}")
-            except (ValueError, EOFError):
-                print("  Invalid input. Skipping license assignment.")
-                print("  Assign manually in the Entra admin center.")
-                return
+        if _assign_license(token, agent_user_id, chosen, "Work IQ"):
+            set_state("AGENT_USER_WORK_IQ_LICENSE_SKU", chosen["skuPartNumber"])
+            assigned_copilot = True
 
-    # Set usageLocation (required before license assignment).
-    # The Agent User may not have fully replicated yet — retry a few times.
-    print("  Setting usageLocation on Agent User (waiting for Entra replication)...")
-    location_set = False
-    for attempt in range(5):
-        if _set_usage_location(token, agent_user_id):
-            location_set = True
-            break
-        wait = 5 * (attempt + 1)
-        print(f"  Agent User not ready yet, retrying in {wait}s...")
-        time.sleep(wait)
-
-    if not location_set:
-        print("  WARNING: Could not set usageLocation after retries")
-        print("  The Agent User may not have replicated to M365 yet.")
-        print("  Re-run setup.sh in a few minutes to assign the license.")
-        return
-
-    # Assign the license (also retry — replication can lag)
-    print(f"  Assigning {chosen['displayName']} to Agent User...")
-    assigned = False
-    for attempt in range(3):
-        resp = graph_request(
-            "POST",
-            f"/users/{agent_user_id}/assignLicense",
-            token,
-            json_body={
-                "addLicenses": [{"skuId": chosen["skuId"]}],
-                "removeLicenses": [],
-            },
-        )
-        if resp.status_code in (200, 201):
-            assigned = True
-            break
-        if attempt < 2:
-            wait = 10 * (attempt + 1)
-            print(f"  License assignment returned {resp.status_code}, retrying in {wait}s...")
-            time.sleep(wait)
-
-    if assigned:
-        print(f"  [done] License assigned: {chosen['displayName']}")
-        print("  Teams/mailbox provisioning will complete in 10-15 minutes")
-        set_state("AGENT_USER_LICENSE_SKU", chosen["skuPartNumber"])
-    else:
-        print(f"  WARNING: License assignment failed after retries ({resp.status_code})")
-        print(f"  Response: {resp.text[:300]}")
-        print("  Re-run setup.sh in a few minutes or assign manually in the Entra admin center")
+    if assigned_teams and assigned_copilot:
+        print("  Teams/mailbox and Work IQ provisioning can take 10-15 minutes")
+    elif assigned_teams:
+        print("  Teams/mailbox provisioning can take 10-15 minutes")
+    elif assigned_copilot:
+        print("  Work IQ provisioning can take 10-15 minutes")
 
 
 # ---------------------------------------------------------------------------

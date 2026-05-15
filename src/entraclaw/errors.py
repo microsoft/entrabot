@@ -155,7 +155,9 @@ class MissingPermissionError(FilesError):
         self.scope_hint = scope_hint
         super().__init__(
             f"Graph rejected the call (403) — Agent User likely missing "
-            f"{scope_hint}. Re-run setup with --with-files."
+            f"{scope_hint}. Run `python scripts/grant_files_consent.py` to "
+            f"PATCH the missing scopes into the existing oauth2PermissionGrant, "
+            f"or re-run `./scripts/setup.sh` for a full provisioning sweep."
         )
 
 

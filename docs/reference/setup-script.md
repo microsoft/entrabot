@@ -17,7 +17,8 @@ The `./scripts/setup.sh` script provisions and configures an EntraClaw agent end
 | *(none)* | Reuse existing Blueprint / Agent Identity / Agent User from `.entraclaw-state.json`. This is the common case on a machine that's already been set up. |
 | `--new` | Provision a brand-new identity chain (Blueprint + Agent Identity + Agent User). Does not touch the existing chain; the current `.env` is backed up. Must be paired with `--with-upn-suffix` or you'll be prompted. |
 | `--use-blueprint=<app-id>` | Attach to an existing Blueprint from a different machine. Generates a new cert locally and uploads its public key to the Blueprint. Reuses the existing Agent Identity and Agent User. Also handles the "switch this machine to a different Blueprint" case — stale Agent Identity / User / cert thumbprint are wiped from local state. |
-| `--with-upn-suffix=<name>` | (Required with `--new`.) Sets the Agent User's UPN suffix — e.g. `--with-upn-suffix=sati-agent` produces `entraclaw-sati-agent@yourdomain.com`. |
+| `--with-upn-suffix=<name>` | Required with `--new`; also supported with `--use-blueprint` to select an existing suffixed Agent User under the Blueprint. Example: `--with-upn-suffix=sati-agent` produces or selects `entraclaw-agent-sati-agent@yourdomain.com`. |
+| `--agent-user-upn=<upn>` | Explicit existing Agent User UPN to reuse with `--use-blueprint`, e.g. `entraclaw-agent-sati-agent@werner.ac`. Use this when a Blueprint has more than one Agent User chain and setup must not fall back to the unsuffixed `entraclaw-agent@...` identity. |
 
 ### User identity
 
@@ -38,6 +39,8 @@ The `./scripts/setup.sh` script provisions and configures an EntraClaw agent end
 
 | Flag | Purpose |
 |------|---------|
+| `--with-a365-work-iq` | Install/update the Microsoft Agent 365 DevTools CLI prerequisite used for Work IQ setup. |
+| `--configure-a365-work-iq` | Configure Work IQ Word for the existing Entraclaw Blueprint. Writes `a365.config.json`, adds `mcp_WordServer`, ensures the A365 resource service principals and OAuth grants exist, then runs `a365 setup permissions mcp`. |
 | `--help`, `-h` | Show the built-in help. |
 
 ## Examples
@@ -63,6 +66,26 @@ Creates a new identity chain, stores everything locally, no cloud storage.
 ```
 
 The Blueprint's Agent Identity and Agent User are reused; this machine gets its own cert.
+
+If the Blueprint has a suffixed Agent User, pin that chain explicitly:
+
+```bash
+./scripts/setup.sh --use-blueprint=9bfb75b3-e65f-4e56-bdbe-3ed213135c3b \
+  --agent-user-upn=entraclaw-agent-sati-agent@werner.ac
+```
+
+If the local OS keystore already has the matching Blueprint private key, setup recovers the registered cert thumbprint and does not prompt to rotate the Blueprint cert.
+
+### Configure Work IQ Word for an existing Agent User
+
+```bash
+./scripts/setup.sh --use-blueprint=9bfb75b3-e65f-4e56-bdbe-3ed213135c3b \
+  --agent-user-upn=entraclaw-agent-sati-agent@werner.ac \
+  --with-a365-work-iq \
+  --configure-a365-work-iq
+```
+
+This path self-heals the A365 tenant bootstrap case where Agent Tools or Work IQ Word MCP service principals are missing. Before `a365 setup permissions mcp`, setup calls `scripts/ensure_a365_work_iq_permissions.py` to create the first-party service principals and grant the Blueprint `McpServersMetadata.Read.All` and `Tools.ListInvoke.All`.
 
 ### Promote an existing local setup to cloud
 

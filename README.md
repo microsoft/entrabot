@@ -269,6 +269,7 @@ Three runtime modes selected by `ENTRACLAW_MODE` in `.env`.
 - Azure CLI (`az`) logged in with admin access to your Entra tenant
 - Python 3.12+
 - Git
+- .NET SDK + Microsoft Agent 365 DevTools CLI (`a365`) — only needed for Agent 365 Work IQ setup
 - An M365 license available for the Agent User (E3, E5, or Teams Enterprise) — only needed for `agent_user` mode
 - macOS, Linux, or Windows with an accessible OS keystore (Keychain / TPM / Secret Service)
 
@@ -276,13 +277,27 @@ Three runtime modes selected by `ENTRACLAW_MODE` in `.env`.
 
 **Windows** (fresh machine):
 ```powershell
-.\scripts\prereqs-windows.ps1                              # installs Python, Git, az, pwsh, VS Build Tools
+.\scripts\prereqs-windows.ps1                              # installs Python, Git, az, pwsh, .NET, a365, VS Build Tools
 .\scripts\setup-windows.ps1 -NewChain -UpnSuffix yourname  # provisions everything
 ```
 
 **macOS / Linux:**
 ```bash
 ./scripts/setup.sh --new --with-upn-suffix=yourname
+
+# Include the Agent 365 CLI setup helper for Work IQ Word:
+./scripts/setup.sh --new --with-upn-suffix=yourname --with-a365-work-iq
+
+# Or run the interactive Work IQ Word developer setup during setup:
+./scripts/setup.sh --new --with-upn-suffix=yourname --configure-a365-work-iq
+```
+
+If your A365 Blueprint uses a different base name, pass it explicitly:
+
+```bash
+./scripts/setup.sh --new --with-upn-suffix=yourname \
+  --configure-a365-work-iq \
+  --a365-agent-name="EntraClaw Code Agent"
 ```
 
 ### One-command setup (Mac/Linux)
@@ -296,7 +311,8 @@ This provisions, idempotently:
 1. A dedicated **provisioner app registration** (avoids Azure CLI token rejection — see "Never use `az rest` tokens" below)
 2. An **Agent Identity Blueprint** + `BlueprintPrincipal` + **Agent Identity**
 3. An **Agent User** (Entra user linked to the Agent Identity)
-4. An auto-detected Teams-capable **M365 license** assignment
+4. Auto-detected **license assignment**: a Teams-capable M365 SKU for Teams
+   presence plus Microsoft 365 Copilot for Work IQ MCP servers when available
 5. **Graph scopes** (Chat.ReadWrite, ChannelMessage.Send, User.Read, Mail.ReadWrite, etc.) + Azure Storage `user_impersonation` (ADR-005)
 6. A **self-signed certificate** — public key uploaded to Entra, private key inserted into the OS keystore
 7. `.env` and `.mcp.json` (no secrets on disk; only the cert thumbprint)
@@ -534,6 +550,50 @@ All Files tools route through Microsoft Graph using the Agent User token (`Files
 <td>Share a file via Graph <code>/invite</code>. <strong>Two-gate authorization</strong>: (1) <code>requester_email</code> must match an Agent Identity sponsor; (2) the matched sponsor must be a member of <code>chat_id</code> — defends against an LLM fabricating a sponsor email for an unrelated chat. Recipient is unrestricted (sponsors may share with anyone). Errors (<code>RequesterNotSponsorError</code>, <code>RequesterNotInChatError</code>) deliberately do not enumerate alternates. See <a href="docs/runbooks/hard-won-learnings.md">Learning #59</a>.</td>
 </tr>
 </table>
+
+### Agent 365 Work IQ Word tools
+
+Word document comments use Microsoft Agent 365 Work IQ Word, not the legacy
+Graph beta `/drives/{id}/items/{id}/comments` endpoint. Configure Work IQ Word
+with:
+
+```bash
+a365 develop add-mcp-servers mcp_WordServer
+a365 setup permissions mcp
+```
+
+If the CLI says `ToolingManifest.json not found`, create the project manifest
+first and pass the project path:
+
+```bash
+printf '{"mcpServers":[]}\n' > ToolingManifest.json
+a365 develop add-mcp-servers mcp_WordServer --project-path .
+a365 setup permissions mcp --agent-name "EntraClaw Code Agent"
+```
+
+Or let the platform setup script run those interactive commands for you:
+
+```bash
+./scripts/setup.sh --new --with-upn-suffix=yourname --configure-a365-work-iq
+```
+
+```powershell
+.\scripts\setup-windows.ps1 -NewChain -UpnSuffix yourname -ConfigureA365WorkIq
+```
+
+These CLI commands may require completing Microsoft device-code login
+interactively before the manifest can be generated. The generated
+`ToolingManifest.json` must contain `mcp_WordServer`. Entraclaw uses that
+manifest to resolve the Work IQ endpoint URL, audience, and scope. Current
+A365 manifests use `Tools.ListInvoke.All` plus a server-specific audience; do
+not hard-code older `McpServers.*.All` scope names.
+
+| Tool | Parameters | Behavior |
+| --- | --- | --- |
+| `read_word_document` | `url` | Reads Word document content and comment metadata through Work IQ Word. |
+| `create_word_document` | `file_name`, `content_html` | Creates a Word document in the Work IQ Word default location. |
+| `add_word_comment` | `drive_id`, `document_id`, `content` | Adds a top-level Word comment. |
+| `reply_to_word_comment` | `drive_id`, `document_id`, `comment_id`, `content` | Replies inside an existing Word comment thread. |
 
 ### Background channel
 

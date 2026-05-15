@@ -21,8 +21,10 @@ import respx
 from entraclaw.config import EntraClawConfig
 from entraclaw.errors import AgentIDNotAvailable, TokenExchangeError
 from entraclaw.preflight import (
+    COPILOT_CAPABLE_SKUS,
     TEAMS_CAPABLE_SKUS,
     Check,
+    check_copilot_license_availability,
     check_mcp_configs,
     check_state_file,
     check_teams_license_availability,
@@ -104,12 +106,121 @@ class TestCheckTeamsLicenseAvailability:
 
         assert result.status == "warn"
 
+    def test_copilot_add_on_does_not_satisfy_teams_requirement(self) -> None:
+        with respx.mock:
+            respx.get(self.SUBSCRIBED_SKUS_URL).mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "value": [
+                            {
+                                "skuId": "copilot-sku",
+                                "skuPartNumber": "MICROSOFT_365_COPILOT",
+                                "prepaidUnits": {"enabled": 2},
+                                "consumedUnits": 0,
+                            }
+                        ]
+                    },
+                )
+            )
+            result = check_teams_license_availability("fake-token")
+
+        assert result.status == "warn"
+
     def test_skip_when_graph_unreachable(self) -> None:
         with respx.mock:
             respx.get(self.SUBSCRIBED_SKUS_URL).mock(
                 return_value=httpx.Response(401, json={"error": "unauthorized"})
             )
             result = check_teams_license_availability("fake-token")
+
+        assert result.status == "skip"
+
+
+class TestCheckCopilotLicenseAvailability:
+    SUBSCRIBED_SKUS_URL = "https://graph.microsoft.com/v1.0/subscribedSkus"
+
+    def test_pass_when_copilot_sku_has_seats(self) -> None:
+        with respx.mock:
+            respx.get(self.SUBSCRIBED_SKUS_URL).mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "value": [
+                            {
+                                "skuId": "copilot-sku",
+                                "skuPartNumber": "MICROSOFT_365_COPILOT",
+                                "prepaidUnits": {"enabled": 2},
+                                "consumedUnits": 0,
+                            }
+                        ]
+                    },
+                )
+            )
+            result = check_copilot_license_availability("fake-token")
+
+        assert result.status == "pass"
+        assert "MICROSOFT_365_COPILOT" in result.detail
+
+    def test_pass_when_copilot_sku_uses_tenant_part_number_casing(self) -> None:
+        with respx.mock:
+            respx.get(self.SUBSCRIBED_SKUS_URL).mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "value": [
+                            {
+                                "skuId": "copilot-sku",
+                                "skuPartNumber": "Microsoft_365_Copilot",
+                                "prepaidUnits": {"enabled": 2},
+                                "consumedUnits": 0,
+                            }
+                        ]
+                    },
+                )
+            )
+            result = check_copilot_license_availability("fake-token")
+
+        assert result.status == "pass"
+        assert "Microsoft_365_Copilot" in result.detail
+
+    def test_warn_when_copilot_sku_is_missing_even_if_teams_is_available(self) -> None:
+        with respx.mock:
+            respx.get(self.SUBSCRIBED_SKUS_URL).mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "value": [
+                            {
+                                "skuId": "teams-sku",
+                                "skuPartNumber": "SPE_E3",
+                                "prepaidUnits": {"enabled": 5},
+                                "consumedUnits": 0,
+                            }
+                        ]
+                    },
+                )
+            )
+            result = check_copilot_license_availability("fake-token")
+
+        assert result.status == "warn"
+        assert "Microsoft 365 Copilot" in result.detail
+
+    def test_skip_when_graph_returns_non_200(self) -> None:
+        with respx.mock:
+            respx.get(self.SUBSCRIBED_SKUS_URL).mock(
+                return_value=httpx.Response(401, json={"error": "unauthorized"})
+            )
+            result = check_copilot_license_availability("fake-token")
+
+        assert result.status == "skip"
+
+    def test_skip_when_graph_unreachable(self) -> None:
+        transport = httpx.MockTransport(
+            lambda request: (_ for _ in ()).throw(httpx.ConnectError("boom"))
+        )
+
+        result = check_copilot_license_availability("fake-token", transport=transport)
 
         assert result.status == "skip"
 
@@ -480,3 +591,9 @@ class TestFormatReport:
         # Sanity check that we exposed the SKU list consumers can import.
         assert "ENTERPRISEPREMIUM" in TEAMS_CAPABLE_SKUS
         assert "SPE_E3" in TEAMS_CAPABLE_SKUS
+
+    def test_copilot_capable_skus_constant_exposed(self) -> None:
+        assert COPILOT_CAPABLE_SKUS == (
+            "MICROSOFT_365_COPILOT",
+            "Microsoft_365_Copilot",
+        )

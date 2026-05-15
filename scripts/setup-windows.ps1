@@ -26,7 +26,12 @@
   Attach to an existing Blueprint by App ID.
 
 .PARAMETER UpnSuffix
-  Agent User UPN suffix (required with -NewChain).
+  Agent User UPN suffix (required with -NewChain). Also supported with
+  -UseBlueprint to select an existing suffixed Agent User.
+
+.PARAMETER AgentUserUpn
+  Explicit existing Agent User UPN to reuse with -UseBlueprint, e.g.
+  entraclaw-agent-sati-agent@werner.ac.
 
 .PARAMETER UseCloudMemory
   Provision Azure Blob Storage for operational data (default: local).
@@ -45,6 +50,15 @@
   the deterministic-name one already exists. Mutually exclusive with
   -WithStorageAccount. Only meaningful with -UseCloudMemory.
 
+.PARAMETER ConfigureA365WorkIq
+  Run the interactive Microsoft Agent 365 Work IQ Word developer setup:
+  a365 develop add-mcp-servers mcp_WordServer, a365 setup permissions mcp
+  against the existing Entraclaw Blueprint, then validate ToolingManifest.json.
+
+.PARAMETER A365AgentName
+  Deprecated compatibility parameter. Work IQ setup now uses the existing
+  Entraclaw Blueprint ID from .entraclaw-state.json.
+
 .EXAMPLE
   .\scripts\setup-windows.ps1 -NewChain -UpnSuffix winagent
 
@@ -58,10 +72,13 @@ param(
     [switch]$NewChain,
     [string]$UseBlueprint = "",
     [string]$UpnSuffix = "",
+    [string]$AgentUserUpn = "",
     [switch]$UseCloudMemory,
     [string]$WithStorageAccount = "",
     [string]$WithContainer = "",
     [switch]$CreateNewStorage,
+    [switch]$ConfigureA365WorkIq,
+    [string]$A365AgentName = "EntraClaw Code Agent",
     [switch]$Migrate,
     [switch]$Help
 )
@@ -131,6 +148,95 @@ function Step($n, $msg) {
 }
 function Success($msg) { Write-Host "  ✓ $msg" -ForegroundColor Green }
 function Fail($msg)    { Write-Host "  ✗ $msg" -ForegroundColor Red; exit 1 }
+function Ensure-A365ToolingManifest {
+    $manifestPath = Join-Path $ProjectRoot 'ToolingManifest.json'
+    if (-not (Test-Path $manifestPath)) {
+        Set-Content -Path $manifestPath -Value '{"mcpServers":[]}' -Encoding utf8
+        Success "Created minimal ToolingManifest.json for A365 Work IQ"
+    }
+}
+
+function Write-A365Config {
+    param(
+        [string]$TenantId,
+        [string]$BlueprintAppId,
+        [string]$BlueprintObjectId,
+        [string]$AgentId
+    )
+
+    $clientAppId = az ad app list --display-name "Agent 365 CLI" --query "[0].appId" -o tsv 2>$null
+    if (-not $clientAppId) {
+        Fail "Agent 365 CLI app was not found. Re-run and choose C during 'a365 setup requirements', or create the app before configuring Work IQ."
+    }
+    if (-not $BlueprintAppId) {
+        Fail "Blueprint ID not found. Entraclaw provisioning must complete before configuring A365 Work IQ."
+    }
+    $AgentIdentityDisplayName = az ad sp show --id $AgentId --query displayName -o tsv 2>$null
+    if (-not $AgentIdentityDisplayName) {
+        Fail "Agent Identity display name not found for $AgentId. Entraclaw provisioning must complete before configuring A365 Work IQ."
+    }
+
+    $configPath = Join-Path $ProjectRoot 'a365.config.json'
+    $config = @{}
+    if (Test-Path $configPath) {
+        $existing = Get-Content $configPath -Raw | ConvertFrom-Json
+        foreach ($property in $existing.PSObject.Properties) {
+            $config[$property.Name] = $property.Value
+        }
+    }
+
+    $config["tenantId"] = $TenantId
+    $config["clientAppId"] = $clientAppId
+    $config["agentBlueprintId"] = $BlueprintAppId
+    $config["agentBlueprintDisplayName"] = "EntraClaw Code Agent"
+    $config["agentIdentityDisplayName"] = $AgentIdentityDisplayName
+    $config["deploymentProjectPath"] = $ProjectRoot
+    if ($BlueprintObjectId) { $config["agentBlueprintObjectId"] = $BlueprintObjectId }
+    if ($AgentId) { $config["agentIdentityId"] = $AgentId }
+
+    $config | ConvertTo-Json -Depth 8 | Set-Content -Path $configPath -Encoding utf8
+    Success "A365 config points to existing Entraclaw Blueprint"
+}
+
+function Configure-A365WorkIq {
+    param(
+        [string]$TenantId,
+        [string]$BlueprintAppId,
+        [string]$BlueprintObjectId,
+        [string]$AgentId
+    )
+    $A365WorkIqMcpServers = @("mcp_WordServer", "mcp_ODSPRemoteServer")
+
+    Write-Host ""
+    Write-Host "Configuring Microsoft Agent 365 Work IQ Word + OneDrive/SharePoint..." -ForegroundColor Cyan
+    Write-Host "This may open an interactive Microsoft sign-in/device-code flow." -ForegroundColor Yellow
+    Write-Host "If the Agent 365 CLI app is missing, choose C when prompted to create it." -ForegroundColor Yellow
+
+    Ensure-A365ToolingManifest
+
+    Write-A365Config -TenantId $TenantId -BlueprintAppId $BlueprintAppId -BlueprintObjectId $BlueprintObjectId -AgentId $AgentId
+
+    a365 setup requirements
+    if ($LASTEXITCODE -ne 0) { Fail "a365 setup requirements failed" }
+
+    a365 develop add-mcp-servers $A365WorkIqMcpServers --project-path $ProjectRoot
+    if ($LASTEXITCODE -ne 0) { Fail "a365 develop add-mcp-servers failed" }
+
+    & $VenvPython (Join-Path $ScriptDir 'ensure_a365_work_iq_permissions.py') '--blueprint-app-id', $BlueprintAppId
+    if ($LASTEXITCODE -ne 0) { Fail "ensure_a365_work_iq_permissions.py failed" }
+
+    $permissionsOutput = a365 setup permissions mcp 2>&1
+    $permissionsExit = $LASTEXITCODE
+    $permissionsOutput | ForEach-Object { Write-Host $_ }
+    if ($permissionsExit -ne 0) { Fail "a365 setup permissions mcp failed" }
+    if (($permissionsOutput -join "`n") -match "OAuth2 grants failed") {
+        Fail "a365 setup permissions mcp reported OAuth2 grants failed; Work IQ permissions are incomplete. Resolve the Agent 365 Tools service principal/admin-consent issue, then rerun setup-windows.ps1."
+    }
+
+    & python (Join-Path $ScriptDir 'spike_a365_work_iq.py')
+    if ($LASTEXITCODE -ne 0) { Fail "A365 Work IQ manifest validation failed" }
+    Success "A365 Work IQ Word manifest configured"
+}
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 3. Probe prereqs
@@ -138,15 +244,15 @@ function Fail($msg)    { Write-Host "  ✗ $msg" -ForegroundColor Red; exit 1 }
 Step 1 "Probing prerequisites"
 
 $missing = @()
-foreach ($tool in 'python', 'az', 'git', 'pwsh') {
+foreach ($tool in 'python', 'az', 'git', 'pwsh', 'a365') {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
         $missing += $tool
     }
 }
 if ($missing) {
-    Fail "Missing tools: $($missing -join ', '). Install them and retry."
+    Fail "Missing tools: $($missing -join ', '). Run scripts\prereqs-windows.ps1 and retry."
 }
-Success "Found: python, az, git, pwsh"
+Success "Found: python, az, git, pwsh, a365"
 
 $pyVer = & python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
 if ([version]$pyVer -lt [version]'3.12') {
@@ -207,6 +313,11 @@ $args = @()
 if ($NewChain)             { $args += '--new' }
 if ($UseBlueprint)         { $args += "--use-blueprint=$UseBlueprint" }
 if ($UpnSuffix)            { $args += "--with-upn-suffix=$UpnSuffix" }
+if ($AgentUserUpn) {
+    $env:ENTRACLAW_AGENT_USER_UPN = $AgentUserUpn
+} elseif ($UseBlueprint -and $UpnSuffix) {
+    $env:_ENTRACLAW_UPN_SUFFIX = $UpnSuffix
+}
 
 # entra_provisioning.py + create_entra_agent_ids.py both read az CLI
 # session state directly, identical to setup.sh.
@@ -218,10 +329,20 @@ if ($LASTEXITCODE -ne 0) { Fail "create_entra_agent_ids.py failed" }
 
 # Read back IDs from .entraclaw-state.json — needed for cloud-memory step
 $statePath = Join-Path $ProjectRoot '.entraclaw-state.json'
+$BlueprintAppId = ""
+$BlueprintObjectId = ""
+$AgentId = ""
 $AgentUserId = ""
 if (Test-Path $statePath) {
     $state = Get-Content $statePath -Raw | ConvertFrom-Json
+    $BlueprintAppId = if ($state.PSObject.Properties['BLUEPRINT_APP_ID']) { $state.BLUEPRINT_APP_ID } else { "" }
+    $BlueprintObjectId = if ($state.PSObject.Properties['BLUEPRINT_OBJECT_ID']) { $state.BLUEPRINT_OBJECT_ID } else { "" }
+    $AgentId = if ($state.PSObject.Properties['AGENT_ID']) { $state.AGENT_ID } else { "" }
     $AgentUserId = if ($state.PSObject.Properties['AGENT_USER_ID']) { $state.AGENT_USER_ID } else { "" }
+}
+
+if ($ConfigureA365WorkIq) {
+    Configure-A365WorkIq -TenantId $account.tenantId -BlueprintAppId $BlueprintAppId -BlueprintObjectId $BlueprintObjectId -AgentId $AgentId
 }
 
 # ═══════════════════════════════════════════════════════════════════════════

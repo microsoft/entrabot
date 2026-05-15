@@ -34,7 +34,7 @@ def agent_ids_module():
 
 def _resp(status: int, body: dict) -> SimpleNamespace:
     """Build a minimal object that quacks like requests.Response."""
-    return SimpleNamespace(status_code=status, json=lambda: body)
+    return SimpleNamespace(status_code=status, json=lambda: body, text=str(body))
 
 
 BLUEPRINT_OURS = "9bfb75b3-e65f-4e56-bdbe-3ed213135c3b"
@@ -214,3 +214,216 @@ class TestFindExistingAgentUser:
         # Verify both the stored lookup AND the fallback filter ran
         assert any(p.startswith("/users/9e5d2c48") for p in calls)
         assert any("identityParentId eq" in p for p in calls)
+
+
+class TestAssignLicenseToAgentUser:
+    def test_assigns_copilot_even_when_teams_license_already_exists(
+        self,
+        agent_ids_module,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        calls: list[tuple[str, str, dict | None]] = []
+
+        def fake_graph_request(method, path, token, **kw):
+            calls.append((method, path, kw.get("json_body")))
+            if path == "/users/agent-user-id?$select=assignedLicenses":
+                return _resp(200, {"assignedLicenses": [{"skuId": "teams-sku"}]})
+            if path == "/subscribedSkus":
+                return _resp(
+                    200,
+                    {
+                        "value": [
+                            {
+                                "skuId": "teams-sku",
+                                "skuPartNumber": "SPE_E3",
+                                "prepaidUnits": {"enabled": 5},
+                                "consumedUnits": 1,
+                            },
+                            {
+                                "skuId": "copilot-sku",
+                                "skuPartNumber": "MICROSOFT_365_COPILOT",
+                                "prepaidUnits": {"enabled": 2},
+                                "consumedUnits": 0,
+                            },
+                        ]
+                    },
+                )
+            if path == "/users/agent-user-id":
+                return _resp(204, {})
+            if path == "/users/agent-user-id/assignLicense":
+                return _resp(200, {})
+            raise AssertionError(f"unexpected Graph call: {method} {path}")
+
+        monkeypatch.setattr(agent_ids_module, "graph_request", fake_graph_request)
+        monkeypatch.setattr(agent_ids_module, "set_state", lambda *args: None)
+
+        agent_ids_module.assign_license_to_agent_user("token", "agent-user-id")
+
+        assign_calls = [call for call in calls if call[1] == "/users/agent-user-id/assignLicense"]
+        assert assign_calls == [
+            (
+                "POST",
+                "/users/agent-user-id/assignLicense",
+                {"addLicenses": [{"skuId": "copilot-sku"}], "removeLicenses": []},
+            )
+        ]
+        output = capsys.readouterr().out
+        assert "already has Teams-capable license: SPE_E3" in output
+        assert "Work IQ license assigned: MICROSOFT_365_COPILOT" in output
+
+    def test_skips_when_agent_user_already_has_teams_and_copilot(
+        self,
+        agent_ids_module,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        calls: list[tuple[str, str]] = []
+
+        def fake_graph_request(method, path, token, **kw):
+            calls.append((method, path))
+            if path == "/users/agent-user-id?$select=assignedLicenses":
+                return _resp(
+                    200,
+                    {
+                        "assignedLicenses": [
+                            {"skuId": "teams-sku"},
+                            {"skuId": "copilot-sku"},
+                        ]
+                    },
+                )
+            if path == "/subscribedSkus":
+                return _resp(
+                    200,
+                    {
+                        "value": [
+                            {
+                                "skuId": "teams-sku",
+                                "skuPartNumber": "SPE_E3",
+                                "prepaidUnits": {"enabled": 1},
+                                "consumedUnits": 1,
+                            },
+                            {
+                                "skuId": "copilot-sku",
+                                "skuPartNumber": "MICROSOFT_365_COPILOT",
+                                "prepaidUnits": {"enabled": 1},
+                                "consumedUnits": 1,
+                            },
+                        ]
+                    },
+                )
+            raise AssertionError(f"unexpected Graph call: {method} {path}")
+
+        monkeypatch.setattr(agent_ids_module, "graph_request", fake_graph_request)
+
+        agent_ids_module.assign_license_to_agent_user("token", "agent-user-id")
+
+        assert not any(path.endswith("/assignLicense") for _, path in calls)
+        assert "[skip] Agent User already has Teams and Work IQ licenses" in capsys.readouterr().out
+
+    def test_does_not_reassign_when_existing_license_names_cannot_be_resolved(
+        self,
+        agent_ids_module,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        calls: list[tuple[str, str]] = []
+
+        def fake_graph_request(method, path, token, **kw):
+            calls.append((method, path))
+            if path == "/users/agent-user-id?$select=assignedLicenses":
+                return _resp(
+                    200,
+                    {
+                        "assignedLicenses": [
+                            {"skuId": "existing-teams-sku"},
+                            {"skuId": "existing-copilot-sku"},
+                        ]
+                    },
+                )
+            if path == "/subscribedSkus":
+                if calls.count(("GET", "/subscribedSkus")) == 1:
+                    return _resp(500, {"error": "temporary_failure"})
+                return _resp(
+                    200,
+                    {
+                        "value": [
+                            {
+                                "skuId": "new-teams-sku",
+                                "skuPartNumber": "SPE_E3",
+                                "prepaidUnits": {"enabled": 2},
+                                "consumedUnits": 1,
+                            },
+                            {
+                                "skuId": "new-copilot-sku",
+                                "skuPartNumber": "MICROSOFT_365_COPILOT",
+                                "prepaidUnits": {"enabled": 2},
+                                "consumedUnits": 1,
+                            },
+                        ]
+                    },
+                )
+            raise AssertionError(f"unexpected Graph call: {method} {path}")
+
+        monkeypatch.setattr(agent_ids_module, "graph_request", fake_graph_request)
+
+        agent_ids_module.assign_license_to_agent_user("token", "agent-user-id")
+
+        assert not any(path.endswith("/assignLicense") for _, path in calls)
+        output = capsys.readouterr().out
+        assert "Could not resolve existing Agent User license SKU names" in output
+
+    def test_reports_only_work_iq_delay_when_teams_assignment_fails(
+        self,
+        agent_ids_module,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        calls: list[tuple[str, str, dict | None]] = []
+        state: dict[str, str] = {}
+
+        def fake_graph_request(method, path, token, **kw):
+            calls.append((method, path, kw.get("json_body")))
+            if path == "/users/agent-user-id?$select=assignedLicenses":
+                return _resp(200, {"assignedLicenses": []})
+            if path == "/subscribedSkus":
+                return _resp(
+                    200,
+                    {
+                        "value": [
+                            {
+                                "skuId": "teams-sku",
+                                "skuPartNumber": "SPE_E3",
+                                "prepaidUnits": {"enabled": 2},
+                                "consumedUnits": 1,
+                            },
+                            {
+                                "skuId": "copilot-sku",
+                                "skuPartNumber": "MICROSOFT_365_COPILOT",
+                                "prepaidUnits": {"enabled": 2},
+                                "consumedUnits": 1,
+                            },
+                        ]
+                    },
+                )
+            if path == "/users/agent-user-id":
+                return _resp(204, {})
+            if path == "/users/agent-user-id/assignLicense":
+                sku_id = kw["json_body"]["addLicenses"][0]["skuId"]
+                return _resp(400 if sku_id == "teams-sku" else 200, {})
+            raise AssertionError(f"unexpected Graph call: {method} {path}")
+
+        monkeypatch.setattr(agent_ids_module, "graph_request", fake_graph_request)
+        monkeypatch.setattr(
+            agent_ids_module,
+            "time",
+            type("FakeTime", (), {"sleep": lambda *_: None}),
+        )
+        monkeypatch.setattr(agent_ids_module, "set_state", state.__setitem__)
+
+        agent_ids_module.assign_license_to_agent_user("token", "agent-user-id")
+
+        output = capsys.readouterr().out
+        assert "Work IQ provisioning can take 10-15 minutes" in output
+        assert "Teams/mailbox and Work IQ provisioning can take 10-15 minutes" not in output
+        assert state == {"AGENT_USER_WORK_IQ_LICENSE_SKU": "MICROSOFT_365_COPILOT"}

@@ -552,6 +552,18 @@ class TestAddFileComment:
             await add_file_comment(ref, "no", token=TOKEN)
 
     @pytest.mark.asyncio
+    async def test_rejects_onedrive_business(self, make_file_ref) -> None:
+        """Beta /comments 404s on ODB MySite drives — guard rejects upfront.
+
+        Verified live 2026-05-04 against the agent's own ODB doc:
+        POST /beta/drives/{id}/items/{id}/comments returned
+        404 itemNotFound. Only real SharePoint team sites work.
+        """
+        ref = make_file_ref(name="spec.docx", kind="onedrive_business", site_id=None)
+        with pytest.raises(UnsupportedCommentFormatError):
+            await add_file_comment(ref, "no", token=TOKEN)
+
+    @pytest.mark.asyncio
     async def test_rejects_folder(self, make_file_ref) -> None:
         ref = make_file_ref(
             name="spec.docx",

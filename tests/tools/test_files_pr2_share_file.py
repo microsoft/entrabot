@@ -320,6 +320,42 @@ class TestRoleAndDenylist:
         assert post_kwargs["json"]["roles"] == ["write"]
         assert result.role == "write"
 
+    async def test_invite_payload_sends_invitation(self):
+        """sendInvitation=True is required for cross-MySite shares.
+
+        Without it Graph creates the permission record but doesn't add
+        the recipient to the target SharePoint site's user list, so
+        opening the doc returns a 500 "SharePoint Foundation" server
+        error and no email lands in the recipient's inbox. Verified
+        live 2026-05-04. Pin the payload so this never silently
+        regresses.
+        """
+        sponsor = _sponsor()
+        with (
+            patch("entraclaw.tools.files._get_sponsor_records") as mock_records,
+            patch("entraclaw.identity.sponsors.fetch_chat_members") as mock_members,
+        ):
+            mock_records.return_value = [sponsor]
+            mock_members.return_value = [
+                {"user_id": "sponsor-uid", "email": "sponsor@contoso.com"}
+            ]
+            ctx, mock_client = _patch_graph_invite_ok()
+            try:
+                await share_file(
+                    file_ref=_file_ref(),
+                    recipient_email="user@werner.ac",
+                    requester_email="sponsor@contoso.com",
+                    chat_id="19:abcd@thread.v2",
+                    role="write",
+                    token="t",
+                )
+            finally:
+                ctx.stop()
+
+        post_kwargs = mock_client.post.call_args.kwargs
+        assert post_kwargs["json"]["sendInvitation"] is True
+        assert post_kwargs["json"]["requireSignIn"] is True
+
     async def test_sharepoint_denylist_rejection_runs_first(self):
         """Site denylist still rejects before any sponsor lookup."""
         denied_site_id = "denied-site-id"

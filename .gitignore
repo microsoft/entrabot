@@ -21,6 +21,9 @@ venv/
 .entraclaw-state.json
 .entraclaw-state.json.bak.*
 .mcp.json
+a365.config.json
+a365.generated.config.json
+ToolingManifest.json
 .coverage
 entraclaw-state-export.tar.gz.enc
 entraclaw_msal_cache

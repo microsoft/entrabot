@@ -749,6 +749,108 @@ The unenriched `AgentIdentitySponsor(user_id=…)` had `email_identifiers() == f
 
 **Evidence/references:** `src/entraclaw/tools/files.py:share_file` (rewritten signature, two-gate logic), `src/entraclaw/errors.py:RequesterNotSponsorError|RequesterNotInChatError`, `src/entraclaw/identity/sponsors.py:fetch_chat_members` (factored out of `fetch_watched_chat_members`), `prompts/anatomy/identity-and-tools.md` (LLM contract: requester_email + chat_id always come from active Teams turn). Tests: `tests/tools/test_files_pr2_share_file.py` (13 tests covering happy path, both gates, EXT-UPN decode, missing args, recipient unrestricted, role/denylist passthrough).
 
+### Learning #60: Graph Beta `/drives/{id}/items/{id}/comments` Doesn't Expose Word Document Comments — Pivot to Work IQ Word MCP
+
+**Date:** 2026-05-04
+**Tags:** #files #graph-beta #word-comments #latent-bug #api-surface
+
+**Context.** Building `list_file_comments` / `reply_to_file_comment` and friends as an extension of the existing `add_file_comment` tool, motivated by the need to defend in-thread against hostile comments left in a shared Word doc. `add_file_comment` (PR1, `src/entraclaw/tools/files.py:add_file_comment`) hits `POST /beta/drives/{drive-id}/items/{item-id}/comments` and was assumed to work for `.docx` and `.xlsx` based on the eng-review note "Microsoft's beta surface uses one path for both Word and Excel." All PR1 tests were respx-mocked and never hit Graph live.
+
+**Surprise.** Live spike against the agent's own `.docx` (in agent's OneDrive-for-Business / MySite drive at `tenant.sharepoint.com/personal/<agent-upn>/...`) returned `404 itemNotFound` on **every** form of the `/comments` endpoint:
+
+- `GET /beta/drives/{drive}/items/{item}/comments`
+- `POST /beta/drives/{drive}/items/{item}/comments` with the documented `{"content": {"contentType": "text", "content": ...}}` payload
+- `GET /v1.0/drives/{drive}/items/{item}/comments`
+- `GET /beta/me/drive/items/{item}/comments`
+- `GET /beta/sites/{site}/drives/{drive}/items/{item}/comments`
+
+All four GET paths return 404 even after a real Word UI comment was added to the document and the comment-notification email landed in Brandon's mailbox (proving the comment is genuinely persisted in the .docx). The `/v1.0/drives/{drive}/items/{item}` metadata call returns 200 — so it isn't permissions or a missing item; the `/comments` collection just doesn't exist for Word documents on this surface.
+
+Microsoft's published beta documentation only covers `workbookComment` / `workbookCommentReply` under `/workbook/comments` (Excel). There is no public Graph endpoint for Word document comments. The `/drives/{id}/items/{id}/comments` family appears to be **SharePoint list-item metadata comments** (the kind you can add on a list item), not document-content comments inside the OOXML. The naming is misleading.
+
+**Implications.**
+
+1. The existing `add_file_comment` tool has shipped against a non-functional endpoint for `.docx` (and the wrong endpoint for `.xlsx` — the Excel surface is `/workbook/comments`, not `/drives/{id}/items/{id}/comments`). It works in unit tests because tests are respx-mocked and never hit Graph. Any production caller would 404. Nobody has reported this because the tool has not been used live against Word.
+2. The plan to extend `add_file_comment` with list / get / reply / list-replies tools is not viable on this Graph surface — none of those reads or writes will ever succeed for Word.
+3. The Hirsch-doc defense use case (the headline motivation) requires a different API surface entirely.
+
+**The pivot.** Microsoft Agent 365's **Work IQ Word MCP server** (`mcp_WordServer`) exposes the right primitives:
+
+- `WordCreateNewDocument` — create
+- `WordGetDocumentContent` — read text + comments
+- `WordCreateNewComment` — top-level comment (driveId + documentId + text)
+- `WordReplyToComment` — reply (commentId + driveId + documentId + text)
+
+Auth model uses **Entra Agent ID** delegated tokens — the same identity primitive entraclaw already implements (Blueprint → Agent Identity → Agent User three-hop). The gaps are:
+
+1. The Agent Identity must be onboarded against the **Agent 365 application** (not Microsoft Graph) in the Microsoft 365 admin center, with admin-granted permissions on Work IQ Word.
+2. The third hop's resource scope likely changes from `https://graph.microsoft.com/.default` to an Agent 365 / MCP audience (`api://{agent-365-app-id}/.default` or similar — to be confirmed against `/me/oauth2PermissionGrants` after the admin grants Work IQ scopes).
+3. New consent grant scopes — Microsoft documents these as `MCP.*` (e.g., `MCP.Word.ReadWrite.All`-style) in the n8n integration sample. Word IQ's exact scope string needs to be looked up after admin onboarding.
+4. Microsoft 365 admin center activation — admins must "Activate" Work IQ Word for the tenant before it's reachable. Tenants in some regions may not have this UI yet.
+5. Tool invocation is via MCP protocol against a Microsoft-hosted MCP server endpoint (URL not yet captured in our docs); entraclaw's existing approach of "raw httpx → Graph URL" doesn't apply unchanged — we'd register Work IQ Word as an MCP **client** consuming the Microsoft-hosted MCP **server**, then wrap its tools as entraclaw MCP tools.
+
+**Lessons.**
+
+- A Microsoft Graph endpoint described in eng-review notes as "the right one for both Word and Excel" — if it has no public documentation page, treat that as a *signal that it might not exist*, not "it's just undocumented." Spike before mocking.
+- Mock-only test coverage on a tool that hits an external service is shipping faith, not validation. Add at least one live-against-Graph integration test (skipped by default, opt-in via env flag) for any tool that crosses an HTTP boundary with an unstable endpoint.
+- The `kind="onedrive_business"` rejection added to `_check_comment_target_allowed` (Learning #60 Task 1, commit `805015b`) is correct *as far as it goes* but doesn't fully describe the issue — the endpoint also fails on real SharePoint team sites for Word. Once we pivot to Work IQ Word the helper's whole purpose changes (or is retired).
+- "`add_file_comment` works for Word" was a load-bearing assumption inherited from a prior PR's eng review; nobody in the chain (eng review, code review, my plan-writing) tested it live. The gap closed only because Brandon asked an empirical question that forced a spike.
+
+**Evidence/references:** Spike script `scripts/spike_file_comments.py` (commit `9fd38e0`), updated implementation plan `docs/superpowers/plans/2026-05-04-file-comment-reply-tools.md` §Spike findings, [Work IQ Word reference](https://learn.microsoft.com/microsoft-agent-365/mcp-server-reference/word), [Agent 365 Identity / authentication flows](https://learn.microsoft.com/microsoft-agent-365/developer/identity), [n8n MCP Server scopes example](https://learn.microsoft.com/entra/agent-id/integrate-n8n-agent#understand-the-mcp-server-scopes).
+
+
+---
+
+### Learning #61: Agent 365 CLI Discovery Requires Interactive Device-Code Authentication Before Manifest Generation
+
+**Date:** 2026-05-04
+**Status:** **BLOCKED in non-interactive Task 0 environment.**
+**Context:** Task 0 of the Agent 365 Work IQ Provider plan attempted to run the local discovery gate in the `a365-work-iq-provider-impl` worktree. The `a365` CLI was not initially installed, so `dotnet tool install --global Microsoft.Agents.A365.DevTools.Cli` installed version `1.1.171` successfully. `dotnet --version` returned `10.0.201`.
+**Problem:** `a365 develop list-available` requires Microsoft account authentication before it can discover MCP servers. Browser auth was unsupported on macOS 26.4.1 in this environment, so the CLI fell back to device-code auth and printed a `https://login.microsoft.com/device` code. The session is non-interactive and cannot complete human browser sign-in, so discovery blocked before `a365 develop add-mcp-servers mcp_WordServer` could run. No `ToolingManifest.json` or `.a365/ToolingManifest.json` was written.
+**Fix/blocker:** Re-run the discovery gate from an interactive developer shell where the human can complete the Microsoft device-code flow, then run `a365 develop add-mcp-servers mcp_WordServer` and `a365 develop list-configured`. Until that succeeds, implementation must not invent Work IQ Word `audience` values; the generated `ToolingManifest.json` remains the source of truth.
+**Prevention:** Treat A365 CLI discovery as an interactive setup step, not an unattended CI/sub-agent step, unless a supported non-interactive authentication path is documented and configured.
+**Evidence/references:** Commands run in the Task 0 worktree on branch `a365-work-iq-provider-impl`: `a365 develop list-available` printed `Authentication required for Agent 365 Tools`, `Browser authentication is not supported on this platform: macOS 26.4.1`, then a device-code prompt. The command was stopped after waiting 120 seconds for authentication.
+
+### Learning #62: A365 ToolingManifest Is the Source of Truth for Work IQ URL, Audience, and Scope
+
+**Date:** 2026-05-08
+**Status:** **CONFIRMED — fixed in `a365-upgrade`.**
+**Context:** The initial Work IQ provider design treated the static catalog endpoint as canonical and expected per-server scopes such as `McpServers.Word.All`.
+**Problem:** The local generated `ToolingManifest.json` includes a `url` field and uses `Tools.ListInvoke.All` with a server-specific `audience` GUID. Hard-coding the catalog endpoint or an older scope pattern risks sending calls to the wrong gateway or requesting the wrong token as Microsoft evolves the Work IQ MCP surface.
+**Fix:** `ManifestServer` now preserves `url`; `WorkIqProvider.call_tool()` uses the manifest URL when present and falls back to the catalog endpoint only for older manifests. Tests cover the newer `url` + `Tools.ListInvoke.All` shape for Word and non-Word servers.
+**Prevention:** Treat `ToolingManifest.json` as the runtime source of truth for `url`, `audience`, and `scope`. The static catalog is only a fallback and a Teams-exclusion policy list.
+**Evidence/references:** `ToolingManifest.json` generated locally on 2026-05-08; `src/entraclaw/a365/manifest.py`; `src/entraclaw/a365/provider.py`; `tests/a365/test_manifest.py::test_load_manifest_accepts_new_workiq_scope_and_url_for_any_server`; `tests/a365/test_provider.py::test_provider_uses_manifest_audience_scope_and_endpoint`.
+
+### Learning #63: A365 Config-Free `--agent-name` Derives a Different Blueprint Name
+
+**Date:** 2026-05-08
+**Status:** **CONFIRMED — fixed in `a365-upgrade`.**
+**Context:** Entraclaw provisions its Agent Identity Blueprint directly through Graph beta with display name `EntraClaw Code Agent`. The A365 setup script originally called `a365 setup permissions mcp --agent-name "EntraClaw Code Agent"` before Entraclaw provisioning had loaded the existing blueprint state.
+**Problem:** A365 config-free mode derives `"<agent-name> Blueprint"`, so it looked for `EntraClaw Code Agent Blueprint` and failed with `Blueprint 'EntraClaw Code Agent Blueprint' not found in Entra` plus `No generated config found ... a365.generated.config.json`. Calling `a365 setup blueprint` would create/reuse the A365-derived blueprint, but that is the wrong fix for Entraclaw because it would split Work IQ permissions away from the existing Agent User chain.
+**Fix:** Run Work IQ configuration after Entraclaw Step 5, write `a365.config.json` from `.entraclaw-state.json`/Azure CLI (`tenantId`, `clientAppId`, `agentBlueprintId`, `agentBlueprintObjectId`, `agentIdentityId`, `agentIdentityDisplayName`, `deploymentProjectPath`), then call `a365 setup permissions mcp` without `--agent-name`.
+**Prevention:** For repos that already own their Blueprint lifecycle, never use A365 config-free `--agent-name` for permissions. Use explicit config IDs so A365 patches the existing blueprint instead of deriving names.
+**Evidence/references:** `scripts/setup.sh:write_a365_config`; `scripts/setup-windows.ps1:Write-A365Config`; `tests/scripts/test_a365_setup_prereqs.py::test_unix_setup_can_run_interactive_a365_work_iq_configuration`; `tests/scripts/test_a365_setup_prereqs.py::test_windows_setup_can_run_interactive_a365_work_iq_configuration`.
+
+### Learning #64: A365 Setup Must Run Python Preflight Scripts with the Worktree Venv
+
+**Date:** 2026-05-15
+**Status:** **CONFIRMED — fixed in `a365-upgrade`.**
+**Context:** `setup.sh --configure-a365-work-iq` installs `azure-identity` and `requests` into the worktree-local `.venv` before running provisioning helpers.
+**Problem:** The A365 permission preflight and smoke helper were invoked with `$PYTHON` (the first Python 3.12+ found on `PATH`) instead of `$SCRIPT_PYTHON` (the interpreter used for dependency installation). On macOS this selected a Homebrew Python without `requests`, so setup reached Work IQ catalog/manifest configuration and then failed with `ModuleNotFoundError: No module named 'requests'`.
+**Fix:** Invoke `scripts/ensure_a365_work_iq_permissions.py` and `scripts/spike_a365_work_iq.py` with `$SCRIPT_PYTHON`.
+**Prevention:** Any setup helper that depends on packages installed in Step 3 must run with `$SCRIPT_PYTHON`, not `$PYTHON` or `python3`.
+**Evidence/references:** `scripts/setup.sh:configure_a365_work_iq`; `tests/scripts/test_a365_setup_prereqs.py::test_unix_setup_can_run_interactive_a365_work_iq_configuration`; live `setup.sh --configure-a365-work-iq` run on 2026-05-15.
+
+### Learning #65: Work IQ Word Live Responses Use Nested DriveItem and Textual Comment IDs
+
+**Date:** 2026-05-15
+**Status:** **CONFIRMED — fixed in `a365-upgrade`.**
+**Context:** The first Work IQ Word adapter expected `CreateDocument` to return top-level `url`/`fileName` fields and comment tools to return top-level `id`/`replyId` fields.
+**Problem:** Live `CreateDocument` returns `{ "driveItem": { "WebUrl": "...", "Name": "...", "Id": "...", "ParentReference": { "DriveId": "..." } }, "sharedWith": ... }`. Live `AddComment` and `ReplyToComment` return MCP text blocks like `WordCommentInfo [CommentId=27CC2AEF, Content=...]`, not JSON id fields. Treating those responses as malformed caused document creation to appear failed after the document was already written, and made reply chaining impossible.
+**Fix:** Parse nested `driveItem.WebUrl` / `driveItem.Name`, ODSP `ParentReference.DriveId`, and textual `WordCommentInfo` IDs.
+**Prevention:** For Work IQ MCP integrations, validate against live response shapes and keep raw response fixtures in adapter tests; do not infer JSON shape from docs/tool names alone.
+**Evidence/references:** `src/entraclaw/a365/word.py`; `src/entraclaw/a365/odsp.py`; `tests/a365/test_word.py::test_create_document_accepts_live_drive_item_shape`; `tests/a365/test_word.py::test_create_comment_parses_live_word_comment_info_text`; `tests/a365/test_word.py::test_reply_to_comment_parses_live_word_comment_info_text`; `tests/a365/test_odsp.py::test_get_file_metadata_reads_live_pascal_case_parent_reference_drive_id`; live create/read/comment/reply smoke on 2026-05-15.
+
 ### [HISTORICAL] Learning #4: OBO Requires Matching Token Audience
 
 **Date:** 2026-04-06

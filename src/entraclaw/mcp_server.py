@@ -3896,6 +3896,200 @@ async def add_file_comment(
     )
 
 
+@mcp.tool()
+async def read_word_document(url: str) -> str:
+    """Read a Word document and its comments through Agent 365 Work IQ Word.
+
+    This is the production path for Word document comments. Use this instead
+    of Graph beta file-comment endpoints when the goal is to inspect Word UI
+    comments or prepare a comment-thread reply.
+    """
+    await _initialize()
+    from entraclaw.a365.errors import A365Error
+    from entraclaw.a365.word import get_document_content
+
+    if not url or not url.strip():
+        return json.dumps({"error": "url is required"})
+
+    try:
+        content = await get_document_content(url.strip())
+    except (A365Error, ValueError) as exc:
+        return json.dumps({"error": str(exc), "error_type": type(exc).__name__})
+
+    return json.dumps(
+        {
+            "content_html": content.content_html,
+            "comments": content.comments,
+            "raw": content.raw,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+async def create_word_document(file_name: str, content_html: str) -> str:
+    """Create a Word document through Agent 365 Work IQ Word."""
+    await _initialize()
+    from entraclaw.a365.errors import A365Error
+    from entraclaw.a365.word import create_document
+
+    if not file_name or not file_name.strip():
+        return json.dumps({"error": "file_name is required"})
+    if not content_html or not content_html.strip():
+        return json.dumps({"error": "content_html is required"})
+
+    try:
+        document = await create_document(file_name.strip(), content_html)
+    except (A365Error, ValueError) as exc:
+        return json.dumps({"error": str(exc), "error_type": type(exc).__name__})
+
+    return json.dumps(
+        {
+            "file_name": document.file_name,
+            "url": document.url,
+            "raw": document.raw,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+async def add_word_comment(drive_id: str, document_id: str, content: str) -> str:
+    """Create a top-level Word comment through Agent 365 Work IQ Word."""
+    await _initialize()
+    from entraclaw.a365.errors import A365Error
+    from entraclaw.a365.word import create_comment
+
+    if not drive_id or not document_id:
+        return json.dumps({"error": "drive_id and document_id are required"})
+    if not content or not content.strip():
+        return json.dumps({"error": "content is required"})
+
+    try:
+        comment = await create_comment(drive_id, document_id, content)
+    except (A365Error, ValueError) as exc:
+        return json.dumps({"error": str(exc), "error_type": type(exc).__name__})
+
+    return json.dumps(
+        {
+            "comment_id": comment.comment_id,
+            "content": comment.content,
+            "raw": comment.raw,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+async def reply_to_word_comment(
+    drive_id: str,
+    document_id: str,
+    comment_id: str,
+    content: str,
+) -> str:
+    """Reply inside an existing Word comment thread through Agent 365 Work IQ Word."""
+    await _initialize()
+    from entraclaw.a365.errors import A365Error
+    from entraclaw.a365.word import reply_to_comment
+
+    if not drive_id or not document_id or not comment_id:
+        return json.dumps({"error": "drive_id, document_id, and comment_id are required"})
+    if not content or not content.strip():
+        return json.dumps({"error": "content is required"})
+
+    try:
+        reply = await reply_to_comment(drive_id, document_id, comment_id, content)
+    except (A365Error, ValueError) as exc:
+        return json.dumps({"error": str(exc), "error_type": type(exc).__name__})
+
+    return json.dumps(
+        {
+            "reply_id": reply.reply_id,
+            "comment_id": reply.comment_id,
+            "content": reply.content,
+            "raw": reply.raw,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+async def get_a365_file_metadata_by_url(url: str) -> str:
+    """Read OneDrive/SharePoint file metadata by URL through Agent 365 Work IQ."""
+    await _initialize()
+    from entraclaw.a365.errors import A365Error
+    from entraclaw.a365.odsp import get_file_or_folder_metadata_by_url
+
+    if not url or not url.strip():
+        return json.dumps({"error": "url is required"})
+
+    try:
+        metadata = await get_file_or_folder_metadata_by_url(url.strip())
+    except (A365Error, ValueError) as exc:
+        return json.dumps({"error": str(exc), "error_type": type(exc).__name__})
+
+    return json.dumps(
+        {
+            "item_id": metadata.item_id,
+            "name": metadata.name,
+            "web_url": metadata.web_url,
+            "document_library_id": metadata.document_library_id,
+            "raw": metadata.raw,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+async def read_a365_text_file(document_library_id: str, file_id: str) -> str:
+    """Read a small text file from OneDrive/SharePoint through Agent 365 Work IQ."""
+    await _initialize()
+    from entraclaw.a365.errors import A365Error
+    from entraclaw.a365.odsp import read_small_text_file
+
+    if not document_library_id or not file_id:
+        return json.dumps({"error": "document_library_id and file_id are required"})
+
+    try:
+        content = await read_small_text_file(document_library_id, file_id)
+    except (A365Error, ValueError) as exc:
+        return json.dumps({"error": str(exc), "error_type": type(exc).__name__})
+
+    return json.dumps(
+        {
+            "content": content.content,
+            "encoding": content.encoding,
+            "raw": content.raw,
+        },
+        indent=2,
+    )
+
+
+@mcp.tool()
+async def read_a365_binary_file(document_library_id: str, file_id: str) -> str:
+    """Read a small binary file from OneDrive/SharePoint through Agent 365 Work IQ."""
+    await _initialize()
+    from entraclaw.a365.errors import A365Error
+    from entraclaw.a365.odsp import read_small_binary_file
+
+    if not document_library_id or not file_id:
+        return json.dumps({"error": "document_library_id and file_id are required"})
+
+    try:
+        content = await read_small_binary_file(document_library_id, file_id)
+    except (A365Error, ValueError) as exc:
+        return json.dumps({"error": str(exc), "error_type": type(exc).__name__})
+
+    return json.dumps(
+        {
+            "content": content.content,
+            "encoding": content.encoding,
+            "raw": content.raw,
+        },
+        indent=2,
+    )
+
+
 # ───────────────────────────────────────────────────────────────────────
 # PR2: Author / Upload / Share Tools
 # ───────────────────────────────────────────────────────────────────────

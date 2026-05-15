@@ -54,7 +54,11 @@ TEAMS_CAPABLE_SKUS: tuple[str, ...] = (
     "TEAMS_EXPLORATORY",
     "TEAMS_PREMIUM",
     "M365_E5_SUITE_COMPONENTS",
-    "MICROSOFT_365_COPILOT",  # M365 Copilot (includes Teams)
+)
+
+COPILOT_CAPABLE_SKUS: tuple[str, ...] = (
+    "MICROSOFT_365_COPILOT",
+    "Microsoft_365_Copilot",
 )
 
 
@@ -135,6 +139,61 @@ def check_teams_license_availability(
         remediation=(
             f"Buy a Teams-capable license at {LICENSE_PURCHASE_URL} and re-run "
             "setup.sh, or assign an existing license manually before testing."
+        ),
+    )
+
+
+def check_copilot_license_availability(
+    token: str, *, transport: httpx.BaseTransport | None = None
+) -> Check:
+    """Query ``/subscribedSkus`` and report whether a Copilot seat is free."""
+    url = f"{GRAPH_BASE}/subscribedSkus"
+    try:
+        with httpx.Client(transport=transport, timeout=15.0) as client:
+            resp = client.get(url, headers={"Authorization": f"Bearer {token}"})
+    except httpx.HTTPError as exc:
+        return Check(
+            name="Microsoft 365 Copilot license availability",
+            status="skip",
+            detail=f"Graph unreachable: {exc}",
+        )
+
+    if resp.status_code != 200:
+        return Check(
+            name="Microsoft 365 Copilot license availability",
+            status="skip",
+            detail=f"Graph returned {resp.status_code}",
+        )
+
+    available: list[tuple[str, int]] = []
+    for sku in resp.json().get("value", []) or []:
+        part = sku.get("skuPartNumber", "")
+        if part not in COPILOT_CAPABLE_SKUS:
+            continue
+        prepaid = (sku.get("prepaidUnits") or {}).get("enabled", 0) or 0
+        consumed = sku.get("consumedUnits", 0) or 0
+        free = prepaid - consumed
+        if free > 0:
+            available.append((part, free))
+
+    if available:
+        descs = ", ".join(f"{part} ({free} free)" for part, free in available)
+        return Check(
+            name="Microsoft 365 Copilot license availability",
+            status="pass",
+            detail=f"Copilot-capable SKUs available: {descs}",
+        )
+
+    return Check(
+        name="Microsoft 365 Copilot license availability",
+        status="warn",
+        detail=(
+            "No Microsoft 365 Copilot SKU has free seats in this tenant. Work IQ "
+            "MCP servers require Microsoft 365 Copilot for the calling Agent User."
+        ),
+        remediation=(
+            "Buy or free a Microsoft 365 Copilot license and re-run setup.sh, "
+            "or assign it manually before testing Work IQ Word."
         ),
     )
 
@@ -583,7 +642,9 @@ def overall_exit_code(checks: Iterable[Check]) -> int:
 
 __all__ = [
     "Check",
+    "COPILOT_CAPABLE_SKUS",
     "TEAMS_CAPABLE_SKUS",
+    "check_copilot_license_availability",
     "check_mcp_configs",
     "check_state_file",
     "check_teams_license_availability",
