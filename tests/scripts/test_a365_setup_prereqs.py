@@ -39,6 +39,27 @@ def test_unix_setup_can_install_a365_cli_when_requested() -> None:
     assert 'export _ENTRACLAW_UPN_SUFFIX="$UPN_SUFFIX"' in script
 
 
+def test_unix_setup_can_create_new_chain_with_explicit_agent_user_upn() -> None:
+    script = read_script("scripts/setup.sh")
+
+    assert "--new --agent-user-upn=entraclaw-agent@werner.ac" in script
+    new_branch = script[script.index('if [ "$NEW_CHAIN" = true ]') :]
+    assert 'if [ -n "$AGENT_USER_UPN" ]; then' in new_branch
+    assert 'export ENTRACLAW_AGENT_USER_UPN="$AGENT_USER_UPN"' in new_branch
+    assert 'elif [ -z "$UPN_SUFFIX" ]; then' in new_branch
+
+
+def test_unix_teardown_supports_targeted_upn_and_preserves_cloud_storage() -> None:
+    script = read_script("scripts/teardown.sh")
+
+    assert "--agent-user-upn=*" in script
+    assert "--dry-run" in script
+    assert "deprovision_entra_agent_identity.py" in script
+    assert "Cloud storage is not deleted by teardown.sh" in script
+    assert "az storage account delete" not in script
+    assert "az storage container delete" not in script
+
+
 def test_unix_setup_can_run_interactive_a365_work_iq_configuration() -> None:
     script = read_script("scripts/setup.sh")
 

@@ -18,7 +18,7 @@ The `./scripts/setup.sh` script provisions and configures an EntraClaw agent end
 | `--new` | Provision a brand-new identity chain (Blueprint + Agent Identity + Agent User). Does not touch the existing chain; the current `.env` is backed up. Must be paired with `--with-upn-suffix` or you'll be prompted. |
 | `--use-blueprint=<app-id>` | Attach to an existing Blueprint from a different machine. Generates a new cert locally and uploads its public key to the Blueprint. Reuses the existing Agent Identity and Agent User. Also handles the "switch this machine to a different Blueprint" case — stale Agent Identity / User / cert thumbprint are wiped from local state. |
 | `--with-upn-suffix=<name>` | Required with `--new`; also supported with `--use-blueprint` to select an existing suffixed Agent User under the Blueprint. Example: `--with-upn-suffix=sati-agent` produces or selects `entraclaw-agent-sati-agent@yourdomain.com`. |
-| `--agent-user-upn=<upn>` | Explicit existing Agent User UPN to reuse with `--use-blueprint`, e.g. `entraclaw-agent-sati-agent@werner.ac`. Use this when a Blueprint has more than one Agent User chain and setup must not fall back to the unsuffixed `entraclaw-agent@...` identity. |
+| `--agent-user-upn=<upn>` | Explicit Agent User UPN. With `--use-blueprint`, selects an existing Agent User to reuse, e.g. `entraclaw-agent-sati-agent@werner.ac`. With `--new`, creates exactly that UPN, e.g. `entraclaw-agent@werner.ac`. |
 
 ### User identity
 
@@ -52,6 +52,12 @@ The `./scripts/setup.sh` script provisions and configures an EntraClaw agent end
 ```
 
 Creates a new identity chain, stores everything locally, no cloud storage.
+
+To create a specific unsuffixed Agent User UPN:
+
+```bash
+./scripts/setup.sh --new --agent-user-upn=entraclaw-agent@werner.ac
+```
 
 ### Fresh setup with cloud storage from the start
 
@@ -143,6 +149,20 @@ Private keys are **never** written to `.env` — they live in the OS keystore (K
 - Does not remove anything. Use `./scripts/teardown.sh` for that.
 - Does not manage the `persona-sati` MCP server. That's a separate project.
 - Does not modify your Azure subscription beyond what's listed above (tenant-scoped storage account, Agent User, Agent Identity, Blueprint, provisioner app, consent grants).
+
+## Targeted teardown
+
+`./scripts/teardown.sh` can deprovision an Agent User chain by UPN:
+
+```bash
+./scripts/teardown.sh --agent-user-upn=entraclaw-agent-sati-agent@werner.ac --dry-run
+./scripts/teardown.sh --agent-user-upn=entraclaw-agent-sati-agent@werner.ac --yes
+```
+
+Targeted teardown removes assigned licenses first, then deletes the Agent User,
+parent Agent Identity, and parent Blueprint. **It does not delete Azure Blob
+Storage accounts or containers.** Storage deletion is intentionally separate and
+manual until a dedicated storage teardown path exists.
 
 ## See also
 

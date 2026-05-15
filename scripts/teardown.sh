@@ -12,6 +12,63 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
+TARGET_AGENT_USER_UPNS=()
+ASSUME_YES=false
+DRY_RUN=false
+DELETE_CLOUD_STORAGE=false
+SHOW_HELP=false
+
+for arg in "$@"; do
+    case $arg in
+        --agent-user-upn=*)
+            IFS=',' read -ra UPN_PARTS <<< "${arg#--agent-user-upn=}"
+            for upn in "${UPN_PARTS[@]}"; do
+                upn="$(echo "$upn" | xargs)"
+                [ -n "$upn" ] && TARGET_AGENT_USER_UPNS+=("$upn")
+            done
+            ;;
+        --yes|-y)
+            ASSUME_YES=true
+            ;;
+        --dry-run)
+            DRY_RUN=true
+            ;;
+        --delete-cloud-storage)
+            DELETE_CLOUD_STORAGE=true
+            ;;
+        --help|-h)
+            SHOW_HELP=true
+            ;;
+        *)
+            echo "ERROR: Unknown argument: $arg" >&2
+            SHOW_HELP=true
+            ;;
+    esac
+done
+
+if [ "$SHOW_HELP" = true ]; then
+    echo "Usage: ./scripts/teardown.sh [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --agent-user-upn=UPN   Target a specific Agent User UPN to deprovision."
+    echo "                         May be repeated or comma-separated."
+    echo "  --dry-run              Resolve and print targeted chains without deleting."
+    echo "  --yes, -y              Skip confirmation prompt."
+    echo "  --delete-cloud-storage Reserved explicit storage teardown switch."
+    echo "                         Current script refuses this switch; cloud storage"
+    echo "                         must be deleted manually after a backup."
+    echo "  --help, -h             Show this help."
+    echo ""
+    echo "Cloud storage is not deleted by teardown.sh."
+    exit 0
+fi
+
+if [ "$DELETE_CLOUD_STORAGE" = true ]; then
+    echo "ERROR: --delete-cloud-storage is intentionally not implemented here." >&2
+    echo "Cloud storage is not deleted by teardown.sh; delete containers/accounts manually after backup." >&2
+    exit 2
+fi
+
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
@@ -49,7 +106,7 @@ BLUEPRINT_OBJECT_ID="${ENTRACLAW_BLUEPRINT_OBJECT_ID:-$(_read_state BLUEPRINT_OB
 HAS_ENTRA_RESOURCES=false
 HAS_LOCAL_STATE=false
 
-if [ -n "$AGENT_USER_ID" ] || [ -n "$AGENT_OBJECT_ID" ] || [ -n "$BLUEPRINT_APP_ID" ]; then
+if [ -n "$AGENT_USER_ID" ] || [ -n "$AGENT_OBJECT_ID" ] || [ -n "$BLUEPRINT_APP_ID" ] || [ ${#TARGET_AGENT_USER_UPNS[@]} -gt 0 ]; then
     HAS_ENTRA_RESOURCES=true
 fi
 if [ -f .env ] || [ -f .entraclaw-state.json ]; then
@@ -77,6 +134,13 @@ echo -e "${YELLOW}⚠️  This will delete the following:${NC}"
 echo ""
 if [ "$HAS_ENTRA_RESOURCES" = true ]; then
     echo "  Entra resources:"
+    if [ ${#TARGET_AGENT_USER_UPNS[@]} -gt 0 ]; then
+        for upn in "${TARGET_AGENT_USER_UPNS[@]}"; do
+            echo "    Target Agent User UPN: $upn"
+        done
+        echo "    Targeted teardown removes assigned licenses, Agent User,"
+        echo "    parent Agent Identity, and parent Blueprint."
+    fi
     [ -n "$AGENT_USER_ID" ]    && echo "    Agent User:     $AGENT_USER_ID"
     [ -n "$AGENT_OBJECT_ID" ]  && echo "    Agent Identity: $AGENT_OBJECT_ID"
     [ -n "$BLUEPRINT_APP_ID" ] && echo "    Blueprint:      $BLUEPRINT_APP_ID"
@@ -87,13 +151,18 @@ if [ "$HAS_LOCAL_STATE" = true ]; then
     [ -f .env ]                  && echo "    .env"
     [ -f .entraclaw-state.json ]  && echo "    .entraclaw-state.json"
 fi
+echo "  Cloud storage: not deleted by teardown.sh"
 echo ""
-read -p "Are you sure? (y/N) " -n 1 -r
-echo
+if [ "$DRY_RUN" = true ]; then
+    echo -e "${YELLOW}Dry run only — no tenant or local state will be deleted.${NC}"
+elif [ "$ASSUME_YES" = false ]; then
+    read -p "Are you sure? (y/N) " -n 1 -r
+    echo
 
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Aborted."
-    exit 0
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Aborted."
+        exit 0
+    fi
 fi
 
 echo ""
@@ -124,6 +193,35 @@ if [ -n "$PROV_TOKEN" ] && [ ${#PROV_TOKEN} -gt 100 ]; then
 else
     echo -e "  ${YELLOW}⚠️  No Provisioner token — will try az CLI (may fail for Agent Identity APIs)${NC}"
     PROV_TOKEN=""
+fi
+
+# ── Targeted Agent User teardown by UPN ─────────────────────────────────────
+
+if [ ${#TARGET_AGENT_USER_UPNS[@]} -gt 0 ]; then
+    if [ -z "$PROV_TOKEN" ]; then
+        echo -e "  ${RED}❌ No Provisioner token — targeted Agent Identity teardown cannot proceed${NC}"
+        exit 1
+    fi
+    TARGET_ARGS=()
+    [ "$DRY_RUN" = true ] && TARGET_ARGS+=(--dry-run)
+    for upn in "${TARGET_AGENT_USER_UPNS[@]}"; do
+        TARGET_ARGS+=(--agent-user-upn "$upn")
+    done
+    if ! "$VENV_PY" "$SCRIPT_DIR/deprovision_entra_agent_identity.py" "${TARGET_ARGS[@]}"; then
+        echo -e "  ${RED}❌ Targeted Agent User teardown failed${NC}"
+        exit 1
+    fi
+    if [ "$DRY_RUN" = true ]; then
+        echo ""
+        echo -e "${GREEN}Dry run complete.${NC}"
+        exit 0
+    fi
+    # The targeted helper already deleted the Agent User, parent Agent Identity,
+    # and parent Blueprint. Avoid duplicate state-based deletes below.
+    AGENT_USER_ID=""
+    AGENT_OBJECT_ID=""
+    BLUEPRINT_APP_ID=""
+    BLUEPRINT_OBJECT_ID=""
 fi
 
 # ── 1. Delete Agent User (child — must go before Agent Identity) ──────────
