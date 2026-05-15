@@ -56,6 +56,7 @@ def test_unix_teardown_supports_targeted_upn_and_preserves_cloud_storage() -> No
     assert "--dry-run" in script
     assert "deprovision_entra_agent_identity.py" in script
     assert "Cloud storage is not deleted by teardown.sh" in script
+    assert "targeted Agent Identity teardown cannot proceed" not in script
     assert "az storage account delete" not in script
     assert "az storage container delete" not in script
 

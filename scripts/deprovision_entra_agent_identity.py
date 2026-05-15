@@ -33,6 +33,7 @@ class AgentUserChain:
     user_id: str
     user_principal_name: str
     assigned_license_ids: list[str]
+    group_assigned_license_ids: list[str]
     agent_identity_object_id: str
     agent_identity_app_id: str
     agent_identity_display_name: str
@@ -83,11 +84,28 @@ def _require_ok(resp: requests.Response, action: str) -> None:
     raise RuntimeError(f"{action} failed ({resp.status_code}): {resp.text[:500]}")
 
 
+def graph_collection_values(path: str, token: str, action: str) -> list[dict]:
+    values: list[dict] = []
+    next_path: str | None = path
+    while next_path:
+        resp = graph_request("GET", next_path, token)
+        _require_ok(resp, action)
+        data = resp.json()
+        values.extend(data.get("value", []))
+        next_link = data.get("@odata.nextLink")
+        if isinstance(next_link, str) and next_link.startswith(GRAPH_BASE):
+            next_path = next_link[len(GRAPH_BASE) :]
+        else:
+            next_path = None
+    return values
+
+
 def resolve_agent_user_chain(token: str, upn: str) -> AgentUserChain | None:
     user_resp = graph_request(
         "GET",
         f"/users?$filter=userPrincipalName eq '{odata_escape(upn)}'"
-        "&$select=id,userPrincipalName,identityParentId,assignedLicenses",
+        "&$select=id,userPrincipalName,identityParentId,assignedLicenses,"
+        "licenseAssignmentStates",
         token,
     )
     _require_ok(user_resp, f"Lookup Agent User {upn}")
@@ -126,16 +144,31 @@ def resolve_agent_user_chain(token: str, upn: str) -> AgentUserChain | None:
         raise RuntimeError(f"Blueprint app not found for appId {blueprint_app_id}")
     blueprint = blueprints[0]
 
-    assigned_license_ids = [
-        license_item.get("skuId", "")
-        for license_item in user.get("assignedLicenses", [])
-        if license_item.get("skuId")
-    ]
+    license_states = user.get("licenseAssignmentStates") or []
+    if license_states:
+        assigned_license_ids = [
+            state.get("skuId", "")
+            for state in license_states
+            if state.get("skuId") and not state.get("assignedByGroup")
+        ]
+        group_assigned_license_ids = [
+            state.get("skuId", "")
+            for state in license_states
+            if state.get("skuId") and state.get("assignedByGroup")
+        ]
+    else:
+        assigned_license_ids = [
+            license_item.get("skuId", "")
+            for license_item in user.get("assignedLicenses", [])
+            if license_item.get("skuId")
+        ]
+        group_assigned_license_ids = []
 
     return AgentUserChain(
         user_id=user_id,
         user_principal_name=user.get("userPrincipalName", upn),
         assigned_license_ids=assigned_license_ids,
+        group_assigned_license_ids=group_assigned_license_ids,
         agent_identity_object_id=agent_identity_object_id,
         agent_identity_app_id=sp.get("appId", ""),
         agent_identity_display_name=sp.get("displayName", ""),
@@ -148,14 +181,16 @@ def resolve_agent_user_chain(token: str, upn: str) -> AgentUserChain | None:
 def ensure_blueprint_has_no_other_agent_identities(
     token: str, chain: AgentUserChain
 ) -> None:
-    resp = graph_request(
-        "GET",
-        f"/servicePrincipals?$filter=agentIdentityBlueprintId eq "
-        f"'{odata_escape(chain.blueprint_app_id)}'&$select=id,appId,displayName",
-        token,
-    )
-    _require_ok(resp, f"List Agent Identities for Blueprint {chain.blueprint_app_id}")
-    identities = resp.json().get("value", [])
+    identities = [
+        item
+        for item in graph_collection_values(
+            "/servicePrincipals/microsoft.graph.agentIdentity"
+            "?$select=id,appId,displayName,agentIdentityBlueprintId&$top=999",
+            token,
+            f"List Agent Identities for Blueprint {chain.blueprint_app_id}",
+        )
+        if item.get("agentIdentityBlueprintId") == chain.blueprint_app_id
+    ]
     other_identities = [
         item for item in identities if item.get("id") != chain.agent_identity_object_id
     ]
@@ -167,8 +202,13 @@ def ensure_blueprint_has_no_other_agent_identities(
 
 
 def remove_agent_user_licenses(token: str, chain: AgentUserChain) -> None:
+    if chain.group_assigned_license_ids:
+        print(
+            f"  {len(chain.group_assigned_license_ids)} license(s) are group-inherited; "
+            "they will be released when the Agent User is deleted."
+        )
     if not chain.assigned_license_ids:
-        print(f"  [skip] No assigned licenses on {chain.user_principal_name}")
+        print(f"  [skip] No directly assigned licenses on {chain.user_principal_name}")
         return
     print(
         f"  Removing {len(chain.assigned_license_ids)} license(s) from "

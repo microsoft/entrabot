@@ -191,6 +191,27 @@ def _generate_provisioner_cert() -> tuple[str, str, str]:
     return cert_pem, key_pem, thumbprint
 
 
+def _cert_pem_from_bundle(pem_bundle: str) -> str:
+    """Extract the public certificate PEM from a cert+key PEM bundle."""
+    marker = "-----END CERTIFICATE-----"
+    if marker not in pem_bundle:
+        raise ProvisionerBootstrapError("stored Provisioner cert bundle has no certificate")
+    return pem_bundle.split(marker, 1)[0] + marker + "\n"
+
+
+def _thumbprint_from_cert_pem(cert_pem: str) -> str:
+    try:
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes
+    except ImportError as exc:
+        raise ProvisionerBootstrapError(
+            "cryptography is required for cert-auth. Install with: pip install -e '.[provisioning]'"
+        ) from exc
+
+    cert = x509.load_pem_x509_certificate(cert_pem.encode())
+    return cert.fingerprint(hashes.SHA1()).hex()
+
+
 def _upload_cert_to_app(app_id: str, cert_pem: str) -> None:
     """Register a public cert on the Provisioner app via az CLI.
 
@@ -659,7 +680,16 @@ def ensure_app_registration(
             f"(service='{_KEYCHAIN_SERVICE_CERT}', account='{tenant_id}')."
         )
     else:
-        thumbprint = get_state("PROVISIONER_CERT_THUMBPRINT") or "(unknown)"
+        thumbprint = get_state("PROVISIONER_CERT_THUMBPRINT")
+        if not thumbprint:
+            cert_pem = _cert_pem_from_bundle(pem_bundle)
+            thumbprint = _thumbprint_from_cert_pem(cert_pem)
+            print(
+                "  Local Provisioner cert exists but is not recorded on this "
+                f"app; uploading public cert (SHA-1 thumb: {thumbprint})..."
+            )
+            _upload_cert_to_app(client_id, cert_pem)
+            set_state("PROVISIONER_CERT_THUMBPRINT", thumbprint)
         print(f"  Using existing Provisioner cert (thumb: {thumbprint})")
 
     if wait_for_propagation:

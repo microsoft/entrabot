@@ -81,7 +81,7 @@ def _fake_resolver(method: str, path: str, token: str, **kw) -> SimpleNamespace:
             },
         )
     if method == "GET" and path.startswith(
-        "/servicePrincipals?$filter=agentIdentityBlueprintId eq"
+        "/servicePrincipals/microsoft.graph.agentIdentity"
     ):
         return _resp(
             200,
@@ -119,7 +119,8 @@ def test_deprovisions_license_user_agent_identity_and_blueprint_in_order(
         (
             "GET",
             "/users?$filter=userPrincipalName eq 'entraclaw-agent-sati-agent@werner.ac'"
-            "&$select=id,userPrincipalName,identityParentId,assignedLicenses",
+            "&$select=id,userPrincipalName,identityParentId,assignedLicenses,"
+            "licenseAssignmentStates",
             None,
         ),
         ("GET", "/servicePrincipals/agent-identity-object-id", None),
@@ -131,8 +132,8 @@ def test_deprovisions_license_user_agent_identity_and_blueprint_in_order(
         ),
         (
             "GET",
-            "/servicePrincipals?$filter=agentIdentityBlueprintId eq 'blueprint-app-id'"
-            "&$select=id,appId,displayName",
+            "/servicePrincipals/microsoft.graph.agentIdentity"
+            "?$select=id,appId,displayName,agentIdentityBlueprintId&$top=999",
             None,
         ),
         (
@@ -171,6 +172,58 @@ def test_license_removal_failure_stops_before_deleting_user(
     assert ("DELETE", "/applications/blueprint-object-id") not in calls
 
 
+def test_only_direct_licenses_are_removed_when_group_licenses_exist(
+    deprovision_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, str, dict | None]] = []
+
+    def fake_graph_request(method, path, token, **kw):
+        calls.append((method, path, kw.get("json_body")))
+        if method == "GET" and path.startswith("/users?$filter=userPrincipalName eq"):
+            return _resp(
+                200,
+                {
+                    "value": [
+                        {
+                            "id": "agent-user-id",
+                            "userPrincipalName": "entraclaw-agent-sati-agent@werner.ac",
+                            "identityParentId": "agent-identity-object-id",
+                            "assignedLicenses": [
+                                {"skuId": "direct-teams-sku"},
+                                {"skuId": "group-copilot-sku"},
+                            ],
+                            "licenseAssignmentStates": [
+                                {"skuId": "direct-teams-sku", "assignedByGroup": None},
+                                {
+                                    "skuId": "group-copilot-sku",
+                                    "assignedByGroup": "license-group-id",
+                                },
+                            ],
+                        }
+                    ]
+                },
+            )
+        if method == "GET":
+            return _fake_resolver(method, path, token, **kw)
+        return _resp(204 if method == "DELETE" else 200, {})
+
+    monkeypatch.setattr(deprovision_module, "graph_request", fake_graph_request)
+
+    result = deprovision_module.deprovision_agent_user(
+        "token", "entraclaw-agent-sati-agent@werner.ac"
+    )
+
+    assert result == "deleted"
+    assign_calls = [call for call in calls if call[1].endswith("/assignLicense")]
+    assert assign_calls == [
+        (
+            "POST",
+            "/users/agent-user-id/assignLicense",
+            {"addLicenses": [], "removeLicenses": ["direct-teams-sku"]},
+        )
+    ]
+
+
 def test_dry_run_resolves_chain_but_does_not_mutate_graph(
     deprovision_module, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -195,14 +248,20 @@ def test_refuses_to_delete_blueprint_with_other_agent_identities(
 ) -> None:
     def fake_graph_request(method, path, token, **kw):
         if method == "GET" and path.startswith(
-            "/servicePrincipals?$filter=agentIdentityBlueprintId eq"
+            "/servicePrincipals/microsoft.graph.agentIdentity"
         ):
             return _resp(
                 200,
                 {
                     "value": [
-                        {"id": "agent-identity-object-id"},
-                        {"id": "other-agent-identity-object-id"},
+                        {
+                            "id": "agent-identity-object-id",
+                            "agentIdentityBlueprintId": "blueprint-app-id",
+                        },
+                        {
+                            "id": "other-agent-identity-object-id",
+                            "agentIdentityBlueprintId": "blueprint-app-id",
+                        },
                     ]
                 },
             )

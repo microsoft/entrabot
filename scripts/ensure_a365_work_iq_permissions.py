@@ -233,6 +233,7 @@ def _ensure_oauth_grant(
     token: str,
     *,
     request: RequestFn,
+    sleep: SleepFn = time.sleep,
 ) -> None:
     existing = _find_oauth_grant(
         blueprint_sp_object_id,
@@ -263,20 +264,64 @@ def _ensure_oauth_grant(
         print(f"  [updated] Added {resource.scope} to {resource.display_name} grant")
         return
 
-    _request(
-        request,
+    response = request(
         "POST",
         f"{GRAPH_V1}/oauth2PermissionGrants",
-        token,
-        json_body={
+        headers=_headers(token),
+        json={
             "clientId": blueprint_sp_object_id,
             "consentType": "AllPrincipals",
             "resourceId": resource_sp_object_id,
             "scope": resource.scope,
         },
-        expected=(200, 201),
-        action=f"create {resource.display_name} OAuth grant",
     )
+    if response.status_code == 409 and "Permission entry already exists" in response.text:
+        for attempt in range(4):
+            wait = 5 * (attempt + 1)
+            sleep(wait)
+            existing = _find_oauth_grant(
+                blueprint_sp_object_id,
+                resource_sp_object_id,
+                token,
+                request=request,
+            )
+            if existing:
+                existing_scopes = set(str(existing.get("scope") or "").split())
+                if resource.scope in existing_scopes:
+                    print(
+                        f"  [skip] {resource.display_name} grant already has "
+                        f"{resource.scope}"
+                    )
+                    return
+                grant_id = str(existing.get("id") or "")
+                if not grant_id:
+                    raise A365PermissionError(
+                        f"Existing {resource.display_name} grant has no grant id"
+                    )
+                merged = " ".join(sorted(existing_scopes | {resource.scope}))
+                _request(
+                    request,
+                    "PATCH",
+                    f"{GRAPH_V1}/oauth2PermissionGrants/{grant_id}",
+                    token,
+                    json_body={"scope": merged},
+                    expected=(200, 204),
+                    action=f"patch {resource.display_name} OAuth grant",
+                )
+                print(
+                    f"  [updated] Added {resource.scope} to "
+                    f"{resource.display_name} grant after create conflict"
+                )
+                return
+        raise A365PermissionError(
+            f"create {resource.display_name} OAuth grant conflicted, but the "
+            "existing grant could not be read back"
+        )
+    if response.status_code not in (200, 201):
+        raise A365PermissionError(
+            f"create {resource.display_name} OAuth grant failed "
+            f"({response.status_code}): {response.text[:400]}"
+        )
     print(f"  [new] {resource.display_name} grant created: {resource.scope}")
 
 
@@ -312,6 +357,7 @@ def ensure_a365_work_iq_permissions(
             resource_sp_object_id,
             token,
             request=request,
+            sleep=sleep,
         )
 
     print("\n  ✅ A365 Work IQ resource service principals and grants are ready")

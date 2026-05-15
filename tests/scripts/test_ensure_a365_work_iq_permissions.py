@@ -144,6 +144,66 @@ def test_patches_existing_grant_when_scope_is_missing() -> None:
     ]
 
 
+def test_post_conflict_requeries_and_patches_existing_grant() -> None:
+    module = load_module()
+    grant_queries = 0
+    patch_bodies: list[dict[str, str]] = []
+    sleeps: list[float] = []
+    resource = module.RequiredResource(
+        app_id=module.A365_AGENT_TOOLS_APP_ID,
+        display_name="Agent 365 Tools metadata",
+        scope="McpServersMetadata.Read.All",
+    )
+
+    def request(method: str, url: str, **kwargs: Any) -> FakeResponse:
+        nonlocal grant_queries
+        body = kwargs.get("json")
+        if method == "GET" and "oauth2PermissionGrants" in url:
+            grant_queries += 1
+            if grant_queries == 1:
+                return FakeResponse(200, {"value": []})
+            return FakeResponse(
+                200,
+                {
+                    "value": [
+                        {
+                            "id": "agent-tools-grant",
+                            "scope": "McpServers.OneDriveSharepoint.All",
+                        }
+                    ]
+                },
+            )
+        if method == "POST" and url.endswith("/oauth2PermissionGrants"):
+            return FakeResponse(
+                409,
+                {
+                    "error": {
+                        "code": "Request_MultipleObjectsWithSameKeyValue",
+                        "message": "Permission entry already exists.",
+                    }
+                },
+            )
+        if method == "PATCH" and url.endswith("/oauth2PermissionGrants/agent-tools-grant"):
+            assert body is not None
+            patch_bodies.append(body)
+            return FakeResponse(204)
+        raise AssertionError(f"unexpected request: {method} {url} {body}")
+
+    module._ensure_oauth_grant(
+        resource,
+        blueprint_sp_object_id="blueprint-sp",
+        resource_sp_object_id="agent-tools-sp",
+        token="token",
+        request=request,
+        sleep=sleeps.append,
+    )
+
+    assert sleeps == [5]
+    assert patch_bodies == [
+        {"scope": "McpServers.OneDriveSharepoint.All McpServersMetadata.Read.All"}
+    ]
+
+
 def test_raises_when_blueprint_service_principal_is_missing() -> None:
     module = load_module()
 

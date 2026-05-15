@@ -198,10 +198,6 @@ fi
 # ── Targeted Agent User teardown by UPN ─────────────────────────────────────
 
 if [ ${#TARGET_AGENT_USER_UPNS[@]} -gt 0 ]; then
-    if [ -z "$PROV_TOKEN" ]; then
-        echo -e "  ${RED}❌ No Provisioner token — targeted Agent Identity teardown cannot proceed${NC}"
-        exit 1
-    fi
     TARGET_ARGS=()
     [ "$DRY_RUN" = true ] && TARGET_ARGS+=(--dry-run)
     for upn in "${TARGET_AGENT_USER_UPNS[@]}"; do
