@@ -2,12 +2,12 @@
   "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
   "manifestVersion": "1.17",
   "version": "0.1.0",
-  "id": "55991923-6f06-4e66-8ca3-cbc9ee991463",
+  "id": "00000000-0000-0000-0000-000000000000",
   "developer": {
     "name": "EntraClaw Research",
-    "websiteUrl": "https://github.com/brandwe/entraclaw-identity-research",
-    "privacyUrl": "https://github.com/brandwe/entraclaw-identity-research",
-    "termsOfUseUrl": "https://github.com/brandwe/entraclaw-identity-research"
+    "websiteUrl": "https://github.com/microsoft/entraclaw-identity-research",
+    "privacyUrl": "https://github.com/microsoft/entraclaw-identity-research",
+    "termsOfUseUrl": "https://github.com/microsoft/entraclaw-identity-research"
   },
   "name": {
     "short": "EntraClaw Agent",
@@ -24,7 +24,7 @@
   "accentColor": "#4F6BED",
   "bots": [
     {
-      "botId": "55991923-6f06-4e66-8ca3-cbc9ee991463",
+      "botId": "00000000-0000-0000-0000-000000000000",
       "scopes": [
         "personal",
         "team",

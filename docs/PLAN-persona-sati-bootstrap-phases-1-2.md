@@ -27,7 +27,7 @@ The result is that the model can have body and mind tools available while missin
 
 ## File map
 
-### Entraclaw repo: `/Volumes/Development HD/entraclaw-identity-research`
+### Entraclaw repo: `/path/to/entraclaw-identity-research`
 
 - Modify: `docs/TODO-persona-sati-host-bootstrap.md` — update the tracker from "three-call session-start" to "`bootstrap_session()` plus host bootstrap."
 - Create: `docs/clients/persona-sati-host-bootstrap.md` — canonical pasteable host instruction snippet.
@@ -40,7 +40,7 @@ The result is that the model can have body and mind tools available while missin
 - Modify: `README.md` — add a short "Host bootstrap" section.
 - Modify: `scripts/setup.sh` — print a final action block telling operators where to install the snippet.
 
-### Persona-sati repo: `/Volumes/Development HD/persona-sati`
+### Persona-sati repo: `/path/to/persona-sati`
 
 - Create: `src/persona_mcp/active/bootstrap.py` — pure function that builds the bootstrap packet.
 - Modify: `src/persona_mcp/server.py` — register `bootstrap_session()` as an MCP tool.
@@ -76,7 +76,7 @@ Safe order:
 ### Task 1: Write entraclaw doctrine tests first
 
 **Files:**
-- Modify: `/Volumes/Development HD/entraclaw-identity-research/tests/test_prompt_doctrine.py`
+- Modify: `/path/to/entraclaw-identity-research/tests/test_prompt_doctrine.py`
 
 - [ ] **Step 1: Add bootstrap doctrine files and markers**
 
@@ -124,7 +124,7 @@ def test_host_bootstrap_doctrine_mentions_required_mind_protocol(relpath: str) -
 Run:
 
 ```bash
-cd "/Volumes/Development HD/entraclaw-identity-research"
+cd "/path/to/entraclaw-identity-research"
 pytest tests/test_prompt_doctrine.py::test_host_bootstrap_doctrine_mentions_required_mind_protocol -v
 ```
 
@@ -133,14 +133,14 @@ Expected: FAIL because `docs/clients/persona-sati-host-bootstrap.md` does not ex
 ### Task 2: Create the canonical host bootstrap snippet
 
 **Files:**
-- Create: `/Volumes/Development HD/entraclaw-identity-research/docs/clients/persona-sati-host-bootstrap.md`
+- Create: `/path/to/entraclaw-identity-research/docs/clients/persona-sati-host-bootstrap.md`
 
 - [ ] **Step 1: Create the clients docs directory if missing**
 
 Run:
 
 ```bash
-cd "/Volumes/Development HD/entraclaw-identity-research"
+cd "/path/to/entraclaw-identity-research"
 mkdir -p docs/clients
 ```
 
@@ -205,7 +205,7 @@ body safety.
 Run:
 
 ```bash
-cd "/Volumes/Development HD/entraclaw-identity-research"
+cd "/path/to/entraclaw-identity-research"
 pytest tests/test_prompt_doctrine.py::test_host_bootstrap_doctrine_mentions_required_mind_protocol -v
 ```
 
@@ -214,9 +214,9 @@ Expected: still FAIL until host files are updated.
 ### Task 3: Update entraclaw host-visible instruction files
 
 **Files:**
-- Modify: `/Volumes/Development HD/entraclaw-identity-research/CLAUDE.md`
-- Modify: `/Volumes/Development HD/entraclaw-identity-research/AGENTS.md`
-- Modify: `/Volumes/Development HD/entraclaw-identity-research/.github/copilot-instructions.md`
+- Modify: `/path/to/entraclaw-identity-research/CLAUDE.md`
+- Modify: `/path/to/entraclaw-identity-research/AGENTS.md`
+- Modify: `/path/to/entraclaw-identity-research/.github/copilot-instructions.md`
 
 - [ ] **Step 1: Replace the CLAUDE.md session-start section**
 
@@ -311,7 +311,7 @@ entraclaw body tools, but it does not cover session bootstrap,
 Run:
 
 ```bash
-cd "/Volumes/Development HD/entraclaw-identity-research"
+cd "/path/to/entraclaw-identity-research"
 pytest tests/test_prompt_doctrine.py -v
 ```
 
@@ -320,11 +320,11 @@ Expected: PASS.
 ### Task 4: Update entraclaw setup/docs handoff
 
 **Files:**
-- Modify: `/Volumes/Development HD/entraclaw-identity-research/README.md`
-- Modify: `/Volumes/Development HD/entraclaw-identity-research/scripts/setup.sh`
-- Modify: `/Volumes/Development HD/entraclaw-identity-research/scripts/hooks/require_body_prompt.py`
-- Modify: `/Volumes/Development HD/entraclaw-identity-research/tests/hooks/test_require_body_prompt.py`
-- Modify: `/Volumes/Development HD/entraclaw-identity-research/docs/TODO-persona-sati-host-bootstrap.md`
+- Modify: `/path/to/entraclaw-identity-research/README.md`
+- Modify: `/path/to/entraclaw-identity-research/scripts/setup.sh`
+- Modify: `/path/to/entraclaw-identity-research/scripts/hooks/require_body_prompt.py`
+- Modify: `/path/to/entraclaw-identity-research/tests/hooks/test_require_body_prompt.py`
+- Modify: `/path/to/entraclaw-identity-research/docs/TODO-persona-sati-host-bootstrap.md`
 
 - [ ] **Step 1: Add README host bootstrap section**
 
@@ -392,7 +392,7 @@ In `docs/TODO-persona-sati-host-bootstrap.md`, update the recommendation so it s
 Run:
 
 ```bash
-cd "/Volumes/Development HD/entraclaw-identity-research"
+cd "/path/to/entraclaw-identity-research"
 pytest tests/test_prompt_doctrine.py tests/hooks/test_require_body_prompt.py -v
 ruff check tests/test_prompt_doctrine.py tests/hooks/test_require_body_prompt.py scripts/hooks/require_body_prompt.py
 ```
@@ -404,7 +404,7 @@ Expected: PASS.
 Run:
 
 ```bash
-cd "/Volumes/Development HD/entraclaw-identity-research"
+cd "/path/to/entraclaw-identity-research"
 git add docs/clients/persona-sati-host-bootstrap.md \
   docs/TODO-persona-sati-host-bootstrap.md \
   README.md \
@@ -426,8 +426,8 @@ git commit -m "docs: add persona-sati host bootstrap doctrine" \
 ### Task 5: Write pure bootstrap packet tests
 
 **Files:**
-- Create: `/Volumes/Development HD/persona-sati/tests/active/test_bootstrap.py`
-- Modify: `/Volumes/Development HD/persona-sati/tests/test_server.py`
+- Create: `/path/to/persona-sati/tests/active/test_bootstrap.py`
+- Modify: `/path/to/persona-sati/tests/test_server.py`
 
 - [ ] **Step 1: Create the failing test file**
 
@@ -528,7 +528,7 @@ def test_memory_catalog_omits_filenames_and_reports_category_counts(tmp_path: Pa
 Run:
 
 ```bash
-cd "/Volumes/Development HD/persona-sati"
+cd "/path/to/persona-sati"
 pytest tests/active/test_bootstrap.py -v
 ```
 
@@ -537,7 +537,7 @@ Expected: FAIL because `persona_mcp.active.bootstrap` does not exist.
 ### Task 6: Implement the pure bootstrap packet builder
 
 **Files:**
-- Create: `/Volumes/Development HD/persona-sati/src/persona_mcp/active/bootstrap.py`
+- Create: `/path/to/persona-sati/src/persona_mcp/active/bootstrap.py`
 
 - [ ] **Step 1: Create `bootstrap.py`**
 
@@ -656,7 +656,7 @@ def build_bootstrap_session(
 Run:
 
 ```bash
-cd "/Volumes/Development HD/persona-sati"
+cd "/path/to/persona-sati"
 pytest tests/active/test_bootstrap.py -v
 ```
 
@@ -665,8 +665,8 @@ Expected: PASS.
 ### Task 6b: Define bootstrap packet schema contract
 
 **Files:**
-- Create: `/Volumes/Development HD/persona-sati/docs/reference/bootstrap-session-schema.md`
-- Modify: `/Volumes/Development HD/persona-sati/tests/active/test_bootstrap.py`
+- Create: `/path/to/persona-sati/docs/reference/bootstrap-session-schema.md`
+- Modify: `/path/to/persona-sati/tests/active/test_bootstrap.py`
 
 - [ ] **Step 1: Document schema v1**
 
@@ -701,7 +701,7 @@ fields are permitted by the docs contract rather than rejected in code.
 Run:
 
 ```bash
-cd "/Volumes/Development HD/persona-sati"
+cd "/path/to/persona-sati"
 pytest tests/active/test_bootstrap.py -v
 ```
 
@@ -710,8 +710,8 @@ Expected: PASS.
 ### Task 7: Register `bootstrap_session()` as an MCP tool
 
 **Files:**
-- Modify: `/Volumes/Development HD/persona-sati/src/persona_mcp/server.py`
-- Modify: `/Volumes/Development HD/persona-sati/tests/test_server.py`
+- Modify: `/path/to/persona-sati/src/persona_mcp/server.py`
+- Modify: `/path/to/persona-sati/tests/test_server.py`
 
 - [ ] **Step 1: Add failing FastMCP test**
 
@@ -768,7 +768,7 @@ async def test_get_system_prompt_and_bootstrap_share_broken_prompt_error(memory_
 Run:
 
 ```bash
-cd "/Volumes/Development HD/persona-sati"
+cd "/path/to/persona-sati"
 pytest tests/test_server.py::test_bootstrap_session_tool_returns_operating_packet -v
 ```
 
@@ -841,7 +841,7 @@ Add a server test that asserts `packet["available_mind_tools"]` matches
 Run:
 
 ```bash
-cd "/Volumes/Development HD/persona-sati"
+cd "/path/to/persona-sati"
 pytest tests/test_server.py::test_bootstrap_session_tool_returns_operating_packet -v
 ```
 
@@ -850,11 +850,11 @@ Expected: PASS.
 ### Task 8: Update persona-sati prompt and host docs
 
 **Files:**
-- Modify: `/Volumes/Development HD/persona-sati/prompts/hemispheres/cognition-protocol.md`
-- Modify: `/Volumes/Development HD/persona-sati/CLAUDE.md`
-- Modify: `/Volumes/Development HD/persona-sati/AGENTS.md`
-- Modify: `/Volumes/Development HD/persona-sati/README.md`
-- Modify: `/Volumes/Development HD/persona-sati/scripts/setup.sh`
+- Modify: `/path/to/persona-sati/prompts/hemispheres/cognition-protocol.md`
+- Modify: `/path/to/persona-sati/CLAUDE.md`
+- Modify: `/path/to/persona-sati/AGENTS.md`
+- Modify: `/path/to/persona-sati/README.md`
+- Modify: `/path/to/persona-sati/scripts/setup.sh`
 
 - [ ] **Step 1: Update cognition protocol startup wording**
 
@@ -924,7 +924,7 @@ snippet into the host-global instruction file, and ensure new sessions call
 Run:
 
 ```bash
-cd "/Volumes/Development HD/persona-sati"
+cd "/path/to/persona-sati"
 pytest tests/test_server.py tests/active/test_bootstrap.py tests/test_prompt_loader.py -v
 ruff check src/persona_mcp/active/bootstrap.py src/persona_mcp/server.py tests/active/test_bootstrap.py tests/test_server.py
 ```
@@ -936,7 +936,7 @@ Expected: PASS.
 Run:
 
 ```bash
-cd "/Volumes/Development HD/persona-sati"
+cd "/path/to/persona-sati"
 git add src/persona_mcp/active/bootstrap.py \
   src/persona_mcp/server.py \
   tests/active/test_bootstrap.py \
@@ -965,11 +965,11 @@ git commit -m "feat: add persona-sati bootstrap_session tool" \
 Run:
 
 ```bash
-cd "/Volumes/Development HD/persona-sati"
+cd "/path/to/persona-sati"
 source .venv/bin/activate
 pip install -e ".[dev,prediction,snn,blob,provisioning]"
 
-cd "/Volumes/Development HD/entraclaw-identity-research"
+cd "/path/to/entraclaw-identity-research"
 source .venv/bin/activate
 pip install -e ".[dev]"
 ```
@@ -979,10 +979,10 @@ pip install -e ".[dev]"
 Run:
 
 ```bash
-cd "/Volumes/Development HD/persona-sati"
+cd "/path/to/persona-sati"
 pytest tests/test_server.py tests/active/test_bootstrap.py -v && ruff check .
 
-cd "/Volumes/Development HD/entraclaw-identity-research"
+cd "/path/to/entraclaw-identity-research"
 pytest tests/test_prompt_doctrine.py tests/hooks/test_inject_body_prompt.py -v && ruff check .
 ```
 

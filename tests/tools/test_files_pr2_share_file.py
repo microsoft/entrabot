@@ -137,7 +137,7 @@ class TestRequesterMustBeSponsor:
         """Requester types home address; sponsor record carries only the EXT UPN."""
         msa_sponsor = AgentIdentitySponsor(
             user_id="msa-uid",
-            user_principal_name="brandwe_outlook.com#EXT#@brandwedir.onmicrosoft.com",
+            user_principal_name="alice_example.com#EXT#@fabrikam.onmicrosoft.com",
             mail=None,
         )
         with (
@@ -146,7 +146,7 @@ class TestRequesterMustBeSponsor:
         ):
             mock_records.return_value = [msa_sponsor]
             mock_members.return_value = [
-                {"user_id": "msa-uid", "email": "brandwe@outlook.com"}
+                {"user_id": "msa-uid", "email": "alice@example.com"}
             ]
             ctx, _ = _patch_graph_invite_ok()
             try:
@@ -155,7 +155,7 @@ class TestRequesterMustBeSponsor:
                 result = await share_file(
                     file_ref=_file_ref(),
                     recipient_email="anyone@example.com",
-                    requester_email="brandwe@outlook.com",
+                    requester_email="alice@example.com",
                     chat_id="19:abcd@thread.v2",
                     role="read",
                     token="t",
@@ -343,7 +343,7 @@ class TestRoleAndDenylist:
             try:
                 await share_file(
                     file_ref=_file_ref(),
-                    recipient_email="user@werner.ac",
+                    recipient_email="user@contoso.com",
                     requester_email="sponsor@contoso.com",
                     chat_id="19:abcd@thread.v2",
                     role="write",

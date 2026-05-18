@@ -1,7 +1,7 @@
 # Entraclaw Identity Research — Engineering Summary
 
 **Date:** April 29, 2026
-**Team:** Brandon Werner
+**Team:** the user
 **Status:** v1 released. Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **791 tests** across the suite. MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat shipped. **Mind-body split complete** — body-first prompt architecture loads locally, persona-sati MCP wired for personality/memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped; blob-hosted operational storage is opt-in via `setup.sh --use-cloud-memory`. Efferent-copy middleware shipped and immediately hot-fixed for self-spawn cascade (PRs #35/#36), then hardened again against wrapper indirection (PR #41), and is now opt-in (`EFFERENT_COPY_ENABLE=1`) so normal MCP runs do not mirror every tool call. Leader/slave gating ripped out per "one stdio client per process" reality. **Windows port (PR #58) acceptance-tested on ARM64 Windows 11 VM.** Full CNG signing via TPM-backed cert, three-hop flow live against Entra, Copilot CLI MCP registration, Teams DM round-trip confirmed. `send_teams_message` auto-wait merged — non-Claude-Code hosts block inline until sponsor replies (deterministic, not model-dependent). See Learning #54/#55.
 
 ---
@@ -61,7 +61,7 @@ gaps" for the gate-by-gate registry, including this gap.
 
 ### Persona-sati 12h MCP refresh bug — PR #47 paused at architectural constraint
 
-**Status:** Open. Draft PR `brandwe/persona-sati#47` (branch `feature/entra-delegated-oauth`). Worktree preserved at `/Volumes/Development HD/persona-sati/.worktrees/entra-oauth`.
+**Status:** Open. Draft PR `persona-sati#47` (branch `feature/entra-delegated-oauth`).
 
 **Impact:** Every ~12 hours, Claude Code's cached MCP bearer expires and persona-sati tools start returning Zod schema errors until the user restarts the MCP session. Affects every entraclaw session that connects to persona-sati after the 12h boundary.
 
@@ -73,9 +73,9 @@ gaps" for the gate-by-gate registry, including this gap.
 - Persona-sati's own AS metadata is now MCP-schema-compliant with safe stubs pointing at the `/authorize` tombstone.
 - `provision_identity.py` updated to declare future fresh-tenant scopes as `User`-consentable.
 
-**What's blocked:** the live OAuth flow at the 12h boundary. Microsoft's **Agent Blueprint** app type — which the Persona-Sati Blueprint (`55555555-5555-5555-5555-555555555555`) uses — cannot have public-client redirect URIs and cannot be flipped to fallback-public-client mode. So the Blueprint cannot be the `client_id` in a browser-based PKCE auth-code flow against Entra. Without the OAuth client role, Claude Code's MCP client passes Zod validation but then fails at `/authorize` with `AADSTS70001: Application not found`. **User-visible behavior at 12h is unchanged** (just a different error string).
+**What's blocked:** the live OAuth flow at the 12h boundary. Microsoft's **Agent Blueprint** app type — which the Persona-Sati Blueprint (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) uses — cannot have public-client redirect URIs and cannot be flipped to fallback-public-client mode. So the Blueprint cannot be the `client_id` in a browser-based PKCE auth-code flow against Entra. Without the OAuth client role, Claude Code's MCP client passes Zod validation but then fails at `/authorize` with `AADSTS70001: Application not found`. **User-visible behavior at 12h is unchanged** (just a different error string).
 
-**Live tenant state:** REVERTED to original by `az rest --method PATCH` after testing the constraint. werner.ac's `access` scope is back to `type: Admin`, redirect URI lists empty. No behavioral change for any existing flow (cert-based three-hop, headersHelper, OBO).
+**Live tenant state:** REVERTED to original by `az rest --method PATCH` after testing the constraint. yourtenant.onmicrosoft.com's `access` scope is back to `type: Admin`, redirect URI lists empty. No behavioral change for any existing flow (cert-based three-hop, headersHelper, OBO).
 
 **Possible resolutions:**
 
@@ -124,7 +124,7 @@ Decision pending.
 
 4. **Debug code crash** — Adding `os.path.expanduser()` without importing `os` at function scope crashed the MCP server silently (empty error on every tool call). Copilot CLI swallows MCP server stderr, making diagnosis difficult. Fixed by removing debug code; file-based logging on Windows MCP is fragile.
 
-5. **Git symlink skills on Windows** — 36 `.claude/skills/*/SKILL.md` files were git symlinks pointing to a Mac-only path (`/Volumes/Development HD/...`). Windows checks these out as plain text files containing the path (since `core.symlinks=false`). Deleted locally for clean demo — not a code fix, just a Windows git limitation.
+5. **Git symlink skills on Windows** — 36 `.claude/skills/*/SKILL.md` files were git symlinks pointing to a Mac-only path (`/path/to/...`). Windows checks these out as plain text files containing the path (since `core.symlinks=false`). Deleted locally for clean demo — not a code fix, just a Windows git limitation.
 
 ### Platform learnings (Windows-specific)
 
@@ -184,7 +184,7 @@ Three PRs merged in sequence; one deep debugging session; one follow-up the next
 
 **Rationale for rip-out.** Every MCP client that spawns entraclaw via stdio gets its own process and its own poll loops. There is no multi-client sharing at runtime, so the leader/slave gate was fighting a problem that doesn't exist in the stdio model. The gate was also the failure mode that turned the efferent-copy cascade from "wasteful" into "silent DM drop." Channel pushes now fire unconditionally; clients that don't handle `notifications/claude/channel` drop them silently per the MCP spec. Net diff: **+189 / −1007**, 618 tests passing, ruff clean.
 
-**Post-#36 behavior verified.** After PR #36 merged and `entraclaw-mcp` was restarted, the log shows **one** `Starting EntraClaw MCP server` per reconnect (previously 30+/minute), zero cascade spawns, and successful push lines for inbound DMs (`Pushed Teams message from Brandon Werner: <p>Hi Hi Hi</p>` appeared 4 seconds after the DM was sent).
+**Post-#36 behavior verified.** After PR #36 merged and `entraclaw-mcp` was restarted, the log shows **one** `Starting EntraClaw MCP server` per reconnect (previously 30+/minute), zero cascade spawns, and successful push lines for inbound DMs (`Pushed Teams message from the user: <p>Hi Hi Hi</p>` appeared 4 seconds after the DM was sent).
 
 **Channel-render symptom resolved Apr 23 — launch-flag typo, not a Claude Code regression.** The symptom was real (no `notifications/claude/channel` entries in session transcript, zero LLM-visible DMs) but the root cause turned out to be the Claude CLI launch command: `-dangerously-load-development-channels` (single dash) instead of `--dangerously-load-development-channels` (double). In single-dash mode Claude treats `server:entraclaw` as prompt text instead of the dev-channel allowlist argument. Relaunching with the correct double-dash form immediately restored channel delivery on both the rollback branch and `main`. Server-side investigation (cascade fix, leader-gate rip, gate-function byte-diff, capability-declaration audit) was real work and correct — just not the blocker for this particular symptom. **See Learning #39 for the full post-mortem and prevention guidance.**
 
@@ -216,7 +216,7 @@ Twelve PRs merged across two days (#17–#28). Tooling and body-prompt disciplin
 - **PR #28** — Second attempt. PR #27 moved the gate from boot to push-time, but `_push_channel_notification` is called from the background poll task, which runs in an asyncio context **detached from any MCP request** — so `_current_host()` STILL returned `"unknown"` and the push gate silently dropped every inbound message. Fix: cache `clientInfo.name` in `_state["cached_host"]` at every tool invocation; `_is_leader_host()` prefers live context but falls back to the cached value. Background tasks now see the right answer after at least one leader-host tool call.
 
 **The footgun that hid the fix for hours (Learning #36)**
-Even with PRs #27 and #28 correctly merged to main, production stayed broken because the MCP server's Python process was importing `entraclaw` from a **sub-agent worktree** (`.claude/worktrees/agent-*/src/entraclaw/...`), not from the main tree. Worktrees don't have `.env`, so `_load_dotenv()` resolved `Path(__file__).resolve().parents[2] / ".env"` to a path inside the worktree with no `.env`, `ENTRACLAW_BLUEPRINT_APP_ID` never loaded, auth never initialized, every Graph call 401'd, and the poll loop's `except Exception` swallowed the error with no visible log. Root cause: several sub-agents ran `pip install -e .` from inside their worktree using the parent venv's `pip`, which silently re-points the parent venv's editable-install target at the worktree source tree. Fix: `cd /Volumes/Development\ HD/entraclaw-identity-research && .venv/bin/pip install -e . --no-deps` to repoint. Prevention: any sub-agent dispatch that expects to install must create its own venv first. **See Learning #36 for the full writeup.**
+Even with PRs #27 and #28 correctly merged to main, production stayed broken because the MCP server's Python process was importing `entraclaw` from a **sub-agent worktree** (`.claude/worktrees/agent-*/src/entraclaw/...`), not from the main tree. Worktrees don't have `.env`, so `_load_dotenv()` resolved `Path(__file__).resolve().parents[2] / ".env"` to a path inside the worktree with no `.env`, `ENTRACLAW_BLUEPRINT_APP_ID` never loaded, auth never initialized, every Graph call 401'd, and the poll loop's `except Exception` swallowed the error with no visible log. Root cause: several sub-agents ran `pip install -e .` from inside their worktree using the parent venv's `pip`, which silently re-points the parent venv's editable-install target at the worktree source tree. Fix: `cd /path/to/entraclaw-identity-research && .venv/bin/pip install -e . --no-deps` to repoint. Prevention: any sub-agent dispatch that expects to install must create its own venv first. **See Learning #36 for the full writeup.**
 
 **Carry-forward TODO (prevention)**
 - Add a pre-boot assertion in `mcp_server.py::_load_dotenv` (or equivalent) that logs a fatal warning when the resolved `.env` path contains `.claude/worktrees/` — fail loud instead of silent-skip auth.
@@ -369,7 +369,7 @@ Invariant: `pytest -v && ruff check .` passes before every commit.
 
 ### What's Not Started / Deferred
 
-- Azure Bot resource registration on werner.ac (needed for live bot test)
+- Azure Bot resource registration on yourtenant.onmicrosoft.com (needed for live bot test)
 - Windows VM provisioning and testing (rescheduled)
 - AppContainer sandbox spike — kernel-level agent isolation on Windows
 - Delta query optimization — replace timestamp polling with `/messages/delta` if rate-limit becomes an issue
@@ -434,7 +434,7 @@ Blueprint (client_credentials)
 6. ~~Bot Gateway~~ — ✅ DONE. M365 Agents SDK bot server + JSONL IPC + tunnel manager. Coexists via `ENTRACLAW_MODE=bot`.
 7. ~~Body-first prompt architecture~~ — ✅ DONE. `@include` expansion, non-overridable body rules, persona layered on top (PRs #14, #15).
 8. ~~Persona-sati MCP wiring~~ — ✅ DONE. `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` consumed at boot.
-9. **Bot Gateway live test** — Register Azure Bot on werner.ac, sideload Teams app, verify end-to-end with Dev Tunnel.
+9. **Bot Gateway live test** — Register Azure Bot on yourtenant.onmicrosoft.com, sideload Teams app, verify end-to-end with Dev Tunnel.
 10. **Entra sign-in log verification** — confirm `idtyp=user` and agent attribution in tenant audit logs.
 11. **Windows VM provisioning** — verify cross-platform `setup.sh`.
 12. **AppContainer sandbox spike** — kernel-level agent isolation on Windows.

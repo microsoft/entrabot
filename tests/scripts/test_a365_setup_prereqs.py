@@ -42,7 +42,7 @@ def test_unix_setup_can_install_a365_cli_when_requested() -> None:
 def test_unix_setup_can_create_new_chain_with_explicit_agent_user_upn() -> None:
     script = read_script("scripts/setup.sh")
 
-    assert "--new --agent-user-upn=entraclaw-agent@werner.ac" in script
+    assert "--new --agent-user-upn=entraclaw-agent@yourtenant.onmicrosoft.com" in script
     new_branch = script[script.index('if [ "$NEW_CHAIN" = true ]') :]
     assert 'if [ -n "$AGENT_USER_UPN" ]; then' in new_branch
     assert 'export ENTRACLAW_AGENT_USER_UPN="$AGENT_USER_UPN"' in new_branch

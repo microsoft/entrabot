@@ -1,7 +1,7 @@
 # Design: Persona-Sati Integration
 
 **Date:** 2026-04-18
-**Author:** Brandon Werner, EntraClaw Agent
+**Author:** the user, EntraClaw Agent
 **Status:** Proposed
 **Implements:** Separation of mind (persona-sati) from body (entraclaw Teams MCP)
 
@@ -273,7 +273,7 @@ Add the dual-server configuration from Section 4.4. This goes in the project roo
 
 ### Step 5: Test
 
-1. Start persona-sati locally: `cd /Volumes/Development\ HD/persona-sati && .venv/bin/persona-sati --transport sse --port 8100`
+1. Start persona-sati locally: `cd /path/to/persona-sati && .venv/bin/persona-sati --transport sse --port 8100`
 2. Start a Claude Code session in the entraclaw directory
 3. Verify: `get_system_prompt()` is available from persona-sati
 4. Verify: `send_teams_message()` is available from entraclaw

@@ -13,8 +13,8 @@ anything else. It describes the problem, the fix, the migration
 requirement, and the verification checklist. Do not deviate from it.
 
 Reference implementation that has already shipped this fix:
-`/Volumes/Development HD/persona-sati/scripts/entra_provisioning.py`
-and `/Volumes/Development HD/persona-sati/scripts/provisioner-token.py`.
+`/path/to/persona-sati/scripts/entra_provisioning.py`
+and `/path/to/persona-sati/scripts/provisioner-token.py`.
 
 Read those two files. The shape is intentionally terse. Copy the same
 pattern into `entraclaw-identity-research/scripts/entra_provisioning.py`

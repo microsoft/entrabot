@@ -2817,7 +2817,7 @@ async def watch_teams_replies(
         )
 
     # Must match the displayName that Graph API returns in message.from.user.displayName
-    # NOT the UPN — Graph returns "EntraClaw Agent", not "entraclaw-agent@werner.ac"
+    # NOT the UPN — Graph returns "EntraClaw Agent", not the agent's UPN.
     agent_display_name = "EntraClaw Agent"
 
     # Bootstrap cursor on first call: fetch latest messages, set cursor to newest

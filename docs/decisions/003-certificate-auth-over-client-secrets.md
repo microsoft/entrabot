@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-06
 **Status:** Proposed
-**Deciders:** Brandon Werner
+**Deciders:** the user
 **Context:** Eliminating client secrets from the device-local agent authentication flow
 
 ## Context

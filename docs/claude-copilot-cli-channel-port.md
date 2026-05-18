@@ -219,7 +219,7 @@ sequenceDiagram
 - `.mcp.json.example`: +10 lines.
 - Tests: ~150 lines.
 
-Total: ~410 lines, no dependencies added. Two days of work including the body-prompt review with Brandon.
+Total: ~410 lines, no dependencies added. Two days of work including the body-prompt review with the user.
 
 ## Open questions for Brandon
 
@@ -264,8 +264,8 @@ Total: ~410 lines, no dependencies added. Two days of work including the body-pr
 - [Microsoft Java DevBlog — Unlocking MCP in JetBrains: How Copilot Uses Sampling, Prompts, Resources, and Elicitation](https://devblogs.microsoft.com/java/unlocking-mcp-in-jetbrains-how-copilot-uses-sampling-prompts-resources-and-elicitation/)
 - [Model Context Protocol — modelcontextprotocol.io](https://modelcontextprotocol.io/)
 - Repo files read:
-  - `/Volumes/Development HD/entraclaw-identity-research/src/entraclaw/mcp_server.py` (channel push, write-stream capture, `clientInfo` host detection, background pollers, FastMCP boot)
-  - `/Volumes/Development HD/entraclaw-identity-research/src/entraclaw/tools/teams.py`
-  - `/Volumes/Development HD/entraclaw-identity-research/prompts/anatomy/channel-discipline.md`
-  - `/Volumes/Development HD/entraclaw-identity-research/.mcp.json.example`
-  - `/Volumes/Development HD/entraclaw-identity-research/pyproject.toml`
+  - `/path/to/entraclaw-identity-research/src/entraclaw/mcp_server.py` (channel push, write-stream capture, `clientInfo` host detection, background pollers, FastMCP boot)
+  - `/path/to/entraclaw-identity-research/src/entraclaw/tools/teams.py`
+  - `/path/to/entraclaw-identity-research/prompts/anatomy/channel-discipline.md`
+  - `/path/to/entraclaw-identity-research/.mcp.json.example`
+  - `/path/to/entraclaw-identity-research/pyproject.toml`

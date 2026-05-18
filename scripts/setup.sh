@@ -141,12 +141,12 @@ if [ "$SHOW_HELP" = true ]; then
     echo "  --agent-user-upn=UPN   Explicit Agent User UPN. With --use-blueprint,"
     echo "                         selects an existing Agent User to reuse; with"
     echo "                         --new, creates exactly that UPN, e.g."
-    echo "                         entraclaw-agent-sati-agent@werner.ac."
+    echo "                         entraclaw-agent-sati-agent@yourtenant.onmicrosoft.com."
     echo "  --switch-user          Sign in as a different user before setup."
     echo "                         The new user becomes the agent's owner and sponsor."
     echo "  --teams-user=EMAIL     Set a different user as the Teams chat recipient."
     echo "                         The az CLI user remains the admin/provisioner."
-    echo "                         e.g., --teams-user=brandon@werner.ac"
+    echo "                         e.g., --teams-user=user@yourtenant.onmicrosoft.com"
     echo "  --use-cloud-memory     Opt in to Azure Blob Storage for operational data"
     echo "                         (interactions log, watched chats, email cursor)."
     echo "                         Provisions a resource group, storage account, and"
@@ -728,7 +728,7 @@ print('  Cleared identity state (kept provisioner app)')
 "
     fi
     # Resolve UPN — explicit UPN wins; otherwise suffix comes from flag or prompt.
-    # Example: ./scripts/setup.sh --new --agent-user-upn=entraclaw-agent@werner.ac
+    # Example: ./scripts/setup.sh --new --agent-user-upn=entraclaw-agent@yourtenant.onmicrosoft.com
     if [ -n "$AGENT_USER_UPN" ]; then
         export ENTRACLAW_AGENT_USER_UPN="$AGENT_USER_UPN"
         echo -e "  ${GREEN}--new: will create explicit Agent User UPN '${AGENT_USER_UPN}'${NC}"

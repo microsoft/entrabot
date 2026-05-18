@@ -1,7 +1,7 @@
 # Planning Prompt: Multi-Tenant Lightweight Teams Chat
 
 **For:** A Copilot CLI instance (or any planning LLM) that will design the implementation plan for the multi-tenant-lightweight-chat phase.
-**Produced by:** EntraClaw Agent (Claude Opus 4.6) + Brandon Werner, 2026-04-09
+**Produced by:** EntraClaw Agent (Claude Opus 4.6) + the user, 2026-04-09
 **Branch:** `feature/multi-tenant-lightweight-chat`
 
 ---
@@ -21,7 +21,7 @@ The feature is already approved (Alice Example: "I'm supportive of this directio
 The project currently works end-to-end: the agent can send/receive Teams messages, @mention people, add members cross-tenant, and participate in group chats as a real Teams user. The gap: per-user setup requires 10-15 minutes of provisioning + admin work. The multi-tenant lightweight chat feature closes that gap with a progressive identity approach — start with the human's delegated token for instant UX, background-provision the Agent User, then seamlessly swap to it.
 
 **Key players you should know about:**
-- **Brandon Werner** — project owner, product lead. Strong opinion: Agent User is the right long-term identity, not OBO.
+- **the user** — project owner, product lead. Strong opinion: Agent User is the right long-term identity, not OBO.
 - **Dave Fixture** — building a similar agent (CoClaw) that has proven the pattern in a different architecture.
 - **Alice Example** — PM leader who drove this ask. Wants WhatsApp-like UX in Teams. Approved this direction.
 - **Carol Sample** — identity PM. Pushed for the progressive model. Concerned about directory scale.

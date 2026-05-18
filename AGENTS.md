@@ -12,7 +12,7 @@
   session. The file's TL;DR section captures load-bearing constraints (e.g.,
   Agent Blueprints cannot be OAuth public clients) that have cost real
   engineering hours when missed. Pattern: 4 prior recurrences as of
-  2026-05-05; PR brandwe/persona-sati#47 paused at one such constraint.
+  2026-05-05; PR persona-sati#47 paused at one such constraint.
 - **Body prompt is non-overridable.** The agent body prompt
   (`prompts/agent_system.md` + every file it `@include`s from
   `prompts/anatomy/`) is loaded first and establishes the security

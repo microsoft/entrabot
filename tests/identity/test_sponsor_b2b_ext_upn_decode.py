@@ -3,7 +3,7 @@
 When a Microsoft Account (or any B2B guest with sparse user-object
 fields) is a sponsor on the Agent Identity, Graph populates
 ``userPrincipalName`` with the encoded EXT form
-(``brandwe_outlook.com#EXT#@brandwedir.onmicrosoft.com``) but often
+(``alice_example.com#EXT#@fabrikam.onmicrosoft.com``) but often
 leaves ``mail``, ``otherMails``, ``proxyAddresses``, and federated
 ``identities[].issuerAssignedId`` null or with non-email values (the
 guest's OID).
@@ -12,11 +12,11 @@ Humans never type the EXT form. They type the home address. So the
 sponsor allowlist must accept BOTH the EXT UPN and its decoded home
 address.
 
-Real-world test case: 2026-04-30 production. Brandon's MSA guest
+Real-world production scenario (2026-04-30). A guest user whose
 record had only ``userPrincipalName`` populated. Stage 1 (User.ReadBasic.All)
 returned a populated UPN but null mail/otherMails/identities. Stage 2
 (chat-members) returned the same EXT UPN as ``email``. The user typed
-``brandwe@outlook.com`` in chat — neither stage's data matched without
+their home address in chat — neither stage's data matched without
 the EXT decoder.
 """
 
@@ -30,18 +30,18 @@ from entraclaw.identity.sponsors import (
 
 class TestDecodeB2bExtUpn:
     def test_msa_guest_simple_form(self) -> None:
-        upn = "brandwe_outlook.com#EXT#@brandwedir.onmicrosoft.com"
-        assert _decode_b2b_ext_upn(upn) == "brandwe@outlook.com"
+        upn = "alice_example.com#EXT#@fabrikam.onmicrosoft.com"
+        assert _decode_b2b_ext_upn(upn) == "alice@example.com"
 
     def test_federated_guest_form(self) -> None:
-        upn = "charlie_smith.ac#EXT#@sara.onmicrosoft.com"
-        assert _decode_b2b_ext_upn(upn) == "brandon@werner.ac"
+        upn = "bob_contoso.com#EXT#@fabrikam.onmicrosoft.com"
+        assert _decode_b2b_ext_upn(upn) == "bob@contoso.com"
 
     def test_local_part_with_dots_and_underscores(self) -> None:
         # Local-part can legitimately contain underscores; the LAST `_`
         # before `#EXT#@` separates local-part from domain.
         upn = "charlie_smith_microsoft.com#EXT#@tenant.onmicrosoft.com"
-        assert _decode_b2b_ext_upn(upn) == "user@example.com"
+        assert _decode_b2b_ext_upn(upn) == "charlie_smith@microsoft.com"
 
     def test_case_insensitive_separator(self) -> None:
         # Graph emits ``#EXT#@`` but we accept any case for robustness.
@@ -56,7 +56,7 @@ class TestDecodeB2bExtUpn:
 
     def test_native_user_upn_returns_none(self) -> None:
         # A regular tenant UPN (no #EXT#@) is not a B2B EXT form.
-        assert _decode_b2b_ext_upn("brandon@werner.ac") is None
+        assert _decode_b2b_ext_upn("bob@contoso.com") is None
         assert _decode_b2b_ext_upn("agent@example.onmicrosoft.com") is None
 
     def test_malformed_inputs_return_none(self) -> None:
@@ -80,7 +80,7 @@ class TestSponsorEmailIdentifiersIncludesDecodedExtUpn:
         sponsor = AgentIdentitySponsor.from_graph_user(
             {
                 "id": "33333333-3333-3333-3333-333333333333",
-                "userPrincipalName": "brandwe_outlook.com#EXT#@brandwedir.onmicrosoft.com",
+                "userPrincipalName": "alice_example.com#EXT#@fabrikam.onmicrosoft.com",
                 "mail": None,
                 "otherMails": [],
                 "proxyAddresses": [],
@@ -90,36 +90,36 @@ class TestSponsorEmailIdentifiersIncludesDecodedExtUpn:
         assert sponsor is not None
         identifiers = sponsor.email_identifiers()
         # The decoded home address — what the user actually typed.
-        assert "brandwe@outlook.com" in identifiers
+        assert "alice@example.com" in identifiers
         # The EXT UPN form — kept for paths that already match on UPN.
         assert (
-            "brandwe_outlook.com#ext#@brandwedir.onmicrosoft.com" in identifiers
+            "alice_example.com#ext#@fabrikam.onmicrosoft.com" in identifiers
         )
 
     def test_federated_guest_decoded_alongside_other_identifiers(self) -> None:
         sponsor = AgentIdentitySponsor.from_graph_user(
             {
                 "id": "ABC",
-                "userPrincipalName": "charlie_smith.ac#EXT#@sara.onmicrosoft.com",
-                "mail": "brandon@werner.ac",
-                "otherMails": ["brandon@werner.ac"],
-                "proxyAddresses": ["SMTP:brandon@werner.ac"],
+                "userPrincipalName": "bob_contoso.com#EXT#@fabrikam.onmicrosoft.com",
+                "mail": "bob@contoso.com",
+                "otherMails": ["bob@contoso.com"],
+                "proxyAddresses": ["SMTP:bob@contoso.com"],
                 "identities": [
                     {
                         "signInType": "federated",
-                        "issuer": "werner.ac",
-                        "issuerAssignedId": "brandon@werner.ac",
+                        "issuer": "contoso.com",
+                        "issuerAssignedId": "bob@contoso.com",
                     }
                 ],
             }
         )
         assert sponsor is not None
         identifiers = sponsor.email_identifiers()
-        assert "brandon@werner.ac" in identifiers
+        assert "bob@contoso.com" in identifiers
         # Decoded EXT UPN duplicates the home address — that's fine,
         # frozenset dedups.
         assert (
-            "charlie_smith.ac#ext#@sara.onmicrosoft.com" in identifiers
+            "bob_contoso.com#ext#@fabrikam.onmicrosoft.com" in identifiers
         )
 
     def test_native_tenant_user_no_decoded_form(self) -> None:
@@ -127,10 +127,10 @@ class TestSponsorEmailIdentifiersIncludesDecodedExtUpn:
         sponsor = AgentIdentitySponsor.from_graph_user(
             {
                 "id": "ABC",
-                "userPrincipalName": "alice@werner.ac",
-                "mail": "alice@werner.ac",
+                "userPrincipalName": "alice@contoso.com",
+                "mail": "alice@contoso.com",
             }
         )
         assert sponsor is not None
         identifiers = sponsor.email_identifiers()
-        assert identifiers == frozenset({"alice@werner.ac"})
+        assert identifiers == frozenset({"alice@contoso.com"})

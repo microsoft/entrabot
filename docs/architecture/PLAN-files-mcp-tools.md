@@ -386,7 +386,7 @@ Before PR1 lands: open this plan in a Teams chat with your sponsor and ask one q
 
 **TODOS.md updates:** 6 entries added under P2 — `search_files`+`list_sites`, Excel writes + workbook session manager, comment-reply webhook subs, `unshare_file`, V2 Office authoring (back-ref to V2 plan), site/library creation. All carry back-references to this plan's §"Deferred / TODOs".
 
-**Test plan artifact:** `~/.gstack/projects/brandwe-entraclaw-identity-research/brandonwerner-main-eng-review-test-plan-20260430-110538.md`.
+**Test plan artifact:** `~/.gstack/projects/entraclaw-identity-research/user-main-eng-review-test-plan-20260430-110538.md`.
 
 **Worktree parallelization:** Sequential — PR1 → PR2 → PR3 all touch `src/entraclaw/tools/files.py`. Within PR1, the 4 tools share the file + the `_audit_graph_call` helper, so splitting tools across worktrees would create merge conflicts. Single PR per phase is correct.
 

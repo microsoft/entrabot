@@ -39,14 +39,14 @@ class TestPRCard:
     def test_open_pr(self) -> None:
         card = pr_card(
             title="Add bot gateway",
-            url="https://github.com/brandwe/repo/pull/1",
+            url="https://github.com/example/repo/pull/1",
             state="open",
             author="Brandon",
             files_changed=12,
         )
         assert card["contentType"] == CONTENT_TYPE
         actions = card["content"].get("actions", [])
-        assert any(a["url"] == "https://github.com/brandwe/repo/pull/1" for a in actions)
+        assert any(a["url"] == "https://github.com/example/repo/pull/1" for a in actions)
 
     def test_merged_pr(self) -> None:
         card = pr_card(

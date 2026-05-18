@@ -5,7 +5,7 @@ Kept for the Python-orchestrator-with-PS1-shim recommendation (which was adopted
 
 **Status:** Draft (architecture plan, no code) — written by Agent 2 / Product Manager review
 **Date:** 2026-04-24
-**Audience:** Brandon Werner, future Windows-machine contributor
+**Audience:** the user, future Windows-machine contributor
 **Source-of-truth scripts referenced:** `scripts/setup.sh`, `scripts/entra_provisioning.py`, `scripts/create_entra_agent_ids.py`, `scripts/provision_blob_storage.py`, `scripts/teardown.sh`, `src/entraclaw/platform/windows.py`, `src/entraclaw/auth/certificate.py`, `src/entraclaw/tools/teams.py`, ADR-003, ADR-005, hard-won-learnings.md (#1, #2, #5, #7, #8, #29, #34, #36)
 
 ---
@@ -105,7 +105,7 @@ State files: `.entraclaw-state.json` (provisioning state, idempotency keys), `.e
 | `setup.sh` uses `/tmp` | Medium | `setup.sh:734` | Replaced by Python rewrite. |
 | `chmod 600` on `.env` | Medium | `setup.sh:714` | Use `icacls` on Windows; helper module `entraclaw_setup.fs.lock_down_file()` handles both. |
 | `keyring` PEM round-trip on Windows untested | Medium | `platform/windows.py` | Add a tests/integration smoke test (skipped unless `ENTRACLAW_TEST_WINDOWS_KEYRING=1`). Run on a Windows VM in CI or by hand. |
-| Editable-install on Windows path with spaces (e.g., `C:\Users\Brandon Werner\…`) | Medium | Generic | The repo path on Mac is `/Volumes/Development HD/…` — already has a space — and works. Confirm on Windows. |
+| Editable-install on Windows path with spaces (e.g., `C:\Users\the user\…`) | Medium | Generic | The repo path on Mac may contain spaces (path with spaces confirmed working). Confirm on Windows. |
 | Microsoft Store Python is broken for editable installs | Medium | New | Detect via `sys.base_prefix` pointing into `WindowsApps\` and refuse with a clean error. |
 | `.venv\Scripts\python.exe` vs `.venv/bin/python3` | Low | `setup.sh:331,504,684,886` | Python orchestrator computes once via `sys.executable`. |
 | ADR-003 claims TPM/CNG on Windows | Low (correctness debt) | `docs/decisions/003-…md:58` | Either deliver TPM-backed keys (large v2 effort) or amend the ADR to describe what we actually do today (Credential Locker, encrypted at rest by DPAPI, bound to the user profile). **Amend the ADR as part of this work.** |
@@ -323,7 +323,7 @@ A clean Windows 11 VM, bare:
 2. **WSL/native ambiguity.** A user running `wsl` and then `python -m entraclaw_setup setup` will write to the WSL Linux keyring, not Windows. The MCP server invoked by Windows Claude Code won't find the key. *Mitigation:* PS1 wrapper aborts if `$env:WSL_DISTRO_NAME` is set, with a clean message: "Run setup-windows.ps1 from PowerShell on the Windows host, not from WSL."
 3. **Azure CLI under PowerShell quoting.** The provisioning Python already shells out to `az` with explicit `subprocess.run([…])` (list-form, not shell-string). PowerShell quoting issues only arise if our PS1 passes user input as a single string. *Mitigation:* PS1 splat (`@pyArgs`) into the Python invocation.
 4. **Microsoft Store Python detection.** `sys.base_prefix.lower().contains("windowsapps")` works. False-positive risk: zero (Microsoft Store Python is the only Python that lives there).
-5. **Path with spaces** (e.g., `C:\Users\Brandon Werner\…`). Most-used quirk on Windows. The Python orchestrator handles this trivially; the PS1 needs `&` invocation with quoted paths. Test with `C:\Users\Test User\Code\entraclaw` explicitly.
+5. **Path with spaces** (e.g., `C:\Users\the user\…`). Most-used quirk on Windows. The Python orchestrator handles this trivially; the PS1 needs `&` invocation with quoted paths. Test with `C:\Users\Test User\Code\entraclaw` explicitly.
 6. **Code-signing the PS1.** Out of scope. The `.cmd` shim with `-ExecutionPolicy Bypass` is the documented way around it. Mention in README.
 7. **Azure Blob provisioning identity propagation on Windows.** The `Storage Blob Data Contributor` role assignment Learning #34 + permission-propagation backoff (Learning #8) takes 30–120 s. Same on every platform. No Windows-specific concern.
 8. **Multi-user Windows boxes.** `keyring` keys are per-user. Two Windows users on the same machine each need their own setup. Same as Mac. Document clearly.

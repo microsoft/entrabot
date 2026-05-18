@@ -18,7 +18,7 @@ The `./scripts/setup.sh` script provisions and configures an EntraClaw agent end
 | `--new` | Provision a brand-new identity chain (Blueprint + Agent Identity + Agent User). Does not touch the existing chain; the current `.env` is backed up. Must be paired with `--with-upn-suffix` or you'll be prompted. |
 | `--use-blueprint=<app-id>` | Attach to an existing Blueprint from a different machine. Generates a new cert locally and uploads its public key to the Blueprint. Reuses the existing Agent Identity and Agent User. Also handles the "switch this machine to a different Blueprint" case — stale Agent Identity / User / cert thumbprint are wiped from local state. |
 | `--with-upn-suffix=<name>` | Required with `--new`; also supported with `--use-blueprint` to select an existing suffixed Agent User under the Blueprint. Example: `--with-upn-suffix=sati-agent` produces or selects `entraclaw-agent-sati-agent@yourdomain.com`. |
-| `--agent-user-upn=<upn>` | Explicit Agent User UPN. With `--use-blueprint`, selects an existing Agent User to reuse, e.g. `entraclaw-agent-sati-agent@werner.ac`. With `--new`, creates exactly that UPN, e.g. `entraclaw-agent@werner.ac`. |
+| `--agent-user-upn=<upn>` | Explicit Agent User UPN. With `--use-blueprint`, selects an existing Agent User to reuse, e.g. `entraclaw-agent-sati-agent@yourtenant.onmicrosoft.com`. With `--new`, creates exactly that UPN, e.g. `entraclaw-agent@yourtenant.onmicrosoft.com`. |
 
 ### User identity
 
@@ -56,7 +56,7 @@ Creates a new identity chain, stores everything locally, no cloud storage.
 To create a specific unsuffixed Agent User UPN:
 
 ```bash
-./scripts/setup.sh --new --agent-user-upn=entraclaw-agent@werner.ac
+./scripts/setup.sh --new --agent-user-upn=entraclaw-agent@yourtenant.onmicrosoft.com
 ```
 
 ### Fresh setup with cloud storage from the start
@@ -68,7 +68,7 @@ To create a specific unsuffixed Agent User UPN:
 ### Add this machine to an existing Blueprint
 
 ```bash
-./scripts/setup.sh --use-blueprint=9bfb75b3-e65f-4e56-bdbe-3ed213135c3b
+./scripts/setup.sh --use-blueprint=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 ```
 
 The Blueprint's Agent Identity and Agent User are reused; this machine gets its own cert.
@@ -76,8 +76,8 @@ The Blueprint's Agent Identity and Agent User are reused; this machine gets its 
 If the Blueprint has a suffixed Agent User, pin that chain explicitly:
 
 ```bash
-./scripts/setup.sh --use-blueprint=9bfb75b3-e65f-4e56-bdbe-3ed213135c3b \
-  --agent-user-upn=entraclaw-agent-sati-agent@werner.ac
+./scripts/setup.sh --use-blueprint=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx \
+  --agent-user-upn=entraclaw-agent-sati-agent@yourtenant.onmicrosoft.com
 ```
 
 If the local OS keystore already has the matching Blueprint private key, setup recovers the registered cert thumbprint and does not prompt to rotate the Blueprint cert.
@@ -85,8 +85,8 @@ If the local OS keystore already has the matching Blueprint private key, setup r
 ### Configure Work IQ Word for an existing Agent User
 
 ```bash
-./scripts/setup.sh --use-blueprint=9bfb75b3-e65f-4e56-bdbe-3ed213135c3b \
-  --agent-user-upn=entraclaw-agent-sati-agent@werner.ac \
+./scripts/setup.sh --use-blueprint=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx \
+  --agent-user-upn=entraclaw-agent-sati-agent@yourtenant.onmicrosoft.com \
   --with-a365-work-iq \
   --configure-a365-work-iq
 ```
@@ -155,8 +155,8 @@ Private keys are **never** written to `.env` — they live in the OS keystore (K
 `./scripts/teardown.sh` can deprovision an Agent User chain by UPN:
 
 ```bash
-./scripts/teardown.sh --agent-user-upn=entraclaw-agent-sati-agent@werner.ac --dry-run
-./scripts/teardown.sh --agent-user-upn=entraclaw-agent-sati-agent@werner.ac --yes
+./scripts/teardown.sh --agent-user-upn=entraclaw-agent-sati-agent@yourtenant.onmicrosoft.com --dry-run
+./scripts/teardown.sh --agent-user-upn=entraclaw-agent-sati-agent@yourtenant.onmicrosoft.com --yes
 ```
 
 Targeted teardown removes assigned licenses first, then deletes the Agent User,

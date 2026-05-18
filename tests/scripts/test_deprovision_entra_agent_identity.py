@@ -47,7 +47,7 @@ def _fake_resolver(method: str, path: str, token: str, **kw) -> SimpleNamespace:
                 "value": [
                     {
                         "id": "agent-user-id",
-                        "userPrincipalName": "entraclaw-agent-sati-agent@werner.ac",
+                        "userPrincipalName": "entraclaw-agent-sati-agent@fabrikam.onmicrosoft.com",
                         "identityParentId": "agent-identity-object-id",
                         "assignedLicenses": [
                             {"skuId": "teams-sku"},
@@ -111,14 +111,15 @@ def test_deprovisions_license_user_agent_identity_and_blueprint_in_order(
     monkeypatch.setattr(deprovision_module, "graph_request", fake_graph_request)
 
     result = deprovision_module.deprovision_agent_user(
-        "token", "entraclaw-agent-sati-agent@werner.ac"
+        "token", "entraclaw-agent-sati-agent@fabrikam.onmicrosoft.com"
     )
 
     assert result == "deleted"
     assert calls == [
         (
             "GET",
-            "/users?$filter=userPrincipalName eq 'entraclaw-agent-sati-agent@werner.ac'"
+            "/users?$filter=userPrincipalName eq "
+            "'entraclaw-agent-sati-agent@fabrikam.onmicrosoft.com'"
             "&$select=id,userPrincipalName,identityParentId,assignedLicenses,"
             "licenseAssignmentStates",
             None,
@@ -164,7 +165,7 @@ def test_license_removal_failure_stops_before_deleting_user(
 
     with pytest.raises(RuntimeError, match="Failed to remove licenses"):
         deprovision_module.deprovision_agent_user(
-            "token", "entraclaw-agent-sati-agent@werner.ac"
+            "token", "entraclaw-agent-sati-agent@fabrikam.onmicrosoft.com"
         )
 
     assert ("DELETE", "/users/agent-user-id") not in calls
@@ -186,7 +187,10 @@ def test_only_direct_licenses_are_removed_when_group_licenses_exist(
                     "value": [
                         {
                             "id": "agent-user-id",
-                            "userPrincipalName": "entraclaw-agent-sati-agent@werner.ac",
+                            "userPrincipalName": (
+                                "entraclaw-agent-sati-agent"
+                                "@fabrikam.onmicrosoft.com"
+                            ),
                             "identityParentId": "agent-identity-object-id",
                             "assignedLicenses": [
                                 {"skuId": "direct-teams-sku"},
@@ -210,7 +214,7 @@ def test_only_direct_licenses_are_removed_when_group_licenses_exist(
     monkeypatch.setattr(deprovision_module, "graph_request", fake_graph_request)
 
     result = deprovision_module.deprovision_agent_user(
-        "token", "entraclaw-agent-sati-agent@werner.ac"
+        "token", "entraclaw-agent-sati-agent@fabrikam.onmicrosoft.com"
     )
 
     assert result == "deleted"
@@ -236,7 +240,7 @@ def test_dry_run_resolves_chain_but_does_not_mutate_graph(
     monkeypatch.setattr(deprovision_module, "graph_request", fake_graph_request)
 
     result = deprovision_module.deprovision_agent_user(
-        "token", "entraclaw-agent-sati-agent@werner.ac", dry_run=True
+        "token", "entraclaw-agent-sati-agent@fabrikam.onmicrosoft.com", dry_run=True
     )
 
     assert result == "dry-run"
@@ -271,7 +275,7 @@ def test_refuses_to_delete_blueprint_with_other_agent_identities(
 
     with pytest.raises(RuntimeError, match="Blueprint has 1 other Agent Identity"):
         deprovision_module.deprovision_agent_user(
-            "token", "entraclaw-agent-sati-agent@werner.ac"
+            "token", "entraclaw-agent-sati-agent@fabrikam.onmicrosoft.com"
         )
 
 
@@ -284,6 +288,6 @@ def test_missing_agent_user_is_idempotent(
         lambda *args, **kwargs: _resp(200, {"value": []}),
     )
 
-    result = deprovision_module.deprovision_agent_user("token", "missing@werner.ac")
+    result = deprovision_module.deprovision_agent_user("token", "missing@contoso.com")
 
     assert result == "missing"

@@ -79,9 +79,15 @@ def main() -> int:
     with contextlib.suppress(OSError):
         sys.stdin.read()
 
-    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
-    if not project_dir:
-        return 0
+    # Derive project root from __file__ so this script is self-locating
+    # regardless of clone path — no CLAUDE_PROJECT_DIR env var needed.
+    # __file__ = <root>/scripts/hooks/inject_body_prompt.py
+    # → .parent       = <root>/scripts/hooks
+    # → .parent.parent = <root>/scripts
+    # → .parent.parent.parent = <root>
+    project_dir = str(Path(__file__).resolve().parent.parent.parent)
+    # CLAUDE_PROJECT_DIR overrides for non-standard layouts.
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", project_dir).strip() or project_dir
 
     prompt_path = Path(project_dir) / "prompts" / "agent_system.md"
     body = _load_body(prompt_path)

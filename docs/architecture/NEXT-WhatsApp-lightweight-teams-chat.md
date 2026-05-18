@@ -5,7 +5,7 @@
 **Branch:** `feature/multi-tenant-lightweight-chat`
 **Driver:** Alice Example' request for WhatsApp-like simplicity in Teams; Ales' standup pushback on heavyweight provisioning
 **Priority:** Moved ahead of Windows isolation work (rescheduled to weekend)
-**Approval:** Alice Example ("I'm supportive of this direction"), Brandon Werner, Dave Fixture
+**Approval:** Alice Example ("I'm supportive of this direction"), the user, Dave Fixture
 **Related:** `docs/architecture/SPEC-dual-track-agent-identity.md` (broader architecture debate that validated this build-time plan)
 
 ---
@@ -239,7 +239,7 @@ If the admin doesn't approve the multi-tenant app, users can still set up their 
 
 ## 2026-04-09 Update — Architecture Debate Context
 
-Between 2026-04-08 evening and 2026-04-09 early morning, the group (Henry Placeholder, Carol Sample, Iris Sample, Bob Tester, Frank Demo, Brandon Werner, Dave Fixture) had an extended debate on the broader agent identity architecture. Full synthesis in `docs/architecture/SPEC-dual-track-agent-identity.md`.
+Between 2026-04-08 evening and 2026-04-09 early morning, the group (Henry Placeholder, Carol Sample, Iris Sample, Bob Tester, Frank Demo, the user, Dave Fixture) had an extended debate on the broader agent identity architecture. Full synthesis in `docs/architecture/SPEC-dual-track-agent-identity.md`.
 
 **Does this change the build-time plan?** No. The progressive identity approach in this spec was **validated** by the debate as the right bridge. Key points:
 

@@ -33,7 +33,7 @@ A365 distinguishes **two** agent shapes; the distinction is architectural and lo
 | **Agent** | Acts on behalf of a user (delegated/OBO) **or** as an app (S2S). Registered as either an Entra application or an Agent Identity Blueprint. | Wherever the developer hosts it. Reachable via API or chat. | No — GA. |
 | **AI teammate** | Operates as **its own user identity** in M365. Has mailbox, Teams presence, directory entry, manager relationship. Always built on a blueprint. | Inside Microsoft 365 — @mentioned in Teams, emailed directly, added to channels. | **Yes** — Frontier preview only. |
 
-**Critical insight:** Entraclaw's `agent_user` mode IS the AI-teammate pattern, just self-built. We provisioned an Agent User UPN (`entraclaw-agent-sati-agent@werner.ac`), it has its own mailbox, posts as itself in Teams chats, and shows up in directory. Microsoft's GA AI-teammate is the same architecture with managed lifecycle + admin center surface. The work entraclaw did to bootstrap this from Graph primitives is precisely what A365 sells as a product.
+**Critical insight:** Entraclaw's `agent_user` mode IS the AI-teammate pattern, just self-built. We provisioned an Agent User UPN (`entraclaw-agent-sati-agent@yourtenant.onmicrosoft.com`), it has its own mailbox, posts as itself in Teams chats, and shows up in directory. Microsoft's GA AI-teammate is the same architecture with managed lifecycle + admin center surface. The work entraclaw did to bootstrap this from Graph primitives is precisely what A365 sells as a product.
 
 ---
 
@@ -43,7 +43,7 @@ A365 is explicitly designed for incremental adoption — you don't have to buy t
 
 | Tier | Capability | What entraclaw has today |
 |------|-----------|---------------------------|
-| **1. Register** | Agent appears in M365 admin center inventory. Inherits Entra ID governance, Purview, and Defender if blueprint-based. | ✅ Provisioned — but via direct Graph `POST /servicePrincipals` extending `Microsoft.Graph.AgentIdentity`, NOT via the A365 blueprint flow. Brandon's M365 admin center shows 173 agents in the registry; the Sati Agent is one of them. |
+| **1. Register** | Agent appears in M365 admin center inventory. Inherits Entra ID governance, Purview, and Defender if blueprint-based. | ✅ Provisioned — but via direct Graph `POST /servicePrincipals` extending `Microsoft.Graph.AgentIdentity`, NOT via the A365 blueprint flow. The admin center shows 173 agents in the registry; the Sati Agent is one of them. |
 | **2. Observability** | OpenTelemetry tracing on every inference + tool call + agent lifecycle event. Visible in admin center, Purview, Defender. | ❌ Not wired. Entraclaw has its own audit log (`tools/audit.py` + `~/.entraclaw/audit/`) but it's local JSONL, not OTel. |
 | **3. Work IQ tools** | Agent calls Microsoft-hosted MCP servers (Mail/Calendar/Teams/SharePoint/OneDrive/Word/User/Copilot/Dataverse). Permissions admin-controlled. | ❌ Not connected. We've built parallel Graph-based implementations for Teams, email, Files; Work IQ Word is the **headline gap** that motivated the Learning #60 pivot. |
 | **4. AI teammate** | Mailbox, Teams presence, directory entry. Frontier preview only. | 🟡 Self-built equivalent — Bot Gateway (`src/entraclaw/bot/`), Teams Graph integration, Bot Framework SDK. Functional but not under MS-managed lifecycle. |
@@ -74,7 +74,7 @@ Both route to the same backend. Detail-pane URLs in this table use the canonical
 | `mcp_OneDriveTools` | Work IQ OneDrive | Personal OneDrive file/folder management | `…/agents/servers/mcp_OneDriveTools` |
 | `mcp_TeamsTools` | Work IQ Teams | Chat CRUD, members, post messages, channel ops | `…/agents/servers/mcp_TeamsTools` |
 | `mcp_UserTools` (a.k.a. `me`) | Work IQ User | Manager, direct reports, profile, search users | `…/agents/servers/mcp_UserTools` |
-| `mcp_WordServer` | Work IQ Word | **Create/read documents, add comments, reply to comments** — the headline tool for Learning #60's Hirsch use case. Verified Available in werner.ac at version 1.0.3 (M365 admin center, 2026-05-04). | `…/agents/servers/mcp_WordServer` |
+| `mcp_WordServer` | Work IQ Word | **Create/read documents, add comments, reply to comments** — the headline tool for Learning #60's Hirsch use case. Verified Available in the tenant at version 1.0.3 (M365 admin center, 2026-05-04). | `…/agents/servers/mcp_WordServer` |
 | `mcp_DataverseTools` | Dataverse / D365 | CRUD + domain-specific actions | `…/agents/servers/mcp_DataverseTools` |
 
 **Word IQ tools (verbatim):**
@@ -124,13 +124,13 @@ This is the standard A365 pattern and the one entraclaw will use.
 
 **Config-free trap:** `a365 setup permissions mcp --agent-name "EntraClaw Code Agent"` derives a blueprint display name of `EntraClaw Code Agent Blueprint`. Entraclaw's actual blueprint display name is `EntraClaw Code Agent`, with the real app ID in `.entraclaw-state.json`. Use generated `a365.config.json` with `agentBlueprintId`, `agentIdentityDisplayName`, and `deploymentProjectPath`, then run `a365 setup permissions mcp` without `--agent-name`.
 
-**Existing Blueprint + multiple Agent Users trap:** `--use-blueprint` must also know which Agent User chain to reuse. If local state is missing and no suffix/UPN is provided, provisioning falls back to the unsuffixed `entraclaw-agent@...` UPN. Pass `--agent-user-upn=entraclaw-agent-sati-agent@werner.ac` (or `--with-upn-suffix=sati-agent`) so A365 config points at the intended Agent Identity and Agent User.
+**Existing Blueprint + multiple Agent Users trap:** `--use-blueprint` must also know which Agent User chain to reuse. If local state is missing and no suffix/UPN is provided, provisioning falls back to the unsuffixed `entraclaw-agent@...` UPN. Pass `--agent-user-upn=entraclaw-agent-sati-agent@yourtenant.onmicrosoft.com` (or `--with-upn-suffix=sati-agent`) so A365 config points at the intended Agent Identity and Agent User.
 
 ### Pattern B — Agent acting on behalf of a user (OBO auth)
 
 For agents that need user delegated access. Agent receives a delegated user token, exchanges it for the MCP gateway audience. No agent identity required.
 
-Use case fit: NOT what entraclaw needs for the Hirsch Word reply (the agent is acting as itself, not on behalf of Brandon).
+Use case fit: NOT what entraclaw needs for the Hirsch Word reply (the agent is acting as itself, not on behalf of the user).
 
 ### Pattern C — Coding-agent client (public-client OAuth)
 
@@ -156,13 +156,13 @@ For Claude Code, Copilot CLI, VS Code consuming Work IQ MCP servers from a devel
    ```
 5. Standard MCP-protocol HTTP transport with OAuth.
 
-**Use case fit:** Claude Code consuming Work IQ Word directly during a conversation with Brandon. Could be a useful adjunct to entraclaw's agent path.
+**Use case fit:** Claude Code consuming Work IQ Word directly during a conversation with the user. Could be a useful adjunct to entraclaw's agent path.
 
 ### Critical license requirement
 
 > *"You must have a Microsoft 365 Copilot license to use Work IQ MCP servers."*
 
-The Agent User identity (`entraclaw-agent-sati-agent@werner.ac`) needs M365 Copilot assigned. `setup.sh` / `setup-windows.ps1` call `create_entra_agent_ids.py`, which now checks the Agent User's existing SKUs and assigns Microsoft 365 Copilot separately from the Teams-capable M365 SKU used for Teams presence. Copilot is an add-on requirement for Work IQ; it does not replace the base Teams/M365 license. In `/subscribedSkus`, the Copilot SKU may appear as `Microsoft_365_Copilot` rather than the older all-caps `MICROSOFT_365_COPILOT` spelling; setup recognizes both.
+The Agent User identity (`entraclaw-agent-sati-agent@yourtenant.onmicrosoft.com`) needs M365 Copilot assigned. `setup.sh` / `setup-windows.ps1` call `create_entra_agent_ids.py`, which now checks the Agent User's existing SKUs and assigns Microsoft 365 Copilot separately from the Teams-capable M365 SKU used for Teams presence. Copilot is an add-on requirement for Work IQ; it does not replace the base Teams/M365 license. In `/subscribedSkus`, the Copilot SKU may appear as `Microsoft_365_Copilot` rather than the older all-caps `MICROSOFT_365_COPILOT` spelling; setup recognizes both.
 
 ---
 
@@ -226,7 +226,7 @@ The CLI is .NET 8. Cross-platform but not natively Python — entraclaw would in
 
 Microsoft explicitly documents the path for agents built outside the M365 ecosystem. Five steps:
 
-1. **Sync to registry** — for agents on Vertex AI / Bedrock, Microsoft has automated registry sync. For agents like entraclaw built directly on Graph, the registry entry comes from the Agent Identity blueprint (already done). Visibility in admin center confirmed (Brandon's screenshot: Sati Agent is in the 173 agents).
+1. **Sync to registry** — for agents on Vertex AI / Bedrock, Microsoft has automated registry sync. For agents like entraclaw built directly on Graph, the registry entry comes from the Agent Identity blueprint (already done). Visibility in admin center confirmed (Sati Agent appears in the 173 agents).
 2. **Integrate with Agent 365 SDK** — adds the SDK packages to the agent code; gives it Work IQ access + observability.
 3. **Apply policies and access controls** — admin configures via M365 admin center → Agents → Settings (`/admin/manage/agent-settings`).
 4. **Manage tooling via CLI** — `a365 develop add-mcp-servers` + `a365 setup permissions mcp`.
@@ -307,7 +307,7 @@ A365 has a **first-class notifications package** (`microsoft-agents-a365-notific
 - **Word comments** (someone leaves a comment in a doc the agent has access to — this is the *exact* event the Hirsch use case turns on)
 - Email lifecycle events
 
-This is essentially a productized version of entraclaw's "background channel" architecture (`mcp_server.py:_push_channel_notification`, `tools/teams_poll.py`, email poll, chat auto-discovery). **A365 ships push-based notifications** rather than entraclaw's polling — when Brandon comments in a Word doc shared with the agent, the notifications package can deliver that event without us implementing a comment-poll loop.
+This is essentially a productized version of entraclaw's "background channel" architecture (`mcp_server.py:_push_channel_notification`, `tools/teams_poll.py`, email poll, chat auto-discovery). **A365 ships push-based notifications** rather than entraclaw's polling — when the user comments in a Word doc shared with the agent, the notifications package can deliver that event without us implementing a comment-poll loop.
 
 **Migration consideration:** entraclaw's polling is structurally limiting (5s Teams poll, 60s email poll, 120s auto-discovery). A365's push model is a real architectural improvement. If we adopt A365 SDK observability + tooling, adopting notifications too is a natural next step.
 
@@ -321,10 +321,10 @@ This is essentially a productized version of entraclaw's "background channel" ar
 
 Concrete steps:
 1. Verify the Sati Agent User has an M365 Copilot license (or get one assigned).
-2. Run the one-time `New-Agent365ToolsServicePrincipalProdPublic.ps1` against werner.ac.
+2. Run the one-time `New-Agent365ToolsServicePrincipalProdPublic.ps1` against your tenant.
 3. Provision an Agent Identity **Blueprint** for entraclaw via `a365 setup all` (this may need to be done from scratch since our Agent Identity was created via Graph not via blueprint — check whether `a365` can adopt an existing AgentIdentity SP).
 4. `a365 develop add-mcp-servers mcp_WordServer` to write `ToolingManifest.json`.
-5. Brandon (Global Admin) runs `a365 setup permissions mcp` to patch the blueprint with `McpServers.Word.All` scope + audience grant.
+5. The global admin runs `a365 setup permissions mcp` to patch the blueprint with `McpServers.Word.All` scope + audience grant.
 6. Add `microsoft-agents-a365-runtime` + `microsoft-agents-a365-tooling` to `pyproject.toml`.
 7. Wrap Work IQ Word's 4 tools (`WordCreateNewDocument`, `WordGetDocumentContent`, `WordCreateNewComment`, `WordReplyToComment`) as 4 entraclaw `@mcp.tool()` wrappers in `mcp_server.py`. Pass-through with our existing audit logging.
 8. Update README + CHANGELOG.
@@ -360,9 +360,9 @@ These need spike-level investigation before commits, in priority order:
 1. **Can `a365 setup all` adopt an existing AgentIdentity SP** (provisioned via Graph), or does it require provisioning a fresh one? If the latter, migrating breaks the existing identity continuity (audit history, Teams chats, sponsor relationships).
 2. **Can the Sati Agent User have an M365 Copilot license assigned?** Microsoft documents Copilot licensing as per-user, but Agent User identities are a non-human identity sub-type. Verify before committing.
 3. **Does `microsoft-agents-a365-tooling` work standalone** (just MCP-client functionality) or does it require the full Agent 365 SDK runtime + manifest project structure?
-4. **Is werner.ac in a region where M365 admin center "Agents and Tools" can grant Work IQ permissions to non-Microsoft-built agents?** Brandon's screenshot confirms the UI shows up, but per Microsoft's docs *"the ability to allow or disallow tooling and MCP servers in Microsoft 365 admin center might not be available in your region yet."*
+4. **Is your tenant in a region where M365 admin center "Agents and Tools" can grant Work IQ permissions to non-Microsoft-built agents?** The admin center shows the UI shows up, but per Microsoft's docs *"the ability to allow or disallow tooling and MCP servers in Microsoft 365 admin center might not be available in your region yet."*
 5. **What does `a365 setup permissions mcp` actually write?** If it writes a per-app oauth2PermissionGrant record, it's PATCHable like our existing `grant_files_consent.py`. If it writes something else (admin consent at the SP-tenant scope?), we need to understand what operation we're authorizing.
-6. **Does Word IQ Word's `WordReplyToComment` actually work on docs the agent doesn't own?** The reply use case is on Brandon's MS-tenant Word doc (`tenant.sharepoint.com`), which the agent doesn't have access to even after the share invite. Cross-tenant + Work IQ is its own scenario worth verifying.
+6. **Does Word IQ Word's `WordReplyToComment` actually work on docs the agent doesn't own?** The reply use case is on the MS-tenant Word doc (`tenant.sharepoint.com`), which the agent doesn't have access to even after the share invite. Cross-tenant + Work IQ is its own scenario worth verifying.
 
 
 ### Discovery update: Work IQ Word local manifest
@@ -381,11 +381,11 @@ a human-authenticated CLI session can generate it.
 
 | # | Action | Owner | Reversibility |
 |---|--------|-------|---------------|
-| 1 | Verify M365 Copilot license can be assigned to `entraclaw-agent-sati-agent@werner.ac`. Try assignment in M365 admin center. | Brandon | Reversible |
-| 2 | In M365 admin center → **Agents and Tools** → **Tools** → search "Word" → click into **Work IQ Word MCP Server (Preview)** → screenshot the detail pane (permissions, scopes, agents that can grant). | Brandon | Read-only |
+| 1 | Verify M365 Copilot license can be assigned to `entraclaw-agent-sati-agent@yourtenant.onmicrosoft.com`. Try assignment in M365 admin center. | Alice | Reversible |
+| 2 | In M365 admin center → **Agents and Tools** → **Tools** → search "Word" → click into **Work IQ Word MCP Server (Preview)** → screenshot the detail pane (permissions, scopes, agents that can grant). | Alice | Read-only |
 | 3 | Confirm whether `a365 setup` can adopt the existing Sati AgentIdentity (`appId=eba51655-...`) or requires fresh blueprint provisioning. Read `a365 setup all` source / docs if not already clear. | Claude (research) | Reversible |
 | 4 | If the answers to (1)–(3) are favorable, write a follow-up plan `docs/superpowers/plans/2026-05-04-work-iq-word-pivot.md` with the 8 concrete steps from §13.1. | Claude | Plan only |
-| 5 | If any answer is blocking (no Copilot license, can't adopt SP, region not ready), surface to Brandon and consider alternative paths (OOXML manipulation as fallback per Learning #60 §3, or pivot Hirsch defense to Teams reply instead of in-doc). | Both | Reversible |
+| 5 | If any answer is blocking (no Copilot license, can't adopt SP, region not ready), surface to the team and consider alternative paths (OOXML manipulation as fallback per Learning #60 §3, or pivot Hirsch defense to Teams reply instead of in-doc). | Both | Reversible |
 
 ---
 

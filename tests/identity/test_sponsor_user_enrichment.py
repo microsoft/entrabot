@@ -55,15 +55,15 @@ def _full_user_response(sponsor_id: str) -> dict[str, Any]:
     """Real ``/users/{id}`` response with all email-shaped fields populated."""
     return {
         "id": sponsor_id,
-        "userPrincipalName": "charlie_smith.ac#EXT#@sara.onmicrosoft.com",
-        "mail": "brandon@werner.ac",
-        "otherMails": ["brandon@werner.ac"],
-        "proxyAddresses": ["SMTP:brandon@werner.ac"],
+        "userPrincipalName": "alice_contoso.com#EXT#@fabrikam.onmicrosoft.com",
+        "mail": "alice@contoso.com",
+        "otherMails": ["alice@contoso.com"],
+        "proxyAddresses": ["SMTP:alice@contoso.com"],
         "identities": [
             {
                 "signInType": "federated",
-                "issuer": "werner.ac",
-                "issuerAssignedId": "brandon@werner.ac",
+                "issuer": "contoso.com",
+                "issuerAssignedId": "alice@contoso.com",
             }
         ],
     }
@@ -104,8 +104,8 @@ class TestUserEnrichmentTokenSeparation:
         sponsor = sponsors[0]
         assert sponsor.user_id == sponsor_id
         # The enrichment ran via the Agent User token and populated emails.
-        assert sponsor.mail == "brandon@werner.ac"
-        assert "brandon@werner.ac" in sponsor.email_identifiers()
+        assert sponsor.mail == "alice@contoso.com"
+        assert "alice@contoso.com" in sponsor.email_identifiers()
         # Both endpoints saw the right tokens.
         assert captured_authorization_headers["sponsors"] == "Bearer agent-identity-token"
         assert captured_authorization_headers["users"] == "Bearer agent-user-token"
@@ -138,7 +138,7 @@ class TestUserEnrichmentTokenSeparation:
         )
 
         assert len(sponsors) == 1
-        assert sponsors[0].mail == "brandon@werner.ac"
+        assert sponsors[0].mail == "alice@contoso.com"
         # Same token used for both endpoints when no user provider is given.
         assert captured_authorization_headers["sponsors"] == "Bearer agent-identity-token"
         assert captured_authorization_headers["users"] == "Bearer agent-identity-token"
@@ -193,8 +193,8 @@ class TestGetSponsorAllowlistPassesUserTokenProvider:
 
         sponsor = AgentIdentitySponsor(
             user_id="u1",
-            user_principal_name="brandon@werner.ac",
-            mail="brandon@werner.ac",
+            user_principal_name="alice@contoso.com",
+            mail="alice@contoso.com",
         )
 
         with (
@@ -210,7 +210,7 @@ class TestGetSponsorAllowlistPassesUserTokenProvider:
             # /users/{id} hop has User.Read.All to read sponsor emails.
             _, kwargs = mock_fetch.call_args
             assert kwargs.get("user_token_provider") is acquire_agent_user_token
-            assert allowlist == {"brandon@werner.ac"}
+            assert allowlist == {"alice@contoso.com"}
 
 
 @pytest.mark.asyncio
@@ -241,14 +241,14 @@ class TestGetSponsorAllowlistChatMembersFallback:
                 # The Agent User itself — must NOT pollute the allowlist.
                 {
                     "user_id": "agent-user-oid",
-                    "email": "entraclaw-agent@werner.ac",
+                    "email": "entraclaw-agent@fabrikam.onmicrosoft.com",
                     "name": "Entraclaw Agent",
                 },
                 # The sponsor — its email is recovered from chat metadata.
                 {
                     "user_id": sponsor_id,
-                    "email": "brandon@werner.ac",
-                    "name": "Brandon Werner",
+                    "email": "alice@contoso.com",
+                    "name": "Alice Smith",
                 },
                 # An unrelated chat member — must NOT enter the allowlist.
                 {
@@ -260,7 +260,7 @@ class TestGetSponsorAllowlistChatMembersFallback:
 
             allowlist = await _get_sponsor_allowlist()
 
-            assert allowlist == {"brandon@werner.ac"}
+            assert allowlist == {"alice@contoso.com"}
             mock_chat_members.assert_called_once()
 
     async def test_chat_members_fallback_skipped_when_enrichment_succeeds(self):
@@ -272,8 +272,8 @@ class TestGetSponsorAllowlistChatMembersFallback:
 
         enriched_sponsor = AgentIdentitySponsor(
             user_id="u1",
-            mail="brandon@werner.ac",
-            user_principal_name="brandon@werner.ac",
+            mail="alice@contoso.com",
+            user_principal_name="alice@contoso.com",
         )
 
         with (
@@ -286,7 +286,7 @@ class TestGetSponsorAllowlistChatMembersFallback:
 
             allowlist = await _get_sponsor_allowlist()
 
-            assert allowlist == {"brandon@werner.ac"}
+            assert allowlist == {"alice@contoso.com"}
             mock_chat_members.assert_not_called()
 
     async def test_chat_members_fallback_swallows_errors(self):
@@ -321,7 +321,7 @@ class TestGetSponsorAllowlistChatMembersFallback:
         from entraclaw.tools.files import _get_sponsor_allowlist
 
         enriched = AgentIdentitySponsor(
-            user_id="u1", user_principal_name="alice@werner.ac", mail="alice@werner.ac"
+            user_id="u1", user_principal_name="alice@contoso.com", mail="alice@contoso.com"
         )
         unenriched = AgentIdentitySponsor(user_id="u2", user_principal_name=None, mail=None)
 
@@ -333,9 +333,9 @@ class TestGetSponsorAllowlistChatMembersFallback:
             mock_get_config.return_value = object()
             mock_fetch.return_value = [enriched, unenriched]
             mock_chat_members.return_value = [
-                {"user_id": "u2", "email": "bob@werner.ac", "name": "Bob"},
+                {"user_id": "u2", "email": "bob@contoso.com", "name": "Bob"},
             ]
 
             allowlist = await _get_sponsor_allowlist()
 
-            assert allowlist == {"alice@werner.ac", "bob@werner.ac"}
+            assert allowlist == {"alice@contoso.com", "bob@contoso.com"}

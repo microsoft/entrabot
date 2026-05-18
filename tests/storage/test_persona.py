@@ -27,14 +27,14 @@ class TestClaudeCodeMemoryDir:
     def test_slug_encoding_for_path_with_spaces(self, tmp_path: Path) -> None:
         # Mirrors the real Claude Code convention observed in this repo
         result = claude_code_memory_dir(
-            Path("/Volumes/Development HD/entraclaw-identity-research"),
+            Path("/path/to/entraclaw-identity-research"),
             home=tmp_path,
         )
         expected = (
             tmp_path
             / ".claude"
             / "projects"
-            / "-Volumes-Development-HD-entraclaw-identity-research"
+            / "-path-to-entraclaw-identity-research"
             / "memory"
         )
         assert result == expected
@@ -55,14 +55,14 @@ class TestPersonaBackendPushOne:
         backend = LocalBackend(tmp_path / "blob")
         mem_dir = tmp_path / "memory"
         mem_dir.mkdir()
-        (mem_dir / "user_brandon_role.md").write_text("# Brandon\nProduct Architect")
+        (mem_dir / "user_alice_role.md").write_text("# Alice\nProduct Architect")
 
         persona = PersonaBackend(backend, local_root=mem_dir)
-        persona.push_one(mem_dir / "user_brandon_role.md")
+        persona.push_one(mem_dir / "user_alice_role.md")
 
         assert (
-            backend.read_text("claude_memory/user_brandon_role.md")
-            == "# Brandon\nProduct Architect"
+            backend.read_text("claude_memory/user_alice_role.md")
+            == "# Alice\nProduct Architect"
         )
 
     def test_push_one_rejects_path_outside_local_root(self, tmp_path: Path) -> None:
@@ -94,7 +94,7 @@ class TestPersonaBackendPushAll:
         mem_dir = tmp_path / "memory"
         mem_dir.mkdir()
         (mem_dir / "MEMORY.md").write_text("index")
-        (mem_dir / "user_brandon_role.md").write_text("Brandon")
+        (mem_dir / "user_alice_role.md").write_text("Alice")
         (mem_dir / "feedback_cvp_tone.md").write_text("Tone notes")
 
         persona = PersonaBackend(backend, local_root=mem_dir)
@@ -102,7 +102,7 @@ class TestPersonaBackendPushAll:
 
         assert report.copied == 3
         assert backend.read_text("claude_memory/MEMORY.md") == "index"
-        assert backend.read_text("claude_memory/user_brandon_role.md") == "Brandon"
+        assert backend.read_text("claude_memory/user_alice_role.md") == "Alice"
 
     def test_push_all_skips_existing_keys(self, tmp_path: Path) -> None:
         backend = LocalBackend(tmp_path / "blob")
@@ -130,7 +130,7 @@ class TestPersonaBackendPullAll:
     def test_downloads_every_claude_memory_key(self, tmp_path: Path) -> None:
         backend = LocalBackend(tmp_path / "blob")
         backend.write_text("claude_memory/MEMORY.md", "index body")
-        backend.write_text("claude_memory/user_brandon_role.md", "Brandon")
+        backend.write_text("claude_memory/user_alice_role.md", "Alice")
         backend.write_text("claude_memory/feedback_tone.md", "register")
         # These should NOT be pulled (not under claude_memory/)
         backend.write_text("interactions/2026-04-17.jsonl", "agent op data")
@@ -140,7 +140,7 @@ class TestPersonaBackendPullAll:
         report = persona.pull_all()
 
         assert (mem_dir / "MEMORY.md").read_text() == "index body"
-        assert (mem_dir / "user_brandon_role.md").read_text() == "Brandon"
+        assert (mem_dir / "user_alice_role.md").read_text() == "Alice"
         assert (mem_dir / "feedback_tone.md").read_text() == "register"
         assert not (mem_dir / "interactions").exists()
         assert report.pulled == 3

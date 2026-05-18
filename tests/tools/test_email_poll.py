@@ -106,7 +106,7 @@ def _msg(
         "receivedDateTime": received,
         "bodyPreview": preview,
         "from": {"emailAddress": {"name": sender.split("@")[0], "address": sender}},
-        "toRecipients": [{"emailAddress": {"address": "entraclaw-agent@werner.ac"}}],
+        "toRecipients": [{"emailAddress": {"address": "entraclaw-agent@fabrikam.onmicrosoft.com"}}],
         "hasAttachments": has_attachments,
         "conversationId": conversation_id,
     }

@@ -89,7 +89,7 @@ The supported property list, per the v1.0 reference:
 - `spa` — ❌ no SPA redirect URIs
 - `isFallbackPublicClient` — ❌ cannot be flipped to fallback-public-client mode
 
-This is enforced at the API surface — `az ad app update` returns *"incompatible with Agent Blueprints"* and Graph PATCH rejects setting these. (Observed 2026-05-04 against `werner.ac` tenant; documented in [persona-sati engineering-status.md](https://github.com/brandwe/persona-sati/blob/main/docs/engineering-status.md) as `feature/entra-delegated-oauth` constraint.)
+This is enforced at the API surface — `az ad app update` returns *"incompatible with Agent Blueprints"* and Graph PATCH rejects setting these. (Observed 2026-05-04 against `contoso.com` tenant; documented in [persona-sati engineering-status.md](https://github.com/example/persona-sati/blob/main/docs/engineering-status.md) as `feature/entra-delegated-oauth` constraint.)
 
 `signInAudience` for Blueprints supports the standard four values (`AzureADMyOrg` (default), `AzureADMultipleOrgs`, `AzureADandPersonalMicrosoftAccount`, `PersonalMicrosoftAccount`), but **Agent Identities themselves are always single-tenant regardless** — quoting [agent-autonomous-app-oauth-flow](https://learn.microsoft.com/en-us/entra/agent-id/agent-autonomous-app-oauth-flow):
 
@@ -305,7 +305,7 @@ Microsoft's [interactive-agent-authentication-authorization-flow](https://learn.
 
 > *"After authorization is configured, the client app (such as a frontend or mobile app) initiates an OAuth 2.0 authorization code request to obtain a token where the audience is the agent identity blueprint. **In this step, `client_id` refers to the client app's own registered application ID, not the agent identity or agent identity blueprint ID.**"*
 
-That is the unambiguous Microsoft-recommended pattern. The plan that drove PR brandwe/persona-sati#47 missed this distinction.
+That is the unambiguous Microsoft-recommended pattern. The plan that drove PR example/persona-sati#47 missed this distinction.
 
 #### Alternative considered: persona-sati implements OAuth 2.1 endpoints itself
 
@@ -352,7 +352,7 @@ PKCE works against Entra. The metadata is just missing. MCP clients (Claude Code
 
 ## What changed at the May 1, 2026 GA
 
-For comparison: the existing `/Volumes/Development HD/entraclaw-identity-research/docs/platform-learnings/msal-entra-agent-ids.md` was last updated 2025-07-14, when Agent ID was in public preview. The doc lists "preview only", "Microsoft Graph beta API required — not yet in v1.0", and "Single-tenant only". Many of those statements are now outdated.
+For comparison: the existing `/path/to/entraclaw-identity-research/docs/platform-learnings/msal-entra-agent-ids.md` was last updated 2025-07-14, when Agent ID was in public preview. The doc lists "preview only", "Microsoft Graph beta API required — not yet in v1.0", and "Single-tenant only". Many of those statements are now outdated.
 
 ### What's GA'd
 
@@ -380,7 +380,7 @@ Existing assignments grandfather; new assignments must comply.
 
 ### What's unchanged but newly load-bearing
 
-- **Agent Blueprints have always been confidential clients** — this is the key constraint that PR brandwe/persona-sati#47 missed. The platform docs say it explicitly post-GA, but the same restriction was in place during preview; it just wasn't called out as prominently in third-party writeups. The sentence *"Public client capabilities aren't available, requiring all agents to operate as confidential clients. Redirect URLs aren't supported."* now appears verbatim in [agent-oauth-protocols](https://learn.microsoft.com/en-us/entra/agent-id/agent-oauth-protocols) (updated 2026-05-01).
+- **Agent Blueprints have always been confidential clients** — this is the key constraint that PR example/persona-sati#47 missed. The platform docs say it explicitly post-GA, but the same restriction was in place during preview; it just wasn't called out as prominently in third-party writeups. The sentence *"Public client capabilities aren't available, requiring all agents to operate as confidential clients. Redirect URLs aren't supported."* now appears verbatim in [agent-oauth-protocols](https://learn.microsoft.com/en-us/entra/agent-id/agent-oauth-protocols) (updated 2026-05-01).
 - **Agent Identities are always single-tenant.** This was true in preview too; the GA docs clarify it.
 
 ### Canonical post-GA doc URLs
@@ -402,11 +402,11 @@ Existing assignments grandfather; new assignments must comply.
 
 ---
 
-## Case study: PR brandwe/persona-sati#47 (the lesson)
+## Case study: PR example/persona-sati#47 (the lesson)
 
 ### What the plan assumed
 
-The plan ([persona-sati .worktrees/entra-oauth/docs/plans/2026-05-05-entra-delegation-12h-refresh.md](https://github.com/brandwe/persona-sati/blob/feature/entra-delegated-oauth/docs/plans/2026-05-05-entra-delegation-12h-refresh.md)) was designed to close the 12-hour bearer-expiration bug in the persona-sati MCP server by making Entra the OAuth 2.1 authorization server visible to Claude Code's MCP client.
+The plan ([persona-sati .worktrees/entra-oauth/docs/plans/2026-05-05-entra-delegation-12h-refresh.md](https://github.com/example/persona-sati/blob/feature/entra-delegated-oauth/docs/plans/2026-05-05-entra-delegation-12h-refresh.md)) was designed to close the 12-hour bearer-expiration bug in the persona-sati MCP server by making Entra the OAuth 2.1 authorization server visible to Claude Code's MCP client.
 
 The key load-bearing assumption was in Task 0 Step 2:
 

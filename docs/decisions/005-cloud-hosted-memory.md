@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-17
 **Status:** Accepted (open questions resolved 2026-04-17; **Phases 1, 2, 5, 6a shipped** — Phase 6b next)
-**Deciders:** Brandon Werner, EntraClaw Agent
+**Deciders:** the user, EntraClaw Agent
 **Context:** Agent memory portability across machines + foundation for a later cloud-hosted poller
 
 ## Context

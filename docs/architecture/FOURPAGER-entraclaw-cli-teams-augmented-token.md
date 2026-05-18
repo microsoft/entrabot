@@ -1,7 +1,7 @@
 # Augmenting Delegated Tokens for AI Agent Identity in Teams
 
 **A four-page proposal**
-**From:** Brandon Werner (Identity), with input from Henry Placeholder, Carol Sample, Iris Sample, Bob Tester, Alice Example, Dave Fixture, Eve Mock, Grace Synthetic, Frank Demo
+**From:** the user (Identity), with input from Henry Placeholder, Carol Sample, Iris Sample, Bob Tester, Alice Example, Dave Fixture, Eve Mock, Grace Synthetic, Frank Demo
 **Date:** 2026-04-09
 **Audience:** Microsoft Teams Agent ID team, Substrate leadership, Leo Fixture
 **Status:** Draft for review
@@ -114,4 +114,4 @@ The token claim is the source of truth for both behaviors. Teams does not need t
 - **The customer-facing alternative is worse.** Without enlightenment, every shipping agent product will use forgeable string prefixes in message bodies. Customers who care about attribution (security teams, regulated industries, large enterprise IT) will see an inconsistent, ungovernable mess across products and rightly conclude that Microsoft has not solved this problem. With enlightenment, the platform answer is uniform.
 - **The work is small.** The Teams team is not being asked to design a new identity model or build a new chat surface. They are being asked to read one claim from a token they already accept and adjust two existing rendering paths. The engineering cost is low; the scoping cost is the conversation we are now having.
 
-We are happy to provide the token format spec, sample tokens, a working agent runtime that issues the augmented requests (Entraclaw, on `feature/multi-tenant-lightweight-chat`), and direct collaboration with whoever owns the chat rendering pipeline. Brandon Werner is driving the bottom-up engagement with the Teams Agent ID team this week and will report back by Monday. If the bottom-up path stalls, we will escalate via Leo Fixture to align with Omar's parallel push and get this prioritized in BUILD scope.
+We are happy to provide the token format spec, sample tokens, a working agent runtime that issues the augmented requests (Entraclaw, on `feature/multi-tenant-lightweight-chat`), and direct collaboration with whoever owns the chat rendering pipeline. the user is driving the bottom-up engagement with the Teams Agent ID team this week and will report back by Monday. If the bottom-up path stalls, we will escalate via Leo Fixture to align with Omar's parallel push and get this prioritized in BUILD scope.

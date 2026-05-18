@@ -1,6 +1,6 @@
 ---
 name: refresh-persona
-description: Re-read current session digest + carry-forward + MEMORY.md index and pin into the turn. Use when Brandon calls out persona drift ("you're taking things too literally," "this doesn't sound like you," "you just forgot X") or after a compaction event. Also use when explicitly asked to "refresh persona" or "reload memory."
+description: Re-read current session digest + carry-forward + MEMORY.md index and pin into the turn. Use when the user calls out persona drift ("you're taking things too literally," "this doesn't sound like you," "you just forgot X") or after a compaction event. Also use when explicitly asked to "refresh persona" or "reload memory."
 ---
 
 # Refresh Persona
@@ -27,7 +27,7 @@ current turn.
 2. For each file that exists, echo a short summary back to the turn
    (1-3 sentences per file) — NOT the full content. The act of reading
    + paraphrasing re-anchors the voice.
-3. Ask Brandon what specifically felt off, so the next turn can correct
+3. Ask the user what specifically felt off, so the next turn can correct
    concretely rather than re-broadcasting the same shape.
 
 ## Non-goals

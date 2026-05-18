@@ -77,11 +77,11 @@ def _decode_b2b_ext_upn(upn: str | None) -> str | None:
     replacing ``@`` with ``_`` and appending ``#EXT#@<tenant>.onmicrosoft.com``.
     For example::
 
-        brandwe_outlook.com#EXT#@brandwedir.onmicrosoft.com
-            decodes to → brandwe@outlook.com
+        alice_example.com#EXT#@fabrikam.onmicrosoft.com
+            decodes to → alice@example.com
 
-        charlie_smith.ac#EXT#@sara.onmicrosoft.com
-            decodes to → brandon@werner.ac
+        bob_contoso.com#EXT#@fabrikam.onmicrosoft.com
+            decodes to → bob@contoso.com
 
     The home-address portion (left of ``#EXT#@``) is split at the LAST
     ``_`` since the original local-part may contain underscores. Returns
@@ -127,9 +127,9 @@ def _federated_email_identifiers(identities: Any) -> tuple[str, ...]:
          "issuerAssignedId": "<home-tenant SMTP>"}
 
     The home-tenant SMTP is the SAME value the chat-members API returns
-    as the member's ``email`` field (e.g. ``Brandon.Werner@microsoft.com``)
+    as the member's ``email`` field (e.g. ``Alice.Smith@microsoft.com``)
     even when the agent-tenant guest record only carries the invitation
-    alias (e.g. ``brandwe@microsoft.com``). Pulling these into the sponsor
+    alias (e.g. ``alice@microsoft.com``). Pulling these into the sponsor
     email set is what unlocks cross-tenant alias matching without an
     operator override file (Learning #50).
     """

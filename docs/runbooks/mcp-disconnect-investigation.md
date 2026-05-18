@@ -193,7 +193,7 @@ tee, not a redirect — server stderr still flows to the parent.
    `notifications/claude/channel` JSON-RPC notification. Claude's MCP
    client closes the connection cleanly upon receiving angle-bracket
    content in notification params. **Evidence:** (a) debug log tail from
-   session 4 ends with `"Pushed Teams message from Brandon Werner:
+   session 4 ends with `"Pushed Teams message from Alice Smith:
    <attachment id=\"1777053221965\"></attachment>\n<p>As"` — confirming
    raw HTML in the push. (b) The email push path documents the identical
    death pattern at `mcp_server.py:1250–1252` and was fixed 2026-04-17
@@ -400,7 +400,7 @@ SIGHUP immunity.
   - T+17s: TUI shows "1 MCP server failed · /mcp" (may be persona-sati)
   - T+18–20s: 3 more token POSTs + blob PUT + Teams message detail GET
   - T+20s: push notification fires; last debug log line:
-    `"Pushed Teams message from Brandon Werner: <attachment id=\"1777053221965\"></attachment>\n<p>As"`
+    `"Pushed Teams message from Alice Smith: <attachment id=\"1777053221965\"></attachment>\n<p>As"`
   - T+20s–25s: entraclaw-mcp dead (clean exit, no traceback)
 - Wrapper-start count = 1 per session ✅ (Learning #45 not regressing)
 - 0 BrokenPipeError ✅ (clean exit, not a crash)
@@ -462,7 +462,7 @@ in `chat_id` or `message_id`. See `src/entraclaw/mcp_server.py`
 
 The 2026-04-27 addendum predicted the next-suspect surface: angle
 brackets *outside* `params.content`, specifically `meta.user`
-(display names like `Brandon Werner <brandon@werner.ac>`) and the
+(display names like `Alice Smith <alice@contoso.com>`) and the
 `quoted_messages` fields beyond `content`. A live 2026-04-28
 disconnect confirmed the prediction. Boot succeeded, the first push
 landed, the responder reply went out — and the second push tore down

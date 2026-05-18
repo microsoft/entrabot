@@ -13,7 +13,7 @@ gate to start matching.
 
 Usage::
 
-    python3 scripts/add_agent_sponsor.py brandwe@microsoft.com
+    python3 scripts/add_agent_sponsor.py user@example.com
 
 The script:
   1. Reads the agent's object id from ``.entraclaw-state.json``.

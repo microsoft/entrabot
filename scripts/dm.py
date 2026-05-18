@@ -1,11 +1,10 @@
 """Send a Teams message to a chat. Uses the Agent User (three-hop) token.
 
 Usage:
-    python scripts/dm.py "Your message here"                   # DMs Brandon (default)
-    python scripts/dm.py "Your message here" --chat <chat_id>  # any chat (DM or group)
-    python scripts/dm.py "Your message here" --chat brandon    # alias
+    python scripts/dm.py "Your message here" --chat <chat_id>   # any chat (DM or group)
+    python scripts/dm.py "Your message here" --chat myalias    # alias defined in CHAT_ALIASES
 
-Known aliases: brandon
+Known aliases: (none by default — populate CHAT_ALIASES below with your own chat IDs)
 """
 
 from __future__ import annotations
@@ -16,12 +15,9 @@ import asyncio
 from entraclaw.config import get_config
 from entraclaw.tools.teams import acquire_agent_user_token, send
 
-CHAT_ALIASES: dict[str, str] = {
-    "brandon": (
-        "19:44444444-4444-4444-4444-444444444444_"
-        "4d4a65ef-e9b3-4ec2-a1e2-b430a5855118@unq.gbl.spaces"
-    ),
-}
+# Populate this dict with your own chat aliases for convenience.
+# Example: "alice": "19:xxxxxxxx...@unq.gbl.spaces"
+CHAT_ALIASES: dict[str, str] = {}
 
 
 async def main() -> None:
@@ -29,8 +25,8 @@ async def main() -> None:
     ap.add_argument("message")
     ap.add_argument(
         "--chat",
-        default="brandon",
-        help="chat_id or alias (default: 'brandon')",
+        required=True,
+        help="chat_id or alias key from CHAT_ALIASES",
     )
     args = ap.parse_args()
 

@@ -3,7 +3,7 @@
 **Date:** 2026-04-08 (updated 2026-04-09 with late-night session additions)
 **Status:** Draft — synthesized from group chat debate, not yet reviewed
 **Driver:** Henry Placeholder's litmus test framework + convergence between Adrian, Ayse, Aashima, Diana, Mark
-**Participants:** Henry Placeholder, Carol Sample, Iris Sample, Bob Tester, Frank Demo, Alice Example, Dave Fixture, Brandon Werner
+**Participants:** Henry Placeholder, Carol Sample, Iris Sample, Bob Tester, Frank Demo, Alice Example, Dave Fixture, the user
 **Context:** Teams group chat debate ~19:30-22:20 UTC on 2026-04-08, continued 03:47-04:23 UTC on 2026-04-09
 **Build-time Plan:** `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` (progressive identity: human delegated token → background Agent User provision → seamless swap)
 

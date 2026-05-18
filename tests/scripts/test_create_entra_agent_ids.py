@@ -153,8 +153,8 @@ class TestFindExistingAgentUser:
             return _resp(
                 200,
                 {
-                    "id": "9e5d2c48-ca9c-4298-80cb-18fc382aa7b2",
-                    "userPrincipalName": "entraclaw-agent-sati-agent@werner.ac",
+                    "id": "aaaabbbb-cccc-dddd-eeee-111122223333",
+                    "userPrincipalName": "entraclaw-agent-sati-agent@fabrikam.onmicrosoft.com",
                     "identityParentId": self._OUR_AI,
                 },
             )
@@ -163,7 +163,7 @@ class TestFindExistingAgentUser:
         monkeypatch.setattr(
             agent_ids_module,
             "get_state",
-            lambda k: "9e5d2c48-ca9c-4298-80cb-18fc382aa7b2" if k == "AGENT_USER_ID" else None,
+            lambda k: "aaaabbbb-cccc-dddd-eeee-111122223333" if k == "AGENT_USER_ID" else None,
         )
 
         result = agent_ids_module.find_existing_agent_user(
@@ -186,12 +186,12 @@ class TestFindExistingAgentUser:
 
         def fake_graph_request(method, path, token, **kw):
             calls.append(path)
-            if path.startswith("/users/9e5d2c48"):
+            if path.startswith("/users/aaaabbbb"):
                 # Fetched stored user — but it's under a DIFFERENT Agent Identity
                 return _resp(
                     200,
                     {
-                        "id": "9e5d2c48-ca9c-4298-80cb-18fc382aa7b2",
+                        "id": "aaaabbbb-cccc-dddd-eeee-111122223333",
                         "identityParentId": self._OTHER_AI,
                     },
                 )
@@ -202,7 +202,7 @@ class TestFindExistingAgentUser:
         monkeypatch.setattr(
             agent_ids_module,
             "get_state",
-            lambda k: "9e5d2c48-ca9c-4298-80cb-18fc382aa7b2" if k == "AGENT_USER_ID" else None,
+            lambda k: "aaaabbbb-cccc-dddd-eeee-111122223333" if k == "AGENT_USER_ID" else None,
         )
 
         result = agent_ids_module.find_existing_agent_user(
@@ -212,7 +212,7 @@ class TestFindExistingAgentUser:
         assert result is None
         assert "parented by a different Agent Identity" in capsys.readouterr().out
         # Verify both the stored lookup AND the fallback filter ran
-        assert any(p.startswith("/users/9e5d2c48") for p in calls)
+        assert any(p.startswith("/users/aaaabbbb") for p in calls)
         assert any("identityParentId eq" in p for p in calls)
 
 

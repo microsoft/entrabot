@@ -74,7 +74,7 @@ Content-Type: application/json
 }
 ```
 
-Supports KQL syntax: `filetype:docx`, `path:"https://contoso.sharepoint.com/sites/Engineering"`, `author:"Brandon Werner"`, `lastModifiedTime>2026-01-01`. Hits arrive as `driveItem` resources you can pipe into the same download/comment endpoints.
+Supports KQL syntax: `filetype:docx`, `path:"https://contoso.sharepoint.com/sites/Engineering"`, `author:"the user"`, `lastModifiedTime>2026-01-01`. Hits arrive as `driveItem` resources you can pipe into the same download/comment endpoints.
 
 **Permission:** `Files.Read.All` and/or `Sites.Read.All`.
 

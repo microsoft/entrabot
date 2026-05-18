@@ -294,7 +294,7 @@ push over the channel:
   "received_at": "2026-04-24T18:21:03Z",
   "channel": "teams" | "email",
   "chat_id": "<graph chat id or 'email'>",
-  "from": "Brandon Werner",
+  "from": "the user",
   "ts": "<source ts>",
     "content_text_sanitized": "Hi",
   "meta": { ...same shape as today's notifications/claude/channel meta... },

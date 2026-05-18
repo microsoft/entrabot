@@ -10,6 +10,7 @@ build/
 venv/
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 *.token
@@ -41,3 +42,7 @@ pip.ini
 .claude/settings.local.json
 .gstack/
 .worktrees/
+
+# Internal session transcripts and personal planning docs
+docs/runbooks/session-*.md
+docs/superpowers/

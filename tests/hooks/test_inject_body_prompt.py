@@ -102,7 +102,11 @@ class TestHookGracefulDegradation:
         # No output — Claude Code treats empty stdout as "nothing to inject".
         assert result.stdout.strip() == ""
 
-    def test_claude_project_dir_unset_exits_zero(self, tmp_path: Path) -> None:
+    def test_claude_project_dir_unset_still_injects_via_self_location(
+        self, tmp_path: Path
+    ) -> None:
+        # The hook is self-locating via __file__, so even without CLAUDE_PROJECT_DIR
+        # it finds prompts/agent_system.md relative to the script path and injects it.
         env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
         result = subprocess.run(
             [sys.executable, str(HOOK_SCRIPT)],
@@ -113,8 +117,11 @@ class TestHookGracefulDegradation:
             timeout=10,
         )
         assert result.returncode == 0, result.stderr
-        # Nothing to inject.
-        assert result.stdout.strip() == ""
+        # Self-location succeeds: output is either the prompt or empty (if
+        # prompts/agent_system.md doesn't exist in this checkout), but never an error.
+        if result.stdout.strip():
+            parsed = json.loads(result.stdout)
+            assert "additionalContext" in parsed["hookSpecificOutput"]
 
     def test_malformed_stdin_payload_does_not_crash(self, tmp_path: Path) -> None:
         _write_prompt(tmp_path, body="ok\n", includes={})

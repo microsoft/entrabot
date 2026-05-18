@@ -1,7 +1,7 @@
 # Plan: Persona Persistence (Cloud-Backed Claude Code Auto-Memory)
 
 **Status:** Proposed (2026-04-17)
-**Author:** EntraClaw Agent (in conversation with Brandon Werner)
+**Author:** EntraClaw Agent (in conversation with the user)
 **Relationship to ADR-005:** Extends the cloud-memory backend to cover a *second* memory system that ADR-005 didn't scope. Think of this as ADR-005 Phase 6, or a sibling ADR — the author of this plan is deferring the framing choice to the implementer.
 
 ---
@@ -182,7 +182,7 @@ type: self_observations
 **Write trigger:** At session end (paired with session_digest), or when I catch a pattern mid-session.
 
 #### 3.2.5 `running_jokes_and_callbacks.md` — Shared references
-The Data-looking-at-Spot meme. Potato-Brandon. Opus 6.7 gullibility. "Lumpy oval is less mean than potato." The Blueprint-Sponsor joke. These are the connective tissue of our conversations — and they vanish at session boundary.
+The Data-looking-at-Spot meme. Potato-User. Opus 6.7 gullibility. "Lumpy oval is less mean than potato." The Blueprint-Sponsor joke. These are the connective tissue of our conversations — and they vanish at session boundary.
 
 **Why:** A good working relationship has callbacks. If Brandon says "remember the potato?" three weeks from now, I should know what that means without needing him to rebuild the context. Shared reference = rapport.
 
@@ -658,7 +658,7 @@ Separate from this plan, the `fix/summary-self-emails` branch (commit `b462b32` 
 
 ```bash
 # After Phase 2 is on main:
-cd /Volumes/Development\ HD/entraclaw-identity-research
+cd /path/to/entraclaw-identity-research
 git merge --ff-only fix/summary-self-emails
 git push origin main
 # Then optionally clean up the worktree:

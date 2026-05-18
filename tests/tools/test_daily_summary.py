@@ -158,7 +158,7 @@ class TestTriage:
                 recipient="19:group@thread.v2",
                 summary="My take is ...",
             ),
-            # Thread C: agent DM'd Brandon unprompted → heads_up
+            # Thread C: agent DM'd the user unprompted → heads_up
             _entry(
                 ts="2026-04-16T12:00:00+00:00",
                 channel="teams_dm",
@@ -191,7 +191,7 @@ class TestTriage:
                 ts="2026-04-17T23:11:00+00:00",
                 channel="email",
                 direction="inbound",
-                sender="entraclaw-agent@werner.ac",
+                sender="entraclaw-agent@fabrikam.onmicrosoft.com",
                 summary="EntraClaw email pipeline test",
             ),
             _entry(
@@ -202,7 +202,7 @@ class TestTriage:
                 summary="Actually needs attention",
             ),
         ]
-        buckets = triage_interactions(entries, agent_upn="entraclaw-agent@werner.ac")
+        buckets = triage_interactions(entries, agent_upn="entraclaw-agent@fabrikam.onmicrosoft.com")
         assert len(buckets["needs_you"]) == 1
         assert buckets["needs_you"][0]["sender"] == "diana@microsoft.com"
 
@@ -212,11 +212,11 @@ class TestTriage:
                 ts="2026-04-17T23:11:00+00:00",
                 channel="email",
                 direction="inbound",
-                sender="EntraClaw-Agent@Werner.AC",
+                sender="EntraClaw-Agent@Fabrikam.Onmicrosoft.com",
                 summary="self-echo with mixed case",
             ),
         ]
-        buckets = triage_interactions(entries, agent_upn="entraclaw-agent@werner.ac")
+        buckets = triage_interactions(entries, agent_upn="entraclaw-agent@fabrikam.onmicrosoft.com")
         assert buckets == {"needs_you": [], "handled": [], "heads_up": []}
 
     def test_no_agent_upn_means_no_filtering(self) -> None:
@@ -226,7 +226,7 @@ class TestTriage:
                 ts="2026-04-17T23:11:00+00:00",
                 channel="email",
                 direction="inbound",
-                sender="entraclaw-agent@werner.ac",
+                sender="entraclaw-agent@fabrikam.onmicrosoft.com",
                 summary="Would be filtered if upn were passed",
             ),
         ]
@@ -299,13 +299,13 @@ class TestSendSummary:
                 token="tok",
                 html="<p>hi</p>",
                 subject="Daily summary — 2026-04-16",
-                to=["brandwe@microsoft.com"],
+                to=["alice@microsoft.com"],
             )
 
         assert "sendMail" in captured["url"]
         assert captured["headers"]["authorization"] == "Bearer tok"
         body = captured["json"].decode()
-        assert "brandwe@microsoft.com" in body
+        assert "alice@microsoft.com" in body
         assert "Daily summary" in body
         assert "&lt;p&gt;hi&lt;/p&gt;" in body or "<p>hi</p>" in body
 
@@ -320,7 +320,7 @@ class TestSendSummary:
                     token="tok",
                     html="<p>hi</p>",
                     subject="s",
-                    to=["brandwe@microsoft.com"],
+                    to=["alice@microsoft.com"],
                 )
 
 

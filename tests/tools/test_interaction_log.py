@@ -52,7 +52,7 @@ class TestDetectChannel:
     def test_dm_chat_id(self) -> None:
         assert (
             detect_channel(
-                "19:44444444-4444-4444-4444-444444444444_4d4a65ef-e9b3-4ec2-a1e2-b430a5855118@unq.gbl.spaces"
+                "19:00000000-0000-0000-0000-000000000000_00112233-4455-6677-8899-aabbccddeeff@unq.gbl.spaces"
             )
             == "teams_dm"
         )
@@ -78,7 +78,7 @@ class TestLogInteraction:
         log_interaction(
             channel="teams_dm",
             direction="outbound",
-            sender="entraclaw-agent@werner.ac",
+            sender="entraclaw-agent@fabrikam.onmicrosoft.com",
             recipient="19:xyz@unq.gbl.spaces",
             summary="Sent Brandon the phase plan",
             action="send_teams_message",
@@ -92,7 +92,7 @@ class TestLogInteraction:
         entry = json.loads(lines[0])
         assert entry["channel"] == "teams_dm"
         assert entry["direction"] == "outbound"
-        assert entry["sender"] == "entraclaw-agent@werner.ac"
+        assert entry["sender"] == "entraclaw-agent@fabrikam.onmicrosoft.com"
         assert entry["summary"] == "Sent Brandon the phase plan"
 
     def test_creates_directory(self, tmp_data_dir: Path) -> None:
@@ -194,7 +194,7 @@ class TestInteractionSchema:
             channel="email",
             direction="inbound",
             sender="diana.smetters@microsoft.com",
-            recipient="entraclaw-agent@werner.ac",
+            recipient="entraclaw-agent@fabrikam.onmicrosoft.com",
             summary="Re: Project Apollo",
             action="noted",
             content_ref="AAMk...message-id",
@@ -202,7 +202,7 @@ class TestInteractionSchema:
         )
         day = datetime.now(UTC).strftime("%Y-%m-%d")
         entry = json.loads((tmp_data_dir / "interactions" / f"{day}.jsonl").read_text().strip())
-        assert entry["recipient"] == "entraclaw-agent@werner.ac"
+        assert entry["recipient"] == "entraclaw-agent@fabrikam.onmicrosoft.com"
         assert entry["action"] == "noted"
         assert entry["content_ref"] == "AAMk...message-id"
         assert entry["metadata"]["subject"] == "Re: Project Apollo"

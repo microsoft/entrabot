@@ -31,7 +31,7 @@
 
 .PARAMETER AgentUserUpn
   Explicit existing Agent User UPN to reuse with -UseBlueprint, e.g.
-  entraclaw-agent-sati-agent@werner.ac.
+  entraclaw-agent-sati-agent@yourtenant.onmicrosoft.com.
 
 .PARAMETER UseCloudMemory
   Provision Azure Blob Storage for operational data (default: local).

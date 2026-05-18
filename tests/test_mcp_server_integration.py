@@ -565,7 +565,7 @@ class TestResolveTenantId:
         mock_client.__aenter__.return_value = mock_client
 
         with patch("entraclaw.mcp_server.httpx.AsyncClient", return_value=mock_client):
-            result = await _resolve_tenant_id("brandwe@microsoft.com", "werner.ac")
+            result = await _resolve_tenant_id("alice@microsoft.com", "contoso.com")
             assert result == "72f988bf-86f1-41af-91ab-2d7cd011db47"
 
     async def test_discovery_failure_returns_none(self) -> None:
@@ -946,7 +946,7 @@ class TestPushChannelNotificationObservability:
         await mcp_server._push_channel_notification(
             {
                 "message_id": "m-dm-1",
-                "from": "Brandon Werner",
+                "from": "Alice Smith",
                 "content": "test DM",
                 "sent_at": "2026-04-17T01:00:00Z",
             },
@@ -1093,7 +1093,7 @@ class TestPushChannelNotificationObservability:
             await mcp_server._push_channel_notification(
                 {
                     "message_id": "m-att-1",
-                    "from": "Brandon Werner",
+                    "from": "Alice Smith",
                     "content": (
                         '<attachment id="1776624654280"></attachment>\n'
                         f'<p><a href="{href}">link text</a></p>'
@@ -1220,7 +1220,7 @@ class TestPushChannelNotificationObservability:
     ) -> None:
         """No angle brackets anywhere in params — not just in content.
 
-        Display names like ``Brandon Werner <brandon@werner.ac>`` and any
+        Display names like ``Alice Smith <brandon@contoso.com>`` and any
         future Graph fields that creep into ``meta`` must be sanitized.
         The walk-every-string assertion is stronger than per-field checks
         — it catches new fields that future code might add.
@@ -1238,7 +1238,7 @@ class TestPushChannelNotificationObservability:
             await mcp_server._push_channel_notification(
                 {
                     "message_id": "m-1",
-                    "from": "Brandon Werner <brandon@werner.ac>",
+                    "from": "Alice Smith <brandon@contoso.com>",
                     "content": "<p>plain reply</p>",
                     "sent_at": "2026-04-28T00:01:00Z",
                     "reply_to_ids": ["SRC-1"],
@@ -1320,7 +1320,7 @@ class TestPushChannelNotificationObservability:
             await mcp_server._push_channel_notification(
                 {
                     "message_id": "m-crash-1",
-                    "from": "Brandon Werner",
+                    "from": "Alice Smith",
                     "content": "crash path",
                     "sent_at": "2026-04-17T01:06:00Z",
                 },
@@ -1815,7 +1815,7 @@ class TestBackgroundPollPerChatResilience:
 
         good_msg = {
             "message_id": "m1",
-            "from": "Brandon Werner",
+            "from": "Alice Smith",
             "content": "<p>hi</p>",
             "sent_at": "2026-04-20T01:00:00.000Z",
         }

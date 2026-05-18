@@ -2,7 +2,7 @@
 
 **Severity: HIGH — confidentiality of agent identity infrastructure**
 **Status: Open**
-**Owner: Brandon Werner**
+**Owner: the user**
 **Filed: 2026-04-19**
 
 ---

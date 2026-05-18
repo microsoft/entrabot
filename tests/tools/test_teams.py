@@ -370,7 +370,7 @@ class TestCreateOrFindChat:
             token="agent-token",
             human_user_ids=["guest-obj-id"],
             human_user_tenant_ids=["72f988bf-86f1-41af-91ab-2d7cd011db47"],
-            human_user_mails=["adrumea@microsoft.com"],
+            human_user_mails=["user1@example.com"],
         )
         assert result["chat_id"] == "19:fed-chat@thread.v2"
         import json
@@ -378,12 +378,12 @@ class TestCreateOrFindChat:
         body = json.loads(route.calls.last.request.content)
         # Find the human member (not the agent)
         human_members = [
-            m for m in body["members"] if "adrumea@microsoft.com" in m.get("user@odata.bind", "")
+            m for m in body["members"] if "user1@example.com" in m.get("user@odata.bind", "")
         ]
         assert len(human_members) == 1
         assert human_members[0]["tenantId"] == "72f988bf-86f1-41af-91ab-2d7cd011db47"
         # user@odata.bind should use email, not the guest object ID
-        assert "adrumea@microsoft.com" in human_members[0]["user@odata.bind"]
+        assert "user1@example.com" in human_members[0]["user@odata.bind"]
 
     @respx.mock
     @pytest.mark.asyncio
@@ -399,7 +399,7 @@ class TestCreateOrFindChat:
             token="agent-token",
             human_user_ids=["member-uid", "guest-obj-id"],
             human_user_tenant_ids=["", "ext-tenant-id"],
-            human_user_mails=["brandon@werner.ac", "guest@external.com"],
+            human_user_mails=["alice@contoso.com", "guest@external.com"],
         )
         import json
 
@@ -429,7 +429,7 @@ class TestCreateOrFindChat:
             token="agent-token",
             human_user_ids=["local-uid"],
             human_user_tenant_ids=[""],
-            human_user_mails=["brandon@werner.ac"],
+            human_user_mails=["alice@contoso.com"],
         )
         import json
 
@@ -499,7 +499,7 @@ class TestCreateOrFindChat:
             human_user_ids=["member-uid", "guest-uid"],
             human_user_types=["Member", "Guest"],
             human_user_tenant_ids=["", "ext-tenant-id"],
-            human_user_mails=["brandon@werner.ac", "guest@external.com"],
+            human_user_mails=["alice@contoso.com", "guest@external.com"],
         )
         import json
 
@@ -594,14 +594,14 @@ class TestAddMember:
         result = await add_member(
             chat_id="19:chat-id@thread.v2",
             token="agent-token",
-            email="local@werner.ac",
+            email="local@contoso.com",
         )
         assert result["display_name"] == "Local User"
         import json
 
         body = json.loads(route.calls.last.request.content)
         assert "tenantId" not in body
-        assert "local@werner.ac" in body["user@odata.bind"]
+        assert "local@contoso.com" in body["user@odata.bind"]
 
     @respx.mock
     @pytest.mark.asyncio
@@ -791,8 +791,8 @@ class TestListMembers:
                         },
                         {
                             "userId": "user-2",
-                            "displayName": "Brandon Werner",
-                            "email": "brandon@werner.ac",
+                            "displayName": "Alice Smith",
+                            "email": "alice@contoso.com",
                             "roles": ["owner"],
                         },
                     ]
@@ -803,7 +803,7 @@ class TestListMembers:
         assert len(result) == 2
         assert result[0]["user_id"] == "user-1"
         assert result[0]["name"] == "Alice Example"
-        assert result[1]["name"] == "Brandon Werner"
+        assert result[1]["name"] == "Alice Smith"
 
     @respx.mock
     @pytest.mark.asyncio
@@ -1115,7 +1115,7 @@ class TestCreateOneOnOneChat:
         )
         result = await create_one_on_one_chat(
             token="agent-token",
-            target_email="brandon@werner.ac",
+            target_email="alice@contoso.com",
             agent_user_id="agent-oid-123",
         )
         assert result["chat_id"] == "19:dm-chat@thread.v2"
@@ -1125,7 +1125,7 @@ class TestCreateOneOnOneChat:
         assert body["chatType"] == "oneOnOne"
         # Target user referenced by email
         target_members = [
-            m for m in body["members"] if "brandon@werner.ac" in m.get("user@odata.bind", "")
+            m for m in body["members"] if "alice@contoso.com" in m.get("user@odata.bind", "")
         ]
         assert len(target_members) == 1
 

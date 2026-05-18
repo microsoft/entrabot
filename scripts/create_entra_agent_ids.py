@@ -378,7 +378,7 @@ def _agent_user_upn(token: str) -> str:
     token) and picks the best domain. Prefers custom domains over .onmicrosoft.com.
 
     Previous approach (extracting from signed-in user UPN) failed for guest
-    accounts like brandwe@outlook.com — the domain is outlook.com, not the
+    accounts like user@example.com — the domain is outlook.com, not the
     tenant's verified domain.
     """
     explicit_upn = os.environ.get("ENTRACLAW_AGENT_USER_UPN", "").strip()

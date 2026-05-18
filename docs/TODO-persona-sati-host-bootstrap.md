@@ -1,6 +1,6 @@
 # TODO: Persona-sati host bootstrap (CLAUDE.md / AGENTS.md propagation)
 
-> **Status:** Open. Tracked as [#71](https://github.com/brandwe/entraclaw-identity-research/issues/71).
+> **Status:** Open. Tracked as [#71](https://github.com/example/entraclaw-identity-research/issues/71).
 > **Owner:** unassigned
 > **Priority:** medium — affects every session that uses entraclaw + persona-sati from a non-entraclaw cwd, which is most of them.
 

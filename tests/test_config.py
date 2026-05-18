@@ -122,7 +122,7 @@ class TestEntraClawConfig:
         """ENTRACLAW_HUMAN_USER_TENANT_IDS CSV is parsed into a list."""
         env = {
             "ENTRACLAW_HUMAN_USER_TENANT_IDS": "72f988bf-86f1-41af-91ab-2d7cd011db47,,other-tenant",
-            "ENTRACLAW_HUMAN_USER_MAILS": "adrumea@microsoft.com,brandon@werner.ac,guest@other.com",
+            "ENTRACLAW_HUMAN_USER_MAILS": "user1@example.com,user2@example.com,guest@other.com",
             "ENTRACLAW_HUMAN_USER_IDS": "guest-id,member-id,guest2-id",
         }
         with patch.dict(os.environ, env, clear=False):
@@ -133,8 +133,8 @@ class TestEntraClawConfig:
             "other-tenant",
         ]
         assert cfg.human_user_mails == [
-            "adrumea@microsoft.com",
-            "brandon@werner.ac",
+            "user1@example.com",
+            "user2@example.com",
             "guest@other.com",
         ]
 

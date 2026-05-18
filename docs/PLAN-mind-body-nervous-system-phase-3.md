@@ -39,7 +39,7 @@ Recommendation for the proof of concept: create a small `src/entraclaw/runtime/`
 
 ## File map for proof of concept
 
-### Entraclaw repo: `/Volumes/Development HD/entraclaw-identity-research`
+### Entraclaw repo: `/path/to/entraclaw-identity-research`
 
 - Create: `docs/architecture/DESIGN-mind-body-nervous-system.md` — final architecture before code.
 - Create: `src/entraclaw/runtime/__init__.py` — package marker.
@@ -58,7 +58,7 @@ Recommendation for the proof of concept: create a small `src/entraclaw/runtime/`
 ### Task 1: Write the architecture design
 
 **Files:**
-- Create: `/Volumes/Development HD/entraclaw-identity-research/docs/architecture/DESIGN-mind-body-nervous-system.md`
+- Create: `/path/to/entraclaw-identity-research/docs/architecture/DESIGN-mind-body-nervous-system.md`
 
 - [ ] **Step 1: Create the design document**
 
@@ -135,7 +135,7 @@ Confirm the design assumes persona-sati has `bootstrap_session()`. If Phase 2 ha
 Run:
 
 ```bash
-cd "/Volumes/Development HD/entraclaw-identity-research"
+cd "/path/to/entraclaw-identity-research"
 git add docs/architecture/DESIGN-mind-body-nervous-system.md
 git commit -m "docs: design mind-body nervous-system runtime" \
   -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
@@ -148,14 +148,14 @@ git commit -m "docs: design mind-body nervous-system runtime" \
 ### Task 2: Write broker tests
 
 **Files:**
-- Create: `/Volumes/Development HD/entraclaw-identity-research/tests/runtime/test_broker.py`
+- Create: `/path/to/entraclaw-identity-research/tests/runtime/test_broker.py`
 
 - [ ] **Step 1: Create the test directory**
 
 Run:
 
 ```bash
-cd "/Volumes/Development HD/entraclaw-identity-research"
+cd "/path/to/entraclaw-identity-research"
 mkdir -p tests/runtime
 ```
 
@@ -221,7 +221,7 @@ def test_tool_classification_marks_human_visible_writes() -> None:
 Run:
 
 ```bash
-cd "/Volumes/Development HD/entraclaw-identity-research"
+cd "/path/to/entraclaw-identity-research"
 pytest tests/runtime/test_broker.py -v
 ```
 
@@ -230,8 +230,8 @@ Expected: FAIL because `entraclaw.runtime.broker` does not exist.
 ### Task 3: Implement broker state and tool classification
 
 **Files:**
-- Create: `/Volumes/Development HD/entraclaw-identity-research/src/entraclaw/runtime/__init__.py`
-- Create: `/Volumes/Development HD/entraclaw-identity-research/src/entraclaw/runtime/broker.py`
+- Create: `/path/to/entraclaw-identity-research/src/entraclaw/runtime/__init__.py`
+- Create: `/path/to/entraclaw-identity-research/src/entraclaw/runtime/broker.py`
 
 - [ ] **Step 1: Create runtime package**
 
@@ -300,7 +300,7 @@ class ToolClassification:
 Run:
 
 ```bash
-cd "/Volumes/Development HD/entraclaw-identity-research"
+cd "/path/to/entraclaw-identity-research"
 pytest tests/runtime/test_broker.py -v
 ```
 
@@ -313,7 +313,7 @@ Expected: PASS.
 ### Task 4: Define MCP client abstraction tests
 
 **Files:**
-- Create: `/Volumes/Development HD/entraclaw-identity-research/tests/runtime/test_runtime_server.py`
+- Create: `/path/to/entraclaw-identity-research/tests/runtime/test_runtime_server.py`
 
 - [ ] **Step 1: Write fake upstream tests**
 
@@ -392,7 +392,7 @@ async def test_runtime_proxies_body_tool_after_bootstrap() -> None:
 Run:
 
 ```bash
-cd "/Volumes/Development HD/entraclaw-identity-research"
+cd "/path/to/entraclaw-identity-research"
 pytest tests/runtime/test_runtime_server.py -v
 ```
 
@@ -401,7 +401,7 @@ Expected: FAIL because `entraclaw.runtime.server` does not exist.
 ### Task 5: Implement runtime server POC
 
 **Files:**
-- Create: `/Volumes/Development HD/entraclaw-identity-research/src/entraclaw/runtime/server.py`
+- Create: `/path/to/entraclaw-identity-research/src/entraclaw/runtime/server.py`
 
 - [ ] **Step 1: Create runtime server**
 
@@ -479,7 +479,7 @@ def create_runtime_server(*, mind: Upstream, body: Upstream) -> FastMCP:
 Run:
 
 ```bash
-cd "/Volumes/Development HD/entraclaw-identity-research"
+cd "/path/to/entraclaw-identity-research"
 pytest tests/runtime/test_broker.py tests/runtime/test_runtime_server.py -v
 ```
 
@@ -488,7 +488,7 @@ Expected: PASS.
 ### Task 6: Wire example MCP config for later manual use
 
 **Files:**
-- Modify: `/Volumes/Development HD/entraclaw-identity-research/.mcp.json.example`
+- Modify: `/path/to/entraclaw-identity-research/.mcp.json.example`
 
 - [ ] **Step 1: Add a strict-JSON runtime note**
 
@@ -505,7 +505,7 @@ The resulting file must remain valid JSON. With the current file shape, the root
 Run:
 
 ```bash
-cd "/Volumes/Development HD/entraclaw-identity-research"
+cd "/path/to/entraclaw-identity-research"
 python3 -m json.tool .mcp.json.example >/tmp/mcp-json-check
 ```
 
@@ -521,7 +521,7 @@ Expected: exit code 0.
 Run:
 
 ```bash
-cd "/Volumes/Development HD/entraclaw-identity-research"
+cd "/path/to/entraclaw-identity-research"
 pytest tests/runtime/test_broker.py tests/runtime/test_runtime_server.py -v
 ruff check src/entraclaw/runtime tests/runtime
 ```
@@ -533,7 +533,7 @@ Expected: PASS.
 Run:
 
 ```bash
-cd "/Volumes/Development HD/entraclaw-identity-research"
+cd "/path/to/entraclaw-identity-research"
 pytest tests/test_prompt_doctrine.py tests/hooks/test_inject_body_prompt.py tests/runtime -v
 ```
 
@@ -544,7 +544,7 @@ Expected: PASS.
 Run:
 
 ```bash
-cd "/Volumes/Development HD/entraclaw-identity-research"
+cd "/path/to/entraclaw-identity-research"
 git add docs/architecture/DESIGN-mind-body-nervous-system.md \
   src/entraclaw/runtime \
   tests/runtime \
