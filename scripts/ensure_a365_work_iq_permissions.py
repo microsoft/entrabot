@@ -23,9 +23,13 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from entra_provisioning import (  # noqa: E402
     ProvisionerBootstrapError,
-    get_graph_token,
+    get_existing_graph_token,
     get_state,
 )
+
+# The repo root is one directory up; src/ contains the entraclaw package.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from entraclaw.graph_helpers import odata_escape as _odata_escape  # noqa: E402
 
 GRAPH_V1 = "https://graph.microsoft.com/v1.0"
 
@@ -72,10 +76,6 @@ REQUIRED_RESOURCES = (
         scope="Tools.ListInvoke.All",
     ),
 )
-
-
-def _odata_escape(value: str) -> str:
-    return value.replace("'", "''")
 
 
 def _headers(token: str) -> dict[str, str]:
@@ -383,7 +383,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        token = get_graph_token(wait_for_propagation=False)
+        token = get_existing_graph_token()
         ensure_a365_work_iq_permissions(token=token, blueprint_app_id=blueprint_app_id)
     except (A365PermissionError, ProvisionerBootstrapError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

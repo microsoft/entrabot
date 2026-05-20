@@ -1,30 +1,22 @@
 #!/usr/bin/env python3
 """
-add_agent_sponsor.py
-====================
-Add a user as a sponsor on the configured Agent Identity.
+remove_agent_sponsor.py
+=======================
+Remove a user from the sponsor list on the configured Agent Identity.
 
-This is the surgical fix for the SponsorGate-rejects-B2B-guest bug:
-when the existing sponsor list does not include the agent operator's
-home-tenant identity, ``wait_for_sponsor_dm`` will silently reject
-their inbound chat messages.  Adding the operator's resolved guest
-user as a sponsor causes Graph to populate ``mail`` correctly and the
-gate to start matching.
+Inverse of ``add_agent_sponsor.py``.
 
 Usage::
 
-    python3 scripts/add_agent_sponsor.py user@example.com
+    python3 scripts/remove_agent_sponsor.py user@example.com
+    python3 scripts/remove_agent_sponsor.py user@example.com --agent-object-id OID
 
 The script:
-  1. Reads the agent's object id from ``.entraclaw-state.json``.
-  2. Mints a Graph token via the dedicated provisioner cert (NEVER az
-     CLI tokens — they are rejected by Agent Identity APIs).
-  3. Resolves the email to a user object id in the agent's home tenant
-     (works for both home-tenant users and B2B guests by mail / UPN /
-     proxyAddresses).
-  4. POSTs to
-     ``/servicePrincipals/{agent}/microsoft.graph.agentIdentity/sponsors/$ref``
-     to add the user as an additional sponsor (does not replace).
+  1. Reads the agent's object id from ``.entraclaw-state.json`` (or ``--agent-object-id``).
+  2. Mints a Graph token via the dedicated provisioner cert.
+  3. Resolves the email to a user object id.
+  4. DELETEs
+     ``/servicePrincipals/{agent}/microsoft.graph.agentIdentity/sponsors/{sponsor_id}/$ref``
   5. Prints the resulting sponsor list for verification.
 """
 
@@ -42,7 +34,6 @@ from entra_provisioning import (  # noqa: E402
     get_state,
 )
 
-# The repo root is one directory up; src/ contains the entraclaw package.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from entraclaw.graph_helpers import GRAPH_BETA as GRAPH_BASE  # noqa: E402
 from entraclaw.graph_helpers import resolve_user_by_email  # noqa: E402
@@ -56,51 +47,59 @@ def _list_sponsors(token: str, agent_object_id: str) -> list[dict]:
     )
     resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
     if resp.status_code != 200:
-        raise SystemExit(f"Failed to read sponsors: {resp.status_code} {resp.text}")
+        raise RuntimeError(f"Failed to read sponsors: {resp.status_code} {resp.text}")
     return resp.json().get("value", [])
 
 
-def _add_sponsor(token: str, agent_object_id: str, user_id: str) -> None:
+def _remove_sponsor(token: str, agent_object_id: str, sponsor_id: str) -> str:
+    """DELETE the sponsor ref. Returns 'removed', 'not_found', or raises."""
     url = (
         f"{GRAPH_BASE}/servicePrincipals/{agent_object_id}"
-        "/microsoft.graph.agentIdentity/sponsors/$ref"
+        f"/microsoft.graph.agentIdentity/sponsors/{sponsor_id}/$ref"
     )
-    body = {"@odata.id": f"{GRAPH_BASE}/users/{user_id}"}
-    resp = requests.post(
+    resp = requests.delete(
         url,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-        json=body,
+        headers={"Authorization": f"Bearer {token}"},
         timeout=15,
     )
-    if resp.status_code in (204, 200, 201):
-        return
-    if resp.status_code == 400 and "already exist" in resp.text.lower():
-        print("  (already a sponsor — no change)")
-        return
-    raise SystemExit(f"Failed to add sponsor: {resp.status_code} {resp.text}")
+    if resp.status_code in (204, 200):
+        return "removed"
+    if resp.status_code == 404:
+        return "not_found"
+    raise RuntimeError(f"Failed to remove sponsor: {resp.status_code} {resp.text}")
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
+    if len(argv) < 2:
         print(__doc__, file=sys.stderr)
-        print("\nERROR: exactly one email argument is required.", file=sys.stderr)
+        print("\nERROR: email argument is required.", file=sys.stderr)
         return 2
+
     email = argv[1].strip()
 
-    agent_object_id = get_state("AGENT_OBJECT_ID")
+    # Parse optional --agent-object-id
+    agent_object_id = None
+    i = 2
+    while i < len(argv):
+        if argv[i] == "--agent-object-id" and i + 1 < len(argv):
+            agent_object_id = argv[i + 1]
+            i += 2
+        else:
+            i += 1
+
+    if not agent_object_id:
+        agent_object_id = get_state("AGENT_OBJECT_ID")
+
     if not agent_object_id:
         print(
             "ERROR: AGENT_OBJECT_ID missing from .entraclaw-state.json. "
-            "Run scripts/create_entra_agent_ids.py first.",
+            "Run scripts/create_entra_agent_ids.py first, or pass --agent-object-id.",
             file=sys.stderr,
         )
         return 1
 
     print(f"Agent object id: {agent_object_id}")
-    print(f"Adding sponsor:  {email}")
+    print(f"Removing sponsor: {email}")
     print("")
 
     try:
@@ -127,9 +126,17 @@ def main(argv: list[str]) -> int:
         )
     print("")
 
-    print(f"Adding {display_name} ({user_id}) as sponsor...")
-    _add_sponsor(token, agent_object_id, user_id)
-    print("  done")
+    print(f"Removing {display_name} ({user_id}) from sponsors...")
+    try:
+        result = _remove_sponsor(token, agent_object_id, user_id)
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    if result == "not_found":
+        print("  (not a sponsor — already removed or never added)")
+    else:
+        print("  done")
     print("")
 
     print("Sponsors after update:")
@@ -140,7 +147,7 @@ def main(argv: list[str]) -> int:
             f"mail={sp.get('mail')!r}"
         )
     print("")
-    print("Restart the entraclaw MCP server so the sponsor gate is reloaded with the new sponsor:")
+    print("Restart the entraclaw MCP server so the sponsor gate is reloaded:")
     print("  killall -TERM Python 2>/dev/null; copilot")
     return 0
 

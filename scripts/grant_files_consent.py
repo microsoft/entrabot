@@ -35,7 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from create_entra_agent_ids import grant_agent_user_consent
-from entra_provisioning import ProvisionerBootstrapError, get_graph_token, get_state
+from entra_provisioning import ProvisionerBootstrapError, get_existing_graph_token, get_state
 
 
 def main() -> int:
@@ -55,7 +55,7 @@ def main() -> int:
     print("")
 
     try:
-        token = get_graph_token(wait_for_propagation=False)
+        token = get_existing_graph_token()
     except ProvisionerBootstrapError as exc:
         print(f"ERROR: provisioner token: {exc}")
         return 2

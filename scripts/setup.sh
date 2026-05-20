@@ -43,6 +43,22 @@ CONFIGURE_A365_WORK_IQ=false
 A365_AGENT_NAME="EntraClaw Code Agent"
 A365_WORK_IQ_MCP_SERVERS=(mcp_WordServer mcp_ODSPRemoteServer)
 
+SETUP_STATUS=false
+STATUS_ARGS=()
+for arg in "$@"; do
+    if [ "$arg" = "--status" ]; then
+        SETUP_STATUS=true
+    else
+        STATUS_ARGS+=("$arg")
+    fi
+done
+
+if [ "$SETUP_STATUS" = true ]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+    exec "$PROJECT_ROOT/status.sh" "${STATUS_ARGS[@]}"
+fi
+
 for arg in "$@"; do
     case $arg in
         --switch-user)
@@ -93,6 +109,9 @@ for arg in "$@"; do
             ;;
         --diagnose)
             DIAGNOSE=true
+            ;;
+        --status)
+            # Handled before full setup argument parsing.
             ;;
         --skip-smoke)
             SKIP_SMOKE=true
@@ -196,6 +215,9 @@ if [ "$SHOW_HELP" = true ]; then
     echo "  --help, -h             Show this help"
     echo ""
     echo "Diagnostics:"
+    echo "  --status               Skip setup and run ./status.sh. Extra args are"
+    echo "                         forwarded to show_agent_status.py, e.g."
+    echo "                         ./scripts/setup.sh --status --json"
     echo "  --diagnose             Skip provisioning. Run a full health check"
     echo "                         (state file, certificate, three-hop token,"
     echo "                         Graph identity, Teams scope, MCP wiring) and"
@@ -363,6 +385,7 @@ ensure_a365_cli() {
 }
 
 if [ "$WITH_A365_WORK_IQ" = true ]; then
+    export ENTRACLAW_ASSIGN_WORK_IQ_LICENSE=1
     ensure_a365_cli
 fi
 
@@ -480,7 +503,7 @@ if [ -z "$HUMAN_USER_ID" ]; then
 fi
 
 # ── License preflight (informational, never blocks) ────────────────────────
-# Check whether this tenant has Teams and Copilot seats *before* we provision
+# Check whether this tenant has Teams and, for A365 runs, Copilot seats *before* we provision
 # anything. Warns are non-fatal — create_entra_agent_ids.py performs the actual
 # assignment later, after the Agent User exists.
 if command -v az >/dev/null 2>&1 && [ -d "$PROJECT_ROOT/.venv" ]; then
@@ -490,24 +513,34 @@ if command -v az >/dev/null 2>&1 && [ -d "$PROJECT_ROOT/.venv" ]; then
         "$PROJECT_ROOT/.venv/bin/python" - "$GRAPH_TOKEN" <<'PY' 2>&1 || true
 import sys
 from entraclaw.preflight import (
-    check_copilot_license_availability,
     check_teams_license_availability,
     format_report,
 )
 
 token = sys.argv[1]
 teams_result = check_teams_license_availability(token)
-copilot_result = check_copilot_license_availability(token)
 # Only print warn/skip — pass is silent so we don't add noise on green runs.
 if teams_result.status == "pass":
     print(f"  \033[0;32m✅ Teams license available: {teams_result.detail}\033[0m")
 else:
     print(format_report([teams_result], color=sys.stdout.isatty()))
+PY
+        if [ "$WITH_A365_WORK_IQ" = true ]; then
+            "$PROJECT_ROOT/.venv/bin/python" - "$GRAPH_TOKEN" <<'PY' 2>&1 || true
+import sys
+from entraclaw.preflight import (
+    check_copilot_license_availability,
+    format_report,
+)
+
+token = sys.argv[1]
+copilot_result = check_copilot_license_availability(token)
 if copilot_result.status == "pass":
     print(f"  \033[0;32m✅ Copilot license available: {copilot_result.detail}\033[0m")
 else:
     print(format_report([copilot_result], color=sys.stdout.isatty()))
 PY
+        fi
         set -e
     fi
 fi
@@ -937,16 +970,16 @@ keyring.set_password('entraclaw', 'blueprint-private-key', pem_key)
 
 # --- Upload public cert to Blueprint app via Graph API ---
 # Uses Provisioner token (not az CLI) to avoid Directory.AccessAsUser.All rejection.
-# get_graph_token() prints diagnostic lines to stdout (provisioner permission
+# get_bootstrap_graph_token() prints diagnostic lines to stdout (provisioner permission
 # checks, admin-consent status, cached-secret notices). We redirect those to
 # stderr so the shell-level \$(...) capture only sees the final thumbprint
 # line — previously the diagnostic output leaked into .env as the literal
 # ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT value and broke Hop 1 auth until
 # manually repaired.
 sys.path.insert(0, '$PROJECT_ROOT/scripts')
-from entra_provisioning import get_graph_token
+from entra_provisioning import get_bootstrap_graph_token
 with contextlib.redirect_stdout(sys.stderr):
-    token = get_graph_token(wait_for_propagation=False)
+    token = get_bootstrap_graph_token(wait_for_propagation=False)
 
 # Graph API: PATCH /applications/{id} with keyCredentials
 # Dates MUST come from the cert itself and use Graph's 7-decimal-place format

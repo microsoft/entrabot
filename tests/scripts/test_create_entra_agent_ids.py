@@ -217,7 +217,7 @@ class TestFindExistingAgentUser:
 
 
 class TestAssignLicenseToAgentUser:
-    def test_assigns_copilot_even_when_teams_license_already_exists(
+    def test_default_does_not_assign_copilot_when_teams_license_already_exists(
         self,
         agent_ids_module,
         monkeypatch: pytest.MonkeyPatch,
@@ -259,6 +259,59 @@ class TestAssignLicenseToAgentUser:
         monkeypatch.setattr(agent_ids_module, "set_state", lambda *args: None)
 
         agent_ids_module.assign_license_to_agent_user("token", "agent-user-id")
+
+        assign_calls = [call for call in calls if call[1] == "/users/agent-user-id/assignLicense"]
+        assert assign_calls == []
+        output = capsys.readouterr().out
+        assert "already has Teams-capable license: SPE_E3" in output
+        assert "Work IQ license assigned" not in output
+
+    def test_assigns_copilot_when_work_iq_requested_and_teams_license_exists(
+        self,
+        agent_ids_module,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        calls: list[tuple[str, str, dict | None]] = []
+
+        def fake_graph_request(method, path, token, **kw):
+            calls.append((method, path, kw.get("json_body")))
+            if path == "/users/agent-user-id?$select=assignedLicenses":
+                return _resp(200, {"assignedLicenses": [{"skuId": "teams-sku"}]})
+            if path == "/subscribedSkus":
+                return _resp(
+                    200,
+                    {
+                        "value": [
+                            {
+                                "skuId": "teams-sku",
+                                "skuPartNumber": "SPE_E3",
+                                "prepaidUnits": {"enabled": 5},
+                                "consumedUnits": 1,
+                            },
+                            {
+                                "skuId": "copilot-sku",
+                                "skuPartNumber": "MICROSOFT_365_COPILOT",
+                                "prepaidUnits": {"enabled": 2},
+                                "consumedUnits": 0,
+                            },
+                        ]
+                    },
+                )
+            if path == "/users/agent-user-id":
+                return _resp(204, {})
+            if path == "/users/agent-user-id/assignLicense":
+                return _resp(200, {})
+            raise AssertionError(f"unexpected Graph call: {method} {path}")
+
+        monkeypatch.setattr(agent_ids_module, "graph_request", fake_graph_request)
+        monkeypatch.setattr(agent_ids_module, "set_state", lambda *args: None)
+
+        agent_ids_module.assign_license_to_agent_user(
+            "token",
+            "agent-user-id",
+            assign_work_iq=True,
+        )
 
         assign_calls = [call for call in calls if call[1] == "/users/agent-user-id/assignLicense"]
         assert assign_calls == [
@@ -316,7 +369,11 @@ class TestAssignLicenseToAgentUser:
 
         monkeypatch.setattr(agent_ids_module, "graph_request", fake_graph_request)
 
-        agent_ids_module.assign_license_to_agent_user("token", "agent-user-id")
+        agent_ids_module.assign_license_to_agent_user(
+            "token",
+            "agent-user-id",
+            assign_work_iq=True,
+        )
 
         assert not any(path.endswith("/assignLicense") for _, path in calls)
         assert "[skip] Agent User already has Teams and Work IQ licenses" in capsys.readouterr().out
@@ -367,7 +424,11 @@ class TestAssignLicenseToAgentUser:
 
         monkeypatch.setattr(agent_ids_module, "graph_request", fake_graph_request)
 
-        agent_ids_module.assign_license_to_agent_user("token", "agent-user-id")
+        agent_ids_module.assign_license_to_agent_user(
+            "token",
+            "agent-user-id",
+            assign_work_iq=True,
+        )
 
         assert not any(path.endswith("/assignLicense") for _, path in calls)
         output = capsys.readouterr().out
@@ -421,7 +482,11 @@ class TestAssignLicenseToAgentUser:
         )
         monkeypatch.setattr(agent_ids_module, "set_state", state.__setitem__)
 
-        agent_ids_module.assign_license_to_agent_user("token", "agent-user-id")
+        agent_ids_module.assign_license_to_agent_user(
+            "token",
+            "agent-user-id",
+            assign_work_iq=True,
+        )
 
         output = capsys.readouterr().out
         assert "Work IQ provisioning can take 10-15 minutes" in output

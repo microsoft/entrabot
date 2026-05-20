@@ -29,13 +29,15 @@ import requests
 # When ENTRACLAW_NEW_CHAIN=1, skip all find_existing_* lookups and create fresh.
 # Set by setup.sh --new to force a new identity chain.
 _FORCE_NEW = os.environ.get("ENTRACLAW_NEW_CHAIN") == "1"
+_ASSIGN_TEAMS_LICENSE = os.environ.get("ENTRACLAW_ASSIGN_TEAMS_LICENSE", "1") == "1"
+_ASSIGN_WORK_IQ_LICENSE = os.environ.get("ENTRACLAW_ASSIGN_WORK_IQ_LICENSE") == "1"
 
 # entra_provisioning.py lives in the same directory
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
 from entra_provisioning import (  # noqa: E402 — sys.path insert precedes this import
     ProvisionerBootstrapError,
     build_sponsors_bind,
-    get_graph_token,
+    get_existing_graph_token,
     get_signed_in_user_id,
     get_state,
     set_state,
@@ -43,41 +45,10 @@ from entra_provisioning import (  # noqa: E402 — sys.path insert precedes this
 
 # The repo root is one directory up; src/ contains the entraclaw package.
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent / "src"))
+from entraclaw.graph_helpers import graph_request, odata_escape  # noqa: E402
 from entraclaw.preflight import COPILOT_CAPABLE_SKUS, TEAMS_CAPABLE_SKUS  # noqa: E402
 
-GRAPH_BASE = "https://graph.microsoft.com/beta"
-
 BLUEPRINT_DISPLAY_NAME = "EntraClaw Code Agent"
-
-
-def odata_escape(value: str) -> str:
-    """Escape single quotes for OData filter strings."""
-    return value.replace("'", "''")
-
-
-def graph_request(
-    method: str,
-    path: str,
-    token: str,
-    json_body: dict | None = None,
-    retry: bool = True,
-) -> requests.Response:
-    """Make a request to the Microsoft Graph beta API."""
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-    url = f"{GRAPH_BASE}{path}"
-    resp = requests.request(method, url, headers=headers, json=json_body)
-
-    # Retry once on 429 (throttling) or 5xx
-    if retry and resp.status_code in (429, 500, 502, 503, 504):
-        wait = int(resp.headers.get("Retry-After", "10"))
-        print(f"  Graph API returned {resp.status_code}, retrying in {wait}s...")
-        time.sleep(wait)
-        resp = requests.request(method, url, headers=headers, json=json_body)
-
-    return resp
 
 
 # ---------------------------------------------------------------------------
@@ -967,14 +938,23 @@ def _assign_license(token: str, agent_user_id: str, sku: dict, label: str) -> bo
     return False
 
 
-def assign_license_to_agent_user(token: str, agent_user_id: str) -> None:
-    """Assign Teams/mailbox and Work IQ licenses to the Agent User.
+def assign_license_to_agent_user(
+    token: str,
+    agent_user_id: str,
+    *,
+    assign_teams: bool = _ASSIGN_TEAMS_LICENSE,
+    assign_work_iq: bool = _ASSIGN_WORK_IQ_LICENSE,
+) -> None:
+    """Assign only the requested licenses to the Agent User.
 
     Teams presence needs a Teams-capable SKU. Work IQ MCP servers need
-    Microsoft 365 Copilot as a distinct license, so this must not return early
-    just because the Agent User already has E3/E5/Teams.
+    Microsoft 365 Copilot as a distinct license and are intentionally opt-in.
     """
     print("\n--- License Assignment ---\n")
+
+    if not assign_teams and not assign_work_iq:
+        print("  [skip] License assignment disabled for this run")
+        return
 
     existing_sku_ids = _check_existing_licenses(token, agent_user_id)
     sku_id_to_name = _get_all_sku_part_numbers(token)
@@ -1001,8 +981,13 @@ def assign_license_to_agent_user(token: str, agent_user_id: str) -> None:
             copilot_name = next(n for n in existing_names if n in COPILOT_CAPABLE_SKUS)
             print(f"  [skip] Agent User already has Work IQ license: {copilot_name}")
 
-    if has_teams and has_copilot:
-        print("  [skip] Agent User already has Teams and Work IQ licenses")
+    if (not assign_teams or has_teams) and (not assign_work_iq or has_copilot):
+        if assign_teams and assign_work_iq:
+            print("  [skip] Agent User already has Teams and Work IQ licenses")
+        elif assign_teams:
+            print("  [skip] Agent User already has Teams-capable license")
+        elif assign_work_iq:
+            print("  [skip] Agent User already has Work IQ license")
         return
 
     all_skus = _get_available_skus(token)
@@ -1017,7 +1002,7 @@ def assign_license_to_agent_user(token: str, agent_user_id: str) -> None:
 
     assigned_teams = False
     assigned_copilot = False
-    if not has_teams:
+    if assign_teams and not has_teams:
         teams_skus = [s for s in all_skus if s["skuPartNumber"] in TEAMS_CAPABLE_SKUS]
         if not teams_skus:
             print("  No Teams-capable licenses found with available seats.")
@@ -1049,7 +1034,7 @@ def assign_license_to_agent_user(token: str, agent_user_id: str) -> None:
                 set_state("AGENT_USER_LICENSE_SKU", chosen["skuPartNumber"])
                 assigned_teams = True
 
-    if not has_copilot:
+    if assign_work_iq and not has_copilot:
         copilot_skus = [s for s in all_skus if s["skuPartNumber"] in COPILOT_CAPABLE_SKUS]
         if not copilot_skus:
             print("  No Microsoft 365 Copilot licenses found with available seats.")
@@ -1084,7 +1069,7 @@ def main() -> int:
     print("=" * 60)
 
     try:
-        token = get_graph_token()
+        token = get_existing_graph_token()
     except ProvisionerBootstrapError as exc:
         print(f"ERROR: {exc}")
         return 1

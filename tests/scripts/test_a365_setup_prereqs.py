@@ -121,6 +121,15 @@ def test_unix_setup_preflights_copilot_license_for_work_iq() -> None:
 
     assert "check_copilot_license_availability" in script
     assert "Copilot license available" in script
+    assert 'if [ "$WITH_A365_WORK_IQ" = true ]; then' in script
+    assert "ENTRACLAW_ASSIGN_WORK_IQ_LICENSE=1" in script
+
+
+def test_windows_setup_assigns_work_iq_license_only_for_a365_configuration() -> None:
+    script = read_script("scripts/setup-windows.ps1")
+
+    assert "ENTRACLAW_ASSIGN_WORK_IQ_LICENSE" in script
+    assert "if ($ConfigureA365WorkIq)" in script
 
 
 def test_windows_setup_can_run_interactive_a365_work_iq_configuration() -> None:

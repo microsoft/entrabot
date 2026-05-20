@@ -16,7 +16,10 @@ TARGET_AGENT_USER_UPNS=()
 ASSUME_YES=false
 DRY_RUN=false
 DELETE_CLOUD_STORAGE=false
+PRESERVE_PROVISIONER=false
+PRESERVE_LOCAL_STATE=false
 SHOW_HELP=false
+TARGETED_DEPROVISION_DONE=false
 
 for arg in "$@"; do
     case $arg in
@@ -35,6 +38,12 @@ for arg in "$@"; do
             ;;
         --delete-cloud-storage)
             DELETE_CLOUD_STORAGE=true
+            ;;
+        --preserve-provisioner)
+            PRESERVE_PROVISIONER=true
+            ;;
+        --preserve-local-state)
+            PRESERVE_LOCAL_STATE=true
             ;;
         --help|-h)
             SHOW_HELP=true
@@ -57,6 +66,12 @@ if [ "$SHOW_HELP" = true ]; then
     echo "  --delete-cloud-storage Reserved explicit storage teardown switch."
     echo "                         Current script refuses this switch; cloud storage"
     echo "                         must be deleted manually after a backup."
+    echo "  --preserve-provisioner"
+    echo "                         Do not delete the shared Provisioner app. Intended"
+    echo "                         for targeted smoke-test teardowns."
+    echo "  --preserve-local-state"
+    echo "                         Do not remove .env, .entraclaw-state.json, or local"
+    echo "                         keychain entries. Intended for wrapper-managed tests."
     echo "  --help, -h             Show this help."
     echo ""
     echo "Cloud storage is not deleted by teardown.sh."
@@ -150,8 +165,10 @@ if [ "$HAS_LOCAL_STATE" = true ]; then
     echo "  Local state:"
     [ -f .env ]                  && echo "    .env"
     [ -f .entraclaw-state.json ]  && echo "    .entraclaw-state.json"
+    [ "$PRESERVE_LOCAL_STATE" = true ] && echo "    (preserved by --preserve-local-state)"
 fi
 echo "  Cloud storage: not deleted by teardown.sh"
+[ "$PRESERVE_PROVISIONER" = true ] && echo "  Provisioner app: preserved by --preserve-provisioner"
 echo ""
 if [ "$DRY_RUN" = true ]; then
     echo -e "${YELLOW}Dry run only — no tenant or local state will be deleted.${NC}"
@@ -180,8 +197,8 @@ if [ -d "$PROJECT_ROOT/.venv" ] && [ -f "$PROJECT_ROOT/scripts/entra_provisionin
 import sys
 sys.path.insert(0, '$PROJECT_ROOT/scripts')
 try:
-    from entra_provisioning import get_graph_token
-    print(get_graph_token(wait_for_propagation=False))
+    from entra_provisioning import get_existing_graph_token
+    print(get_existing_graph_token())
 except Exception as e:
     print('', end='')
     print(f'  Could not get provisioner token: {e}', file=sys.stderr)
@@ -214,11 +231,12 @@ if [ ${#TARGET_AGENT_USER_UPNS[@]} -gt 0 ]; then
     fi
     # The targeted helper already deleted the Agent User, parent Agent Identity,
     # and parent Blueprint. Avoid duplicate state-based deletes below.
-    AGENT_USER_ID=""
-    AGENT_OBJECT_ID=""
-    BLUEPRINT_APP_ID=""
-    BLUEPRINT_OBJECT_ID=""
+    TARGETED_DEPROVISION_DONE=true
 fi
+
+# ── 1-3. Delete state-based identity chain if no targeted teardown ran ─────
+
+if [ "$TARGETED_DEPROVISION_DONE" = false ]; then
 
 # ── 1. Delete Agent User (child — must go before Agent Identity) ──────────
 
@@ -289,10 +307,18 @@ else
     echo -e "  ${YELLOW}⚠️  No Blueprint ID found — skipping${NC}"
 fi
 
+else
+    echo -e "  ${GREEN}✅ Targeted teardown already removed the identity chain${NC}"
+fi
+
 # ── 4. Delete Provisioner app LAST (needed it for steps 2-3) ─────────────
 # Provisioner is a regular app — az CLI works fine here
 
 for PROV_NAME in "EntraClaw Provisioner" "EntraClaw Agent ID Provisioner"; do
+    if [ "$PRESERVE_PROVISIONER" = true ]; then
+        echo -e "  ${YELLOW}⚠️  Preserving Provisioner app ($PROV_NAME)${NC}"
+        continue
+    fi
     PROV_OBJ=$(az ad app list --display-name "$PROV_NAME" \
         --query "[0].id" -o tsv 2>/dev/null) || true
     if [ -n "$PROV_OBJ" ]; then
@@ -307,6 +333,13 @@ done
 # ── 5. Clean up local state ───────────────────────────────────────────────
 
 echo ""
+
+if [ "$PRESERVE_LOCAL_STATE" = true ]; then
+    echo -e "  ${YELLOW}⚠️  Preserving local state and keychain entries${NC}"
+    echo ""
+    echo -e "${GREEN}Done.${NC} Local state was preserved."
+    exit 0
+fi
 
 # Keychain entries (certificate private key + legacy) — use venv Python for keyring
 CLEANUP_PY="${VENV_PY:-python3}"

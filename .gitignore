@@ -28,6 +28,7 @@ ToolingManifest.json
 .coverage
 entraclaw-state-export.tar.gz.enc
 entraclaw_msal_cache
+tests/smoke/logs/
 *.zip
 
 # ADO / Azure Pipelines (kept locally, hidden from GitHub)

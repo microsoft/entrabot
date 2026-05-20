@@ -10,6 +10,19 @@
   deletes the old cert from Cert:\CurrentUser\My only after smoke
   passes.
 
+.PARAMETER Status
+    Skip cert rotation and run the consolidated status command via
+    status-windows.ps1.
+
+.PARAMETER Json
+    With -Status, output machine-readable JSON.
+
+.PARAMETER HealthOnly
+    With -Status, only print health checks.
+
+.PARAMETER Strict
+    With -Status, return non-zero when health checks fail.
+
   Failure modes:
     - Initial PATCH fails → rotate raises RotationFailed; nothing
       changed; old cert still in store; .env still points at old cert.
@@ -20,7 +33,13 @@
 #>
 
 [CmdletBinding()]
-param([switch]$Help)
+param(
+    [switch]$Status,
+    [switch]$Json,
+    [switch]$HealthOnly,
+    [switch]$Strict,
+    [switch]$Help
+)
 
 # Detect the "blue Windows PowerShell 5.1 vs black PowerShell 7" trap before
 # strict mode trips on PS-7-only automatic variables ($IsWindows, $IsLinux).
@@ -48,6 +67,12 @@ Set-StrictMode -Version Latest
 if ($Help) {
     Get-Help $PSCommandPath -Detailed
     exit 0
+}
+
+if ($Status) {
+    $ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
+    & (Join-Path $ProjectRoot 'status-windows.ps1') -Json:$Json -HealthOnly:$HealthOnly -Strict:$Strict
+    exit $LASTEXITCODE
 }
 
 if (-not $IsWindows) { throw "deploy-windows.ps1 must run on Windows." }

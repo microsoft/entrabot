@@ -2,6 +2,32 @@
 
 ## P1
 
+### Script toolkit final phase: README + GitHub Pages script reference
+After the remaining script-toolkit phases land, do a dedicated documentation
+closeout pass so the new operational surface is discoverable and stable.
+
+Required deliverables:
+- Update `README.md` to make `./status.sh` the canonical one-command status
+  entry point, and mention that `./scripts/setup.sh --status` delegates to the
+  same consolidated status implementation.
+- Add a GitHub Pages/MkDocs reference page under `docs/reference/` that lists
+  every supported root and `scripts/` entry point, what it does, whether it is
+  read-only or mutating, required prerequisites/permissions, common flags, and
+  safe example invocations.
+- Add that page to `mkdocs.yml` under the Reference section and link it from
+  `docs/index.md` and the README's project-layout / docs sections.
+- Include deprecated compatibility wrappers such as `scripts/health_check.py`,
+  explaining their canonical replacement rather than leaving users to infer it.
+- Verify the docs site builds (`mkdocs build`) and that every documented script
+  has at least one non-destructive smoke command (`--help`, `--dry-run`,
+  `--json`, `--health-only`, or equivalent) validated during the final pass.
+
+- **Effort:** S-M (README + one reference page + nav + smoke-check table)
+- **Depends on:** All script-toolkit behavior settling, especially status,
+  health, setup/status delegation, cert inventory, sponsor/license reporting,
+  and non-mutating token acquisition paths.
+- **Source:** Script-toolkit follow-up request, 2026-05-19.
+
 ### ADR-005 Phase 2: MemoryBackend protocol + Local/Blob impls
 Land the next phase of cloud-hosted memory. Spec: `docs/decisions/005-cloud-hosted-memory.md` §"Implementation phases" (Phase 2 row). Define `MemoryBackend` protocol in `src/entraclaw/storage/backend.py` with `LocalBackend` (current behavior) and `BlobBackend` (uses Phase 1 `BlobStore`). Route `interaction_log.py`, `daily_summary.py`, and memory-file access through it. Driven by `ENTRACLAW_KEEP_MEMORY_LOCAL` env var.
 - **Effort:** S (~150 LOC + tests)

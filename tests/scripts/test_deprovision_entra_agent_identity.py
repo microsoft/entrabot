@@ -14,6 +14,8 @@ from types import SimpleNamespace
 
 import pytest
 
+import entraclaw.graph_helpers as _graph_helpers_mod
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "deprovision_entra_agent_identity.py"
 
@@ -109,6 +111,7 @@ def test_deprovisions_license_user_agent_identity_and_blueprint_in_order(
         return _resp(204 if method == "DELETE" else 200, {})
 
     monkeypatch.setattr(deprovision_module, "graph_request", fake_graph_request)
+    monkeypatch.setattr(_graph_helpers_mod, "graph_request", fake_graph_request)
 
     result = deprovision_module.deprovision_agent_user(
         "token", "entraclaw-agent-sati-agent@fabrikam.onmicrosoft.com"
@@ -162,6 +165,7 @@ def test_license_removal_failure_stops_before_deleting_user(
         return _resp(204, {})
 
     monkeypatch.setattr(deprovision_module, "graph_request", fake_graph_request)
+    monkeypatch.setattr(_graph_helpers_mod, "graph_request", fake_graph_request)
 
     with pytest.raises(RuntimeError, match="Failed to remove licenses"):
         deprovision_module.deprovision_agent_user(
@@ -212,6 +216,7 @@ def test_only_direct_licenses_are_removed_when_group_licenses_exist(
         return _resp(204 if method == "DELETE" else 200, {})
 
     monkeypatch.setattr(deprovision_module, "graph_request", fake_graph_request)
+    monkeypatch.setattr(_graph_helpers_mod, "graph_request", fake_graph_request)
 
     result = deprovision_module.deprovision_agent_user(
         "token", "entraclaw-agent-sati-agent@fabrikam.onmicrosoft.com"
@@ -238,6 +243,7 @@ def test_dry_run_resolves_chain_but_does_not_mutate_graph(
         return _fake_resolver(method, path, token, **kw)
 
     monkeypatch.setattr(deprovision_module, "graph_request", fake_graph_request)
+    monkeypatch.setattr(_graph_helpers_mod, "graph_request", fake_graph_request)
 
     result = deprovision_module.deprovision_agent_user(
         "token", "entraclaw-agent-sati-agent@fabrikam.onmicrosoft.com", dry_run=True
@@ -272,6 +278,7 @@ def test_refuses_to_delete_blueprint_with_other_agent_identities(
         return _fake_resolver(method, path, token, **kw)
 
     monkeypatch.setattr(deprovision_module, "graph_request", fake_graph_request)
+    monkeypatch.setattr(_graph_helpers_mod, "graph_request", fake_graph_request)
 
     with pytest.raises(RuntimeError, match="Blueprint has 1 other Agent Identity"):
         deprovision_module.deprovision_agent_user(

@@ -20,6 +20,7 @@ dependencies = [
     "botbuilder-core>=4.17.0",
     "botbuilder-integration-aiohttp>=4.17.0",
     "pypdf>=4.0",
+    "click>=8.1.0",
 ]
 
 [project.optional-dependencies]

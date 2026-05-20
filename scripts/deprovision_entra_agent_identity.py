@@ -16,16 +16,20 @@ from __future__ import annotations
 
 import argparse
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import requests
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from entra_provisioning import ProvisionerBootstrapError, get_graph_token  # noqa: E402
+from entra_provisioning import ProvisionerBootstrapError, get_existing_graph_token  # noqa: E402
 
-GRAPH_BASE = "https://graph.microsoft.com/beta"
+# The repo root is one directory up; src/ contains the entraclaw package.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from entraclaw.graph_helpers import (  # noqa: E402
+    graph_collection_values,
+    graph_request,
+    odata_escape,
+    require_ok,
+)
 
 
 @dataclass(frozen=True)
@@ -42,64 +46,6 @@ class AgentUserChain:
     blueprint_display_name: str
 
 
-def odata_escape(value: str) -> str:
-    return value.replace("'", "''")
-
-
-def graph_request(
-    method: str,
-    path: str,
-    token: str,
-    json_body: dict | None = None,
-    retry: bool = True,
-) -> requests.Response:
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-    resp = requests.request(
-        method,
-        f"{GRAPH_BASE}{path}",
-        headers=headers,
-        json=json_body,
-        timeout=30,
-    )
-    if retry and resp.status_code in (429, 500, 502, 503, 504):
-        wait = int(resp.headers.get("Retry-After", "10"))
-        print(f"  Graph API returned {resp.status_code}; retrying in {wait}s...")
-        time.sleep(wait)
-        resp = requests.request(
-            method,
-            f"{GRAPH_BASE}{path}",
-            headers=headers,
-            json=json_body,
-            timeout=30,
-        )
-    return resp
-
-
-def _require_ok(resp: requests.Response, action: str) -> None:
-    if resp.status_code in (200, 201, 204):
-        return
-    raise RuntimeError(f"{action} failed ({resp.status_code}): {resp.text[:500]}")
-
-
-def graph_collection_values(path: str, token: str, action: str) -> list[dict]:
-    values: list[dict] = []
-    next_path: str | None = path
-    while next_path:
-        resp = graph_request("GET", next_path, token)
-        _require_ok(resp, action)
-        data = resp.json()
-        values.extend(data.get("value", []))
-        next_link = data.get("@odata.nextLink")
-        if isinstance(next_link, str) and next_link.startswith(GRAPH_BASE):
-            next_path = next_link[len(GRAPH_BASE) :]
-        else:
-            next_path = None
-    return values
-
-
 def resolve_agent_user_chain(token: str, upn: str) -> AgentUserChain | None:
     user_resp = graph_request(
         "GET",
@@ -108,7 +54,7 @@ def resolve_agent_user_chain(token: str, upn: str) -> AgentUserChain | None:
         "licenseAssignmentStates",
         token,
     )
-    _require_ok(user_resp, f"Lookup Agent User {upn}")
+    require_ok(user_resp, f"Lookup Agent User {upn}")
     users = user_resp.json().get("value", [])
     if not users:
         return None
@@ -124,7 +70,7 @@ def resolve_agent_user_chain(token: str, upn: str) -> AgentUserChain | None:
         f"/servicePrincipals/{agent_identity_object_id}",
         token,
     )
-    _require_ok(sp_resp, f"Lookup Agent Identity {agent_identity_object_id}")
+    require_ok(sp_resp, f"Lookup Agent Identity {agent_identity_object_id}")
     sp = sp_resp.json()
     blueprint_app_id = sp.get("agentIdentityBlueprintId", "")
     if not blueprint_app_id:
@@ -138,7 +84,7 @@ def resolve_agent_user_chain(token: str, upn: str) -> AgentUserChain | None:
         "&$select=id,appId,displayName",
         token,
     )
-    _require_ok(blueprint_resp, f"Lookup Blueprint {blueprint_app_id}")
+    require_ok(blueprint_resp, f"Lookup Blueprint {blueprint_app_id}")
     blueprints = blueprint_resp.json().get("value", [])
     if not blueprints:
         raise RuntimeError(f"Blueprint app not found for appId {blueprint_app_id}")
@@ -290,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        token = get_graph_token(wait_for_propagation=False)
+        token = get_existing_graph_token()
     except ProvisionerBootstrapError as exc:
         print(f"ERROR: {exc}")
         return 1

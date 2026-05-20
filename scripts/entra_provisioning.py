@@ -17,8 +17,8 @@ app registration in Entra. No client_secret anywhere on disk. Matches the
 Blueprint-cert pattern already used for agent-body auth (ADR-003).
 
 Usage:
-    # As a library (from create_entra_agent_ids.py):
-    from entra_provisioning import get_graph_token, run_az, get_signed_in_user_id
+    # As a library:
+    from entra_provisioning import get_existing_graph_token, get_bootstrap_graph_token
 
     # As a standalone bootstrap:
     python3 scripts/entra_provisioning.py
@@ -45,6 +45,7 @@ APP_READWRITE_ALL_ID = "1bfefb4e-e0b5-418b-a88f-73c46d2cc8e9"
 
 BASE_PERMISSION_VALUES = [
     "Application.ReadWrite.All",
+    "AppRoleAssignment.ReadWrite.All",
     "DelegatedPermissionGrant.ReadWrite.All",
     "LicenseAssignment.ReadWrite.All",
     "Organization.Read.All",
@@ -497,8 +498,12 @@ def _ensure_service_principal(client_id: str) -> None:
         raise ProvisionerBootstrapError(err or "service principal creation failed")
 
 
-def _ensure_permissions_and_consent(client_id: str, required_values: list[str]) -> None:
-    """Add Graph permissions and grant admin consent for the provisioner app."""
+def _ensure_permissions_and_consent(client_id: str, required_values: list[str]) -> bool:
+    """Add Graph permissions and grant admin consent if permissions changed.
+
+    Returns ``True`` only when this invocation added missing app permissions.
+    Callers use that to decide whether a propagation wait is warranted.
+    """
     _ensure_service_principal(client_id)
 
     permission_specs = _resolve_permission_specs(required_values)
@@ -531,8 +536,11 @@ def _ensure_permissions_and_consent(client_id: str, required_values: list[str]) 
             raise ProvisionerBootstrapError(err or "permission add failed")
     else:
         print("  Provisioner app already has the required Graph permissions")
+        return False
 
-    # Grant admin consent with retry
+    # Grant admin consent only after adding permissions in this invocation. If
+    # permissions were already present, the read/action script should not spend
+    # time re-consenting on every token acquisition.
     print("  Granting admin consent for provisioner app...")
     consent_error = ""
     for attempt in range(4):
@@ -543,7 +551,7 @@ def _ensure_permissions_and_consent(client_id: str, required_values: list[str]) 
         rc, _, err = run_az(["ad", "app", "permission", "admin-consent", "--id", client_id])
         if rc == 0:
             print("  Admin consent granted")
-            return
+            return True
         consent_error = err
 
     lowered = consent_error.lower()
@@ -651,7 +659,7 @@ def ensure_app_registration(
             print(f"  Created provisioner app: {client_id}")
             set_state("PROVISIONER_CLIENT_ID", client_id)
 
-    _ensure_permissions_and_consent(client_id, required_values)
+    permissions_changed = _ensure_permissions_and_consent(client_id, required_values)
 
     # SECURITY: any leftover password credentials on the app are a
     # backdoor — remove them unconditionally. This closes the window
@@ -692,29 +700,61 @@ def ensure_app_registration(
             set_state("PROVISIONER_CERT_THUMBPRINT", thumbprint)
         print(f"  Using existing Provisioner cert (thumb: {thumbprint})")
 
-    if wait_for_propagation:
+    if wait_for_propagation and permissions_changed:
         print("  Waiting 30s for Graph permission propagation...")
         time.sleep(30)
 
     return client_id, pem_bundle, tenant_id
 
 
+def load_existing_app_registration() -> tuple[str, str, str]:
+    """Load an already-bootstrapped provisioner app without mutating Entra.
+
+    Utility scripts use this path so read/status/action commands don't create
+    app registrations, add permissions, grant consent, or wait for propagation.
+    """
+    tenant_id = os.environ.get("ENTRACLAW_TENANT_ID") or get_state("TENANT_ID")
+    client_id = get_state("PROVISIONER_CLIENT_ID")
+    if not tenant_id or not client_id:
+        raise ProvisionerBootstrapError(
+            "Provisioner app is not bootstrapped. Run: python3 scripts/entra_provisioning.py"
+        )
+
+    if not _application_exists(client_id):
+        raise ProvisionerBootstrapError(
+            "Provisioner app from state was not found in Entra. "
+            "Run: python3 scripts/entra_provisioning.py"
+        )
+
+    pem_bundle = _keychain_get_cert(tenant_id)
+    if not pem_bundle:
+        raise ProvisionerBootstrapError(
+            "Provisioner certificate private key is missing locally. "
+            "Run: python3 scripts/entra_provisioning.py"
+        )
+    return client_id, pem_bundle, tenant_id
+
+
 def get_graph_token(
     required_values: list[str] | None = None,
     wait_for_propagation: bool = True,
+    auto_provision: bool = True,
 ) -> str:
     """Get a Graph API access token via the Provisioner app's cert.
 
     Uses ``CertificateCredential`` — private key comes from Keychain,
-    never from disk. Auto-provisions the app + cert on first run.
+    never from disk. Auto-provisions the app + cert on first run unless
+    ``auto_provision`` is false.
     """
-    if required_values is None:
-        required_values = build_required_permission_values()
-
-    client_id, pem_bundle, tenant_id = ensure_app_registration(
-        required_values,
-        wait_for_propagation=wait_for_propagation,
-    )
+    if auto_provision:
+        if required_values is None:
+            required_values = build_required_permission_values()
+        client_id, pem_bundle, tenant_id = ensure_app_registration(
+            required_values,
+            wait_for_propagation=wait_for_propagation,
+        )
+    else:
+        client_id, pem_bundle, tenant_id = load_existing_app_registration()
 
     try:
         from azure.identity import CertificateCredential
@@ -729,6 +769,23 @@ def get_graph_token(
         certificate_data=pem_bundle.encode(),
     )
     return credential.get_token("https://graph.microsoft.com/.default").token
+
+
+def get_bootstrap_graph_token(
+    required_values: list[str] | None = None,
+    wait_for_propagation: bool = True,
+) -> str:
+    """Get a Graph token, creating or repairing the provisioner app if needed."""
+    return get_graph_token(
+        required_values=required_values,
+        wait_for_propagation=wait_for_propagation,
+        auto_provision=True,
+    )
+
+
+def get_existing_graph_token() -> str:
+    """Get a Graph token from an already-bootstrapped provisioner app."""
+    return get_graph_token(wait_for_propagation=False, auto_provision=False)
 
 
 # ---------------------------------------------------------------------------

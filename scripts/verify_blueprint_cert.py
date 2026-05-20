@@ -28,7 +28,7 @@ import sys
 import requests
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
-from entra_provisioning import get_graph_token
+from entra_provisioning import get_existing_graph_token
 
 
 def _thumbprint_of(der_key_b64: str) -> str:
@@ -50,7 +50,7 @@ def main() -> int:
     blueprint_obj_id, expected = sys.argv[1], sys.argv[2]
 
     with contextlib.redirect_stdout(sys.stderr):
-        token = get_graph_token(wait_for_propagation=False)
+        token = get_existing_graph_token()
 
     resp = requests.get(
         f"https://graph.microsoft.com/v1.0/applications/{blueprint_obj_id}?$select=keyCredentials",

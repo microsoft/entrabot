@@ -19,7 +19,7 @@ import contextlib
 import sys
 
 import requests
-from entra_provisioning import get_graph_token
+from entra_provisioning import get_existing_graph_token
 
 
 def main() -> int:
@@ -31,10 +31,10 @@ def main() -> int:
         return 2
     blueprint_obj_id = sys.argv[1]
 
-    # get_graph_token is noisy on stdout; redirect so only the count reaches
+    # get_existing_graph_token is noisy on stdout; redirect so only the count reaches
     # the shell capture.
     with contextlib.redirect_stdout(sys.stderr):
-        token = get_graph_token(wait_for_propagation=False)
+        token = get_existing_graph_token()
 
     resp = requests.get(
         f"https://graph.microsoft.com/v1.0/applications/{blueprint_obj_id}?$select=keyCredentials",

@@ -59,6 +59,18 @@
   Deprecated compatibility parameter. Work IQ setup now uses the existing
   Entraclaw Blueprint ID from .entraclaw-state.json.
 
+.PARAMETER Status
+    Skip setup and run the consolidated status command via status-windows.ps1.
+
+.PARAMETER Json
+    With -Status, output machine-readable JSON.
+
+.PARAMETER HealthOnly
+    With -Status, only print health checks.
+
+.PARAMETER Strict
+    With -Status, return non-zero when health checks fail.
+
 .EXAMPLE
   .\scripts\setup-windows.ps1 -NewChain -UpnSuffix winagent
 
@@ -80,6 +92,10 @@ param(
     [switch]$ConfigureA365WorkIq,
     [string]$A365AgentName = "EntraClaw Code Agent",
     [switch]$Migrate,
+    [switch]$Status,
+    [switch]$Json,
+    [switch]$HealthOnly,
+    [switch]$Strict,
     [switch]$Help
 )
 
@@ -117,6 +133,12 @@ Set-StrictMode -Version Latest
 if ($Help) {
     Get-Help $PSCommandPath -Detailed
     exit 0
+}
+
+if ($Status) {
+    $ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
+    & (Join-Path $ProjectRoot 'status-windows.ps1') -Json:$Json -HealthOnly:$HealthOnly -Strict:$Strict
+    exit $LASTEXITCODE
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -317,6 +339,9 @@ if ($AgentUserUpn) {
     $env:ENTRACLAW_AGENT_USER_UPN = $AgentUserUpn
 } elseif ($UseBlueprint -and $UpnSuffix) {
     $env:_ENTRACLAW_UPN_SUFFIX = $UpnSuffix
+}
+if ($ConfigureA365WorkIq) {
+    $env:ENTRACLAW_ASSIGN_WORK_IQ_LICENSE = '1'
 }
 
 # entra_provisioning.py + create_entra_agent_ids.py both read az CLI

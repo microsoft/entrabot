@@ -835,6 +835,27 @@ pytest tests/tools/test_teams.py::TestAcquireAgentUserToken::test_success -v
 ruff format .
 ```
 
+**Destructive E2E smoke:**
+
+The smoke harness provisions a fresh test Agent Identity chain, a test Azure
+storage account/container, runs status checks, tears the test resources down,
+and verifies deletion. It is opt-in and refuses to run without
+`--confirm-destroy-test-resources`. Full details: [tests/smoke/README.md](tests/smoke/README.md).
+
+Identity + storage only, with no Teams-capable or Copilot license requirement:
+
+```bash
+tests/smoke/smokeit.sh \
+    --confirm-destroy-test-resources \
+    --agent-user-upn smoketest-agent@yourtenant.onmicrosoft.com
+```
+
+Add `--test-teams` plus `--sponsor-upn` or `--chat-id` to assign/use a
+Teams-capable license and send a real Teams message. Add
+`--wait-for-teams-reply` when a human is available to reply and you want the
+smoke run to exercise Teams polling. Add `--test-a365` to enable the Work
+IQ/Copilot license assignment path.
+
 **Teardown:**
 
 ```bash
@@ -869,6 +890,7 @@ manually if desired.
 | `docs/reference/` | Setup-script, MCP tools, token flows |
 | `docs/runbooks/` | Hard-won learnings (29 entries) + migration playbooks |
 | `tests/` | Test suite mirroring `src/` — 484 tests |
+| `tests/smoke/` | Opt-in destructive E2E smoke harness with verbose log bundles |
 
 ---
 
