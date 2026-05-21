@@ -19,6 +19,9 @@ End-to-end macOS / Linux setup. Provisions the Blueprint, Agent Identity, and Ag
 
 # Opt into cloud-hosted memory (Azure Blob)
 ./scripts/setup.sh --new --with-upn-suffix=sati-agent --use-cloud-memory
+
+# Skip setup and run the consolidated status check
+./scripts/setup.sh --status --json
 ```
 
 Run `./scripts/setup.sh --help` for the full flag matrix.
@@ -32,6 +35,7 @@ Run `./scripts/setup.sh --help` for the full flag matrix.
 - Writes `.env` with the resulting IDs and thumbprints.
 - Optionally provisions Azure Blob Storage when `--use-cloud-memory` is passed (see `provision_blob_storage.py`).
 - Registers `entraclaw` in `.mcp.json` and `~/.copilot/mcp-config.json` via `mcp_config.py`.
+- With `--status`, skips provisioning and delegates to `./status.sh`, forwarding status arguments such as `--json`, `--health-only`, and `--strict`.
 
 ### Idempotency
 

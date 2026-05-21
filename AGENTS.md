@@ -32,7 +32,7 @@
 - Parse `az` CLI output as JSON, not TSV — TSV can be corrupted by warnings (Learning #7)
 - Graph API `$filter`/`$orderby` are unreliable for chat messages — always filter client-side (Learning #16)
 - **Sub-agent worktree installs must use a worktree-local venv, never the parent venv** (Learning #36) — running `pip install -e .` from inside a git worktree against the main repo's `.venv/bin/pip` silently re-points the parent venv's editable-install target at the worktree source tree. Every subsequent MCP server boot then loads code from the worktree — which has no `.env`, no auth, no polling, and no visible error. Always create `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"` inside the worktree BEFORE any editable install. After any session that used sub-agent worktrees, verify the main venv's target via `.venv/bin/python3 -c "from entraclaw import config; print(config.__file__)"` — the path must not contain `.claude/worktrees/`.
-- **Sponsor DM wait pattern (mandatory).** When the human says "ping me when X is done" / "I'm going AFK, let me know" / any equivalent: confirm in Teams with `send_teams_message`, do the work, send the completion update with `send_teams_message`, then call `wait_for_sponsor_dm` — that tool blocks this MCP session until the human's DM arrives and returns the message as next-turn input. NEVER poll in a loop. NEVER spawn `copilot -p` / headless subprocesses. NEVER use `watch_teams_replies` for this pattern. Only `wait_for_sponsor_dm`. Sponsor gating is mechanical (only the Agent Identity's configured human sponsors wake the wait); Ctrl+C cancels cleanly. Full protocol: `prompts/anatomy/channel-discipline.md`.
+- **Sponsor DM wait pattern (host-gated).** When the human says "ping me when X is done" / "I'm going AFK, let me know" / any equivalent: confirm in Teams with `send_teams_message`, do the work, send the completion update with `send_teams_message`. Claude Code receives the sponsor's reply via channel-push next-turn input, so do not call `wait_for_sponsor_dm` there. Non-Claude-Code hosts such as Copilot CLI and Codex get the sponsor's reply inline from `send_teams_message` as `sponsor_reply`. `wait_for_sponsor_dm` is reserved for the rare explicit "block until they reply" request. NEVER poll in a loop. NEVER spawn `copilot -p` / headless subprocesses. NEVER use `watch_teams_replies` for this pattern. Full protocol: `prompts/anatomy/channel-discipline.md`; see Learning #54.
 
 ## Required reading per topic
 
@@ -54,7 +54,7 @@ These are not optional. Skipping them is the documented cause of 4 design errors
 ## Current Runtime Model
 
 - Python 3.12+ research project — no deployed service yet
-- Eight modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `bot/` (Bot Gateway) → `identity/` (state machine) → `storage/` (`LocalBackend`/`BlobBackend`/`PersonaBackend` + `migration` helper — ADR-005 Phases 1, 2, 5, 6a shipped) → `mcp_server.py` (FastMCP + background channel)
+- Nine modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `a365/` (Work IQ MCP provider + Word adapter) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `bot/` (Bot Gateway) → `identity/` (state machine) → `storage/` (`LocalBackend`/`BlobBackend`/`PersonaBackend` + `migration` helper — ADR-005 Phases 1, 2, 5, 6a shipped) → `mcp_server.py` (FastMCP + background channel)
 - External dependencies: Microsoft Entra ID, Microsoft Teams + Outlook mailbox (Graph API or Bot Framework), Azure Blob Storage (optional, opt-in via `setup.sh --use-cloud-memory`)
 - **No default group chat.** Every Teams tool requires an explicit `chat_id`. Chats come from `create_chat`, the persisted `watched_chats` file, or the auto-discovery sweep over `/me/chats`.
 - **Body-first prompt.** `prompts/agent_system.md` loads at boot with `@include` expansion of `prompts/anatomy/*.md`. Persona-sati output (if configured) is appended AFTER the body and cannot override body rules.
@@ -116,16 +116,16 @@ Note: efferent-copy may mechanically cover body-tool observe but not bootstrap/r
 - **Mind-body split shipped.** Body-first prompt architecture (PR #14) — `prompts/agent_system.md` + `prompts/anatomy/*.md` load first with non-overridable rules. `mcp_server.py:_load_agent_instructions` composes `body + persona`; persona is fetched from a remote MCP when `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` env vars are set, with clean fallback to the body. `docs/TODO-persona-sati-integration.md` is now historical.
 - **ADR-005: cloud-hosted memory via Azure Blob Storage** — `docs/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phases 1, 2, 5, 6a shipped.** Memory sync hooks removed (persona-sati owns memory now).
 - Multi-tenant lightweight chat — landed to `main` (commit `c8ec521`).
-- **Up next** (see `docs/engineering-status.md`): Bot Gateway live test, sign-in log verification, Windows VM setup, AppContainer sandbox.
+- **Up next** (see `docs/engineering-status.md`): script-toolkit docs closeout, blob-env test isolation, MCP server orphan cleanup, daily-summary scheduler fixes, and email cursor precision.
 
 ## Read These First
 
-- `docs/engineering-status.md` — current state, test count (484), next steps
+- `docs/engineering-status.md` — current state, test count (1,237), next steps
 - `prompts/agent_system.md` + `prompts/anatomy/*.md` — the body prompt that governs your behaviour (security, channel discipline, identity/tools)
 - `docs/architecture/DESIGN-persona-sati-integration.md` — mind-body split design
 - `docs/decisions/005-cloud-hosted-memory.md` — cloud memory spec
 - `prompts/agent_system.md.archive` — original monolithic prompt, kept for reference
-- `docs/runbooks/hard-won-learnings.md` — 29 learnings, read before making changes
+- `docs/runbooks/hard-won-learnings.md` — 66 learnings, read before making changes
 
 ## Commands
 
@@ -154,6 +154,7 @@ claude --dangerously-load-development-channels server:entraclaw
 
 - `src/entraclaw/platform/`: OS-specific credential storage — `CredentialStore` protocol with Mac/Linux/Windows implementations
 - `src/entraclaw/auth/`: Certificate-based JWT assertion builder + MSAL delegated auth
+- `src/entraclaw/a365/`: Microsoft Agent 365 Work IQ provider boundary and Word adapter
 - `src/entraclaw/identity/`: Progressive identity state machine (UNAUTHENTICATED → DELEGATED → PROVISIONING → AGENT_USER)
 - `src/entraclaw/bot/`: Bot Gateway — M365 Agents SDK server, JSONL IPC, Dev Tunnel
 - `src/entraclaw/tools/`: Teams Graph API + interaction log (Phase 1) + email poll (Phase 2) + daily summary (Phase 3) + Adaptive Cards

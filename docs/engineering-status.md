@@ -7,9 +7,9 @@
 
 ## In Progress
 
-Source of truth for detail: [`TODOS.md`](../TODOS.md). One line each below.
+Source of truth for detail: `TODOS.md` in the repository root. One line each below.
 
-- **Script-toolkit docs closeout** — `./status.sh` becomes the canonical entry; add a GitHub Pages script reference page and link it from `mkdocs.yml`, `docs/index.md`, and README. See [TODOS.md P1](../TODOS.md).
+- **Script-toolkit docs closeout** — `./status.sh` is the canonical entry; finish the remaining script-reference polish and smoke verification. See `TODOS.md` P1.
 - **Test isolation: blob env leakage** — `tmp_data_dir` fixture in `tests/tools/test_interaction_log.py` doesn't clear `ENTRACLAW_BLOB_ENDPOINT`; 10 tests fail on any machine with blob env configured.
 - **MCP server orphans on Claude Code exit** — background poll tasks sit outside FastMCP's lifespan cancel scope; new sessions spawn a second server, both poll Graph independently.
 - **Daily summary scheduler — wrong day + double-fire** — UTC-based `target_day` summarizes the brand-new UTC day at 5pm PDT; scheduler fired twice at the same second on 2026-04-17.

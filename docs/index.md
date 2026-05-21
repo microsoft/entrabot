@@ -23,7 +23,7 @@ The scripts take care of the rest: provisioning the Agent Identity Blueprint, Ag
 - **Local vs. cloud storage?** Read [Storage configuration](guides/storage-configuration.md)
 - **MCP tool reference?** See [MCP tools](reference/mcp-tools.md)
 - **`setup.sh` flags?** See [setup.sh reference](reference/setup-script.md)
-- **Script + API reference?** Browse [Reference: Scripts](reference/) and [Reference: API](reference/)
+- **Script + API reference?** Browse [Reference: Scripts](reference/scripts/operations.md) and [Reference: API](reference/api/mcp-tools.md)
 - **Understanding the design?** Read [System Overview](architecture/system-overview.md)
 - **Bot Gateway design?** Read [DESIGN: Teams Bot Gateway](architecture/DESIGN-teams-bot-gateway.md)
 - **Delegated mode / multi-tenant chat?** Read [Lightweight Teams Chat](architecture/NEXT-WhatsApp-lightweight-teams-chat.md) (landed)

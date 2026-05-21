@@ -11,7 +11,7 @@ Entraclaw is a Python MCP server that gives a device-local agent its own Entra *
 
 The scripts will take care of the rest: provisioning the Agent Identity Blueprint, Agent Identity, and Agent User in Entra; uploading a self-signed certificate; assigning the license; and configuring the local MCP server.
 
- **Microsoft Entra Agent ID** and **Microsoft Agent 365** which enables these expereinces went GA on 2026-05-01. entraclaw is the reference implementation that pulls those primitives together on a real device, today.
+**Microsoft Entra Agent ID** and **Microsoft Agent 365** — which enable these experiences — went GA on 2026-05-01. Entraclaw is the reference implementation that pulls those primitives together on a real device, today.
 
 ---
 
@@ -98,6 +98,14 @@ claude --dangerously-load-development-channels server:entraclaw
 
 `setup.sh` is idempotent. It provisions the Blueprint, BlueprintPrincipal, Agent Identity, and Agent User; assigns a Teams-capable license; uploads a self-signed certificate to Entra; and writes `.env` plus `.mcp.json` with no secrets on disk. Full walkthrough — including Windows, cloud memory, cross-tenant group chats, and the Work IQ Word setup — is in [`docs/getting-started/quickstart.md`](docs/getting-started/quickstart.md) and [`INSTALL.md`](INSTALL.md).
 
+After setup, use `./status.sh` as the canonical health and identity check:
+
+```bash
+./status.sh
+./status.sh --health-only --strict
+./scripts/setup.sh --status --json   # delegates to ./status.sh
+```
+
 ---
 
 ## Documentation
@@ -109,11 +117,12 @@ Direct pointers:
 - [Quickstart](docs/getting-started/quickstart.md) — five minutes from clone to first Teams message
 - [MCP tool reference](docs/reference/mcp-tools.md) — every tool, every parameter
 - [Setup script reference](docs/reference/setup-script.md) — every `setup.sh` flag
+- [Script reference](docs/reference/scripts/operations.md) — status, health, DM, email, setup, teardown, and diagnostic scripts
 - [Token flows](docs/reference/token-flows.md) — the three hops, annotated
 - [System overview](docs/architecture/system-overview.md) — how the modules fit together
 - [Architecture decisions](docs/decisions/README.md) — ADRs 001–005
 - [Platform learnings](docs/platform-learnings/) — Entra Agent ID constraints, Agent 365, MSAL, OS-specific notes
-- [Hard-won learnings](docs/runbooks/hard-won-learnings.md) — 60 non-obvious gotchas; read before changing auth or Teams code
+- [Hard-won learnings](docs/runbooks/hard-won-learnings.md) — 66 non-obvious gotchas; read before changing auth or Teams code
 - [Engineering status](docs/engineering-status.md) — what's shipped, what's open, what's next
 
 ---
@@ -132,7 +141,7 @@ This is a research repo, not a production service. It runs reliably on a develop
 - Storage: `LocalBackend` (default) and `BlobBackend` (Azure Blob Storage, opt-in via `setup.sh --use-cloud-memory`)
 - Body-first prompt architecture with optional persona layer from a separate MCP (`persona-sati`)
 - Audit fails closed: if the audit write fails, the action does not proceed
-- 791 tests; `pytest -v && ruff check .` gate every commit
+- 1,237 tests; `pytest -v && ruff check .` gate every commit
 
 **OS coverage:**
 

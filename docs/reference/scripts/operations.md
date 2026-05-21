@@ -61,6 +61,27 @@ python scripts/read_email.py "Project Apollo" 20     # top 20
 - GETs `/me/messages` with `$filter=contains(subject, '...')`.
 - Prints subject, from, received-at, and body of each match.
 
+## `status.sh`
+
+Root-level wrapper for the consolidated Agent Identity status command. This is the canonical status entry point for humans.
+
+### Usage
+
+```bash
+./status.sh
+./status.sh --json
+./status.sh --health-only --strict
+./scripts/setup.sh --status --json
+```
+
+`./scripts/setup.sh --status` delegates to `./status.sh` and forwards any remaining status arguments.
+
+### What it does
+
+- Ensures the local virtual environment exists.
+- Installs the package with the dependencies needed for status checks if the venv is missing.
+- Runs `scripts/show_agent_status.py` with the provided arguments.
+
 ## `show_agent_status.py`
 
 Consolidated Agent Identity status. Reads local state and queries Graph for live data about the Blueprint, Agent Identity, Agent User, sponsors, permissions, certs, licenses, and storage.

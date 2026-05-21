@@ -56,7 +56,7 @@
 ## Current Runtime Model
 
 - Python 3.12+ research project — no deployed service yet
-- Eight modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `bot/` (Bot Gateway) → `identity/` (state machine) → `storage/` (`LocalBackend`/`BlobBackend`/`PersonaBackend` + `migration` helper — ADR-005 Phases 1, 2, 5, 6a shipped) → `mcp_server.py` (FastMCP + background channel)
+- Nine modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `a365/` (Work IQ MCP provider + Word adapter) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `bot/` (Bot Gateway) → `identity/` (state machine) → `storage/` (`LocalBackend`/`BlobBackend`/`PersonaBackend` + `migration` helper — ADR-005 Phases 1, 2, 5, 6a shipped) → `mcp_server.py` (FastMCP + background channel)
 - External dependencies: Microsoft Entra ID (identity), Microsoft Teams + Outlook mailbox (Graph API or Bot Framework), Azure Blob Storage (optional, opt-in via `setup.sh --use-cloud-memory`)
 - **No default group chat.** Every Teams tool requires an explicit `chat_id`. Chats come from `create_chat`, the persisted `watched_chats` file, or the auto-discovery sweep over `/me/chats`.
 - **Body-first prompt.** `prompts/agent_system.md` loads at boot with `@include` expansion of `prompts/anatomy/*.md`. Persona-sati output (if configured) is appended AFTER the body and cannot override body rules. See the "Body prompt is non-overridable" rule above.
@@ -194,7 +194,7 @@ cognition rules, and degraded-mode flags in a single packet.
   - Phase 5: `acquire_agent_user_storage_token` (parallel third hop for `https://storage.azure.com/.default`), `scripts/provision_blob_storage.py` (idempotent resource group + storage account + container + RBAC scoped to Agent User), `grant_agent_user_storage_consent` added to `create_entra_agent_ids.py`, `setup.sh --keep-memory-local` flag + Step 7b provisioning + migration prompt (idempotent, source-preserving), `src/entraclaw/storage/migration.py`. 23 tests. Setup now exits red + non-zero on migration failure.
   - Phase 6a: `PersonaBackend` in `src/entraclaw/storage/persona.py`. `scripts/claude_memory_sync.py` CLI. Memory sync hooks deprecated — persona-sati owns sync.
 - **Multi-tenant lightweight chat** — landed to `main` (commit `c8ec521`). Spec: `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md`.
-- **Up next** (see `docs/engineering-status.md` "Next Steps"): Bot Gateway live test on werner.ac, Entra sign-in log attribution verification, Windows VM setup, AppContainer sandbox spike.
+- **Up next** (see `docs/engineering-status.md` "In Progress"): script-toolkit docs closeout, blob-env test isolation, MCP server orphan cleanup, daily-summary scheduler fixes, and email cursor precision.
 
 ## Memory types
 
@@ -226,7 +226,7 @@ Two memory systems coexist in this project:
 - `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` — delegated mode spec (landed)
 - `docs/index.md` — doc site entry point
 - `docs/runbooks/mcp-disconnect-investigation.md` — **OPEN issue.** Entraclaw MCP dies after 2–10 min of sustained activity. Two amplifiers fixed (PR #40, PR #41), root cause still unknown. Read this before debugging any MCP-drop symptom — do NOT restart the investigation from scratch.
-- `docs/runbooks/hard-won-learnings.md` — 60 learnings, read before making changes
+- `docs/runbooks/hard-won-learnings.md` — 66 learnings, read before making changes
 - `docs/decisions/001-obo-flows-for-device-agents.md`
 - `docs/decisions/003-certificate-auth-over-client-secrets.md`
 - `docs/platform-learnings/microsoft-agent-365.md` — A365 GA'd 2026-05-01. Identity model, Work IQ MCP catalog, four capability tiers, auth flows, gap analysis vs entraclaw. Read this before considering any A365 / Work IQ integration work.
@@ -259,13 +259,14 @@ pip install mkdocs-material && mkdocs serve
 
 - `src/entraclaw/platform/`: OS-specific credential storage — `CredentialStore` protocol with Mac/Linux/Windows implementations
 - `src/entraclaw/auth/`: Certificate-based JWT assertion builder + MSAL delegated auth (localhost redirect + device code fallback)
+- `src/entraclaw/a365/`: Microsoft Agent 365 Work IQ provider boundary and Word adapter
 - `src/entraclaw/bot/`: Bot Gateway — M365 Agents SDK server, JSONL IPC handler, Dev Tunnel manager, conversation reference persistence
 - `src/entraclaw/identity/`: Progressive identity state machine (UNAUTHENTICATED → DELEGATED → PROVISIONING → AGENT_USER)
 - `src/entraclaw/tools/teams.py`: Three-hop token flow + Teams Graph API (send, read, filter, chat creation, add members cross-tenant)
 - `src/entraclaw/mcp_server.py`: FastMCP server — Teams tools + 3 auth modes + background poll + channel push + token refresh (generic instructions — personality in persona-sati)
 - `src/entraclaw/config.py`: `ENTRACLAW_MODE` switch (auto/bot/delegated/agent_user) + all env config
 - `docs/decisions/`: ADRs — every significant architectural choice is recorded here
-- `docs/runbooks/hard-won-learnings.md`: 60 hard-won learnings — READ THIS before making changes
+- `docs/runbooks/hard-won-learnings.md`: 66 hard-won learnings — READ THIS before making changes
 - `docs/runbooks/mcp-disconnect-investigation.md`: OPEN MCP-disconnect dossier — READ before touching MCP transport, logging, or efferent-copy code
 
 ## gstack
