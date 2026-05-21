@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "entraclaw-identity-research"
-version = "0.1.0"
+version = "0.1"
 description = "Research: securing agentic workflows on devices with Agent IDs and OBO flows"
 requires-python = ">=3.12"
 dependencies = [
