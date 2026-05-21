@@ -1,5 +1,7 @@
 # Planning Prompt: Multi-Tenant Lightweight Teams Chat
 
+> **HISTORICAL.** This planning prompt is preserved as the spec that drove the multi-tenant lightweight chat feature. The feature has shipped (commit `c8ec521`). Read for context on how the plan was framed, not as an active workstream.
+
 **For:** A Copilot CLI instance (or any planning LLM) that will design the implementation plan for the multi-tenant-lightweight-chat phase.
 **Produced by:** EntraClaw Agent (Claude Opus 4.6) + the user, 2026-04-09
 **Branch:** `feature/multi-tenant-lightweight-chat`
@@ -38,26 +40,25 @@ The project currently works end-to-end: the agent can send/receive Teams message
 
 ### Context on WHY
 2. **`docs/architecture/SPEC-dual-track-agent-identity.md`** — Broader architecture debate that validated this approach. Answers "why this instead of pure OBO" and "why this instead of just faster Agent User provisioning." Critical for understanding the architectural tradeoffs.
-3. **`docs/runbooks/session-2026-04-08-teams-chat-transcript.md`** — Full transcript of the day PM leadership approved this. Has the conversation that shaped the design.
 
 ### Architecture Decision Records
-4. **`docs/decisions/001-obo-flows-for-device-agents.md`** — Why we moved away from OBO.
-5. **`docs/decisions/002-agent-user-over-obo.md`** — Why Agent User is the target identity.
-6. **`docs/decisions/003-certificate-auth-over-client-secrets.md`** — Why the three-hop flow uses certs, not secrets.
+3. **`docs/decisions/001-obo-flows-for-device-agents.md`** — Why we moved away from OBO.
+4. **`docs/decisions/002-agent-user-over-obo.md`** — Why Agent User is the target identity.
+5. **`docs/decisions/003-certificate-auth-over-client-secrets.md`** — Why the three-hop flow uses certs, not secrets.
 
 ### Platform Learnings (avoid re-learning the hard way)
-7. **`docs/runbooks/hard-won-learnings.md`** — 29 entries from prior debugging sessions. **READ ALL OF THEM** before designing anything. They cover pitfalls like "never use az rest for Agent Identity APIs" and "always create BlueprintPrincipal explicitly."
-8. **`docs/platform-learnings/entra-agent-users.md`** — Deep dive on Agent User concepts, the three-hop flow, licensing constraints, and the directory scale limits you need to respect.
-9. **`docs/platform-learnings/msal-entra-agent-ids.md`** — MSAL library behavior with Agent Identity endpoints. Critical for the device code / localhost redirect flow design.
-10. **`docs/platform-learnings/mcp-close-the-loop.md`** — The MCP background channel pattern (Claude Code-specific) + fallback to tool-based polling (Copilot-compatible).
-11. **`docs/platform-learnings/teams-graph-api.md`** — Graph API quirks for Teams (create chat Example 6 vs Example 7, cross-tenant federation, etc.).
+6. **`docs/runbooks/hard-won-learnings.md`** — append-only learnings log. **READ ALL OF THEM** before designing anything. They cover pitfalls like "never use az rest for Agent Identity APIs" and "always create BlueprintPrincipal explicitly."
+7. **`docs/platform-learnings/entra-agent-users.md`** — Deep dive on Agent User concepts, the three-hop flow, licensing constraints, and the directory scale limits you need to respect.
+8. **`docs/platform-learnings/msal-entra-agent-ids.md`** — MSAL library behavior with Agent Identity endpoints. Critical for the device code / localhost redirect flow design.
+9. **`docs/platform-learnings/mcp-close-the-loop.md`** — The MCP background channel pattern (Claude Code-specific) + fallback to tool-based polling (Copilot-compatible).
+10. **`docs/platform-learnings/teams-graph-api.md`** — Graph API quirks for Teams (create chat Example 6 vs Example 7, cross-tenant federation, etc.).
 
 ### Current Implementation
-12. **`src/entraclaw/mcp_server.py`** — Current MCP server. Shows how tools are wired up, how the background poll works, how state is managed.
-13. **`src/entraclaw/tools/teams.py`** — Teams Graph API integration. Three-hop token acquisition, create_chat, send/read/list, member management.
-14. **`src/entraclaw/auth/certificate.py`** — Certificate-based JWT assertion for Hop 1.
-15. **`scripts/setup.sh` + `scripts/create_entra_agent_ids.py` + `scripts/entra_provisioning.py`** — Current provisioning flow. You'll need to understand this to design the background provisioning for the multi-tenant version.
-16. **`CLAUDE.md`** — Project non-negotiables. **READ THIS.** Contains hard rules like "TDD: tests first", "security fails closed", "never use `az rest` or Azure CLI tokens for Agent Identity APIs", etc.
+11. **`src/entraclaw/mcp_server.py`** — Current MCP server. Shows how tools are wired up, how the background poll works, how state is managed.
+12. **`src/entraclaw/tools/teams.py`** — Teams Graph API integration. Three-hop token acquisition, create_chat, send/read/list, member management.
+13. **`src/entraclaw/auth/certificate.py`** — Certificate-based JWT assertion for Hop 1.
+14. **`scripts/setup.sh` + `scripts/create_entra_agent_ids.py` + `scripts/entra_provisioning.py`** — Current provisioning flow. You'll need to understand this to design the background provisioning for the multi-tenant version.
+15. **`CLAUDE.md`** — Project non-negotiables. **READ THIS.** Contains hard rules like "TDD: tests first", "security fails closed", "never use `az rest` or Azure CLI tokens for Agent Identity APIs", etc.
 
 ---
 
@@ -120,7 +121,7 @@ You don't know Microsoft's specific APIs and policies. Research these before you
 - [ ] PKCE (Proof Key for Code Exchange) — what does it protect against?
 
 ### Teams Graph API Edge Cases
-- [ ] The hard-won-learnings doc has 29 entries; pay special attention to ones about chat creation Example 6 vs Example 7, cross-tenant federation, and the 400/404 errors that aren't actual failures.
+- [ ] The hard-won-learnings doc is append-only; pay special attention to ones about chat creation Example 6 vs Example 7, cross-tenant federation, and the 400/404 errors that aren't actual failures.
 - [ ] Look up the Graph API `POST /chats` docs — Examples 1-7 cover different chat creation patterns.
 
 ---

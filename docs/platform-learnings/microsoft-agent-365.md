@@ -384,7 +384,7 @@ a human-authenticated CLI session can generate it.
 | 1 | Verify M365 Copilot license can be assigned to `entraclaw-agent-sati-agent@yourtenant.onmicrosoft.com`. Try assignment in M365 admin center. | Alice | Reversible |
 | 2 | In M365 admin center → **Agents and Tools** → **Tools** → search "Word" → click into **Work IQ Word MCP Server (Preview)** → screenshot the detail pane (permissions, scopes, agents that can grant). | Alice | Read-only |
 | 3 | Confirm whether `a365 setup` can adopt the existing Sati AgentIdentity (`appId=eba51655-...`) or requires fresh blueprint provisioning. Read `a365 setup all` source / docs if not already clear. | Claude (research) | Reversible |
-| 4 | If the answers to (1)–(3) are favorable, write a follow-up plan `docs/superpowers/plans/2026-05-04-work-iq-word-pivot.md` with the 8 concrete steps from §13.1. | Claude | Plan only |
+| 4 | If the answers to (1)–(3) are favorable, write a follow-up plan under `docs/plans/` (e.g., `docs/plans/2026-05-04-work-iq-word-pivot.md`) with the 8 concrete steps from §13.1. | Claude | Plan only |
 | 5 | If any answer is blocking (no Copilot license, can't adopt SP, region not ready), surface to the team and consider alternative paths (OOXML manipulation as fallback per Learning #60 §3, or pivot Hirsch defense to Teams reply instead of in-doc). | Both | Reversible |
 
 ---

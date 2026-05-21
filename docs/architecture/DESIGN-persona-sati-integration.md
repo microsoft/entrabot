@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-18
 **Author:** the user, EntraClaw Agent
-**Status:** Proposed
+**Status:** Shipped (v1, PRs #14 and #15). This document describes the design as implemented; the body-first prompt architecture is live and persona-sati MCP wiring is consumed at boot.
 **Implements:** Separation of mind (persona-sati) from body (entraclaw Teams MCP)
 
 ---

@@ -7,9 +7,8 @@
 | All tests pass | `pytest -v` | 0 failures |
 | Lint clean | `ruff check .` | No errors |
 | Package installs | `pip install -e ".[dev]"` | No errors |
+| Coverage gate | `pytest --cov=entraclaw --cov-fail-under=80` | passes |
 
 ## Known Issues
 
-| Issue | Workaround | Status |
-|-------|-----------|--------|
-| No tests written yet | Project is in scaffolding phase | Expected |
+See `docs/engineering-status.md` "Known Issues (Open)" for the live list. The hardest-won ones are tracked in `docs/runbooks/hard-won-learnings.md`.

@@ -11,8 +11,8 @@ Agent wants to access a resource
         │
         ▼
 ┌─────────────────┐
-│ 1. Token check  │  Does the agent have a valid OBO token?
-│    (auth/)      │  If expired → re-consent or refresh
+│ 1. Token check  │  Does the agent have a valid Agent User token?
+│    (auth/)      │  If expired → eager refresh (55-min) or lazy 401 retry
 └────────┬────────┘
          │ valid token
          ▼
@@ -24,7 +24,7 @@ Agent wants to access a resource
          ▼
 ┌─────────────────┐
 │ 3. Execute      │  Perform the actual resource access
-│    (caller)     │  Using the OBO token
+│    (caller)     │  Using the Agent User token
 └────────┬────────┘
          │ result
          ▼
@@ -33,6 +33,8 @@ Agent wants to access a resource
 │    (audit/)     │  Append outcome to the audit event
 └─────────────────┘
 ```
+
+The token check uses the three-hop Agent User token (ADR-002) for `agent_user` mode; in `delegated` mode the human's MSAL-cached token; in `bot` mode the bot's app credentials.
 
 ## Key Invariant
 

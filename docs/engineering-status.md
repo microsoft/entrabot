@@ -1,6 +1,6 @@
 # Entraclaw Identity Research — Engineering Summary
 
-**Date:** April 29, 2026
+**Date:** April 29, 2026 (last full status sweep; updates below)
 **Team:** the user
 **Status:** v1 released. Three auth modes working (Agent User / Delegated / Bot Gateway). Progressive identity state machine. **791 tests** across the suite. MCP tools + 4 background tasks (Teams 5s / email 60s / chat-discovery 120s / daily summary 5pm PDT). Multi-tenant lightweight chat shipped. **Mind-body split complete** — body-first prompt architecture loads locally, persona-sati MCP wired for personality/memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped; blob-hosted operational storage is opt-in via `setup.sh --use-cloud-memory`. Efferent-copy middleware shipped and immediately hot-fixed for self-spawn cascade (PRs #35/#36), then hardened again against wrapper indirection (PR #41), and is now opt-in (`EFFERENT_COPY_ENABLE=1`) so normal MCP runs do not mirror every tool call. Leader/slave gating ripped out per "one stdio client per process" reality. **Windows port (PR #58) acceptance-tested on ARM64 Windows 11 VM.** Full CNG signing via TPM-backed cert, three-hop flow live against Entra, Copilot CLI MCP registration, Teams DM round-trip confirmed. `send_teams_message` auto-wait merged — non-Claude-Code hosts block inline until sponsor replies (deterministic, not model-dependent). See Learning #54/#55.
 
@@ -298,7 +298,7 @@ Full reference: `docs/reference/mcp-tools.md`.
 ## TDD Status
 
 ```
-484 tests collected
+791 tests collected (as of 2026-04-29)
 ```
 
 Key modules:
@@ -344,7 +344,7 @@ Invariant: `pytest -v && ruff check .` passes before every commit.
 - MCP server auto-discovered via `.mcp.json`
 - `--teams-user` flag to set Teams recipient separately from admin
 - `read_teams_messages` with null-from handling (system messages)
-- 29 hard-won learnings documented in runbooks
+- 66 hard-won learnings documented in runbooks
 - Bidirectional Teams channel — background polling + push notifications
 - Certificate auth for Blueprint — private key in OS keystore, no secrets on disk (ADR-003)
 - Token auto-refresh: eager (55-min) + lazy (401 retry) for all tools
@@ -369,8 +369,7 @@ Invariant: `pytest -v && ruff check .` passes before every commit.
 
 ### What's Not Started / Deferred
 
-- Azure Bot resource registration on yourtenant.onmicrosoft.com (needed for live bot test)
-- Windows VM provisioning and testing (rescheduled)
+- Azure Bot resource registration (needed for live bot test)
 - AppContainer sandbox spike — kernel-level agent isolation on Windows
 - Delta query optimization — replace timestamp polling with `/messages/delta` if rate-limit becomes an issue
 - Dynamic precision weighting for the polling cadence (still static per source)
@@ -434,11 +433,12 @@ Blueprint (client_credentials)
 6. ~~Bot Gateway~~ — ✅ DONE. M365 Agents SDK bot server + JSONL IPC + tunnel manager. Coexists via `ENTRACLAW_MODE=bot`.
 7. ~~Body-first prompt architecture~~ — ✅ DONE. `@include` expansion, non-overridable body rules, persona layered on top (PRs #14, #15).
 8. ~~Persona-sati MCP wiring~~ — ✅ DONE. `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` consumed at boot.
-9. **Bot Gateway live test** — Register Azure Bot on yourtenant.onmicrosoft.com, sideload Teams app, verify end-to-end with Dev Tunnel.
-10. **Entra sign-in log verification** — confirm `idtyp=user` and agent attribution in tenant audit logs.
-11. **Windows VM provisioning** — verify cross-platform `setup.sh`.
-12. **AppContainer sandbox spike** — kernel-level agent isolation on Windows.
-13. **Delta query optimization** — replace timestamp polling with `/messages/delta` if rate-limit becomes an issue.
+9. ~~Windows port acceptance~~ — ✅ DONE (PR #58). ARM64 Windows 11 + CNG signing + Copilot CLI MCP + Teams DM round-trip.
+10. **Bot Gateway live test** — Register Azure Bot, sideload Teams app, verify end-to-end with Dev Tunnel.
+11. **Entra sign-in log verification** — confirm `idtyp=user` and agent attribution in tenant audit logs.
+12. **Provisioner cert-auth migration** — close `docs/SECURITY-DEBT-PROVISIONER-SECRET.md`. Reference impl exists in persona-sati.
+13. **AppContainer sandbox spike** — kernel-level agent isolation on Windows.
+14. **Delta query optimization** — replace timestamp polling with `/messages/delta` if rate-limit becomes an issue.
 
 ---
 
@@ -464,4 +464,4 @@ Blueprint (client_credentials)
 | 16 | Agent reading its own messages back as new input | Loop | Filter agent echoes including persona-display-name suffix (v1) |
 | 17 | Body prompt not loading from file | Wrong | Fall back to `prompts/agent_system.md` when persona-sati unreachable (v1) |
 
-Full append-only log: `docs/runbooks/hard-won-learnings.md` (29 entries).
+Full append-only log: `docs/runbooks/hard-won-learnings.md` (66 entries).

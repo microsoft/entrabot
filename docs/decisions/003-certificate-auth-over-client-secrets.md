@@ -1,7 +1,7 @@
 # ADR-003: Certificate Auth Over Client Secrets for Device-Local Agents
 
 **Date:** 2026-04-06
-**Status:** Proposed
+**Status:** Accepted (shipped). Private key lives in OS keystore; the Blueprint signs the Hop 1 JWT assertion.
 **Deciders:** the user
 **Context:** Eliminating client secrets from the device-local agent authentication flow
 

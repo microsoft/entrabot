@@ -796,7 +796,7 @@ Auth model uses **Entra Agent ID** delegated tokens — the same identity primit
 - The `kind="onedrive_business"` rejection added to `_check_comment_target_allowed` (Learning #60 Task 1, commit `805015b`) is correct *as far as it goes* but doesn't fully describe the issue — the endpoint also fails on real SharePoint team sites for Word. Once we pivot to Work IQ Word the helper's whole purpose changes (or is retired).
 - "`add_file_comment` works for Word" was a load-bearing assumption inherited from a prior PR's eng review; nobody in the chain (eng review, code review, my plan-writing) tested it live. The gap closed only because Brandon asked an empirical question that forced a spike.
 
-**Evidence/references:** Spike script `scripts/spike_file_comments.py` (commit `9fd38e0`), updated implementation plan `docs/superpowers/plans/2026-05-04-file-comment-reply-tools.md` §Spike findings, [Work IQ Word reference](https://learn.microsoft.com/microsoft-agent-365/mcp-server-reference/word), [Agent 365 Identity / authentication flows](https://learn.microsoft.com/microsoft-agent-365/developer/identity), [n8n MCP Server scopes example](https://learn.microsoft.com/entra/agent-id/integrate-n8n-agent#understand-the-mcp-server-scopes).
+**Evidence/references:** Spike script `scripts/spike_file_comments.py` (commit `9fd38e0`), implementation plan §Spike findings (plan was kept in a private working branch), [Work IQ Word reference](https://learn.microsoft.com/microsoft-agent-365/mcp-server-reference/word), [Agent 365 Identity / authentication flows](https://learn.microsoft.com/microsoft-agent-365/developer/identity), [n8n MCP Server scopes example](https://learn.microsoft.com/entra/agent-id/integrate-n8n-agent#understand-the-mcp-server-scopes).
 
 
 ---
