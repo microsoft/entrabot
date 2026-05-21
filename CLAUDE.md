@@ -81,8 +81,6 @@ behavioral rules) is served by a separate MCP server: **persona-sati**.
 - If persona-sati is not configured, entraclaw works standalone as a generic Teams tool
 - Memory operations go through persona-sati's tools, not through local blob sync hooks
 - The system prompt comes from persona-sati, not from this repo
-- The original prompt is archived at `prompts/agent_system.md.archive` for reference
-- A sanitized example for standalone users is at `prompts/agent_system.md.example`
 
 **Connecting to persona-sati:**
 - Local: `cd /path/to/persona-sati && .venv/bin/persona-sati --transport sse --port 8100`
@@ -232,8 +230,6 @@ Two memory systems coexist in this project:
 - `docs/decisions/003-certificate-auth-over-client-secrets.md`
 - `docs/platform-learnings/microsoft-agent-365.md` — A365 GA'd 2026-05-01. Identity model, Work IQ MCP catalog, four capability tiers, auth flows, gap analysis vs entraclaw. Read this before considering any A365 / Work IQ integration work.
 - `docs/platform-learnings/mcp-close-the-loop.md`
-- `prompts/agent_system.md.archive` — original monolithic prompt, kept for reference
-- `prompts/agent_system.md.example` — sanitized standalone example
 
 ## Commands
 
