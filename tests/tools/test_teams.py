@@ -462,7 +462,7 @@ class TestCreateOrFindChat:
             agent_user_id="agent-user-id",
             human_user_types=["Guest"],
             human_user_tenant_ids=["72f988bf-86f1-41af-91ab-2d7cd011db47"],
-            human_user_mails=["user@microsoft.com"],
+            human_user_mails=["user@example.com"],
         )
         assert result["chat_id"] == "19:fed-guest@thread.v2"
         import json
@@ -472,7 +472,7 @@ class TestCreateOrFindChat:
         assert body["chatType"] == "oneOnOne"
         # Find the guest member — should use email, not guest object ID
         human_members = [
-            m for m in body["members"] if "user@microsoft.com" in m.get("user@odata.bind", "")
+            m for m in body["members"] if "user@example.com" in m.get("user@odata.bind", "")
         ]
         assert len(human_members) == 1
         assert human_members[0]["roles"] == ["owner"]
@@ -544,6 +544,39 @@ class TestCreateOrFindChat:
 # ---------------------------------------------------------------------------
 
 
+def _sponsor_gate_patches():
+    """Pre-baked sponsor + chat-membership mocks so existing add_member
+    happy-path tests don't have to repeat the gate plumbing.
+
+    The sponsor record uses the same address the tests pass as
+    ``requester_email``, and chat-members returns a single entry whose
+    ``user_id`` matches the sponsor.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from entraclaw.identity.sponsors import AgentIdentitySponsor
+
+    sponsor = AgentIdentitySponsor(
+        user_id="sponsor-uid",
+        user_principal_name="sponsor@contoso.com",
+        mail="sponsor@contoso.com",
+    )
+    return [
+        patch(
+            "entraclaw.tools.teams._get_sponsor_records",
+            new=AsyncMock(return_value=[sponsor]),
+        ),
+        patch(
+            "entraclaw.tools.teams._fetch_chat_members_for_gate",
+            new=AsyncMock(
+                return_value=[
+                    {"user_id": "sponsor-uid", "email": "sponsor@contoso.com"}
+                ]
+            ),
+        ),
+    ]
+
+
 class TestAddMember:
     @respx.mock
     @pytest.mark.asyncio
@@ -561,18 +594,26 @@ class TestAddMember:
                 },
             )
         )
-        result = await add_member(
-            chat_id="19:chat-id@thread.v2",
-            token="agent-token",
-            email="newuser@microsoft.com",
-            tenant_id="72f988bf-86f1-41af-91ab-2d7cd011db47",
-        )
+        patches = _sponsor_gate_patches()
+        for p in patches:
+            p.start()
+        try:
+            result = await add_member(
+                chat_id="19:chat-id@thread.v2",
+                token="agent-token",
+                email="newuser@example.com",
+                requester_email="sponsor@contoso.com",
+                tenant_id="72f988bf-86f1-41af-91ab-2d7cd011db47",
+            )
+        finally:
+            for p in patches:
+                p.stop()
         assert result["display_name"] == "New User"
         import json
 
         body = json.loads(route.calls.last.request.content)
         assert body["tenantId"] == "72f988bf-86f1-41af-91ab-2d7cd011db47"
-        assert "newuser@microsoft.com" in body["user@odata.bind"]
+        assert "newuser@example.com" in body["user@odata.bind"]
         assert body["roles"] == ["owner"]
 
     @respx.mock
@@ -591,11 +632,19 @@ class TestAddMember:
                 },
             )
         )
-        result = await add_member(
-            chat_id="19:chat-id@thread.v2",
-            token="agent-token",
-            email="local@contoso.com",
-        )
+        patches = _sponsor_gate_patches()
+        for p in patches:
+            p.start()
+        try:
+            result = await add_member(
+                chat_id="19:chat-id@thread.v2",
+                token="agent-token",
+                email="local@contoso.com",
+                requester_email="sponsor@contoso.com",
+            )
+        finally:
+            for p in patches:
+                p.stop()
         assert result["display_name"] == "Local User"
         import json
 
@@ -615,13 +664,21 @@ class TestAddMember:
                 json={"error": {"message": "User not found"}},
             )
         )
-        with pytest.raises(ChatNotFound):
-            await add_member(
-                chat_id="19:chat-id@thread.v2",
-                token="agent-token",
-                email="nobody@microsoft.com",
-                tenant_id="72f988bf-86f1-41af-91ab-2d7cd011db47",
-            )
+        patches = _sponsor_gate_patches()
+        for p in patches:
+            p.start()
+        try:
+            with pytest.raises(ChatNotFound):
+                await add_member(
+                    chat_id="19:chat-id@thread.v2",
+                    token="agent-token",
+                    email="nobody@example.com",
+                    requester_email="sponsor@contoso.com",
+                    tenant_id="72f988bf-86f1-41af-91ab-2d7cd011db47",
+                )
+        finally:
+            for p in patches:
+                p.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -680,7 +737,7 @@ class TestTeamsSend:
             return_value=httpx.Response(201, json={"id": "msg-m", "createdDateTime": "2024-01-01"})
         )
         mentions = [
-            {"id": 0, "name": "Alice Example", "user_id": "user-guid-eric"},
+            {"id": 0, "name": "Alice Example", "user_id": "user-guid-alice"},
         ]
         result = await send(
             chat_id="c1",
@@ -694,7 +751,7 @@ class TestTeamsSend:
 
         body = _json.loads(route.calls.last.request.content)
         assert "mentions" in body
-        assert body["mentions"][0]["mentioned"]["user"]["id"] == "user-guid-eric"
+        assert body["mentions"][0]["mentioned"]["user"]["id"] == "user-guid-alice"
         assert body["mentions"][0]["mentionText"] == "Alice Example"
 
     @respx.mock
@@ -705,8 +762,8 @@ class TestTeamsSend:
             return_value=httpx.Response(201, json={"id": "msg-mm", "createdDateTime": "2024-01-01"})
         )
         mentions = [
-            {"id": 0, "name": "Carol Sample", "user_id": "user-guid-ayse"},
-            {"id": 1, "name": "Alice Example", "user_id": "user-guid-eric"},
+            {"id": 0, "name": "Carol Sample", "user_id": "user-guid-carol"},
+            {"id": 1, "name": "Alice Example", "user_id": "user-guid-alice"},
         ]
         await send(
             chat_id="c1",
@@ -786,7 +843,7 @@ class TestListMembers:
                         {
                             "userId": "user-1",
                             "displayName": "Alice Example",
-                            "email": "user@example.com",
+                            "email": "alice@example.com",
                             "roles": ["owner"],
                         },
                         {
@@ -884,7 +941,7 @@ class TestTeamsRead:
                     "value": [
                         {
                             "id": "reply-1",
-                            "from": {"user": {"displayName": "Adrian"}},
+                            "from": {"user": {"displayName": "Alice Example"}},
                             "body": {
                                 "content": (
                                     '<attachment id="1776393595644">'
@@ -895,7 +952,7 @@ class TestTeamsRead:
                         },
                         {
                             "id": "plain-1",
-                            "from": {"user": {"displayName": "Diana"}},
+                            "from": {"user": {"displayName": "Bob Tester"}},
                             "body": {"content": "<p>plain message</p>"},
                             "createdDateTime": "2026-04-17T16:16:00Z",
                         },
@@ -1147,7 +1204,7 @@ class TestCreateOneOnOneChat:
         )
         result = await create_one_on_one_chat(
             token="agent-token",
-            target_email="user@microsoft.com",
+            target_email="user@example.com",
             target_tenant_id="72f988bf-86f1-41af-91ab-2d7cd011db47",
             agent_user_id="agent-oid-123",
         )
@@ -1156,7 +1213,7 @@ class TestCreateOneOnOneChat:
 
         body = json.loads(route.calls.last.request.content)
         target_members = [
-            m for m in body["members"] if "user@microsoft.com" in m.get("user@odata.bind", "")
+            m for m in body["members"] if "user@example.com" in m.get("user@odata.bind", "")
         ]
         assert len(target_members) == 1
         assert target_members[0]["tenantId"] == "72f988bf-86f1-41af-91ab-2d7cd011db47"

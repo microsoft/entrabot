@@ -105,7 +105,7 @@ tests/
 | # | Decision | Rationale |
 |---|----------|-----------|
 | 1 | Progressive identity required | Management directive, non-negotiable |
-| 2 | Localhost redirect primary, device code fallback after 10s | Karen Mock security flag; try localhost, fall back gracefully |
+| 2 | Localhost redirect primary, device code fallback after 10s | Security architect's flag; try localhost, fall back gracefully |
 | 3 | Three-hop flow preserved as Agent User path | Existing working infrastructure |
 | 4 | werner.ac for research, tenant-agnostic design | Config not code |
 | 5 | MSAL for delegated, raw httpx for three-hop | Best tool for each job |

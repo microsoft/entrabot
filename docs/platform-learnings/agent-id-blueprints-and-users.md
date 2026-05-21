@@ -2,7 +2,7 @@
 
 > **Last updated:** 2026-05-05
 > **Status:** Authoritative reference. READ BEFORE designing any auth flow that touches Agent Identity, Agent Blueprint, or Agent User objects.
-> **Cross-repo:** This doc should be mirrored in entraclaw, persona-sati, and agent-foundry-poc. Update via PR to all three.
+> **Cross-repo:** This doc may be mirrored in related internal Agent Identity research repos. Update via PR to each.
 
 ---
 
@@ -413,7 +413,7 @@ The key load-bearing assumption was in Task 0 Step 2:
 > *"`publicClient.redirectUris` OR `spa.redirectUris` contains at least one loopback URI (`http://localhost`, `http://localhost:<port>`, `http://127.0.0.1`)."*
 > *"If public-client redirect URIs are missing → same: record the command, do not execute."*
 
-The implicit assumption: the persona-sati Blueprint app reg (`55555555-5555-5555-5555-555555555555`) **could be configured** with a `publicClient.redirectUris` entry, making it a valid OAuth client for Claude Code's PKCE auth-code flow.
+The implicit assumption: the persona-sati Blueprint app reg (`<blueprint-app-id>`) **could be configured** with a `publicClient.redirectUris` entry, making it a valid OAuth client for Claude Code's PKCE auth-code flow.
 
 ### What post-GA reality says
 
@@ -525,7 +525,7 @@ When designing any auth flow that touches an Agent Identity, Agent Blueprint, or
 
 - **Entraclaw `docs/platform-learnings/msal-entra-agent-ids.md`** (last updated 2025-07-14): pre-GA preview-era reference. Extends with: device-code flow patterns for human bootstrap, MSAL Python class breakdown, OBO mechanics. **Now superseded** for any post-GA Agent Blueprint claims; this doc supersedes the "Current Limitations (Preview)" section.
 - **Entraclaw `docs/platform-learnings/entra-agent-users.md`**: the three-hop user_fic flow walkthrough, directory-quota analysis. **Still accurate for the user_fic mechanics**, but the "preview" framing is outdated post-2026-05-01.
-- **agent-foundry `docs/platform-learnings/Conditional-Access-Learnings.md`**: CA semantics for agents (agent risk, custom security attributes, target scoping). Complements this doc — read together when designing tenant-policy enforcement.
+- **Related internal Conditional Access learnings**: CA semantics for agents (agent risk, custom security attributes, target scoping). Complements this doc — read together when designing tenant-policy enforcement.
 - **Persona-sati `.worktrees/entra-oauth/docs/plans/2026-05-05-entra-delegation-12h-refresh.md`**: the plan that taught us this lesson. The discovery-shim and OIDC-injection parts are correct; Task 0 Step 2 is the assumption that broke.
 
 ### Open questions / "what to keep an eye on"

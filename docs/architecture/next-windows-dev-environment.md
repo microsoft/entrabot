@@ -123,7 +123,7 @@ az vm extension set \
 
 # Assign your user the "Virtual Machine User Login" role
 az role assignment create \
-  --assignee "<your-user-upn>@microsoft.com" \
+  --assignee "<your-user-upn>@example.com" \
   --role "Virtual Machine User Login" \
   --scope "/subscriptions/<sub-id>/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Compute/virtualMachines/$VM_NAME"
 
@@ -150,7 +150,7 @@ winget install Git.Git --accept-package-agreements --accept-source-agreements
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
 # Clone the repo
-git clone "https://YourOrg@dev.azure.com/YourOrg/Engineering/_git/AIM%20EntraClaw%20Research" C:\entraclaw
+git clone "<your-internal-or-github-remote-url>" C:\entraclaw
 cd C:\entraclaw
 
 # Create venv and install

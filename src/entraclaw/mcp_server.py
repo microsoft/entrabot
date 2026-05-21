@@ -1224,7 +1224,7 @@ async def _background_poll_email() -> None:
     # Per-session dedup. Graph returns sub-second precision on
     # receivedDateTime but the cursor file we save may end up truncated
     # to second resolution, which causes the same email to be returned
-    # every poll cycle (observed 2026-04-17 with Jack Test's "Ball
+    # every poll cycle (observed 2026-04-17 with a teammate's "Ball
     # game tonight" looping). Belt-and-suspenders: also track the
     # Graph-side message IDs we've already pushed this session so we
     # never double-push, regardless of cursor drift.
@@ -2618,21 +2618,41 @@ async def list_chat_members(chat_id: str) -> str:
 
 
 @mcp.tool()
-async def add_teams_member(email: str, chat_id: str, tenant_id: str = "") -> str:
-    """Add a new member to a Teams chat.
+async def add_teams_member(
+    email: str,
+    chat_id: str,
+    requester_email: str,
+    tenant_id: str = "",
+) -> str:
+    """Add a new member to a Teams chat. The REQUESTER must be an Agent Identity sponsor.
 
-    Just provide the email address and the chat_id. For external users
-    (different org), the tenant is auto-resolved from the email domain.
+    Authorization model (mirrors share_file): only sponsors can ask the
+    agent to invite anyone. A sponsor may invite anyone they choose;
+    the invitee (``email``) is unrestricted.
 
     Args:
-        email: The user's email address (e.g., 'user@example.com').
+        email: The invitee's email address (e.g., 'user@example.com').
         chat_id: The chat to add the member to. Required.
+        requester_email: REQUIRED. Email of the human (sponsor) who asked
+            the agent to invite. Derive this from the active
+            conversation context — the sender of the Teams message that
+            triggered this turn. NEVER use the agent's own address.
+            NEVER fabricate.
         tenant_id: Optional override. Auto-resolved from email domain if empty.
 
     Returns:
-        JSON with member_id, display_name, and roles.
+        JSON with member_id, display_name, and roles, or ``{"error": "..."}``.
+
+    Errors:
+        RequesterNotSponsorError: requester_email is not in the sponsor allowlist.
+        RequesterNotInChatError: requester is a sponsor but not a member of chat_id.
     """
     await _initialize()
+    from entraclaw.errors import (
+        FilesError,
+        RequesterNotInChatError,
+        RequesterNotSponsorError,
+    )
     from entraclaw.tools.teams import add_member
 
     if not chat_id:
@@ -2642,6 +2662,17 @@ async def add_teams_member(email: str, chat_id: str, tenant_id: str = "") -> str
                     "chat_id is required — pass the chat_id of the target Teams "
                     "chat (create one via create_chat if needed)."
                 )
+            }
+        )
+    if not requester_email:
+        return json.dumps(
+            {
+                "error": (
+                    "requester_email is required — pass the email of the human "
+                    "who asked you to add this member. Never use the agent's own "
+                    "address."
+                ),
+                "error_type": "ValueError",
             }
         )
 
@@ -2656,12 +2687,16 @@ async def add_teams_member(email: str, chat_id: str, tenant_id: str = "") -> str
             tenant_id = resolved
 
     await _ensure_valid_token()
-    result = await _with_token_retry(
-        add_member,
-        chat_id=chat_id,
-        email=email,
-        tenant_id=tenant_id or None,
-    )
+    try:
+        result = await _with_token_retry(
+            add_member,
+            chat_id=chat_id,
+            email=email,
+            requester_email=requester_email,
+            tenant_id=tenant_id or None,
+        )
+    except (RequesterNotSponsorError, RequesterNotInChatError, FilesError) as exc:
+        return json.dumps({"error": str(exc), "error_type": type(exc).__name__})
     return json.dumps(result, indent=2)
 
 

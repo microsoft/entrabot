@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 MS_GRAPH_API_ID = "00000003-0000-0000-c000-000000000000"
-PROVISIONER_APP_DISPLAY_NAME = "AIM Agent ID Provisioner"
+PROVISIONER_APP_DISPLAY_NAME = "Agent Foundry Agent ID Provisioner"
 
 BASE_PERMISSION_VALUES = [
     "Application.ReadWrite.All",

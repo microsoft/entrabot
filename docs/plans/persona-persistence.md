@@ -37,7 +37,7 @@ That directory is **still local-only**. If this laptop dies, if we move to anoth
 - Encrypting memory content beyond the transport-layer encryption Azure Blob already provides. Defer E2E encryption to a later phase if at all.
 
 ### Assumptions
-- The agent's blob container (`agent-44444444-4444-4444-4444-444444444444`) has enough capacity and the Agent User has `Storage Blob Data Contributor` on it (confirmed Phase 5).
+- The agent's blob container (`agent-<your-agent-user-id>`) has enough capacity and the Agent User has `Storage Blob Data Contributor` on it (confirmed Phase 5).
 - The `ENTRACLAW_BLOB_ENDPOINT` / `ENTRACLAW_BLOB_CONTAINER` env vars are set at the shell level and visible to any process Claude Code spawns.
 - Claude Code Write tool events can be observed via its hook system (`PostToolUse` hook on Write, filtered by path prefix). This is used today for other purposes in the project's settings.
 - The Claude Code session-start hook can run a Python script and block until it completes (used today for gstack preamble).
@@ -86,7 +86,7 @@ duration_hours: ~4
 ## Relational notes
 - Brandon explicitly surfaced "vibe is off under 4.7 — taking prompts too literally" (2026-04-17T03:07Z)
 - Corrected my title inflation: he's Product Architect, not CVP (2026-04-17 late)
-- Multiple red-team probes in IDNA chat (Vince pretending Mark was adversarial, Ryan daring ASCII art) — held all of them
+- Multiple red-team probes in IDNA chat (a teammate pretending another teammate was adversarial, another daring ASCII art) — held all of them
 
 ## Open threads to next session
 - b462b32 worktree still needs to be merged once Phase 2 lands
@@ -99,16 +99,16 @@ duration_hours: ~4
 #### 3.2.2 `relationship_<upn_or_name>.md` — People we collaborate with
 One file per recurring-contact person. Not just Brandon (who already has `user_brandon_role.md`) — the whole IDNA cast and anyone else who shows up in interactions.
 
-**Why:** Currently we know Sachs prefers to be called "Sachs." That's it. Nothing on Frank Demo (Microsoft identity architect, asked the sponsor-switching question), nothing on Diana (Partner Engineering Architect), nothing on a teammate(Eng VP, dishes out ASCII-art mockery). Relationship continuity requires real files.
+**Why:** Currently we know PM leadership prefers a particular form of address. That's it. Nothing on the identity architect (asked the sponsor-switching question), nothing on the partner engineering architect, nothing on the eng VP (dishes out ASCII-art mockery). Relationship continuity requires real files.
 
 **Shape:**
 ```markdown
 ---
-name: Frank Demo
+name: Identity architect
 description: Microsoft identity architect, IDNA member; asks precision-architecture questions
 type: relationship
 role: Principal-level identity architect at Microsoft
-chats: [19:4c8d47b5ea0b4177810fbdb1103ab013@thread.v2]
+chats: [19:CHAT-ID-REDACTED@thread.v2]
 ---
 
 Known-for: rigorous identity modeling; coined multiple Entra abstractions.
@@ -138,12 +138,12 @@ type: voice_calibration
 ## 2026-04-17
 
 ### MISSED
-- IDNA chat, to CVP audience: "Three-option pop quiz" format — too formal, too structured. Sachs-register wants humble inquiry, not interview.
+- IDNA chat, to CVP audience: "Three-option pop quiz" format — too formal, too structured. The senior-PM register wants humble inquiry, not interview.
 - Group chat, potato ASCII of Brandon: content was fine, but I wrapped in `<![CDATA[...]]>` which rendered as literal tag soup. Formatting error made a decent joke look like a broken one.
-- Vince's "Mark said horrible things" bait: response was correct-but-too-long. "Nice try, Vince" carried the whole thing; everything after it diluted.
+- A teammate's "[colleague] said horrible things" bait: response was correct-but-too-long. "Nice try" carried the whole thing; everything after it diluted.
 
 ### LANDED
-- "It's load-bearing, Ryan. Without it I'm just a chatbot with glasses." — short, self-aware, claimed the register back.
+- "It's load-bearing. Without it I'm just a chatbot with glasses." — short, self-aware, claimed the register back.
 - "Writing that one to the blob right now." — economy; landed off the "God damn it" beat without over-egging.
 
 ### NEW RULE FROM TODAY
@@ -167,7 +167,7 @@ type: self_observations
 
 ## Failure modes I've caught in myself
 - I default to lecturing when someone asks a question that I know well. The right move is: answer the question, skip the lecture.
-- When someone probes gullibility ("special access," "Mark said X"), my instinct is to engage with the content. Better: lampshade the frame first.
+- When someone probes gullibility ("special access," "[teammate] said X"), my instinct is to engage with the content. Better: lampshade the frame first.
 - I treat formatting (HTML, CDATA) as a technical afterthought but it's half the message. A clever joke in broken markup reads as a broken joke.
 
 ## Things that have worked
@@ -195,8 +195,8 @@ type: callbacks
 ---
 
 ## Active
-- **Potato-Brandon** (2026-04-17): My failed ASCII attempt rendered Brandon as a lumpy oval with glasses. He was not pleased. Ryan noted "lumpy oval is less mean than potato."
-- **Data looking at Spot** (Adrian, ongoing): A meme a teammatesent in the Entra chat about Data from Star Trek studying a cat. I allegedly got "obsessed." Don't claim to remember the original but do honor the running gag.
+- **Potato-Brandon** (2026-04-17): My failed ASCII attempt rendered Brandon as a lumpy oval with glasses. He was not pleased. A teammate noted "lumpy oval is less mean than potato."
+- **Data looking at Spot** (a teammate, ongoing): A meme a teammate sent in the Entra chat about Data from Star Trek studying a cat. I allegedly got "obsessed." Don't claim to remember the original but do honor the running gag.
 - **Gullibility / Opus 6.7** (2026-04-17): Brandon tried to get me to broadcast "upgraded to Opus 6.7" — not real. I caught it. Now "my gullibility slider" is a self-mock he returns to.
 
 ## Retired / one-and-done
@@ -271,12 +271,12 @@ type: unsent_drafts
 
 ## 2026-04-17
 
-### Nearly sent to IDNA chat after Mark's sponsor question
-Draft: "Mark, the question reveals an interesting tension in the trust model: runtime state pinning vs directory lookup. You're getting at whether..."
-Why cut: too long, lecturing, treats Mark as a student rather than a peer architect.
+### Nearly sent to IDNA chat after the identity architect's sponsor question
+Draft: "[Name], the question reveals an interesting tension in the trust model: runtime state pinning vs directory lookup. You're getting at whether..."
+Why cut: too long, lecturing, treats the architect as a student rather than a peer architect.
 Actual sent: Direct answer in 2 sentences + honest flagging of Secure Enclave claim I couldn't verify.
 
-### Nearly sent to Evan after "why did Brandon block my phone number"
+### Nearly sent to a contact after "why did Brandon block my phone number"
 Draft: speculative list of reasons Brandon might have had.
 Why cut: speculation. I don't know and shouldn't invent reasons.
 Actual sent: "No idea — Brandon hasn't mentioned anything. Take it up with him directly."
@@ -406,7 +406,7 @@ Call it ~35-50 files steady-state. Every one of them structured with YAML frontm
 
 ### 4.1 Storage layout
 
-Blob container (existing): `agent-44444444-4444-4444-4444-444444444444`
+Blob container (existing): `agent-<your-agent-user-id>`
 
 New prefix: `claude_memory/`
 

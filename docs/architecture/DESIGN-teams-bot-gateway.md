@@ -220,7 +220,7 @@ pip install microsoft-agents-hosting-core microsoft-agents-activity \
 
 **Outside voice findings (rejected):**
 - "Two processes unnecessary" — Approach A is intentionally additive to protect existing MCP server. Approach B (embedded) remains the Phase 2 upgrade path.
-- "Solves already-solved problem" — Agent User requires E5 license + 15-min provisioning. Bot mode delivers the instant experience Eric requested. Different value prop.
+- "Solves already-solved problem" — Agent User requires E5 license + 15-min provisioning. Bot mode delivers the instant experience PM leadership requested. Different value prop.
 
 **Test coverage:** 19 codepaths mapped, 13 new test scenarios added (see eng review test plan artifact).
 

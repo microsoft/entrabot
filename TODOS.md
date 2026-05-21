@@ -62,7 +62,7 @@ Two bugs, both observed at 2026-04-17T17:00:00 PDT (= 00:00:01 UTC 2026-04-18):
 ### Email cursor sub-second precision
 `email_poll.poll_once` returns `latest_ts` verbatim from Graph; the cursor file may end up at second precision while Graph internally compares with sub-second. Result: an email at the cursor's exact second gets re-returned every poll. Per-session dedup in `_background_poll_email` handles within-session, but the email re-pushes once on every server restart. Real fix: bump cursor by 1ms when it equals the latest receivedDateTime, or store sub-second precision unconditionally.
 - **Effort:** XS (~10 LOC + 1 test)
-- **Source:** Live observation 2026-04-17 (Jack Test "Ball game tonight" loop)
+- **Source:** Live observation 2026-04-17 (a teammate's "Ball game tonight" loop)
 
 ### ~~Token auto-refresh in teams_send~~ ✅ DONE
 Implemented as `_with_token_retry()` in `mcp_server.py` and `_ensure_valid_token()` (proactive refresh at 55 min). All tools use it.

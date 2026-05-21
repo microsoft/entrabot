@@ -140,7 +140,7 @@ GET https://graph.microsoft.com/v1.0/me/presence
 **Response:**
 ```json
 {
-  "id": "fa8bf3dc-eca7-46b7-bad1-db199b62afc3",
+  "id": "00000000-0000-0000-0000-000000000000",
   "availability": "Available",
   "activity": "Available"
 }

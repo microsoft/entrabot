@@ -235,7 +235,7 @@ Agent Users are directory objects. Every Agent User counts against the tenant's 
 
 ### Why This Matters for Agent Users at Scale
 
-If each user creates multiple agent sessions (Ayse reported 7-8 concurrent sessions), a 100K-employee company could need 700K+ Agent User objects — well past default limits.
+If each user creates multiple agent sessions (the identity PM reported 7-8 concurrent sessions), a 100K-employee company could need 700K+ Agent User objects — well past default limits.
 
 ### Pooling Does NOT Work
 
@@ -247,7 +247,7 @@ A "connection pool" model (pre-provision Agent Users, check out/return) was cons
 
 ### Better Alternatives
 
-1. **IC3/Teams federation** (Henry Placeholder's proposal) — agent identities live in Teams' IC3 backend, not the Entra directory. Session IDs as external OIDs via native federation tokens. IC3 already scales to billions. No directory objects needed for chat-only scenarios.
+1. **IC3/Teams federation** (identity architect's proposal) — agent identities live in Teams' IC3 backend, not the Entra directory. Session IDs as external OIDs via native federation tokens. IC3 already scales to billions. No directory objects needed for chat-only scenarios.
 2. **FMIs (Federated Machine Identities)** — SPIFFE/SPIRE-like identities that don't require directory objects. Could be hosted in IC3 or a separate identity store.
 3. **Ephemeral Agent Users with TTL** — auto-deprovision after session end. Acceptable if the 2-month delete lifecycle is fixed.
 

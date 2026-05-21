@@ -49,9 +49,9 @@ class TestIsSubstantive:
         assert not is_substantive("no-reply@example.com")
         assert not is_substantive("donotreply@example.com")
 
-    def test_keeps_real_microsoft_sender(self) -> None:
+    def test_keeps_real_substantive_sender(self) -> None:
         assert is_substantive("user@example.com")
-        assert is_substantive("diana.smetters@microsoft.com")
+        assert is_substantive("alice.example@example.com")
 
     def test_keeps_external_domain(self) -> None:
         assert is_substantive("partner@contoso.com")
@@ -132,7 +132,7 @@ class TestPollOnce:
             ),
             _msg(
                 msg_id="2",
-                sender="diana.smetters@microsoft.com",
+                sender="alice.example@example.com",
                 subject="Re: Project Apollo",
                 received="2026-04-16T19:06:00Z",
             ),
@@ -190,7 +190,7 @@ class TestPollOnce:
         to detect Purview-encrypted content (message.rpmsg)."""
         main_msg = _msg(
             msg_id="enc-1",
-            sender="boss@microsoft.com",
+            sender="boss@example.com",
             subject="Confidential",
             received="2026-04-16T19:00:00Z",
             has_attachments=True,
@@ -220,7 +220,7 @@ class TestPollOnce:
     async def test_no_encryption_flag_when_no_rpmsg(self) -> None:
         main_msg = _msg(
             msg_id="plain-1",
-            sender="boss@microsoft.com",
+            sender="boss@example.com",
             received="2026-04-16T19:00:00Z",
             has_attachments=True,
         )

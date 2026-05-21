@@ -3,9 +3,9 @@
 **Date:** 2026-04-08 (updated 2026-04-09 — architecture debate context added, plan unchanged)
 **Status:** Approved — ready to implement
 **Branch:** `feature/multi-tenant-lightweight-chat`
-**Driver:** Alice Example' request for WhatsApp-like simplicity in Teams; Ales' standup pushback on heavyweight provisioning
+**Driver:** PM leadership's request for WhatsApp-like simplicity in Teams; Substrate leadership's standup pushback on heavyweight provisioning
 **Priority:** Moved ahead of Windows isolation work (rescheduled to weekend)
-**Approval:** Alice Example ("I'm supportive of this direction"), the user, Dave Fixture
+**Approval:** PM leadership ("I'm supportive of this direction"), the user, the platform team
 **Related:** `docs/architecture/SPEC-dual-track-agent-identity.md` (broader architecture debate that validated this build-time plan)
 
 ---
@@ -25,20 +25,20 @@ This is heavyweight for the scenario where you just want an agent to chat with y
 
 ## Agreed Direction
 
-After discussion between Brandon, Alex, Eric, Ayse, Adrian, Mark, and Nikhi:
+After discussion between Brandon, the agent runtime team, PM leadership, the identity PM, the identity architect, and licensing/federation contacts:
 
 - **Use a multi-tenant app** that an admin approves once per tenant
 - **Start with the human's delegated token** for instant Teams access
 - **Background-provision Agent User** for eventual identity separation
 - **No WhatsApp integration** — the ask is WhatsApp-like UX **in Teams**
-- **Agent User is non-negotiable** — Brandon and Alex disagree with dropping it
-- Ayse clarified: also want to explore sponsor-identity option, but Agent User path comes first
-- Eric confirmed: "having working code that shows/proves some limitations is more helpful than theorizing"
+- **Agent User is non-negotiable** — Brandon and the agent runtime team disagree with dropping it
+- The identity PM clarified: also want to explore sponsor-identity option, but Agent User path comes first
+- PM leadership confirmed: "having working code that shows/proves some limitations is more helpful than theorizing"
 
 ### Why Not Just Fix Agent User Provisioning?
 
-- Aashima's team is building a service to create Agent Users without admin permissions (Frank Demo)
-- Omar's M365 claw project already uses Agent Users, wants shorter provisioning times
+- A partner PM team is building a service to create Agent Users without admin permissions (per the identity architect)
+- A peer M365 claw project already uses Agent Users, wants shorter provisioning times
 - But those efforts are still evolving — this proposal works today with existing APIs
 
 ### The Admin Consent Problem
@@ -46,7 +46,7 @@ After discussion between Brandon, Alex, Eric, Ayse, Adrian, Mark, and Nikhi:
 - Chat.ReadWrite delegated permission requires admin consent in enterprise tenants
 - You can work around this by running your own tenant (like Brandon with werner.ac)
 - But for corp tenants (MSIT, etc.), admin approval is unavoidable
-- Ayse confirmed: even using her own MS account hits "requires admin approval" for Teams messaging APIs
+- The identity PM confirmed: even using her own MS account hits "requires admin approval" for Teams messaging APIs
 
 ## Architecture
 
@@ -200,8 +200,8 @@ When Agent User provisioning completes:
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| WhatsApp integration? | No | Ayse clarified: WhatsApp UX **in Teams**, not actual WhatsApp |
-| Drop Agent User? | No | Brandon/Alex: non-negotiable for audit separation |
+| WhatsApp integration? | No | The identity PM clarified: WhatsApp UX **in Teams**, not actual WhatsApp |
+| Drop Agent User? | No | Brandon and the agent runtime team: non-negotiable for audit separation |
 | Auth flow | Device code | Works headless, no browser redirect needed for CLI |
 | Token library | MSAL | Standard for multi-tenant apps, handles caching/refresh |
 | License for Agent User | FLW F1/F3 preferred | Cheaper ($2.25/mo vs $23/mo), includes Teams |
@@ -209,19 +209,19 @@ When Agent User provisioning completes:
 
 ## Conversation Context (Raw Notes)
 
-### Ayse's Clarification of Intent
+### Identity PM Clarification of Intent
 
 "There is one scenario with 2 options: One option is to have the agent runtime have its own identity — the AgentUser. The other option is to have the agent runtime have the owner's identity. This would allow a lot more delegation cause it would start with access to everything that the owner has access to (and we'd have to propose a way to scope it down). Whether you or I or anyone else agrees with that direction or not, we also want to explore this option."
 
-### Frank Demo's Federation Question
+### Identity Architect Federation Question
 
-Mark asked: if the corp admin requires MFA for external users, can the agent in a "rogue wolf" tenant still interact? Answer: federated chat (external access) authenticates in the home tenant, so corp MFA policies for B2B guests don't apply. Corp admin's levers are: disable external access entirely, or block specific domains.
+A teammate asked: if the corp admin requires MFA for external users, can the agent in a "rogue wolf" tenant still interact? Answer: federated chat (external access) authenticates in the home tenant, so corp MFA policies for B2B guests don't apply. Corp admin's levers are: disable external access entirely, or block specific domains.
 
-### Dave Fixture on Channels
+### Agent Runtime Team on Channels
 
 "Practically this also means it can't interact in channels without admin approval across tenants." — federated chat works for 1:1 and group chats, but Teams channels require guest/member access in the target tenant.
 
-### a teammateon Licensing
+### Licensing Contact on Licensing
 
 "I got it working without frontier as well, just Teams enterprise license did the trick." and "UX doesn't allow this license on Agentic Users, API does" — confirming Graph API can assign licenses that the portal blocks.
 
@@ -239,20 +239,20 @@ If the admin doesn't approve the multi-tenant app, users can still set up their 
 
 ## 2026-04-09 Update — Architecture Debate Context
 
-Between 2026-04-08 evening and 2026-04-09 early morning, the group (Henry Placeholder, Carol Sample, Iris Sample, Bob Tester, Frank Demo, the user, Dave Fixture) had an extended debate on the broader agent identity architecture. Full synthesis in `docs/architecture/SPEC-dual-track-agent-identity.md`.
+Between 2026-04-08 evening and 2026-04-09 early morning, the group (the identity platform team, the user, the agent runtime team) had an extended debate on the broader agent identity architecture. Full synthesis in `docs/architecture/SPEC-dual-track-agent-identity.md`.
 
 **Does this change the build-time plan?** No. The progressive identity approach in this spec was **validated** by the debate as the right bridge. Key points:
 
 1. **The OBO vs Agent User debate is long-term architecture, not a BUILD blocker.** This spec is the short-term bridge regardless of where that lands.
 
-2. **Diana flagged device code flow as insecure** for security-sensitive operations. Action: use localhost redirect for the initial auth flow instead of pure device code. (Step 2 of the implementation plan — update the MSAL flow choice.)
+2. **The security architect flagged device code flow as insecure** for security-sensitive operations. Action: use localhost redirect for the initial auth flow instead of pure device code. (Step 2 of the implementation plan — update the MSAL flow choice.)
 
-3. **Ayse confirmed device code UX works great in practice** (CoClaw proved it, even from her phone on the go). But "great UX" is not "secure enough" — we still need the localhost redirect for prod.
+3. **The identity PM confirmed device code UX works great in practice** (CoClaw proved it, even from her phone on the go). But "great UX" is not "secure enough" — we still need the localhost redirect for prod.
 
-4. **Directory scale is real but solvable.** Ayse's quota table: 300K default, 1M+ needs coordination. Ayse had 7-8 concurrent agent sessions at once — this doesn't scale if every session creates an Agent User. Mitigations:
+4. **Directory scale is real but solvable.** The identity PM's quota table: 300K default, 1M+ needs coordination. The identity PM had 7-8 concurrent agent sessions at once — this doesn't scale if every session creates an Agent User. Mitigations:
    - Don't pool (OID recycling is a security risk, soft-delete quota makes churn worse)
    - Do push substrate for fast provisioning (Brandon confirmed doable)
-   - Long-term: Teams/IC3 federation for chat-only agent identities (Adrian's idea — virtual agent tenant, session IDs as external OIDs)
+   - Long-term: Teams/IC3 federation for chat-only agent identities (the identity architect's idea — virtual agent tenant, session IDs as external OIDs)
 
 5. **Brandon's substrate commitment:** fast Agent User provisioning (sub-minute) is doable. That makes the Phase 1 → Phase 2 swap fast enough for BUILD.
 
@@ -260,7 +260,7 @@ Between 2026-04-08 evening and 2026-04-09 early morning, the group (Henry Placeh
 
 ### Minor Adjustments to This Spec
 
-- **Step 2 (Device Code Auth Flow):** Change default to **localhost redirect** for security (Diana's flag). Keep device code as a fallback for headless environments.
+- **Step 2 (Device Code Auth Flow):** Change default to **localhost redirect** for security (per the security architect's flag). Keep device code as a fallback for headless environments.
 - **Step 4 (Background Agent User Provisioning):** Coordinate with Brandon's substrate contacts for sub-minute provisioning target. If achievable, Phase 2 upgrade happens in seconds, not 10-15 minutes.
 - **Step 5 (Token Swap):** No change — the seamless swap logic is the same regardless of wait time.
 

@@ -81,7 +81,7 @@ class TestTriage:
                 ts="2026-04-16T10:00:00+00:00",
                 channel="email",
                 direction="inbound",
-                sender="diana.smetters@microsoft.com",
+                sender="alice.example@example.com",
                 summary="Re: Project Apollo",
             ),
         ]
@@ -97,7 +97,7 @@ class TestTriage:
                 ts="2026-04-16T10:00:00+00:00",
                 channel="email",
                 direction="inbound",
-                sender="diana.smetters@microsoft.com",
+                sender="alice.example@example.com",
                 summary="Re: Project Apollo",
             ),
             _entry(
@@ -105,7 +105,7 @@ class TestTriage:
                 channel="email",
                 direction="outbound",
                 sender="entraclaw-agent",
-                recipient="diana.smetters@microsoft.com",
+                recipient="alice.example@example.com",
                 summary="Thanks for sharing — three quick thoughts",
             ),
         ]
@@ -133,20 +133,20 @@ class TestTriage:
 
     def test_multiple_threads_independent(self) -> None:
         entries = [
-            # Thread A: inbound from Diana, no reply → needs_you
+            # Thread A: inbound from Alice, no reply → needs_you
             _entry(
                 ts="2026-04-16T10:00:00+00:00",
                 channel="email",
                 direction="inbound",
-                sender="diana@microsoft.com",
-                summary="Question about Syd",
+                sender="alice@example.com",
+                summary="Question about Apollo",
             ),
-            # Thread B: inbound from Adrian, agent replied → handled
+            # Thread B: inbound from Dave, agent replied → handled
             _entry(
                 ts="2026-04-16T11:00:00+00:00",
                 channel="teams_group",
                 direction="inbound",
-                sender="Henry Placeholder",
+                sender="Dave Fixture",
                 summary="What's your take?",
                 metadata={"chat_id": "19:group@thread.v2"},
             ),
@@ -170,7 +170,7 @@ class TestTriage:
         ]
         buckets = triage_interactions(entries)
         assert len(buckets["needs_you"]) == 1
-        assert buckets["needs_you"][0]["sender"] == "diana@microsoft.com"
+        assert buckets["needs_you"][0]["sender"] == "alice@example.com"
         assert len(buckets["handled"]) == 1
         assert buckets["handled"][0]["recipient"] == "19:group@thread.v2"
         assert len(buckets["heads_up"]) == 1
@@ -198,13 +198,13 @@ class TestTriage:
                 ts="2026-04-17T23:12:00+00:00",
                 channel="email",
                 direction="inbound",
-                sender="diana@microsoft.com",
+                sender="alice@example.com",
                 summary="Actually needs attention",
             ),
         ]
         buckets = triage_interactions(entries, agent_upn="entraclaw-agent@fabrikam.onmicrosoft.com")
         assert len(buckets["needs_you"]) == 1
-        assert buckets["needs_you"][0]["sender"] == "diana@microsoft.com"
+        assert buckets["needs_you"][0]["sender"] == "alice@example.com"
 
     def test_inbound_from_agent_upn_filter_is_case_insensitive(self) -> None:
         entries = [
@@ -251,8 +251,8 @@ class TestRender:
         buckets = {
             "needs_you": [
                 {
-                    "sender": "diana@microsoft.com",
-                    "summary": "Question about Syd",
+                    "sender": "alice@example.com",
+                    "summary": "Question about Apollo",
                     "channel": "email",
                     "ts": "2026-04-16T10:00:00+00:00",
                 }
@@ -261,8 +261,8 @@ class TestRender:
             "heads_up": [],
         }
         html = render_summary_html(buckets, day="2026-04-16")
-        assert "diana@microsoft.com" in html
-        assert "Question about Syd" in html
+        assert "alice@example.com" in html
+        assert "Question about Apollo" in html
 
     def test_html_empty_bucket_shows_placeholder(self) -> None:
         buckets = {"needs_you": [], "handled": [], "heads_up": []}
@@ -299,13 +299,13 @@ class TestSendSummary:
                 token="tok",
                 html="<p>hi</p>",
                 subject="Daily summary — 2026-04-16",
-                to=["alice@microsoft.com"],
+                to=["alice@example.com"],
             )
 
         assert "sendMail" in captured["url"]
         assert captured["headers"]["authorization"] == "Bearer tok"
         body = captured["json"].decode()
-        assert "alice@microsoft.com" in body
+        assert "alice@example.com" in body
         assert "Daily summary" in body
         assert "&lt;p&gt;hi&lt;/p&gt;" in body or "<p>hi</p>" in body
 
@@ -320,7 +320,7 @@ class TestSendSummary:
                     token="tok",
                     html="<p>hi</p>",
                     subject="s",
-                    to=["alice@microsoft.com"],
+                    to=["alice@example.com"],
                 )
 
 

@@ -550,7 +550,7 @@ class TestResolveTenantId:
             assert result == "aaaabbbb-cccc-dddd-eeee-ffff00001111"
 
     async def test_cross_tenant_sts_windows_issuer(self) -> None:
-        """microsoft.com returns sts.windows.net issuer, not login.microsoftonline.com."""
+        """Some tenants return sts.windows.net issuer, not login.microsoftonline.com."""
         from entraclaw.mcp_server import _resolve_tenant_id
 
         fake_oidc = {
@@ -565,7 +565,7 @@ class TestResolveTenantId:
         mock_client.__aenter__.return_value = mock_client
 
         with patch("entraclaw.mcp_server.httpx.AsyncClient", return_value=mock_client):
-            result = await _resolve_tenant_id("alice@microsoft.com", "contoso.com")
+            result = await _resolve_tenant_id("alice@example.com", "contoso.com")
             assert result == "72f988bf-86f1-41af-91ab-2d7cd011db47"
 
     async def test_discovery_failure_returns_none(self) -> None:

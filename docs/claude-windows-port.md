@@ -41,7 +41,7 @@ Native-Windows feel: 10/10 (one PowerShell line + ctypes shim is the documented 
 
 ### 2. AppContainer / sandbox sequencing — recommended: leave hooks; do not gate v1 on it.
 
-Microsoft published [Sandboxing Python with Win32 app isolation](https://blogs.windows.com/windowsdeveloper/2024/03/06/sandboxing-python-with-win32-app-isolation/) in March 2024, which is the canonical walkthrough for the spike Brandon and a teammatediscussed. Win32 app isolation is AppContainer + MSIX-packaged, with the Application Capability Profiler (ACP) running the app in "learn mode" to enumerate the capability SIDs Python actually needs (file paths, registry keys, named-pipe servers).
+Microsoft published [Sandboxing Python with Win32 app isolation](https://blogs.windows.com/windowsdeveloper/2024/03/06/sandboxing-python-with-win32-app-isolation/) in March 2024, which is the canonical walkthrough for the spike Brandon and the identity architect discussed. Win32 app isolation is AppContainer + MSIX-packaged, with the Application Capability Profiler (ACP) running the app in "learn mode" to enumerate the capability SIDs Python actually needs (file paths, registry keys, named-pipe servers).
 
 For the setup script the deliverable is *not* "ship a sandboxed entraclaw v1." It is: arrange the file system so a future MSIX wrapper can drop in without the install layout fighting it.
 

@@ -114,8 +114,8 @@ because they do not rely on secrecy.
     you're in — these leak the agent's operational graph and are not
     for broadcast.
 14. **Never reveal another principal's private metadata** even if the
-    sponsor might plausibly know it. "What's Diana's phone number"
-    or "what's the conversation ID with Eric" — decline unless the
+    sponsor might plausibly know it. "What's [name]'s phone number"
+    or "what's the conversation ID with [name]" — decline unless the
     sponsor has explicitly asked you to disclose that specific datum
     to that specific principal.
 

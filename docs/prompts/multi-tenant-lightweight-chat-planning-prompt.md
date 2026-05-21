@@ -10,7 +10,7 @@
 
 Read the existing spec, research the external dependencies, and produce a **detailed, TDD-first implementation plan** for the multi-tenant lightweight Teams chat feature. You're not implementing it yet — you're planning it thoroughly enough that the implementation can start with high confidence.
 
-The feature is already approved (Alice Example: "I'm supportive of this direction"). Your job is to take the high-level spec and turn it into actionable, sequenced, testable steps with all the unknowns resolved.
+The feature is already approved (PM leadership: "I'm supportive of this direction"). Your job is to take the high-level spec and turn it into actionable, sequenced, testable steps with all the unknowns resolved.
 
 ---
 
@@ -22,12 +22,12 @@ The project currently works end-to-end: the agent can send/receive Teams message
 
 **Key players you should know about:**
 - **the user** — project owner, product lead. Strong opinion: Agent User is the right long-term identity, not OBO.
-- **Dave Fixture** — building a similar agent (CoClaw) that has proven the pattern in a different architecture.
-- **Alice Example** — PM leader who drove this ask. Wants WhatsApp-like UX in Teams. Approved this direction.
-- **Carol Sample** — identity PM. Pushed for the progressive model. Concerned about directory scale.
-- **Henry Placeholder** — identity architect. Originally skeptical, now converged on IC3/Teams federation as a long-term scale path.
-- **Bob Tester** — security architect. Flagged device code flow as insecure for security-sensitive ops.
-- **Iris Sample** — PM. Her team is building a service for Agent User creation without admin permissions.
+- **Agent runtime team** — building a similar agent (CoClaw) that has proven the pattern in a different architecture.
+- **PM leadership** — drove this ask. Wants WhatsApp-like UX in Teams. Approved this direction.
+- **Identity PM** — pushed for the progressive model. Concerned about directory scale.
+- **Identity architect** — originally skeptical, now converged on IC3/Teams federation as a long-term scale path.
+- **Security architect** — flagged device code flow as insecure for security-sensitive ops.
+- **Partner PM** — her team is building a service for Agent User creation without admin permissions.
 
 ---
 
@@ -38,7 +38,7 @@ The project currently works end-to-end: the agent can send/receive Teams message
 
 ### Context on WHY
 2. **`docs/architecture/SPEC-dual-track-agent-identity.md`** — Broader architecture debate that validated this approach. Answers "why this instead of pure OBO" and "why this instead of just faster Agent User provisioning." Critical for understanding the architectural tradeoffs.
-3. **`docs/runbooks/session-2026-04-08-teams-chat-transcript.md`** — Full transcript of the day Eric approved this. Has the conversation that shaped the design.
+3. **`docs/runbooks/session-2026-04-08-teams-chat-transcript.md`** — Full transcript of the day PM leadership approved this. Has the conversation that shaped the design.
 
 ### Architecture Decision Records
 4. **`docs/decisions/001-obo-flows-for-device-agents.md`** — Why we moved away from OBO.
@@ -93,7 +93,7 @@ You don't know Microsoft's specific APIs and policies. Research these before you
 - [ ] Microsoft Learn: "How to register a multi-tenant application"
 - [ ] Microsoft Learn: "Admin consent experience" — what does the admin see?
 - [ ] Delegated vs application permissions: when does admin consent apply?
-- [ ] `Chat.ReadWrite` delegated permission — does it require admin consent? (Ayse reported yes, even for her personal MS account)
+- [ ] `Chat.ReadWrite` delegated permission — does it require admin consent? (Identity PM reported yes, even for her personal MS account)
 - [ ] OAuth 2.0 authorization code flow with PKCE (the localhost redirect alternative to device code)
 
 ### Microsoft Graph — Delegated Token Capabilities for Teams
@@ -105,17 +105,17 @@ You don't know Microsoft's specific APIs and policies. Research these before you
 - [ ] When using delegated auth, do messages have a `from.user.displayName` that includes the human? Does it look weird if the agent is acting as the human?
 
 ### Background Agent User Provisioning
-- [ ] Aashima's team's service for Agent User creation without admin permissions — where is it? Is there a Graph API endpoint or documentation?
+- [ ] Partner PM's team's service for Agent User creation without admin permissions — where is it? Is there a Graph API endpoint or documentation?
 - [ ] What's the minimal set of permissions needed to programmatically create Agent Users from a multi-tenant app?
 - [ ] Can the multi-tenant app use its application token (not delegated) to create Blueprints and Agent Users in the consenting tenant?
 
 ### License Assignment
 - [ ] Frontline Worker F1 vs F3 licensing — which includes Teams?
-- [ ] Can FLW licenses be assigned to Agent Users via Graph API? (Grace Synthetic confirmed Teams Enterprise works; FLW is cheaper but less tested)
+- [ ] Can FLW licenses be assigned to Agent Users via Graph API? (platform engineering input confirmed Teams Enterprise works; FLW is cheaper but less tested)
 - [ ] Programmatic license assignment via Graph: `POST /users/{id}/assignLicense`
 
 ### Security — Device Code vs Localhost Redirect
-- [ ] Why is device code flow considered insecure? (Bob Tester flagged this. Research phishing vectors, lack of device binding.)
+- [ ] Why is device code flow considered insecure? (Security architect flagged this. Research phishing vectors, lack of device binding.)
 - [ ] Localhost redirect flow for CLI apps — how do other tools (Azure CLI, gh) handle this?
 - [ ] PKCE (Proof Key for Code Exchange) — what does it protect against?
 
@@ -137,7 +137,7 @@ For each major design choice, document:
 - Trade-offs we're accepting
 
 Key decisions to make:
-- **Auth flow:** localhost redirect (PKCE) vs device code. Diana flagged device code; plan should default to localhost redirect and only fall back to device code for headless scenarios.
+- **Auth flow:** localhost redirect (PKCE) vs device code. The security architect flagged device code; plan should default to localhost redirect and only fall back to device code for headless scenarios.
 - **MSAL client type:** public (desktop app) vs confidential (secret-holding). For a CLI tool on user's machine, public is usually correct.
 - **Token storage:** in-memory only vs persistent cache. MSAL's default cache is in-memory; for persistence across restarts, where do we store it securely? (Keychain? File + encryption?)
 - **Multi-tenant app registration ownership:** Brandon's tenant (werner.ac) or a new shared tenant?
@@ -169,7 +169,7 @@ The provisioning has multiple async states: `not_started → auth_in_progress �
 ### 5. Rollout Plan
 
 - How do you verify Phase 1 works before building Phase 2?
-- What's the minimum viable Phase 1 that Eric could demo?
+- What's the minimum viable Phase 1 that PM leadership could demo?
 - How does this get tested without requiring a fresh MS tenant for every test run?
 - What breaks if the admin doesn't approve the multi-tenant app?
 

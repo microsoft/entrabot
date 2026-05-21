@@ -58,7 +58,7 @@ def odata_escape(value):
 #   ENTRA_AGENTID_CLIENT_ID     — App registration client ID
 #   ENTRA_AGENTID_CLIENT_SECRET — App registration client secret
 #   AZURE_TENANT_ID             — Entra tenant ID (usually already set)
-PROVISIONER_APP_DISPLAY_NAME = "AIM Agent ID Provisioner"
+PROVISIONER_APP_DISPLAY_NAME = "Agent Foundry Agent ID Provisioner"
 
 # Microsoft Graph API ID (constant across all tenants)
 MS_GRAPH_API_ID = "00000003-0000-0000-c000-000000000000"
@@ -92,8 +92,8 @@ def print_scope_preflight():
     """Print the exact Entra object names this run will touch."""
     scope = get_scope()
     print("Entra scope:")
-    print(f"  AIM_ENV_SCOPE_MODE: {scope.mode} ({scope.mode_source})")
-    print(f"  AIM_ENV_SCOPE_KEY:  {scope.scope_key} ({scope.key_source})")
+    print(f"  AGENT_ENV_SCOPE_MODE: {scope.mode} ({scope.mode_source})")
+    print(f"  AGENT_ENV_SCOPE_KEY:  {scope.scope_key} ({scope.key_source})")
     print(f"  Blueprint:          {blueprint_display_name(scope)}")
     for agent_def in AGENTS:
         print(
@@ -260,7 +260,7 @@ def create_blueprint(token):
         "@odata.type": "Microsoft.Graph.AgentIdentityBlueprint",
         "displayName": blueprint_name,
         "description": (
-            "Agent Identity Blueprint for Agent Platform PoC. "
+            "Agent Identity Blueprint for sample Agent Foundry Budget Backend PoC. "
             "Creates per-agent Entra identities for SPIFFE mTLS enforcement."
         ),
     }

@@ -111,7 +111,7 @@ class TestLogInteraction:
             log_interaction(
                 channel="email",
                 direction="inbound",
-                sender=f"s{i}@microsoft.com",
+                sender=f"s{i}@example.com",
                 summary=f"Message {i}",
             )
         day = datetime.now(UTC).strftime("%Y-%m-%d")
@@ -193,7 +193,7 @@ class TestInteractionSchema:
         log_interaction(
             channel="email",
             direction="inbound",
-            sender="diana.smetters@microsoft.com",
+            sender="alice.example@example.com",
             recipient="entraclaw-agent@fabrikam.onmicrosoft.com",
             summary="Re: Project Apollo",
             action="noted",

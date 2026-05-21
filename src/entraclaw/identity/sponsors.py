@@ -127,9 +127,9 @@ def _federated_email_identifiers(identities: Any) -> tuple[str, ...]:
          "issuerAssignedId": "<home-tenant SMTP>"}
 
     The home-tenant SMTP is the SAME value the chat-members API returns
-    as the member's ``email`` field (e.g. ``Alice.Smith@microsoft.com``)
+    as the member's ``email`` field (e.g. ``Alice.Smith@example.com``)
     even when the agent-tenant guest record only carries the invitation
-    alias (e.g. ``alice@microsoft.com``). Pulling these into the sponsor
+    alias (e.g. ``alice@example.com``). Pulling these into the sponsor
     email set is what unlocks cross-tenant alias matching without an
     operator override file (Learning #50).
     """

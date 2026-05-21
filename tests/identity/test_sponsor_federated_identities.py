@@ -1,9 +1,9 @@
 """Tests for cross-tenant sponsor matching via federated identities.
 
-When a microsoft.com user is a B2B guest in the agent tenant, the guest
+When an external-tenant user is a B2B guest in the agent tenant, the guest
 record's ``identities`` array contains a federated entry whose
 ``issuerAssignedId`` holds the user's home-tenant SMTP (e.g.
-``Alice.Smith@microsoft.com``). The chat-members API returns the
+``Alice.Smith@example.com``). The chat-members API returns the
 SAME SMTP as ``email``. By treating ``issuerAssignedId`` as a sponsor
 email identifier we get cross-tenant alias matching for free, with no
 operator override file.
@@ -20,20 +20,20 @@ from entraclaw.identity.sponsors import (
 
 GUEST_WITH_FEDERATED_IDENTITY = {
     "id": "963835fc-0b5c-4f3e-9f42-a1b906d9fbf8",
-    "userPrincipalName": "alice_microsoft.com#EXT#@fabrikam.onmicrosoft.com",
-    "mail": "alice@microsoft.com",
-    "otherMails": ["alice@microsoft.com"],
+    "userPrincipalName": "alice_example.com#EXT#@fabrikam.onmicrosoft.com",
+    "mail": "alice@example.com",
+    "otherMails": ["alice@example.com"],
     "proxyAddresses": [],
     "identities": [
         {
             "signInType": "userPrincipalName",
             "issuer": "fabrikam.onmicrosoft.com",
-            "issuerAssignedId": "alice_microsoft.com#EXT#@fabrikam.onmicrosoft.com",
+            "issuerAssignedId": "alice_example.com#EXT#@fabrikam.onmicrosoft.com",
         },
         {
             "signInType": "federated",
-            "issuer": "microsoft.com",
-            "issuerAssignedId": "Alice.Smith@microsoft.com",
+            "issuer": "example.com",
+            "issuerAssignedId": "Alice.Smith@example.com",
         },
     ],
 }
@@ -44,8 +44,8 @@ class TestSponsorIdentitiesExtraction:
         sponsor = AgentIdentitySponsor.from_graph_user(GUEST_WITH_FEDERATED_IDENTITY)
         assert sponsor is not None
         emails = sponsor.email_identifiers()
-        assert "alice.smith@microsoft.com" in emails
-        assert "alice@microsoft.com" in emails
+        assert "alice.smith@example.com" in emails
+        assert "alice@example.com" in emails
 
     def test_non_email_issuer_assigned_id_skipped(self) -> None:
         user = {
@@ -87,7 +87,7 @@ class TestCrossTenantChatMemberMatching:
         # Federated chat-members API returns home-tenant userId + home SMTP.
         member = {
             "user_id": "00112233-4455-6677-8899-aabbccddeeff",
-            "email": "Alice.Smith@microsoft.com",
+            "email": "Alice.Smith@example.com",
         }
         gate2 = gate.with_chat_members([member])
         assert "00112233-4455-6677-8899-aabbccddeeff" in gate2.user_ids
@@ -101,7 +101,7 @@ class TestCrossTenantChatMemberMatching:
         assert sponsor is not None
         gate = SponsorGate.from_agent_identity_sponsors([sponsor])
 
-        member = {"user_id": "some-other-id", "email": "alice@microsoft.com"}
+        member = {"user_id": "some-other-id", "email": "alice@example.com"}
         gate2 = gate.with_chat_members([member])
         assert "some-other-id" in gate2.user_ids
 

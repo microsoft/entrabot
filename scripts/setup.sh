@@ -5,7 +5,7 @@
 # No device-code flow.  No OBO.  The Agent User authenticates autonomously
 # via the three-hop flow: Blueprint → Agent Identity → Agent User.
 #
-# Architecture (borrowed from agent-foundry-poc):
+# Architecture (borrowed from a related internal project):
 #   1. entra_provisioning.py  — creates/manages the dedicated provisioner app
 #   2. create_entra_agent_ids.py — Blueprint + Agent Identity + Agent User
 #   3. This script — venv + .env + tests

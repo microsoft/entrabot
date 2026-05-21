@@ -23,11 +23,15 @@ from entraclaw.errors import (
     ChatNotFound,
     MessageTooLong,
     RateLimitError,
+    RequesterNotInChatError,
+    RequesterNotSponsorError,
     TeamsNotLicensed,
     TokenExchangeError,
     TokenExpiredError,
 )
+from entraclaw.graph_helpers import odata_escape
 from entraclaw.platform import get_credential_store
+from entraclaw.tools.audit import log_event
 from entraclaw.tools.rate_limit import RetryOn429Transport
 
 logger = logging.getLogger("entraclaw.tools.teams")
@@ -288,7 +292,7 @@ async def create_one_on_one_chat(
     target_member: dict = {
         "@odata.type": "#microsoft.graph.aadUserConversationMember",
         "roles": ["owner"],
-        "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{target_email}')",
+        "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{odata_escape(target_email)}')",
     }
     if target_tenant_id:
         target_member["tenantId"] = target_tenant_id
@@ -305,10 +309,13 @@ async def create_one_on_one_chat(
             if me_resp.status_code == 200:
                 agent_user_id = me_resp.json().get("id", "")
 
+    _agent_bind_value = odata_escape(agent_user_id or "")
     agent_member: dict = {
         "@odata.type": "#microsoft.graph.aadUserConversationMember",
         "roles": ["owner"],
-        "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{agent_user_id}')",
+        "user@odata.bind": (
+            f"https://graph.microsoft.com/v1.0/users('{_agent_bind_value}')"
+        ),
     }
 
     payload = {
@@ -404,7 +411,7 @@ async def create_or_find_chat(
             member: dict = {
                 "@odata.type": "#microsoft.graph.aadUserConversationMember",
                 "roles": ["owner"],
-                "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{mail}')",
+                "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{odata_escape(mail)}')",
                 "tenantId": tid,
             }
         elif tid:
@@ -413,7 +420,7 @@ async def create_or_find_chat(
             member = {
                 "@odata.type": "#microsoft.graph.aadUserConversationMember",
                 "roles": ["owner"],
-                "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{user_ref}')",
+                "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{odata_escape(user_ref)}')",
                 "tenantId": tid,
             }
         else:
@@ -421,7 +428,7 @@ async def create_or_find_chat(
             member = {
                 "@odata.type": "#microsoft.graph.aadUserConversationMember",
                 "roles": ["owner"],
-                "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{uid}')",
+                "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{odata_escape(uid)}')",
             }
         members.append(member)
 
@@ -432,7 +439,7 @@ async def create_or_find_chat(
             {
                 "@odata.type": "#microsoft.graph.aadUserConversationMember",
                 "roles": ["owner"],
-                "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{agent_user_id}')",
+                "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{odata_escape(agent_user_id)}')",
             },
         )
 
@@ -506,20 +513,149 @@ async def create_or_find_chat(
         }
 
 
+async def _get_sponsor_records() -> list:
+    """Fetch Agent Identity sponsor records (defers to the files-tool helper).
+
+    Centralized in ``tools.files`` so the same enrichment + chat-members
+    email-fallback logic is shared between the file-share gate and the
+    Teams add-member gate. Re-exported here so tests can patch the
+    symbol at ``entraclaw.tools.teams._get_sponsor_records``.
+    """
+    from entraclaw.tools.files import _get_sponsor_records as _files_get_sponsors
+
+    return await _files_get_sponsors()
+
+
+async def _fetch_chat_members_for_gate(chat_id: str) -> list[dict]:
+    """Fetch chat members for the sponsor-membership gate (sync helper, thread-offloaded).
+
+    Wraps ``identity.sponsors.fetch_chat_members`` so tests can patch
+    this single attribute on ``entraclaw.tools.teams`` and so the live
+    code path doesn't hit Graph from inside ``add_member`` synchronously.
+    """
+    import asyncio
+
+    from entraclaw.config import get_config
+    from entraclaw.identity.sponsors import fetch_chat_members
+
+    return await asyncio.to_thread(fetch_chat_members, get_config(), chat_id)
+
+
 async def add_member(
     *,
     chat_id: str,
     token: str,
     email: str,
+    requester_email: str,
     tenant_id: str | None = None,
 ) -> dict:
-    """Add a user to an existing Teams chat.
+    """Add a user to an existing Teams chat. Sponsor-gated.
 
-    For external/federated users, provide ``tenant_id`` (their home tenant
-    GUID).  Graph resolves the email cross-tenant via Example 7.
+    Authorization model (mirrors ``share_file`` 2026-04-30 inverted
+    gate): only Agent Identity sponsors are authorized to direct the
+    agent to invite anyone into a Teams chat. A sponsor may invite
+    anyone they choose — the invitee (``email``) is not checked against
+    the allowlist. Two gates run before the Graph mutation:
 
-    For in-tenant members, omit ``tenant_id``.
+    1. **Requester is a sponsor.** ``requester_email`` must match an
+       Agent Identity sponsor record (any email identifier form).
+    2. **Requester is a member of ``chat_id``.** Their ``user_id`` must
+       appear in the chat's member list — defends against an LLM
+       fabricating a sponsor email that doesn't match the actual
+       conversation context.
+
+    ``audit_log`` (via ``log_event``) fires BEFORE the Graph call so a
+    blocked add still produces a record.
+
+    For external/federated invitees, provide ``tenant_id`` (their home
+    tenant GUID); Graph resolves the email cross-tenant via Example 7.
+    For in-tenant invitees, omit ``tenant_id``.
+
+    Args:
+        chat_id: Teams chat ID to invite into. Required.
+        token: Agent User access token for Graph.
+        email: Invitee email address (sponsors may invite anyone).
+        requester_email: Email of the human (sponsor) who asked the
+            agent to invite. Required. Derived from the active
+            conversation context — never the agent's own address.
+        tenant_id: Optional home tenant GUID for federated invitees.
+
+    Raises:
+        ValueError: ``requester_email`` or ``chat_id`` missing.
+        RequesterNotSponsorError: ``requester_email`` not in sponsor allowlist.
+        RequesterNotInChatError: requester is a sponsor but not a member of ``chat_id``.
     """
+    if not requester_email:
+        raise ValueError("requester_email is required")
+    if not chat_id:
+        raise ValueError("chat_id is required")
+
+    audit_resource = f"chats/{chat_id}/members"
+    audit_metadata = {
+        "requester_email": requester_email,
+        "chat_id": chat_id,
+        "invitee_email": email,
+        "tenant_id": tenant_id,
+    }
+    log_event(
+        action="teams.add_member",
+        resource=audit_resource,
+        outcome="pending",
+        metadata=audit_metadata,
+    )
+
+    try:
+        # Gate 1: requester must be in the static sponsor allowlist.
+        sponsors = await _get_sponsor_records()
+        requester_lower = requester_email.strip().lower()
+        matched_sponsor = next(
+            (
+                s
+                for s in sponsors
+                if any(
+                    e.lower() == requester_lower for e in s.email_identifiers()
+                )
+            ),
+            None,
+        )
+        if matched_sponsor is None or not matched_sponsor.user_id:
+            err = RequesterNotSponsorError(requester=requester_email)
+            log_event(
+                action="teams.add_member",
+                resource=audit_resource,
+                outcome="failure",
+                metadata={
+                    **audit_metadata,
+                    "error": type(err).__name__,
+                    "message": str(err),
+                },
+            )
+            raise err
+
+        # Gate 2: matched sponsor must be a member of the cited chat.
+        members = await _fetch_chat_members_for_gate(chat_id)
+        matched_user_id = matched_sponsor.user_id.lower()
+        if not any(
+            (m.get("user_id") or "").strip().lower() == matched_user_id
+            for m in members
+        ):
+            err = RequesterNotInChatError(
+                requester=requester_email, chat_id=chat_id
+            )
+            log_event(
+                action="teams.add_member",
+                resource=audit_resource,
+                outcome="failure",
+                metadata={
+                    **audit_metadata,
+                    "error": type(err).__name__,
+                    "message": str(err),
+                },
+            )
+            raise err
+    except (RequesterNotSponsorError, RequesterNotInChatError):
+        raise
+
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
@@ -528,7 +664,7 @@ async def add_member(
     member_payload: dict = {
         "@odata.type": "#microsoft.graph.aadUserConversationMember",
         "roles": ["owner"],
-        "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{email}')",
+        "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{odata_escape(email)}')",
     }
     if tenant_id:
         member_payload["tenantId"] = tenant_id
@@ -536,39 +672,65 @@ async def add_member(
     logger.info("Adding member to chat %s: %s (tenant=%s)", chat_id, email, tenant_id)
 
     transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
-    async with httpx.AsyncClient(transport=transport) as client:
-        resp = await client.post(
-            f"{GRAPH_BASE}/chats/{chat_id}/members",
-            json=member_payload,
-            headers=headers,
-        )
-        if resp.status_code == 404:
-            try:
-                error_body = resp.json().get("error", {})
-                error_msg = error_body.get("message", resp.text)
-            except Exception:
-                error_msg = resp.text or "Not found"
-            raise ChatNotFound(f"Could not add member: {error_msg}")
-        if resp.status_code == 401:
-            raise TokenExpiredError("Agent User token expired — re-acquire via three-hop flow")
-        if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After", "60"))
-            raise RateLimitError(retry_after)
-        resp.raise_for_status()
+    try:
+        async with httpx.AsyncClient(transport=transport) as client:
+            resp = await client.post(
+                f"{GRAPH_BASE}/chats/{chat_id}/members",
+                json=member_payload,
+                headers=headers,
+            )
+            if resp.status_code == 404:
+                try:
+                    error_body = resp.json().get("error", {})
+                    error_msg = error_body.get("message", resp.text)
+                except Exception:
+                    error_msg = resp.text or "Not found"
+                raise ChatNotFound(f"Could not add member: {error_msg}")
+            if resp.status_code == 401:
+                raise TokenExpiredError(
+                    "Agent User token expired — re-acquire via three-hop flow"
+                )
+            if resp.status_code == 429:
+                retry_after = int(resp.headers.get("Retry-After", "60"))
+                raise RateLimitError(retry_after)
+            resp.raise_for_status()
 
-        # POST /members may return 201 with empty body
-        if resp.text.strip():
-            result = resp.json()
-            display_name = result.get("displayName", email)
-        else:
-            result = {}
-            display_name = email
-        logger.info("Member added: %s", display_name)
-        return {
+            # POST /members may return 201 with empty body
+            if resp.text.strip():
+                result = resp.json()
+                display_name = result.get("displayName", email)
+            else:
+                result = {}
+                display_name = email
+            logger.info("Member added: %s", display_name)
+    except Exception as exc:
+        log_event(
+            action="teams.add_member",
+            resource=audit_resource,
+            outcome="failure",
+            metadata={
+                **audit_metadata,
+                "error": type(exc).__name__,
+                "message": str(exc),
+            },
+        )
+        raise
+
+    log_event(
+        action="teams.add_member",
+        resource=audit_resource,
+        outcome="success",
+        metadata={
+            **audit_metadata,
             "member_id": result.get("id", ""),
             "display_name": display_name,
-            "roles": result.get("roles", ["owner"]),
-        }
+        },
+    )
+    return {
+        "member_id": result.get("id", ""),
+        "display_name": display_name,
+        "roles": result.get("roles", ["owner"]),
+    }
 
 
 async def list_members(

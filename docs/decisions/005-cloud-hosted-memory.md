@@ -212,7 +212,7 @@ Default: cloud mode when `az login` exists + Azure subscription is reachable. Lo
 ## TODO (future work, explicitly out of scope for this ADR)
 
 - **Document user-visible recovery behavior** when two of the user's own machines run simultaneously. ETag handles it correctly (last-writer-wins after retry), but the semantics should be documented so users aren't surprised when their laptop clobbers an unflushed Mac Studio write.
-- **Multi-agent coordination on shared memory.** Explicitly *not* supported by this design. If we ever want two distinct Agent Users to share a memory store (e.g. Brandon's EntraClaw and Alex's agent both writing to a team-wide behavioral layer), that's a future ADR. Would require real locking or CRDT-style merge semantics. Categorized as science-project for now.
+- **Multi-agent coordination on shared memory.** Explicitly *not* supported by this design. If we ever want two distinct Agent Users to share a memory store (e.g. Brandon's EntraClaw and another teammate's agent both writing to a team-wide behavioral layer), that's a future ADR. Would require real locking or CRDT-style merge semantics. Categorized as science-project for now.
 - **Compaction quality control.** The daily compaction step is the most judgment-heavy part of this design. The first few weeks should log compaction decisions so we can eyeball what got promoted vs discarded and tune the heuristic. Treat the first 30 days of compaction output as reviewable.
 - **Manifest consistency under concurrent writes.** The manifest is a single file updated on every blob write; ETag protects it, but heavy write bursts could cause retry loops. Monitor; switch to per-prefix manifests if that becomes a real problem.
 

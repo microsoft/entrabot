@@ -2,8 +2,8 @@
 
 **Date:** 2026-04-08 (updated 2026-04-09 with late-night session additions)
 **Status:** Draft — synthesized from group chat debate, not yet reviewed
-**Driver:** Henry Placeholder's litmus test framework + convergence between Adrian, Ayse, Aashima, Diana, Mark
-**Participants:** Henry Placeholder, Carol Sample, Iris Sample, Bob Tester, Frank Demo, Alice Example, Dave Fixture, the user
+**Driver:** Identity architect's litmus test framework + convergence between identity, security, and PM stakeholders
+**Participants:** Identity architect, identity PM, partner PM, security architect, identity governance architect, PM leadership, agent runtime team, the user
 **Context:** Teams group chat debate ~19:30-22:20 UTC on 2026-04-08, continued 03:47-04:23 UTC on 2026-04-09
 **Build-time Plan:** `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` (progressive identity: human delegated token → background Agent User provision → seamless swap)
 
@@ -20,7 +20,7 @@ Two extremes exist today, and neither alone is sufficient:
 
 The group agreed: **both are needed**. The debate was about architecture, sequencing, and non-functional requirements.
 
-## Adrian's Litmus Test (Evaluation Framework)
+## Identity Architect's Litmus Test (Evaluation Framework)
 
 All proposals must answer these questions for the "Maya scenario" — an end user running a single-purpose, ad-hoc, urgent local task:
 
@@ -48,10 +48,10 @@ All proposals must answer these questions for the "Maya scenario" — an end use
 - Maya declares guardrails at session start: "do this, no destructive writes"
 
 **Governance:**
-- **No IGA** — lightweight identity has no directory persistence, IGA requires persistence (Ayse's point)
-  - Frank Demo challenged this: IGA can govern non-directory entities via policy rules on `<USER>-<AGENT>,<TARGET>` tuples
-  - Ayse requested KT session with Mark/Funda to understand how — a teammateagreed to set up 1 hour
-- **Conditional Access** — risk-based policies, fine-grained action-level controls (a teammate+ Ayse agreed)
+- **No IGA** — lightweight identity has no directory persistence, IGA requires persistence (per the identity PM)
+  - The identity governance architect challenged this: IGA can govern non-directory entities via policy rules on `<USER>-<AGENT>,<TARGET>` tuples
+  - The identity PM requested a KT session with the governance team to understand how — the partner PM agreed to set up 1 hour
+- **Conditional Access** — risk-based policies, fine-grained action-level controls (identity architect + identity PM agreed)
 - **GSA + CAE sidecar** as data plane choke point — intercepts traffic, enforces decorated claims
 - RP sees Maya's normal token unchanged — enforcement is at the proxy layer, not the resource
 
@@ -66,10 +66,10 @@ Maya's CLI → Agent Runtime → [Decorated OBO Token] → GSA/CAE Proxy → RP
 ```
 
 **Key Constraints:**
-- **1:1 only** — OBO/decorated-token agent communicates exclusively with its owner/sponsor. Multi-user chat (agent talking to people other than its owner) requires full Agent User with Office license (Track 2). Agreed by Sachs, Diana, a teammateon 2026-04-10. Rationale: OBO claw chatting with non-owners introduces security risks documented in Dave Fixture's "Circles of Trust" (Lobster PoC).
-- Proxy choke point only works for in-network traffic (Aashima: "open claw running in AWS accessing Salesforce won't hit the proxy")
-- Diana: choke point might come from sandboxing infra, not necessarily GSA/Entra
-- Cannot rely on LLM prompt-level enforcement — LLMs forget instructions over long conversations (Ayse's firsthand experience with Copilot editing a doc it was told not to)
+- **1:1 only** — OBO/decorated-token agent communicates exclusively with its owner/sponsor. Multi-user chat (agent talking to people other than its owner) requires full Agent User with Office license (Track 2). Agreed by PM leadership, the security architect, and the identity architect on 2026-04-10. Rationale: OBO claw chatting with non-owners introduces security risks documented in the agent runtime team's "Circles of Trust" (Lobster PoC).
+- Proxy choke point only works for in-network traffic (partner PM: "open claw running in AWS accessing Salesforce won't hit the proxy")
+- Security architect: choke point might come from sandboxing infra, not necessarily GSA/Entra
+- Cannot rely on LLM prompt-level enforcement — LLMs forget instructions over long conversations (identity PM's firsthand experience with Copilot editing a doc it was told not to)
 
 **Litmus Test Answers (OBO Track):**
 1. Maya just describes her task + declares scope constraints — no identity thinking
@@ -92,18 +92,18 @@ Maya's CLI → Agent Runtime → [Decorated OBO Token] → GSA/CAE Proxy → RP
 - Admin has full visibility and control
 
 **Key Constraints:**
-- Provisioning latency: 10-15 min for Teams/mailbox (Aashima's team building a service to reduce this)
-- Directory object scale: 300K default, 1M+ requires coordination with RP propagation (Ayse's quota table)
+- Provisioning latency: 10-15 min for Teams/mailbox (the partner PM's team building a service to reduce this)
+- Directory object scale: 300K default, 1M+ requires coordination with RP propagation (per the identity PM's quota table)
 - User must think about permissions: "which identity, have I granted enough?"
-- Ceremonial delegation gesture required for personal resources (Diana)
+- Ceremonial delegation gesture required for personal resources (per the security architect)
 
 **Litmus Test Answers (Agent User Track):**
 1. Maya must consider identity + permissions — fails the "just do the task" bar
 2. 10-15 min provisioning wait — acceptable for "start and come back later" but not real-time
-3. Aashima: nothing needed by admin (her team's service handles it), but historically requires admin
+3. Partner PM: nothing needed by admin (her team's service handles it), but historically requires admin
 4. No — once provisioned, agent operates autonomously
 
-## Progressive Model (Ayse's Synthesis)
+## Progressive Model (Identity PM's Synthesis)
 
 Start with Track 1 (OBO), step-up to Track 2 (Agent User) when needed:
 
@@ -118,31 +118,31 @@ This controls the scale of Track 2 (not every user creates an Agent User for eve
 
 ### The Directory Scale Reality
 
-Ayse shared live data: she had **8 agent sessions** running simultaneously (7 + CoClaw's CLI). Extrapolating: 300K employees × 7-8 concurrent sessions = 2M+ directory objects — past the point where RP propagation costs show up and federated partner coordination is needed.
+The identity PM shared live data: she had **8 agent sessions** running simultaneously (7 + CoClaw's CLI). Extrapolating: 300K employees × 7-8 concurrent sessions = 2M+ directory objects — past the point where RP propagation costs show up and federated partner coordination is needed.
 
-### CoClaw as Existence Proof (Dave Fixture)
+### CoClaw as Existence Proof (Agent Runtime Team)
 
-Ayse used CoClaw and noted two identity modes in practice:
+The identity PM used CoClaw and noted two identity modes in practice:
 1. **CoClaw's own account** (Agent User) — used for work actions: creating docs, checking Teams messages
-2. **Ayse's token via device code** — used for accessing her personal resources
+2. **Identity PM's token via device code** — used for accessing her personal resources
 
-This is literally the dual-track model running in production. Alex built custom identity scaffolding to make this work. Ayse: "I like the fact that it uses its own account for work_iq."
+This is literally the dual-track model running in production. The agent runtime team built custom identity scaffolding to make this work. Identity PM: "I like the fact that it uses its own account for work_iq."
 
-However — CoClaw's device code approach is what Diana flagged as insecure. Same OID problem: "Derek cannot tell the difference" between Ayse and CoClaw when the agent acts on her token.
+However — CoClaw's device code approach is what the security architect flagged as insecure. Same OID problem: "Derek cannot tell the difference" between the human user and CoClaw when the agent acts on her token.
 
 ### Pool Model Rejected
 
-A "connection pool" model (pre-provision Agent Users, check out/return) was proposed and rejected by Ayse:
+A "connection pool" model (pre-provision Agent Users, check out/return) was proposed and rejected by the identity PM:
 
 - **OID recycling is a security risk** — residual permissions/audit from one session would attach to the next checkout
 - **Soft-deleted objects count against quota** — 30 days at full weight, 30 more at partial. Pool churn makes scale worse, not better.
 - **Hard delete lifecycle** is ~2 months before quota is freed
 
-### The IC3/Teams Federation Direction (a teammate+ Brandon convergence)
+### The IC3/Teams Federation Direction (Identity Architect + Brandon convergence)
 
-Brandon and a teammate— on opposite sides of the debate earlier — converged on a new direction:
+Brandon and the identity architect — on opposite sides of the debate earlier — converged on a new direction:
 
-> **"What is the point of having hard objects in directory if all we need is distinct chats in teams?"** — Henry Placeholder
+> **"What is the point of having hard objects in directory if all we need is distinct chats in teams?"** — the identity architect
 
 The proposal:
 - Agent identities live in **IC3** (Teams' backend), not the Entra directory
@@ -160,7 +160,7 @@ Brandon's pitch to substrate: **"A company-wide fast REPL maker for AI"** — us
 The progressive model (Track 1 → Track 2) is still the right build-time bridge. But the long-term architecture may be:
 
 1. **Short-term (BUILD/May):** Multi-tenant app + human delegated token + background Agent User provision. Unchanged from `NEXT-WhatsApp-lightweight-teams-chat.md`.
-2. **Medium-term:** Faster Agent User provisioning (seconds not minutes) via Aashima's service + substrate fast-path.
+2. **Medium-term:** Faster Agent User provisioning (seconds not minutes) via the partner PM's service + substrate fast-path.
 3. **Long-term:** Agent identities in IC3 via Teams federation. No directory objects for chat-only scenarios. FMIs for workload identity.
 
 This changes nothing about what we should build for BUILD. The bridge plan stands.
@@ -169,36 +169,36 @@ This changes nothing about what we should build for BUILD. The bridge plan stand
 
 | # | Item | Owner | Status |
 |---|------|-------|--------|
-| 1 | IGA for token-only identities | Frank Demo, Funda, a teammate| KT session to be scheduled (a teammateasked for 1 hour, 2026-04-08) |
-| 2 | GSA + CAE data plane sidecar feasibility | Ayse / GSA team | "No small feat" — needs engineering scoping |
-| 3 | Sandboxing infra as alternative choke point | Bob Tester | Exploring — knows more about this than Identity team |
-| 4 | Permission categorization for scope claims | Ayse | Required for Maya to declare "no destructive writes" |
-| 5 | Out-of-network enforcement (AWS → Salesforce) | a teammate| Parked for later — in-network first |
-| 6 | Agent User provisioning speed | Aashima's team + Brandon's substrate contacts | Brandon confirmed "doable" with substrate (2026-04-09 night session) |
+| 1 | IGA for token-only identities | Identity governance team + partner PM | KT session to be scheduled (partner PM asked for 1 hour, 2026-04-08) |
+| 2 | GSA + CAE data plane sidecar feasibility | Identity PM / GSA team | "No small feat" — needs engineering scoping |
+| 3 | Sandboxing infra as alternative choke point | Security architect | Exploring — knows more about this than Identity team |
+| 4 | Permission categorization for scope claims | Identity PM | Required for Maya to declare "no destructive writes" |
+| 5 | Out-of-network enforcement (AWS → Salesforce) | Partner PM | Parked for later — in-network first |
+| 6 | Agent User provisioning speed | Partner PM's team + Brandon's substrate contacts | Brandon confirmed "doable" with substrate (2026-04-09 night session) |
 | 7 | Directory quota at scale | Brandon → Teams team | Talk to Teams about IC3 federation approach (TODO 2026-04-09 morning) |
-| 8 | Device code flow replacement | Bob Tester | Flagged as security concern — use localhost redirect |
-| 9 | IC3/Teams federation for agent identities | Brandon + a teammate| New direction from 2026-04-09 session — agents as native fed users in Teams backend, no directory objects |
+| 8 | Device code flow replacement | Security architect | Flagged as security concern — use localhost redirect |
+| 9 | IC3/Teams federation for agent identities | Brandon + identity architect | New direction from 2026-04-09 session — agents as native fed users in Teams backend, no directory objects |
 | 10 | FMI (Federated Machine Identities) in IC3 | Brandon | Proposed as long-term scale path for Agent IDs |
 
 ## Key Agreements
 
-1. **Everyone agrees both tracks are needed** — not either/or (Aashima, corrected by Alex + Brandon)
-2. **Same governance plumbing for both** — provisioning, tagging, risk assessment applies to OBO and Agent User (Aashima)
-3. **Proxy/gateway enforcement, not RP changes** — RPs don't need to understand decorated claims (Adrian, Ayse)
-4. **No prompt-level enforcement** — must be at identity/token/sandbox layer (Ayse, from her Copilot experience)
-5. **No admin setup for ad-hoc tasks** — Kamen aligns (Aashima, confirmed 2026-04-08)
-6. **May timeline pressure** — Ayse wants an Identity-owned fallback plan for May
+1. **Everyone agrees both tracks are needed** — not either/or (partner PM, corrected by the agent runtime team + Brandon)
+2. **Same governance plumbing for both** — provisioning, tagging, risk assessment applies to OBO and Agent User (partner PM)
+3. **Proxy/gateway enforcement, not RP changes** — RPs don't need to understand decorated claims (identity architect, identity PM)
+4. **No prompt-level enforcement** — must be at identity/token/sandbox layer (identity PM, from her Copilot experience)
+5. **No admin setup for ad-hoc tasks** — leadership aligns (partner PM, confirmed 2026-04-08)
+6. **May timeline pressure** — identity PM wants an Identity-owned fallback plan for May
 7. **Agent IDs are GA, must scale** — Microsoft cannot ship a product that doesn't back up at scale (Brandon, 2026-04-09 night session)
 8. **Progressive model is the BUILD-time bridge** — human delegated token → background Agent User provision → seamless swap. Not a parallel architecture.
-9. **OBO track is 1:1 only** — agent communicates exclusively with its owner/sponsor. Multi-user chat requires Agent User + Office license (Track 2). Security rationale: OBO agent chatting beyond owner introduces Circles of Trust risks (Sachs, Diana, Adrian, 2026-04-10).
+9. **OBO track is 1:1 only** — agent communicates exclusively with its owner/sponsor. Multi-user chat requires Agent User + Office license (Track 2). Security rationale: OBO agent chatting beyond owner introduces Circles of Trust risks (PM leadership, security architect, identity architect, 2026-04-10).
 
 ## Relationship to Existing Work
 
-- **EntraClaw (Brandon/Alex):** Currently implements Track 2 (Agent User) end-to-end. Working today with Teams identity, @mentions, cross-tenant federation, multi-chat. Proves Agent User viability.
-- **Coclaw (Alex):** Agent in sandbox, does coding directly. Complementary to identity layer.
+- **EntraClaw (Brandon + agent runtime team):** Currently implements Track 2 (Agent User) end-to-end. Working today with Teams identity, @mentions, cross-tenant federation, multi-chat. Proves Agent User viability.
+- **Coclaw (agent runtime team):** Agent in sandbox, does coding directly. Complementary to identity layer.
 - **Multi-tenant lightweight chat spec:** `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` — implements the progressive model (start with delegated token, background-provision Agent User).
-- **Diana + a teammateF + Sasha:** Designing the OBO + actor attribution model — non-directory FMI/SPIFFE-like actor identity.
-- **Aashima's provisioning service:** Reduces Track 2 setup — no admin permissions needed for Agent User creation.
+- **Actor-attribution working group:** Designing the OBO + actor attribution model — non-directory FMI/SPIFFE-like actor identity.
+- **Partner PM's provisioning service:** Reduces Track 2 setup — no admin permissions needed for Agent User creation.
 
 ## What This Spec Does NOT Cover
 

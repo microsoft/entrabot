@@ -95,7 +95,7 @@ class TestFindExistingAgentIdentity:
 
         def fake_graph_request(method, path, token, **kw):
             # stored_app_id query returns the old-Blueprint SP
-            if "eq '52dff96e" in path:
+            if "eq '22222222" in path:
                 return _resp(
                     200,
                     {

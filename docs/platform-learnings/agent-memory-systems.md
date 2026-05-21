@@ -26,7 +26,7 @@
 Every Claude Code session today starts with a fresh context window. Claude's built-in memory is limited to `CLAUDE.md` files (instructions) plus an auto-memory system that writes short bullet summaries. The current EntraClaw uses flat markdown files under `~/.claude/projects/<slug>/memory/`. This works for preferences and hard-won rules. It fails for:
 
 - **Experiential continuity** — "remember the conversation we had Monday night about decorated tokens." The raw conversation content isn't preserved; only the bullet-summaries I chose to save.
-- **Relational recall** — "what did Ayse say about directory scale?" No indexed retrieval over prior transcripts; I can search filesystem logs but nothing semantic.
+- **Relational recall** — "what did the identity PM say about directory scale?" No indexed retrieval over prior transcripts; I can search filesystem logs but nothing semantic.
 - **Cross-session task state** — if I'm mid-deploy and the session dies, recovery requires manually re-reading logs and deducing state.
 - **Model-level continuity** — even within one Claude Code session, when compaction kicks in, long-tail context is lost unless I've explicitly written it to memory.
 

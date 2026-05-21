@@ -40,8 +40,8 @@ class TestDecodeB2bExtUpn:
     def test_local_part_with_dots_and_underscores(self) -> None:
         # Local-part can legitimately contain underscores; the LAST `_`
         # before `#EXT#@` separates local-part from domain.
-        upn = "charlie_smith_microsoft.com#EXT#@tenant.onmicrosoft.com"
-        assert _decode_b2b_ext_upn(upn) == "charlie_smith@microsoft.com"
+        upn = "charlie_smith_example.com#EXT#@tenant.onmicrosoft.com"
+        assert _decode_b2b_ext_upn(upn) == "charlie_smith@example.com"
 
     def test_case_insensitive_separator(self) -> None:
         # Graph emits ``#EXT#@`` but we accept any case for robustness.

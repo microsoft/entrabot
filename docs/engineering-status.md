@@ -85,7 +85,7 @@ gaps" for the gate-by-gate registry, including this gap.
 
 Decision pending.
 
-**Why this wasn't caught in design:** the Agent Blueprint constraint (post-GA May 1, 2026) was not in `docs/platform-learnings/msal-entra-agent-ids.md` (last updated 2025-07-14) at the time of PR design. Planning missed it; the Codex consult that informed the design was reasoning from RFC 8414 + MCP spec, not from Microsoft Agent Identity post-GA semantics. Filed: deep-spike on Agent ID / Blueprint / User post-GA semantics + cross-repo platform-learnings sync (entraclaw + persona-sati + agent-foundry-poc) is happening 2026-05-05; the new doc will be `docs/platform-learnings/agent-id-blueprints-and-users.md`.
+**Why this wasn't caught in design:** the Agent Blueprint constraint (post-GA May 1, 2026) was not in `docs/platform-learnings/msal-entra-agent-ids.md` (last updated 2025-07-14) at the time of PR design. Planning missed it; the Codex consult that informed the design was reasoning from RFC 8414 + MCP spec, not from Microsoft Agent Identity post-GA semantics. Filed: deep-spike on Agent ID / Blueprint / User post-GA semantics + cross-repo platform-learnings sync (entraclaw + persona-sati + a related internal prototype) is happening 2026-05-05; the new doc will be `docs/platform-learnings/agent-id-blueprints-and-users.md`.
 
 ### Agent Identity missing `Application.Read.All` after provisioning
 

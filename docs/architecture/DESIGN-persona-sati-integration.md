@@ -109,7 +109,7 @@ def _load_agent_instructions() -> str:
 - Create `prompts/agent_system.md.example` — a sanitized version without personal memory references, suitable for open-source users who run entraclaw standalone without persona-sati
 
 The `.example` file should contain the structural rules (channel discipline, watch-only in group chats, HTML for Teams) but NOT:
-- References to specific people (Brandon, Sachs, Adrian, etc.)
+- References to specific people (Brandon, named colleagues, etc.)
 - Running jokes or callbacks
 - Philosophical threads
 - Personal memory file references

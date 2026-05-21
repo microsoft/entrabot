@@ -6,7 +6,7 @@ Centralizes the dedicated "EntraClaw Agent ID Provisioner" app registration
 used for Agent Identity Blueprint and Agent Identity creation via the
 Graph beta API.
 
-Pattern borrowed from agent-foundry-poc — the provisioner is a dedicated app
+Pattern borrowed from a related internal project — the provisioner is a dedicated app
 with client_credentials flow, because Azure CLI tokens include
 Directory.AccessAsUser.All which the Agent Identity APIs explicitly reject
 (hard 403).
