@@ -163,8 +163,25 @@ This is a research repo, not a production service. It runs reliably on a develop
 
 ## Contributing
 
+This project welcomes contributions and suggestions. Most contributions require you to agree to a Contributor License Agreement (CLA) declaring that you have the right to, and do grant us the rights to use your contribution. For details, visit <https://cla.opensource.microsoft.com>.
+
+When you submit a pull request, a CLA bot automatically determines whether you need to provide a CLA and decorates the PR appropriately. Follow the bot's instructions. You only need to do this once across all repositories using the Microsoft CLA.
+
+This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information, see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with questions or comments.
+
 Test discipline is the contract. TDD: failing test first, implementation second. `pytest -v && ruff check .` must pass before every commit; coverage threshold is 80%.
 
 File issues for bugs and platform questions. PRs welcome — for anything touching auth, Teams, or the body prompt, read [`docs/runbooks/hard-won-learnings.md`](docs/runbooks/hard-won-learnings.md) first. The hard-won learnings file is append-only; new gotchas get numbered entries, never deletions.
+
+Useful links:
+
+- [Code of Conduct](https://opensource.microsoft.com/codeofconduct/)
+- [Security policy](SECURITY.md)
+- [MIT License](LICENSE)
+- [Microsoft Open Source](https://opensource.microsoft.com/)
+- [Microsoft Privacy Statement](https://privacy.microsoft.com/privacystatement)
+- [Microsoft Trademarks](https://www.microsoft.com/legal/intellectualproperty/trademarks)
+
+## Disclaimer
 
 *This is a prototype. Flexible FIC and Entra Agent Identity are preview surfaces — APIs may change. The platform is designed to show the pattern and to be copyable, not to be run as-is in production.*
