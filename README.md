@@ -110,7 +110,7 @@ After setup, use `./status.sh` as the canonical health and identity check:
 
 ## Documentation
 
-The full doc site: **<https://legendary-adventure-k5npoz7.pages.github.io/>**
+The full doc site: **<https://microsoft.github.io/Entraclaw/>**
 
 Direct pointers:
 
