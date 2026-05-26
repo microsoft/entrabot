@@ -41,7 +41,7 @@ First public release. Reference implementation for Microsoft Entra Agent ID and 
 **Discipline**
 - 1,237 tests, ruff clean, 80% coverage threshold enforced.
 - 66 hard-won learnings at `docs/runbooks/hard-won-learnings.md`.
-- Full docs site at <https://microsoft.github.io/Entraclaw/> with API reference, script reference, ADRs, platform learnings, and runbooks.
+- Full docs site at <https://legendary-adventure-k5npoz7.pages.github.io/> with API reference, script reference, ADRs, platform learnings, and runbooks.
 
 ### Known limitations
 
