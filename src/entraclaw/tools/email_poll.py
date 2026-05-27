@@ -14,6 +14,7 @@ with historical mail.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -57,6 +58,23 @@ def load_cursor() -> str | None:
 def save_cursor(ts: str) -> None:
     """Persist *ts* as the new cursor (whitespace stripped)."""
     _cursor_path().write_text(ts.strip())
+
+
+def advance_cursor(ts: str) -> str:
+    """Return a timestamp strictly after *ts* for the next poll watermark.
+
+    Graph's ``receivedDateTime gt {cursor}`` filter excludes messages at or
+    before the cursor. When timestamps lack sub-second precision, bumping by
+    1 ms prevents messages at the cursor's exact second from being re-fetched
+    after a server restart (per-session dedup is lost on restart).
+    """
+    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    advanced = (dt + timedelta(milliseconds=1)).astimezone(UTC).replace(tzinfo=None)
+    if advanced.microsecond:
+        return advanced.strftime("%Y-%m-%dT%H:%M:%S.") + f"{advanced.microsecond // 1000:03d}Z"
+    return advanced.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def is_substantive(address: str | None) -> bool:
@@ -127,6 +145,8 @@ async def poll_once(
 
             substantive.append(msg)
 
+        if latest_ts is not None:
+            latest_ts = advance_cursor(latest_ts)
         return substantive, latest_ts
 
 

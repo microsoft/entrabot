@@ -59,9 +59,9 @@ Two bugs, both observed at 2026-04-17T17:00:00 PDT (= 00:00:01 UTC 2026-04-18):
 - **Effort:** S (~30 LOC + tests for both)
 - **Source:** Live observation 2026-04-17 evening (first real scheduled fire)
 
-### Email cursor sub-second precision
+### ~~Email cursor sub-second precision~~ ✅ DONE
 `email_poll.poll_once` returns `latest_ts` verbatim from Graph; the cursor file may end up at second precision while Graph internally compares with sub-second. Result: an email at the cursor's exact second gets re-returned every poll. Per-session dedup in `_background_poll_email` handles within-session, but the email re-pushes once on every server restart. Real fix: bump cursor by 1ms when it equals the latest receivedDateTime, or store sub-second precision unconditionally.
-- **Effort:** XS (~10 LOC + 1 test)
+- **Shipped:** `advance_cursor()` bumps the poll watermark by 1 ms after each batch (PR pending).
 - **Source:** Live observation 2026-04-17 (a teammate's "Ball game tonight" loop)
 
 ### ~~Token auto-refresh in teams_send~~ ✅ DONE
