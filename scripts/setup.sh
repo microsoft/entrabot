@@ -136,6 +136,11 @@ fi
 if [ "$SHOW_HELP" = true ]; then
     echo "Usage: ./scripts/setup.sh [OPTIONS]"
     echo ""
+    echo "Prerequisites (az CLI, Python 3.12+, git):"
+    echo "  macOS:   ./scripts/prereqs-macos.sh"
+    echo "  Windows: .\\scripts\\prereqs-windows.ps1"
+    echo "  Linux:   install python3.12, git, and the Azure CLI via your package manager"
+    echo ""
     echo "Options:"
     echo ""
     echo "Identity mode (one required):"
@@ -353,6 +358,25 @@ if [ ${#MISSING[@]} -gt 0 ]; then
     for m in "${MISSING[@]}"; do
         echo -e "  ${RED}✗ $m${NC}"
     done
+    echo ""
+    if [ "$(uname -s)" = "Darwin" ]; then
+        echo -e "  ${YELLOW}One-shot installer for macOS:${NC}"
+        echo -e "      ${YELLOW}./scripts/prereqs-macos.sh${NC}"
+        echo -e "  ${YELLOW}(installs Xcode CLT, Python 3.12+, git, Azure CLI, and optionally${NC}"
+        echo -e "  ${YELLOW}.NET SDK + a365 CLI + PowerShell via Homebrew. Pass --core-only${NC}"
+        echo -e "  ${YELLOW}to skip the optional Microsoft Agent 365 tooling.)${NC}"
+        echo ""
+        echo -e "  ${YELLOW}Or install manually with Homebrew:${NC}"
+        echo -e "      ${YELLOW}brew install python@3.12 git azure-cli${NC}"
+    elif [ "$(uname -s)" = "Linux" ]; then
+        echo -e "  ${YELLOW}Install via your distro's package manager:${NC}"
+        echo -e "      ${YELLOW}# Debian/Ubuntu${NC}"
+        echo -e "      ${YELLOW}sudo apt install python3.12 git${NC}"
+        echo -e "      ${YELLOW}curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash${NC}"
+    else
+        echo -e "  ${YELLOW}For Windows, see scripts/prereqs-windows.ps1.${NC}"
+    fi
+    echo ""
     fail "Install the missing prerequisites above and re-run."
 fi
 
