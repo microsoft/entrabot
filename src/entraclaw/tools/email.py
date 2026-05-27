@@ -25,6 +25,16 @@ logger = logging.getLogger("entraclaw.tools.email")
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 GRAPH_SENDMAIL_URL = f"{GRAPH_BASE}/me/sendMail"
 
+# Fields the agent needs when re-reading a poll-pushed message: full body
+# (text + HTML), all recipient lists, message headers, attachment flag.
+# The 60s email poll only ships a short preview via the channel push;
+# longer mails truncate. ``read_email`` fixes that.
+READ_EMAIL_SELECT = (
+    "body,bodyPreview,toRecipients,ccRecipients,bccRecipients,"
+    "from,sender,subject,internetMessageHeaders,hasAttachments,"
+    "receivedDateTime,id"
+)
+
 
 class EmailSendError(EntraClawError):
     """Graph ``sendMail`` / reply endpoint returned a non-2xx (non-401/429)."""
@@ -149,3 +159,63 @@ async def send_email(
         f"Graph rejected mail send ({resp.status_code}): {err_body}",
         status_code=resp.status_code,
     )
+
+
+async def read_email(
+    *,
+    message_id: str,
+    mailbox: str = "",
+    token: str,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> dict:
+    """Fetch the full body + recipients + headers of a message by id.
+
+    The 60-second email poll only ships a short body preview via the
+    channel push; longer mails (forwarded recipient lists, threaded
+    replies, attached metadata) get truncated. This helper calls
+    ``GET /me/messages/{id}`` (or ``/users/{mailbox}/messages/{id}`` for
+    shared mailboxes) with ``$select`` covering every field the agent
+    needs to act on a real inbound mail.
+
+    Returns the Graph message JSON unchanged on success — body is
+    returned verbatim with no truncation on our side.
+
+    Errors:
+        * 401 → ``TokenExpiredError`` (caller refreshes + retries via
+          ``_with_token_retry``).
+        * 404 / 403 / 5xx → ``{"error": "...", "status": <code>}`` so
+          the caller can surface "no such message" without an
+          exception. The bearer token is never echoed into the result.
+    """
+    if mailbox:
+        url = f"{GRAPH_BASE}/users/{mailbox}/messages/{message_id}"
+    else:
+        url = f"{GRAPH_BASE}/me/messages/{message_id}"
+
+    headers = {"Authorization": f"Bearer {token}"}
+    params = {"$select": READ_EMAIL_SELECT}
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        resp = await client.get(url, params=params, headers=headers)
+
+    if resp.status_code == 200:
+        return resp.json()
+
+    if resp.status_code == 401:
+        raise TokenExpiredError("Agent User token expired — re-acquire via three-hop flow")
+
+    # Non-2xx, non-401: surface the Graph error body so the operator
+    # can see *why* the read failed, but never include the token.
+    try:
+        err_body = resp.json()
+        err_msg = err_body.get("error", {}).get("message") or str(err_body)
+    except Exception:
+        err_msg = resp.text or f"Graph returned HTTP {resp.status_code}"
+
+    logger.info(
+        "read_email failed for %s (mailbox=%s): status=%d",
+        message_id,
+        mailbox or "<me>",
+        resp.status_code,
+    )
+    return {"error": err_msg, "status": resp.status_code, "message_id": message_id}

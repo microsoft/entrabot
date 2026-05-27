@@ -1,7 +1,7 @@
 # Engineering Status
 
-**Last updated:** 2026-05-21
-**Status:** v1 released. Three auth modes (Agent User / Delegated / Bot Gateway) running locally on macOS, Linux, and ARM64 Windows 11. **1,237 tests** across the suite, ruff clean. Body-first prompt architecture loads at boot; persona-sati MCP wires personality and memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped — blob storage is opt-in via `setup.sh --use-cloud-memory`. Work IQ Word migration landed (PR #75) and the `send_teams_message` auto-wait pattern is host-gated and deterministic. README, docs site, and GitHub Pages auto-deploy refreshed 2026-05-21.
+**Last updated:** 2026-05-27
+**Status:** v1 released. Three auth modes (Agent User / Delegated / Bot Gateway) running locally on macOS, Linux, and ARM64 Windows 11. **1,248 tests** across the suite, ruff clean. Body-first prompt architecture loads at boot; persona-sati MCP wires personality and memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped — blob storage is opt-in via `setup.sh --use-cloud-memory`. Work IQ Word migration landed (PR #75) and the `send_teams_message` auto-wait pattern is host-gated and deterministic. README, docs site, and GitHub Pages auto-deploy refreshed 2026-05-21.
 
 ---
 
@@ -18,6 +18,7 @@ Source of truth for detail: `TODOS.md` in the repository root. One line each bel
 
 Last ~30 days. Full diff: `git log --since="2026-04-21"`.
 
+- **`read_email` MCP tool** (2026-05-27) — fetches the full body + all recipient lists + headers of an inbound mail by `message_id`. Fixes the gap where the 60s email-poll channel push truncates the preview of long forwarded mails. Same three-hop Agent User token + `Mail.Read` scope as the poll. +7 tests.
 - **Email cursor sub-second precision** (2026-05-27) — `advance_cursor()` bumps the poll watermark by 1 ms so Graph's `gt` filter does not re-fetch messages at the cursor's exact second after a server restart.
 - **README + docs-site refresh** (2026-05-21, ff9a8dd, 9b73dee, b495073) — developer-first README rewrite, GitHub Pages auto-deploy, nav restructure.
 - **OSS sanitization passes** (2026-05-21, f2a3c18; 2026-05-18, 6cff243) — PII scrub, personal data and private identifiers removed from repo.

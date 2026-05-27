@@ -2457,6 +2457,50 @@ async def send_email(
 
 
 @mcp.tool()
+async def read_email(
+    message_id: str,
+    mailbox: str = "",
+) -> str:
+    """Fetch the full body + recipients + headers of an inbound email.
+
+    Use when the 60-second email-poll channel push has truncated the
+    body (forwarded recipient lists, threaded replies, attached
+    metadata) and the agent needs to read past where the preview cut
+    off. Calls Graph ``GET /me/messages/{message_id}`` with a
+    ``$select`` covering body (text + HTML), all recipient lists,
+    sender, subject, message headers, and ``hasAttachments``.
+
+    Args:
+        message_id: The Graph ``id`` of the message (from the channel
+            push or a prior ``read_email`` / poll result).
+        mailbox: Optional shared mailbox UPN/address. Empty (default)
+            reads from the Agent User's own mailbox.
+
+    Returns:
+        JSON with the full Graph message object on success, or
+        ``{"error": "...", "status": <code>, "message_id": "..."}`` on
+        404 / 403 / 5xx. 401 triggers an automatic token refresh and
+        retry; only an exhausted retry surfaces.
+    """
+    await _initialize()
+
+    if not message_id or not message_id.strip():
+        return json.dumps({"error": "message_id is required."})
+
+    from entraclaw.tools.email import read_email as _read
+
+    await _ensure_valid_token()
+
+    result = await _with_token_retry(
+        _read,
+        message_id=message_id,
+        mailbox=mailbox,
+    )
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
 async def send_card(
     card_type: str,
     chat_id: str = "",
