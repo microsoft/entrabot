@@ -19,7 +19,7 @@ python scripts/provision_blob_storage.py --create-new-storage
 
 ### What it does
 
-1. Ensures `entraclaw-rg` resource group exists in the user's default subscription.
+1. Ensures `entrabot-rg` resource group exists in the user's default subscription.
 2. Ensures a Storage Account exists — one per tenant, named from the tenant ID so multiple devs in the same tenant converge on the same account without a global-unique-name race.
 3. Ensures a container exists for this Agent User (named with the Agent User's object ID per ADR-005).
 4. Assigns `Storage Blob Data Contributor` to the Agent User on the container — scoped to the container, not the account, so each Agent User only sees its own slice.
@@ -81,7 +81,7 @@ python3 scripts/claude_memory_sync.py push-one <PATH>
 
 ### What it does
 
-- All three commands are idempotent and respect `ENTRACLAW_PERSONA_SYNC` — when unset or not `on`, the script exits 0 without touching the backend.
+- All three commands are idempotent and respect `ENTRABOT_PERSONA_SYNC` — when unset or not `on`, the script exits 0 without touching the backend.
 - Every error path returns 0 and logs to stderr (the original SessionStart hook ran on every Claude session and could not block boot).
 
 Use cases now: one-off bulk migrations after switching machines, or manual recovery when persona-sati's sync state is broken.
@@ -102,7 +102,7 @@ Export everything needed to run the MCP server on a new machine without re-provi
 ### What's in the archive
 
 - `.env` (MCP server config).
-- `.entraclaw-state.json` (provisioning state).
+- `.entrabot-state.json` (provisioning state).
 - Persisted Teams chat IDs.
 - Blueprint private key from the OS keystore.
 - Claude Code memory files.
@@ -125,11 +125,11 @@ Import an archive produced by `export-state.sh`. Inverse.
 
 - Decrypts the archive into the project root.
 - Imports the private key into the local OS keystore.
-- Writes `.env`, `.entraclaw-state.json`, and watched chat state in place.
+- Writes `.env`, `.entrabot-state.json`, and watched chat state in place.
 
 After import:
 
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"
-claude --dangerously-load-development-channels server:entraclaw
+claude --dangerously-load-development-channels server:entrabot
 ```

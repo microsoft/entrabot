@@ -15,10 +15,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from entraclaw.errors import (
+from entrabot.errors import (
     SiteNotAllowedError,
 )
-from entraclaw.tools.files import (
+from entrabot.tools.files import (
     OneDriveTarget,
     SharePointTarget,
     upload_file,
@@ -35,7 +35,7 @@ class TestUploadFile:
         token = "mock_token_123"
         small_content = b"Small file content" * 100  # ~1.8KB
 
-        with patch("entraclaw.tools.files._client") as mock_client_ctx:
+        with patch("entrabot.tools.files._client") as mock_client_ctx:
             mock_response = MagicMock()
             mock_response.status_code = 201
             mock_response.json.return_value = {
@@ -68,7 +68,7 @@ class TestUploadFile:
         # 5 MiB
         large_content = b"X" * (5 * 1024 * 1024 + 1000)
 
-        with patch("entraclaw.tools.files._client") as mock_client_ctx:
+        with patch("entrabot.tools.files._client") as mock_client_ctx:
             # First call: createUploadSession
             session_response = MagicMock()
             session_response.status_code = 200
@@ -121,7 +121,7 @@ class TestUploadFile:
         token = "mock_token_123"
         large_content = b"Y" * (5 * 1024 * 1024)
 
-        with patch("entraclaw.tools.files._client") as mock_client_ctx:
+        with patch("entrabot.tools.files._client") as mock_client_ctx:
             session_response = MagicMock()
             session_response.status_code = 200
             session_response.json.return_value = {
@@ -176,7 +176,7 @@ class TestUploadFile:
         token = "mock_token_123"
         small_content = b"Small" * 100
 
-        with patch("entraclaw.tools.files._client") as mock_client_ctx:
+        with patch("entrabot.tools.files._client") as mock_client_ctx:
             mock_response = MagicMock()
             mock_response.status_code = 201
             mock_response.json.return_value = {
@@ -206,7 +206,7 @@ class TestUploadFile:
         token = "mock_token_123"
         small_content = b"Replace" * 100
 
-        with patch("entraclaw.tools.files._client") as mock_client_ctx:
+        with patch("entrabot.tools.files._client") as mock_client_ctx:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {
@@ -239,7 +239,7 @@ class TestUploadFile:
         )
         token = "mock_token_123"
 
-        with patch("entraclaw.tools.files._check_site_allowed") as mock_check:
+        with patch("entrabot.tools.files._check_site_allowed") as mock_check:
             mock_check.side_effect = SiteNotAllowedError("site_denied")
 
             with pytest.raises(SiteNotAllowedError):
@@ -257,7 +257,7 @@ class TestUploadFile:
         token = "mock_token_123"
         small_content = b"Throttled" * 100
 
-        with patch("entraclaw.tools.files._client") as mock_client_ctx:
+        with patch("entrabot.tools.files._client") as mock_client_ctx:
             # First call returns 429; transport retries internally
             final_response = MagicMock()
             final_response.status_code = 201
@@ -292,10 +292,10 @@ class TestUploadFile:
         token = "mock_token_123"
         small_content = b"SharePoint file" * 50
 
-        with patch("entraclaw.tools.files._check_site_allowed") as mock_check:
+        with patch("entrabot.tools.files._check_site_allowed") as mock_check:
             mock_check.return_value = None
 
-            with patch("entraclaw.tools.files._client") as mock_client_ctx:
+            with patch("entrabot.tools.files._client") as mock_client_ctx:
                 mock_response = MagicMock()
                 mock_response.status_code = 201
                 mock_response.json.return_value = {

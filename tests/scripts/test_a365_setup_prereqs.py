@@ -35,17 +35,17 @@ def test_unix_setup_can_install_a365_cli_when_requested() -> None:
     assert "dotnet tool install --global Microsoft.Agents.A365.DevTools.Cli" in script
     assert "dotnet tool update --global Microsoft.Agents.A365.DevTools.Cli" in script
     assert "--agent-user-upn=*" in script
-    assert 'export ENTRACLAW_AGENT_USER_UPN="$AGENT_USER_UPN"' in script
-    assert 'export _ENTRACLAW_UPN_SUFFIX="$UPN_SUFFIX"' in script
+    assert 'export ENTRABOT_AGENT_USER_UPN="$AGENT_USER_UPN"' in script
+    assert 'export _ENTRABOT_UPN_SUFFIX="$UPN_SUFFIX"' in script
 
 
 def test_unix_setup_can_create_new_chain_with_explicit_agent_user_upn() -> None:
     script = read_script("scripts/setup.sh")
 
-    assert "--new --agent-user-upn=entraclaw-agent@yourtenant.onmicrosoft.com" in script
+    assert "--new --agent-user-upn=entrabot-agent@yourtenant.onmicrosoft.com" in script
     new_branch = script[script.index('if [ "$NEW_CHAIN" = true ]') :]
     assert 'if [ -n "$AGENT_USER_UPN" ]; then' in new_branch
-    assert 'export ENTRACLAW_AGENT_USER_UPN="$AGENT_USER_UPN"' in new_branch
+    assert 'export ENTRABOT_AGENT_USER_UPN="$AGENT_USER_UPN"' in new_branch
     assert 'elif [ -z "$UPN_SUFFIX" ]; then' in new_branch
 
 
@@ -70,7 +70,7 @@ def test_unix_setup_can_run_interactive_a365_work_iq_configuration() -> None:
     assert "PowerShell 7+ (pwsh)" in script
     assert "brew install powershell" in script
     assert "brew install --cask powershell" not in script
-    assert 'A365_AGENT_NAME="EntraClaw Code Agent"' in script
+    assert 'A365_AGENT_NAME="EntraBot Code Agent"' in script
     assert "--a365-agent-name=*" in script
     assert "ensure_a365_tooling_manifest" in script
     assert 'printf \'{"mcpServers":[]}' in script
@@ -111,8 +111,8 @@ def test_unix_setup_can_run_interactive_a365_work_iq_configuration() -> None:
 def test_create_entra_agent_ids_allows_explicit_agent_user_upn() -> None:
     script = read_script("scripts/create_entra_agent_ids.py")
 
-    assert "ENTRACLAW_AGENT_USER_UPN" in script
-    assert 'explicit_upn = os.environ.get("ENTRACLAW_AGENT_USER_UPN", "").strip()' in script
+    assert "ENTRABOT_AGENT_USER_UPN" in script
+    assert 'explicit_upn = os.environ.get("ENTRABOT_AGENT_USER_UPN", "").strip()' in script
     assert "Using explicit Agent User UPN" in script
 
 
@@ -122,13 +122,13 @@ def test_unix_setup_preflights_copilot_license_for_work_iq() -> None:
     assert "check_copilot_license_availability" in script
     assert "Copilot license available" in script
     assert 'if [ "$WITH_A365_WORK_IQ" = true ]; then' in script
-    assert "ENTRACLAW_ASSIGN_WORK_IQ_LICENSE=1" in script
+    assert "ENTRABOT_ASSIGN_WORK_IQ_LICENSE=1" in script
 
 
 def test_windows_setup_assigns_work_iq_license_only_for_a365_configuration() -> None:
     script = read_script("scripts/setup-windows.ps1")
 
-    assert "ENTRACLAW_ASSIGN_WORK_IQ_LICENSE" in script
+    assert "ENTRABOT_ASSIGN_WORK_IQ_LICENSE" in script
     assert "if ($ConfigureA365WorkIq)" in script
 
 
@@ -136,7 +136,7 @@ def test_windows_setup_can_run_interactive_a365_work_iq_configuration() -> None:
     script = read_script("scripts/setup-windows.ps1")
 
     assert "[switch]$ConfigureA365WorkIq" in script
-    assert '[string]$A365AgentName = "EntraClaw Code Agent"' in script
+    assert '[string]$A365AgentName = "EntraBot Code Agent"' in script
     assert '[string]$AgentUserUpn = ""' in script
     assert "Ensure-A365ToolingManifest" in script
     assert "'{\"mcpServers\":[]}'" in script

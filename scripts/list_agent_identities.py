@@ -28,7 +28,7 @@ from entra_provisioning import (  # noqa: E402
 )
 
 # fmt: on
-from entraclaw.graph_helpers import graph_collection_values  # noqa: E402
+from entrabot.graph_helpers import graph_collection_values  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Main

@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from entraclaw.bot import convo_store
+from entrabot.bot import convo_store
 
 
 @pytest.fixture(autouse=True)
@@ -26,7 +26,7 @@ def _sample_ref(label: str = "a") -> dict[str, Any]:
     """Return a minimal conversation reference dict for testing."""
     return {
         "conversation": {"id": f"conv-{label}"},
-        "bot": {"id": "bot-1", "name": "EntraClaw"},
+        "bot": {"id": "bot-1", "name": "EntraBot"},
         "serviceUrl": f"https://smba.trafficmanager.net/{label}",
     }
 
@@ -110,7 +110,7 @@ class TestLoadAllReferences:
         refs_path.parent.mkdir(parents=True, exist_ok=True)
         refs_path.write_text("NOT VALID JSON {{{")
 
-        with caplog.at_level(logging.WARNING, logger="entraclaw.bot.convo_store"):
+        with caplog.at_level(logging.WARNING, logger="entrabot.bot.convo_store"):
             result = convo_store.load_all_references()
 
         assert result == {}

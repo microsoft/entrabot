@@ -35,8 +35,8 @@ _SPEC.loader.exec_module(rotate_cert_windows)
 def _make_state(tmp_path: Path) -> rotate_cert_windows.RotationState:
     env = tmp_path / ".env"
     env.write_text(
-        "ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT=ORIG_X5T\n"
-        "ENTRACLAW_BLUEPRINT_CERT_SHA1=" + "0" * 40 + "\n"
+        "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=ORIG_X5T\n"
+        "ENTRABOT_BLUEPRINT_CERT_SHA1=" + "0" * 40 + "\n"
     )
     msal = tmp_path / ".msal-cache.bin"
     msal.write_bytes(b"old-cache")
@@ -73,8 +73,8 @@ class TestPatchOkSmokeOk:
         assert state.msal_cache_path.read_bytes() == b"old-cache"
         # .env updated.
         env_text = state.env_path.read_text()
-        assert "ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT=NEW_X5T" in env_text
-        assert "ENTRACLAW_BLUEPRINT_CERT_SHA1=" + "A" * 40 in env_text
+        assert "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=NEW_X5T" in env_text
+        assert "ENTRABOT_BLUEPRINT_CERT_SHA1=" + "A" * 40 in env_text
 
 
 class TestPatchOkSmokeFail:
@@ -112,8 +112,8 @@ class TestPatchOkSmokeFail:
 
         # .env restored to ORIG values.
         env_text = state.env_path.read_text()
-        assert "ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT=ORIG_X5T" in env_text
-        assert "ENTRACLAW_BLUEPRINT_CERT_SHA1=" + "0" * 40 in env_text
+        assert "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=ORIG_X5T" in env_text
+        assert "ENTRABOT_BLUEPRINT_CERT_SHA1=" + "0" * 40 in env_text
 
 
 class TestPatchFails:
@@ -143,7 +143,7 @@ class TestPatchFails:
         # No rollback needed: nothing changed in the agent identity.
         # .env still has original values.
         env_text = state.env_path.read_text()
-        assert "ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT=ORIG_X5T" in env_text
+        assert "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=ORIG_X5T" in env_text
 
 
 class TestRollbackPatchAlsoFails:

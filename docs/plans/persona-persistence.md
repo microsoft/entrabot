@@ -1,16 +1,16 @@
 # Plan: Persona Persistence (Cloud-Backed Claude Code Auto-Memory)
 
 **Status:** Proposed (2026-04-17)
-**Author:** EntraClaw Agent (in conversation with the user)
+**Author:** EntraBot Agent (in conversation with the user)
 **Relationship to ADR-005:** Extends the cloud-memory backend to cover a *second* memory system that ADR-005 didn't scope. Think of this as ADR-005 Phase 6, or a sibling ADR — the author of this plan is deferring the framing choice to the implementer.
 
 ---
 
 ## 1. Motivation
 
-ADR-005 Phases 1-5 successfully moved **EntraClaw agent operational memory** to blob storage — interaction log, daily summaries, email cursor, watched chats. Restart-resilient, cross-device-capable, survives filesystem loss.
+ADR-005 Phases 1-5 successfully moved **EntraBot agent operational memory** to blob storage — interaction log, daily summaries, email cursor, watched chats. Restart-resilient, cross-device-capable, survives filesystem loss.
 
-But that's not the *personality* system. Claude Code maintains a **separate, per-project auto-memory** at `~/.claude/projects/<project-slug>/memory/` — a directory of markdown files with YAML frontmatter that captures everything Claude has learned about the user, the work, and how to collaborate. A `MEMORY.md` index is auto-injected at session start. For this project that directory currently holds **23 files** — the accumulated shape of how EntraClaw-Brandon collaboration works.
+But that's not the *personality* system. Claude Code maintains a **separate, per-project auto-memory** at `~/.claude/projects/<project-slug>/memory/` — a directory of markdown files with YAML frontmatter that captures everything Claude has learned about the user, the work, and how to collaborate. A `MEMORY.md` index is auto-injected at session start. For this project that directory currently holds **23 files** — the accumulated shape of how EntraBot-Brandon collaboration works.
 
 That directory is **still local-only**. If this laptop dies, if we move to another device, if the user changes machines, **all the learned register, feedback, relationship context, and accumulated conversation shape evaporates**. The operational log survives (blob), but the personality that makes cross-session continuity meaningful does not.
 
@@ -38,7 +38,7 @@ That directory is **still local-only**. If this laptop dies, if we move to anoth
 
 ### Assumptions
 - The agent's blob container (`agent-<your-agent-user-id>`) has enough capacity and the Agent User has `Storage Blob Data Contributor` on it (confirmed Phase 5).
-- The `ENTRACLAW_BLOB_ENDPOINT` / `ENTRACLAW_BLOB_CONTAINER` env vars are set at the shell level and visible to any process Claude Code spawns.
+- The `ENTRABOT_BLOB_ENDPOINT` / `ENTRABOT_BLOB_CONTAINER` env vars are set at the shell level and visible to any process Claude Code spawns.
 - Claude Code Write tool events can be observed via its hook system (`PostToolUse` hook on Write, filtered by path prefix). This is used today for other purposes in the project's settings.
 - The Claude Code session-start hook can run a Python script and block until it completes (used today for gstack preamble).
 
@@ -54,7 +54,7 @@ These are already structured and in use. They need no schema change — just a n
 |---|---|---|
 | user | 3 | `user_brandon_role.md`, `user_brandon_philosophical_depth.md`, `user_eric_sachs.md` |
 | feedback | 7 | `feedback_channel_discipline.md`, `feedback_cvp_tone.md`, `feedback_pace_with_multiple_threads.md` |
-| project | 12 | `project_whatsapp_pivot.md`, `project_entraclaw_personality_design.md`, `project_red_team_attempts.md` |
+| project | 12 | `project_whatsapp_pivot.md`, `project_entrabot_personality_design.md`, `project_red_team_attempts.md` |
 | reference | 0 | (none yet) |
 
 **Action:** Mirror the entire contents of `~/.claude/projects/<slug>/memory/` to blob key prefix `claude_memory/`. The `MEMORY.md` index becomes `claude_memory/MEMORY.md`; each memory file becomes `claude_memory/<filename>.md`.
@@ -310,7 +310,7 @@ type: carry_forward
 
 ### 3.3 Consumption — how Claude knows to USE these files
 
-Storing the files is half the work. Teaching Claude (and the EntraClaw agent) to read/write them at the right moments is the other half. Without this, the new categories sit in blob unread.
+Storing the files is half the work. Teaching Claude (and the EntraBot agent) to read/write them at the right moments is the other half. Without this, the new categories sit in blob unread.
 
 #### 3.3.1 Session-start reads (always in context)
 
@@ -381,7 +381,7 @@ ADR-005's 7d raw → 30d weekly-digest → indefinite behavioral decay is for **
 | `unsent_drafts.md` | **Rolling 30d** — older drafts don't teach anything new |
 | `carry_forward.md` | **Transient** — consumed items leave entirely; pending items persist until raised |
 
-Implementation: a scheduled compaction job (daily, reuses the daily summary scheduler infrastructure) walks the `claude_memory/` prefix and applies per-type retention. Lives in `src/entraclaw/storage/persona_compaction.py`. Strict rule: **never delete without an equivalent synthesized form written first** — no data loss without replacement.
+Implementation: a scheduled compaction job (daily, reuses the daily summary scheduler infrastructure) walks the `claude_memory/` prefix and applies per-type retention. Lives in `src/entrabot/storage/persona_compaction.py`. Strict rule: **never delete without an equivalent synthesized form written first** — no data loss without replacement.
 
 ### 3.5 Summary — total expected file count after Phase 6
 
@@ -428,7 +428,7 @@ claude_memory/unsent_drafts.md
 claude_memory/carry_forward.md
 ```
 
-Local path (unchanged): `~/.claude/projects/-Volumes-Development-HD-entraclaw-identity-research/memory/<same_filenames>.md`
+Local path (unchanged): `~/.claude/projects/-Volumes-Development-HD-entrabot-identity-research/memory/<same_filenames>.md`
 
 ### 4.2 Sync mechanics
 
@@ -487,29 +487,29 @@ If blob is unreachable during a write:
 
 ## 5. Implementation Phases
 
-Each phase ships independently, is tested, and is behind a feature flag (`ENTRACLAW_PERSONA_SYNC`, default `off`).
+Each phase ships independently, is tested, and is behind a feature flag (`ENTRABOT_PERSONA_SYNC`, default `off`).
 
 ### Phase 6a — Lift-and-shift existing memory (safe, no behavior change)
-- Add `PersonaBackend` to `src/entraclaw/storage/persona.py` — thin wrapper over existing `BlobBackend` scoped to `claude_memory/` prefix.
+- Add `PersonaBackend` to `src/entrabot/storage/persona.py` — thin wrapper over existing `BlobBackend` scoped to `claude_memory/` prefix.
 - Add sync helpers: `pull_all()`, `push_one(path)`, `push_all()`.
 - Write tests with a fake `BlobBackend` (the Phase 2 pattern).
 - Create `scripts/claude_memory_sync.py` with subcommands `pull`, `push`, `push-one <path>`.
-- **Extend `migrate_local_to_backend`** (`src/entraclaw/storage/migration.py`, added in Phase 5) to accept a list of `(source_dir, blob_prefix)` pairs rather than a single source. Existing callers pass `[(data_dir, "")]`; new caller passes both agent data and persona memory:
+- **Extend `migrate_local_to_backend`** (`src/entrabot/storage/migration.py`, added in Phase 5) to accept a list of `(source_dir, blob_prefix)` pairs rather than a single source. Existing callers pass `[(data_dir, "")]`; new caller passes both agent data and persona memory:
   ```python
   migrate_local_to_backend([
-      (Path.home() / ".entraclaw/data", ""),
+      (Path.home() / ".entrabot/data", ""),
       (claude_code_memory_dir(), "claude_memory"),
   ], get_backend())
   ```
   `claude_code_memory_dir()` is a new helper that resolves the Claude Code project-memory path using the same slug convention Claude Code uses (derived from the project's absolute path with forward-slash → hyphen encoding). If the directory doesn't exist (user without Claude Code, or no memory yet), skip silently — return 0 copied for that pair.
 - **Update `setup.sh` Step 7b**:
-  - Pre-compute the combined size: `~/.entraclaw/data/` bytes + `~/.claude/projects/<slug>/memory/` bytes.
+  - Pre-compute the combined size: `~/.entrabot/data/` bytes + `~/.claude/projects/<slug>/memory/` bytes.
   - Change prompt text from "Upload existing local memory (~NNN KB) to blob? [y/N]" to something like "Upload existing local memory (~NNN KB, includes persona) to blob? [y/N]" so the user knows both trees are covered.
   - Call the extended migration helper with both source pairs.
   - Error handling unchanged — setup.sh still exits red + non-zero on any non-recoverable migration failure.
 - **Idempotency guarantee (important for partial-migrated states):** The existing helper already skips keys that exist in blob. After Phase 6a ships, running setup.sh on a state where *only* the agent-data subtree was previously migrated will copy the 24 persona files (23 memory files + MEMORY.md), skip the ~10 agent files already in cloud, and report `Copied: 24, Skipped: 10`. No clobber.
 - **Update `CLAUDE.md`** (project root) — add a new `## Memory types` section listing all existing + new types with their write-triggers and read-triggers (per §3.3.2 and §3.3.4 of this doc). Also add the compaction-aware re-read rule from §3.3.3. CLAUDE.md is always-in-context and explicitly overrides default auto-memory behavior, so this is the sanctioned place to extend the type taxonomy.
-- **Update `prompts/agent_system.md`** (EntraClaw MCP prompt) — add a `## Persona memory` section telling the agent to consult specific files when handling Teams interactions: `relationship_<sender>.md` on inbound-from-known-person, `voice_calibration.md` before composing banter in group chats, `running_commitments.md` before claiming work is shipped. This prompt loads at MCP boot and applies every time the agent acts through Teams tools.
+- **Update `prompts/agent_system.md`** (EntraBot MCP prompt) — add a `## Persona memory` section telling the agent to consult specific files when handling Teams interactions: `relationship_<sender>.md` on inbound-from-known-person, `voice_calibration.md` before composing banter in group chats, `running_commitments.md` before claiming work is shipped. This prompt loads at MCP boot and applies every time the agent acts through Teams tools.
 - **Add `/refresh-persona` skill** at `~/.claude/skills/refresh-persona/SKILL.md` — manual safety valve when Brandon notices drift. Reads MEMORY.md + `session_digest_<today>.md` + `carry_forward.md` and pins them into the current turn. ~30 LOC of skill markdown.
 - **Add a new `always-read-on-start` list** to CLAUDE.md: `session_digest_<today>.md` and `carry_forward.md` alongside the implicit `MEMORY.md`. Claude re-checks at session start and on compaction.
 - Add Claude Code `PostToolUse` hook wiring in `.claude/settings.json`:
@@ -520,7 +520,7 @@ Each phase ships independently, is tested, and is behind a feature flag (`ENTRAC
         "matcher": "Write",
         "hooks": [{
           "type": "command",
-          "command": "[[ \"$CLAUDE_TOOL_INPUT_file_path\" == */memory/* ]] && python scripts/claude_memory_sync.py push-one \"$CLAUDE_TOOL_INPUT_file_path\" 2>>~/.entraclaw/logs/persona-sync.log &"
+          "command": "[[ \"$CLAUDE_TOOL_INPUT_file_path\" == */memory/* ]] && python scripts/claude_memory_sync.py push-one \"$CLAUDE_TOOL_INPUT_file_path\" 2>>~/.entrabot/logs/persona-sync.log &"
         }]
       }]
     }
@@ -533,13 +533,13 @@ Each phase ships independently, is tested, and is behind a feature flag (`ENTRAC
       "SessionStart": [{
         "hooks": [{
           "type": "command",
-          "command": "[ \"$ENTRACLAW_PERSONA_SYNC\" = \"on\" ] && python scripts/claude_memory_sync.py pull 2>>~/.entraclaw/logs/persona-sync.log"
+          "command": "[ \"$ENTRABOT_PERSONA_SYNC\" = \"on\" ] && python scripts/claude_memory_sync.py pull 2>>~/.entrabot/logs/persona-sync.log"
         }]
       }]
     }
   }
   ```
-- Manual test: flip `ENTRACLAW_PERSONA_SYNC=on`, start new session, verify `MEMORY.md` and 23 files round-trip cleanly.
+- Manual test: flip `ENTRABOT_PERSONA_SYNC=on`, start new session, verify `MEMORY.md` and 23 files round-trip cleanly.
 
 **LOC estimate:** ~200 production + ~200 tests.
 
@@ -575,7 +575,7 @@ Each phase ships independently, is tested, and is behind a feature flag (`ENTRAC
 **LOC estimate:** ~100 production + ~100 tests.
 
 ### Phase 6f-retention — Per-type retention / compaction scheduler
-- Add `src/entraclaw/storage/persona_compaction.py` implementing retention rules from §3.4.
+- Add `src/entrabot/storage/persona_compaction.py` implementing retention rules from §3.4.
 - Runs daily, reuses the daily-summary-scheduler infrastructure (shared scheduler, different callback).
 - Implements:
   - `session_digest_*` → weekly roll-up after 7d, monthly after 30d, yearly after 365d
@@ -640,12 +640,12 @@ Each phase ships independently, is tested, and is behind a feature flag (`ENTRAC
 
 ## 8. Rollout
 
-Phase 6a ships with `ENTRACLAW_PERSONA_SYNC=on` as the **default** — the sync hooks ARE the feature, gating them behind a flag that most users won't flip defeats the purpose. The safety properties (idempotent migration, non-fatal pull, stderr logging on push failure) are strong enough that "on by default" is the right call. Flag exists for disaster opt-out (`ENTRACLAW_PERSONA_SYNC=off` to quiesce hooks), not for opt-in.
+Phase 6a ships with `ENTRABOT_PERSONA_SYNC=on` as the **default** — the sync hooks ARE the feature, gating them behind a flag that most users won't flip defeats the purpose. The safety properties (idempotent migration, non-fatal pull, stderr logging on push failure) are strong enough that "on by default" is the right call. Flag exists for disaster opt-out (`ENTRABOT_PERSONA_SYNC=off` to quiesce hooks), not for opt-in.
 
 1. Ship Phase 6a with sync on by default.
 2. First `setup.sh` run after deploy: Step 7b prompts for the combined migration (agent + persona). Brandon says yes; 24 persona files upload to `claude_memory/` prefix; existing agent files stay.
 3. Subsequent `setup.sh` runs: Step 7b is idempotent — reports 0 new copies if nothing changed locally, or a small delta if Claude wrote memory between runs.
-4. Monitor `~/.entraclaw/logs/persona-sync.log` for hook errors in the first week.
+4. Monitor `~/.entrabot/logs/persona-sync.log` for hook errors in the first week.
 5. Phases 6b-f ship incrementally as iterations; each continues to respect the same hook and migration contract.
 6. Update `CLAUDE.md` active-work section at the end of each phase.
 7. Update `docs/engineering-status.md` with test count and new capabilities at the end of each phase.
@@ -658,7 +658,7 @@ Separate from this plan, the `fix/summary-self-emails` branch (commit `b462b32` 
 
 ```bash
 # After Phase 2 is on main:
-cd /path/to/entraclaw-identity-research
+cd /path/to/entrabot-identity-research
 git merge --ff-only fix/summary-self-emails
 git push origin main
 # Then optionally clean up the worktree:
@@ -670,7 +670,7 @@ git branch -d fix/summary-self-emails
 
 ## 10. Implementer notes — important context
 
-- **The existing memory dir is at** `~/.claude/projects/-Volumes-Development-HD-entraclaw-identity-research/memory/` — note the URL-encoded-ish path. Use `os.path.expanduser` + the Claude Code project slug convention, don't hardcode.
+- **The existing memory dir is at** `~/.claude/projects/-Volumes-Development-HD-entrabot-identity-research/memory/` — note the URL-encoded-ish path. Use `os.path.expanduser` + the Claude Code project slug convention, don't hardcode.
 - **The existing `BlobBackend` API is sync** (`write_text`, `read_text`, `append_text`, `exists`, `list`). If you add a `pull_all` that needs to be fast, use `asyncio` + `BlobStore` (Phase 1, which IS async) directly — not BlobBackend. That's fine; `BlobBackend` was always a sync convenience layer.
 - **Don't break existing file paths.** `interaction_log.py` and `daily_summary.py` currently route through `get_backend()`. Their keys (e.g., `interactions/2026-04-18.jsonl`) sit alongside the new `claude_memory/` prefix. No collision.
 - **CLAUDE.md non-negotiables apply** — TDD, no stderr-silencing, always check for `error` key on tokens, etc.

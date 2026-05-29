@@ -1,4 +1,4 @@
-# CLAUDE.md — Entraclaw Identity Research
+# CLAUDE.md — Entrabot Identity Research
 
 > Root working context. Durable architecture lives in `docs/`.
 
@@ -31,16 +31,16 @@
 - Always create BlueprintPrincipal explicitly after Blueprint — it is NOT auto-created
 - Agent IDs are service principals, not users — never create fake user accounts with passwords
 - Parse `az` CLI output as JSON, not TSV — TSV can be corrupted by warnings
-- **Sub-agent worktree installs must use a worktree-local venv, never the parent venv.** Running `pip install -e .` from inside a git worktree against the main repo's `.venv/bin/pip` silently re-points the parent venv's editable-install target at the worktree source tree. Every subsequent `entraclaw-mcp` boot from the parent venv then loads code from the worktree — which has no `.env`, no auth, no polling, and no visible error. After any session that spawned sub-agents in worktrees, verify `.venv/bin/python3 -c "from entraclaw import config; print(config.__file__)"` does NOT contain `.claude/worktrees/`. See `docs/runbooks/hard-won-learnings.md` Learning #36 for the full writeup.
+- **Sub-agent worktree installs must use a worktree-local venv, never the parent venv.** Running `pip install -e .` from inside a git worktree against the main repo's `.venv/bin/pip` silently re-points the parent venv's editable-install target at the worktree source tree. Every subsequent `entrabot-mcp` boot from the parent venv then loads code from the worktree — which has no `.env`, no auth, no polling, and no visible error. After any session that spawned sub-agents in worktrees, verify `.venv/bin/python3 -c "from entrabot import config; print(config.__file__)"` does NOT contain `.claude/worktrees/`. See `docs/runbooks/hard-won-learnings.md` Learning #36 for the full writeup.
 - **Sponsor DM wait pattern (host-gated).** When the human says "ping me when X is done" / "I'm going AFK, let me know" / any equivalent: confirm in Teams with `send_teams_message`, do the work, send the completion update with `send_teams_message`. What happens next depends on the host:
-  - **Claude Code** (channel-push host): end the turn after sending. The entraclaw background poll delivers the sponsor's reply as a next-turn `<channel source="entraclaw">` system reminder. Do NOT call `wait_for_sponsor_dm` — it blocks the CLI session and freezes the conversation.
+  - **Claude Code** (channel-push host): end the turn after sending. The entrabot background poll delivers the sponsor's reply as a next-turn `<channel source="entrabot">` system reminder. Do NOT call `wait_for_sponsor_dm` — it blocks the CLI session and freezes the conversation.
   - **Non-Claude-Code hosts** (Copilot CLI, Codex, etc.): `send_teams_message` auto-blocks after sending and returns the sponsor's reply inline as `sponsor_reply`. No manual wait needed.
 
   `wait_for_sponsor_dm` is reserved for the rare case the operator explicitly says "block until they reply" mid-task. NEVER poll in a loop. NEVER spawn `copilot -p` / headless subprocesses. NEVER use `watch_teams_replies` for this pattern. Full protocol: `prompts/anatomy/channel-discipline.md`. See Learning #54.
 - **Never expose behavioral switches as MCP tool parameters.** LLMs will override them to skip waiting/blocking/validation. `send_teams_message` auto-wait is unconditional for non-Claude-Code hosts — determined by server-side host detection, not a parameter the model can set. If you need a knob, use an env var. See Learning #54.
 - **Memory routing is mechanically enforced.** A PreToolUse hook blocks
   `Write`/`Edit`/`NotebookEdit` to `~/.claude/projects/<slug>/memory/**`
-  unless `ENTRACLAW_KEEP_MEMORY_LOCAL=true`. Cloud-memory setups (the
+  unless `ENTRABOT_KEEP_MEMORY_LOCAL=true`. Cloud-memory setups (the
   default after `setup.sh --use-cloud-memory`) route all memory writes
   through `mcp__persona-sati__write_memory_file`, which lands content
   in persona-sati's blob. Three-way decision tree for durable writes:
@@ -48,7 +48,7 @@
   - Mind content (personality, relationships, philosophy, running
     jokes) → `mcp__persona-sati__write_memory_file`.
   - Operational state (interactions, summaries, watched chats, email
-    cursor, outstanding promises) → entraclaw blob; written by the MCP
+    cursor, outstanding promises) → entrabot blob; written by the MCP
     server, not by you.
   The local auto-memory directory is ephemeral and off by default;
   treat it as read-only unless the user explicitly enables it.
@@ -60,9 +60,9 @@
 - External dependencies: Microsoft Entra ID (identity), Microsoft Teams + Outlook mailbox (Graph API or Bot Framework), Azure Blob Storage (optional, opt-in via `setup.sh --use-cloud-memory`)
 - **No default group chat.** Every Teams tool requires an explicit `chat_id`. Chats come from `create_chat`, the persisted `watched_chats` file, or the auto-discovery sweep over `/me/chats`.
 - **Body-first prompt.** `prompts/agent_system.md` loads at boot with `@include` expansion of `prompts/anatomy/*.md`. Persona-sati output (if configured) is appended AFTER the body and cannot override body rules. See the "Body prompt is non-overridable" rule above.
-- Three auth modes via `ENTRACLAW_MODE` config switch:
+- Three auth modes via `ENTRABOT_MODE` config switch:
   - `agent_user` — three-hop Agent User flow (Blueprint cert → Agent Identity FIC → Agent User `user_fic`)
-  - `delegated` — MSAL interactive auth with human's token, messages prefixed `[EntraClaw]`
+  - `delegated` — MSAL interactive auth with human's token, messages prefixed `[EntraBot]`
   - `bot` — M365 Agents SDK bot server with JSONL IPC, bot has its own Teams identity
 - Certificate auth: private key in OS keystore (Keychain/TPM/Keyring), JWT assertion for Hop 1 (ADR-003)
 - Background tasks (all started eagerly at MCP server boot in `agent_user` mode):
@@ -79,7 +79,7 @@ This repo is the **body** (Teams interface). The **mind** (personality, memory,
 behavioral rules) is served by a separate MCP server: **persona-sati**.
 
 - Both MCPs are listed in `.mcp.json` (see `.mcp.json.example` for the dual-server config)
-- If persona-sati is not configured, entraclaw works standalone as a generic Teams tool
+- If persona-sati is not configured, entrabot works standalone as a generic Teams tool
 - Memory operations go through persona-sati's tools, not through local blob sync hooks
 - The system prompt comes from persona-sati, not from this repo
 
@@ -90,14 +90,14 @@ behavioral rules) is served by a separate MCP server: **persona-sati**.
 
 ## Efferent-Copy Dispatch
 
-When explicitly enabled, every `@mcp.tool()` on entraclaw fires a
+When explicitly enabled, every `@mcp.tool()` on entrabot fires a
 side-channel `observe(tool_name, args[, result])` MCP call before and
 after execution, to any peer in `.mcp.json` that advertises a
 compatibly shaped `observe` tool. Fire-and-forget, 250ms per-sink
 timeout, failures logged and swallowed. Tool return values are
 byte-for-byte unchanged regardless of how many sinks are attached.
 
-- **Mechanism.** See `src/entraclaw/efferent_copy.py`. At boot,
+- **Mechanism.** See `src/entrabot/efferent_copy.py`. At boot,
   `_run_stdio_with_write_stream` calls `discover_sinks()`. Unless
   `EFFERENT_COPY_ENABLE=1` is set, discovery returns zero sinks and no
   tool functions are wrapped. When enabled, discovery enumerates peers
@@ -120,7 +120,7 @@ byte-for-byte unchanged regardless of how many sinks are attached.
 
 ## Session-Start Protocol (MANDATORY when persona-sati is listed in `.mcp.json`)
 
-> **Why this exists.** Entraclaw's `_load_agent_instructions` fetches
+> **Why this exists.** Entrabot's `_load_agent_instructions` fetches
 > persona-sati's full voice contract at boot and hands it to FastMCP
 > as `instructions`. Claude Code does **not** automatically inject
 > those FastMCP instructions into the LLM system prompt — it only surfaces
@@ -189,10 +189,10 @@ cognition rules, and degraded-mode flags in a single packet.
 - **v1 released (2026-04-18, PR #15).** Body-first prompts, cloud-opt-in, no default chat. See `docs/engineering-status.md` for the summary and `docs/architecture/DESIGN-persona-sati-integration.md` for the mind-body split design.
 - **Mind-body split shipped.** Body-first prompt architecture (PR #14, `prompts/agent_system.md` + `prompts/anatomy/*.md`) is live. `mcp_server.py:_load_agent_instructions` composes `body + persona`, fetching the persona from a remote MCP when `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` env vars are set, with clean fallback to the body when persona-sati is unreachable. `docs/TODO-persona-sati-integration.md` is now historical.
 - **ADR-005: cloud-hosted memory via Azure Blob Storage** — `docs/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phases 1, 2, 5, 6a shipped.** Memory sync hooks removed (persona-sati owns memory now). `scripts/claude_memory_sync.py` retained as manual migration tool.
-  - Phase 1 (commit `f900ba1`): `BlobStore` async client in `src/entraclaw/storage/blob.py` (put/get/list/delete/exists + ETag concurrency + 401→`TokenExpiredError`). 22 tests.
-  - Phase 2: `MemoryBackend` protocol in `src/entraclaw/storage/backend.py` with `LocalBackend` + `BlobBackend` + `get_backend()` factory. `interaction_log.py` and `daily_summary.py` route through it. 22 tests.
-  - Phase 5: `acquire_agent_user_storage_token` (parallel third hop for `https://storage.azure.com/.default`), `scripts/provision_blob_storage.py` (idempotent resource group + storage account + container + RBAC scoped to Agent User), `grant_agent_user_storage_consent` added to `create_entra_agent_ids.py`, `setup.sh --keep-memory-local` flag + Step 7b provisioning + migration prompt (idempotent, source-preserving), `src/entraclaw/storage/migration.py`. 23 tests. Setup now exits red + non-zero on migration failure.
-  - Phase 6a: `PersonaBackend` in `src/entraclaw/storage/persona.py`. `scripts/claude_memory_sync.py` CLI. Memory sync hooks deprecated — persona-sati owns sync.
+  - Phase 1 (commit `f900ba1`): `BlobStore` async client in `src/entrabot/storage/blob.py` (put/get/list/delete/exists + ETag concurrency + 401→`TokenExpiredError`). 22 tests.
+  - Phase 2: `MemoryBackend` protocol in `src/entrabot/storage/backend.py` with `LocalBackend` + `BlobBackend` + `get_backend()` factory. `interaction_log.py` and `daily_summary.py` route through it. 22 tests.
+  - Phase 5: `acquire_agent_user_storage_token` (parallel third hop for `https://storage.azure.com/.default`), `scripts/provision_blob_storage.py` (idempotent resource group + storage account + container + RBAC scoped to Agent User), `grant_agent_user_storage_consent` added to `create_entra_agent_ids.py`, `setup.sh --keep-memory-local` flag + Step 7b provisioning + migration prompt (idempotent, source-preserving), `src/entrabot/storage/migration.py`. 23 tests. Setup now exits red + non-zero on migration failure.
+  - Phase 6a: `PersonaBackend` in `src/entrabot/storage/persona.py`. `scripts/claude_memory_sync.py` CLI. Memory sync hooks deprecated — persona-sati owns sync.
 - **Multi-tenant lightweight chat** — landed to `main` (commit `c8ec521`). Spec: `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md`.
 - **Up next** (see `docs/engineering-status.md` "In Progress"): script-toolkit docs closeout, blob-env test isolation, MCP server orphan cleanup, daily-summary scheduler fixes, and email cursor precision.
 
@@ -200,7 +200,7 @@ cognition rules, and degraded-mode flags in a single packet.
 
 Two memory systems coexist in this project:
 
-1. **Agent operational memory** (blob prefix ``) — interaction log, daily summaries, watched-chats list, email cursor. Written by the EntraClaw MCP server (`src/entraclaw/tools/interaction_log.py` et al.). Read on demand.
+1. **Agent operational memory** (blob prefix ``) — interaction log, daily summaries, watched-chats list, email cursor. Written by the EntraBot MCP server (`src/entrabot/tools/interaction_log.py` et al.). Read on demand.
 2. **Claude Code persona memory** (blob prefix `claude_memory/`) — **now owned by persona-sati**. The per-project auto-memory directory at `~/.claude/projects/<slug>/memory/` is synced by persona-sati's MCP tools (`write_memory_file`, `read_memory_file`, `refresh_persona`), not by local hooks.
 
 **Legacy sync:** `scripts/claude_memory_sync.py` is retained as a manual migration/one-off tool but is no longer called automatically. The SessionStart and PostToolUse hooks have been removed from `.claude/settings.json`.
@@ -225,11 +225,11 @@ Two memory systems coexist in this project:
 - `docs/architecture/DESIGN-teams-bot-gateway.md` — Bot Gateway design
 - `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` — delegated mode spec (landed)
 - `docs/index.md` — doc site entry point
-- `docs/runbooks/mcp-disconnect-investigation.md` — **OPEN issue.** Entraclaw MCP dies after 2–10 min of sustained activity. Two amplifiers fixed (PR #40, PR #41), root cause still unknown. Read this before debugging any MCP-drop symptom — do NOT restart the investigation from scratch.
+- `docs/runbooks/mcp-disconnect-investigation.md` — **OPEN issue.** Entrabot MCP dies after 2–10 min of sustained activity. Two amplifiers fixed (PR #40, PR #41), root cause still unknown. Read this before debugging any MCP-drop symptom — do NOT restart the investigation from scratch.
 - `docs/runbooks/hard-won-learnings.md` — 66 learnings, read before making changes
 - `docs/decisions/001-obo-flows-for-device-agents.md`
 - `docs/decisions/003-certificate-auth-over-client-secrets.md`
-- `docs/platform-learnings/microsoft-agent-365.md` — A365 GA'd 2026-05-01. Identity model, Work IQ MCP catalog, four capability tiers, auth flows, gap analysis vs entraclaw. Read this before considering any A365 / Work IQ integration work.
+- `docs/platform-learnings/microsoft-agent-365.md` — A365 GA'd 2026-05-01. Identity model, Work IQ MCP catalog, four capability tiers, auth flows, gap analysis vs entrabot. Read this before considering any A365 / Work IQ integration work.
 - `docs/platform-learnings/mcp-close-the-loop.md`
 
 ## Commands
@@ -243,7 +243,7 @@ pip install -e ".[dev]"
 pytest -v --tb=short && ruff check .
 
 # Test with coverage
-pytest -v --cov=entraclaw --cov-report=term-missing --cov-fail-under=80
+pytest -v --cov=entrabot --cov-report=term-missing --cov-fail-under=80
 
 # Single test
 pytest tests/tools/test_teams.py::TestAcquireAgentUserToken::test_success -v
@@ -257,14 +257,14 @@ pip install mkdocs-material && mkdocs serve
 
 ## High-Value Repo Areas
 
-- `src/entraclaw/platform/`: OS-specific credential storage — `CredentialStore` protocol with Mac/Linux/Windows implementations
-- `src/entraclaw/auth/`: Certificate-based JWT assertion builder + MSAL delegated auth (localhost redirect + device code fallback)
-- `src/entraclaw/a365/`: Microsoft Agent 365 Work IQ provider boundary and Word adapter
-- `src/entraclaw/bot/`: Bot Gateway — M365 Agents SDK server, JSONL IPC handler, Dev Tunnel manager, conversation reference persistence
-- `src/entraclaw/identity/`: Progressive identity state machine (UNAUTHENTICATED → DELEGATED → PROVISIONING → AGENT_USER)
-- `src/entraclaw/tools/teams.py`: Three-hop token flow + Teams Graph API (send, read, filter, chat creation, add members cross-tenant)
-- `src/entraclaw/mcp_server.py`: FastMCP server — Teams tools + 3 auth modes + background poll + channel push + token refresh (generic instructions — personality in persona-sati)
-- `src/entraclaw/config.py`: `ENTRACLAW_MODE` switch (auto/bot/delegated/agent_user) + all env config
+- `src/entrabot/platform/`: OS-specific credential storage — `CredentialStore` protocol with Mac/Linux/Windows implementations
+- `src/entrabot/auth/`: Certificate-based JWT assertion builder + MSAL delegated auth (localhost redirect + device code fallback)
+- `src/entrabot/a365/`: Microsoft Agent 365 Work IQ provider boundary and Word adapter
+- `src/entrabot/bot/`: Bot Gateway — M365 Agents SDK server, JSONL IPC handler, Dev Tunnel manager, conversation reference persistence
+- `src/entrabot/identity/`: Progressive identity state machine (UNAUTHENTICATED → DELEGATED → PROVISIONING → AGENT_USER)
+- `src/entrabot/tools/teams.py`: Three-hop token flow + Teams Graph API (send, read, filter, chat creation, add members cross-tenant)
+- `src/entrabot/mcp_server.py`: FastMCP server — Teams tools + 3 auth modes + background poll + channel push + token refresh (generic instructions — personality in persona-sati)
+- `src/entrabot/config.py`: `ENTRABOT_MODE` switch (auto/bot/delegated/agent_user) + all env config
 - `docs/decisions/`: ADRs — every significant architectural choice is recorded here
 - `docs/runbooks/hard-won-learnings.md`: 66 hard-won learnings — READ THIS before making changes
 - `docs/runbooks/mcp-disconnect-investigation.md`: OPEN MCP-disconnect dossier — READ before touching MCP transport, logging, or efferent-copy code

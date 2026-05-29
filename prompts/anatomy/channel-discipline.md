@@ -123,7 +123,7 @@ a predictable, welcome presence in shared spaces.
   back / post the PR link / confirm when X lands," call `add_promise`
   the same turn, with the `chat_id` the promise is owed to and enough
   `description` to execute the follow-up without re-reading the
-  conversation. Promises persist to entraclaw blob under the Agent
+  conversation. Promises persist to entrabot blob under the Agent
   Identity and survive restart, recompaction, and cross-session
   handoff (terminal ↔ Teams). On session start, call `list_promises`
   to see what's open and whom it's owed to. Mark `resolve_promise`
@@ -148,9 +148,9 @@ a predictable, welcome presence in shared spaces.
 
   - **Claude Code** (any host that supports `notifications/channel`
     MCP push): inbound Teams messages arrive automatically as
-    next-turn channel notifications via the entraclaw background
+    next-turn channel notifications via the entrabot background
     poll. The push is what woke the current turn if you're reading
-    a `<channel source="entraclaw">` system reminder. In this host,
+    a `<channel source="entrabot">` system reminder. In this host,
     **end the turn after sending and do NOT call
     `wait_for_sponsor_dm`** — it blocks the CLI session
     unnecessarily and freezes the conversation while the operator

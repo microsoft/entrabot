@@ -4,7 +4,7 @@ create_entra_agent_ids.py
 =========================
 Creates an Agent Identity Blueprint and a per-device Agent Identity in
 Microsoft Entra ID via the Graph beta API.  Stores the resulting IDs in
-the local provision state file (.entraclaw-state.json).
+the local provision state file (.entrabot-state.json).
 
 Uses the dedicated provisioner app from entra_provisioning.py — never
 Azure CLI tokens (which include Directory.AccessAsUser.All and get
@@ -26,11 +26,11 @@ import time
 
 import requests
 
-# When ENTRACLAW_NEW_CHAIN=1, skip all find_existing_* lookups and create fresh.
+# When ENTRABOT_NEW_CHAIN=1, skip all find_existing_* lookups and create fresh.
 # Set by setup.sh --new to force a new identity chain.
-_FORCE_NEW = os.environ.get("ENTRACLAW_NEW_CHAIN") == "1"
-_ASSIGN_TEAMS_LICENSE = os.environ.get("ENTRACLAW_ASSIGN_TEAMS_LICENSE", "1") == "1"
-_ASSIGN_WORK_IQ_LICENSE = os.environ.get("ENTRACLAW_ASSIGN_WORK_IQ_LICENSE") == "1"
+_FORCE_NEW = os.environ.get("ENTRABOT_NEW_CHAIN") == "1"
+_ASSIGN_TEAMS_LICENSE = os.environ.get("ENTRABOT_ASSIGN_TEAMS_LICENSE", "1") == "1"
+_ASSIGN_WORK_IQ_LICENSE = os.environ.get("ENTRABOT_ASSIGN_WORK_IQ_LICENSE") == "1"
 
 # entra_provisioning.py lives in the same directory
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
@@ -43,12 +43,12 @@ from entra_provisioning import (  # noqa: E402 — sys.path insert precedes this
     set_state,
 )
 
-# The repo root is one directory up; src/ contains the entraclaw package.
+# The repo root is one directory up; src/ contains the entrabot package.
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent / "src"))
-from entraclaw.graph_helpers import graph_request, odata_escape  # noqa: E402
-from entraclaw.preflight import COPILOT_CAPABLE_SKUS, TEAMS_CAPABLE_SKUS  # noqa: E402
+from entrabot.graph_helpers import graph_request, odata_escape  # noqa: E402
+from entrabot.preflight import COPILOT_CAPABLE_SKUS, TEAMS_CAPABLE_SKUS  # noqa: E402
 
-BLUEPRINT_DISPLAY_NAME = "EntraClaw Code Agent"
+BLUEPRINT_DISPLAY_NAME = "EntraBot Code Agent"
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +155,7 @@ def create_blueprint(token: str) -> tuple[str, str]:
     body: dict = {
         "@odata.type": "Microsoft.Graph.AgentIdentityBlueprint",
         "displayName": BLUEPRINT_DISPLAY_NAME,
-        "description": "Agent Identity Blueprint for EntraClaw device agents",
+        "description": "Agent Identity Blueprint for EntraBot device agents",
     }
     sponsors_bind = build_sponsors_bind()
     if sponsors_bind:
@@ -199,7 +199,7 @@ def _agent_display_name() -> str:
         hostname = socket.gethostname().split(".")[0]
     except Exception:
         hostname = platform.node() or "unknown"
-    return f"EntraClaw Agent - {hostname}"
+    return f"EntraBot Agent - {hostname}"
 
 
 def find_existing_agent_identity(
@@ -211,8 +211,8 @@ def find_existing_agent_identity(
     """Find an existing Agent Identity under ``blueprint_app_id``.
 
     Agent Identity display names include the machine hostname
-    (``EntraClaw Agent - <host>``) — in a tenant that has multiple
-    EntraClaw Blueprints, multiple Agent Identity SPs will share the
+    (``EntraBot Agent - <host>``) — in a tenant that has multiple
+    EntraBot Blueprints, multiple Agent Identity SPs will share the
     same display name, each parented by a different Blueprint.
 
     Graph does not support ``$filter=agentIdentityBlueprintId eq ...``
@@ -352,7 +352,7 @@ def _agent_user_upn(token: str) -> str:
     accounts like user@example.com — the domain is outlook.com, not the
     tenant's verified domain.
     """
-    explicit_upn = os.environ.get("ENTRACLAW_AGENT_USER_UPN", "").strip()
+    explicit_upn = os.environ.get("ENTRABOT_AGENT_USER_UPN", "").strip()
     if explicit_upn:
         print(f"  Using explicit Agent User UPN: {explicit_upn}")
         return explicit_upn
@@ -369,8 +369,8 @@ def _agent_user_upn(token: str) -> str:
             d["id"] for d in domains if d.get("isVerified") and ".onmicrosoft.com" not in d["id"]
         ]
         # When --new, add a unique suffix to avoid UPN collision
-        upn_suffix = os.environ.get("_ENTRACLAW_UPN_SUFFIX", "")
-        agent_name = f"entraclaw-agent-{upn_suffix}" if upn_suffix else "entraclaw-agent"
+        upn_suffix = os.environ.get("_ENTRABOT_UPN_SUFFIX", "")
+        agent_name = f"entrabot-agent-{upn_suffix}" if upn_suffix else "entrabot-agent"
         if custom:
             print(f"  Using custom verified domain: {custom[0]}")
             return f"{agent_name}@{custom[0]}"
@@ -383,7 +383,7 @@ def _agent_user_upn(token: str) -> str:
     # Last resort
     print("  WARNING: Could not determine verified domain for Agent User UPN")
     print(f"  Graph API returned: {resp.status_code} {resp.text[:200]}")
-    return "entraclaw-agent@unknown.onmicrosoft.com"
+    return "entrabot-agent@unknown.onmicrosoft.com"
 
 
 def _resolve_graph_sp_object_id(token: str) -> str | None:
@@ -502,9 +502,9 @@ def create_agent_user(
         return user_id, upn
 
     upn = _agent_user_upn(token)
-    upn_suffix = os.environ.get("_ENTRACLAW_UPN_SUFFIX", "")
-    mail_nick = f"entraclaw-agent-{upn_suffix}" if upn_suffix else "entraclaw-agent"
-    display = f"EntraClaw Agent ({upn_suffix})" if upn_suffix else "EntraClaw Agent"
+    upn_suffix = os.environ.get("_ENTRABOT_UPN_SUFFIX", "")
+    mail_nick = f"entrabot-agent-{upn_suffix}" if upn_suffix else "entrabot-agent"
+    display = f"EntraBot Agent ({upn_suffix})" if upn_suffix else "EntraBot Agent"
     body = {
         "@odata.type": "microsoft.graph.agentUser",
         "displayName": display,
@@ -831,14 +831,14 @@ def grant_agent_user_storage_consent(
         print(f"  WARN: Storage consent grant failed ({resp.status_code})")
         print(f"  Response: {resp_text[:400]}")
         print("  Cloud-hosted memory (ADR-005) will not work until this is resolved.")
-        print("  Re-run this script or set ENTRACLAW_KEEP_MEMORY_LOCAL=true to bypass.")
+        print("  Re-run this script or set ENTRABOT_KEEP_MEMORY_LOCAL=true to bypass.")
         return
 
 
 # ---------------------------------------------------------------------------
 # License assignment
 # ---------------------------------------------------------------------------
-# License SKU constants are imported from entraclaw.preflight — single source of
+# License SKU constants are imported from entrabot.preflight — single source of
 # truth so setup.sh's preflight checks and actual assignment use the same lists.
 
 
@@ -1065,7 +1065,7 @@ def assign_license_to_agent_user(
 
 def main() -> int:
     print("=" * 60)
-    print("EntraClaw — Entra Agent Identity Provisioning")
+    print("EntraBot — Entra Agent Identity Provisioning")
     print("=" * 60)
 
     try:
@@ -1086,7 +1086,7 @@ def main() -> int:
     # unique UPN suffix so the new Agent User doesn't collide.
     if _FORCE_NEW:
         existing_user = None
-        _suffix = os.environ.get("_ENTRACLAW_UPN_SUFFIX", "")
+        _suffix = os.environ.get("_ENTRABOT_UPN_SUFFIX", "")
         if _suffix:
             print(f"  [--new] Will use UPN suffix: {_suffix}")
         else:

@@ -52,10 +52,10 @@ def _patch_env(env_path: Path, *, x5t: str, sha1: str) -> None:
     lines = env_path.read_text().splitlines()
     out = []
     for line in lines:
-        if line.startswith("ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT="):
-            out.append(f"ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT={x5t}")
-        elif line.startswith("ENTRACLAW_BLUEPRINT_CERT_SHA1="):
-            out.append(f"ENTRACLAW_BLUEPRINT_CERT_SHA1={sha1}")
+        if line.startswith("ENTRABOT_BLUEPRINT_CERT_THUMBPRINT="):
+            out.append(f"ENTRABOT_BLUEPRINT_CERT_THUMBPRINT={x5t}")
+        elif line.startswith("ENTRABOT_BLUEPRINT_CERT_SHA1="):
+            out.append(f"ENTRABOT_BLUEPRINT_CERT_SHA1={sha1}")
         else:
             out.append(line)
     env_path.write_text("\n".join(out) + "\n")
@@ -64,9 +64,9 @@ def _patch_env(env_path: Path, *, x5t: str, sha1: str) -> None:
 def _read_orig_thumbprints(env_path: Path) -> tuple[str, str]:
     x5t = sha1 = ""
     for line in env_path.read_text().splitlines():
-        if line.startswith("ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT="):
+        if line.startswith("ENTRABOT_BLUEPRINT_CERT_THUMBPRINT="):
             x5t = line.split("=", 1)[1]
-        elif line.startswith("ENTRACLAW_BLUEPRINT_CERT_SHA1="):
+        elif line.startswith("ENTRABOT_BLUEPRINT_CERT_SHA1="):
             sha1 = line.split("=", 1)[1]
     return x5t, sha1
 

@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from entraclaw.platform import windows
+from entrabot.platform import windows
 
 
 class TestKeyringPassthrough:

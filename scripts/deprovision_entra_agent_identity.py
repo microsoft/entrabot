@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Targeted Agent User teardown for EntraClaw identity chains.
+"""Targeted Agent User teardown for EntraBot identity chains.
 
 Deletes a single Agent User chain in the safe order:
 
@@ -22,9 +22,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from entra_provisioning import ProvisionerBootstrapError, get_existing_graph_token  # noqa: E402
 
-# The repo root is one directory up; src/ contains the entraclaw package.
+# The repo root is one directory up; src/ contains the entrabot package.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from entraclaw.graph_helpers import (  # noqa: E402
+from entrabot.graph_helpers import (  # noqa: E402
     graph_collection_values,
     graph_request,
     odata_escape,
@@ -220,7 +220,7 @@ def deprovision_agent_user(token: str, upn: str, *, dry_run: bool = False) -> st
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Deprovision targeted EntraClaw Agent User identity chains."
+        description="Deprovision targeted EntraBot Agent User identity chains."
     )
     parser.add_argument(
         "--agent-user-upn",

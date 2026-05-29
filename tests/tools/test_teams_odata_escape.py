@@ -16,8 +16,8 @@ import httpx
 import pytest
 import respx
 
-from entraclaw.identity.sponsors import AgentIdentitySponsor
-from entraclaw.tools.teams import GRAPH_BASE
+from entrabot.identity.sponsors import AgentIdentitySponsor
+from entrabot.tools.teams import GRAPH_BASE
 
 
 def _sponsor() -> AgentIdentitySponsor:
@@ -33,7 +33,7 @@ def _sponsor() -> AgentIdentitySponsor:
 async def test_add_member_escapes_single_quote_in_email() -> None:
     """``add_member`` must double single quotes in ``email`` to keep
     the ``user@odata.bind`` OData path well-formed."""
-    from entraclaw.tools.teams import add_member
+    from entrabot.tools.teams import add_member
 
     route = respx.post(
         f"{GRAPH_BASE}/chats/19:chat-id@thread.v2/members"
@@ -50,11 +50,11 @@ async def test_add_member_escapes_single_quote_in_email() -> None:
 
     with (
         patch(
-            "entraclaw.tools.teams._get_sponsor_records",
+            "entrabot.tools.teams._get_sponsor_records",
             new=AsyncMock(return_value=[_sponsor()]),
         ),
         patch(
-            "entraclaw.tools.teams._fetch_chat_members_for_gate",
+            "entrabot.tools.teams._fetch_chat_members_for_gate",
             new=AsyncMock(
                 return_value=[
                     {"user_id": "sponsor-uid", "email": "sponsor@contoso.com"}
@@ -83,7 +83,7 @@ async def test_add_member_escapes_single_quote_in_email() -> None:
 async def test_create_one_on_one_chat_escapes_single_quote_in_target_email() -> None:
     """``create_one_on_one_chat`` must escape single quotes in
     ``target_email`` and in the resolved agent user id."""
-    from entraclaw.tools.teams import create_one_on_one_chat
+    from entrabot.tools.teams import create_one_on_one_chat
 
     route = respx.post(f"{GRAPH_BASE}/chats").mock(
         return_value=httpx.Response(

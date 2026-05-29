@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "entraclaw-identity-research"
+name = "entrabot-identity-research"
 version = "0.1"
 description = "Research: securing agentic workflows on devices with Agent IDs and OBO flows"
 requires-python = ">=3.12"
@@ -58,13 +58,13 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["entraclaw"]
+source = ["entrabot"]
 omit = [
-    "src/entraclaw/mcp_server.py",
-    "src/entraclaw/logging_config.py",
-    "src/entraclaw/platform/mac.py",
-    "src/entraclaw/platform/linux.py",
-    "src/entraclaw/platform/windows.py",
+    "src/entrabot/mcp_server.py",
+    "src/entrabot/logging_config.py",
+    "src/entrabot/platform/mac.py",
+    "src/entrabot/platform/linux.py",
+    "src/entrabot/platform/windows.py",
 ]
 
 [tool.coverage.report]
@@ -80,4 +80,4 @@ exclude_lines = [
 where = ["src"]
 
 [project.scripts]
-entraclaw-mcp = "entraclaw.mcp_server:main"
+entrabot-mcp = "entrabot.mcp_server:main"

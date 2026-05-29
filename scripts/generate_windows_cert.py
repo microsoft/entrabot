@@ -111,7 +111,7 @@ def generate(*, subject: str, days_valid: int, ksp: str) -> GenerateResult:
 
     Args:
         subject: ``Subject`` for ``New-SelfSignedCertificate`` (e.g.,
-            ``"CN=entraclaw-blueprint"``).
+            ``"CN=entrabot-blueprint"``).
         days_valid: lifetime in days.
         ksp: ``"tpm"`` or ``"software"``. The caller decides; this
             function does not auto-fallback (use ``probe_tpm_ready``
@@ -165,7 +165,7 @@ def compute_x5t_s256(der_bytes: bytes) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--subject", default="CN=entraclaw-blueprint")
+    parser.add_argument("--subject", default="CN=entrabot-blueprint")
     parser.add_argument("--days", type=int, default=365)
     parser.add_argument(
         "--ksp",

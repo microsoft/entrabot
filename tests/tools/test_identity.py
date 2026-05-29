@@ -11,21 +11,21 @@ from unittest.mock import patch
 
 import pytest
 
-from entraclaw.errors import GraphApiError
-from entraclaw.identity.sponsors import AgentIdentitySponsor
-from entraclaw.tools.identity import whoami
-from entraclaw.tools.teams import acquire_agent_user_token
+from entrabot.errors import GraphApiError
+from entrabot.identity.sponsors import AgentIdentitySponsor
+from entrabot.tools.identity import whoami
+from entrabot.tools.teams import acquire_agent_user_token
 
 
 class TestWhoami:
     @pytest.mark.asyncio
     async def test_returns_config_when_set(self) -> None:
         env = {
-            "ENTRACLAW_BLUEPRINT_APP_ID": "test-blueprint-id",
-            "ENTRACLAW_TENANT_ID": "test-tenant-id",
-            "ENTRACLAW_AGENT_ID": "test-agent-id",
-            "ENTRACLAW_AGENT_OBJECT_ID": "agent-object-id",
-            "ENTRACLAW_HUMAN_UPN": "forged@example.com",
+            "ENTRABOT_BLUEPRINT_APP_ID": "test-blueprint-id",
+            "ENTRABOT_TENANT_ID": "test-tenant-id",
+            "ENTRABOT_AGENT_ID": "test-agent-id",
+            "ENTRABOT_AGENT_OBJECT_ID": "agent-object-id",
+            "ENTRABOT_HUMAN_UPN": "forged@example.com",
         }
         sponsor = AgentIdentitySponsor(
             user_id="sponsor-id",
@@ -34,7 +34,7 @@ class TestWhoami:
         )
         with (
             patch.dict(os.environ, env, clear=False),
-            patch("entraclaw.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
+            patch("entrabot.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
         ):
             mock_fetch.return_value = [sponsor]
             result = await whoami(token="fake-token")
@@ -55,12 +55,12 @@ class TestWhoami:
     @pytest.mark.asyncio
     async def test_returns_plural_human_sponsors_from_entra_not_env(self) -> None:
         env = {
-            "ENTRACLAW_AGENT_OBJECT_ID": "agent-object-id",
-            "ENTRACLAW_HUMAN_UPN": "forged@example.com",
-            "ENTRACLAW_HUMAN_UPNS": "forged@example.com,also-forged@example.com",
-            "ENTRACLAW_HUMAN_USER_MAILS": "forged@example.com",
-            "ENTRACLAW_HUMAN_USER_ID": "forged-id",
-            "ENTRACLAW_HUMAN_USER_IDS": "forged-id,also-forged-id",
+            "ENTRABOT_AGENT_OBJECT_ID": "agent-object-id",
+            "ENTRABOT_HUMAN_UPN": "forged@example.com",
+            "ENTRABOT_HUMAN_UPNS": "forged@example.com,also-forged@example.com",
+            "ENTRABOT_HUMAN_USER_MAILS": "forged@example.com",
+            "ENTRABOT_HUMAN_USER_ID": "forged-id",
+            "ENTRABOT_HUMAN_USER_IDS": "forged-id,also-forged-id",
         }
         sponsors = [
             AgentIdentitySponsor(
@@ -76,7 +76,7 @@ class TestWhoami:
         ]
         with (
             patch.dict(os.environ, env, clear=False),
-            patch("entraclaw.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
+            patch("entrabot.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
         ):
             mock_fetch.return_value = sponsors
             result = await whoami(token="fake-token")
@@ -102,12 +102,12 @@ class TestWhoami:
     @pytest.mark.asyncio
     async def test_sponsor_fetch_error_does_not_fall_back_to_env(self) -> None:
         env = {
-            "ENTRACLAW_AGENT_OBJECT_ID": "agent-object-id",
-            "ENTRACLAW_HUMAN_UPN": "forged@example.com",
+            "ENTRABOT_AGENT_OBJECT_ID": "agent-object-id",
+            "ENTRABOT_HUMAN_UPN": "forged@example.com",
         }
         with (
             patch.dict(os.environ, env, clear=False),
-            patch("entraclaw.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
+            patch("entrabot.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
         ):
             mock_fetch.side_effect = GraphApiError(403, "forbidden")
             result = await whoami(token="fake-token")
@@ -122,11 +122,11 @@ class TestWhoami:
     @pytest.mark.asyncio
     async def test_not_authenticated_without_token(self, tmp_path: Path) -> None:
         env = {
-            "ENTRACLAW_BLUEPRINT_APP_ID": "bp-id",
-            "ENTRACLAW_TENANT_ID": "tid",
-            "ENTRACLAW_LOG_DIR": str(tmp_path / "logs"),
-            "ENTRACLAW_AUDIT_DIR": str(tmp_path / "audit"),
-            "ENTRACLAW_DATA_DIR": str(tmp_path / "data"),
+            "ENTRABOT_BLUEPRINT_APP_ID": "bp-id",
+            "ENTRABOT_TENANT_ID": "tid",
+            "ENTRABOT_LOG_DIR": str(tmp_path / "logs"),
+            "ENTRABOT_AUDIT_DIR": str(tmp_path / "audit"),
+            "ENTRABOT_DATA_DIR": str(tmp_path / "data"),
         }
         with patch.dict(os.environ, env, clear=True):
             result = await whoami()
@@ -134,8 +134,8 @@ class TestWhoami:
 
     @pytest.mark.asyncio
     async def test_defaults_when_not_configured(self) -> None:
-        # Remove all Entraclaw env vars
-        cleaned = {k: v for k, v in os.environ.items() if not k.startswith("ENTRACLAW_")}
+        # Remove all Entrabot env vars
+        cleaned = {k: v for k, v in os.environ.items() if not k.startswith("ENTRABOT_")}
         with patch.dict(os.environ, cleaned, clear=True):
             result = await whoami()
         assert result["agent_id"] == "not_configured"

@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from entraclaw.a365.errors import A365ConsentMissingError, A365McpCallError
-from entraclaw.a365.mcp_client import WorkIqMcpClient
+from entrabot.a365.errors import A365ConsentMissingError, A365McpCallError
+from entrabot.a365.mcp_client import WorkIqMcpClient
 
 
 @pytest.mark.asyncio

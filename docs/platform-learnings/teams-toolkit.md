@@ -2,21 +2,21 @@
 
 > **Last Updated:** 2025-07  
 > **Status:** Research Reference  
-> **Relevance to Entraclaw:** High — Teams is the primary human-to-agent communication channel
+> **Relevance to Entrabot:** High — Teams is the primary human-to-agent communication channel
 
 ## Overview
 
 **Microsoft Teams Toolkit** (rebranded as **Microsoft 365 Agents Toolkit / ATK** in May 2025) is a VS Code / Visual Studio extension that scaffolds, packages, provisions, and deploys apps and agents for Microsoft Teams, Outlook, and Microsoft 365 Copilot.
 
-### Why This Matters for Entraclaw
+### Why This Matters for Entrabot
 
-Entraclaw autonomous agents on devices need a channel to communicate with humans. Teams is the primary target. The question is whether we should:
+Entrabot autonomous agents on devices need a channel to communicate with humans. Teams is the primary target. The question is whether we should:
 
 1. **Use Teams Toolkit** to scaffold and manage our agent as a Teams app
 2. **Use the SDKs directly** (Teams SDK or M365 Agents SDK) and handle packaging ourselves
 3. **Use Azure Bot Service** as a channel-agnostic transport and register Teams as a channel
 
-**TL;DR Assessment:** Teams Toolkit is useful for rapid prototyping and handles tedious manifest/packaging/auth plumbing. But for Entraclaw's scenario — autonomous agents with their own identity (Agent IDs) communicating proactively — we'll likely use the **Teams SDK (Python)** directly for bot logic and proactive messaging, with the Toolkit mainly for manifest management and sideloading during development.
+**TL;DR Assessment:** Teams Toolkit is useful for rapid prototyping and handles tedious manifest/packaging/auth plumbing. But for Entrabot's scenario — autonomous agents with their own identity (Agent IDs) communicating proactively — we'll likely use the **Teams SDK (Python)** directly for bot logic and proactive messaging, with the Toolkit mainly for manifest management and sideloading during development.
 
 ---
 
@@ -42,9 +42,9 @@ Teams AI Library v2     →  released Sep 2025, renamed "Teams SDK" Nov 2025
 Teams Toolkit           →  rebranded "M365 Agents Toolkit" May 2025
 ```
 
-### Which SDK for Entraclaw?
+### Which SDK for Entrabot?
 
-**Teams SDK (Python)** is the right choice for Entraclaw because:
+**Teams SDK (Python)** is the right choice for Entrabot because:
 - Teams-only for now (no Slack/Twilio needed yet)
 - Python is our primary language
 - Built-in AI/LLM integration patterns
@@ -79,7 +79,7 @@ async def on_message(context, state):
 async def get_device_status(context, state, parameters):
     """LLM can call this function when user asks about device status."""
     device_id = parameters.get("device_id")
-    # ... look up device via Entraclaw backend
+    # ... look up device via Entrabot backend
     return {"status": "online", "last_seen": "2025-07-01T12:00:00Z"}
 ```
 
@@ -103,10 +103,10 @@ app.listen(3000);
 
 ```bash
 # Create a new Python bot project
-npx @microsoft/teams.cli@latest new python entraclaw-agent --template echo
+npx @microsoft/teams.cli@latest new python entrabot-agent --template echo
 
 # Create a TypeScript project
-npx @microsoft/teams.cli@latest new typescript entraclaw-agent --template echo
+npx @microsoft/teams.cli@latest new typescript entrabot-agent --template echo
 ```
 
 ### Key SDK Classes & Concepts
@@ -192,9 +192,9 @@ Teams apps authenticate via **Microsoft Entra ID (Azure AD)** using a registered
 
 ### How This Relates to Agent IDs
 
-**This is a critical design question for Entraclaw:**
+**This is a critical design question for Entrabot:**
 
-| Aspect | Teams App Identity | Entraclaw Agent ID |
+| Aspect | Teams App Identity | Entrabot Agent ID |
 |--------|-------------------|-------------------|
 | Identity Provider | Microsoft Entra ID | Our own (backed by Entra ID?) |
 | Principal Type | App Registration (service principal) | Per-agent identity |
@@ -206,7 +206,7 @@ Teams apps authenticate via **Microsoft Entra ID (Azure AD)** using a registered
 2. **One App Registration, multiple bot instances** — single Teams app, agent ID in metadata
 3. **Managed Identity per agent** — use Azure Managed Identities mapped to agent IDs
 
-The most practical for now: **one Teams app registration for all Entraclaw agents**, with agent identity tracked in our own system. The Teams bot acts as a gateway/router to the appropriate agent.
+The most practical for now: **one Teams app registration for all Entrabot agents**, with agent identity tracked in our own system. The Teams bot acts as a gateway/router to the appropriate agent.
 
 ---
 
@@ -245,12 +245,12 @@ The SDK auto-generates JSON schemas for registered functions:
 ```python
 @app.ai.action("lookup_agent")
 async def lookup_agent(context, state, parameters):
-    """Look up an Entraclaw agent by its Agent ID.
+    """Look up an Entrabot agent by its Agent ID.
     
     Args:
         agent_id: The unique identifier of the agent
     """
-    agent = await entraclaw_service.get_agent(parameters["agent_id"])
+    agent = await entrabot_service.get_agent(parameters["agent_id"])
     return agent.to_dict()
 ```
 
@@ -262,7 +262,7 @@ As of late 2025, the Teams SDK supports MCP natively:
 - **MCP Server plugin**: Your Teams bot can expose its capabilities as an MCP server
 - **Agent-to-Agent (A2A)**: Teams agents can communicate with each other
 
-This is directly relevant to Entraclaw — an Entraclaw agent running on a device could expose an MCP server, and the Teams bot could act as an MCP client to it.
+This is directly relevant to Entrabot — an Entrabot agent running on a device could expose an MCP server, and the Teams bot could act as an MCP client to it.
 
 ### Prompt Files
 
@@ -290,20 +290,20 @@ The Teams app manifest (`manifest.json`) declares what the app can do:
   "manifestVersion": "1.19",
   "version": "1.0.0",
   "id": "YOUR-APP-ID-GUID",
-  "packageName": "com.entraclaw.agent",
+  "packageName": "com.entrabot.agent",
   "developer": {
-    "name": "Entraclaw",
-    "websiteUrl": "https://entraclaw.dev",
-    "privacyUrl": "https://entraclaw.dev/privacy",
-    "termsOfUseUrl": "https://entraclaw.dev/terms"
+    "name": "Entrabot",
+    "websiteUrl": "https://entrabot.dev",
+    "privacyUrl": "https://entrabot.dev/privacy",
+    "termsOfUseUrl": "https://entrabot.dev/terms"
   },
   "name": {
-    "short": "Entraclaw Agent",
-    "full": "Entraclaw Autonomous Agent Interface"
+    "short": "Entrabot Agent",
+    "full": "Entrabot Autonomous Agent Interface"
   },
   "description": {
-    "short": "Communicate with your Entraclaw agents",
-    "full": "Interface for humans to interact with Entraclaw autonomous agents on devices"
+    "short": "Communicate with your Entrabot agents",
+    "full": "Interface for humans to interact with Entrabot autonomous agents on devices"
   },
   "icons": {
     "color": "color.png",
@@ -328,13 +328,13 @@ The Teams app manifest (`manifest.json`) declares what the app can do:
     }
   ],
   "permissions": ["identity", "messageTeamMembers"],
-  "validDomains": ["entraclaw.dev", "*.azurewebsites.net"]
+  "validDomains": ["entrabot.dev", "*.azurewebsites.net"]
 }
 ```
 
-### Key Manifest Fields for Entraclaw
+### Key Manifest Fields for Entrabot
 
-| Field | Purpose | Entraclaw Relevance |
+| Field | Purpose | Entrabot Relevance |
 |-------|---------|-------------------|
 | `bots[].botId` | Entra App Registration ID | Our bot's app registration |
 | `bots[].scopes` | Where bot works (personal/team/groupChat) | Likely `personal` for 1:1 agent chat |
@@ -346,7 +346,7 @@ The Teams app manifest (`manifest.json`) declares what the app can do:
 
 The app package is a ZIP file at the root level:
 ```
-entraclaw-agent.zip
+entrabot-agent.zip
 ├── manifest.json
 ├── color.png        (192×192)
 └── outline.png      (32×32)
@@ -370,16 +370,16 @@ entraclaw-agent.zip
 
 ---
 
-## Integration Patterns for Entraclaw
+## Integration Patterns for Entrabot
 
-### Architecture: Entraclaw Agent as a Teams Bot
+### Architecture: Entrabot Agent as a Teams Bot
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                    Microsoft Teams                            │
 │  ┌──────────┐                                                │
 │  │  User     │  ← chat messages →  ┌──────────────────────┐ │
-│  │  (human)  │                      │ Entraclaw Teams Bot   │ │
+│  │  (human)  │                      │ Entrabot Teams Bot   │ │
 │  └──────────┘                      │ (Teams SDK / Python) │ │
 │                                     └──────────┬───────────┘ │
 └──────────────────────────────────────────────────┼────────────┘
@@ -391,7 +391,7 @@ entraclaw-agent.zip
                     │                              │
                     ▼                              ▼
           ┌─────────────────┐          ┌─────────────────────┐
-          │ Entraclaw Backend│          │ Proactive Messaging  │
+          │ Entrabot Backend│          │ Proactive Messaging  │
           │ (Agent Router)  │          │ Service              │
           │                 │          │ (stores ConvRefs,    │
           │ - Agent Registry│          │  sends notifications)│
@@ -400,7 +400,7 @@ entraclaw-agent.zip
           └────────┬────────┘                    │
                    │                             │
           ┌────────▼────────┐                    │
-          │ Entraclaw Agents  │ ← notifications ──┘
+          │ Entrabot Agents  │ ← notifications ──┘
           │ (on devices)     │
           │ - Agent ID auth  │
           │ - Task execution │
@@ -413,13 +413,13 @@ entraclaw-agent.zip
 1. User sends message in Teams
 2. Teams SDK bot receives the activity
 3. Bot identifies target agent (from conversation context or user selection)
-4. Bot forwards request to Entraclaw backend
+4. Bot forwards request to Entrabot backend
 5. Agent processes and responds
 6. Bot sends response back to Teams
 
 ### Pattern 2: Proactive Messaging (Agent → User)
 
-This is the more important pattern for Entraclaw — agents need to notify humans.
+This is the more important pattern for Entrabot — agents need to notify humans.
 
 ```python
 from botbuilder.core import CloudAdapter, ConversationReference
@@ -457,7 +457,7 @@ async def notify_user(adapter: CloudAdapter, user_aad_id: str, message: str):
 ### Pattern 3: MCP Bridge (Agent ↔ Teams via MCP)
 
 With Teams SDK's MCP support:
-1. Entraclaw agent on device exposes an MCP server
+1. Entrabot agent on device exposes an MCP server
 2. Teams bot connects as an MCP client
 3. User asks a question in Teams
 4. Bot invokes MCP tools on the agent
@@ -474,14 +474,14 @@ Two paradigms exist in the Microsoft 365 ecosystem:
 - Built in **Copilot Studio** or with the Agents Toolkit
 - Leverage Microsoft's orchestrator and LLM
 - Inherit M365 compliance and security automatically
-- **Not suitable for Entraclaw** — we need full control over orchestration, model choice, and external system integration
+- **Not suitable for Entrabot** — we need full control over orchestration, model choice, and external system integration
 
 ### Custom Engine (Coded) Agents
 - **Full code** — you implement orchestration, model integration, and business logic
 - Built with Teams SDK or M365 Agents SDK
 - Choose your own LLM (OpenAI, Azure OpenAI, local models, etc.)
 - Full control over data flow and external integrations
-- **This is Entraclaw's path** — custom engine agent with our own backend
+- **This is Entrabot's path** — custom engine agent with our own backend
 
 ### Decision Matrix
 
@@ -529,9 +529,9 @@ Two paradigms exist in the Microsoft 365 ecosystem:
 
 ---
 
-## Open Questions for Entraclaw
+## Open Questions for Entrabot
 
-1. **Agent Identity Mapping**: How do we map Entraclaw Agent IDs to the Teams bot's single app registration? Options:
+1. **Agent Identity Mapping**: How do we map Entrabot Agent IDs to the Teams bot's single app registration? Options:
    - Agent ID as metadata in the conversation state
    - Multiple bot registrations (one per agent — probably overkill)
    - Agent ID as a "sub-account" within our bot
@@ -540,9 +540,9 @@ Two paradigms exist in the Microsoft 365 ecosystem:
 
 3. **Python SDK Stability**: Is the `teams-ai` Python package stable enough for production? Or should we use TypeScript for the Teams layer and call our Python backend via API?
 
-4. **MCP Integration Path**: Can Entraclaw device agents expose MCP servers that the Teams bot connects to? What about NAT traversal for on-premise devices?
+4. **MCP Integration Path**: Can Entrabot device agents expose MCP servers that the Teams bot connects to? What about NAT traversal for on-premise devices?
 
-5. **Multi-Tenant Deployment**: If Entraclaw serves multiple M365 tenants, do we need separate bot registrations per tenant or can a single multi-tenant app registration work?
+5. **Multi-Tenant Deployment**: If Entrabot serves multiple M365 tenants, do we need separate bot registrations per tenant or can a single multi-tenant app registration work?
 
 6. **Admin Consent**: For enterprise deployment, how do we handle admin consent for our bot app? Can we avoid per-user consent via organization-wide app installation?
 

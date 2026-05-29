@@ -1,7 +1,7 @@
 """Tests for scripts/hooks/require_body_prompt.py.
 
 The hook is a Claude Code PreToolUse hook that blocks high-blast-radius
-entraclaw tools (send_teams_message, send_email, etc.) unless the transcript
+entrabot tools (send_teams_message, send_email, etc.) unless the transcript
 contains evidence that the model loaded the body prompt this session.
 
 Acceptable sentinels:
@@ -75,7 +75,7 @@ class TestAllow:
         ])
         try:
             result = _run_hook(
-                {"tool_name": "mcp__entraclaw__send_teams_message", "transcript_path": transcript}
+                {"tool_name": "mcp__entrabot__send_teams_message", "transcript_path": transcript}
             )
             assert result.returncode == 0, result.stderr
         finally:
@@ -102,7 +102,7 @@ class TestAllow:
         ])
         try:
             result = _run_hook(
-                {"tool_name": "mcp__entraclaw__send_teams_message", "transcript_path": transcript}
+                {"tool_name": "mcp__entrabot__send_teams_message", "transcript_path": transcript}
             )
             assert result.returncode == 0, result.stderr
         finally:
@@ -119,7 +119,7 @@ class TestAllow:
                             "name": "Read",
                             "input": {
                                 "file_path": (
-                                    r"D:\a\entraclaw-identity-research"
+                                    r"D:\a\entrabot-identity-research"
                                     r"\prompts\agent_system.md"
                                 )
                             },
@@ -131,7 +131,7 @@ class TestAllow:
         try:
             result = _run_hook(
                 {
-                    "tool_name": "mcp__entraclaw__send_teams_message",
+                    "tool_name": "mcp__entrabot__send_teams_message",
                     "transcript_path": transcript,
                 }
             )
@@ -156,7 +156,7 @@ class TestAllow:
         ])
         try:
             result = _run_hook(
-                {"tool_name": "mcp__entraclaw__send_teams_message", "transcript_path": transcript}
+                {"tool_name": "mcp__entrabot__send_teams_message", "transcript_path": transcript}
             )
             assert result.returncode == 0, result.stderr
         finally:
@@ -199,7 +199,7 @@ class TestAllow:
         ])
         try:
             result = _run_hook(
-                {"tool_name": "mcp__entraclaw__send_teams_message", "transcript_path": transcript}
+                {"tool_name": "mcp__entrabot__send_teams_message", "transcript_path": transcript}
             )
             assert result.returncode == 0, result.stderr
         finally:
@@ -207,8 +207,8 @@ class TestAllow:
 
     def test_env_override_allows_bypass(self):
         result = _run_hook(
-            {"tool_name": "mcp__entraclaw__send_teams_message", "transcript_path": "/dev/null"},
-            env_overrides={"ENTRACLAW_SKIP_BODY_PROMPT_GATE": "true"},
+            {"tool_name": "mcp__entrabot__send_teams_message", "transcript_path": "/dev/null"},
+            env_overrides={"ENTRABOT_SKIP_BODY_PROMPT_GATE": "true"},
         )
         assert result.returncode == 0, result.stderr
 
@@ -225,7 +225,7 @@ class TestBlock:
         ])
         try:
             result = _run_hook(
-                {"tool_name": "mcp__entraclaw__send_teams_message", "transcript_path": transcript}
+                {"tool_name": "mcp__entrabot__send_teams_message", "transcript_path": transcript}
             )
             assert result.returncode == 2
             assert "blocked:" in result.stderr
@@ -254,7 +254,7 @@ class TestBlock:
         ])
         try:
             result = _run_hook(
-                {"tool_name": "mcp__entraclaw__send_teams_message", "transcript_path": transcript}
+                {"tool_name": "mcp__entrabot__send_teams_message", "transcript_path": transcript}
             )
             assert result.returncode == 2
             assert "blocked:" in result.stderr
@@ -294,7 +294,7 @@ class TestBlock:
         ])
         try:
             result = _run_hook(
-                {"tool_name": "mcp__entraclaw__send_teams_message", "transcript_path": transcript}
+                {"tool_name": "mcp__entrabot__send_teams_message", "transcript_path": transcript}
             )
             assert result.returncode == 2
         finally:
@@ -335,7 +335,7 @@ class TestBlock:
         ])
         try:
             result = _run_hook(
-                {"tool_name": "mcp__entraclaw__send_teams_message", "transcript_path": transcript}
+                {"tool_name": "mcp__entrabot__send_teams_message", "transcript_path": transcript}
             )
             assert result.returncode == 2
         finally:

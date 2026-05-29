@@ -1,4 +1,4 @@
-site_name: "EntraClaw Identity Research"
+site_name: "EntraBot Identity Research"
 site_description: "Securing agentic workflows on devices with Agent IDs and OBO flows"
 docs_dir: docs
 site_dir: site
@@ -91,7 +91,7 @@ nav:
     - Linux Platform: platform-learnings/platform-linux.md
     - Windows Platform: platform-learnings/platform-windows.md
   - Plans & Specs (Historical):
-    - "Four-Pager: Teams Augmented Token": architecture/FOURPAGER-entraclaw-cli-teams-augmented-token.md
+    - "Four-Pager: Teams Augmented Token": architecture/FOURPAGER-entrabot-cli-teams-augmented-token.md
     - Multi-Tenant Lightweight Chat: architecture/PLAN-multi-tenant-lightweight-chat.md
     - Dual-Track Agent Identity: architecture/SPEC-dual-track-agent-identity.md
     - Lightweight Teams Chat: architecture/NEXT-WhatsApp-lightweight-teams-chat.md

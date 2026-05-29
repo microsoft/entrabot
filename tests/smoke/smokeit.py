@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end destructive smoke harness for EntraClaw scripts.
+"""End-to-end destructive smoke harness for EntraBot scripts.
 
 This is intentionally not a pytest test. It provisions real Entra/Azure/M365
 resources, sends a real Teams message, tears the test resources down, and writes
@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_RESOURCE_GROUP = "entraclaw-rg"
+DEFAULT_RESOURCE_GROUP = "entrabot-rg"
 TAIL_LINES = 80
 
 
@@ -162,9 +162,9 @@ def run_command(
 def smoke_env(ctx: SmokeContext) -> dict[str, str]:
     env = os.environ.copy()
     # Avoid setup.sh prompting to migrate unrelated local operational/persona data.
-    env["ENTRACLAW_DATA_DIR"] = str(ctx.log_dir / "isolated-data")
-    env["ENTRACLAW_LOG_DIR"] = str(ctx.log_dir / "entraclaw-logs")
-    env["ENTRACLAW_AUDIT_DIR"] = str(ctx.log_dir / "entraclaw-audit")
+    env["ENTRABOT_DATA_DIR"] = str(ctx.log_dir / "isolated-data")
+    env["ENTRABOT_LOG_DIR"] = str(ctx.log_dir / "entrabot-logs")
+    env["ENTRABOT_AUDIT_DIR"] = str(ctx.log_dir / "entrabot-audit")
     env.setdefault("PYTHONUNBUFFERED", "1")
     return env
 
@@ -246,14 +246,14 @@ def teardown_command(ctx: SmokeContext) -> list[str]:
 def snapshot_local_state(ctx: SmokeContext) -> None:
     backup_dir = ctx.log_dir / "local-state-backup"
     backup_dir.mkdir(parents=True, exist_ok=True)
-    for name in (".env", ".entraclaw-state.json"):
+    for name in (".env", ".entrabot-state.json"):
         source = REPO_ROOT / name
         if source.exists():
             shutil.copy2(source, backup_dir / name)
     try:
         import keyring
 
-        value = keyring.get_password("entraclaw", "blueprint-private-key")
+        value = keyring.get_password("entrabot", "blueprint-private-key")
         ctx.blueprint_key_was_present = value is not None
         ctx.blueprint_key_backup = value
         (backup_dir / "keyring-blueprint-private-key.present").write_text(
@@ -265,7 +265,7 @@ def snapshot_local_state(ctx: SmokeContext) -> None:
 
 def restore_local_state(ctx: SmokeContext) -> None:
     backup_dir = ctx.log_dir / "local-state-backup"
-    for name in (".env", ".entraclaw-state.json"):
+    for name in (".env", ".entrabot-state.json"):
         target = REPO_ROOT / name
         backup = backup_dir / name
         if backup.exists():
@@ -276,10 +276,10 @@ def restore_local_state(ctx: SmokeContext) -> None:
         import keyring
 
         if ctx.blueprint_key_was_present and ctx.blueprint_key_backup is not None:
-            keyring.set_password("entraclaw", "blueprint-private-key", ctx.blueprint_key_backup)
+            keyring.set_password("entrabot", "blueprint-private-key", ctx.blueprint_key_backup)
         else:
             with contextlib_suppress_keyring_delete(keyring):
-                keyring.delete_password("entraclaw", "blueprint-private-key")
+                keyring.delete_password("entrabot", "blueprint-private-key")
     except Exception as exc:  # pragma: no cover - depends on host keyring
         (ctx.log_dir / "restore-keyring-error.txt").write_text(str(exc) + "\n", encoding="utf-8")
     ctx.local_state_restored = True
@@ -299,7 +299,7 @@ class contextlib_suppress_keyring_delete:
 
 
 def load_state() -> dict[str, str]:
-    state_path = REPO_ROOT / ".entraclaw-state.json"
+    state_path = REPO_ROOT / ".entrabot-state.json"
     if not state_path.exists():
         return {}
     return json.loads(state_path.read_text(encoding="utf-8"))
@@ -316,8 +316,8 @@ def write_send_teams_driver(path: Path) -> None:
             import json
             import time
 
-            from entraclaw.config import get_config
-            from entraclaw.tools.teams import (
+            from entrabot.config import get_config
+            from entrabot.tools.teams import (
                 acquire_agent_user_token,
                 create_one_on_one_chat,
                 filter_human_messages,
@@ -348,7 +348,7 @@ def write_send_teams_driver(path: Path) -> None:
                     raw_messages = await read(chat_id=chat_id, token=token, count=20)
                     human_messages = filter_human_messages(
                         raw_messages,
-                        "EntraClaw Agent",
+                        "EntraBot Agent",
                         sent_message_ids={sent_message_id},
                     )
                     replies = [
@@ -539,7 +539,7 @@ def validate_args(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     run_id = utc_run_id()
     parser = argparse.ArgumentParser(
-        description="Provision, exercise, tear down, and verify an isolated EntraClaw smoke chain.",
+        description="Provision, exercise, tear down, and verify an isolated EntraBot smoke chain.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent(
             """
@@ -573,7 +573,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--storage-account", default=default_storage_account(run_id))
     parser.add_argument("--container", default=default_container(run_id))
     parser.add_argument("--resource-group", default=DEFAULT_RESOURCE_GROUP)
-    parser.add_argument("--message", default=f"<b>EntraClaw smoke test</b> {run_id}")
+    parser.add_argument("--message", default=f"<b>EntraBot smoke test</b> {run_id}")
     parser.add_argument(
         "--log-dir",
         type=Path,
@@ -660,8 +660,8 @@ def main() -> int:
         keep_resources_on_failure=args.keep_resources_on_failure,
     )
     env = smoke_env(ctx)
-    env["ENTRACLAW_ASSIGN_TEAMS_LICENSE"] = "1" if args.test_teams else "0"
-    env["ENTRACLAW_ASSIGN_WORK_IQ_LICENSE"] = "1" if args.test_a365 else "0"
+    env["ENTRABOT_ASSIGN_TEAMS_LICENSE"] = "1" if args.test_teams else "0"
+    env["ENTRABOT_ASSIGN_WORK_IQ_LICENSE"] = "1" if args.test_a365 else "0"
     inputs = dict(vars(args))
     inputs["log_dir"] = str(args.log_dir)
     write_json(ctx.log_dir / "smoke-inputs.json", inputs)

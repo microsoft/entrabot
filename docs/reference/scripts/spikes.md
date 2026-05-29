@@ -14,7 +14,7 @@ Inspect local Agent 365 Work IQ setup. Prints the configured Work IQ server meta
 python scripts/spike_a365_work_iq.py
 ```
 
-Set `ENTRACLAW_A365_TOOLING_MANIFEST` to override the manifest path. Defaults: `ToolingManifest.json`, `.a365/ToolingManifest.json`.
+Set `ENTRABOT_A365_TOOLING_MANIFEST` to override the manifest path. Defaults: `ToolingManifest.json`, `.a365/ToolingManifest.json`.
 
 ### What it does
 

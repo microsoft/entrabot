@@ -13,13 +13,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from entraclaw.errors import (
+from entrabot.errors import (
     RequesterNotInChatError,
     RequesterNotSponsorError,
     SiteNotAllowedError,
 )
-from entraclaw.identity.sponsors import AgentIdentitySponsor
-from entraclaw.tools.files import (
+from entrabot.identity.sponsors import AgentIdentitySponsor
+from entrabot.tools.files import (
     FileRef,
     share_file,
 )
@@ -75,7 +75,7 @@ def _patch_graph_invite_ok(
     mock_client = MagicMock()
     mock_client.post = AsyncMock(return_value=mock_response)
 
-    ctx = patch("entraclaw.tools.files._client")
+    ctx = patch("entrabot.tools.files._client")
     ctx_obj = ctx.start()
     ctx_obj.return_value.__aenter__.return_value = mock_client
     ctx_obj.return_value.__aexit__.return_value = None
@@ -89,8 +89,8 @@ class TestRequesterMustBeSponsor:
     async def test_happy_path_sponsor_in_chat_can_share_to_anyone(self):
         sponsor = _sponsor()
         with (
-            patch("entraclaw.tools.files._get_sponsor_records") as mock_records,
-            patch("entraclaw.identity.sponsors.fetch_chat_members") as mock_members,
+            patch("entrabot.tools.files._get_sponsor_records") as mock_records,
+            patch("entrabot.identity.sponsors.fetch_chat_members") as mock_members,
         ):
             mock_records.return_value = [sponsor]
             mock_members.return_value = [
@@ -115,7 +115,7 @@ class TestRequesterMustBeSponsor:
 
     async def test_non_sponsor_requester_rejected(self):
         sponsor = _sponsor()
-        with patch("entraclaw.tools.files._get_sponsor_records") as mock_records:
+        with patch("entrabot.tools.files._get_sponsor_records") as mock_records:
             mock_records.return_value = [sponsor]
             with pytest.raises(RequesterNotSponsorError) as exc_info:
                 await share_file(
@@ -141,8 +141,8 @@ class TestRequesterMustBeSponsor:
             mail=None,
         )
         with (
-            patch("entraclaw.tools.files._get_sponsor_records") as mock_records,
-            patch("entraclaw.identity.sponsors.fetch_chat_members") as mock_members,
+            patch("entrabot.tools.files._get_sponsor_records") as mock_records,
+            patch("entrabot.identity.sponsors.fetch_chat_members") as mock_members,
         ):
             mock_records.return_value = [msa_sponsor]
             mock_members.return_value = [
@@ -173,8 +173,8 @@ class TestRequesterMustBeChatMember:
     async def test_sponsor_not_in_chat_rejected(self):
         sponsor = _sponsor()
         with (
-            patch("entraclaw.tools.files._get_sponsor_records") as mock_records,
-            patch("entraclaw.identity.sponsors.fetch_chat_members") as mock_members,
+            patch("entrabot.tools.files._get_sponsor_records") as mock_records,
+            patch("entrabot.identity.sponsors.fetch_chat_members") as mock_members,
         ):
             mock_records.return_value = [sponsor]
             # Chat exists but the sponsor isn't a member — the LLM may
@@ -201,8 +201,8 @@ class TestRequesterMustBeChatMember:
         """Graph returned 403/404 for the chat — no membership = no auth."""
         sponsor = _sponsor()
         with (
-            patch("entraclaw.tools.files._get_sponsor_records") as mock_records,
-            patch("entraclaw.identity.sponsors.fetch_chat_members") as mock_members,
+            patch("entrabot.tools.files._get_sponsor_records") as mock_records,
+            patch("entrabot.identity.sponsors.fetch_chat_members") as mock_members,
         ):
             mock_records.return_value = [sponsor]
             mock_members.return_value = []
@@ -263,8 +263,8 @@ class TestRecipientUnrestricted:
     async def test_share_with_external_recipient_succeeds(self):
         sponsor = _sponsor()
         with (
-            patch("entraclaw.tools.files._get_sponsor_records") as mock_records,
-            patch("entraclaw.identity.sponsors.fetch_chat_members") as mock_members,
+            patch("entrabot.tools.files._get_sponsor_records") as mock_records,
+            patch("entrabot.identity.sponsors.fetch_chat_members") as mock_members,
         ):
             mock_records.return_value = [sponsor]
             mock_members.return_value = [
@@ -296,8 +296,8 @@ class TestRoleAndDenylist:
     async def test_role_write_passed_through(self):
         sponsor = _sponsor()
         with (
-            patch("entraclaw.tools.files._get_sponsor_records") as mock_records,
-            patch("entraclaw.identity.sponsors.fetch_chat_members") as mock_members,
+            patch("entrabot.tools.files._get_sponsor_records") as mock_records,
+            patch("entrabot.identity.sponsors.fetch_chat_members") as mock_members,
         ):
             mock_records.return_value = [sponsor]
             mock_members.return_value = [
@@ -332,8 +332,8 @@ class TestRoleAndDenylist:
         """
         sponsor = _sponsor()
         with (
-            patch("entraclaw.tools.files._get_sponsor_records") as mock_records,
-            patch("entraclaw.identity.sponsors.fetch_chat_members") as mock_members,
+            patch("entrabot.tools.files._get_sponsor_records") as mock_records,
+            patch("entrabot.identity.sponsors.fetch_chat_members") as mock_members,
         ):
             mock_records.return_value = [sponsor]
             mock_members.return_value = [
@@ -360,8 +360,8 @@ class TestRoleAndDenylist:
         """Site denylist still rejects before any sponsor lookup."""
         denied_site_id = "denied-site-id"
         with (
-            patch("entraclaw.tools.files._check_site_allowed") as mock_deny,
-            patch("entraclaw.tools.files._get_sponsor_records") as mock_records,
+            patch("entrabot.tools.files._check_site_allowed") as mock_deny,
+            patch("entrabot.tools.files._get_sponsor_records") as mock_records,
         ):
             mock_deny.side_effect = SiteNotAllowedError(site_id=denied_site_id)
             mock_records.return_value = []
@@ -382,8 +382,8 @@ class TestRoleAndDenylist:
     async def test_permission_metadata_includes_web_url_and_expiration(self):
         sponsor = _sponsor()
         with (
-            patch("entraclaw.tools.files._get_sponsor_records") as mock_records,
-            patch("entraclaw.identity.sponsors.fetch_chat_members") as mock_members,
+            patch("entrabot.tools.files._get_sponsor_records") as mock_records,
+            patch("entrabot.identity.sponsors.fetch_chat_members") as mock_members,
         ):
             mock_records.return_value = [sponsor]
             mock_members.return_value = [
@@ -415,7 +415,7 @@ class TestGetSponsorAllowlistCompat:
     """``_get_sponsor_allowlist`` is retained as a back-compat shim."""
 
     async def test_aggregates_all_email_identifiers(self):
-        from entraclaw.tools.files import _get_sponsor_allowlist
+        from entrabot.tools.files import _get_sponsor_allowlist
 
         sponsor = AgentIdentitySponsor(
             user_id="u1",
@@ -427,15 +427,15 @@ class TestGetSponsorAllowlistCompat:
         )
 
         with (
-            patch("entraclaw.config.get_config") as mock_get_config,
-            patch("entraclaw.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
+            patch("entrabot.config.get_config") as mock_get_config,
+            patch("entrabot.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
         ):
             mock_get_config.return_value = MagicMock()
             mock_fetch.return_value = [sponsor]
 
             allowlist = await _get_sponsor_allowlist()
 
-            from entraclaw.tools.teams import acquire_agent_user_token
+            from entrabot.tools.teams import acquire_agent_user_token
 
             call_args, call_kwargs = mock_fetch.call_args
             assert call_args == (mock_get_config.return_value,)

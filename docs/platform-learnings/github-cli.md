@@ -1,17 +1,17 @@
 # GitHub CLI (gh)
 
 > **Research date:** July 2025
-> **Relevance:** Entraclaw agent identity, OBO token flows, Teams bidirectional communication
+> **Relevance:** Entrabot agent identity, OBO token flows, Teams bidirectional communication
 
 ## Overview
 
 GitHub CLI (`gh`) is GitHub's official open-source command-line tool (repo: [github/cli](https://github.com/cli/cli)), written in Go. It brings pull requests, issues, Actions, and the full GitHub API to the terminal. It ships on macOS, Linux, and Windows.
 
-**Why it matters to Entraclaw:**
+**Why it matters to Entrabot:**
 
 1. **Auth model precedent** — `gh auth` implements OAuth Device Flow, token storage in OS keychains, multi-account switching, and environment-variable overrides. This is the exact pattern we need for Agent IDs that authenticate on behalf of humans.
 2. **Remote session steering** — Copilot CLI's `--remote` / session persistence / `/delegate` model is the closest existing analogy to our "agent running locally, human steering from Teams" scenario.
-3. **Extension model** — `gh extension` shows how to build composable agent capabilities that inherit the host CLI's auth context. An Entraclaw agent could theoretically be a `gh` extension.
+3. **Extension model** — `gh extension` shows how to build composable agent capabilities that inherit the host CLI's auth context. An Entrabot agent could theoretically be a `gh` extension.
 4. **`go-gh` SDK** — The official Go SDK for extensions auto-inherits `gh`'s stored credentials, demonstrating zero-friction OBO token delegation to child processes.
 
 ---
@@ -77,7 +77,7 @@ gh auth token
 gh auth token --hostname github.mycompany.com
 ```
 
-This is critical for Entraclaw: an agent process can call `gh auth token` to obtain a valid token without managing credentials directly.
+This is critical for Entrabot: an agent process can call `gh auth token` to obtain a valid token without managing credentials directly.
 
 ---
 
@@ -92,7 +92,7 @@ This is critical for Entraclaw: an agent process can call `gh auth token` to obt
 | **Personal Access Token** | `--with-token` flag or pipe | Scripting, one-off automation | Not persisted (stdin) |
 | **Environment Variable** | `GH_TOKEN` / `GITHUB_TOKEN` | CI/CD, containers, agents | Not stored (env only) |
 
-### OAuth Device Flow (Key for Entraclaw)
+### OAuth Device Flow (Key for Entrabot)
 
 The Device Flow is GitHub's recommended pattern for CLI tools and is what `gh auth login` uses in headless environments:
 
@@ -102,7 +102,7 @@ The Device Flow is GitHub's recommended pattern for CLI tools and is what `gh au
 4. CLI polls GitHub until authorization completes
 5. CLI receives OAuth token and stores it
 
-**This is directly analogous to how an Entraclaw agent could authenticate:**
+**This is directly analogous to how an Entrabot agent could authenticate:**
 - Agent starts and requests a device code
 - Human approves in Teams (or browser)
 - Agent receives an OBO token scoped to that human's permissions
@@ -146,7 +146,7 @@ GH_FORCE_TTY                     → force terminal output in pipes
 GH_NO_UPDATE_NOTIFIER            → suppress update checks
 ```
 
-**Critical insight:** `GH_TOKEN` takes **absolute precedence** over stored credentials. This means an Entraclaw agent can inject a scoped OBO token via environment variable, and all `gh` commands (and `go-gh`-based extensions) will automatically use it. No credential store manipulation needed.
+**Critical insight:** `GH_TOKEN` takes **absolute precedence** over stored credentials. This means an Entrabot agent can inject a scoped OBO token via environment variable, and all `gh` commands (and `go-gh`-based extensions) will automatically use it. No credential store manipulation needed.
 
 ### Multi-Account Support
 
@@ -172,7 +172,7 @@ The minimum required scopes for `gh auth login` are: `repo`, `read:org`, and `gi
 
 ### Relevance to Agent IDs and OBO Flows
 
-| gh Pattern | Entraclaw Analogy |
+| gh Pattern | Entrabot Analogy |
 |------------|------------------|
 | Device Flow approval | Agent requests OBO token, human approves in Teams |
 | `GH_TOKEN` env var override | Agent injects OBO token into child processes |
@@ -297,9 +297,9 @@ Environment variables for automation:
 - `COPILOT_ALLOW_ALL=true` — skip permission prompts
 - `--deny-tool` / `--allow-tool` — fine-grained tool control
 
-### Relevance to Entraclaw Teams Integration
+### Relevance to Entrabot Teams Integration
 
-| Copilot CLI Pattern | Entraclaw Analogy |
+| Copilot CLI Pattern | Entrabot Analogy |
 |---------------------|------------------|
 | Session persistence + resume | Agent maintains state across Teams conversations |
 | Remote session URL | Agent provides Teams deep-link to current work |
@@ -309,7 +309,7 @@ Environment variables for automation:
 | `--deny-tool` / `--allow-tool` | Human sets permission boundaries via Teams |
 | Browser steering | Human steers agent via Teams instead of browser |
 
-**The key insight:** Copilot CLI has already solved the "human in one place, agent in another" problem. Entraclaw needs to replace "browser" with "Teams" as the steering channel.
+**The key insight:** Copilot CLI has already solved the "human in one place, agent in another" problem. Entrabot needs to replace "browser" with "Teams" as the steering channel.
 
 ---
 
@@ -457,11 +457,11 @@ export default {
 };
 ```
 
-### Could Entraclaw Be a gh Extension?
+### Could Entrabot Be a gh Extension?
 
 **Pros:**
 - Automatic auth inheritance (zero credential code)
-- Runs as `gh entraclaw` — familiar to GitHub users
+- Runs as `gh entrabot` — familiar to GitHub users
 - Distribution via `gh extension install`
 - Cross-platform binary distribution via Go + GitHub Releases
 - Access to full GitHub API via `go-gh`
@@ -510,7 +510,7 @@ cli/cli/
 
 **Key architectural decisions:**
 - **Cobra** for CLI command parsing and help generation
-- **`internal/authflow/`** contains the OAuth Device Flow implementation — worth studying for Entraclaw
+- **`internal/authflow/`** contains the OAuth Device Flow implementation — worth studying for Entrabot
 - Clean separation between command parsing (`pkg/cmd/`) and business logic (`internal/`)
 - API clients wrap `go-gh` for consistency
 
@@ -575,11 +575,11 @@ When switching between accounts with `gh auth switch`, the change is global — 
 
 ## Open Questions
 
-### For Entraclaw Agent Identity
+### For Entrabot Agent Identity
 
 1. **Can we use GitHub's OAuth Device Flow for agent registration?** The flow is designed for CLIs — could we adapt it so a human approves an agent's identity request via Teams instead of a browser?
 
-2. **Token lifecycle for long-running agents:** `gh` tokens don't expire by default (OAuth tokens are long-lived). But fine-grained PATs can have expiry. What's the right token type for an Entraclaw agent that runs for weeks/months?
+2. **Token lifecycle for long-running agents:** `gh` tokens don't expire by default (OAuth tokens are long-lived). But fine-grained PATs can have expiry. What's the right token type for an Entrabot agent that runs for weeks/months?
 
 3. **OBO token delegation chain:** `gh` → `go-gh` extension auto-inherits tokens. Can we build a similar chain where: Human approves → Agent gets OBO token → Agent's sub-processes inherit via `GH_TOKEN`?
 
@@ -589,7 +589,7 @@ When switching between accounts with `gh auth switch`, the change is global — 
 
 5. **ACP as the protocol for Teams ↔ Agent?** The Agent Client Protocol (JSON-RPC over stdio/TCP) is designed for exactly this — external clients steering an agent. Could a Teams bot be an ACP client?
 
-6. **Session URLs in Teams:** Copilot CLI generates shareable session URLs. Could Entraclaw agents generate similar deep-links that open in Teams rather than a browser?
+6. **Session URLs in Teams:** Copilot CLI generates shareable session URLs. Could Entrabot agents generate similar deep-links that open in Teams rather than a browser?
 
 7. **Delegation model for Teams:** The `/delegate` pattern (hand off to cloud agent, report back) maps well to Teams. Human says "do X" in Teams → Agent delegates → Reports back with PR link.
 
@@ -597,9 +597,9 @@ When switching between accounts with `gh auth switch`, the change is global — 
 
 8. **Hybrid model:** Use `gh extension` for installation/auth bootstrap, but run the agent as an independent daemon that uses `go-gh` for GitHub API access and ACP for human steering?
 
-9. **Copilot CLI extension model:** The `.mjs` extension system for Copilot CLI is more powerful than `gh extension` for agent scenarios. Should Entraclaw agents integrate as Copilot CLI extensions rather than `gh` extensions?
+9. **Copilot CLI extension model:** The `.mjs` extension system for Copilot CLI is more powerful than `gh extension` for agent scenarios. Should Entrabot agents integrate as Copilot CLI extensions rather than `gh` extensions?
 
-10. **MCP server integration:** Both Copilot CLI and GitHub's coding agent support Model Context Protocol (MCP) servers. Should Entraclaw agents expose their capabilities as MCP tools, making them composable with Copilot?
+10. **MCP server integration:** Both Copilot CLI and GitHub's coding agent support Model Context Protocol (MCP) servers. Should Entrabot agents expose their capabilities as MCP tools, making them composable with Copilot?
 
 ---
 

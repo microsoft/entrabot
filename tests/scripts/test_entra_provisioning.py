@@ -32,7 +32,7 @@ def test_existing_local_cert_is_uploaded_when_provisioner_app_is_recreated(
     )
     uploads: list[tuple[str, str]] = []
 
-    monkeypatch.delenv("ENTRACLAW_TENANT_ID", raising=False)
+    monkeypatch.delenv("ENTRABOT_TENANT_ID", raising=False)
 
     def fake_run_az(args, capture=True):
         del capture
@@ -88,7 +88,7 @@ def test_wait_for_propagation_skips_sleep_when_permissions_unchanged(
     )
     sleeps: list[int] = []
 
-    monkeypatch.delenv("ENTRACLAW_TENANT_ID", raising=False)
+    monkeypatch.delenv("ENTRABOT_TENANT_ID", raising=False)
     monkeypatch.setattr(provisioning_module, "get_state", lambda key: state.get(key))
     monkeypatch.setattr(provisioning_module, "set_state", state.__setitem__)
     monkeypatch.setattr(provisioning_module, "clear_state", lambda key: state.pop(key, None))
@@ -120,7 +120,7 @@ def test_wait_for_propagation_sleeps_when_permissions_changed(
     )
     sleeps: list[int] = []
 
-    monkeypatch.delenv("ENTRACLAW_TENANT_ID", raising=False)
+    monkeypatch.delenv("ENTRABOT_TENANT_ID", raising=False)
     monkeypatch.setattr(provisioning_module, "get_state", lambda key: state.get(key))
     monkeypatch.setattr(provisioning_module, "set_state", state.__setitem__)
     monkeypatch.setattr(provisioning_module, "clear_state", lambda key: state.pop(key, None))
@@ -193,7 +193,7 @@ def test_required_permissions_include_app_role_assignment_write(
 def test_load_existing_app_registration_requires_bootstrap_state(
     provisioning_module, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("ENTRACLAW_TENANT_ID", raising=False)
+    monkeypatch.delenv("ENTRABOT_TENANT_ID", raising=False)
     monkeypatch.setattr(provisioning_module, "get_state", lambda key: None)
 
     with pytest.raises(provisioning_module.ProvisionerBootstrapError) as exc:
@@ -214,7 +214,7 @@ def test_load_existing_app_registration_does_not_repair_permissions(
         "-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n"
     )
 
-    monkeypatch.delenv("ENTRACLAW_TENANT_ID", raising=False)
+    monkeypatch.delenv("ENTRABOT_TENANT_ID", raising=False)
     monkeypatch.setattr(provisioning_module, "get_state", lambda key: state.get(key))
     monkeypatch.setattr(provisioning_module, "_application_exists", lambda client_id: True)
     monkeypatch.setattr(provisioning_module, "_keychain_get_cert", lambda tenant: pem_bundle)

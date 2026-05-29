@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
-  EntraClaw status wrapper for Windows.
+  EntraBot status wrapper for Windows.
 
 .DESCRIPTION
-  Ensures the local Python environment exists, installs the EntraClaw
+  Ensures the local Python environment exists, installs the EntraBot
   provisioning dependencies if needed, loads .env, and delegates to the
   consolidated scripts/show_agent_status.py command.
 
@@ -58,16 +58,16 @@ function Find-Python312 {
 if (-not (Test-Path $VenvPython)) {
     $Python = Find-Python312
     if (-not $Python) {
-        Write-Host "ERROR: Python 3.12+ is required to run EntraClaw status." -ForegroundColor Red
+        Write-Host "ERROR: Python 3.12+ is required to run EntraBot status." -ForegroundColor Red
         exit 1
     }
     Write-Host "Creating local Python environment at .venv..." -ForegroundColor Yellow
     & $Python -m venv (Join-Path $ProjectRoot '.venv')
 }
 
-& $VenvPython -c "import azure.identity, entraclaw" 2>$null
+& $VenvPython -c "import azure.identity, entrabot" 2>$null
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Installing EntraClaw status dependencies into .venv..." -ForegroundColor Yellow
+    Write-Host "Installing EntraBot status dependencies into .venv..." -ForegroundColor Yellow
     & $VenvPython -m pip install -e '.[provisioning]'
 }
 

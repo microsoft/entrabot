@@ -120,7 +120,7 @@ class TestEndToEndProvisionAllNew:
             _err("not found"),  # container show
             _ok(),  # container create
             _ok(
-                "/subscriptions/sub/resourceGroups/entraclaw-rg/providers/Microsoft.Storage/storageAccounts/acct"
+                "/subscriptions/sub/resourceGroups/entrabot-rg/providers/Microsoft.Storage/storageAccounts/acct"
             ),  # noqa: E501
             _ok(),  # role assignment create
         ]
@@ -146,7 +146,7 @@ class TestEndToEndProvisionAllNew:
             _ok(),  # account show
             _ok(),  # container show
             _ok(
-                "/subscriptions/sub/resourceGroups/entraclaw-rg/providers/Microsoft.Storage/storageAccounts/acct"
+                "/subscriptions/sub/resourceGroups/entrabot-rg/providers/Microsoft.Storage/storageAccounts/acct"
             ),  # noqa: E501
             _ok(),  # role assignment create (idempotent itself)
         ]
@@ -220,7 +220,7 @@ class TestOverrides:
             _ok(),  # group show
             _ok(),  # account show (the override name)
             _ok(),  # container show
-            _ok("/subscriptions/sub/resourceGroups/entraclaw-rg/providers/Microsoft.Storage/storageAccounts/myaccount"),  # noqa: E501
+            _ok("/subscriptions/sub/resourceGroups/entrabot-rg/providers/Microsoft.Storage/storageAccounts/myaccount"),  # noqa: E501
             _ok(),  # role assignment create
         ]
         with patch.object(provision_blob_storage, "_run_az", side_effect=results) as m:

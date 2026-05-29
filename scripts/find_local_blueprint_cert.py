@@ -51,7 +51,7 @@ def main() -> int:
         return 2
 
     blueprint_obj_id = sys.argv[1]
-    private_key_pem = keyring.get_password("entraclaw", "blueprint-private-key")
+    private_key_pem = keyring.get_password("entrabot", "blueprint-private-key")
     if not private_key_pem:
         print("  No local blueprint-private-key found in OS credential store.", file=sys.stderr)
         return 1

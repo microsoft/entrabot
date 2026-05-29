@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from entraclaw.a365.catalog import (
+from entrabot.a365.catalog import (
     COPILOT_SERVER_NAME,
     ODSP_SERVER_NAME,
     ONEDRIVE_SERVER_NAME,
@@ -13,7 +13,7 @@ from entraclaw.a365.catalog import (
     get_server,
     list_servers,
 )
-from entraclaw.a365.errors import A365ServerNotConfiguredError
+from entrabot.a365.errors import A365ServerNotConfiguredError
 
 
 def test_catalog_contains_word_server() -> None:
@@ -25,15 +25,15 @@ def test_catalog_contains_word_server() -> None:
         scope="McpServers.Word.All",
         audience="",
         default_endpoint="https://agent365.svc.cloud.microsoft/agents/servers/mcp_WordServer",
-        entraclaw_enabled=True,
+        entrabot_enabled=True,
     )
 
 
-def test_catalog_keeps_teams_disabled_for_entraclaw() -> None:
+def test_catalog_keeps_teams_disabled_for_entrabot() -> None:
     server = get_server(TEAMS_SERVER_NAME)
 
     assert server.server_name == "mcp_TeamsServer"
-    assert server.entraclaw_enabled is False
+    assert server.entrabot_enabled is False
 
 
 def test_catalog_contains_live_loop_candidate_servers() -> None:

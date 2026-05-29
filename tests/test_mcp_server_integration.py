@@ -8,7 +8,7 @@ Tests cover:
 - Sent-message set FIFO eviction at SENT_MESSAGE_MAX
 - Silent-refresh-failure → UNAUTHENTICATED transition
 - Audit attribution reads from identity state machine (Tension 1)
-- filter_human_messages with sent_message_ids and [EntraClaw] prefix
+- filter_human_messages with sent_message_ids and [EntraBot] prefix
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from entraclaw.tools.teams import filter_human_messages
+from entrabot.tools.teams import filter_human_messages
 
 
 # ---------------------------------------------------------------------------
@@ -42,19 +42,19 @@ class TestLoadAgentInstructions:
         monkeypatch.delenv("PERSONA_SATI_MCP_URL", raising=False)
         monkeypatch.delenv("PERSONA_SATI_MCP_TOKEN_COMMAND", raising=False)
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "LOCAL_PROMPT_PATH", tmp_path / "missing.md")
 
         result = mcp_server._load_agent_instructions()
-        assert "EntraClaw Teams Interface" in result
+        assert "EntraBot Teams Interface" in result
         assert "persona-sati" in result
 
     def test_mcp_server_boots(self) -> None:
         """The module-level mcp object should be created without error."""
-        from entraclaw.mcp_server import mcp
+        from entrabot.mcp_server import mcp
 
-        assert mcp.name == "EntraClaw Agent Identity"
+        assert mcp.name == "EntraBot Agent Identity"
 
     def test_body_alone_when_persona_unavailable(self, monkeypatch, tmp_path) -> None:
         """With only the body file present, it becomes the full prompt."""
@@ -64,13 +64,13 @@ class TestLoadAgentInstructions:
         prompt_file = tmp_path / "agent_system.md"
         prompt_file.write_text("BODY_ONLY", encoding="utf-8")
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "LOCAL_PROMPT_PATH", prompt_file)
 
         result = mcp_server._load_agent_instructions()
         assert "BODY_ONLY" in result
-        assert "EntraClaw Teams Interface" not in result
+        assert "EntraBot Teams Interface" not in result
 
     def test_body_is_prepended_to_persona(self, monkeypatch, tmp_path) -> None:
         """When both body and persona are available, body loads FIRST
@@ -91,7 +91,7 @@ class TestLoadAgentInstructions:
         prompt_file = tmp_path / "agent_system.md"
         prompt_file.write_text("BODY_CONTENT", encoding="utf-8")
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "LOCAL_PROMPT_PATH", prompt_file)
 
@@ -117,7 +117,7 @@ class TestLoadAgentInstructions:
             lambda c: (c.close(), "PERSONA_ONLY")[1],
         )
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "LOCAL_PROMPT_PATH", tmp_path / "missing.md")
 
@@ -138,7 +138,7 @@ class TestLoadAgentInstructions:
             encoding="utf-8",
         )
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "LOCAL_PROMPT_PATH", prompt_file)
 
@@ -158,7 +158,7 @@ class TestLoadAgentInstructions:
             encoding="utf-8",
         )
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "LOCAL_PROMPT_PATH", prompt_file)
 
@@ -172,12 +172,12 @@ class TestLoadAgentInstructions:
         prompt_file = tmp_path / "agent_system.md"
         prompt_file.write_text("   \n\n", encoding="utf-8")
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "LOCAL_PROMPT_PATH", prompt_file)
 
         result = mcp_server._load_agent_instructions()
-        assert "EntraClaw Teams Interface" in result
+        assert "EntraBot Teams Interface" in result
 
 
 # ---------------------------------------------------------------------------
@@ -194,14 +194,14 @@ class TestLoadAgentInstructionsPersonaSati:
     Boot must never raise.
     """
 
-    _LOCAL_PREFIX = "EntraClaw Teams Interface"
+    _LOCAL_PREFIX = "EntraBot Teams Interface"
 
     @pytest.fixture(autouse=True)
     def _isolate_local_prompt(self, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
         """Point LOCAL_PROMPT_PATH at a non-existent file so these tests
         only exercise the persona-sati / hardcoded-fallback paths — not
         whatever prompts/agent_system.md happens to be on disk."""
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "LOCAL_PROMPT_PATH", tmp_path / "missing.md")
 
@@ -210,7 +210,7 @@ class TestLoadAgentInstructionsPersonaSati:
     ) -> None:
         monkeypatch.delenv("PERSONA_SATI_MCP_URL", raising=False)
         monkeypatch.delenv("PERSONA_SATI_MCP_TOKEN_COMMAND", raising=False)
-        from entraclaw.mcp_server import _load_agent_instructions
+        from entrabot.mcp_server import _load_agent_instructions
 
         result = _load_agent_instructions()
         assert result.startswith(self._LOCAL_PREFIX)
@@ -230,7 +230,7 @@ class TestLoadAgentInstructionsPersonaSati:
 
         monkeypatch.setattr(subprocess, "check_output", _raise)
 
-        from entraclaw.mcp_server import _load_agent_instructions
+        from entrabot.mcp_server import _load_agent_instructions
 
         result = _load_agent_instructions()
         assert result.startswith(self._LOCAL_PREFIX)
@@ -261,7 +261,7 @@ class TestLoadAgentInstructionsPersonaSati:
 
         monkeypatch.setattr(asyncio, "run", _fake_run)
 
-        from entraclaw.mcp_server import _load_agent_instructions
+        from entrabot.mcp_server import _load_agent_instructions
 
         result = _load_agent_instructions()
         assert result == "REMOTE_SYSTEM_PROMPT"
@@ -292,7 +292,7 @@ class TestLoadAgentInstructionsPersonaSati:
 
         monkeypatch.setattr(asyncio, "run", _boom)
 
-        from entraclaw.mcp_server import _load_agent_instructions
+        from entrabot.mcp_server import _load_agent_instructions
 
         result = _load_agent_instructions()
         assert result.startswith(self._LOCAL_PREFIX)
@@ -302,7 +302,7 @@ class TestLoadAgentInstructionsPersonaSati:
 
     # ---- structured-logger observability ----------------------------
     # Every persona-load branch must also emit a record on the
-    # ``entraclaw`` logger so post-hoc grep over ``entraclaw.log``
+    # ``entrabot`` logger so post-hoc grep over ``entrabot.log``
     # answers "did persona load at boot?" without tailing stderr.
 
     def test_persona_load_success_is_logged(
@@ -319,12 +319,12 @@ class TestLoadAgentInstructionsPersonaSati:
         monkeypatch.setattr(subprocess, "check_output", lambda *a, **kw: "fake.jwt.token\n")
         monkeypatch.setattr(asyncio, "run", lambda c: (c.close(), "REMOTE_SYSTEM_PROMPT")[1])
 
-        from entraclaw.mcp_server import _load_agent_instructions
+        from entrabot.mcp_server import _load_agent_instructions
 
-        with caplog.at_level(logging.INFO, logger="entraclaw"):
+        with caplog.at_level(logging.INFO, logger="entrabot"):
             _load_agent_instructions()
 
-        records = [r for r in caplog.records if r.name == "entraclaw"]
+        records = [r for r in caplog.records if r.name == "entrabot"]
         msgs = [r.getMessage() for r in records]
         assert any("persona-sati prompt loaded" in m for m in msgs), msgs
         assert any(
@@ -343,12 +343,12 @@ class TestLoadAgentInstructionsPersonaSati:
         monkeypatch.delenv("PERSONA_SATI_MCP_URL", raising=False)
         monkeypatch.delenv("PERSONA_SATI_MCP_TOKEN_COMMAND", raising=False)
 
-        from entraclaw.mcp_server import _load_agent_instructions
+        from entrabot.mcp_server import _load_agent_instructions
 
-        with caplog.at_level(logging.INFO, logger="entraclaw"):
+        with caplog.at_level(logging.INFO, logger="entrabot"):
             _load_agent_instructions()
 
-        msgs = [r.getMessage() for r in caplog.records if r.name == "entraclaw"]
+        msgs = [r.getMessage() for r in caplog.records if r.name == "entrabot"]
         assert any("persona-sati env unset" in m or "body-only" in m for m in msgs), msgs
 
     def test_persona_fetch_failure_is_logged(
@@ -370,12 +370,12 @@ class TestLoadAgentInstructionsPersonaSati:
 
         monkeypatch.setattr(asyncio, "run", _boom)
 
-        from entraclaw.mcp_server import _load_agent_instructions
+        from entrabot.mcp_server import _load_agent_instructions
 
-        with caplog.at_level(logging.WARNING, logger="entraclaw"):
+        with caplog.at_level(logging.WARNING, logger="entrabot"):
             _load_agent_instructions()
 
-        msgs = [r.getMessage() for r in caplog.records if r.name == "entraclaw"]
+        msgs = [r.getMessage() for r in caplog.records if r.name == "entrabot"]
         assert any("persona-sati fetch failed" in m for m in msgs), msgs
 
 
@@ -401,9 +401,9 @@ class TestPersonaSatiHeartbeat:
         monkeypatch.delenv("PERSONA_SATI_MCP_URL", raising=False)
         monkeypatch.delenv("PERSONA_SATI_MCP_TOKEN_COMMAND", raising=False)
 
-        from entraclaw.mcp_server import _persona_sati_heartbeat_once
+        from entrabot.mcp_server import _persona_sati_heartbeat_once
 
-        with caplog.at_level(logging.DEBUG, logger="entraclaw"):
+        with caplog.at_level(logging.DEBUG, logger="entrabot"):
             outcome = await _persona_sati_heartbeat_once()
         assert outcome == "skipped"
 
@@ -420,7 +420,7 @@ class TestPersonaSatiHeartbeat:
         monkeypatch.setattr(subprocess, "check_output", lambda *a, **kw: "fake.jwt.token\n")
         # Stub asyncio.run inside the function if it uses it, or mock
         # the SSE client; simplest: patch the fetch helper.
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         async def fake_call():
             return ["MEMORY.md", "f1.md", "f2.md", "f3.md"]
@@ -431,11 +431,11 @@ class TestPersonaSatiHeartbeat:
             lambda url, token: fake_call(),
         )
 
-        with caplog.at_level(logging.INFO, logger="entraclaw"):
+        with caplog.at_level(logging.INFO, logger="entrabot"):
             outcome = await mcp_server._persona_sati_heartbeat_once()
 
         assert outcome == "ok"
-        msgs = [r.getMessage() for r in caplog.records if r.name == "entraclaw"]
+        msgs = [r.getMessage() for r in caplog.records if r.name == "entrabot"]
         assert any("persona-sati heartbeat ok" in m for m in msgs), msgs
         assert any("file_count=4" in m for m in msgs), msgs
 
@@ -455,13 +455,13 @@ class TestPersonaSatiHeartbeat:
 
         monkeypatch.setattr(subprocess, "check_output", _raise)
 
-        from entraclaw.mcp_server import _persona_sati_heartbeat_once
+        from entrabot.mcp_server import _persona_sati_heartbeat_once
 
-        with caplog.at_level(logging.WARNING, logger="entraclaw"):
+        with caplog.at_level(logging.WARNING, logger="entrabot"):
             outcome = await _persona_sati_heartbeat_once()
 
         assert outcome == "token_mint_failed"
-        msgs = [r.getMessage() for r in caplog.records if r.name == "entraclaw"]
+        msgs = [r.getMessage() for r in caplog.records if r.name == "entrabot"]
         assert any("persona-sati heartbeat FAILED" in m for m in msgs), msgs
         assert any("token_mint_failed" in m for m in msgs), msgs
 
@@ -477,7 +477,7 @@ class TestPersonaSatiHeartbeat:
         monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/fake-token-cli")
         monkeypatch.setattr(subprocess, "check_output", lambda *a, **kw: "fake.jwt.token\n")
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         async def fake_call():
             raise RuntimeError("SSE 401 Unauthorized")
@@ -488,11 +488,11 @@ class TestPersonaSatiHeartbeat:
             lambda url, token: fake_call(),
         )
 
-        with caplog.at_level(logging.WARNING, logger="entraclaw"):
+        with caplog.at_level(logging.WARNING, logger="entrabot"):
             outcome = await mcp_server._persona_sati_heartbeat_once()
 
         assert outcome == "remote_failed"
-        msgs = [r.getMessage() for r in caplog.records if r.name == "entraclaw"]
+        msgs = [r.getMessage() for r in caplog.records if r.name == "entrabot"]
         assert any("persona-sati heartbeat FAILED" in m for m in msgs), msgs
         assert any("RuntimeError" in m for m in msgs), msgs
         assert any("SSE 401" in m for m in msgs), msgs
@@ -509,9 +509,9 @@ class TestPersonaSatiHeartbeat:
         monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/empty-tok")
         monkeypatch.setattr(subprocess, "check_output", lambda *a, **kw: "\n")
 
-        from entraclaw.mcp_server import _persona_sati_heartbeat_once
+        from entrabot.mcp_server import _persona_sati_heartbeat_once
 
-        with caplog.at_level(logging.WARNING, logger="entraclaw"):
+        with caplog.at_level(logging.WARNING, logger="entrabot"):
             outcome = await _persona_sati_heartbeat_once()
 
         assert outcome == "token_mint_failed"
@@ -522,22 +522,22 @@ class TestPersonaSatiHeartbeat:
 # ---------------------------------------------------------------------------
 class TestResolveTenantId:
     async def test_same_domain_returns_none(self) -> None:
-        from entraclaw.mcp_server import _resolve_tenant_id
+        from entrabot.mcp_server import _resolve_tenant_id
 
         assert await _resolve_tenant_id("user@contoso.com", "contoso.com") is None
 
     async def test_case_insensitive_domain(self) -> None:
-        from entraclaw.mcp_server import _resolve_tenant_id
+        from entrabot.mcp_server import _resolve_tenant_id
 
         assert await _resolve_tenant_id("user@Contoso.COM", "contoso.com") is None
 
     async def test_no_at_sign_returns_none(self) -> None:
-        from entraclaw.mcp_server import _resolve_tenant_id
+        from entrabot.mcp_server import _resolve_tenant_id
 
         assert await _resolve_tenant_id("notanemail", "contoso.com") is None
 
     async def test_cross_tenant_discovery_success(self) -> None:
-        from entraclaw.mcp_server import _resolve_tenant_id
+        from entrabot.mcp_server import _resolve_tenant_id
 
         fake_oidc = {
             "issuer": "https://login.microsoftonline.com/aaaabbbb-cccc-dddd-eeee-ffff00001111/v2.0",
@@ -550,13 +550,13 @@ class TestResolveTenantId:
         mock_client.get.return_value = fake_resp
         mock_client.__aenter__.return_value = mock_client
 
-        with patch("entraclaw.mcp_server.httpx.AsyncClient", return_value=mock_client):
+        with patch("entrabot.mcp_server.httpx.AsyncClient", return_value=mock_client):
             result = await _resolve_tenant_id("alice@fabrikam.com", "contoso.com")
             assert result == "aaaabbbb-cccc-dddd-eeee-ffff00001111"
 
     async def test_cross_tenant_sts_windows_issuer(self) -> None:
         """Some tenants return sts.windows.net issuer, not login.microsoftonline.com."""
-        from entraclaw.mcp_server import _resolve_tenant_id
+        from entrabot.mcp_server import _resolve_tenant_id
 
         fake_oidc = {
             "issuer": "https://sts.windows.net/72f988bf-86f1-41af-91ab-2d7cd011db47/",
@@ -569,23 +569,23 @@ class TestResolveTenantId:
         mock_client.get.return_value = fake_resp
         mock_client.__aenter__.return_value = mock_client
 
-        with patch("entraclaw.mcp_server.httpx.AsyncClient", return_value=mock_client):
+        with patch("entrabot.mcp_server.httpx.AsyncClient", return_value=mock_client):
             result = await _resolve_tenant_id("alice@example.com", "contoso.com")
             assert result == "72f988bf-86f1-41af-91ab-2d7cd011db47"
 
     async def test_discovery_failure_returns_none(self) -> None:
-        from entraclaw.mcp_server import _resolve_tenant_id
+        from entrabot.mcp_server import _resolve_tenant_id
 
         mock_client = AsyncMock()
         mock_client.get.side_effect = httpx.ConnectError("timeout")
         mock_client.__aenter__.return_value = mock_client
 
-        with patch("entraclaw.mcp_server.httpx.AsyncClient", return_value=mock_client):
+        with patch("entrabot.mcp_server.httpx.AsyncClient", return_value=mock_client):
             result = await _resolve_tenant_id("alice@fabrikam.com", "contoso.com")
             assert result is None
 
     async def test_discovery_non_200_returns_none(self) -> None:
-        from entraclaw.mcp_server import _resolve_tenant_id
+        from entrabot.mcp_server import _resolve_tenant_id
 
         fake_resp = MagicMock()
         fake_resp.status_code = 404
@@ -594,7 +594,7 @@ class TestResolveTenantId:
         mock_client.get.return_value = fake_resp
         mock_client.__aenter__.return_value = mock_client
 
-        with patch("entraclaw.mcp_server.httpx.AsyncClient", return_value=mock_client):
+        with patch("entrabot.mcp_server.httpx.AsyncClient", return_value=mock_client):
             result = await _resolve_tenant_id("alice@fabrikam.com", "contoso.com")
             assert result is None
 
@@ -606,9 +606,9 @@ class TestTokenRefreshDispatch:
     @pytest.mark.asyncio
     async def test_agent_user_refreshes_via_three_hop(self) -> None:
         """AGENT_USER state should refresh via acquire_agent_user_token."""
-        from entraclaw import mcp_server
-        from entraclaw.identity.state_machine import IdentityStateMachine
-        from entraclaw.models import IdentityState
+        from entrabot import mcp_server
+        from entrabot.identity.state_machine import IdentityStateMachine
+        from entrabot.models import IdentityState
 
         mock_acquire = MagicMock(return_value="three-hop-token")
         mock_config = MagicMock()
@@ -622,7 +622,7 @@ class TestTokenRefreshDispatch:
             mcp_server._identity = sm
             mcp_server._state["config"] = mock_config
 
-            with patch("entraclaw.mcp_server.acquire_agent_user_token", mock_acquire):
+            with patch("entrabot.mcp_server.acquire_agent_user_token", mock_acquire):
                 await mcp_server._ensure_valid_token()
 
             assert sm.session.token == "three-hop-token"
@@ -635,9 +635,9 @@ class TestTokenRefreshDispatch:
     @pytest.mark.asyncio
     async def test_delegated_refreshes_via_msal(self) -> None:
         """DELEGATED state should refresh via MSAL silent/interactive."""
-        from entraclaw import mcp_server
-        from entraclaw.identity.state_machine import IdentityStateMachine
-        from entraclaw.models import IdentityState
+        from entrabot import mcp_server
+        from entrabot.identity.state_machine import IdentityStateMachine
+        from entrabot.models import IdentityState
 
         mock_config = MagicMock()
         mock_config.client_id = "test-client-id"
@@ -656,7 +656,7 @@ class TestTokenRefreshDispatch:
             mock_auth_instance.try_silent.return_value = {"access_token": "msal-refreshed"}
 
             with patch(
-                "entraclaw.auth.delegated.MsalDelegatedAuth",
+                "entrabot.auth.delegated.MsalDelegatedAuth",
                 return_value=mock_auth_instance,
             ):
                 await mcp_server._ensure_valid_token()
@@ -670,9 +670,9 @@ class TestTokenRefreshDispatch:
     @pytest.mark.asyncio
     async def test_unauthenticated_is_noop(self) -> None:
         """UNAUTHENTICATED state should not attempt any refresh."""
-        from entraclaw import mcp_server
-        from entraclaw.identity.state_machine import IdentityStateMachine
-        from entraclaw.models import IdentityState
+        from entrabot import mcp_server
+        from entrabot.identity.state_machine import IdentityStateMachine
+        from entrabot.models import IdentityState
 
         old_identity = mcp_server._identity
         try:
@@ -689,9 +689,9 @@ class TestTokenRefreshDispatch:
     @pytest.mark.asyncio
     async def test_msal_failure_transitions_to_unauthenticated(self) -> None:
         """If MSAL refresh completely fails, transition to UNAUTHENTICATED."""
-        from entraclaw import mcp_server
-        from entraclaw.identity.state_machine import IdentityStateMachine
-        from entraclaw.models import IdentityState
+        from entrabot import mcp_server
+        from entrabot.identity.state_machine import IdentityStateMachine
+        from entrabot.models import IdentityState
 
         mock_config = MagicMock()
         mock_config.client_id = "test-client-id"
@@ -707,7 +707,7 @@ class TestTokenRefreshDispatch:
             mcp_server._state["config"] = mock_config
 
             with patch(
-                "entraclaw.auth.delegated.MsalDelegatedAuth",
+                "entrabot.auth.delegated.MsalDelegatedAuth",
                 side_effect=RuntimeError("MSAL unavailable"),
             ):
                 await mcp_server._ensure_valid_token()
@@ -725,7 +725,7 @@ class TestTokenRefreshDispatch:
 class TestSentMessageTracking:
     def test_fifo_eviction_at_max(self) -> None:
         """Sent-message set should evict oldest when exceeding SENT_MESSAGE_MAX."""
-        from entraclaw.mcp_server import SENT_MESSAGE_MAX, _sent_message_ids
+        from entrabot.mcp_server import SENT_MESSAGE_MAX, _sent_message_ids
 
         old_ids = _sent_message_ids.copy()
         try:
@@ -764,10 +764,10 @@ class TestDelegatedModeFiltering:
         assert len(result) == 1
         assert result[0]["message_id"] == "m2"
 
-    def test_excludes_entraclaw_prefix(self) -> None:
-        """Messages starting with [EntraClaw] should be filtered (restart-safe dedup)."""
+    def test_excludes_entrabot_prefix(self) -> None:
+        """Messages starting with [EntraBot] should be filtered (restart-safe dedup)."""
         messages = [
-            {"message_id": "m1", "from": "Human", "content": "[EntraClaw] automated msg"},
+            {"message_id": "m1", "from": "Human", "content": "[EntraBot] automated msg"},
             {"message_id": "m2", "from": "Human", "content": "normal human msg"},
         ]
         result = filter_human_messages(messages, "Agent")
@@ -777,10 +777,10 @@ class TestDelegatedModeFiltering:
     def test_agent_display_name_still_filtered(self) -> None:
         """Agent's own messages are still filtered by display name."""
         messages = [
-            {"message_id": "m1", "from": "EntraClaw Agent", "content": "hi"},
+            {"message_id": "m1", "from": "EntraBot Agent", "content": "hi"},
             {"message_id": "m2", "from": "Human", "content": "response"},
         ]
-        result = filter_human_messages(messages, "EntraClaw Agent")
+        result = filter_human_messages(messages, "EntraBot Agent")
         assert len(result) == 1
         assert result[0]["from"] == "Human"
 
@@ -789,7 +789,7 @@ class TestDelegatedModeFiltering:
         messages = [
             {"message_id": "m1", "from": "Agent", "content": "agent msg"},
             {"message_id": "m2", "from": "unknown", "content": "system msg"},
-            {"message_id": "m3", "from": "Human", "content": "[EntraClaw] echo"},
+            {"message_id": "m3", "from": "Human", "content": "[EntraBot] echo"},
             {"message_id": "m4", "from": "Human", "content": "sent by me"},
             {"message_id": "m5", "from": "Human", "content": "real human msg"},
         ]
@@ -810,9 +810,9 @@ class TestAuditAttribution:
         """audit.log_event should accept and record attribution_type."""
         from unittest.mock import patch as mock_patch
 
-        from entraclaw.tools.audit import log_event
+        from entrabot.tools.audit import log_event
 
-        with mock_patch("entraclaw.tools.audit._audit_dir", return_value=tmp_path):
+        with mock_patch("entrabot.tools.audit._audit_dir", return_value=tmp_path):
             event = log_event(
                 action="send_message",
                 resource="chat:123",
@@ -826,9 +826,9 @@ class TestAuditAttribution:
         """Default attribution_type should be 'agent'."""
         from unittest.mock import patch as mock_patch
 
-        from entraclaw.tools.audit import log_event
+        from entrabot.tools.audit import log_event
 
-        with mock_patch("entraclaw.tools.audit._audit_dir", return_value=tmp_path):
+        with mock_patch("entrabot.tools.audit._audit_dir", return_value=tmp_path):
             event = log_event(
                 action="send_message",
                 resource="chat:123",
@@ -847,7 +847,7 @@ class TestSendWithPrefix:
         """send() with prefix should prepend it to the message content."""
         import respx
 
-        from entraclaw.tools.teams import send
+        from entrabot.tools.teams import send
 
         with respx.mock:
             route = respx.post("https://graph.microsoft.com/v1.0/chats/c1/messages").mock(
@@ -861,7 +861,7 @@ class TestSendWithPrefix:
                 chat_id="c1",
                 message="hello world",
                 token="tok",
-                prefix="[EntraClaw]",
+                prefix="[EntraBot]",
             )
 
             assert result["message_id"] == "msg-1"
@@ -870,14 +870,14 @@ class TestSendWithPrefix:
             import json
 
             payload = json.loads(sent_body)
-            assert payload["body"]["content"] == "[EntraClaw] hello world"
+            assert payload["body"]["content"] == "[EntraBot] hello world"
 
     @pytest.mark.asyncio
     async def test_no_prefix_sends_raw(self) -> None:
         """send() without prefix should send message as-is."""
         import respx
 
-        from entraclaw.tools.teams import send
+        from entrabot.tools.teams import send
 
         with respx.mock:
             route = respx.post("https://graph.microsoft.com/v1.0/chats/c1/messages").mock(
@@ -897,7 +897,7 @@ class TestSendWithPrefix:
     @pytest.mark.asyncio
     async def test_empty_message_raises(self) -> None:
         """send() with empty message should raise ValueError."""
-        from entraclaw.tools.teams import send
+        from entrabot.tools.teams import send
 
         with pytest.raises(ValueError, match="empty"):
             await send(chat_id="c1", message="", token="tok")
@@ -905,7 +905,7 @@ class TestSendWithPrefix:
     @pytest.mark.asyncio
     async def test_whitespace_only_message_raises(self) -> None:
         """send() with whitespace-only message should raise ValueError."""
-        from entraclaw.tools.teams import send
+        from entrabot.tools.teams import send
 
         with pytest.raises(ValueError, match="empty"):
             await send(chat_id="c1", message="   ", token="tok")
@@ -939,12 +939,12 @@ class TestPushChannelNotificationObservability:
         must still be recorded in the interaction log. Otherwise the daily
         summary is blind to inbound traffic whenever the push path breaks.
         """
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
 
         from datetime import UTC, datetime
 
-        from entraclaw import mcp_server
-        from entraclaw.tools.interaction_log import read_day
+        from entrabot import mcp_server
+        from entrabot.tools.interaction_log import read_day
 
         mcp_server._state.pop("_write_stream", None)
 
@@ -972,12 +972,12 @@ class TestPushChannelNotificationObservability:
         """Happy path: write_stream is available, push fires AND log captures
         the inbound message. Both effects must occur in the same call.
         """
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
 
         from datetime import UTC, datetime
 
-        from entraclaw import mcp_server
-        from entraclaw.tools.interaction_log import read_day
+        from entrabot import mcp_server
+        from entrabot.tools.interaction_log import read_day
 
         mock_stream = AsyncMock()
         mcp_server._state["_write_stream"] = mock_stream
@@ -1014,9 +1014,9 @@ class TestPushChannelNotificationObservability:
         metadata in meta, but do not pass raw ``<attachment>`` or ``<p>`` tags
         through the top-level content field.
         """
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         mock_stream = AsyncMock()
         mcp_server._state["_write_stream"] = mock_stream
@@ -1050,9 +1050,9 @@ class TestPushChannelNotificationObservability:
         the URL as plain text so the LLM can see it, while keeping the
         payload free of angle brackets that close the MCP stream.
         """
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         giphy_src = "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExeXh0ZGF6/giphy.gif"
         mock_stream = AsyncMock()
@@ -1087,9 +1087,9 @@ class TestPushChannelNotificationObservability:
         the URL after the 2026-04-24 sanitizer ran — only the anchor text
         survived. Keep both: anchor text plus the href URL, no angles.
         """
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         href = "https://example.com/path/to/resource"
         mock_stream = AsyncMock()
@@ -1128,9 +1128,9 @@ class TestPushChannelNotificationObservability:
         custom fields are populated, regardless of content. See
         docs/runbooks/mcp-disconnect-investigation.md.
         """
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         mock_stream = AsyncMock()
         mcp_server._state["_write_stream"] = mock_stream
@@ -1156,9 +1156,9 @@ class TestPushChannelNotificationObservability:
     @pytest.mark.asyncio
     async def test_reply_to_ids_absent_when_empty(self, tmp_path, monkeypatch) -> None:
         """Keep meta tight: don't add reply_to_ids when the list is empty."""
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         mock_stream = AsyncMock()
         mcp_server._state["_write_stream"] = mock_stream
@@ -1189,9 +1189,9 @@ class TestPushChannelNotificationObservability:
         needed for any other purpose since they're not in the push.
         See docs/runbooks/mcp-disconnect-investigation.md.
         """
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         mock_stream = AsyncMock()
         mcp_server._state["_write_stream"] = mock_stream
@@ -1231,9 +1231,9 @@ class TestPushChannelNotificationObservability:
         — it catches new fields that future code might add.
         See ``docs/runbooks/mcp-disconnect-investigation.md``.
         """
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         mock_stream = AsyncMock()
         mcp_server._state["_write_stream"] = mock_stream
@@ -1274,12 +1274,12 @@ class TestPushChannelNotificationObservability:
         """Regression guard: the interaction log write must still happen
         when no write stream is present. Daily summaries stay blind-proof
         even when push transport is broken."""
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
 
         from datetime import UTC, datetime
 
-        from entraclaw import mcp_server
-        from entraclaw.tools.interaction_log import read_day
+        from entrabot import mcp_server
+        from entrabot.tools.interaction_log import read_day
 
         # No write stream — push path is skipped entirely. The log write
         # is the only observable effect.
@@ -1307,12 +1307,12 @@ class TestPushChannelNotificationObservability:
         answer 'did this message arrive at the agent?' by reading the log,
         even when the push transport is broken.
         """
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
 
         from datetime import UTC, datetime
 
-        from entraclaw import mcp_server
-        from entraclaw.tools.interaction_log import read_day
+        from entrabot import mcp_server
+        from entrabot.tools.interaction_log import read_day
 
         bad_stream = AsyncMock()
         bad_stream.send.side_effect = RuntimeError("stream closed")
@@ -1344,7 +1344,7 @@ class TestPushChannelNotificationObservability:
 # ---------------------------------------------------------------------------
 # Chat auto-discovery — the fix for "polling misses chats I didn't register"
 # ---------------------------------------------------------------------------
-# Historical bug: chats created via raw entraclaw.tools.teams.create_* (not
+# Historical bug: chats created via raw entrabot.tools.teams.create_* (not
 # the MCP create_chat tool wrapper) never got added to watched_chats, so
 # the background poll silently ignored them. Also: when a human adds the
 # Agent User to a brand-new group chat, there's no in-process hook to
@@ -1358,11 +1358,11 @@ class TestChatAutoDiscovery:
         """When /me/chats returns a chat_id not in watched_chats, the
         discovery sweep must register it (both in-memory and persisted)
         so future background polls iterate it."""
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
 
         import respx
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         existing = "19:existing@thread.v2"
         brand_new = "19:brand_new@thread.v2"
@@ -1453,7 +1453,7 @@ class TestBootstrapChat:
     """
 
     async def test_newest_message_is_not_swallowed_by_bootstrap(self, tmp_path) -> None:
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         chat_id = "19:brand_new@thread.v2"
 
@@ -1489,7 +1489,7 @@ class TestBootstrapChat:
             mcp_server._identity = sm
 
             with patch(
-                "entraclaw.tools.teams.read",
+                "entrabot.tools.teams.read",
                 new=AsyncMock(return_value=bootstrap_msgs),
             ):
                 await mcp_server._bootstrap_chat(chat_id)
@@ -1527,7 +1527,7 @@ class TestBootstrapChat:
             mcp_server._identity = old_identity
 
     async def test_bootstrap_with_no_messages_is_a_noop(self, tmp_path) -> None:
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         chat_id = "19:empty@thread.v2"
 
@@ -1557,7 +1557,7 @@ class TestBootstrapChat:
             mcp_server._identity = sm
 
             with patch(
-                "entraclaw.tools.teams.read",
+                "entrabot.tools.teams.read",
                 new=AsyncMock(return_value=[]),
             ):
                 await mcp_server._bootstrap_chat(chat_id)
@@ -1590,9 +1590,9 @@ class TestPollTaskAutoStart:
 
     @pytest.mark.asyncio
     async def test_register_starts_poll_when_no_task_running(self, monkeypatch) -> None:
-        monkeypatch.setenv("ENTRACLAW_SKIP_PROVISIONING", "true")
+        monkeypatch.setenv("ENTRABOT_SKIP_PROVISIONING", "true")
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         # Leader mode required — slave hosts intentionally skip polling.
 
@@ -1629,9 +1629,9 @@ class TestPollTaskAutoStart:
     async def test_register_does_not_double_start(self, monkeypatch) -> None:
         """If a poll task is already running, registering another chat
         must not start a second task."""
-        monkeypatch.setenv("ENTRACLAW_SKIP_PROVISIONING", "true")
+        monkeypatch.setenv("ENTRABOT_SKIP_PROVISIONING", "true")
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         old_state = mcp_server._state.copy()
         try:
@@ -1653,9 +1653,9 @@ class TestPollTaskAutoStart:
     async def test_register_restarts_if_task_done(self, monkeypatch) -> None:
         """If the prior poll task has finished (e.g. crashed), registering
         a new chat should spin up a fresh one."""
-        monkeypatch.setenv("ENTRACLAW_SKIP_PROVISIONING", "true")
+        monkeypatch.setenv("ENTRABOT_SKIP_PROVISIONING", "true")
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         old_state = mcp_server._state.copy()
         try:
@@ -1689,9 +1689,9 @@ class TestPollTaskAutoStart:
     async def test_bot_mode_does_not_start_graph_poll(self, monkeypatch) -> None:
         """In bot mode, the graph poll must not start — the bot gateway
         handles inbound via _background_poll_bot instead."""
-        monkeypatch.setenv("ENTRACLAW_SKIP_PROVISIONING", "true")
+        monkeypatch.setenv("ENTRABOT_SKIP_PROVISIONING", "true")
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         old_state = mcp_server._state.copy()
         try:
@@ -1734,9 +1734,9 @@ class TestSponsorGateInvalidationOnNewChat:
 
     @pytest.mark.asyncio
     async def test_register_new_chat_invalidates_sponsor_gate(self, monkeypatch) -> None:
-        monkeypatch.setenv("ENTRACLAW_SKIP_PROVISIONING", "true")
+        monkeypatch.setenv("ENTRABOT_SKIP_PROVISIONING", "true")
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         old_state = mcp_server._state.copy()
         try:
@@ -1763,9 +1763,9 @@ class TestSponsorGateInvalidationOnNewChat:
     async def test_register_existing_chat_preserves_sponsor_gate(self, monkeypatch) -> None:
         """Idempotent registration — re-registering an already-watched chat
         must NOT invalidate the gate (avoids unnecessary Graph calls)."""
-        monkeypatch.setenv("ENTRACLAW_SKIP_PROVISIONING", "true")
+        monkeypatch.setenv("ENTRABOT_SKIP_PROVISIONING", "true")
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         old_state = mcp_server._state.copy()
         try:
@@ -1813,7 +1813,7 @@ class TestBackgroundPollPerChatResilience:
     async def test_one_chat_403_does_not_starve_others(self, monkeypatch) -> None:
         import asyncio as _asyncio
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         bad_chat = "19:bad@thread.v2"
         good_chat = "19:good@thread.v2"
@@ -1878,15 +1878,15 @@ class TestBackgroundPollPerChatResilience:
 
             with (
                 patch(
-                    "entraclaw.tools.teams.read",
+                    "entrabot.tools.teams.read",
                     new=AsyncMock(side_effect=fake_read),
                 ),
                 patch(
-                    "entraclaw.mcp_server._ensure_valid_token",
+                    "entrabot.mcp_server._ensure_valid_token",
                     new=AsyncMock(side_effect=no_refresh),
                 ),
                 patch(
-                    "entraclaw.mcp_server._push_channel_notification",
+                    "entrabot.mcp_server._push_channel_notification",
                     new=AsyncMock(side_effect=fake_push),
                 ),
                 patch.object(_asyncio, "sleep", new=fake_sleep),
@@ -1916,7 +1916,7 @@ class TestInitPollNoDefaultChat:
     async def test_default_chat_id_is_not_auto_registered(self, tmp_path, monkeypatch) -> None:
         """A _state["chat_id"] left over from _init_chat must NOT become a
         watched chat. Only explicit entries in the watched_chats file count."""
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         fake_config = MagicMock()
         fake_config.data_dir = tmp_path
@@ -1955,7 +1955,7 @@ class TestInitPollNoDefaultChat:
 class TestNoDefaultChat:
     def test_init_chat_symbol_is_gone(self) -> None:
         """Prevent regressions: _init_chat should not exist on the module."""
-        import entraclaw.mcp_server as mod
+        import entrabot.mcp_server as mod
 
         assert not hasattr(mod, "_init_chat"), (
             "_init_chat was removed — the default-chat concept is gone"
@@ -1964,7 +1964,7 @@ class TestNoDefaultChat:
     @pytest.mark.asyncio
     async def test_initialize_does_not_touch_chat_id_state(self, monkeypatch) -> None:
         """A freshly initialized MCP server must have no _state["chat_id"]."""
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         old_state = mcp_server._state.copy()
         try:
@@ -1990,7 +1990,7 @@ class TestNoDefaultChat:
         must return an explicit error, not silently target nothing."""
         import json as _json
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         old_state = mcp_server._state.copy()
         try:
@@ -2022,7 +2022,7 @@ class TestNoDefaultChat:
         so callers cannot forget and silently ship plain text — which
         renders as a second-class message in Teams and breaks links.
         """
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         old_state = mcp_server._state.copy()
         try:
@@ -2060,7 +2060,7 @@ class TestNoDefaultChat:
 # send_teams_message auto-wait loop-continuation contract
 # ---------------------------------------------------------------------------
 #
-# Bug: when Copilot CLI is launched outside the entraclaw repo, neither
+# Bug: when Copilot CLI is launched outside the entrabot repo, neither
 # AGENTS.md / CLAUDE.md / channel-discipline.md nor the FastMCP
 # ``instructions=`` payload reach the LLM system prompt. The model sees
 # only the tool docstring + tool result. Without an explicit "REQUIRED:
@@ -2077,10 +2077,10 @@ class TestSendTeamsMessageLoopContinuation:
     def test_docstring_states_required_followup_rule(self) -> None:
         """The send_teams_message docstring must explicitly tell the
         model to call send_teams_message again after a sponsor reply.
-        Hosts like Copilot CLI launched outside the entraclaw repo do
+        Hosts like Copilot CLI launched outside the entrabot repo do
         not load AGENTS.md / channel-discipline.md, so the loop rule
         has to live on the tool itself."""
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         doc = mcp_server.send_teams_message.__doc__ or ""
         assert "REQUIRED FOLLOW-UP" in doc, (
@@ -2104,7 +2104,7 @@ class TestSendTeamsMessageLoopContinuation:
         import json as _json
         from collections import deque
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         old_state = mcp_server._state.copy()
         try:
@@ -2150,7 +2150,7 @@ class TestSendTeamsMessageLoopContinuation:
             async def fake_wait_loop(**kwargs):
                 return sponsor_msg
 
-            from entraclaw.tools import wait_tool
+            from entrabot.tools import wait_tool
 
             monkeypatch.setattr(wait_tool, "wait_loop", fake_wait_loop)
 
@@ -2165,7 +2165,7 @@ class TestSendTeamsMessageLoopContinuation:
             assert "_next_action" in parsed, (
                 "auto-wait result must carry _next_action so hosts "
                 "that don't load tool docstrings (Copilot CLI outside "
-                "the entraclaw repo) still see the loop-continuation "
+                "the entrabot repo) still see the loop-continuation "
                 "rule"
             )
             next_action = parsed["_next_action"]
@@ -2194,7 +2194,7 @@ class TestThinkingPlaceholderTool:
         """post_thinking_placeholder writes an outbound interaction log entry."""
         import json as _json
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         captured: dict = {}
 
@@ -2221,7 +2221,7 @@ class TestThinkingPlaceholderTool:
     async def test_post_placeholder_requires_chat_id(self, monkeypatch) -> None:
         import json as _json
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         result = await mcp_server.post_thinking_placeholder(chat_id="")
@@ -2234,7 +2234,7 @@ class TestThinkingPlaceholderTool:
         """resolve_placeholder logs an audit event before the Graph call."""
         import json as _json
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         audit_events: list[dict] = []
 
@@ -2242,7 +2242,7 @@ class TestThinkingPlaceholderTool:
             audit_events.append(kwargs)
             return {"event_id": "evt-1", **kwargs}
 
-        monkeypatch.setattr("entraclaw.tools.audit.log_event", fake_log_event)
+        monkeypatch.setattr("entrabot.tools.audit.log_event", fake_log_event)
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock(return_value=None))
         monkeypatch.setattr(mcp_server, "_log_interaction_safe", lambda **kw: None)
@@ -2275,7 +2275,7 @@ class TestThinkingPlaceholderTool:
     async def test_resolve_rejects_invalid_mode(self, monkeypatch) -> None:
         import json as _json
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         result = await mcp_server.resolve_placeholder(
@@ -2292,7 +2292,7 @@ class TestThinkingPlaceholderTool:
     async def test_resolve_requires_ids(self, monkeypatch) -> None:
         import json as _json
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         result = await mcp_server.resolve_placeholder(
@@ -2308,7 +2308,7 @@ class TestThinkingPlaceholderTool:
         """Interaction log reports the actual mode returned by Graph (e.g. fallback_new)."""
         import json as _json
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         captured: dict = {}
 
@@ -2317,7 +2317,7 @@ class TestThinkingPlaceholderTool:
 
         monkeypatch.setattr(mcp_server, "_log_interaction_safe", fake_log)
         monkeypatch.setattr(
-            "entraclaw.tools.audit.log_event",
+            "entrabot.tools.audit.log_event",
             lambda **kw: {"event_id": "evt-x"},
         )
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
@@ -2349,7 +2349,7 @@ class TestUpdatePlaceholderTool:
     async def test_calls_teams_helper_with_args(self, monkeypatch) -> None:
         import json as _json
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock(return_value=None))
@@ -2378,7 +2378,7 @@ class TestUpdatePlaceholderTool:
     async def test_does_not_write_audit_event(self, monkeypatch) -> None:
         """Progress updates are ephemeral — no audit event fires. Only
         resolve_placeholder writes to the audit log."""
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock(return_value=None))
@@ -2395,7 +2395,7 @@ class TestUpdatePlaceholderTool:
             audit_events.append(kw)
             return {"event_id": "evt-y", **kw}
 
-        monkeypatch.setattr("entraclaw.tools.audit.log_event", fake_audit)
+        monkeypatch.setattr("entrabot.tools.audit.log_event", fake_audit)
 
         await mcp_server.update_placeholder(
             chat_id="c1",
@@ -2408,7 +2408,7 @@ class TestUpdatePlaceholderTool:
 
     @pytest.mark.asyncio
     async def test_logs_interaction_with_progress_flag(self, monkeypatch) -> None:
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         captured: dict = {}
 
@@ -2438,7 +2438,7 @@ class TestUpdatePlaceholderTool:
     async def test_requires_chat_id_and_placeholder_id(self, monkeypatch) -> None:
         import json as _json
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         result = await mcp_server.update_placeholder(
@@ -2459,13 +2459,13 @@ class TestDeleteTeamsMessageTool:
         """delete_teams_message forwards chat_id + message_id to Graph helper."""
         import json as _json
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock(return_value=None))
         monkeypatch.setattr(mcp_server, "_log_interaction_safe", lambda **kw: None)
         monkeypatch.setattr(
-            "entraclaw.tools.audit.log_event",
+            "entrabot.tools.audit.log_event",
             lambda **kw: {"event_id": "evt-x"},
         )
 
@@ -2488,7 +2488,7 @@ class TestDeleteTeamsMessageTool:
     async def test_rejects_missing_chat_id(self, monkeypatch) -> None:
         import json as _json
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         result = await mcp_server.delete_teams_message(message_id="msg-1", chat_id="")
@@ -2500,7 +2500,7 @@ class TestDeleteTeamsMessageTool:
     async def test_rejects_missing_message_id(self, monkeypatch) -> None:
         import json as _json
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         result = await mcp_server.delete_teams_message(message_id="", chat_id="c1")
@@ -2511,7 +2511,7 @@ class TestDeleteTeamsMessageTool:
     @pytest.mark.asyncio
     async def test_audits_before_graph_call(self, monkeypatch) -> None:
         """Security: audit event must land before the Graph mutation (fail-closed)."""
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         audit_events: list[dict] = []
 
@@ -2519,7 +2519,7 @@ class TestDeleteTeamsMessageTool:
             audit_events.append(kwargs)
             return {"event_id": "evt-1", **kwargs}
 
-        monkeypatch.setattr("entraclaw.tools.audit.log_event", fake_log_event)
+        monkeypatch.setattr("entrabot.tools.audit.log_event", fake_log_event)
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock(return_value=None))
         monkeypatch.setattr(mcp_server, "_log_interaction_safe", lambda **kw: None)
@@ -2541,7 +2541,7 @@ class TestDeleteTeamsMessageTool:
 
     @pytest.mark.asyncio
     async def test_interaction_log_on_success(self, monkeypatch) -> None:
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         captured: dict = {}
 
@@ -2550,7 +2550,7 @@ class TestDeleteTeamsMessageTool:
 
         monkeypatch.setattr(mcp_server, "_log_interaction_safe", fake_log)
         monkeypatch.setattr(
-            "entraclaw.tools.audit.log_event",
+            "entrabot.tools.audit.log_event",
             lambda **kw: {"event_id": "evt-x"},
         )
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
@@ -2573,7 +2573,7 @@ class TestDeleteTeamsMessageTool:
         """Failure path: Graph returned False (403/404). deleted=false logged."""
         import json as _json
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         captured: dict = {}
 
@@ -2582,7 +2582,7 @@ class TestDeleteTeamsMessageTool:
 
         monkeypatch.setattr(mcp_server, "_log_interaction_safe", fake_log)
         monkeypatch.setattr(
-            "entraclaw.tools.audit.log_event",
+            "entrabot.tools.audit.log_event",
             lambda **kw: {"event_id": "evt-x"},
         )
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
@@ -2610,13 +2610,13 @@ class TestSendEmailTool:
     @pytest.mark.asyncio
     async def test_splits_comma_separated_recipients(self, monkeypatch) -> None:
         """to/cc/bcc arrive as comma-separated strings; wrapper splits to lists."""
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock(return_value=None))
         monkeypatch.setattr(mcp_server, "_log_interaction_safe", lambda **kw: None)
         monkeypatch.setattr(
-            "entraclaw.tools.audit.log_event",
+            "entrabot.tools.audit.log_event",
             lambda **kw: {"event_id": "evt-x"},
         )
 
@@ -2645,7 +2645,7 @@ class TestSendEmailTool:
     async def test_rejects_empty_to(self, monkeypatch) -> None:
         import json as _json
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         result = await mcp_server.send_email(to="   ", subject="hi", body="b")
@@ -2657,7 +2657,7 @@ class TestSendEmailTool:
     async def test_rejects_empty_subject(self, monkeypatch) -> None:
         import json as _json
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         result = await mcp_server.send_email(to="a@example.com", subject="", body="b")
@@ -2668,7 +2668,7 @@ class TestSendEmailTool:
     @pytest.mark.asyncio
     async def test_audits_before_graph_call(self, monkeypatch) -> None:
         """Security: audit event lands before the Graph mutation (fail-closed)."""
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         audit_events: list[dict] = []
 
@@ -2676,7 +2676,7 @@ class TestSendEmailTool:
             audit_events.append(kwargs)
             return {"event_id": "evt-1", **kwargs}
 
-        monkeypatch.setattr("entraclaw.tools.audit.log_event", fake_log_event)
+        monkeypatch.setattr("entrabot.tools.audit.log_event", fake_log_event)
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock(return_value=None))
         monkeypatch.setattr(mcp_server, "_log_interaction_safe", lambda **kw: None)
@@ -2701,7 +2701,7 @@ class TestSendEmailTool:
 
     @pytest.mark.asyncio
     async def test_interaction_log_on_success(self, monkeypatch) -> None:
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         captured: dict = {}
 
@@ -2710,7 +2710,7 @@ class TestSendEmailTool:
 
         monkeypatch.setattr(mcp_server, "_log_interaction_safe", fake_log)
         monkeypatch.setattr(
-            "entraclaw.tools.audit.log_event",
+            "entrabot.tools.audit.log_event",
             lambda **kw: {"event_id": "evt-x"},
         )
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
@@ -2744,8 +2744,8 @@ class TestSendEmailTool:
 
     @pytest.mark.asyncio
     async def test_interaction_log_on_failure(self, monkeypatch) -> None:
-        from entraclaw import mcp_server
-        from entraclaw.tools.email import EmailSendError
+        from entrabot import mcp_server
+        from entrabot.tools.email import EmailSendError
 
         captured: dict = {}
 
@@ -2754,7 +2754,7 @@ class TestSendEmailTool:
 
         monkeypatch.setattr(mcp_server, "_log_interaction_safe", fake_log)
         monkeypatch.setattr(
-            "entraclaw.tools.audit.log_event",
+            "entrabot.tools.audit.log_event",
             lambda **kw: {"event_id": "evt-x"},
         )
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
@@ -2794,7 +2794,7 @@ class TestPromiseTools:
     async def test_add_promise_rejects_empty_chat_id(self, monkeypatch) -> None:
         import json as _json
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         result = await mcp_server.add_promise(chat_id="", description="something")
@@ -2806,7 +2806,7 @@ class TestPromiseTools:
     async def test_add_promise_rejects_empty_description(self, monkeypatch) -> None:
         import json as _json
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         result = await mcp_server.add_promise(chat_id="c1", description="   ")
@@ -2817,7 +2817,7 @@ class TestPromiseTools:
     @pytest.mark.asyncio
     async def test_add_promise_audits_before_blob_call(self, monkeypatch) -> None:
         """Audit event must land before the blob write (fail-closed)."""
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         audit_events: list[dict] = []
 
@@ -2825,7 +2825,7 @@ class TestPromiseTools:
             audit_events.append(kwargs)
             return {"event_id": "evt-1", **kwargs}
 
-        monkeypatch.setattr("entraclaw.tools.audit.log_event", fake_log_event)
+        monkeypatch.setattr("entrabot.tools.audit.log_event", fake_log_event)
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock(return_value=None))
         monkeypatch.setattr(mcp_server, "_log_interaction_safe", lambda **kw: None)
@@ -2836,7 +2836,7 @@ class TestPromiseTools:
             nonlocal blob_called
             assert audit_events, "audit event must be written before the blob write"
             blob_called = True
-            from entraclaw.tools.promises import Promise
+            from entrabot.tools.promises import Promise
 
             return Promise(
                 id="abc123",
@@ -2854,7 +2854,7 @@ class TestPromiseTools:
 
     @pytest.mark.asyncio
     async def test_add_promise_writes_interaction_log_on_success(self, monkeypatch) -> None:
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         captured: dict = {}
 
@@ -2863,13 +2863,13 @@ class TestPromiseTools:
 
         monkeypatch.setattr(mcp_server, "_log_interaction_safe", fake_log)
         monkeypatch.setattr(
-            "entraclaw.tools.audit.log_event",
+            "entrabot.tools.audit.log_event",
             lambda **kw: {"event_id": "evt-x"},
         )
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock(return_value=None))
 
-        from entraclaw.tools.promises import Promise
+        from entrabot.tools.promises import Promise
 
         async def fake_retry(fn, **kwargs):
             return Promise(
@@ -2889,13 +2889,13 @@ class TestPromiseTools:
     async def test_list_promises_returns_json_array(self, monkeypatch) -> None:
         import json as _json
 
-        from entraclaw import mcp_server
-        from entraclaw.tools.promises import Promise
+        from entrabot import mcp_server
+        from entrabot.tools.promises import Promise
 
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock(return_value=None))
         monkeypatch.setattr(
-            "entraclaw.tools.audit.log_event",
+            "entrabot.tools.audit.log_event",
             lambda **kw: {"event_id": "evt-x"},
         )
 
@@ -2928,7 +2928,7 @@ class TestPromiseTools:
     @pytest.mark.asyncio
     async def test_list_promises_does_not_write_interaction_log(self, monkeypatch) -> None:
         """Reads are not logged — mutations are."""
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         calls: list[dict] = []
 
@@ -2937,7 +2937,7 @@ class TestPromiseTools:
 
         monkeypatch.setattr(mcp_server, "_log_interaction_safe", fake_log)
         monkeypatch.setattr(
-            "entraclaw.tools.audit.log_event",
+            "entrabot.tools.audit.log_event",
             lambda **kw: {"event_id": "evt-x"},
         )
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
@@ -2955,7 +2955,7 @@ class TestPromiseTools:
     async def test_resolve_promise_rejects_empty_id(self, monkeypatch) -> None:
         import json as _json
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         result = await mcp_server.resolve_promise(promise_id="", resolution="done")
@@ -2967,7 +2967,7 @@ class TestPromiseTools:
     async def test_resolve_promise_rejects_empty_resolution(self, monkeypatch) -> None:
         import json as _json
 
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         result = await mcp_server.resolve_promise(promise_id="abc", resolution="")
@@ -2979,14 +2979,14 @@ class TestPromiseTools:
     async def test_resolve_promise_propagates_not_found_as_error(self, monkeypatch) -> None:
         import json as _json
 
-        from entraclaw import mcp_server
-        from entraclaw.tools.promises import PromiseNotFound
+        from entrabot import mcp_server
+        from entrabot.tools.promises import PromiseNotFound
 
         monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
         monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock(return_value=None))
         monkeypatch.setattr(mcp_server, "_log_interaction_safe", lambda **kw: None)
         monkeypatch.setattr(
-            "entraclaw.tools.audit.log_event",
+            "entrabot.tools.audit.log_event",
             lambda **kw: {"event_id": "evt-x"},
         )
 
@@ -3009,8 +3009,8 @@ class TestPromiseTools:
         """
         import json as _json
 
-        from entraclaw import mcp_server
-        from entraclaw.tools import promises as promises_mod
+        from entrabot import mcp_server
+        from entrabot.tools import promises as promises_mod
 
         class InMem:
             def __init__(self) -> None:
@@ -3038,7 +3038,7 @@ class TestPromiseTools:
         monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock(return_value=None))
         monkeypatch.setattr(mcp_server, "_log_interaction_safe", lambda **kw: None)
         monkeypatch.setattr(
-            "entraclaw.tools.audit.log_event",
+            "entrabot.tools.audit.log_event",
             lambda **kw: {"event_id": "evt-x"},
         )
 

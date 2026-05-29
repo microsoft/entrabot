@@ -20,7 +20,7 @@ python3 scripts/entra_provisioning.py
 
 ### What it does
 
-- Creates or reuses the `EntraClaw Agent ID Provisioner` app registration with `client_credentials` flow.
+- Creates or reuses the `EntraBot Agent ID Provisioner` app registration with `client_credentials` flow.
 - Generates a cert pair, stores the private key in Keychain via `keyring`, uploads the public cert to the app.
 - Returns Graph access tokens via `get_existing_graph_token()` and `get_bootstrap_graph_token()`.
 
@@ -28,7 +28,7 @@ Pattern matches the Blueprint-cert flow (ADR-003). No client secret on disk.
 
 ## `create_entra_agent_ids.py`
 
-Creates the Blueprint + Agent Identity + Agent User chain and persists IDs to `.entraclaw-state.json`.
+Creates the Blueprint + Agent Identity + Agent User chain and persists IDs to `.entrabot-state.json`.
 
 ### Usage
 
@@ -36,7 +36,7 @@ Creates the Blueprint + Agent Identity + Agent User chain and persists IDs to `.
 python3 scripts/create_entra_agent_ids.py
 ```
 
-Set `ENTRACLAW_NEW_CHAIN=1` to force creation (skips reuse lookups). `setup.sh --new` sets this for you.
+Set `ENTRABOT_NEW_CHAIN=1` to force creation (skips reuse lookups). `setup.sh --new` sets this for you.
 
 ### What it does
 
@@ -49,7 +49,7 @@ Set `ENTRACLAW_NEW_CHAIN=1` to force creation (skips reuse lookups). `setup.sh -
 
 ### Idempotency
 
-Each step checks for existing state in `.entraclaw-state.json` first, then queries Graph for the named object. Re-runs are safe.
+Each step checks for existing state in `.entrabot-state.json` first, then queries Graph for the named object. Re-runs are safe.
 
 ## `add_agent_sponsor.py`
 
@@ -64,7 +64,7 @@ python3 scripts/add_agent_sponsor.py user@example.com --agent-object-id <OID>
 
 ### What it does
 
-- Reads `AGENT_OBJECT_ID` from `.entraclaw-state.json` (or uses `--agent-object-id`).
+- Reads `AGENT_OBJECT_ID` from `.entrabot-state.json` (or uses `--agent-object-id`).
 - Mints a Graph token via the Provisioner cert.
 - Resolves the email to a user object id — works for home-tenant users and B2B guests via `mail` / UPN / `proxyAddresses`.
 - POSTs to `/servicePrincipals/{agent}/microsoft.graph.agentIdentity/sponsors/$ref`.

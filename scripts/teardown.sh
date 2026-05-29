@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# EntraClaw Identity Research — teardown
+# EntraBot Identity Research — teardown
 # Removes everything setup.sh creates:
 #   1. Agent User (must go first — child of Agent Identity)
 #   2. Agent Identity (service principal)
 #   3. Blueprint (app registration — also deletes BlueprintPrincipal)
 #   4. Provisioner app registration
-#   5. Local state (.env, .entraclaw-state.json, legacy keychain)
+#   5. Local state (.env, .entrabot-state.json, legacy keychain)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -70,7 +70,7 @@ if [ "$SHOW_HELP" = true ]; then
     echo "                         Do not delete the shared Provisioner app. Intended"
     echo "                         for targeted smoke-test teardowns."
     echo "  --preserve-local-state"
-    echo "                         Do not remove .env, .entraclaw-state.json, or local"
+    echo "                         Do not remove .env, .entrabot-state.json, or local"
     echo "                         keychain entries. Intended for wrapper-managed tests."
     echo "  --help, -h             Show this help."
     echo ""
@@ -94,10 +94,10 @@ NC='\033[0m'
 # Helper to read from state file (always available)
 _read_state() {
     local key="$1"
-    if [ -f .entraclaw-state.json ] && command -v python3 &>/dev/null; then
+    if [ -f .entrabot-state.json ] && command -v python3 &>/dev/null; then
         python3 -c "
 import json, pathlib
-data = json.loads(pathlib.Path('.entraclaw-state.json').read_text())
+data = json.loads(pathlib.Path('.entrabot-state.json').read_text())
 print(data.get('$key', ''))
 " || echo ""
     else
@@ -112,10 +112,10 @@ if [ -f .env ]; then
 fi
 
 # Merge state file values (state file takes precedence for new-format IDs)
-AGENT_USER_ID="${ENTRACLAW_AGENT_USER_ID:-$(_read_state AGENT_USER_ID)}"
-AGENT_OBJECT_ID="${ENTRACLAW_AGENT_OBJECT_ID:-$(_read_state AGENT_OBJECT_ID)}"
-BLUEPRINT_APP_ID="${ENTRACLAW_BLUEPRINT_APP_ID:-$(_read_state BLUEPRINT_APP_ID)}"
-BLUEPRINT_OBJECT_ID="${ENTRACLAW_BLUEPRINT_OBJECT_ID:-$(_read_state BLUEPRINT_OBJECT_ID)}"
+AGENT_USER_ID="${ENTRABOT_AGENT_USER_ID:-$(_read_state AGENT_USER_ID)}"
+AGENT_OBJECT_ID="${ENTRABOT_AGENT_OBJECT_ID:-$(_read_state AGENT_OBJECT_ID)}"
+BLUEPRINT_APP_ID="${ENTRABOT_BLUEPRINT_APP_ID:-$(_read_state BLUEPRINT_APP_ID)}"
+BLUEPRINT_OBJECT_ID="${ENTRABOT_BLUEPRINT_OBJECT_ID:-$(_read_state BLUEPRINT_OBJECT_ID)}"
 
 # Check if there's anything to do
 HAS_ENTRA_RESOURCES=false
@@ -124,14 +124,14 @@ HAS_LOCAL_STATE=false
 if [ -n "$AGENT_USER_ID" ] || [ -n "$AGENT_OBJECT_ID" ] || [ -n "$BLUEPRINT_APP_ID" ] || [ ${#TARGET_AGENT_USER_UPNS[@]} -gt 0 ]; then
     HAS_ENTRA_RESOURCES=true
 fi
-if [ -f .env ] || [ -f .entraclaw-state.json ]; then
+if [ -f .env ] || [ -f .entrabot-state.json ]; then
     HAS_LOCAL_STATE=true
 fi
 
 # Check for provisioner apps in Entra (only if logged in)
 PROV_FOUND=false
 if az account show &>/dev/null; then
-    for PROV_NAME in "EntraClaw Provisioner" "EntraClaw Agent ID Provisioner"; do
+    for PROV_NAME in "EntraBot Provisioner" "EntraBot Agent ID Provisioner"; do
         PROV_CHECK=$(az ad app list --display-name "$PROV_NAME" --query "[0].id" -o tsv) || true
         if [ -n "$PROV_CHECK" ]; then
             PROV_FOUND=true
@@ -164,7 +164,7 @@ fi
 if [ "$HAS_LOCAL_STATE" = true ]; then
     echo "  Local state:"
     [ -f .env ]                  && echo "    .env"
-    [ -f .entraclaw-state.json ]  && echo "    .entraclaw-state.json"
+    [ -f .entrabot-state.json ]  && echo "    .entrabot-state.json"
     [ "$PRESERVE_LOCAL_STATE" = true ] && echo "    (preserved by --preserve-local-state)"
 fi
 echo "  Cloud storage: not deleted by teardown.sh"
@@ -314,7 +314,7 @@ fi
 # ── 4. Delete Provisioner app LAST (needed it for steps 2-3) ─────────────
 # Provisioner is a regular app — az CLI works fine here
 
-for PROV_NAME in "EntraClaw Provisioner" "EntraClaw Agent ID Provisioner"; do
+for PROV_NAME in "EntraBot Provisioner" "EntraBot Agent ID Provisioner"; do
     if [ "$PRESERVE_PROVISIONER" = true ]; then
         echo -e "  ${YELLOW}⚠️  Preserving Provisioner app ($PROV_NAME)${NC}"
         continue
@@ -348,7 +348,7 @@ import keyring
 cleared = []
 for key in ['blueprint-private-key', 'blueprint_secret', 'human_refresh_token', 'agent_password']:
     try:
-        keyring.delete_password('entraclaw', key)
+        keyring.delete_password('entrabot', key)
         cleared.append(key)
     except Exception:
         pass
@@ -363,9 +363,9 @@ if [ -f .env ]; then
     echo -e "  ${GREEN}✅ Removed .env${NC}"
 fi
 
-if [ -f .entraclaw-state.json ]; then
-    rm -f .entraclaw-state.json
-    echo -e "  ${GREEN}✅ Removed .entraclaw-state.json${NC}"
+if [ -f .entrabot-state.json ]; then
+    rm -f .entrabot-state.json
+    echo -e "  ${GREEN}✅ Removed .entrabot-state.json${NC}"
 fi
 
 echo ""

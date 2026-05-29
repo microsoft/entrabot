@@ -41,5 +41,5 @@ Reads recent messages from the chat. The agent can check for human responses and
 
 ## Key Files
 
-- `src/entraclaw/tools/teams.py` — `acquire_agent_user_token()`, `create_or_find_chat()`, `send()`, `read()`
+- `src/entrabot/tools/teams.py` — `acquire_agent_user_token()`, `create_or_find_chat()`, `send()`, `read()`
 - `tests/tools/test_teams.py` — 21 tests covering all three hops + Graph API calls

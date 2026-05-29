@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# EntraClaw — import state from another machine
+# EntraBot — import state from another machine
 #
 # Restores everything exported by export-state.sh so the MCP server
 # can run on this machine without re-provisioning.
@@ -9,7 +9,7 @@
 #
 # After import:
 #   1. Create venv: python3.12 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"
-#   2. Start Claude Code: claude --dangerously-load-development-channels server:entraclaw
+#   2. Start Claude Code: claude --dangerously-load-development-channels server:entrabot
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,7 +22,7 @@ RED='\033[0;31m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-ARCHIVE="$PROJECT_ROOT/entraclaw-state-export.tar.gz.enc"
+ARCHIVE="$PROJECT_ROOT/entrabot-state-export.tar.gz.enc"
 PASSWORD=""
 
 for arg in "$@"; do
@@ -67,7 +67,7 @@ if [ -f "$IMPORT_DIR/.env" ]; then
 fi
 
 # 2. Restore state file
-for state_file in .entraclaw-state.json .entraclaw-state.json; do
+for state_file in .entrabot-state.json .entrabot-state.json; do
     if [ -f "$IMPORT_DIR/$state_file" ]; then
         cp "$IMPORT_DIR/$state_file" "$PROJECT_ROOT/$state_file"
         echo -e "  ${GREEN}✅ $state_file restored${NC}"
@@ -76,9 +76,9 @@ done
 
 # 3. Restore chat_id
 if [ -f "$IMPORT_DIR/chat_id" ]; then
-    mkdir -p "$HOME/.entraclaw/data"
-    cp "$IMPORT_DIR/chat_id" "$HOME/.entraclaw/data/chat_id"
-    echo -e "  ${GREEN}✅ chat_id restored: $(cat "$HOME/.entraclaw/data/chat_id")${NC}"
+    mkdir -p "$HOME/.entrabot/data"
+    cp "$IMPORT_DIR/chat_id" "$HOME/.entrabot/data/chat_id"
+    echo -e "  ${GREEN}✅ chat_id restored: $(cat "$HOME/.entrabot/data/chat_id")${NC}"
 fi
 
 # 4. Import private key to keychain
@@ -94,7 +94,7 @@ if [ -f "$IMPORT_DIR/blueprint-private-key.pem" ] && [ -n "$PYTHON" ]; then
     "$PYTHON" -c "
 import keyring
 key = open('$IMPORT_DIR/blueprint-private-key.pem').read()
-keyring.set_password('entraclaw', 'blueprint-private-key', key)
+keyring.set_password('entrabot', 'blueprint-private-key', key)
 print('Key stored in keychain')
 " 2>/dev/null && echo -e "  ${GREEN}✅ Blueprint private key stored in keychain${NC}" \
     || echo -e "  ${YELLOW}⚠️  Could not store key in keychain — install keyring: pip install keyring${NC}"
@@ -113,15 +113,15 @@ fi
 
 # 6. Regenerate .mcp.json with correct paths for this machine
 # NOTE: To add persona-sati (mind server), see .mcp.json.example
-ENTRACLAW_MCP_BIN="$PROJECT_ROOT/.venv/bin/entraclaw-mcp"
+ENTRABOT_MCP_BIN="$PROJECT_ROOT/.venv/bin/entrabot-mcp"
 cat > "$PROJECT_ROOT/.mcp.json" << MCPEOF
 {
   "mcpServers": {
-    "entraclaw": {
+    "entrabot": {
       "type": "stdio",
-      "command": "$ENTRACLAW_MCP_BIN",
+      "command": "$ENTRABOT_MCP_BIN",
       "args": [],
-      "description": "EntraClaw Agent Identity — Teams tools + background DM/email poll"
+      "description": "EntraBot Agent Identity — Teams tools + background DM/email poll"
     }
   }
 }
@@ -139,6 +139,6 @@ echo ""
 echo -e "  ${YELLOW}Next steps:${NC}"
 echo -e "  1. Create venv:  ${BLUE}python3.12 -m venv .venv && source .venv/bin/activate && pip install -e '.[dev]'${NC}"
 echo -e "  2. Run tests:    ${BLUE}pytest -v${NC}"
-echo -e "  3. Start Claude: ${BLUE}claude --dangerously-load-development-channels server:entraclaw${NC}"
+echo -e "  3. Start Claude: ${BLUE}claude --dangerously-load-development-channels server:entrabot${NC}"
 echo ""
-echo -e "  ${RED}⚠️  Delete the archive now: rm entraclaw-state-export.tar.gz.enc${NC}"
+echo -e "  ${RED}⚠️  Delete the archive now: rm entrabot-state-export.tar.gz.enc${NC}"

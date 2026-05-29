@@ -7,11 +7,11 @@
 
 The **Azure Bot Framework** is Microsoft's platform for building conversational bots that connect to channels like Microsoft Teams, Web Chat, Slack, and more. Bots are web applications that receive "activities" (messages, events) from the **Azure Bot Service** cloud relay and respond via the same channel.
 
-### Relevance to Entraclaw
+### Relevance to Entrabot
 
-Entraclaw's scenario — autonomous agents on devices that get Agent IDs and use OBO flows — maps onto the Bot Framework model in an interesting but imperfect way:
+Entrabot's scenario — autonomous agents on devices that get Agent IDs and use OBO flows — maps onto the Bot Framework model in an interesting but imperfect way:
 
-- **Bot = Agent**: Each Entraclaw agent could register as a bot, getting a Microsoft App ID (Entra ID app registration) that serves as its identity.
+- **Bot = Agent**: Each Entrabot agent could register as a bot, getting a Microsoft App ID (Entra ID app registration) that serves as its identity.
 - **Teams = Human Interface**: The bot can communicate with humans via Teams — sending status updates, receiving commands, presenting structured data via Adaptive Cards.
 - **Proactive Messaging = Agent-Initiated Communication**: Agents need to push information to humans without waiting for a prompt. Bot Framework supports this via stored conversation references.
 - **Public Endpoint Requirement = Challenge**: Bot Framework requires a publicly accessible HTTPS endpoint. A device-local agent would need tunneling (ngrok, Dev Tunnels) or a cloud relay.
@@ -75,7 +75,7 @@ class MyBot(ActivityHandler):
         """Called when bot is installed or users join."""
         for member in members_added:
             if member.id != turn_context.activity.recipient.id:
-                await turn_context.send_activity("Welcome! I am your Entraclaw agent.")
+                await turn_context.send_activity("Welcome! I am your Entrabot agent.")
 
     async def on_conversation_update_activity(self, turn_context: TurnContext):
         """Called on conversation lifecycle events."""
@@ -165,7 +165,7 @@ When you create an **Azure Bot** resource, Azure creates a **Microsoft Entra ID 
 - **MicrosoftAppId** (GUID) — The bot's unique identity
 - **MicrosoftAppPassword** (client secret) — Used by the bot to authenticate to Azure Bot Service
 
-This Entra ID app registration **is** the bot's identity. It's analogous to an Entraclaw Agent ID — a unique identity tied to a specific application instance.
+This Entra ID app registration **is** the bot's identity. It's analogous to an Entrabot Agent ID — a unique identity tied to a specific application instance.
 
 ### Authentication Flow
 
@@ -193,7 +193,7 @@ If the bot needs to act **on behalf of a user** (e.g., access their calendar via
 
 ### OBO (On-Behalf-Of) Flow in Teams
 
-**This is directly relevant to Entraclaw's OBO pattern.**
+**This is directly relevant to Entrabot's OBO pattern.**
 
 Teams supports **Single Sign-On (SSO)** for bots:
 
@@ -220,16 +220,16 @@ result = app.acquire_token_on_behalf_of(
 access_token = result["access_token"]
 ```
 
-### Identity Mapping to Entraclaw
+### Identity Mapping to Entrabot
 
-| Bot Framework Concept | Entraclaw Equivalent | Notes |
+| Bot Framework Concept | Entrabot Equivalent | Notes |
 |----|----|----|
 | MicrosoftAppId (Entra ID app) | Agent ID | 1:1 mapping possible. Each agent device gets its own app registration. |
 | MicrosoftAppPassword | Agent credential | Client secret or certificate |
 | OBO token exchange | Agent acting on behalf of user | Bot receives SSO token, exchanges for Graph token |
 | Bot user in Teams | Agent presence in Teams | Bot appears as a contact/app in Teams |
 
-### Key Identity Question for Entraclaw
+### Key Identity Question for Entrabot
 
 **Can multiple device agents share one Bot registration, or does each need its own?**
 
@@ -241,7 +241,7 @@ access_token = result["access_token"]
 
 ## Proactive Messaging
 
-Proactive messaging is **critical** for Entraclaw — agents need to push status updates, alerts, and results to humans without waiting for a prompt.
+Proactive messaging is **critical** for Entrabot — agents need to push status updates, alerts, and results to humans without waiting for a prompt.
 
 ### How It Works
 
@@ -453,7 +453,7 @@ async def on_message_activity(self, turn_context: TurnContext):
 
 ## Integration Patterns
 
-### Architecture: Entraclaw Agent as a Teams Bot
+### Architecture: Entrabot Agent as a Teams Bot
 
 #### Option A: Cloud-Hosted Bot Backend (Recommended)
 
@@ -586,7 +586,7 @@ Power Virtual Agents ────────────────▶ REBRAND
 Microsoft Copilot Studio ────────────▶ Low-code/no-code successor
 ```
 
-### Decision Matrix: Which Tool for Entraclaw?
+### Decision Matrix: Which Tool for Entrabot?
 
 | Scenario | Recommended Tool |
 |----------|-----------------|
@@ -647,14 +647,14 @@ Microsoft Copilot Studio ────────────▶ Low-code/no-cod
 
 ## Open Questions
 
-### For the Entraclaw Scenario
+### For the Entrabot Scenario
 
 1. **Agent-per-device vs. shared bot registration?**
    - Can multiple device agents share one Bot registration with a single cloud endpoint that fans out? Or does each device need its own registration?
    - **Likely answer**: Shared registration with a cloud relay that routes to specific devices. One-bot-per-device would require O(n) Entra ID app registrations.
 
 2. **OBO flow compatibility with Agent IDs?**
-   - If an Entraclaw agent has its own Agent ID (Entra ID app), can it use OBO to act on behalf of the user who "owns" it?
+   - If an Entrabot agent has its own Agent ID (Entra ID app), can it use OBO to act on behalf of the user who "owns" it?
    - **Likely answer**: Yes — this maps directly to the Teams SSO + OBO pattern. The agent's App ID is the "bot," and it exchanges the user's SSO token for downstream access.
 
 3. **Can a device agent maintain a stable Teams presence without a public endpoint?**
@@ -663,14 +663,14 @@ Microsoft Copilot Studio ────────────▶ Low-code/no-cod
 
 4. **What happens to the bot identity when a device goes offline?**
    - Bot Framework has no concept of "online/offline" for bots. If the endpoint is unreachable, messages fail silently (or with errors).
-   - Entraclaw may need a "presence" protocol on top of Bot Framework.
+   - Entrabot may need a "presence" protocol on top of Bot Framework.
 
 5. **M365 Agents SDK readiness for Python?**
    - The Python SDK for M365 Agents is new (2025). How production-ready is it?
    - GitHub: `github.com/microsoft/Agents-for-python`
 
 6. **Multi-tenant vs. single-tenant bot?**
-   - Entraclaw agents may operate across tenant boundaries. Bot Framework supports both, but multi-tenant requires additional configuration.
+   - Entrabot agents may operate across tenant boundaries. Bot Framework supports both, but multi-tenant requires additional configuration.
 
 7. **Scalability of proactive messaging?**
    - If 10,000 device agents each need to send hourly updates, what are the Teams rate limits?

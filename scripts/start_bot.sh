@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# start_bot.sh — Launch the EntraClaw bot gateway (tunnel + bot server + MCP server)
+# start_bot.sh — Launch the EntraBot bot gateway (tunnel + bot server + MCP server)
 #
 # One command to start everything needed for bot mode:
 #   1. Validates prerequisites (devtunnel CLI, .env config, venv)
@@ -8,7 +8,7 @@
 #   4. Prints the tunnel URL to register in Azure Bot Service
 #
 # The MCP server is launched separately by Claude Code via:
-#   claude --dangerously-load-development-channels server:entraclaw
+#   claude --dangerously-load-development-channels server:entrabot
 #
 # Usage:
 #   ./scripts/start_bot.sh          # start tunnel + bot server
@@ -36,7 +36,7 @@ warn()  { echo -e "${YELLOW}⚠${NC} $*"; }
 fail()  { echo -e "${RED}✗${NC} $*"; exit 1; }
 
 # ── Pidfile management ─────────────────────────────────────────────────────
-PIDDIR="${HOME}/.entraclaw/bot"
+PIDDIR="${HOME}/.entrabot/bot"
 TUNNEL_PIDFILE="${PIDDIR}/tunnel.pid"
 BOT_PIDFILE="${PIDDIR}/bot.pid"
 
@@ -79,12 +79,12 @@ else
 fi
 
 # ── Validate config ───────────────────────────────────────────────────────
-PORT="${ENTRACLAW_BOT_TUNNEL_PORT:-3978}"
+PORT="${ENTRABOT_BOT_TUNNEL_PORT:-3978}"
 
-if [ -z "${ENTRACLAW_BOT_APP_ID:-}" ]; then
-    fail "ENTRACLAW_BOT_APP_ID not set. Run ./scripts/setup_bot.sh first."
+if [ -z "${ENTRABOT_BOT_APP_ID:-}" ]; then
+    fail "ENTRABOT_BOT_APP_ID not set. Run ./scripts/setup_bot.sh first."
 fi
-ok "Bot app ID: ${ENTRACLAW_BOT_APP_ID}"
+ok "Bot app ID: ${ENTRABOT_BOT_APP_ID}"
 
 # ── Check prerequisites ──────────────────────────────────────────────────
 if ! command -v devtunnel &>/dev/null; then
@@ -108,9 +108,9 @@ elif [ -f venv/bin/activate ]; then
     ok "Activated venv"
 fi
 
-python -c "import entraclaw.bot.server" 2>/dev/null \
-    || fail "entraclaw.bot.server not importable. Run: pip install -e '.[dev]'"
-ok "entraclaw package importable"
+python -c "import entrabot.bot.server" 2>/dev/null \
+    || fail "entrabot.bot.server not importable. Run: pip install -e '.[dev]'"
+ok "entrabot package importable"
 
 python -c "import aiohttp" 2>/dev/null \
     || fail "aiohttp not installed. Run: pip install -e '.[dev]'"
@@ -143,11 +143,11 @@ if [ -n "${TUNNEL_URL}" ]; then
     if command -v az &>/dev/null && az account show &>/dev/null 2>&1; then
         ENDPOINT="${TUNNEL_URL}/api/messages"
         az bot update \
-            --resource-group "entraclaw-bot-rg" \
-            --name "entraclaw-bot" \
+            --resource-group "entrabot-bot-rg" \
+            --name "entrabot-bot" \
             --endpoint "${ENDPOINT}" \
             -o none 2>&1 && ok "Bot endpoint updated: ${ENDPOINT}" \
-            || warn "Could not auto-update bot endpoint. Run: az bot update --resource-group entraclaw-bot-rg --name entraclaw-bot --endpoint ${ENDPOINT}"
+            || warn "Could not auto-update bot endpoint. Run: az bot update --resource-group entrabot-bot-rg --name entrabot-bot --endpoint ${ENDPOINT}"
     else
         echo ""
         echo -e "   ${YELLOW}→ Set this as the Messaging Endpoint in Azure Bot Service:${NC}"
@@ -162,8 +162,8 @@ fi
 
 # ── Start Bot Server ─────────────────────────────────────────────────────
 info "Starting bot server on localhost:${PORT}..."
-export ENTRACLAW_MODE=bot
-python -m entraclaw.bot.server > "${PIDDIR}/bot.log" 2>&1 &
+export ENTRABOT_MODE=bot
+python -m entrabot.bot.server > "${PIDDIR}/bot.log" 2>&1 &
 BOT_PID=$!
 echo "${BOT_PID}" > "${BOT_PIDFILE}"
 
@@ -193,7 +193,7 @@ echo -e "   Inbound:     ${PIDDIR}/inbound.jsonl"
 echo -e "   Outbound:    ${PIDDIR}/outbound.jsonl"
 echo ""
 echo -e "   ${CYAN}Now launch Claude Code:${NC}"
-echo -e "   claude --dangerously-load-development-channels server:entraclaw"
+echo -e "   claude --dangerously-load-development-channels server:entrabot"
 echo ""
 echo -e "   ${CYAN}To stop:${NC}"
 echo -e "   ./scripts/start_bot.sh --stop"

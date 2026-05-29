@@ -11,11 +11,11 @@ from collections import deque
 
 import pytest
 
-from entraclaw.identity.sponsors import (
+from entrabot.identity.sponsors import (
     AgentIdentitySponsor,
     SponsorGate,
 )
-from entraclaw.tools.wait_tool import (
+from entrabot.tools.wait_tool import (
     DEDUP_MAX,
     WaitForSponsorDmResult,
     _injection_dedupe_key,
@@ -419,7 +419,7 @@ class TestBroadenedWaitDoctrine:
     def test_mcp_tool_docstring_carries_broadened_trigger(self) -> None:
         from pathlib import Path
 
-        mcp_src = (Path(__file__).resolve().parents[2] / "src/entraclaw/mcp_server.py").read_text(
+        mcp_src = (Path(__file__).resolve().parents[2] / "src/entrabot/mcp_server.py").read_text(
             encoding="utf-8"
         )
         # The wait_for_sponsor_dm tool body in mcp_server.py must

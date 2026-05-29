@@ -1,1 +1,0 @@
-"""EntraClaw MCP server tools."""

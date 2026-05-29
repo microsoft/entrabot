@@ -4,8 +4,8 @@ from collections.abc import Callable
 
 import pytest
 
-from entraclaw.a365.errors import A365TokenError
-from entraclaw.a365.tokens import StaticA365TokenProvider, WorkIqTokenRequest
+from entrabot.a365.errors import A365TokenError
+from entrabot.a365.tokens import StaticA365TokenProvider, WorkIqTokenRequest
 
 
 @pytest.mark.asyncio
@@ -41,7 +41,7 @@ async def test_static_token_provider_rejects_empty_token() -> None:
 
 @pytest.mark.asyncio
 async def test_three_hop_provider_passes_audience_to_token_function() -> None:
-    from entraclaw.a365.tokens import EntraclawA365TokenProvider
+    from entrabot.a365.tokens import EntrabotA365TokenProvider
 
     calls: list[str] = []
 
@@ -49,7 +49,7 @@ async def test_three_hop_provider_passes_audience_to_token_function() -> None:
         calls.append(audience)
         return "work-iq-token"
 
-    provider = EntraclawA365TokenProvider(acquire_token=fake_acquire)
+    provider = EntrabotA365TokenProvider(acquire_token=fake_acquire)
     token = await provider.get_token(
         WorkIqTokenRequest(
             server_name="mcp_WordServer",
@@ -68,14 +68,14 @@ async def test_runtime_provider_runs_sync_three_hop_acquire_in_thread(
 ) -> None:
     import asyncio
 
-    from entraclaw.a365 import tokens
-    from entraclaw.config import EntraClawConfig
-    from entraclaw.tools import teams
+    from entrabot.a365 import tokens
+    from entrabot.config import EntraBotConfig
+    from entrabot.tools import teams
 
     config = object()
     thread_calls: list[tuple[Callable[..., str], tuple[object, ...], dict[str, object]]] = []
 
-    monkeypatch.setattr(EntraClawConfig, "from_env", classmethod(lambda cls: config))
+    monkeypatch.setattr(EntraBotConfig, "from_env", classmethod(lambda cls: config))
 
     def fake_acquire(config_arg: object, *, resource_scope: str) -> str:
         assert config_arg is config

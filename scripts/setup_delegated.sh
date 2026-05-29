@@ -5,13 +5,13 @@
 #   ./scripts/setup_delegated.sh
 #
 # What it does:
-#   1. Reads ENTRACLAW_CLIENT_ID from .env
+#   1. Reads ENTRABOT_CLIENT_ID from .env
 #   2. Opens your browser for Entra sign-in (MSAL localhost redirect on port 8400)
 #   3. Caches the token in OS keystore (Keychain on macOS)
 #   4. The MCP server picks it up silently via try_silent() — no blocking
 #
 # After running this, launch Claude Code normally:
-#   claude --dangerously-load-development-channels server:entraclaw
+#   claude --dangerously-load-development-channels server:entrabot
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -23,8 +23,8 @@ if [ -f .env ]; then
     set +a
 fi
 
-if [ -z "${ENTRACLAW_CLIENT_ID:-}" ]; then
-    echo "ERROR: ENTRACLAW_CLIENT_ID not set in .env"
+if [ -z "${ENTRABOT_CLIENT_ID:-}" ]; then
+    echo "ERROR: ENTRABOT_CLIENT_ID not set in .env"
     echo "Set it to your multi-tenant app registration's Application (client) ID."
     exit 1
 fi
@@ -34,10 +34,10 @@ if [ -f .venv/bin/activate ]; then
     source .venv/bin/activate
 fi
 
-echo "=== EntraClaw Delegated Auth Setup ==="
+echo "=== EntraBot Delegated Auth Setup ==="
 echo ""
-echo "Client ID: ${ENTRACLAW_CLIENT_ID}"
-echo "Tenant:    ${ENTRACLAW_TENANT_ID:-common}"
+echo "Client ID: ${ENTRABOT_CLIENT_ID}"
+echo "Tenant:    ${ENTRABOT_TENANT_ID:-common}"
 echo ""
 echo "Opening browser for sign-in..."
 echo ""
@@ -47,10 +47,10 @@ import os
 import sys
 import json
 
-from entraclaw.auth.delegated import MsalDelegatedAuth
+from entrabot.auth.delegated import MsalDelegatedAuth
 
-client_id = os.environ["ENTRACLAW_CLIENT_ID"]
-tenant_id = os.environ.get("ENTRACLAW_TENANT_ID", "common")
+client_id = os.environ["ENTRABOT_CLIENT_ID"]
+tenant_id = os.environ.get("ENTRABOT_TENANT_ID", "common")
 
 auth = MsalDelegatedAuth(client_id=client_id, tenant_id=tenant_id)
 
@@ -64,7 +64,7 @@ if silent:
     print(f"  Token:     cached ({len(silent.get('access_token', ''))} bytes)")
     print()
     print("Token is cached. Launch Claude Code:")
-    print("  claude --dangerously-load-development-channels server:entraclaw")
+    print("  claude --dangerously-load-development-channels server:entrabot")
     sys.exit(0)
 
 # Interactive — opens browser
@@ -86,5 +86,5 @@ print(f"  Tenant:    {claims.get('tid', 'unknown')}")
 print(f"  Token:     cached in OS keystore ({len(result.get('access_token', ''))} bytes)")
 print()
 print("Token is cached. Now launch Claude Code:")
-print("  claude --dangerously-load-development-channels server:entraclaw")
+print("  claude --dangerously-load-development-channels server:entrabot")
 PY

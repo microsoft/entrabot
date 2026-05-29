@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-17
 **Status:** Accepted (open questions resolved 2026-04-17; **Phases 1, 2, 5, 6a shipped** — Phase 6b next)
-**Deciders:** the user, EntraClaw Agent
+**Deciders:** the user, EntraBot Agent
 **Context:** Agent memory portability across machines + foundation for a later cloud-hosted poller
 
 ## Context
@@ -12,10 +12,10 @@ Today every piece of agent state lives on a single Mac:
 | Path | What | Size |
 |---|---|---|
 | `~/.claude/projects/.../memory/` | Behavioral memory (markdown + frontmatter: `feedback_*`, `project_*`, `user_*`, `reference_*`) | ~96 KB |
-| `~/.entraclaw/data/interactions/YYYY-MM-DD.jsonl` | Append-only event log of every Teams/email I/O | growing, currently ~20 KB |
-| `~/.entraclaw/data/summaries/YYYY-MM-DD.{html,json}` | Rendered daily summaries + sidecar counts | ~5 KB/day |
-| `~/.entraclaw/data/watched_chats` | Small state file of polled chat IDs | < 1 KB |
-| `~/.entraclaw/data/email_cursor.txt` | ISO 8601 `receivedDateTime` watermark | < 50 B |
+| `~/.entrabot/data/interactions/YYYY-MM-DD.jsonl` | Append-only event log of every Teams/email I/O | growing, currently ~20 KB |
+| `~/.entrabot/data/summaries/YYYY-MM-DD.{html,json}` | Rendered daily summaries + sidecar counts | ~5 KB/day |
+| `~/.entrabot/data/watched_chats` | Small state file of polled chat IDs | < 1 KB |
+| `~/.entrabot/data/email_cursor.txt` | ISO 8601 `receivedDateTime` watermark | < 50 B |
 
 Consequences of the single-machine model:
 1. Switching between Mac Studio and laptop means either manually copying files (fragile, encryption headaches with Keychain) or losing continuity.
@@ -47,8 +47,8 @@ Consequences of the single-machine model:
 **Azure Blob Storage, one Storage Account per tenant, one container per Agent User.**
 
 ```
-https://entraclaw<suffix>.blob.core.windows.net/
-  entraclaw-memory/   (container — one per Agent User UPN)
+https://entrabot<suffix>.blob.core.windows.net/
+  entrabot-memory/   (container — one per Agent User UPN)
     manifest.json
     behavioral/
       MEMORY.md
@@ -104,7 +104,7 @@ The agent reads the manifest at session start to know what's available without l
 
 ### Local cache + write-through
 
-- Read-through cache at `~/.entraclaw/cache/blob/` on every machine
+- Read-through cache at `~/.entrabot/cache/blob/` on every machine
 - Read: cache first; on miss or stale (compare mtime to manifest), pull from blob
 - Write: write local cache + blob in parallel
 - High-frequency writes (interactions) batch in-memory for up to 5s or 4KB, then flush
@@ -154,14 +154,14 @@ Low-risk in practice — the agent runs on one machine at a time, one process. G
 
 ### Migration
 
-First run on a machine where `ENTRACLAW_BLOB_ENDPOINT` is set and the container is empty:
+First run on a machine where `ENTRABOT_BLOB_ENDPOINT` is set and the container is empty:
 
 1. `setup.sh` prompts: *"This will upload ~{N} KB of local memory + data to Azure Blob. Continue? [y/N]"*
-2. Walk local `~/.claude/projects/.../memory/` and `~/.entraclaw/data/`, upload to blob with the directory layout above
+2. Walk local `~/.claude/projects/.../memory/` and `~/.entrabot/data/`, upload to blob with the directory layout above
 3. Verify manifest matches; print summary
 4. **Leave local files untouched** — blob becomes the source of truth, local is now a cache, not a backup
 
-Rollback: set `ENTRACLAW_KEEP_MEMORY_LOCAL=true` in `.env`. Code reverts to pure-local operation. Local files are always authoritative when this flag is set.
+Rollback: set `ENTRABOT_KEEP_MEMORY_LOCAL=true` in `.env`. Code reverts to pure-local operation. Local files are always authoritative when this flag is set.
 
 ## Alternatives considered
 
@@ -177,8 +177,8 @@ Rollback: set `ENTRACLAW_KEEP_MEMORY_LOCAL=true` in `.env`. Code reverts to pure
 
 | Phase | What | LOC estimate |
 |---|---|---|
-| 1 | `src/entraclaw/storage/blob.py` — async blob client (get/put/list/delete/exists + ETag) | ~200 + tests |
-| 2 | `src/entraclaw/storage/backend.py` — `MemoryBackend` protocol + `Local`/`Blob` implementations; route `interaction_log.py`, `daily_summary.py`, memory-file reads through it | ~150 |
+| 1 | `src/entrabot/storage/blob.py` — async blob client (get/put/list/delete/exists + ETag) | ~200 + tests |
+| 2 | `src/entrabot/storage/backend.py` — `MemoryBackend` protocol + `Local`/`Blob` implementations; route `interaction_log.py`, `daily_summary.py`, memory-file reads through it | ~150 |
 | 3 | `CachedBlobBackend` — local mirror + write-through + ETag retry | ~150 + tests |
 | 4 | Manifest maintenance (atomic read-modify-write on every upload) | ~80 + tests |
 | 5 | `setup.sh` — provision Storage Account + container + RBAC; `--keep-memory-local` flag; migration prompt | ~120 shell + Python helper |
@@ -191,12 +191,12 @@ Ship order: 1 → 2 → 5 → 3 → 4 → 6. Phase 5 comes early so setup.sh wor
 Escape hatch for:
 - Privacy-conscious users who don't want Azure sync
 - Offline / air-gapped environments
-- Users wanting to evaluate EntraClaw before trusting cloud storage
+- Users wanting to evaluate EntraBot before trusting cloud storage
 - Dev iteration speed (no network round-trip per write)
 
 Implementation:
 - `setup.sh` CLI flag; skips Storage Account provisioning
-- `.env` gets `ENTRACLAW_KEEP_MEMORY_LOCAL=true`
+- `.env` gets `ENTRABOT_KEEP_MEMORY_LOCAL=true`
 - `MemoryBackend` selection driven by the flag — pure `LocalBackend` if set, `CachedBlobBackend` otherwise
 - Documented in README as a supported mode, not a hack
 
@@ -212,7 +212,7 @@ Default: cloud mode when `az login` exists + Azure subscription is reachable. Lo
 ## TODO (future work, explicitly out of scope for this ADR)
 
 - **Document user-visible recovery behavior** when two of the user's own machines run simultaneously. ETag handles it correctly (last-writer-wins after retry), but the semantics should be documented so users aren't surprised when their laptop clobbers an unflushed Mac Studio write.
-- **Multi-agent coordination on shared memory.** Explicitly *not* supported by this design. If we ever want two distinct Agent Users to share a memory store (e.g. Brandon's EntraClaw and another teammate's agent both writing to a team-wide behavioral layer), that's a future ADR. Would require real locking or CRDT-style merge semantics. Categorized as science-project for now.
+- **Multi-agent coordination on shared memory.** Explicitly *not* supported by this design. If we ever want two distinct Agent Users to share a memory store (e.g. Brandon's EntraBot and another teammate's agent both writing to a team-wide behavioral layer), that's a future ADR. Would require real locking or CRDT-style merge semantics. Categorized as science-project for now.
 - **Compaction quality control.** The daily compaction step is the most judgment-heavy part of this design. The first few weeks should log compaction decisions so we can eyeball what got promoted vs discarded and tune the heuristic. Treat the first 30 days of compaction output as reviewable.
 - **Manifest consistency under concurrent writes.** The manifest is a single file updated on every blob write; ETag protects it, but heavy write bursts could cause retry loops. Monitor; switch to per-prefix manifests if that becomes a real problem.
 
@@ -222,7 +222,7 @@ Default: cloud mode when `az login` exists + Azure subscription is reachable. Lo
 - Weekend-portability use case solved (Mac Studio ↔ laptop)
 - Foundation for cloud-hosted poller (ADR-006)
 - Memory survives machine loss
-- Others adopting EntraClaw get portable memory out-of-the-box
+- Others adopting EntraBot get portable memory out-of-the-box
 
 **Negative**
 - New dependency: Azure Storage account + RBAC setup in `setup.sh`

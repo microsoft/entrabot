@@ -16,9 +16,9 @@ No human in the loop. No MSAL at runtime — uses raw `httpx` calls to the Entra
 
 ## Key Files
 
-- `src/entraclaw/tools/teams.py` — `acquire_agent_user_token()` implements the three-hop flow
-- `src/entraclaw/config.py` — loads Blueprint credentials and Agent User IDs from `.env`
-- `src/entraclaw/errors.py` — `TokenExchangeError` with hop identification for debugging
+- `src/entrabot/tools/teams.py` — `acquire_agent_user_token()` implements the three-hop flow
+- `src/entrabot/config.py` — loads Blueprint credentials and Agent User IDs from `.env`
+- `src/entrabot/errors.py` — `TokenExchangeError` with hop identification for debugging
 
 ## Error Handling
 

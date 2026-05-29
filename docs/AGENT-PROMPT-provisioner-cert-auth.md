@@ -1,7 +1,7 @@
 # Agent prompt: migrate Provisioner from secret-auth to cert-auth
 
 Paste the content below into Claude Code while working in the
-`entraclaw-identity-research` repo directory. It is written to be
+`entrabot-identity-research` repo directory. It is written to be
 self-contained — the agent does not need any prior conversation context.
 
 ---
@@ -17,15 +17,15 @@ Reference implementation that has already shipped this fix:
 and `/path/to/persona-sati/scripts/provisioner-token.py`.
 
 Read those two files. The shape is intentionally terse. Copy the same
-pattern into `entraclaw-identity-research/scripts/entra_provisioning.py`
+pattern into `entrabot-identity-research/scripts/entra_provisioning.py`
 and a new `scripts/provisioner-token.py`. Change:
 
-- `PROVISIONER_APP_DISPLAY_NAME` stays `EntraClaw Agent ID Provisioner` —
+- `PROVISIONER_APP_DISPLAY_NAME` stays `EntraBot Agent ID Provisioner` —
   do NOT rename. Cert-auth is a credential change, not an identity
   change.
-- `_KEYCHAIN_SERVICE_CERT = "entraclaw-provisioner-cert"` (not
+- `_KEYCHAIN_SERVICE_CERT = "entrabot-provisioner-cert"` (not
   persona-sati-provisioner-cert).
-- `_STATE_FILE = .entraclaw-state.json` (already the case here).
+- `_STATE_FILE = .entrabot-state.json` (already the case here).
 
 Your job in order:
 
@@ -86,7 +86,7 @@ DO NOT:
   backdoor).
 - Cache the secret in environment variables or temp files as a
   "performance optimization."
-- Commit `.entraclaw-state.json` or any keychain export to git.
+- Commit `.entrabot-state.json` or any keychain export to git.
 - Rename the Provisioner app, change its permission set, or touch the
   Blueprint cert path.
 - Open the PR without running the full verification checklist.
@@ -112,7 +112,7 @@ az account show --query "{name:name,tenantId:tenantId,user:user.name}" -o json
 And back up the current state file, in case you need to roll back:
 
 ```bash
-cp .entraclaw-state.json /tmp/entraclaw-state.backup-$(date +%s).json
+cp .entrabot-state.json /tmp/entrabot-state.backup-$(date +%s).json
 ```
 
 Then paste the agent prompt and let it work.

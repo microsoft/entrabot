@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from entraclaw.a365.word import (
+from entrabot.a365.word import (
     WordComment,
     WordCommentReply,
     WordDocument,

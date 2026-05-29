@@ -58,7 +58,7 @@ class TestGenerateCert:
 
         with patch.object(generate_windows_cert.subprocess, "run", side_effect=fake_run):
             result = generate_windows_cert.generate(
-                subject="CN=entraclaw-blueprint", days_valid=365, ksp="software"
+                subject="CN=entrabot-blueprint", days_valid=365, ksp="software"
             )
         assert result.thumbprint == valid_thumbprint
         assert result.ksp == "software"

@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
-from entraclaw.auth.certificate import build_client_assertion, compute_cert_thumbprint
+from entrabot.auth.certificate import build_client_assertion, compute_cert_thumbprint
 
 
 @pytest.fixture
@@ -139,7 +139,7 @@ class TestWindowsDispatch:
     """Mock-based: Windows path delegates to ``cncrypt_signer``."""
 
     def test_windows_path_uses_cncrypt_signer_when_no_pem(self) -> None:
-        from entraclaw.auth import cncrypt_signer
+        from entrabot.auth import cncrypt_signer
 
         with patch.object(
             cncrypt_signer, "sign_pkcs1_sha256", return_value=b"\xab" * 256

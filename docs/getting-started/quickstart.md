@@ -1,6 +1,6 @@
 # Quickstart
 
-**Source:** <https://github.com/microsoft/entraclaw>
+**Source:** <https://github.com/microsoft/entrabot>
 
 ## Prerequisites
 
@@ -14,8 +14,8 @@
 ## One-Command Setup (macOS/Linux)
 
 ```bash
-git clone https://github.com/microsoft/entraclaw.git
-cd Entraclaw
+git clone https://github.com/microsoft/entrabot.git
+cd Entrabot
 ./scripts/setup.sh
 ```
 
@@ -28,7 +28,7 @@ This will:
 6. Generate a self-signed certificate, upload public key to Entra, store private key in the OS keystore (Keychain / TPM / Keyring — ADR-003)
 7. Install Python dependencies and write `.env` (no secrets — only the cert thumbprint)
 
-The script is **idempotent** — safe to re-run. State is persisted in `.entraclaw-state.json`.
+The script is **idempotent** — safe to re-run. State is persisted in `.entrabot-state.json`.
 
 ### Optional flags
 
@@ -45,7 +45,7 @@ See `docs/reference/setup-script.md` for the full flag list, and `docs/guides/st
 
    ```bash
    source .venv/bin/activate
-   pytest -v --cov=entraclaw --cov-report=term-missing
+   pytest -v --cov=entrabot --cov-report=term-missing
    ```
 
 ## Common Pitfalls

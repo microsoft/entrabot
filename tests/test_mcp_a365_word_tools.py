@@ -7,8 +7,8 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_read_word_document_wrapper(monkeypatch: pytest.MonkeyPatch) -> None:
-    import entraclaw.mcp_server as server
-    from entraclaw.a365.word import WordDocumentContent
+    import entrabot.mcp_server as server
+    from entrabot.a365.word import WordDocumentContent
 
     async def fake_initialize() -> None:
         return None
@@ -22,7 +22,7 @@ async def test_read_word_document_wrapper(monkeypatch: pytest.MonkeyPatch) -> No
         )
 
     monkeypatch.setattr(server, "_initialize", fake_initialize)
-    monkeypatch.setattr("entraclaw.a365.word.get_document_content", fake_read)
+    monkeypatch.setattr("entrabot.a365.word.get_document_content", fake_read)
 
     body = json.loads(await server.read_word_document("https://contoso/doc.docx"))
 
@@ -32,8 +32,8 @@ async def test_read_word_document_wrapper(monkeypatch: pytest.MonkeyPatch) -> No
 
 @pytest.mark.asyncio
 async def test_reply_to_word_comment_wrapper(monkeypatch: pytest.MonkeyPatch) -> None:
-    import entraclaw.mcp_server as server
-    from entraclaw.a365.word import WordCommentReply
+    import entrabot.mcp_server as server
+    from entrabot.a365.word import WordCommentReply
 
     async def fake_initialize() -> None:
         return None
@@ -48,7 +48,7 @@ async def test_reply_to_word_comment_wrapper(monkeypatch: pytest.MonkeyPatch) ->
         return WordCommentReply(reply_id="r1", comment_id="c", content="No.", raw={"id": "r1"})
 
     monkeypatch.setattr(server, "_initialize", fake_initialize)
-    monkeypatch.setattr("entraclaw.a365.word.reply_to_comment", fake_reply)
+    monkeypatch.setattr("entrabot.a365.word.reply_to_comment", fake_reply)
 
     body = json.loads(await server.reply_to_word_comment("d", "doc", "c", "No."))
 
@@ -62,8 +62,8 @@ async def test_reply_to_word_comment_wrapper(monkeypatch: pytest.MonkeyPatch) ->
 
 @pytest.mark.asyncio
 async def test_get_a365_file_metadata_by_url_wrapper(monkeypatch: pytest.MonkeyPatch) -> None:
-    import entraclaw.mcp_server as server
-    from entraclaw.a365.odsp import OdspFileMetadata
+    import entrabot.mcp_server as server
+    from entrabot.a365.odsp import OdspFileMetadata
 
     async def fake_initialize() -> None:
         return None
@@ -79,7 +79,7 @@ async def test_get_a365_file_metadata_by_url_wrapper(monkeypatch: pytest.MonkeyP
         )
 
     monkeypatch.setattr(server, "_initialize", fake_initialize)
-    monkeypatch.setattr("entraclaw.a365.odsp.get_file_or_folder_metadata_by_url", fake_metadata)
+    monkeypatch.setattr("entrabot.a365.odsp.get_file_or_folder_metadata_by_url", fake_metadata)
 
     body = json.loads(await server.get_a365_file_metadata_by_url("https://contoso/page.loop"))
 
@@ -94,8 +94,8 @@ async def test_get_a365_file_metadata_by_url_wrapper(monkeypatch: pytest.MonkeyP
 
 @pytest.mark.asyncio
 async def test_read_a365_text_file_wrapper(monkeypatch: pytest.MonkeyPatch) -> None:
-    import entraclaw.mcp_server as server
-    from entraclaw.a365.odsp import OdspFileContent
+    import entrabot.mcp_server as server
+    from entrabot.a365.odsp import OdspFileContent
 
     async def fake_initialize() -> None:
         return None
@@ -105,7 +105,7 @@ async def test_read_a365_text_file_wrapper(monkeypatch: pytest.MonkeyPatch) -> N
         return OdspFileContent(content="hello", encoding="text", raw={"content": "hello"})
 
     monkeypatch.setattr(server, "_initialize", fake_initialize)
-    monkeypatch.setattr("entraclaw.a365.odsp.read_small_text_file", fake_read)
+    monkeypatch.setattr("entrabot.a365.odsp.read_small_text_file", fake_read)
 
     body = json.loads(await server.read_a365_text_file("drive-1", "item-1"))
 
@@ -118,8 +118,8 @@ async def test_read_a365_text_file_wrapper(monkeypatch: pytest.MonkeyPatch) -> N
 
 @pytest.mark.asyncio
 async def test_read_a365_binary_file_wrapper(monkeypatch: pytest.MonkeyPatch) -> None:
-    import entraclaw.mcp_server as server
-    from entraclaw.a365.odsp import OdspFileContent
+    import entrabot.mcp_server as server
+    from entrabot.a365.odsp import OdspFileContent
 
     async def fake_initialize() -> None:
         return None
@@ -129,7 +129,7 @@ async def test_read_a365_binary_file_wrapper(monkeypatch: pytest.MonkeyPatch) ->
         return OdspFileContent(content="SGVsbG8=", encoding="base64", raw={"content": "SGVsbG8="})
 
     monkeypatch.setattr(server, "_initialize", fake_initialize)
-    monkeypatch.setattr("entraclaw.a365.odsp.read_small_binary_file", fake_read)
+    monkeypatch.setattr("entrabot.a365.odsp.read_small_binary_file", fake_read)
 
     body = json.loads(await server.read_a365_binary_file("drive-1", "item-1"))
 

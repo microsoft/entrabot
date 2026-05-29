@@ -1,8 +1,8 @@
 """Tests for informational host detection.
 
-The EntraClaw MCP server records the connected client's ``clientInfo.name``
+The EntraBot MCP server records the connected client's ``clientInfo.name``
 for logging purposes only. There is no leader/slave gating — every client
-that spawns entraclaw (stdio) gets its own process with its own poll loops,
+that spawns entrabot (stdio) gets its own process with its own poll loops,
 and channel pushes fire unconditionally. Clients that don't handle
 ``notifications/claude/channel`` drop them silently per the MCP spec.
 
@@ -28,7 +28,7 @@ class TestCurrentHost:
     """``_current_host()`` returns the lowercased client name or ``unknown``."""
 
     def test_returns_claude_code_when_client_is_claude_code(self) -> None:
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         fake_ctx = MagicMock()
         fake_ctx.session.client_params.clientInfo.name = "claude-code"
@@ -38,7 +38,7 @@ class TestCurrentHost:
 
     def test_returns_lowercased_when_client_is_capitalized(self) -> None:
         """Case-insensitive normalization."""
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         fake_ctx = MagicMock()
         fake_ctx.session.client_params.clientInfo.name = "Claude Code"
@@ -47,7 +47,7 @@ class TestCurrentHost:
             assert mcp_server._current_host() == "claude code"
 
     def test_returns_github_copilot_cli_when_client_is_copilot(self) -> None:
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         fake_ctx = MagicMock()
         fake_ctx.session.client_params.clientInfo.name = "github-copilot-cli"
@@ -57,7 +57,7 @@ class TestCurrentHost:
 
     def test_returns_unknown_when_client_info_absent(self) -> None:
         """Before session initialize, client_params is None."""
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         fake_ctx = MagicMock()
         fake_ctx.session.client_params = None
@@ -67,7 +67,7 @@ class TestCurrentHost:
 
     def test_returns_unknown_when_get_context_raises(self) -> None:
         """Outside a request context, FastMCP.get_context() raises. Treat as unknown."""
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         def boom():
             raise LookupError("no active request context")
@@ -89,7 +89,7 @@ class TestCaptureHostFromContext:
     """
 
     def test_captures_live_host_into_cache(self) -> None:
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         prior = mcp_server._state.get("cached_host", "")
         mcp_server._state["cached_host"] = ""
@@ -101,7 +101,7 @@ class TestCaptureHostFromContext:
             mcp_server._state["cached_host"] = prior
 
     def test_no_live_context_preserves_existing_cache(self) -> None:
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         prior = mcp_server._state.get("cached_host", "")
         mcp_server._state["cached_host"] = "claude-code"
@@ -113,7 +113,7 @@ class TestCaptureHostFromContext:
             mcp_server._state["cached_host"] = prior
 
     def test_empty_live_host_preserves_existing_cache(self) -> None:
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         prior = mcp_server._state.get("cached_host", "")
         mcp_server._state["cached_host"] = "claude-code"
@@ -126,7 +126,7 @@ class TestCaptureHostFromContext:
 
     def test_new_host_overwrites_cache(self) -> None:
         """If a different client connects, the cache reflects that."""
-        from entraclaw import mcp_server
+        from entrabot import mcp_server
 
         prior = mcp_server._state.get("cached_host", "")
         mcp_server._state["cached_host"] = "claude-code"

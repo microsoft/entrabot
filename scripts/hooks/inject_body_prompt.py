@@ -4,7 +4,7 @@
 Why this exists
 ---------------
 
-``src/entraclaw/mcp_server.py::_load_agent_instructions`` assembles the
+``src/entrabot/mcp_server.py::_load_agent_instructions`` assembles the
 body prompt from ``prompts/agent_system.md`` (with ``@include``
 expansion over ``prompts/anatomy/*.md``) and hands it to FastMCP as the
 server's ``instructions`` string. Claude Code surfaces those MCP-server
@@ -120,7 +120,7 @@ def main() -> int:
         "\n"
         "---\n"
         "\n"
-        "# Body prompt (entraclaw)\n"
+        "# Body prompt (entrabot)\n"
         "\n"
         "The following is the non-overridable body prompt, loaded from "
         "`prompts/agent_system.md` at session start.\n"

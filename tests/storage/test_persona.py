@@ -19,22 +19,22 @@ from pathlib import Path
 
 import pytest
 
-from entraclaw.storage.backend import LocalBackend
-from entraclaw.storage.persona import PersonaBackend, claude_code_memory_dir
+from entrabot.storage.backend import LocalBackend
+from entrabot.storage.persona import PersonaBackend, claude_code_memory_dir
 
 
 class TestClaudeCodeMemoryDir:
     def test_slug_encoding_for_path_with_spaces(self, tmp_path: Path) -> None:
         # Mirrors the real Claude Code convention observed in this repo
         result = claude_code_memory_dir(
-            Path("/path/to/entraclaw-identity-research"),
+            Path("/path/to/entrabot-identity-research"),
             home=tmp_path,
         )
         expected = (
             tmp_path
             / ".claude"
             / "projects"
-            / "-path-to-entraclaw-identity-research"
+            / "-path-to-entrabot-identity-research"
             / "memory"
         )
         assert result == expected

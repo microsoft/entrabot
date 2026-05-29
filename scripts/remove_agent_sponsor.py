@@ -12,7 +12,7 @@ Usage::
     python3 scripts/remove_agent_sponsor.py user@example.com --agent-object-id OID
 
 The script:
-  1. Reads the agent's object id from ``.entraclaw-state.json`` (or ``--agent-object-id``).
+  1. Reads the agent's object id from ``.entrabot-state.json`` (or ``--agent-object-id``).
   2. Mints a Graph token via the dedicated provisioner cert.
   3. Resolves the email to a user object id.
   4. DELETEs
@@ -35,8 +35,8 @@ from entra_provisioning import (  # noqa: E402
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from entraclaw.graph_helpers import GRAPH_BETA as GRAPH_BASE  # noqa: E402
-from entraclaw.graph_helpers import resolve_user_by_email  # noqa: E402
+from entrabot.graph_helpers import GRAPH_BETA as GRAPH_BASE  # noqa: E402
+from entrabot.graph_helpers import resolve_user_by_email  # noqa: E402
 
 
 def _list_sponsors(token: str, agent_object_id: str) -> list[dict]:
@@ -92,7 +92,7 @@ def main(argv: list[str]) -> int:
 
     if not agent_object_id:
         print(
-            "ERROR: AGENT_OBJECT_ID missing from .entraclaw-state.json. "
+            "ERROR: AGENT_OBJECT_ID missing from .entrabot-state.json. "
             "Run scripts/create_entra_agent_ids.py first, or pass --agent-object-id.",
             file=sys.stderr,
         )
@@ -147,7 +147,7 @@ def main(argv: list[str]) -> int:
             f"mail={sp.get('mail')!r}"
         )
     print("")
-    print("Restart the entraclaw MCP server so the sponsor gate is reloaded:")
+    print("Restart the entrabot MCP server so the sponsor gate is reloaded:")
     print("  killall -TERM Python 2>/dev/null; copilot")
     return 0
 

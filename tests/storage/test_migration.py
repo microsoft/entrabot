@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from entraclaw.storage.backend import LocalBackend
-from entraclaw.storage.migration import MigrationReport, migrate_local_to_backend
+from entrabot.storage.backend import LocalBackend
+from entrabot.storage.migration import MigrationReport, migrate_local_to_backend
 
 
 @pytest.fixture

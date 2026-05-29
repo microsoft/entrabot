@@ -4,7 +4,7 @@
 > Kept for the Azure VM provisioning recipe (still useful as a sub-step).
 > The three-hop port itself is covered by the new plan.
 
-> Scriptable Azure VM setup for developing and demonstrating Entraclaw on Windows.
+> Scriptable Azure VM setup for developing and demonstrating Entrabot on Windows.
 
 ## Overview
 
@@ -26,7 +26,7 @@ For MVP, skip the Agent User — use your own account. The OBO token's `azp` cla
 
 ### 2. Entra App Registration
 
-Create an app registration for the Entraclaw agent:
+Create an app registration for the Entrabot agent:
 
 ```bash
 # Create the app registration
@@ -34,7 +34,7 @@ Create an app registration for the Entraclaw agent:
 #   az ad sp show --id 00000003-0000-0000-c000-000000000000 \
 #     --query "oauth2PermissionScopes[?value=='Chat.Create' || value=='ChatMessage.Send' || value=='Chat.ReadWrite' || value=='User.Read' || value=='Presence.ReadWrite'].{name:value, id:id}" -o table
 az ad app create \
-  --display-name "Entraclaw Agent" \
+  --display-name "Entrabot Agent" \
   --sign-in-audience "AzureADMyOrg" \
   --required-resource-accesses '[{
     "resourceAppId": "00000003-0000-0000-c000-000000000000",
@@ -62,7 +62,7 @@ az ad app permission admin-consent --id <app-id>
 
 Generate a client secret (for OBO exchange):
 ```bash
-az ad app credential reset --id <app-id> --display-name "Entraclaw MVP"
+az ad app credential reset --id <app-id> --display-name "Entrabot MVP"
 # SAVE the password — this is the client secret for ConfidentialClientApplication
 # ⚠️ MVP ONLY — production must use split architecture or certificate auth.
 #    The client secret on a device is a crown-jewel credential (see proposals.md Risk #1).
@@ -74,14 +74,14 @@ az ad app credential reset --id <app-id> --display-name "Entraclaw MVP"
 > If not available in your tenant, skip this step — OBO still works without Agent IDs
 > (the `azp` claim in sign-in logs still identifies the agent app).
 
-Register an Agent ID blueprint for the Entraclaw agent type:
+Register an Agent ID blueprint for the Entrabot agent type:
 
 ```http
 POST https://graph.microsoft.com/beta/agentIdentityBlueprints
 Content-Type: application/json
 
 {
-  "displayName": "Entraclaw Code Agent",
+  "displayName": "Entrabot Code Agent",
   "description": "Autonomous coding agent with Teams integration",
   "appId": "<app-registration-client-id>"
 }
@@ -91,12 +91,12 @@ Content-Type: application/json
 
 ```bash
 #!/bin/bash
-# provision-windows-vm.sh — Create an Entra-joined Windows 11 VM for Entraclaw dev
+# provision-windows-vm.sh — Create an Entra-joined Windows 11 VM for Entrabot dev
 
-RESOURCE_GROUP="entraclaw-dev"
-VM_NAME="entraclaw-win11"
+RESOURCE_GROUP="entrabot-dev"
+VM_NAME="entrabot-win11"
 LOCATION="westus2"
-ADMIN_USER="entraclawadmin"
+ADMIN_USER="entrabotadmin"
 
 # Create resource group
 az group create --name $RESOURCE_GROUP --location $LOCATION
@@ -135,7 +135,7 @@ echo "VM created. Connect via: az ssh vm -n $VM_NAME -g $RESOURCE_GROUP"
 Run this inside the VM after RDP/SSH in:
 
 ```powershell
-# setup-entraclaw.ps1 — Install Copilot CLI, Python, and Entraclaw on Windows
+# setup-entrabot.ps1 — Install Copilot CLI, Python, and Entrabot on Windows
 
 # Install Python 3.12
 winget install Python.Python.3.12 --accept-package-agreements --accept-source-agreements
@@ -150,8 +150,8 @@ winget install Git.Git --accept-package-agreements --accept-source-agreements
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
 # Clone the repo
-git clone "<your-internal-or-github-remote-url>" C:\entraclaw
-cd C:\entraclaw
+git clone "<your-internal-or-github-remote-url>" C:\entrabot
+cd C:\entrabot
 
 # Create venv and install
 python -m venv .venv
@@ -163,25 +163,25 @@ python --version
 pytest --version
 copilot --version
 
-Write-Host "Entraclaw dev environment ready. Launch 'copilot' to start."
+Write-Host "Entrabot dev environment ready. Launch 'copilot' to start."
 ```
 
 ## Connection
 
 ```bash
 # RDP (traditional)
-az vm show -g entraclaw-dev -n entraclaw-win11 --show-details --query publicIps -o tsv
+az vm show -g entrabot-dev -n entrabot-win11 --show-details --query publicIps -o tsv
 # → RDP to that IP, sign in with your Entra credentials
 
 # SSH (if enabled)
-az ssh vm -n entraclaw-win11 -g entraclaw-dev
+az ssh vm -n entrabot-win11 -g entrabot-dev
 ```
 
 ## Teardown
 
 ```bash
 # Delete everything when done
-az group delete --name entraclaw-dev --yes --no-wait
+az group delete --name entrabot-dev --yes --no-wait
 ```
 
 ## Cost Estimate
@@ -193,4 +193,4 @@ az group delete --name entraclaw-dev --yes --no-wait
 | Public IP | Standard | ~$4/month |
 | **Total (dev hours only)** | ~8 hrs/week | **~$8/week** |
 
-Deallocate the VM when not in use: `az vm deallocate -g entraclaw-dev -n entraclaw-win11`
+Deallocate the VM when not in use: `az vm deallocate -g entrabot-dev -n entrabot-win11`

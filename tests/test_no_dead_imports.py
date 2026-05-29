@@ -1,7 +1,7 @@
 """Guard against re-introducing the failed PTY-supervisor / terminal-watcher modules.
 
-Phase 3 of the Copilot-CLI watcher plan deleted ``src/entraclaw/supervise.py`` and
-``src/entraclaw/watch.py`` (along with their ``entraclaw-supervise`` / ``entraclaw-watch``
+Phase 3 of the Copilot-CLI watcher plan deleted ``src/entrabot/supervise.py`` and
+``src/entrabot/watch.py`` (along with their ``entrabot-supervise`` / ``entrabot-watch``
 console scripts) once ``wait_for_sponsor_dm`` shipped in PR #46. The wait-tool is the
 only sanctioned wake mechanism — any new code that imports the removed modules is a
 regression toward the failed approach. This test fails loudly if it happens.
@@ -20,14 +20,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC_ROOT = REPO_ROOT / "src"
 
 FORBIDDEN_IMPORTS = (
-    "from entraclaw.supervise",
-    "import entraclaw.supervise",
-    "from entraclaw.watch ",
-    "from entraclaw.watch\n",
-    "import entraclaw.watch",
+    "from entrabot.supervise",
+    "import entrabot.supervise",
+    "from entrabot.watch ",
+    "from entrabot.watch\n",
+    "import entrabot.watch",
 )
 
-FORBIDDEN_SCRIPTS = ("entraclaw-supervise", "entraclaw-watch")
+FORBIDDEN_SCRIPTS = ("entrabot-supervise", "entrabot-watch")
 
 
 def _python_files() -> list[Path]:
@@ -54,7 +54,7 @@ def test_pyproject_does_not_advertise_removed_console_scripts() -> None:
 
 
 def test_removed_modules_not_present_on_disk() -> None:
-    for relpath in ("src/entraclaw/supervise.py", "src/entraclaw/watch.py"):
+    for relpath in ("src/entrabot/supervise.py", "src/entrabot/watch.py"):
         assert not (REPO_ROOT / relpath).exists(), (
             f"{relpath} reappeared. The PTY-supervisor / terminal-watcher path "
             "was retired in favor of wait_for_sponsor_dm — see Learning #49."

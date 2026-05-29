@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup_bot.sh — One-time Azure Bot provisioning for EntraClaw bot mode
+# setup_bot.sh — One-time Azure Bot provisioning for EntraBot bot mode
 #
 # Pattern: matches setup.sh — idempotent, state-persisted, certificate auth (ADR-003).
 #
@@ -10,9 +10,9 @@
 #   4. Generates a certificate and stores private key in OS keystore
 #   5. Uploads public certificate to the app registration
 #   6. Creates Azure Bot resource linked to the app
-#   7. Writes bot config to .env and .entraclaw-state.json
+#   7. Writes bot config to .env and .entrabot-state.json
 #
-# State is persisted in .entraclaw-state.json so re-runs are idempotent.
+# State is persisted in .entrabot-state.json so re-runs are idempotent.
 # Certificate private key is stored in OS keystore (Keychain/TPM/Keyring).
 #
 # Usage:
@@ -74,9 +74,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-BOT_DISPLAY_NAME="EntraClaw Bot"
-BOT_RG_NAME="entraclaw-bot-rg"
-BOT_RESOURCE_NAME="entraclaw-bot"
+BOT_DISPLAY_NAME="EntraBot Bot"
+BOT_RG_NAME="entrabot-bot-rg"
+BOT_RESOURCE_NAME="entrabot-bot"
 BOT_RG_LOCATION="westus2"
 
 # ── State helpers (shared pattern with setup.sh) ─────────────────────────
@@ -85,7 +85,7 @@ read_state() {
     local key="$1"
     python3 -c "
 import json, pathlib, sys
-state_file = pathlib.Path('$PROJECT_ROOT/.entraclaw-state.json')
+state_file = pathlib.Path('$PROJECT_ROOT/.entrabot-state.json')
 if not state_file.is_file():
     sys.exit(0)
 data = json.loads(state_file.read_text())
@@ -100,7 +100,7 @@ write_state() {
     local value="$2"
     python3 -c "
 import json, pathlib
-state_file = pathlib.Path('$PROJECT_ROOT/.entraclaw-state.json')
+state_file = pathlib.Path('$PROJECT_ROOT/.entrabot-state.json')
 data = json.loads(state_file.read_text()) if state_file.is_file() else {}
 data['$key'] = '$value'
 state_file.write_text(json.dumps(data, indent=2) + '\n')
@@ -111,7 +111,7 @@ clear_state() {
     local key="$1"
     python3 -c "
 import json, pathlib
-state_file = pathlib.Path('$PROJECT_ROOT/.entraclaw-state.json')
+state_file = pathlib.Path('$PROJECT_ROOT/.entrabot-state.json')
 if not state_file.is_file():
     return
 data = json.loads(state_file.read_text())
@@ -145,8 +145,8 @@ if [ "$TEARDOWN" = true ]; then
     python3 -c "
 import keyring
 try:
-    keyring.delete_password('entraclaw-bot', 'private-key')
-    keyring.delete_password('entraclaw-bot', 'certificate')
+    keyring.delete_password('entrabot-bot', 'private-key')
+    keyring.delete_password('entrabot-bot', 'certificate')
 except Exception:
     pass
 " 2>/dev/null || true
@@ -158,7 +158,7 @@ fi
 # ════════════════════════════════════════════════════════════════════════════
 
 echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║   EntraClaw Bot Gateway — One-Time Setup                    ║${NC}"
+echo -e "${GREEN}║   EntraBot Bot Gateway — One-Time Setup                    ║${NC}"
 echo -e "${GREEN}║   (Azure Bot + single-tenant app + certificate auth)       ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
 
@@ -287,7 +287,7 @@ if [ -n "$BOT_CERT_THUMBPRINT" ]; then
     # Verify the private key is still in the keystore
     KEY_EXISTS=$("$PYTHON" -c "
 import keyring
-key = keyring.get_password('entraclaw-bot', 'private-key')
+key = keyring.get_password('entrabot-bot', 'private-key')
 print('yes' if key else 'no')
 " 2>/dev/null || echo "no")
 
@@ -315,8 +315,8 @@ import keyring
 # Generate RSA 2048 key + self-signed cert
 key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 subject = issuer = x509.Name([
-    x509.NameAttribute(NameOID.COMMON_NAME, 'entraclaw-bot-$BOT_APP_ID'),
-    x509.NameAttribute(NameOID.ORGANIZATION_NAME, 'EntraClaw Bot Gateway'),
+    x509.NameAttribute(NameOID.COMMON_NAME, 'entrabot-bot-$BOT_APP_ID'),
+    x509.NameAttribute(NameOID.ORGANIZATION_NAME, 'EntraBot Bot Gateway'),
 ])
 cert = (x509.CertificateBuilder()
     .subject_name(subject)
@@ -337,14 +337,14 @@ pem_key = key.private_bytes(
     serialization.PrivateFormat.PKCS8,
     serialization.NoEncryption(),
 ).decode()
-keyring.set_password('entraclaw-bot', 'private-key', pem_key)
+keyring.set_password('entrabot-bot', 'private-key', pem_key)
 
 # Store certificate for reference
 pem_cert = cert.public_bytes(serialization.Encoding.PEM).decode()
-keyring.set_password('entraclaw-bot', 'certificate', pem_cert)
+keyring.set_password('entrabot-bot', 'certificate', pem_cert)
 
 # Write cert to known path for az CLI upload
-with open('/tmp/entraclaw-bot-cert.pem', 'w') as f:
+with open('/tmp/entrabot-bot-cert.pem', 'w') as f:
     f.write(pem_cert)
 
 print(thumbprint)
@@ -356,7 +356,7 @@ print(thumbprint)
 
     # Upload certificate to app registration
     echo "  Uploading public certificate to Entra app registration..."
-    CERT_FILE="/tmp/entraclaw-bot-cert.pem"
+    CERT_FILE="/tmp/entrabot-bot-cert.pem"
     if [ ! -f "$CERT_FILE" ]; then
         fail "Certificate file not found at $CERT_FILE"
     fi
@@ -425,7 +425,7 @@ success "Teams channel configured"
 step 6 "Updating .env with bot configuration"
 
 # Append bot config to .env (preserve existing entries)
-BOT_ENV_KEYS="ENTRACLAW_BOT_APP_ID ENTRACLAW_BOT_CERT_THUMBPRINT ENTRACLAW_BOT_TUNNEL_PORT ENTRACLAW_MODE"
+BOT_ENV_KEYS="ENTRABOT_BOT_APP_ID ENTRABOT_BOT_CERT_THUMBPRINT ENTRABOT_BOT_TUNNEL_PORT ENTRABOT_MODE"
 
 if [ -f .env ]; then
     # Remove existing bot entries to avoid duplicates
@@ -435,7 +435,7 @@ if [ -f .env ]; then
     # Remove old bot comment block if present
     sed -i '' '/^# Bot mode/d' .env 2>/dev/null || true
 else
-    echo "# EntraClaw Identity Research — generated by scripts/setup.sh" > .env
+    echo "# EntraBot Identity Research — generated by scripts/setup.sh" > .env
     echo "# DO NOT commit this file (it is in .gitignore)" >> .env
     echo "" >> .env
 fi
@@ -443,9 +443,9 @@ fi
 cat >> .env << EOF
 
 # Bot mode (certificate auth per ADR-003 — no client secrets)
-ENTRACLAW_BOT_APP_ID=$BOT_APP_ID
-ENTRACLAW_BOT_CERT_THUMBPRINT=$BOT_CERT_THUMBPRINT
-ENTRACLAW_BOT_TUNNEL_PORT=3978
+ENTRABOT_BOT_APP_ID=$BOT_APP_ID
+ENTRABOT_BOT_CERT_THUMBPRINT=$BOT_CERT_THUMBPRINT
+ENTRABOT_BOT_TUNNEL_PORT=3978
 EOF
 
 chmod 600 .env
@@ -457,7 +457,7 @@ success ".env updated with bot configuration"
 step 7 "Building Teams app package"
 
 MANIFEST_DIR="$PROJECT_ROOT/manifests/teams-app"
-PACKAGE_PATH="$PROJECT_ROOT/manifests/entraclaw-bot.zip"
+PACKAGE_PATH="$PROJECT_ROOT/manifests/entrabot-bot.zip"
 
 if [ ! -f "$MANIFEST_DIR/manifest.json" ]; then
     warn "No manifest.json found at $MANIFEST_DIR — skipping package build"
@@ -506,7 +506,7 @@ echo -e "  1. Run the bot:  ${BLUE}./scripts/start_bot.sh${NC}"
 echo -e "     (This starts the Dev Tunnel + bot server. The tunnel URL will be"
 echo -e "      auto-configured as the messaging endpoint.)"
 echo -e "  2. Sideload the Teams app manifest (if not already done)"
-echo -e "  3. Launch Claude Code:  ${BLUE}claude --dangerously-load-development-channels server:entraclaw${NC}"
+echo -e "  3. Launch Claude Code:  ${BLUE}claude --dangerously-load-development-channels server:entrabot${NC}"
 echo ""
 echo -e "  ${YELLOW}TEARDOWN:${NC}"
 echo -e "  ./scripts/setup_bot.sh --teardown"

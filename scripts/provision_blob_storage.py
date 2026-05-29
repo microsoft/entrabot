@@ -1,11 +1,11 @@
-"""Provision Azure Blob Storage for EntraClaw agent memory (ADR-005, Phase 5).
+"""Provision Azure Blob Storage for EntraBot agent memory (ADR-005, Phase 5).
 
 Idempotent — designed to be called from ``scripts/setup.sh`` on every run.
 Already-provisioned resources are detected and reused; only missing pieces
 get created.
 
 What it does, in order:
-  1. Ensure resource group ``entraclaw-rg`` exists (in the user's default
+  1. Ensure resource group ``entrabot-rg`` exists (in the user's default
      subscription, in a sensible region).
   2. Ensure a Storage Account exists (one per tenant — name derived from
      the tenant ID so multiple devs in the same tenant converge on the
@@ -43,7 +43,7 @@ import subprocess
 import sys
 
 # Module-level constants
-RESOURCE_GROUP = "entraclaw-rg"
+RESOURCE_GROUP = "entrabot-rg"
 DEFAULT_LOCATION = "eastus"
 STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE = "Storage Blob Data Contributor"
 
@@ -323,7 +323,7 @@ def provision(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Provision Azure Blob Storage for an EntraClaw Agent User."
+        description="Provision Azure Blob Storage for an EntraBot Agent User."
     )
     parser.add_argument("--tenant-id", required=True, help="Entra tenant ID (GUID).")
     parser.add_argument(

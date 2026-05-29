@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import msal
 import pytest
 
-from entraclaw.errors import AuthCancelledError, MsalAuthError
+from entrabot.errors import AuthCancelledError, MsalAuthError
 
 
 def _token_result(
@@ -39,8 +39,8 @@ def _make_account(username: str = "user@contoso.com") -> dict:
 class TestMsalDelegatedAuth:
     """Tests for the MsalDelegatedAuth class."""
 
-    @patch("entraclaw.auth.delegated._build_token_cache")
-    @patch("entraclaw.auth.delegated._build_app")
+    @patch("entrabot.auth.delegated._build_token_cache")
+    @patch("entrabot.auth.delegated._build_app")
     def _make_auth(
         self,
         mock_build_app: MagicMock,
@@ -49,7 +49,7 @@ class TestMsalDelegatedAuth:
         app: MagicMock | None = None,
     ):
         """Helper: create an MsalDelegatedAuth with mocked app."""
-        from entraclaw.auth.delegated import MsalDelegatedAuth
+        from entrabot.auth.delegated import MsalDelegatedAuth
 
         mock_build_cache.return_value = msal.SerializableTokenCache()
         mock_app = app or MagicMock(spec=msal.PublicClientApplication)
@@ -226,15 +226,15 @@ class TestMsalDelegatedAuth:
 class TestTokenCache:
     """Tests for the _build_token_cache helper."""
 
-    @patch("entraclaw.auth.delegated.build_encrypted_persistence")
-    @patch("entraclaw.auth.delegated.PersistedTokenCache")
+    @patch("entrabot.auth.delegated.build_encrypted_persistence")
+    @patch("entrabot.auth.delegated.PersistedTokenCache")
     def test_build_token_cache_success(
         self,
         mock_persisted: MagicMock,
         mock_build_persistence: MagicMock,
     ) -> None:
         """Encrypted persistence + PersistedTokenCache are wired correctly."""
-        from entraclaw.auth.delegated import _build_token_cache
+        from entrabot.auth.delegated import _build_token_cache
 
         mock_persistence = MagicMock()
         mock_build_persistence.return_value = mock_persistence
@@ -243,17 +243,17 @@ class TestTokenCache:
 
         result = _build_token_cache()
 
-        mock_build_persistence.assert_called_once_with("entraclaw_msal_cache")
+        mock_build_persistence.assert_called_once_with("entrabot_msal_cache")
         mock_persisted.assert_called_once_with(mock_persistence)
         assert result is mock_cache
 
-    @patch("entraclaw.auth.delegated.build_encrypted_persistence")
+    @patch("entrabot.auth.delegated.build_encrypted_persistence")
     def test_build_token_cache_corruption_fallback(
         self,
         mock_build_persistence: MagicMock,
     ) -> None:
         """Corrupted cache falls back to an in-memory SerializableTokenCache."""
-        from entraclaw.auth.delegated import _build_token_cache
+        from entrabot.auth.delegated import _build_token_cache
 
         mock_build_persistence.side_effect = Exception("Corrupt cache file")
 
@@ -263,6 +263,6 @@ class TestTokenCache:
 
     def test_cache_location_constant(self) -> None:
         """CACHE_LOCATION is set to expected value."""
-        from entraclaw.auth.delegated import CACHE_LOCATION
+        from entrabot.auth.delegated import CACHE_LOCATION
 
-        assert CACHE_LOCATION == "entraclaw_msal_cache"
+        assert CACHE_LOCATION == "entrabot_msal_cache"

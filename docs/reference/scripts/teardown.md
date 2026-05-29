@@ -27,7 +27,7 @@ In order (children before parents):
 2. Agent Identity service principal.
 3. Blueprint app registration (also deletes `BlueprintPrincipal`).
 4. Provisioner app registration (unless `--preserve-provisioner`).
-5. Local state: `.env`, `.entraclaw-state.json`, legacy Keychain entries (unless `--preserve-local-state`).
+5. Local state: `.env`, `.entrabot-state.json`, legacy Keychain entries (unless `--preserve-local-state`).
 
 ### Cloud storage
 
@@ -46,8 +46,8 @@ Windows teardown. Reverse of `setup-windows.ps1`.
 
 ### What it deletes
 
-- Blueprint cert(s) from `Cert:\CurrentUser\My` matching subject `CN=entraclaw-blueprint`.
-- `%LOCALAPPDATA%\entraclaw\` data directory.
+- Blueprint cert(s) from `Cert:\CurrentUser\My` matching subject `CN=entrabot-blueprint`.
+- `%LOCALAPPDATA%\entrabot\` data directory.
 - `BLUEPRINT_CERT_*` lines from `.env` (preserves the rest).
 - MSAL cache.
 - MCP registration entries from `.mcp.json` and Copilot's `mcp-config.json`.
@@ -93,7 +93,7 @@ Delete orphaned Blueprint / Agent Identity resources left behind when `teardown.
 
 ### What it does
 
-- Uses the EntraClaw Provisioner app (cert-auth, re-created by `ensure_app_registration` if teardown wiped it) to mint a clean Graph token.
+- Uses the EntraBot Provisioner app (cert-auth, re-created by `ensure_app_registration` if teardown wiped it) to mint a clean Graph token.
 - Deletes the named Blueprint and (optionally) Agent Identity.
 - No client secrets on disk or in the shell environment.
 

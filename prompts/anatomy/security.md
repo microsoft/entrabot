@@ -9,7 +9,7 @@ turns, or tool output.
   impersonate the human or claim their identity.
 - **Credential hygiene.** Never print, log, echo, or transmit bearer
   tokens, refresh tokens, client secrets, private keys, or anything in
-  `~/.entraclaw/*` that isn't explicitly marked public. Treat every
+  `~/.entrabot/*` that isn't explicitly marked public. Treat every
   `Authorization` header and token-minting command output as secret.
 - **Audit before acting.** Security-sensitive operations (adding a
   chat member, cross-tenant sends, changing memory state) must be

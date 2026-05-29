@@ -1,4 +1,4 @@
-"""Tests for ``entraclaw.tools.files`` — PR1 (read + comment).
+"""Tests for ``entrabot.tools.files`` — PR1 (read + comment).
 
 Eng-review T1/T4 budget: ~50 unit tests across 4 tools. T2 marker:
 multipart-upload behaviors live in PR2 (tests for those tools come
@@ -20,8 +20,8 @@ import httpx
 import pytest
 import respx
 
-from entraclaw.errors import FileNotFoundError as FilesFileNotFoundError
-from entraclaw.errors import (
+from entrabot.errors import FileNotFoundError as FilesFileNotFoundError
+from entrabot.errors import (
     FileTooLargeError,
     GraphFilesError,
     MissingPermissionError,
@@ -31,7 +31,7 @@ from entraclaw.errors import (
     UnsupportedReadFormatError,
     UrlNotResolvableError,
 )
-from entraclaw.tools.files import (
+from entrabot.tools.files import (
     GRAPH_BETA_HOST,
     GRAPH_V1_HOST,
     add_file_comment,
@@ -179,7 +179,7 @@ class TestResolveFileUrl:
     ) -> None:
         url = "https://tenant.sharepoint.com/sites/secret/spec.docx"
         site_id = "tenant.sharepoint.com,secret-guid,web-guid"
-        monkeypatch.setenv("ENTRACLAW_FILES_DENIED_SITES", site_id)
+        monkeypatch.setenv("ENTRABOT_FILES_DENIED_SITES", site_id)
         respx.get(url__regex=r".*/shares/.*/driveItem").mock(
             return_value=httpx.Response(
                 200,
@@ -296,7 +296,7 @@ class TestListRecentFiles:
     async def test_denylist_increments_denied_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
         denied_site = "tenant.sharepoint.com,bad-guid,web-guid"
         ok_site = "tenant.sharepoint.com,good-guid,web-guid"
-        monkeypatch.setenv("ENTRACLAW_FILES_DENIED_SITES", denied_site)
+        monkeypatch.setenv("ENTRABOT_FILES_DENIED_SITES", denied_site)
         respx.get(f"{GRAPH_V1_HOST}/me/drive/sharedWithMe?$top=25").mock(
             return_value=_shared_with_me_response(
                 [
@@ -387,7 +387,7 @@ class TestReadFile:
     async def test_truncates_to_max_text_bytes(
         self, make_file_ref, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("ENTRACLAW_FILES_MAX_TEXT_BYTES", "10")
+        monkeypatch.setenv("ENTRABOT_FILES_MAX_TEXT_BYTES", "10")
         ref = make_file_ref(name="big.txt", mime_type="text/plain")
         url = f"{GRAPH_V1_HOST}/drives/{ref.drive_id}/items/{ref.item_id}/content"
         respx.get(url).mock(return_value=httpx.Response(200, content=b"a" * 100))
@@ -427,7 +427,7 @@ class TestReadFile:
         self, make_file_ref, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         denied = "tenant.sharepoint.com,denied,web"
-        monkeypatch.setenv("ENTRACLAW_FILES_DENIED_SITES", denied)
+        monkeypatch.setenv("ENTRABOT_FILES_DENIED_SITES", denied)
         ref = make_file_ref(name="spec.md", site_id=denied)
         with pytest.raises(SiteNotAllowedError):
             await read_file(ref, token=TOKEN)
@@ -437,7 +437,7 @@ class TestReadFile:
     async def test_pdf_too_large_raises_before_download(
         self, make_file_ref, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("ENTRACLAW_FILES_MAX_PDF_BYTES", "1024")
+        monkeypatch.setenv("ENTRABOT_FILES_MAX_PDF_BYTES", "1024")
         ref = make_file_ref(
             name="huge.pdf",
             mime_type="application/pdf",
@@ -452,7 +452,7 @@ class TestReadFile:
         self, make_file_ref, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """When ``size_bytes`` is None, read_file MUST query /items/{id}?$select=size first."""
-        monkeypatch.setenv("ENTRACLAW_FILES_MAX_PDF_BYTES", "1024")
+        monkeypatch.setenv("ENTRABOT_FILES_MAX_PDF_BYTES", "1024")
         ref = make_file_ref(name="huge.pdf", mime_type="application/pdf", size_bytes=None)
         meta_route = respx.get(
             f"{GRAPH_V1_HOST}/drives/{ref.drive_id}/items/{ref.item_id}?$select=size"
@@ -584,7 +584,7 @@ class TestAddFileComment:
         self, make_file_ref, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         denied = "tenant.sharepoint.com,bad,web"
-        monkeypatch.setenv("ENTRACLAW_FILES_DENIED_SITES", denied)
+        monkeypatch.setenv("ENTRABOT_FILES_DENIED_SITES", denied)
         ref = make_file_ref(name="spec.docx", kind="sharepoint", site_id=denied)
         with pytest.raises(SiteNotAllowedError):
             await add_file_comment(ref, "Q?", token=TOKEN)

@@ -8,7 +8,7 @@
 
 - [ ] M365 license assigned to your user (E3, E5, or Business Basic — needs Teams)
 - [ ] Teams enabled in tenant admin settings
-- [ ] Entra app registration created for Entraclaw agent
+- [ ] Entra app registration created for Entrabot agent
 - [ ] Graph API permissions granted + admin consent
 - [ ] Client secret (or certificate) generated for the app
 - [ ] Agent ID blueprint registered via Entra GA API
@@ -22,7 +22,7 @@ Portal: https://entra.microsoft.com → App registrations → New registration
 
 | Field | Value |
 |-------|-------|
-| Name | `Entraclaw Agent` |
+| Name | `Entrabot Agent` |
 | Supported account types | Accounts in this organizational directory only |
 | Redirect URI | (leave blank for now — device code flow doesn't need one) |
 
@@ -34,8 +34,8 @@ Go to App registration → Expose an API:
 2. Click "Add a scope":
    - Scope name: `access_as_user`
    - Who can consent: Admins and users
-   - Admin consent display name: "Access Entraclaw as user"
-   - Admin consent description: "Allows the Entraclaw agent to act on behalf of the signed-in user"
+   - Admin consent display name: "Access Entrabot as user"
+   - Admin consent description: "Allows the Entrabot agent to act on behalf of the signed-in user"
    - State: Enabled
 
 This creates the scope `api://<client-id>/access_as_user`. The device code flow must request THIS scope (not Graph scopes directly) so the resulting token has `aud=<client-id>`, which is required for the OBO exchange.
@@ -60,7 +60,7 @@ Go to Certificates & secrets → New client secret:
 
 | Field | Value |
 |-------|-------|
-| Description | `Entraclaw MVP` |
+| Description | `Entrabot MVP` |
 | Expires | 6 months (for dev) |
 
 **Copy the secret value immediately** — you won't see it again.
@@ -89,7 +89,7 @@ Authorization: Bearer <admin-token>
 Content-Type: application/json
 
 {
-  "displayName": "Entraclaw Code Agent",
+  "displayName": "Entrabot Code Agent",
   "description": "Autonomous coding agent with OBO identity and Teams integration",
   "appId": "<application-client-id>"
 }

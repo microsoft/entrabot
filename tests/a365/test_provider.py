@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from entraclaw.a365.provider import WorkIqProvider
-from entraclaw.a365.tokens import WorkIqTokenRequest
+from entrabot.a365.provider import WorkIqProvider
+from entrabot.a365.tokens import WorkIqTokenRequest
 
 
 class FakeMcpClient:

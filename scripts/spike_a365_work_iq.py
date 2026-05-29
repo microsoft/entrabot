@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect local Agent 365 Work IQ setup for Entraclaw.
+"""Inspect local Agent 365 Work IQ setup for Entrabot.
 
 This script is a discovery helper, not runtime code. It prints the configured
 Work IQ server metadata from ToolingManifest.json and validates that Word is
@@ -16,7 +16,7 @@ from typing import Any
 
 
 def _manifest_candidates() -> list[Path]:
-    configured = os.environ.get("ENTRACLAW_A365_TOOLING_MANIFEST")
+    configured = os.environ.get("ENTRABOT_A365_TOOLING_MANIFEST")
     paths: list[Path] = []
     if configured:
         paths.append(Path(configured).expanduser())
@@ -32,7 +32,7 @@ def _load_manifest() -> tuple[Path, dict[str, Any]]:
 
 
 async def smoke_read_word(url: str) -> int:
-    from entraclaw.a365.word import get_document_content
+    from entrabot.a365.word import get_document_content
 
     content = await get_document_content(url)
     print(f"content_html bytes: {len(content.content_html.encode('utf-8'))}")

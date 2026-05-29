@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from entraclaw.bot.tunnel import TunnelError, TunnelManager
+from entrabot.bot.tunnel import TunnelError, TunnelManager
 
 
 class TestTunnelManager:

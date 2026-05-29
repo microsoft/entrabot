@@ -1,6 +1,6 @@
 # Customizing the agent body prompt
 
-The EntraClaw agent's system prompt is composed from a **body** (shipped with the repo) and, optionally, a **persona** (from the `persona-sati` MCP server). This guide explains how the body works and how to customize it.
+The EntraBot agent's system prompt is composed from a **body** (shipped with the repo) and, optionally, a **persona** (from the `persona-sati` MCP server). This guide explains how the body works and how to customize it.
 
 ## Why the split
 
@@ -93,7 +93,7 @@ The loader falls through from body → persona → hardcoded string. An empty or
 
 ## How the loader behaves
 
-`src/entraclaw/mcp_server.py::_load_agent_instructions` runs at MCP server boot:
+`src/entrabot/mcp_server.py::_load_agent_instructions` runs at MCP server boot:
 
 1. **Read body.** Open `LOCAL_PROMPT_PATH` (default `prompts/agent_system.md`), expand `@include` directives, strip surrounding whitespace. If the file doesn't exist or is empty, `body = ""`.
 2. **Try persona.** If `PERSONA_SATI_MCP_URL` and `PERSONA_SATI_MCP_TOKEN_COMMAND` are both set, open an SSE session to persona-sati and call its `get_system_prompt` tool. On any failure (token mint, network, empty response) persona is dropped and a diagnostic goes to stderr.
@@ -111,10 +111,10 @@ After editing, restart the MCP server so the new prompt is loaded. In Claude Cod
 
 ```bash
 # Confirms the body prompt file is the one you expect
-.venv/bin/python -c "from entraclaw.mcp_server import LOCAL_PROMPT_PATH; print(LOCAL_PROMPT_PATH)"
+.venv/bin/python -c "from entrabot.mcp_server import LOCAL_PROMPT_PATH; print(LOCAL_PROMPT_PATH)"
 
 # Dumps the composed prompt to stdout
-.venv/bin/python -c "from entraclaw.mcp_server import _load_agent_instructions; print(_load_agent_instructions())"
+.venv/bin/python -c "from entrabot.mcp_server import _load_agent_instructions; print(_load_agent_instructions())"
 ```
 
 For programmatic checks, `tests/test_mcp_server_integration.py::TestLoadAgentInstructions` covers the composition logic — use that as a pattern for your own prompt-related tests.

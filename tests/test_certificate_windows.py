@@ -26,8 +26,8 @@ if sys.platform != "win32":
 import importlib.util  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-from entraclaw.auth import certificate, cncrypt_signer  # noqa: E402
-from entraclaw.platform import windows  # noqa: E402
+from entrabot.auth import certificate, cncrypt_signer  # noqa: E402
+from entrabot.platform import windows  # noqa: E402
 
 _HERE = Path(__file__).resolve()
 _GEN_SPEC = importlib.util.spec_from_file_location(
@@ -42,7 +42,7 @@ _GEN_SPEC.loader.exec_module(_GEN)
 @pytest.fixture
 def fresh_software_cert(tmp_path: Path):
     """Generate a software-KSP cert; remove it after the test."""
-    subject = f"CN=entraclaw-test-{int(time.time())}"
+    subject = f"CN=entrabot-test-{int(time.time())}"
     result = _GEN.generate(subject=subject, days_valid=1, ksp="software")
     yield result
     # Cleanup — don't fail the test if removal fails.

@@ -1,19 +1,19 @@
 # Design: Persona-Sati Integration
 
 **Date:** 2026-04-18
-**Author:** the user, EntraClaw Agent
+**Author:** the user, EntraBot Agent
 **Status:** Shipped (v1, PRs #14 and #15). This document describes the design as implemented; the body-first prompt architecture is live and persona-sati MCP wiring is consumed at boot.
-**Implements:** Separation of mind (persona-sati) from body (entraclaw Teams MCP)
+**Implements:** Separation of mind (persona-sati) from body (entrabot Teams MCP)
 
 ---
 
 ## 1. What This Is
 
-This document describes how to connect the entraclaw Teams MCP server (the "body") to the persona-sati MCP server (the "mind") that now runs as a separate service in Azure Kubernetes.
+This document describes how to connect the entrabot Teams MCP server (the "body") to the persona-sati MCP server (the "mind") that now runs as a separate service in Azure Kubernetes.
 
-**Before this change:** entraclaw is self-contained. It loads its own system prompt from `prompts/agent_system.md`, syncs its own memory to blob via hooks in `.claude/settings.json`, and owns the full `claude_memory/` blob prefix. Everything is in one repo.
+**Before this change:** entrabot is self-contained. It loads its own system prompt from `prompts/agent_system.md`, syncs its own memory to blob via hooks in `.claude/settings.json`, and owns the full `claude_memory/` blob prefix. Everything is in one repo.
 
-**After this change:** entraclaw becomes a Teams interface tool only. The personality, system prompt, and memory operations are served by persona-sati, which runs as a separate MCP server (in AKS or locally). entraclaw still sends Teams messages, polls for replies, and runs the daily summary — but it no longer owns the agent's mind.
+**After this change:** entrabot becomes a Teams interface tool only. The personality, system prompt, and memory operations are served by persona-sati, which runs as a separate MCP server (in AKS or locally). entrabot still sends Teams messages, polls for replies, and runs the daily summary — but it no longer owns the agent's mind.
 
 **Why:** The mind should be portable. It should work with any agent body — not just Teams. Separating them means a code review agent, an email agent, or a Slack agent can all attach to the same persona without duplicating the prompt or memory infrastructure.
 
@@ -24,7 +24,7 @@ This document describes how to connect the entraclaw Teams MCP server (the "body
 ```
 Claude Code
   │
-  └── connects via stdio ──► entraclaw MCP server
+  └── connects via stdio ──► entrabot MCP server
                                 │
                                 ├── loads prompts/agent_system.md (hardcoded path)
                                 ├── Teams tools (send, read, watch, create_chat, etc.)
@@ -42,7 +42,7 @@ The MCP server loads `agent_system.md` at import time via `_load_agent_instructi
 ```
 Claude Code
   │
-  ├── connects via stdio ──► entraclaw MCP server (Teams body)
+  ├── connects via stdio ──► entrabot MCP server (Teams body)
   │                            │
   │                            ├── Teams tools (send, read, watch, etc.)
   │                            ├── background polls (unchanged)
@@ -61,13 +61,13 @@ Claude Code
                               └── consolidate() → run consolidation cycle
 ```
 
-Claude Code connects to BOTH MCP servers. It loads the personality from persona-sati and uses entraclaw for Teams operations. The LLM naturally bridges them — it calls `get_system_prompt()` from persona-sati at session start, and `send_teams_message()` from entraclaw when it needs to message someone.
+Claude Code connects to BOTH MCP servers. It loads the personality from persona-sati and uses entrabot for Teams operations. The LLM naturally bridges them — it calls `get_system_prompt()` from persona-sati at session start, and `send_teams_message()` from entrabot when it needs to message someone.
 
 ---
 
-## 4. What Changes in This Repo (entraclaw)
+## 4. What Changes in This Repo (entrabot)
 
-### 4.1 System Prompt: Remove from entraclaw
+### 4.1 System Prompt: Remove from entrabot
 
 **Current:** `_load_agent_instructions()` reads `prompts/agent_system.md` and passes it to `FastMCP(instructions=...)`.
 
@@ -92,7 +92,7 @@ def _load_agent_instructions() -> str:
     no memory references.
     """
     return (
-        "EntraClaw Teams Interface: provides tools for sending and "
+        "EntraBot Teams Interface: provides tools for sending and "
         "receiving Microsoft Teams messages, managing group chats, "
         "email polling, and daily summary generation. This server "
         "handles communication channels only. For personality, memory, "
@@ -106,7 +106,7 @@ def _load_agent_instructions() -> str:
 
 **Change:**
 - Rename `prompts/agent_system.md` → `prompts/agent_system.md.archive` (keep for reference, do not delete — it documents the original prompt design)
-- Create `prompts/agent_system.md.example` — a sanitized version without personal memory references, suitable for open-source users who run entraclaw standalone without persona-sati
+- Create `prompts/agent_system.md.example` — a sanitized version without personal memory references, suitable for open-source users who run entrabot standalone without persona-sati
 
 The `.example` file should contain the structural rules (channel discipline, watch-only in group chats, HTML for Teams) but NOT:
 - References to specific people (Brandon, named colleagues, etc.)
@@ -115,7 +115,7 @@ The `.example` file should contain the structural rules (channel discipline, wat
 - Personal memory file references
 - Persona sync instructions
 
-### 4.3 Memory Sync Hooks: Remove from entraclaw
+### 4.3 Memory Sync Hooks: Remove from entrabot
 
 **Current:** `.claude/settings.json` has two hooks:
 
@@ -146,7 +146,7 @@ Keep the `PostToolUse` hook for `send_teams_message` (the "background channel wi
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "mcp__entraclaw__send_teams_message",
+        "matcher": "mcp__entrabot__send_teams_message",
         "hooks": [
           {
             "type": "command",
@@ -167,11 +167,11 @@ Create `.mcp.json` (or update the user's Claude Code MCP settings) to include bo
 ```json
 {
   "mcpServers": {
-    "entraclaw": {
+    "entrabot": {
       "type": "stdio",
-      "command": ".venv/bin/entraclaw-mcp",
+      "command": ".venv/bin/entrabot-mcp",
       "env": {
-        "ENTRACLAW_MODE": "agent_user"
+        "ENTRABOT_MODE": "agent_user"
       }
     },
     "persona-sati": {
@@ -184,21 +184,21 @@ Create `.mcp.json` (or update the user's Claude Code MCP settings) to include bo
 
 For local development, persona-sati runs on localhost:8100. For cloud, the user runs `kubectl port-forward svc/persona-sati-service 8100:8100 -n persona-sati` to tunnel AKS to localhost.
 
-**First-time install without persona-sati:** If someone clones entraclaw and doesn't have persona-sati configured, they simply don't add the `persona-sati` entry to `.mcp.json`. entraclaw works standalone — it's just a Teams tool server with a generic instruction string. No personality, no memory, but fully functional for sending and receiving messages.
+**First-time install without persona-sati:** If someone clones entrabot and doesn't have persona-sati configured, they simply don't add the `persona-sati` entry to `.mcp.json`. entrabot works standalone — it's just a Teams tool server with a generic instruction string. No personality, no memory, but fully functional for sending and receiving messages.
 
 ### 4.5 Config: PERSONA_SATI_MCP_URL (Optional Future)
 
-For a future where entraclaw's MCP server itself needs to call persona-sati (e.g., to fetch the prompt server-to-server without Claude Code in the middle), add:
+For a future where entrabot's MCP server itself needs to call persona-sati (e.g., to fetch the prompt server-to-server without Claude Code in the middle), add:
 
 ```
 PERSONA_SATI_MCP_URL=http://persona-sati-service.persona-sati:8100
 ```
 
-This is NOT needed for the initial integration (Claude Code bridges both MCPs). It's a future option for when entraclaw runs headless (e.g., in a cloud-hosted poller scenario where there's no Claude Code client).
+This is NOT needed for the initial integration (Claude Code bridges both MCPs). It's a future option for when entrabot runs headless (e.g., in a cloud-hosted poller scenario where there's no Claude Code client).
 
 ---
 
-## 5. What Does NOT Change in entraclaw
+## 5. What Does NOT Change in entrabot
 
 - **Teams tools** — `send_teams_message`, `read_teams_messages`, `watch_teams_replies`, `add_teams_member`, `create_chat`, `list_chat_members` — all unchanged
 - **Background polls** — Teams (5s), email (60s), chat-discovery (120s) — unchanged
@@ -217,7 +217,7 @@ The body keeps doing everything it does today. It just stops pretending to be th
 
 ### 6.1 persona-sati unreachable at session start
 
-**What happens:** Claude Code tries to connect to `persona-sati` SSE endpoint. Connection fails. Claude Code logs a warning but still connects to entraclaw.
+**What happens:** Claude Code tries to connect to `persona-sati` SSE endpoint. Connection fails. Claude Code logs a warning but still connects to entrabot.
 
 **User experience:** The agent works but has no personality — it's a generic Teams tool. No memory access, no behavioral rules, no channel discipline.
 
@@ -227,15 +227,15 @@ The body keeps doing everything it does today. It just stops pretending to be th
 
 **What happens:** Claude Code already loaded the system prompt from persona-sati at session start (it's in the conversation context). Memory tool calls (`read_memory_file`, etc.) start failing.
 
-**User experience:** The agent still sends/receives Teams messages (entraclaw is fine). It can't read or write memory. The LLM will notice tool failures and report them.
+**User experience:** The agent still sends/receives Teams messages (entrabot is fine). It can't read or write memory. The LLM will notice tool failures and report them.
 
 **Recovery:** Restore persona-sati. Memory tools resume working. No data loss — blob storage is durable.
 
 ### 6.3 First-time clone, no persona-sati, no blob storage
 
-**What happens:** Someone clones entraclaw fresh. No `.env`, no persona-sati, no blob. They run `scripts/setup.sh` (or `setup_delegated.sh`).
+**What happens:** Someone clones entrabot fresh. No `.env`, no persona-sati, no blob. They run `scripts/setup.sh` (or `setup_delegated.sh`).
 
-**User experience:** entraclaw works as a standalone Teams tool. The `instructions` string says "for personality, connect to persona-sati." The user can send and receive Teams messages immediately. If they later want personality, they deploy persona-sati and add it to `.mcp.json`.
+**User experience:** entrabot works as a standalone Teams tool. The `instructions` string says "for personality, connect to persona-sati." The user can send and receive Teams messages immediately. If they later want personality, they deploy persona-sati and add it to `.mcp.json`.
 
 **This is the correct experience for open-source users.** They get a working Teams MCP tool. The persona layer is optional.
 
@@ -249,7 +249,7 @@ The body keeps doing everything it does today. It just stops pretending to be th
 
 ## 7. Implementation Steps (for the implementing agent)
 
-### Step 1: Update `_load_agent_instructions()` in `src/entraclaw/mcp_server.py`
+### Step 1: Update `_load_agent_instructions()` in `src/entrabot/mcp_server.py`
 
 Replace the function body as shown in Section 4.1. Remove the `prompts/agent_system.md` path resolution. Return a generic tool-description string.
 
@@ -274,11 +274,11 @@ Add the dual-server configuration from Section 4.4. This goes in the project roo
 ### Step 5: Test
 
 1. Start persona-sati locally: `cd /path/to/persona-sati && .venv/bin/persona-sati --transport sse --port 8100`
-2. Start a Claude Code session in the entraclaw directory
+2. Start a Claude Code session in the entrabot directory
 3. Verify: `get_system_prompt()` is available from persona-sati
-4. Verify: `send_teams_message()` is available from entraclaw
+4. Verify: `send_teams_message()` is available from entrabot
 5. Verify: `read_memory_file("MEMORY.md")` returns the index from persona-sati
-6. Verify: entraclaw boots without errors even if persona-sati is stopped
+6. Verify: entrabot boots without errors even if persona-sati is stopped
 
 ### Step 6: Update CLAUDE.md
 
@@ -291,7 +291,7 @@ This repo is the **body** (Teams interface). The **mind** (personality, memory,
 behavioral rules) is served by a separate MCP server: persona-sati.
 
 - Both MCPs are listed in `.mcp.json`
-- If persona-sati is not configured, entraclaw works standalone as a generic Teams tool
+- If persona-sati is not configured, entrabot works standalone as a generic Teams tool
 - Memory operations go through persona-sati's tools, not through local blob sync
 - The system prompt comes from persona-sati, not from this repo
 ```
@@ -330,10 +330,10 @@ The port-forward bridges the AKS cluster to your laptop. Claude Code doesn't kno
 - [ ] Create `prompts/agent_system.md.example` (sanitized)
 - [ ] Remove memory sync hooks from `.claude/settings.json`
 - [ ] Create `.mcp.json` with both servers
-- [ ] Test: entraclaw boots standalone (no persona-sati)
+- [ ] Test: entrabot boots standalone (no persona-sati)
 - [ ] Test: both MCPs connected, prompt loads from persona-sati
 - [ ] Test: memory read/write works through persona-sati
-- [ ] Test: persona-sati goes down, entraclaw still sends Teams messages
+- [ ] Test: persona-sati goes down, entrabot still sends Teams messages
 - [ ] Update CLAUDE.md
 - [ ] Update engineering-status.md
 - [ ] Commit with message: `feat: mind-body split — externalize prompt and memory to persona-sati`

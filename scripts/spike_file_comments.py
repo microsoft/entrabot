@@ -26,8 +26,8 @@ from urllib.parse import urlparse
 
 import httpx
 
-from entraclaw.config import EntraClawConfig
-from entraclaw.tools.teams import acquire_agent_user_token
+from entrabot.config import EntraBotConfig
+from entrabot.tools.teams import acquire_agent_user_token
 
 GRAPH_V1 = "https://graph.microsoft.com/v1.0"
 GRAPH_BETA = "https://graph.microsoft.com/beta"
@@ -67,7 +67,7 @@ def main() -> int:
             k, _, v = line.partition("=")
             os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
-    config = EntraClawConfig.from_env()
+    config = EntraBotConfig.from_env()
     print("Minting fresh Agent User token (picks up newly-PATCHed scopes)...")
     token = acquire_agent_user_token(config)
     headers = {"Authorization": f"Bearer {token}"}

@@ -1,6 +1,6 @@
 # Efferent-copy dispatch
 
-Observer-sink middleware that broadcasts every `@mcp.tool()` call as a side-channel `observe(tool_name, args[, result])` to compatible MCP peers. Source: `src/entraclaw/efferent_copy.py`.
+Observer-sink middleware that broadcasts every `@mcp.tool()` call as a side-channel `observe(tool_name, args[, result])` to compatible MCP peers. Source: `src/entrabot/efferent_copy.py`.
 
 The biological metaphor: every motor command the brain issues also generates a copy routed to sensory-prediction circuits so they can anticipate the consequences. This module is the infrastructure version.
 
@@ -23,9 +23,9 @@ Any peer in `.mcp.json` that exposes a tool named `observe` accepting `{tool_nam
 
 ## Self-reference defence
 
-Wrapping the entraclaw MCP server itself as one of its own sinks would create an infinite loop. Two defences:
+Wrapping the entrabot MCP server itself as one of its own sinks would create an infinite loop. Two defences:
 
-1. `_is_self_referential_peer(peer)` checks whether the peer's `command` is the same script as the running process. The debug wrapper at `scripts/entraclaw-mcp-debug.sh` carries an `entraclaw-self-ref-target: ../.venv/bin/entraclaw-mcp` marker so swapping the `command` to the wrapper still gets recognized as self.
+1. `_is_self_referential_peer(peer)` checks whether the peer's `command` is the same script as the running process. The debug wrapper at `scripts/entrabot-mcp-debug.sh` carries an `entrabot-self-ref-target: ../.venv/bin/entrabot-mcp` marker so swapping the `command` to the wrapper still gets recognized as self.
 2. `observe` itself is never wrapped — no recursion when one sink calls `observe` on the same server.
 
 See Learning #45 for the underlying incident.

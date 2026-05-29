@@ -54,7 +54,7 @@ class TestDeleteStorageAccount:
     @patch.object(deprov_mod, "_run_az")
     def test_delete_success(self, mock_az):
         mock_az.return_value = _ok()
-        deprov_mod.delete_storage_account("myaccount", "entraclaw-rg")
+        deprov_mod.delete_storage_account("myaccount", "entrabot-rg")
         args = mock_az.call_args[0][0]
         assert "storage" in args
         assert "account" in args
@@ -64,14 +64,14 @@ class TestDeleteStorageAccount:
     def test_delete_failure_raises(self, mock_az):
         mock_az.return_value = _err()
         with pytest.raises(RuntimeError):
-            deprov_mod.delete_storage_account("myaccount", "entraclaw-rg")
+            deprov_mod.delete_storage_account("myaccount", "entrabot-rg")
 
 
 class TestDeleteResourceGroup:
     @patch.object(deprov_mod, "_run_az")
     def test_delete_success(self, mock_az):
         mock_az.return_value = _ok()
-        deprov_mod.delete_resource_group("entraclaw-rg")
+        deprov_mod.delete_resource_group("entrabot-rg")
         args = mock_az.call_args[0][0]
         assert "group" in args
         assert "delete" in args
@@ -80,7 +80,7 @@ class TestDeleteResourceGroup:
     def test_delete_failure_raises(self, mock_az):
         mock_az.return_value = _err()
         with pytest.raises(RuntimeError):
-            deprov_mod.delete_resource_group("entraclaw-rg")
+            deprov_mod.delete_resource_group("entrabot-rg")
 
 
 class TestDeprovision:

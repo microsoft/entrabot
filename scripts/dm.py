@@ -12,8 +12,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from entraclaw.config import get_config
-from entraclaw.tools.teams import acquire_agent_user_token, send
+from entrabot.config import get_config
+from entrabot.tools.teams import acquire_agent_user_token, send
 
 # Populate this dict with your own chat aliases for convenience.
 # Example: "alice": "19:xxxxxxxx...@unq.gbl.spaces"

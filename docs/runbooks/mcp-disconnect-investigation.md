@@ -1,4 +1,4 @@
-# Runbook — Entraclaw MCP dies after a few minutes under sustained activity
+# Runbook — Entrabot MCP dies after a few minutes under sustained activity
 
 **Status:** RESOLVED 2026-04-28. The actual root cause turned out to be
 the *shape* of `params.meta` in the channel push, not just its content.
@@ -17,7 +17,7 @@ in the addenda.
 
 ## TL;DR (HISTORICAL — superseded by 2026-04-28 RESOLVED section)
 
-- **Symptom.** Entraclaw MCP server (stdio child of Claude Code CLI) dies
+- **Symptom.** Entrabot MCP server (stdio child of Claude Code CLI) dies
   cleanly ~25 seconds after start, immediately after the first inbound
   Teams push notification of the session. No traceback. No BrokenPipeError.
   `/mcp` shows `disconnected`. Reconnect triggers a fresh boot and repeats.
@@ -54,41 +54,41 @@ in the addenda.
 
 ### What the user sees
 
-1. `/mcp` shows entraclaw as `connected`.
+1. `/mcp` shows entrabot as `connected`.
 2. First 1–3 tool calls (e.g., `whoami`, `read_teams_messages`) respond
    in under a second.
 3. After some time — anywhere from ~2 minutes of idle up to ~10 minutes
    of active use — subsequent tool calls stall for 5–60 seconds and then
    fail with a generic transport error.
-4. `/mcp` now shows entraclaw as `disconnected`.
-5. Manually running `/mcp` → `Reconnect entraclaw` (or any tool-call
+4. `/mcp` now shows entrabot as `disconnected`.
+5. Manually running `/mcp` → `Reconnect entrabot` (or any tool-call
    attempt) respawns the child; the cycle repeats.
 
 ### What the logs show
 
-- `~/.entraclaw/logs/entraclaw.log` (the JSON file log): normal INFO lines
+- `~/.entrabot/logs/entrabot.log` (the JSON file log): normal INFO lines
   right up until the cutoff. **No shutdown/exception line at the tail.**
   The log simply stops.
-- `/tmp/entraclaw-debug.log` (stderr tee from the debug wrapper — only
+- `/tmp/entrabot-debug.log` (stderr tee from the debug wrapper — only
   present if the wrapper is active via `.mcp.json`'s `command`):
   httpx request/response lines, msal token refresh lines, FastMCP
-  lifecycle `Starting MCP server "entraclaw"` banners. **Zero Python
+  lifecycle `Starting MCP server "entrabot"` banners. **Zero Python
   tracebacks on the parent MCP child around the time of drop.** The
   only `BrokenPipeError` tracebacks ever captured in this log belong
   to the *cascade children* that Learning #45 fixed, not to the parent
   MCP process itself.
 - `ps aux | grep claude` while it's happening: parent Claude CLI at 27%
-  to 83% CPU, ~800 MB–1 GB RSS, state `S+`. Entraclaw child at ~0% CPU.
+  to 83% CPU, ~800 MB–1 GB RSS, state `S+`. Entrabot child at ~0% CPU.
 
 ### Process and config at time of writing
 
-- `.mcp.json` `command` is `.venv/bin/entraclaw-mcp` (direct, no wrapper).
-  The wrapper (`scripts/entraclaw-mcp-debug.sh`) is fix-ready and carries
+- `.mcp.json` `command` is `.venv/bin/entrabot-mcp` (direct, no wrapper).
+  The wrapper (`scripts/entrabot-mcp-debug.sh`) is fix-ready and carries
   the self-ref marker (Learning #45 / PR #41) — **you can safely flip
   `.mcp.json` back to the wrapper** to capture stderr without
   retriggering the twin-spawn cascade.
 - Claude CLI launch flag is the correct double-dash form:
-  `--dangerously-load-development-channels server:entraclaw`.
+  `--dangerously-load-development-channels server:entrabot`.
   Learning #39 rules out the single-dash typo as the cause of any
   channel-delivery symptom.
 - Three background tasks are active in agent_user mode: Teams poll (5s),
@@ -102,8 +102,8 @@ in the addenda.
 
 ### Amplifier #1 — Wrapper-triggered self-spawn cascade (FIXED by PR #41)
 
-When the debug wrapper `scripts/entraclaw-mcp-debug.sh` was named as
-`.mcp.json`'s `command`, entraclaw boot spawned a duplicate child ~2s in
+When the debug wrapper `scripts/entrabot-mcp-debug.sh` was named as
+`.mcp.json`'s `command`, entrabot boot spawned a duplicate child ~2s in
 via the efferent-copy `discover_sinks` logic. The duplicate completed a
 full three-hop token flow, registered polls, fetched the persona-sati
 prompt, responded to `tools/list`, and then died on BrokenPipeError when
@@ -113,13 +113,13 @@ work** — two token flows, two poll registrations, two Graph chat lookups
 
 **Root cause.** `_is_self_referential_peer` compared `peer.command`
 against `sys.argv[0]`. The wrapper script's resolved path did not match
-`.venv/bin/entraclaw-mcp`, so the self-ref check returned `False` and
+`.venv/bin/entrabot-mcp`, so the self-ref check returned `False` and
 the peer was NOT filtered.
 
 **Fix.** `_is_self_referential_peer` now reads up to 16 KB of the
-wrapper script, looks for a `# entraclaw-self-ref-target: <path>`
+wrapper script, looks for a `# entrabot-self-ref-target: <path>`
 marker line, and compares the declared target against `sys.argv[0]` /
-`sys.executable`. `scripts/entraclaw-mcp-debug.sh` now carries the
+`sys.executable`. `scripts/entrabot-mcp-debug.sh` now carries the
 marker. Shipped in commit `934bbef`, merged as PR #41.
 
 **Effect on the disconnect symptom.** Eliminated the twin-spawn API
@@ -130,9 +130,9 @@ See: `docs/runbooks/hard-won-learnings.md` Learning #45.
 
 ### Amplifier #2 — Double-rendered logs flooding stderr (FIXED by PR #40)
 
-Every record logged to the `entraclaw` logger propagated up to the
+Every record logged to the `entrabot` logger propagated up to the
 Python root logger, where FastMCP's `configure_logging()` had installed
-a `RichHandler` via `logging.basicConfig`. Result: every entraclaw log
+a `RichHandler` via `logging.basicConfig`. Result: every entrabot log
 record was rendered **twice** on stderr — once as JSON via our own
 StreamHandler, once as rich-formatted pretty-print via FastMCP's root
 handler. The parent Claude CLI had to drain 2× the byte volume over
@@ -140,20 +140,20 @@ stdio/stderr, and in periods of message bursts this was plausibly
 contributing to stdio backpressure.
 
 **Fix.** Added `logger.propagate = False` in
-`src/entraclaw/logging_config.py`. Shipped in commit `41ae30b`, merged
+`src/entrabot/logging_config.py`. Shipped in commit `41ae30b`, merged
 as PR #40. `pytest` regressed on 6 `caplog` tests because caplog
-attaches a handler to root (not to the entraclaw logger), and with
-propagation off, entraclaw records never reached caplog. Fixed by
+attaches a handler to root (not to the entrabot logger), and with
+propagation off, entrabot records never reached caplog. Fixed by
 adding an autouse fixture in `tests/conftest.py` that attaches
-`caplog.handler` directly to `entraclaw_logger` per test.
+`caplog.handler` directly to `entrabot_logger` per test.
 
-**Known limitation.** Only `entraclaw.*` records stop propagating.
+**Known limitation.** Only `entrabot.*` records stop propagating.
 `httpx.*` and `msal.*` records still propagate to root and still render
 through the RichHandler. Given the Teams poll fires once every 5s and
 issues at least one httpx request per cycle, the remaining stderr
 volume from these third-party loggers is material but not measured.
 
-**Effect on the disconnect symptom.** Halved entraclaw-originated
+**Effect on the disconnect symptom.** Halved entrabot-originated
 stderr volume. Symptom reduced but not eliminated.
 
 ### Amplifier #3 — 4 slow throttling tests in the test suite (REMOVED)
@@ -173,11 +173,11 @@ still raises it; only the tests were removed.
 
 ### Debug infrastructure — stderr capture via wrapper (READY, OFF BY DEFAULT)
 
-`scripts/entraclaw-mcp-debug.sh` tees stderr to
-`/tmp/entraclaw-debug.log` with `===== wrapper start <UTC> pid=<n> =====`
+`scripts/entrabot-mcp-debug.sh` tees stderr to
+`/tmp/entrabot-debug.log` with `===== wrapper start <UTC> pid=<n> =====`
 markers. Since PR #41 it carries the self-ref marker and is safe to
 activate. To turn it on: change `.mcp.json`'s `command` from
-`.venv/bin/entraclaw-mcp` to `scripts/entraclaw-mcp-debug.sh` and
+`.venv/bin/entrabot-mcp` to `scripts/entrabot-mcp-debug.sh` and
 restart Claude Code. To turn it off: revert the command. The log is a
 tee, not a redirect — server stderr still flows to the parent.
 
@@ -214,7 +214,7 @@ tee, not a redirect — server stderr still flows to the parent.
    handling is impossible. **Fix:** replace `_run_sync` with
    `asyncio.to_thread()` or make `log_interaction` fully async (see
    Step 1). Fix separately from the HTML content fix above.
-3. **httpx/msal logs still propagating.** PR #40 fixed entraclaw's
+3. **httpx/msal logs still propagating.** PR #40 fixed entrabot's
    own propagation but third-party loggers still render through the
    root `RichHandler`. On a busy poll cycle this is still a few
    hundred bytes per 5 seconds, most of it pretty-printed. Worth
@@ -239,7 +239,7 @@ tee, not a redirect — server stderr still flows to the parent.
 
 - **Efferent-copy self-spawn cascade.** Killed in PR #36 (direct) and
   PR #41 (wrapper). Both covered by regression tests.
-- **Learning #36 venv corruption.** `python -c "from entraclaw import
+- **Learning #36 venv corruption.** `python -c "from entrabot import
   config; print(config.__file__)"` currently resolves to the parent
   src tree, not a worktree. Do re-check if symptoms resurface after
   any sub-agent dispatch (see CLAUDE.md non-negotiable).
@@ -288,7 +288,7 @@ tags; length truncation is secondary.
 1. Run `pytest -v --tb=short` — all tests must pass.
 2. Flip `.mcp.json` to the debug wrapper.
 3. Run the PTY soak (`.claude/pty_soak.py`) for 10 minutes.
-4. Confirm entraclaw-mcp stays alive through at least 2 push cycles.
+4. Confirm entrabot-mcp stays alive through at least 2 push cycles.
 5. Restore `.mcp.json` to direct binary, delete wrapper line.
 
 ### Step 1 — Fix `_run_sync` event loop blocking (MEDIUM PRIORITY)
@@ -321,7 +321,7 @@ creating material stderr volume. Extend `logging_config.py` to set
 ### Step 3 — Run the 60-minute acceptance soak
 
 After Steps 0 and 1 are merged, run `.claude/pty_soak.py` for 60 minutes.
-Acceptance criteria: entraclaw-mcp stays alive continuously, no
+Acceptance criteria: entrabot-mcp stays alive continuously, no
 BrokenPipeError, wrapper-start count = 1 per session, Claude CPU < 15%.
 
 ### (OLD) Step 4 — Try SSE transport (experimental, deferred)
@@ -366,14 +366,14 @@ out or already fixed. Do not propose them as new ideas:
   write is security-relevant; do not "fix" the hot path by skipping it.
   If you decouple via a queue, the audit write must still be durable
   before the tool's side effect is visible externally.
-- `logger.propagate = False` must stay on `entraclaw`. Do not revert
+- `logger.propagate = False` must stay on `entrabot`. Do not revert
   that fix in the process of silencing third-party loggers.
 - `_is_self_referential_peer`'s wrapper-marker behavior is a
   security-relevant invariant now (see Learning #45). Any change to
   efferent-copy discovery must include regression tests that prove
   both direct and wrapper-indirect self-peers are skipped.
 - The debug wrapper is opt-in. Don't make it the default in `.mcp.json`
-  on `main`; it writes to `/tmp/entraclaw-debug.log` which is a
+  on `main`; it writes to `/tmp/entrabot-debug.log` which is a
   single-user, single-machine convention. Leave that switch as a
   conscious flip for active debugging.
 
@@ -381,7 +381,7 @@ out or already fixed. Do not propose them as new ideas:
 
 ## Investigation session — 2026-04-24 (PTY soak + debug wrapper)
 
-**Method:** Flipped `.mcp.json` to `scripts/entraclaw-mcp-debug.sh` (safe
+**Method:** Flipped `.mcp.json` to `scripts/entrabot-mcp-debug.sh` (safe
 per Learning #45). Built `.claude/pty_soak.py` — a Python PTY soak driver
 using `pty.openpty()` + `os.fork()` + `os.execve()` to spawn claude with
 a proper 50×200 PTY, send blind `\r` after 4 s for TUI consent, drain the
@@ -401,7 +401,7 @@ SIGHUP immunity.
   - T+18–20s: 3 more token POSTs + blob PUT + Teams message detail GET
   - T+20s: push notification fires; last debug log line:
     `"Pushed Teams message from Alice Smith: <attachment id=\"1777053221965\"></attachment>\n<p>As"`
-  - T+20s–25s: entraclaw-mcp dead (clean exit, no traceback)
+  - T+20s–25s: entrabot-mcp dead (clean exit, no traceback)
 - Wrapper-start count = 1 per session ✅ (Learning #45 not regressing)
 - 0 BrokenPipeError ✅ (clean exit, not a crash)
 - 6 token POSTs per push: 3 for storage token + 3 for Teams API token
@@ -451,7 +451,7 @@ after this PR**, the sanitizer is no longer the suspect — audit the
 JSON-RPC envelope outside `params.content`: `meta.user` (display name
 that could carry `<addr@example.com>` shapes), `meta.quoted_messages`
 fields beyond `content`, or control characters / unescaped sequences
-in `chat_id` or `message_id`. See `src/entraclaw/mcp_server.py`
+in `chat_id` or `message_id`. See `src/entrabot/mcp_server.py`
 `_summarize_content` and `tests/test_mcp_server_integration.py`
 `test_channel_notification_preserves_img_src_url` /
 `test_channel_notification_preserves_anchor_text_and_href`.
@@ -494,7 +494,7 @@ characters or unescaped sequences in `chat_id` / `message_id`
 ISO timestamp). All three are well-formed in the wild, but the
 defense in `_summarize_content` is cheap to extend if needed.
 
-See `src/entraclaw/mcp_server.py` `_push_channel_notification` and
+See `src/entrabot/mcp_server.py` `_push_channel_notification` and
 `tests/test_mcp_server_integration.py::TestPushChannelNotificationObservability::test_channel_notification_meta_strips_html_everywhere`.
 
 ---
@@ -532,7 +532,7 @@ located the actual root cause.
 4. **Actual root cause: the field shape itself.** Claude Code's MCP
    client closes the stream when `params.meta` carries `reply_to_ids`
    or `quoted_messages` — regardless of whether their content is
-   sanitized or empty. These were entraclaw-side conveniences (added
+   sanitized or empty. These were entrabot-side conveniences (added
    so the agent had quoted context inline) that the client doesn't
    accept.
 
@@ -587,7 +587,7 @@ disconnect recurs:
 
 ### See also
 
-- `src/entraclaw/mcp_server.py::_push_channel_notification` (final shape)
+- `src/entrabot/mcp_server.py::_push_channel_notification` (final shape)
 - `tests/test_mcp_server_integration.py::TestPushChannelNotificationObservability::test_reply_to_ids_omitted_from_meta`
 - `tests/test_mcp_server_integration.py::TestPushChannelNotificationObservability::test_quoted_messages_omitted_from_push_envelope`
 
@@ -601,6 +601,6 @@ disconnect recurs:
 - `docs/runbooks/hard-won-learnings.md` Learning #45 (wrapper bypass)
 - `docs/runbooks/hard-won-learnings.md` Learning #46 (this symptom — pointer)
 - `docs/engineering-status.md` "What's New Apr 24 (part 2) — MCP disconnect investigation" section
-- `src/entraclaw/logging_config.py` (`propagate = False` fix from PR #40)
-- `src/entraclaw/efferent_copy.py` (`_is_self_referential_peer` from PR #36 + PR #41)
-- `scripts/entraclaw-mcp-debug.sh` (debug wrapper, safe to activate)
+- `src/entrabot/logging_config.py` (`propagate = False` fix from PR #40)
+- `src/entrabot/efferent_copy.py` (`_is_self_referential_peer` from PR #36 + PR #41)
+- `scripts/entrabot-mcp-debug.sh` (debug wrapper, safe to activate)

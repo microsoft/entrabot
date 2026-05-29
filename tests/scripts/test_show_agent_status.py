@@ -101,7 +101,7 @@ def _fake_graph(method, path, token, **kw):
                 "keyCredentials": [
                     {
                         "keyId": "key-1",
-                        "displayName": "EntraClaw Device Certificate - TestHost",
+                        "displayName": "EntraBot Device Certificate - TestHost",
                         "type": "AsymmetricX509Cert",
                         "usage": "Verify",
                         "key": _FAKE_CERT_B64,
@@ -122,9 +122,9 @@ class TestShowStatus:
     @patch.dict(
         "os.environ",
         {
-            "ENTRACLAW_BLOB_ENDPOINT": "https://entclawtest.blob.core.windows.net",
-            "ENTRACLAW_BLOB_CONTAINER": "agent-user-666",
-            "ENTRACLAW_RESOURCE_GROUP": "rg-test",
+            "ENTRABOT_BLOB_ENDPOINT": "https://entclawtest.blob.core.windows.net",
+            "ENTRABOT_BLOB_CONTAINER": "agent-user-666",
+            "ENTRABOT_RESOURCE_GROUP": "rg-test",
         },
         clear=False,
     )
@@ -155,7 +155,7 @@ class TestShowStatus:
         assert "Microsoft Graph" in out
         assert "Blueprint Key Credentials" in out
         assert "key-1" in out
-        assert "EntraClaw Device Certificate - TestHost" in out
+        assert "EntraBot Device Certificate - TestHost" in out
         assert "Matches Local Cert:   yes" in out
 
 
@@ -184,7 +184,7 @@ class TestShowStatusJson:
         assert data["licenses"][0]["skuPartNumber"] == "ENTERPRISEPACK"
         assert data["permissions"][0]["resourceName"] == "Microsoft Graph"
         assert (
-            data["key_credentials"][0]["displayName"] == "EntraClaw Device Certificate - TestHost"
+            data["key_credentials"][0]["displayName"] == "EntraBot Device Certificate - TestHost"
         )
         assert data["key_credentials"][0]["matchesLocalBlueprintCert"] is True
 

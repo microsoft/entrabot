@@ -1,6 +1,6 @@
 """Tests for the dual-host MCP config writer used by scripts/setup.sh.
 
-The setup script writes the EntraClaw MCP server entry into two places:
+The setup script writes the EntraBot MCP server entry into two places:
 
   * project-local ``.mcp.json`` — Claude Code picks this up
   * ``~/.copilot/mcp-config.json`` (overridable via ``COPILOT_HOME``) —
@@ -13,7 +13,7 @@ session initialize — not via separate configs.
 The writer must be idempotent: running it twice produces the same file
 content, and it never clobbers unrelated server entries that already
 live in either config. If the target file is missing it's created;
-if present and contains valid JSON, the entraclaw entry is merged in.
+if present and contains valid JSON, the entrabot entry is merged in.
 """
 
 from __future__ import annotations
@@ -40,10 +40,10 @@ def mcp_config():
     sys.modules.pop("mcp_config", None)
 
 
-class TestBuildEntraclawEntry:
+class TestBuildEntrabotEntry:
     def test_entry_uses_given_binary(self, mcp_config) -> None:
-        entry = mcp_config.build_entraclaw_entry("/foo/bar/entraclaw-mcp")
-        assert entry["command"] == "/foo/bar/entraclaw-mcp"
+        entry = mcp_config.build_entrabot_entry("/foo/bar/entrabot-mcp")
+        assert entry["command"] == "/foo/bar/entrabot-mcp"
         assert entry["type"] == "stdio"
         assert entry["args"] == []
         assert "description" in entry
@@ -52,12 +52,12 @@ class TestBuildEntraclawEntry:
 class TestUpsertMcpEntry:
     def test_creates_file_when_missing(self, mcp_config, tmp_path: Path) -> None:
         target = tmp_path / "mcp-config.json"
-        mcp_config.upsert_mcp_entry(target, "entraclaw", {"type": "stdio", "command": "/x"})
+        mcp_config.upsert_mcp_entry(target, "entrabot", {"type": "stdio", "command": "/x"})
 
         data = json.loads(target.read_text())
         assert data == {
             "mcpServers": {
-                "entraclaw": {"type": "stdio", "command": "/x"},
+                "entrabot": {"type": "stdio", "command": "/x"},
             }
         }
 
@@ -66,15 +66,15 @@ class TestUpsertMcpEntry:
         target = tmp_path / "mcp-config.json"
         entry = {"type": "stdio", "command": "/x"}
 
-        mcp_config.upsert_mcp_entry(target, "entraclaw", entry)
+        mcp_config.upsert_mcp_entry(target, "entrabot", entry)
         first = target.read_text()
 
-        mcp_config.upsert_mcp_entry(target, "entraclaw", entry)
+        mcp_config.upsert_mcp_entry(target, "entrabot", entry)
         second = target.read_text()
 
         assert first == second
         data = json.loads(second)
-        assert list(data["mcpServers"].keys()) == ["entraclaw"]
+        assert list(data["mcpServers"].keys()) == ["entrabot"]
 
     def test_merges_alongside_existing_entries(self, mcp_config, tmp_path: Path) -> None:
         """Unrelated servers (e.g. persona-sati) are preserved."""
@@ -92,30 +92,30 @@ class TestUpsertMcpEntry:
             )
         )
 
-        mcp_config.upsert_mcp_entry(target, "entraclaw", {"type": "stdio", "command": "/x"})
+        mcp_config.upsert_mcp_entry(target, "entrabot", {"type": "stdio", "command": "/x"})
 
         data = json.loads(target.read_text())
-        assert set(data["mcpServers"]) == {"persona-sati", "entraclaw"}
+        assert set(data["mcpServers"]) == {"persona-sati", "entrabot"}
         assert data["mcpServers"]["persona-sati"]["url"] == "http://localhost:8100/sse"
 
-    def test_updates_existing_entraclaw_entry(self, mcp_config, tmp_path: Path) -> None:
-        """If the entraclaw entry already exists with a stale binary path,
+    def test_updates_existing_entrabot_entry(self, mcp_config, tmp_path: Path) -> None:
+        """If the entrabot entry already exists with a stale binary path,
         upserting a new entry overwrites it rather than duplicating."""
         target = tmp_path / "mcp-config.json"
         target.write_text(
             json.dumps(
                 {
                     "mcpServers": {
-                        "entraclaw": {"type": "stdio", "command": "/old/bin"},
+                        "entrabot": {"type": "stdio", "command": "/old/bin"},
                     }
                 }
             )
         )
 
-        mcp_config.upsert_mcp_entry(target, "entraclaw", {"type": "stdio", "command": "/new/bin"})
+        mcp_config.upsert_mcp_entry(target, "entrabot", {"type": "stdio", "command": "/new/bin"})
 
         data = json.loads(target.read_text())
-        assert data["mcpServers"]["entraclaw"]["command"] == "/new/bin"
+        assert data["mcpServers"]["entrabot"]["command"] == "/new/bin"
 
     def test_preserves_top_level_keys(self, mcp_config, tmp_path: Path) -> None:
         """If Copilot's config has top-level keys other than ``mcpServers``
@@ -130,17 +130,17 @@ class TestUpsertMcpEntry:
             )
         )
 
-        mcp_config.upsert_mcp_entry(target, "entraclaw", {"type": "stdio", "command": "/x"})
+        mcp_config.upsert_mcp_entry(target, "entrabot", {"type": "stdio", "command": "/x"})
 
         data = json.loads(target.read_text())
         assert data["telemetry"] == {"enabled": False}
-        assert "entraclaw" in data["mcpServers"]
+        assert "entrabot" in data["mcpServers"]
 
     def test_handles_missing_parent_directory(self, mcp_config, tmp_path: Path) -> None:
         target = tmp_path / "nested" / "dir" / "mcp-config.json"
         assert not target.parent.exists()
 
-        mcp_config.upsert_mcp_entry(target, "entraclaw", {"type": "stdio", "command": "/x"})
+        mcp_config.upsert_mcp_entry(target, "entrabot", {"type": "stdio", "command": "/x"})
 
         assert target.is_file()
 
@@ -150,10 +150,10 @@ class TestUpsertMcpEntry:
         target = tmp_path / "mcp-config.json"
         target.write_text("{not valid json")
 
-        mcp_config.upsert_mcp_entry(target, "entraclaw", {"type": "stdio", "command": "/x"})
+        mcp_config.upsert_mcp_entry(target, "entrabot", {"type": "stdio", "command": "/x"})
 
         data = json.loads(target.read_text())
-        assert "entraclaw" in data["mcpServers"]
+        assert "entrabot" in data["mcpServers"]
         backups = list(tmp_path.glob("mcp-config.json.bak.*"))
         assert len(backups) == 1
 

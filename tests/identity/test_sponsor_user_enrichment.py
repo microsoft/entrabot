@@ -25,14 +25,14 @@ from typing import Any
 import httpx
 import pytest
 
-from entraclaw.identity.sponsors import (
+from entrabot.identity.sponsors import (
     AgentIdentitySponsor,
     fetch_agent_identity_sponsors,
 )
 
 
 def _make_config(agent_object_id: str = "spn-1") -> Any:
-    """Tiny stand-in for EntraClawConfig — only ``agent_object_id`` is read."""
+    """Tiny stand-in for EntraBotConfig — only ``agent_object_id`` is read."""
 
     class _Cfg:
         def __init__(self) -> None:
@@ -188,8 +188,8 @@ class TestGetSponsorAllowlistPassesUserTokenProvider:
     async def test_get_sponsor_allowlist_routes_user_enrichment_via_agent_user_token(self):
         from unittest.mock import patch
 
-        from entraclaw.tools.files import _get_sponsor_allowlist
-        from entraclaw.tools.teams import acquire_agent_user_token
+        from entrabot.tools.files import _get_sponsor_allowlist
+        from entrabot.tools.teams import acquire_agent_user_token
 
         sponsor = AgentIdentitySponsor(
             user_id="u1",
@@ -198,8 +198,8 @@ class TestGetSponsorAllowlistPassesUserTokenProvider:
         )
 
         with (
-            patch("entraclaw.config.get_config") as mock_get_config,
-            patch("entraclaw.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
+            patch("entrabot.config.get_config") as mock_get_config,
+            patch("entrabot.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
         ):
             mock_get_config.return_value = object()
             mock_fetch.return_value = [sponsor]
@@ -223,7 +223,7 @@ class TestGetSponsorAllowlistChatMembersFallback:
     async def test_chat_members_fallback_recovers_sponsor_email(self):
         from unittest.mock import patch
 
-        from entraclaw.tools.files import _get_sponsor_allowlist
+        from entrabot.tools.files import _get_sponsor_allowlist
 
         sponsor_id = "33333333-3333-3333-3333-333333333333"
         unenriched_sponsor = AgentIdentitySponsor(
@@ -231,9 +231,9 @@ class TestGetSponsorAllowlistChatMembersFallback:
         )
 
         with (
-            patch("entraclaw.config.get_config") as mock_get_config,
-            patch("entraclaw.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
-            patch("entraclaw.identity.sponsors.fetch_watched_chat_members") as mock_chat_members,
+            patch("entrabot.config.get_config") as mock_get_config,
+            patch("entrabot.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
+            patch("entrabot.identity.sponsors.fetch_watched_chat_members") as mock_chat_members,
         ):
             mock_get_config.return_value = object()
             mock_fetch.return_value = [unenriched_sponsor]
@@ -241,8 +241,8 @@ class TestGetSponsorAllowlistChatMembersFallback:
                 # The Agent User itself — must NOT pollute the allowlist.
                 {
                     "user_id": "agent-user-oid",
-                    "email": "entraclaw-agent@fabrikam.onmicrosoft.com",
-                    "name": "Entraclaw Agent",
+                    "email": "entrabot-agent@fabrikam.onmicrosoft.com",
+                    "name": "Entrabot Agent",
                 },
                 # The sponsor — its email is recovered from chat metadata.
                 {
@@ -268,7 +268,7 @@ class TestGetSponsorAllowlistChatMembersFallback:
         emails, we must NOT spend a Graph round-trip enumerating chats."""
         from unittest.mock import patch
 
-        from entraclaw.tools.files import _get_sponsor_allowlist
+        from entrabot.tools.files import _get_sponsor_allowlist
 
         enriched_sponsor = AgentIdentitySponsor(
             user_id="u1",
@@ -277,9 +277,9 @@ class TestGetSponsorAllowlistChatMembersFallback:
         )
 
         with (
-            patch("entraclaw.config.get_config") as mock_get_config,
-            patch("entraclaw.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
-            patch("entraclaw.identity.sponsors.fetch_watched_chat_members") as mock_chat_members,
+            patch("entrabot.config.get_config") as mock_get_config,
+            patch("entrabot.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
+            patch("entrabot.identity.sponsors.fetch_watched_chat_members") as mock_chat_members,
         ):
             mock_get_config.return_value = object()
             mock_fetch.return_value = [enriched_sponsor]
@@ -296,14 +296,14 @@ class TestGetSponsorAllowlistChatMembersFallback:
         Graph exception."""
         from unittest.mock import patch
 
-        from entraclaw.tools.files import _get_sponsor_allowlist
+        from entrabot.tools.files import _get_sponsor_allowlist
 
         unenriched_sponsor = AgentIdentitySponsor(user_id="u1", user_principal_name=None, mail=None)
 
         with (
-            patch("entraclaw.config.get_config") as mock_get_config,
-            patch("entraclaw.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
-            patch("entraclaw.identity.sponsors.fetch_watched_chat_members") as mock_chat_members,
+            patch("entrabot.config.get_config") as mock_get_config,
+            patch("entrabot.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
+            patch("entrabot.identity.sponsors.fetch_watched_chat_members") as mock_chat_members,
         ):
             mock_get_config.return_value = object()
             mock_fetch.return_value = [unenriched_sponsor]
@@ -318,7 +318,7 @@ class TestGetSponsorAllowlistChatMembersFallback:
         Allowlist must contain emails from BOTH sources."""
         from unittest.mock import patch
 
-        from entraclaw.tools.files import _get_sponsor_allowlist
+        from entrabot.tools.files import _get_sponsor_allowlist
 
         enriched = AgentIdentitySponsor(
             user_id="u1", user_principal_name="alice@contoso.com", mail="alice@contoso.com"
@@ -326,9 +326,9 @@ class TestGetSponsorAllowlistChatMembersFallback:
         unenriched = AgentIdentitySponsor(user_id="u2", user_principal_name=None, mail=None)
 
         with (
-            patch("entraclaw.config.get_config") as mock_get_config,
-            patch("entraclaw.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
-            patch("entraclaw.identity.sponsors.fetch_watched_chat_members") as mock_chat_members,
+            patch("entrabot.config.get_config") as mock_get_config,
+            patch("entrabot.identity.sponsors.fetch_agent_identity_sponsors") as mock_fetch,
+            patch("entrabot.identity.sponsors.fetch_watched_chat_members") as mock_chat_members,
         ):
             mock_get_config.return_value = object()
             mock_fetch.return_value = [enriched, unenriched]

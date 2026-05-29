@@ -1,6 +1,6 @@
 # Auth
 
-Token acquisition modules. Source lives in `src/entraclaw/auth/` and `src/entraclaw/tools/teams.py` (the three-hop token functions sit alongside the Teams helpers for historical reasons — they all share the same `httpx` client and token cache).
+Token acquisition modules. Source lives in `src/entrabot/auth/` and `src/entrabot/tools/teams.py` (the three-hop token functions sit alongside the Teams helpers for historical reasons — they all share the same `httpx` client and token cache).
 
 See [Token Flows](../token-flows.md) for the flow diagrams. ADR-003 documents the cert-auth choice.
 
@@ -36,7 +36,7 @@ Compute the b64url SHA-256 thumbprint of a certificate. Used during cert generat
 
 ### `sign_pkcs1_sha256` (Windows CNG)
 
-`src/entraclaw/auth/cncrypt_signer.py`:
+`src/entrabot/auth/cncrypt_signer.py`:
 
 ```python
 def sign_pkcs1_sha256(*, thumbprint: str, hash_bytes: bytes) -> bytes
@@ -46,7 +46,7 @@ Signs a 32-byte SHA-256 digest via `ncrypt.dll` PKCS1+SHA256 against the non-exp
 
 ## MSAL delegated auth
 
-`src/entraclaw/auth/delegated.py`:
+`src/entrabot/auth/delegated.py`:
 
 ### `MsalDelegatedAuth`
 
@@ -72,17 +72,17 @@ MSAL interactive authentication with localhost redirect on port 8400, falling ba
 
 `try_silent()` returns a cached token without UI when one is available — the MCP server calls this on every startup before falling back to `authenticate()`. Cache lives in the OS keystore via MSAL's `SerializableTokenCache`.
 
-Used by `delegated` mode. Messages prefixed with `[EntraClaw]` so humans can spot what the agent posted under the human's identity.
+Used by `delegated` mode. Messages prefixed with `[EntraBot]` so humans can spot what the agent posted under the human's identity.
 
 ## Three-hop token chain
 
-`src/entraclaw/tools/teams.py` exposes the three functions that drive the Agent User identity model.
+`src/entrabot/tools/teams.py` exposes the three functions that drive the Agent User identity model.
 
 ### `acquire_agent_user_token`
 
 ```python
 def acquire_agent_user_token(
-    config: EntraClawConfig,
+    config: EntraBotConfig,
     *,
     resource_scope: str = GRAPH_RESOURCE_SCOPE,
 ) -> str
@@ -101,7 +101,7 @@ Raises `AgentIDNotAvailable` if config is incomplete, `TokenExchangeError` if an
 ### `acquire_agent_user_storage_token`
 
 ```python
-def acquire_agent_user_storage_token(config: EntraClawConfig) -> str
+def acquire_agent_user_storage_token(config: EntraBotConfig) -> str
 ```
 
 Three-hop variant for Azure Blob Storage. Same first two hops; Hop 3 swaps the resource scope to `https://storage.azure.com/.default`. Requires the Agent Identity to be consented for Storage during `setup.sh --use-cloud-memory`.
@@ -110,13 +110,13 @@ Three-hop variant for Azure Blob Storage. Same first two hops; Hop 3 swaps the r
 
 ```python
 def acquire_agent_identity_token(
-    config: EntraClawConfig,
+    config: EntraBotConfig,
     *,
     resource_scope: str = GRAPH_RESOURCE_SCOPE,
 ) -> str
 ```
 
-Two-hop variant. Stops at the Agent Identity — no `user_fic` grant. Used by `entraclaw.identity.sponsors` to read the Agent Identity's Graph sponsors relationship, which requires app-only auth (Learning #20).
+Two-hop variant. Stops at the Agent Identity — no `user_fic` grant. Used by `entrabot.identity.sponsors` to read the Agent Identity's Graph sponsors relationship, which requires app-only auth (Learning #20).
 
 ## Common errors
 

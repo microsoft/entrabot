@@ -1,4 +1,4 @@
-"""Tests for entraclaw.preflight.
+"""Tests for entrabot.preflight.
 
 Covers the three VP-readiness deliverables:
   1. License preflight (Graph /subscribedSkus check).
@@ -18,9 +18,9 @@ from unittest.mock import patch
 import httpx
 import respx
 
-from entraclaw.config import EntraClawConfig
-from entraclaw.errors import AgentIDNotAvailable, TokenExchangeError
-from entraclaw.preflight import (
+from entrabot.config import EntraBotConfig
+from entrabot.errors import AgentIDNotAvailable, TokenExchangeError
+from entrabot.preflight import (
     COPILOT_CAPABLE_SKUS,
     TEAMS_CAPABLE_SKUS,
     Check,
@@ -233,8 +233,8 @@ class TestCheckCopilotLicenseAvailability:
 # ─── Phase 2: smoke checks ───────────────────────────────────────────────────
 
 
-def _config_complete() -> EntraClawConfig:
-    return EntraClawConfig(
+def _config_complete() -> EntraBotConfig:
+    return EntraBotConfig(
         tenant_id="00000000-0000-0000-0000-000000000001",
         blueprint_app_id="00000000-0000-0000-0000-000000000002",
         blueprint_cert_thumbprint="A" * 40,
@@ -251,7 +251,7 @@ class TestRunSmokeChecks:
     def test_all_pass(self) -> None:
         config = _config_complete()
         with (
-            patch("entraclaw.preflight.acquire_agent_user_token", return_value="tok-123"),
+            patch("entrabot.preflight.acquire_agent_user_token", return_value="tok-123"),
             respx.mock,
         ):
             respx.get(self.ME_URL).mock(
@@ -279,7 +279,7 @@ class TestRunSmokeChecks:
     def test_token_mint_fails_short_circuits(self) -> None:
         config = _config_complete()
         with patch(
-            "entraclaw.preflight.acquire_agent_user_token",
+            "entrabot.preflight.acquire_agent_user_token",
             side_effect=TokenExchangeError(
                 hop="hop1", error="invalid_client", description="bad assertion"
             ),
@@ -295,7 +295,7 @@ class TestRunSmokeChecks:
     def test_token_mint_unconfigured(self) -> None:
         config = _config_complete()
         with patch(
-            "entraclaw.preflight.acquire_agent_user_token",
+            "entrabot.preflight.acquire_agent_user_token",
             side_effect=AgentIDNotAvailable("missing fields"),
         ):
             checks = run_smoke_checks(config)
@@ -304,7 +304,7 @@ class TestRunSmokeChecks:
 
     def test_me_upn_mismatch_fails(self) -> None:
         config = _config_complete()
-        with patch("entraclaw.preflight.acquire_agent_user_token", return_value="tok"), respx.mock:
+        with patch("entrabot.preflight.acquire_agent_user_token", return_value="tok"), respx.mock:
             respx.get(self.ME_URL).mock(
                 return_value=httpx.Response(
                     200,
@@ -325,7 +325,7 @@ class TestRunSmokeChecks:
 
     def test_chats_403_replication_lag(self) -> None:
         config = _config_complete()
-        with patch("entraclaw.preflight.acquire_agent_user_token", return_value="tok"), respx.mock:
+        with patch("entrabot.preflight.acquire_agent_user_token", return_value="tok"), respx.mock:
             respx.get(self.ME_URL).mock(
                 return_value=httpx.Response(
                     200,
@@ -350,7 +350,7 @@ class TestRunSmokeChecks:
 
 class TestCheckStateFile:
     def test_pass_when_required_keys_present(self, tmp_path: Path) -> None:
-        state = tmp_path / ".entraclaw-state.json"
+        state = tmp_path / ".entrabot-state.json"
         state.write_text(
             json.dumps(
                 {
@@ -369,7 +369,7 @@ class TestCheckStateFile:
         assert "setup.sh" in (result.remediation or "")
 
     def test_fail_when_keys_incomplete(self, tmp_path: Path) -> None:
-        state = tmp_path / ".entraclaw-state.json"
+        state = tmp_path / ".entrabot-state.json"
         state.write_text(json.dumps({"BLUEPRINT_APP_ID": "x"}))
         result = check_state_file(state)
         assert result.status == "fail"
@@ -378,7 +378,7 @@ class TestCheckStateFile:
 
 class TestCheckMcpConfigs:
     def test_pass_when_both_configs_point_at_binary(self, tmp_path: Path) -> None:
-        binary = tmp_path / "bin" / "entraclaw-mcp"
+        binary = tmp_path / "bin" / "entrabot-mcp"
         binary.parent.mkdir()
         binary.write_text("#!/bin/sh\n")
         binary.chmod(0o755)
@@ -388,7 +388,7 @@ class TestCheckMcpConfigs:
             json.dumps(
                 {
                     "mcpServers": {
-                        "entraclaw": {
+                        "entrabot": {
                             "type": "stdio",
                             "command": str(binary),
                             "args": [],
@@ -416,16 +416,16 @@ class TestCheckMcpConfigs:
             json.dumps(
                 {
                     "mcpServers": {
-                        "entraclaw": {
+                        "entrabot": {
                             "type": "stdio",
-                            "command": "/old/stale/path/entraclaw-mcp",
+                            "command": "/old/stale/path/entrabot-mcp",
                             "args": [],
                         }
                     }
                 }
             )
         )
-        binary = tmp_path / "bin" / "entraclaw-mcp"
+        binary = tmp_path / "bin" / "entrabot-mcp"
         binary.parent.mkdir()
         binary.write_text("")
 
@@ -441,7 +441,7 @@ class TestCheckMcpConfigs:
 
     def test_relative_command_path_resolves_against_config_parent(self, tmp_path: Path) -> None:
         """The Claude .mcp.json deliberately writes a relative path."""
-        binary = tmp_path / ".venv" / "bin" / "entraclaw-mcp"
+        binary = tmp_path / ".venv" / "bin" / "entrabot-mcp"
         binary.parent.mkdir(parents=True)
         binary.write_text("")
         claude_cfg = tmp_path / ".mcp.json"
@@ -449,9 +449,9 @@ class TestCheckMcpConfigs:
             json.dumps(
                 {
                     "mcpServers": {
-                        "entraclaw": {
+                        "entrabot": {
                             "type": "stdio",
-                            "command": ".venv/bin/entraclaw-mcp",
+                            "command": ".venv/bin/entrabot-mcp",
                             "args": [],
                         }
                     }
@@ -473,16 +473,16 @@ class TestCheckMcpConfigs:
     def test_copilot_drift_is_warn_not_fail(self, tmp_path: Path) -> None:
         """Copilot pointing at another worktree is non-fatal — common in dev."""
         claude_cfg = tmp_path / ".mcp.json"
-        binary = tmp_path / "bin" / "entraclaw-mcp"
+        binary = tmp_path / "bin" / "entrabot-mcp"
         binary.parent.mkdir()
         binary.write_text("")
-        claude_cfg.write_text(json.dumps({"mcpServers": {"entraclaw": {"command": str(binary)}}}))
+        claude_cfg.write_text(json.dumps({"mcpServers": {"entrabot": {"command": str(binary)}}}))
         copilot_cfg = tmp_path / "copilot.json"
         copilot_cfg.write_text(
             json.dumps(
                 {
                     "mcpServers": {
-                        "entraclaw": {"command": "/other/worktree/.venv/bin/entraclaw-mcp"}
+                        "entrabot": {"command": "/other/worktree/.venv/bin/entrabot-mcp"}
                     }
                 }
             )
@@ -498,7 +498,7 @@ class TestCheckMcpConfigs:
         assert statuses["Copilot CLI MCP config"] == "warn"
 
     def test_warn_when_claude_missing_and_copilot_missing(self, tmp_path: Path) -> None:
-        binary = tmp_path / "entraclaw-mcp"
+        binary = tmp_path / "entrabot-mcp"
         binary.write_text("")
         checks = check_mcp_configs(
             expected_binary=binary,
@@ -516,7 +516,7 @@ class TestRunDiagnostics:
         # Just smoke-test that run_diagnostics returns a superset of smoke checks
         # plus state + mcp. We mock everything so this is a structural test.
         config = _config_complete()
-        state = tmp_path / ".entraclaw-state.json"
+        state = tmp_path / ".entrabot-state.json"
         state.write_text(
             json.dumps(
                 {
@@ -527,9 +527,9 @@ class TestRunDiagnostics:
             )
         )
         with (
-            patch("entraclaw.preflight.acquire_agent_user_token", return_value="tok"),
+            patch("entrabot.preflight.acquire_agent_user_token", return_value="tok"),
             patch(
-                "entraclaw.preflight._check_cert_in_keystore",
+                "entrabot.preflight._check_cert_in_keystore",
                 return_value=Check(
                     name="Blueprint cert in OS keystore",
                     status="pass",
@@ -554,7 +554,7 @@ class TestRunDiagnostics:
             checks = run_diagnostics(
                 config,
                 state_path=state,
-                expected_binary=tmp_path / "bin" / "entraclaw-mcp",
+                expected_binary=tmp_path / "bin" / "entrabot-mcp",
                 claude_mcp_path=tmp_path / "absent.json",
                 copilot_mcp_path=tmp_path / "absent2.json",
             )

@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  EntraClaw — Windows cert rotation deploy.
+  EntraBot — Windows cert rotation deploy.
 
 .DESCRIPTION
   Wraps scripts/rotate_cert_windows.py. Captures the current cert's
@@ -87,19 +87,19 @@ if (-not (Test-Path $VenvPython)) {
 
 # Read current SHA-1 from .env so we know which cert to dump and rotate.
 $envText = Get-Content (Join-Path $ProjectRoot '.env') -Raw
-$oldSha1 = ($envText | Select-String '(?m)^ENTRACLAW_BLUEPRINT_CERT_SHA1=(.+)$').Matches[0].Groups[1].Value
-if (-not $oldSha1) { throw "ENTRACLAW_BLUEPRINT_CERT_SHA1 missing from .env" }
+$oldSha1 = ($envText | Select-String '(?m)^ENTRABOT_BLUEPRINT_CERT_SHA1=(.+)$').Matches[0].Groups[1].Value
+if (-not $oldSha1) { throw "ENTRABOT_BLUEPRINT_CERT_SHA1 missing from .env" }
 
 Write-Host "Capturing public DER of cert $oldSha1 BEFORE generating new cert..."
-$oldDerPath = Join-Path $env:TEMP "entraclaw-old-$(Get-Random).cer"
+$oldDerPath = Join-Path $env:TEMP "entrabot-old-$(Get-Random).cer"
 $cert = Get-Item "Cert:\CurrentUser\My\$oldSha1" -ErrorAction Stop
 [IO.File]::WriteAllBytes($oldDerPath, $cert.GetRawCertData())
 Write-Host "  Saved old DER to $oldDerPath"
 
 Write-Host "Generating new cert..."
-$newDerPath = Join-Path $env:TEMP "entraclaw-new-$(Get-Random).cer"
+$newDerPath = Join-Path $env:TEMP "entrabot-new-$(Get-Random).cer"
 $genOut = & $VenvPython (Join-Path $ScriptDir 'generate_windows_cert.py') `
-    --subject "CN=entraclaw-blueprint" `
+    --subject "CN=entrabot-blueprint" `
     --days 365 `
     --export-der $newDerPath
 if ($LASTEXITCODE -ne 0) { throw "generate_windows_cert.py failed" }
@@ -115,13 +115,13 @@ import sys, base64, httpx
 from pathlib import Path
 sys.path.insert(0, r'$ScriptDir')
 import rotate_cert_windows as rcw
-from entraclaw.config import get_config
-from entraclaw.tools.teams import acquire_agent_identity_token, acquire_agent_user_token
+from entrabot.config import get_config
+from entrabot.tools.teams import acquire_agent_identity_token, acquire_agent_user_token
 
 cfg   = get_config()
 state = rcw.RotationState(
     env_path=Path(r'$ProjectRoot') / '.env',
-    msal_cache_path=Path(r'$env:LOCALAPPDATA') / 'entraclaw' / '.msal-cache.bin',
+    msal_cache_path=Path(r'$env:LOCALAPPDATA') / 'entrabot' / '.msal-cache.bin',
     blueprint_object_id=cfg.blueprint_object_id,
 )
 old_der = Path(r'$oldDerPath').read_bytes()

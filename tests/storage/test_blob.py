@@ -1,4 +1,4 @@
-"""Tests for entraclaw.storage.blob — Azure Blob Storage client.
+"""Tests for entrabot.storage.blob — Azure Blob Storage client.
 
 Per ADR-005: async client with put/get/list/delete/exists + ETag-based
 optimistic concurrency. Auth is DI'd via a token_provider callable so
@@ -14,10 +14,10 @@ import httpx
 import pytest
 import respx
 
-from entraclaw.storage.blob import BlobStore
+from entrabot.storage.blob import BlobStore
 
-ACCOUNT = "entraclawtest123"
-CONTAINER = "entraclaw-memory"
+ACCOUNT = "entrabottest123"
+CONTAINER = "entrabot-memory"
 ENDPOINT = f"https://{ACCOUNT}.blob.core.windows.net"
 BLOB_URL = f"{ENDPOINT}/{CONTAINER}"
 
@@ -238,7 +238,7 @@ class TestBlobETag:
 
     @pytest.mark.asyncio
     async def test_put_412_raises_concurrency_error(self) -> None:
-        from entraclaw.storage.blob import ConcurrencyError
+        from entrabot.storage.blob import ConcurrencyError
 
         with respx.mock:
             respx.put(f"{BLOB_URL}/manifest.json").mock(return_value=httpx.Response(412))
@@ -266,7 +266,7 @@ class TestBlobAuth:
 
     @pytest.mark.asyncio
     async def test_get_401_raises_token_expired(self) -> None:
-        from entraclaw.errors import TokenExpiredError
+        from entrabot.errors import TokenExpiredError
 
         with respx.mock:
             respx.get(f"{BLOB_URL}/x").mock(return_value=httpx.Response(401))
@@ -276,7 +276,7 @@ class TestBlobAuth:
 
     @pytest.mark.asyncio
     async def test_put_401_raises_token_expired(self) -> None:
-        from entraclaw.errors import TokenExpiredError
+        from entrabot.errors import TokenExpiredError
 
         with respx.mock:
             respx.put(f"{BLOB_URL}/x").mock(return_value=httpx.Response(401))
@@ -286,7 +286,7 @@ class TestBlobAuth:
 
     @pytest.mark.asyncio
     async def test_head_401_raises_token_expired(self) -> None:
-        from entraclaw.errors import TokenExpiredError
+        from entrabot.errors import TokenExpiredError
 
         with respx.mock:
             respx.head(f"{BLOB_URL}/x").mock(return_value=httpx.Response(401))
@@ -296,7 +296,7 @@ class TestBlobAuth:
 
     @pytest.mark.asyncio
     async def test_list_401_raises_token_expired(self) -> None:
-        from entraclaw.errors import TokenExpiredError
+        from entrabot.errors import TokenExpiredError
 
         with respx.mock:
             respx.get(f"{ENDPOINT}/{CONTAINER}").mock(return_value=httpx.Response(401))
@@ -306,7 +306,7 @@ class TestBlobAuth:
 
     @pytest.mark.asyncio
     async def test_delete_401_raises_token_expired(self) -> None:
-        from entraclaw.errors import TokenExpiredError
+        from entrabot.errors import TokenExpiredError
 
         with respx.mock:
             respx.delete(f"{BLOB_URL}/x").mock(return_value=httpx.Response(401))

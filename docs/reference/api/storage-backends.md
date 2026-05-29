@@ -1,6 +1,6 @@
 # Storage backends
 
-Defined in `src/entraclaw/storage/`. The `MemoryBackend` protocol hides whether a piece of agent state lives on the local filesystem or in Azure Blob Storage. Three implementations ship: `LocalBackend`, `BlobBackend`, `PersonaBackend`.
+Defined in `src/entrabot/storage/`. The `MemoryBackend` protocol hides whether a piece of agent state lives on the local filesystem or in Azure Blob Storage. Three implementations ship: `LocalBackend`, `BlobBackend`, `PersonaBackend`.
 
 Background: ADR-005 (`docs/decisions/005-cloud-hosted-memory.md`). Phases 1, 2, 5, 6a are shipped.
 
@@ -27,11 +27,11 @@ class LocalBackend:
     def __init__(self, root: Path) -> None
 ```
 
-Filesystem-backed. Keys map directly to paths under `root`. `root` is `cfg.data_dir`, which is `~/.entraclaw/data` on macOS / Linux and `%LOCALAPPDATA%\entraclaw\data` on Windows.
+Filesystem-backed. Keys map directly to paths under `root`. `root` is `cfg.data_dir`, which is `~/.entrabot/data` on macOS / Linux and `%LOCALAPPDATA%\entrabot\data` on Windows.
 
 Use when:
 
-- `ENTRACLAW_KEEP_MEMORY_LOCAL=true` is set.
+- `ENTRABOT_KEEP_MEMORY_LOCAL=true` is set.
 - `BLOB_ENDPOINT` / `BLOB_CONTAINER` are unset (half-configured cloud falls back to local for safety).
 - Running locally without an Azure subscription.
 
@@ -51,7 +51,7 @@ Token provider: `acquire_agent_user_storage_token(cfg)` — Hop 3 of the three-h
 Use when:
 
 - `BLOB_ENDPOINT` and `BLOB_CONTAINER` are both set.
-- `ENTRACLAW_KEEP_MEMORY_LOCAL` is unset.
+- `ENTRABOT_KEEP_MEMORY_LOCAL` is unset.
 - Cross-device durability matters.
 
 ## `PersonaBackend`
@@ -97,7 +97,7 @@ Half-configured cloud (endpoint without container, or vice versa) is treated as 
 
 ## Migration
 
-`src/entraclaw/storage/migration.py` ships a one-shot `migrate_local_to_backend()` helper used by `setup.sh --use-cloud-memory` to upload an existing local data dir to the freshly-provisioned blob container.
+`src/entrabot/storage/migration.py` ships a one-shot `migrate_local_to_backend()` helper used by `setup.sh --use-cloud-memory` to upload an existing local data dir to the freshly-provisioned blob container.
 
 ```python
 @dataclass

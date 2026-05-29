@@ -1,6 +1,6 @@
-# Next: Entraclaw MCP Server Design
+# Next: Entrabot MCP Server Design
 
-> **HISTORICAL — shipped. The current MCP server implementation lives at `src/entraclaw/mcp_server.py`; see [System Overview](system-overview.md) for the live architecture.**
+> **HISTORICAL — shipped. The current MCP server implementation lives at `src/entrabot/mcp_server.py`; see [System Overview](system-overview.md) for the live architecture.**
 
 > The core deliverable — an MCP server that gives Copilot CLI agent identity, Teams communication, and audit.
 
@@ -19,7 +19,7 @@
 
 ## Overview
 
-Entraclaw runs as an **MCP server** that Copilot CLI connects to. It exposes identity, Teams, and audit as MCP tools. When Copilot CLI does agentic work, it calls these tools to authenticate as the agent, communicate through Teams, and record audit events.
+Entrabot runs as an **MCP server** that Copilot CLI connects to. It exposes identity, Teams, and audit as MCP tools. When Copilot CLI does agentic work, it calls these tools to authenticate as the agent, communicate through Teams, and record audit events.
 
 ## MCP Tools
 
@@ -27,26 +27,26 @@ Entraclaw runs as an **MCP server** that Copilot CLI connects to. It exposes ide
 
 | Tool | Description | When Called |
 |------|-------------|------------|
-| `entraclaw_bootstrap` | Discover human identity (WAM/PRT or device code), register Agent ID, perform OBO exchange. Returns agent token. | Once at session start |
-| `entraclaw_whoami` | Return current agent identity: Agent ID, human sponsor, token scopes, token expiry | On demand |
-| `entraclaw_refresh` | Silently refresh the OBO token if nearing expiry | Periodically or before API calls |
-| `entraclaw_revoke` | Revoke the agent's token and clear cached credentials | When human says "stop" |
+| `entrabot_bootstrap` | Discover human identity (WAM/PRT or device code), register Agent ID, perform OBO exchange. Returns agent token. | Once at session start |
+| `entrabot_whoami` | Return current agent identity: Agent ID, human sponsor, token scopes, token expiry | On demand |
+| `entrabot_refresh` | Silently refresh the OBO token if nearing expiry | Periodically or before API calls |
+| `entrabot_revoke` | Revoke the agent's token and clear cached credentials | When human says "stop" |
 
 ### Teams Tools
 
 | Tool | Description | When Called |
 |------|-------------|------------|
-| `entraclaw_teams_connect` | Create or resume a 1:1 Teams chat between the agent and the human | After bootstrap |
-| `entraclaw_teams_send` | Send a message to the human in Teams (text or Adaptive Card JSON) | Whenever agent has status/results |
-| `entraclaw_teams_poll` | Check for new messages from the human (delta query) | Every few seconds, or on demand |
-| `entraclaw_teams_presence` | Set the agent's presence status (Available, Busy, Away, Offline) | On state changes |
+| `entrabot_teams_connect` | Create or resume a 1:1 Teams chat between the agent and the human | After bootstrap |
+| `entrabot_teams_send` | Send a message to the human in Teams (text or Adaptive Card JSON) | Whenever agent has status/results |
+| `entrabot_teams_poll` | Check for new messages from the human (delta query) | Every few seconds, or on demand |
+| `entrabot_teams_presence` | Set the agent's presence status (Available, Busy, Away, Offline) | On state changes |
 
 ### Audit Tools
 
 | Tool | Description | When Called |
 |------|-------------|------------|
-| `entraclaw_audit_log` | Record an audit event (action, resource, outcome) | Before every resource access |
-| `entraclaw_audit_query` | Query recent audit events for this session | On demand / debugging |
+| `entrabot_audit_log` | Record an audit event (action, resource, outcome) | Before every resource access |
+| `entrabot_audit_query` | Query recent audit events for this session | On demand / debugging |
 
 ## Architecture
 
@@ -57,16 +57,16 @@ Entraclaw runs as an **MCP server** that Copilot CLI connects to. It exposes ide
 │                                  │
 │  User says: "deploy to staging"  │
 │  Copilot calls:                  │
-│    entraclaw_audit_log(...)       │
+│    entrabot_audit_log(...)       │
 │    <does the deploy>             │
-│    entraclaw_teams_send(...)      │
-│    entraclaw_teams_poll(...)      │
+│    entrabot_teams_send(...)      │
+│    entrabot_teams_poll(...)      │
 │                                  │
 └──────────────┬───────────────────┘
                │ MCP (stdio or HTTP)
                ▼
 ┌──────────────────────────────────┐
-│ Entraclaw MCP Server              │
+│ Entrabot MCP Server              │
 │ (Python process)                 │
 │                                  │
 │  ┌────────┐ ┌───────┐ ┌───────┐ │
@@ -75,13 +75,13 @@ Entraclaw runs as an **MCP server** that Copilot CLI connects to. It exposes ide
 │  └────────┘ └───────┘ └───────┘ │
 │                                  │
 │  Token cache: OS Credential Mgr  │
-│  Audit log: ~/.entraclaw/audit/   │
+│  Audit log: ~/.entrabot/audit/   │
 └──────────────────────────────────┘
 ```
 
 ## MCP Server Configuration
 
-The user adds Entraclaw to their Copilot CLI MCP config:
+The user adds Entrabot to their Copilot CLI MCP config:
 
 ```json
 // ~/.copilot/mcp-config.json (or .vscode/mcp.json)
@@ -89,13 +89,13 @@ The user adds Entraclaw to their Copilot CLI MCP config:
 //    Production must use split architecture (secret stays in cloud service).
 {
   "mcpServers": {
-    "entraclaw": {
+    "entrabot": {
       "command": "python",
-      "args": ["-m", "entraclaw.mcp_server"],
+      "args": ["-m", "entrabot.mcp_server"],
       "env": {
-        "ENTRACLAW_TENANT_ID": "<entra-tenant-id>",
-        "ENTRACLAW_CLIENT_ID": "<agent-app-client-id>",
-        "ENTRACLAW_CLIENT_SECRET": "<agent-app-secret>"
+        "ENTRABOT_TENANT_ID": "<entra-tenant-id>",
+        "ENTRABOT_CLIENT_ID": "<agent-app-client-id>",
+        "ENTRABOT_CLIENT_SECRET": "<agent-app-secret>"
       }
     }
   }
@@ -121,7 +121,7 @@ dependencies = [
 ## Bootstrap Sequence (Detailed)
 
 ```python
-# Pseudocode for entraclaw_bootstrap tool
+# Pseudocode for entrabot_bootstrap tool
 #
 # CRITICAL: The device code flow must request YOUR APP's custom scope,
 # not Graph scopes directly. The OBO exchange requires the incoming token's
@@ -135,7 +135,7 @@ AGENT_SCOPES = ["https://graph.microsoft.com/Chat.Create",
                 "https://graph.microsoft.com/ChatMessage.Send",
                 "https://graph.microsoft.com/Chat.ReadWrite"]
 
-async def entraclaw_bootstrap():
+async def entrabot_bootstrap():
     # 1. Try WAM/PRT (Windows Entra-joined devices)
     human_token = try_wam_acquire(scopes=HUMAN_SCOPES)
 
@@ -187,12 +187,12 @@ async def entraclaw_bootstrap():
 ### Error Hierarchy
 
 ```python
-# src/entraclaw/errors.py
+# src/entrabot/errors.py
 
-class EntraclawError(Exception):
-    """Base class for all Entraclaw errors."""
+class EntrabotError(Exception):
+    """Base class for all Entrabot errors."""
 
-class AuthError(EntraclawError):
+class AuthError(EntrabotError):
     """Authentication/identity errors."""
 
 class MSALError(AuthError):
@@ -207,7 +207,7 @@ class ConsentDenied(AuthError): ...
 class OBOExchangeError(AuthError): ...
 class AgentIDNotAvailable(AuthError): ...
 
-class TeamsError(EntraclawError):
+class TeamsError(EntrabotError):
     """Teams Graph API errors."""
 
 class TeamsNotLicensed(TeamsError): ...
@@ -215,7 +215,7 @@ class ChatNotFound(TeamsError): ...
 class MessageTooLong(TeamsError): ...
 
 class TokenExpiredError(AuthError): ...
-class RateLimitError(EntraclawError):
+class RateLimitError(EntrabotError):
     def __init__(self, retry_after: int):
         self.retry_after = retry_after
         super().__init__(f"Rate limited. Retry after {retry_after}s")
@@ -224,12 +224,12 @@ class RateLimitError(EntraclawError):
 ## File Structure
 
 ```
-src/entraclaw/
+src/entrabot/
   mcp_server.py        # MCP server entry point
   tools/
-    identity.py        # entraclaw_bootstrap, whoami, refresh, revoke
-    teams.py           # entraclaw_teams_connect, send, poll, presence
-    audit.py           # entraclaw_audit_log, query
+    identity.py        # entrabot_bootstrap, whoami, refresh, revoke
+    teams.py           # entrabot_teams_connect, send, poll, presence
+    audit.py           # entrabot_audit_log, query
   platform/
     windows.py         # WAM/PRT, Credential Manager, Task Scheduler
     mac.py             # Keychain, launchd, osascript consent
@@ -245,9 +245,9 @@ src/entraclaw/
 > "Run Copilot CLI on the Windows VM, type something, and see a message appear in Teams from the agent."
 
 Three tools. That's it:
-1. `entraclaw_bootstrap` — get an agent-attributed token
-2. `entraclaw_teams_connect` — create a 1:1 chat
-3. `entraclaw_teams_send` — send a message
+1. `entrabot_bootstrap` — get an agent-attributed token
+2. `entrabot_teams_connect` — create a 1:1 chat
+3. `entrabot_teams_send` — send a message
 
 Everything else (`audit_log`, `refresh`, `revoke`, `whoami`, `teams_poll`, `teams_presence`) is iteration.
 
@@ -257,6 +257,6 @@ Everything else (`audit_log`, `refresh`, `revoke`, `whoami`, `teams_poll`, `team
 2. `models.py` — Pydantic models for tokens, identity, audit events
 3. `platform/windows.py` — `keyring` integration for Credential Manager (identity needs this)
 4. `mcp_server.py` — bare MCP server with tool registration
-5. `tools/identity.py` — `entraclaw_bootstrap` with device code flow (stores to credential store)
-6. `tools/teams.py` — `entraclaw_teams_connect` + `entraclaw_teams_send` (needs identity working first)
-7. `tools/audit.py` — `entraclaw_audit_log` writing to JSON file (add after Teams works)
+5. `tools/identity.py` — `entrabot_bootstrap` with device code flow (stores to credential store)
+6. `tools/teams.py` — `entrabot_teams_connect` + `entrabot_teams_send` (needs identity working first)
+7. `tools/audit.py` — `entrabot_audit_log` writing to JSON file (add after Teams works)

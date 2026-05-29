@@ -6,7 +6,7 @@ Proposed — 2026-04-24, author: Claude (PM: Brandon)
 
 ## Problem statement
 
-Entraclaw's push channel is a non-standard JSON-RPC notification — `notifications/claude/channel` — emitted from the stdio write stream by background pollers in `_push_channel_notification` ([`mcp_server.py:1432`](../src/entraclaw/mcp_server.py)) and `_push_email_notification` ([`mcp_server.py:1237`](../src/entraclaw/mcp_server.py)). Claude Code routes the notification into the agent's system-reminder stream because the entraclaw process is launched with `--dangerously-load-development-channels`, and we declare the matching `experimental_capabilities={"claude/channel": {}}` in `_run_stdio_with_write_stream` ([`mcp_server.py:2780`](../src/entraclaw/mcp_server.py)). This is the entire push mechanism — no Microsoft webhooks, no Graph subscription, no client-pull.
+Entrabot's push channel is a non-standard JSON-RPC notification — `notifications/claude/channel` — emitted from the stdio write stream by background pollers in `_push_channel_notification` ([`mcp_server.py:1432`](../src/entrabot/mcp_server.py)) and `_push_email_notification` ([`mcp_server.py:1237`](../src/entrabot/mcp_server.py)). Claude Code routes the notification into the agent's system-reminder stream because the entrabot process is launched with `--dangerously-load-development-channels`, and we declare the matching `experimental_capabilities={"claude/channel": {}}` in `_run_stdio_with_write_stream` ([`mcp_server.py:2780`](../src/entrabot/mcp_server.py)). This is the entire push mechanism — no Microsoft webhooks, no Graph subscription, no client-pull.
 
 Brandon increasingly works in GitHub Copilot CLI. Copilot CLI is a different MCP host. It supports MCP **tools only** — not resources, not prompts, not sampling, not elicitation, not roots, and not arbitrary `notifications/*` channels ([copilot-cli#1518](https://github.com/github/copilot-cli/issues/1518), [copilot-cli#1748](https://github.com/github/copilot-cli/issues/1748), [copilot-cli#1803](https://github.com/github/copilot-cli/issues/1803)). It has no `--dangerously-load-development-channels` analogue. The model receives nothing the server doesn't send back as a tool-call result. So under Copilot CLI, every inbound Teams DM today is invisible to the agent until it happens to call a tool whose return value happens to mention it — which it never does, because no tool currently advertises inbound state.
 
@@ -57,7 +57,7 @@ Dies on Copilot CLI: [#1518](https://github.com/github/copilot-cli/issues/1518) 
 
 ### C. Sampling — server initiates a model turn
 
-`sampling/createMessage` would let entraclaw say "here's an inbound message, please act on it" and the host would feed it to the model. This is the cleanest semantic match to today's behavior.
+`sampling/createMessage` would let entrabot say "here's an inbound message, please act on it" and the host would feed it to the model. This is the cleanest semantic match to today's behavior.
 
 Dies on Copilot CLI: [community#160291](https://github.com/orgs/community/discussions/160291) and [copilot-cli#1748](https://github.com/github/copilot-cli/issues/1748) confirm `sampling/createMessage` returns `Method not found` in Copilot CLI. Listed as a feature request as of March 2026, still unassigned. Skip.
 
@@ -71,9 +71,9 @@ Brandon will hate this. Two surfaces, no security story for the webhook authenti
 
 ### F. Hybrid — host detection at boot, channel push for Claude Code, long-poll for Copilot CLI
 
-Detect the host via `clientInfo.name` (already cached in `_state["cached_host"]` by `_capture_host_from_context`, [`mcp_server.py:280`](../src/entraclaw/mcp_server.py)). For Claude Code (`name in {"claude-code", "claude-ai"}` or anything that handles the channel cap), do exactly what we do today. For Copilot CLI (`name == "github-copilot-cli"`), gate the channel push to no-op and rely on the long-poll tool from (A).
+Detect the host via `clientInfo.name` (already cached in `_state["cached_host"]` by `_capture_host_from_context`, [`mcp_server.py:280`](../src/entrabot/mcp_server.py)). For Claude Code (`name in {"claude-code", "claude-ai"}` or anything that handles the channel cap), do exactly what we do today. For Copilot CLI (`name == "github-copilot-cli"`), gate the channel push to no-op and rely on the long-poll tool from (A).
 
-This is the recommendation, with a wrinkle: **always run both paths in parallel**, regardless of host. Push is fire-and-forget — the cost on a host that drops it is one TCP write and a swallowed exception ([`mcp_server.py:1535-1546`](../src/entraclaw/mcp_server.py)). The long-poll tool is host-agnostic — it always works. So we don't actually need a host gate on the *push* path; we need a host gate only on the *body prompt convention* that tells the agent to call `wait_for_inbound_message`.
+This is the recommendation, with a wrinkle: **always run both paths in parallel**, regardless of host. Push is fire-and-forget — the cost on a host that drops it is one TCP write and a swallowed exception ([`mcp_server.py:1535-1546`](../src/entrabot/mcp_server.py)). The long-poll tool is host-agnostic — it always works. So we don't actually need a host gate on the *push* path; we need a host gate only on the *body prompt convention* that tells the agent to call `wait_for_inbound_message`.
 
 That collapses (F) into "ship (A); Claude Code body keeps using channel pushes; Copilot CLI body adds a `wait_for_inbound_message` rule." One server, one push pipeline, one new tool, one body-prompt section.
 
@@ -100,7 +100,7 @@ If Copilot CLI later ships sampling or arbitrary-notification routing, this desi
 
 ## Implementation sketch
 
-### New module: `src/entraclaw/inbound_queue.py`
+### New module: `src/entrabot/inbound_queue.py`
 
 A small in-process pub-sub queue. Async-safe, bounded, deduped by `message_id`, with a wakeup `asyncio.Event` so the long-poll tool unblocks within a tick of an enqueue.
 
@@ -119,11 +119,11 @@ class InboundQueue:
 
 `drain` blocks on `self._wakeup` until something is queued or `timeout_s` elapses, then returns up to `max_items`. Bounded `maxlen=200` is the safety valve — if the agent falls behind for hours, the oldest 200 messages survive; older ones are dropped (logged + audited) so the process can't OOM. Tests will pin all four behaviors: enqueue/drain happy path, dedupe by `message_id`, timeout returns empty list, overflow drops + audits.
 
-### Changes to `src/entraclaw/mcp_server.py`
+### Changes to `src/entrabot/mcp_server.py`
 
 1. **Module-level singleton.** `_inbound_queue: InboundQueue` initialized at boot inside `_run_stdio_with_write_stream`, stored alongside the write stream.
 
-2. **Push fan-out.** `_push_channel_notification` ([`mcp_server.py:1432`](../src/entraclaw/mcp_server.py)) and `_push_email_notification` ([`mcp_server.py:1237`](../src/entraclaw/mcp_server.py)) gain one extra line each: `await _inbound_queue.push(InboundMessage.from_teams(message))` (or `.from_email`). The existing notification send path is unchanged. The interaction-log write is unchanged. Order: log → enqueue → push. Enqueue precedes push so a transport-broken host still gets the message via the long-poll path.
+2. **Push fan-out.** `_push_channel_notification` ([`mcp_server.py:1432`](../src/entrabot/mcp_server.py)) and `_push_email_notification` ([`mcp_server.py:1237`](../src/entrabot/mcp_server.py)) gain one extra line each: `await _inbound_queue.push(InboundMessage.from_teams(message))` (or `.from_email`). The existing notification send path is unchanged. The interaction-log write is unchanged. Order: log → enqueue → push. Enqueue precedes push so a transport-broken host still gets the message via the long-poll path.
 
 3. **New tool.**
 
@@ -153,7 +153,7 @@ async def wait_for_inbound_message(
 
 The 55s cap is the load-bearing line — [copilot-cli#1535](https://github.com/github/copilot-cli/issues/1535) confirms 60s is hard, and we leave 5s for serialization overhead. We do **not** trust the caller to set this correctly; we cap it server-side.
 
-4. **No changes to the channel push path.** Claude Code keeps everything it has. The push call still fires on every host and is silently dropped on Copilot CLI per MCP-spec behavior ([`mcp_server.py:1466-1469`](../src/entraclaw/mcp_server.py)). Belt + suspenders.
+4. **No changes to the channel push path.** Claude Code keeps everything it has. The push call still fires on every host and is silently dropped on Copilot CLI per MCP-spec behavior ([`mcp_server.py:1466-1469`](../src/entrabot/mcp_server.py)). Belt + suspenders.
 
 ### Changes to `prompts/anatomy/channel-discipline.md`
 
@@ -170,16 +170,16 @@ Add a second example block showing the Copilot CLI configuration:
 ```json
 {
   "mcpServers": {
-    "entraclaw": {
+    "entrabot": {
       "type": "local",
-      "command": ".venv/bin/entraclaw-mcp",
+      "command": ".venv/bin/entrabot-mcp",
       "args": []
     }
   }
 }
 ```
 
-(Path is `~/.copilot/mcp-config.json` for Copilot CLI; same `entraclaw-mcp` binary.)
+(Path is `~/.copilot/mcp-config.json` for Copilot CLI; same `entrabot-mcp` binary.)
 
 ### Sequence diagram
 
@@ -229,11 +229,11 @@ Total: ~410 lines, no dependencies added. Two days of work including the body-pr
 
 - **Q3. Do we expose queue stats as a tool?** A `inbound_queue_stats()` tool would help debug ("how many messages did I miss while compacting?"). **Recommended default: yes, add it cheaply.** One @mcp.tool that returns `{depth, dropped_total, oldest_ts}`. ~10 LOC.
 
-- **Q4. Body prompt: do we add the Copilot CLI clause to a new file (`prompts/anatomy/copilot-cli.md`) or extend `channel-discipline.md`?** **Recommended default: extend `channel-discipline.md`.** The behavior IS channel discipline — same vocabulary, same audit rules, same place a body-rule reader expects to find it. A separate file fragments the rule by host and would have to be `@include`d conditionally, which the loader doesn't support today (`_expand_includes` is unconditional, [`mcp_server.py:53`](../src/entraclaw/mcp_server.py)).
+- **Q4. Body prompt: do we add the Copilot CLI clause to a new file (`prompts/anatomy/copilot-cli.md`) or extend `channel-discipline.md`?** **Recommended default: extend `channel-discipline.md`.** The behavior IS channel discipline — same vocabulary, same audit rules, same place a body-rule reader expects to find it. A separate file fragments the rule by host and would have to be `@include`d conditionally, which the loader doesn't support today (`_expand_includes` is unconditional, [`mcp_server.py:53`](../src/entrabot/mcp_server.py)).
 
-- **Q5. Should `wait_for_inbound_message` also forward Bot Gateway inbound (`_background_poll_bot`)?** **Recommended default: yes.** Same fan-out pattern — `_push_channel_notification` is already the unified entry point for bot inbound ([`mcp_server.py:846`](../src/entraclaw/mcp_server.py)), so the enqueue line lives in one place and bot mode gets long-poll for free.
+- **Q5. Should `wait_for_inbound_message` also forward Bot Gateway inbound (`_background_poll_bot`)?** **Recommended default: yes.** Same fan-out pattern — `_push_channel_notification` is already the unified entry point for bot inbound ([`mcp_server.py:846`](../src/entrabot/mcp_server.py)), so the enqueue line lives in one place and bot mode gets long-poll for free.
 
-- **Q6. Channel-push backwards compatibility — do we remove the experimental_capabilities declaration when we detect Copilot CLI?** **Recommended default: no, leave it.** The capability is advertised in `mcp._mcp_server.create_initialization_options(experimental_capabilities={"claude/channel": {}})` ([`mcp_server.py:2780`](../src/entraclaw/mcp_server.py)) and Copilot CLI ignores capabilities it doesn't understand, per MCP spec. Branching the init options on host adds complexity for zero benefit.
+- **Q6. Channel-push backwards compatibility — do we remove the experimental_capabilities declaration when we detect Copilot CLI?** **Recommended default: no, leave it.** The capability is advertised in `mcp._mcp_server.create_initialization_options(experimental_capabilities={"claude/channel": {}})` ([`mcp_server.py:2780`](../src/entrabot/mcp_server.py)) and Copilot CLI ignores capabilities it doesn't understand, per MCP spec. Branching the init options on host adds complexity for zero benefit.
 
 ## Risks and rollback
 
@@ -264,8 +264,8 @@ Total: ~410 lines, no dependencies added. Two days of work including the body-pr
 - [Microsoft Java DevBlog — Unlocking MCP in JetBrains: How Copilot Uses Sampling, Prompts, Resources, and Elicitation](https://devblogs.microsoft.com/java/unlocking-mcp-in-jetbrains-how-copilot-uses-sampling-prompts-resources-and-elicitation/)
 - [Model Context Protocol — modelcontextprotocol.io](https://modelcontextprotocol.io/)
 - Repo files read:
-  - `/path/to/entraclaw-identity-research/src/entraclaw/mcp_server.py` (channel push, write-stream capture, `clientInfo` host detection, background pollers, FastMCP boot)
-  - `/path/to/entraclaw-identity-research/src/entraclaw/tools/teams.py`
-  - `/path/to/entraclaw-identity-research/prompts/anatomy/channel-discipline.md`
-  - `/path/to/entraclaw-identity-research/.mcp.json.example`
-  - `/path/to/entraclaw-identity-research/pyproject.toml`
+  - `/path/to/entrabot-identity-research/src/entrabot/mcp_server.py` (channel push, write-stream capture, `clientInfo` host detection, background pollers, FastMCP boot)
+  - `/path/to/entrabot-identity-research/src/entrabot/tools/teams.py`
+  - `/path/to/entrabot-identity-research/prompts/anatomy/channel-discipline.md`
+  - `/path/to/entrabot-identity-research/.mcp.json.example`
+  - `/path/to/entrabot-identity-research/pyproject.toml`

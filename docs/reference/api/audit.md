@@ -1,12 +1,12 @@
 # Audit
 
-Audit logging proves the agent (not the human) performed each action. Events land in `~/.entraclaw/audit/<YYYY-MM-DD>.jsonl`.
+Audit logging proves the agent (not the human) performed each action. Events land in `~/.entrabot/audit/<YYYY-MM-DD>.jsonl`.
 
 The body prompt's security section makes audit non-overridable: **if audit can't record, the action doesn't proceed.** Security-sensitive operations (cross-tenant Teams sends, chat member adds, memory mutations) must call `audit_log` before execution. Fail-closed is enforced by the call sites, not by the audit module itself.
 
 ## `log_event`
 
-`src/entraclaw/tools/audit.py`:
+`src/entrabot/tools/audit.py`:
 
 ```python
 def log_event(
@@ -19,7 +19,7 @@ def log_event(
 ) -> dict
 ```
 
-Write an audit event and return it. Writes a single JSON line to `~/.entraclaw/audit/<YYYY-MM-DD>.jsonl`. Also logs via the standard `entraclaw.tools.audit` logger.
+Write an audit event and return it. Writes a single JSON line to `~/.entrabot/audit/<YYYY-MM-DD>.jsonl`. Also logs via the standard `entrabot.tools.audit` logger.
 
 | Field | Source | Notes |
 |-------|--------|-------|
@@ -58,7 +58,7 @@ Call BEFORE performing any action on the user's behalf. The `metadata` argument 
 
 ## `_audit_graph_call` middleware
 
-`src/entraclaw/tools/files.py` wraps every Graph Files call in an async context manager:
+`src/entrabot/tools/files.py` wraps every Graph Files call in an async context manager:
 
 ```python
 @asynccontextmanager
@@ -86,13 +86,13 @@ From `prompts/anatomy/security.md`:
 
 ```bash
 # Today's events
-cat ~/.entraclaw/audit/$(date -u +%Y-%m-%d).jsonl | jq .
+cat ~/.entrabot/audit/$(date -u +%Y-%m-%d).jsonl | jq .
 
 # All events for a specific resource
-cat ~/.entraclaw/audit/*.jsonl | jq 'select(.resource == "chat_19:abc...@unq.gbl.spaces")'
+cat ~/.entrabot/audit/*.jsonl | jq 'select(.resource == "chat_19:abc...@unq.gbl.spaces")'
 
 # Failures only
-cat ~/.entraclaw/audit/*.jsonl | jq 'select(.outcome == "failure")'
+cat ~/.entrabot/audit/*.jsonl | jq 'select(.outcome == "failure")'
 ```
 
-`run_daily_summary` reads the audit log and the interaction log to build the 5pm PDT triage email — see `src/entraclaw/tools/daily_summary.py`.
+`run_daily_summary` reads the audit log and the interaction log to build the 5pm PDT triage email — see `src/entrabot/tools/daily_summary.py`.

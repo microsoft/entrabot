@@ -1,9 +1,9 @@
 # Agent Memory Systems: Anthropic Memory Tool vs Mem0
 
-**Purpose:** Compare the two leading approaches to persistent memory for LLM agents, identify their architectural tradeoffs, and name the contribution entraclaw/EntraClaw can make that neither covers.
+**Purpose:** Compare the two leading approaches to persistent memory for LLM agents, identify their architectural tradeoffs, and name the contribution entrabot/EntraBot can make that neither covers.
 
 **Last updated:** 2026-04-15
-**Audience:** entraclaw architecture + implementation team
+**Audience:** entrabot architecture + implementation team
 **Related:** [`SPEC-dual-track-agent-identity.md`](../architecture/SPEC-dual-track-agent-identity.md), [`entra-agent-users.md`](./entra-agent-users.md), [`msal-entra-agent-ids.md`](./msal-entra-agent-ids.md)
 
 ---
@@ -15,7 +15,7 @@
 3. [Approach A: Anthropic Memory Tool (`memory_20250818`)](#approach-a-anthropic-memory-tool-memory_20250818)
 4. [Approach B: Mem0](#approach-b-mem0)
 5. [Side-by-side comparison](#side-by-side-comparison)
-6. [The Entraclaw angle: memory as a governed resource](#the-entraclaw-angle-memory-as-a-governed-resource)
+6. [The Entrabot angle: memory as a governed resource](#the-entrabot-angle-memory-as-a-governed-resource)
 7. [Recommendation](#recommendation)
 8. [Open questions](#open-questions)
 
@@ -23,14 +23,14 @@
 
 ## Why this matters now
 
-Every Claude Code session today starts with a fresh context window. Claude's built-in memory is limited to `CLAUDE.md` files (instructions) plus an auto-memory system that writes short bullet summaries. The current EntraClaw uses flat markdown files under `~/.claude/projects/<slug>/memory/`. This works for preferences and hard-won rules. It fails for:
+Every Claude Code session today starts with a fresh context window. Claude's built-in memory is limited to `CLAUDE.md` files (instructions) plus an auto-memory system that writes short bullet summaries. The current EntraBot uses flat markdown files under `~/.claude/projects/<slug>/memory/`. This works for preferences and hard-won rules. It fails for:
 
 - **Experiential continuity** — "remember the conversation we had Monday night about decorated tokens." The raw conversation content isn't preserved; only the bullet-summaries I chose to save.
 - **Relational recall** — "what did the identity PM say about directory scale?" No indexed retrieval over prior transcripts; I can search filesystem logs but nothing semantic.
 - **Cross-session task state** — if I'm mid-deploy and the session dies, recovery requires manually re-reading logs and deducing state.
 - **Model-level continuity** — even within one Claude Code session, when compaction kicks in, long-tail context is lost unless I've explicitly written it to memory.
 
-Two real products solve these problems differently. Neither fully addresses the constraints that matter for entraclaw (identity-bound, governed, auditable memory). This paper maps the gap.
+Two real products solve these problems differently. Neither fully addresses the constraints that matter for entrabot (identity-bound, governed, auditable memory). This paper maps the gap.
 
 ---
 
@@ -90,7 +90,7 @@ Memory as **instruction-following file I/O.** Anthropic's model already knows ho
 
 ## Approach B: Mem0
 
-**Status:** Third-party SaaS + open-source core, ~100k developers per their marketing. Released an EntraClaw plugin (`mem0.ai/claw-setup`) in April 2026. Published a CLI-first variant ("Mem0 CLI — Agent-First Memory from Your Terminal") on April 9, 2026. ECAI-accepted research paper on their extraction methodology.
+**Status:** Third-party SaaS + open-source core, ~100k developers per their marketing. Released an EntraBot plugin (`mem0.ai/claw-setup`) in April 2026. Published a CLI-first variant ("Mem0 CLI — Agent-First Memory from Your Terminal") on April 9, 2026. ECAI-accepted research paper on their extraction methodology.
 
 ### What is a memory?
 
@@ -118,7 +118,7 @@ Memory as a **specialized system service.** Mem0 treats memory extraction, stora
 - **Compression.** Long conversations become small structured records. Token savings are real (they claim 90% reduction vs. passing full context).
 - **Semantic retrieval.** Works at scale — thousands of memories are still fast to query.
 - **Benchmarked quality.** ECAI paper claims 26% accuracy improvement over OpenAI's native memory.
-- **Turnkey.** One-line install; pre-built integrations for OpenAI, LangGraph, CrewAI, and now EntraClaw.
+- **Turnkey.** One-line install; pre-built integrations for OpenAI, LangGraph, CrewAI, and now EntraBot.
 
 ### Weaknesses
 
@@ -151,9 +151,9 @@ The two approaches are **complementary more than competitive.** They solve diffe
 
 ---
 
-## The Entraclaw angle: memory as a governed resource
+## The Entrabot angle: memory as a governed resource
 
-Neither Anthropic Memory Tool nor Mem0 treats memory as an **identity-bound, policy-governed resource** the way entraclaw treats every other agent access. This is the contribution entraclaw/EntraClaw can make.
+Neither Anthropic Memory Tool nor Mem0 treats memory as an **identity-bound, policy-governed resource** the way entrabot treats every other agent access. This is the contribution entrabot/EntraBot can make.
 
 ### What's missing in both approaches
 
@@ -162,24 +162,24 @@ Consider these questions, which neither system answers natively:
 1. **Whose memory is this?** When Maya's agent writes a memory about a customer, is the memory owned by Maya's identity, the agent's identity, or the organization? Who can read it back? Who can audit it?
 2. **What policy governs retrieval?** If Maya's CA risk is HIGH, can Maya's agent still read memories it wrote under a LOW risk context? Should memories be redacted at retrieval based on current session risk?
 3. **How does memory survive agent identity rotation?** If an agent ID is revoked and a new one issued, do old memories transfer? Do they need re-authorization?
-4. **What's the audit trail?** Every other agent access in entraclaw's model produces an audit event tied to (human sponsor, agent identity, session, resource). Memory reads and writes are currently invisible to governance.
+4. **What's the audit trail?** Every other agent access in entrabot's model produces an audit event tied to (human sponsor, agent identity, session, resource). Memory reads and writes are currently invisible to governance.
 5. **How do memories federate cross-cloud?** The agent federation story we built for budget-report (Google agent calling Azure backend via SPIFFE + OBO) does not extend to memory. If a GCE agent and an Azure agent share a human sponsor, they don't share memory unless a system is explicitly designed to bridge them.
 
-### What entraclaw's architecture already solves (and how memory can inherit it)
+### What entrabot's architecture already solves (and how memory can inherit it)
 
-The entraclaw model already has:
+The entrabot model already has:
 - **Blueprint + Agent Identity + Agent User** hierarchy — memories could be scoped at any of these three levels.
 - **Human sponsor attribution** — every agent action is tied to a human. Memory writes could inherit this.
 - **Federated identity via SPIFFE + Entra FIC** — cross-cloud memory access could use the same trust plane.
 - **Conditional Access + RBAC at the sidecar** — memory reads/writes could be gated by the same policy engine as other data access.
 - **Portal and admin control plane** — admins could view "what does this agent remember about this user" and apply retention / deletion policies.
 
-### Proposed: Memory as a first-class entraclaw resource
+### Proposed: Memory as a first-class entrabot resource
 
 A **governed memory service** that:
 
 1. **Stores** memories in a location the customer controls (Azure Blob + Key Vault envelope encryption, or customer S3, or on-prem).
-2. **Exposes** memory ops via the existing entraclaw sidecar so CA policy, risk level, and RBAC apply to memory reads/writes identically to any other resource.
+2. **Exposes** memory ops via the existing entrabot sidecar so CA policy, risk level, and RBAC apply to memory reads/writes identically to any other resource.
 3. **Indexes** for semantic retrieval (option: pluggable — could use Azure AI Search, customer's Pinecone, or a local vector DB).
 4. **Audits** every read and write to the same audit sink as other agent actions, with full attribution (sponsor, agent, session, memory ID, operation).
 5. **Scopes** memories at configurable granularity:
@@ -189,7 +189,7 @@ A **governed memory service** that:
    - **Tenant-scoped:** organization-level knowledge shared across approved agents
 6. **Speaks** the Anthropic Memory Tool protocol on the front end so Claude can use it without prompt-engineering hacks (model-aligned), and optionally integrates a Mem0-style extraction pipeline for automatic summarization.
 
-The key architectural insight: memory isn't a cognitive feature, it's a **resource access pattern**. Entraclaw already governs resource access. Memory fits cleanly into that frame if we build it there.
+The key architectural insight: memory isn't a cognitive feature, it's a **resource access pattern**. Entrabot already governs resource access. Memory fits cleanly into that frame if we build it there.
 
 ### Concrete artifact
 
@@ -197,9 +197,9 @@ A Bicep module (`infra/modules/memory-service.bicep`) + a sidecar extension that
 - Implements the Anthropic Memory Tool protocol (host-side)
 - Backs onto Azure Blob with customer-managed keys
 - Uses Azure AI Search for semantic retrieval (optional, policy-gated)
-- Emits audit events via existing entraclaw audit pipeline
+- Emits audit events via existing entrabot audit pipeline
 - Enforces scope rules via CA + RBAC on memory IDs
-- Exposes admin views through the entraclaw portal
+- Exposes admin views through the entrabot portal
 
 The demo scenario that would close the loop:
 - Maya runs `ghcp-cli`, asks her agent to review her budget history
@@ -209,17 +209,17 @@ The demo scenario that would close the loop:
 - Admin opens portal → sees every memory access Maya's agent has made, can revoke/redact specific memories
 - Maya's GCP agent (google-budget-reader) reads the same memory via SPIFFE + OBO — same identity, same governance, same audit trail
 
-That last bullet is the thing neither Anthropic nor Mem0 does. Cross-cloud, identity-bound, policy-governed memory. That's entraclaw's lane.
+That last bullet is the thing neither Anthropic nor Mem0 does. Cross-cloud, identity-bound, policy-governed memory. That's entrabot's lane.
 
 ---
 
 ## Recommendation
 
-**Phase 1 (next 1-2 weeks):** Adopt the **Anthropic Memory Tool protocol** in EntraClaw. Build a minimal host backend that writes to local disk (matching what we have today). Adds nothing functionally but puts us on the standard protocol.
+**Phase 1 (next 1-2 weeks):** Adopt the **Anthropic Memory Tool protocol** in EntraBot. Build a minimal host backend that writes to local disk (matching what we have today). Adds nothing functionally but puts us on the standard protocol.
 
-**Phase 2 (month 1-2):** Swap the local-disk backend for an **Azure Blob + customer-managed key** backend. Add audit logging tied to the existing entraclaw audit pipeline. Add scope rules (session / agent / sponsor / tenant). Deliver: memory as a governed resource.
+**Phase 2 (month 1-2):** Swap the local-disk backend for an **Azure Blob + customer-managed key** backend. Add audit logging tied to the existing entrabot audit pipeline. Add scope rules (session / agent / sponsor / tenant). Deliver: memory as a governed resource.
 
-**Phase 3 (month 3+):** Add optional **semantic retrieval layer** via Azure AI Search, policy-gated. Optionally integrate **Mem0's extraction pipeline** as a plugin for auto-summarization of long sessions — but only if we can run it self-hosted and keep the trust plane under entraclaw's control.
+**Phase 3 (month 3+):** Add optional **semantic retrieval layer** via Azure AI Search, policy-gated. Optionally integrate **Mem0's extraction pipeline** as a plugin for auto-summarization of long sessions — but only if we can run it self-hosted and keep the trust plane under entrabot's control.
 
 **Phase 4 (strategic):** Publish the **cross-cloud memory federation pattern** as a platform learning. If GCE and Azure agents with the same human sponsor can share governed memory via SPIFFE + OBO, that's a story no existing memory system tells and Microsoft can tell credibly.
 
@@ -232,12 +232,12 @@ That last bullet is the thing neither Anthropic nor Mem0 does. Cross-cloud, iden
 3. **Scope defaults:** session? agent? sponsor? What's the principle of least surprise? My guess: session by default, with explicit promotion to longer scopes.
 4. **Federation trust model:** if Maya's Azure agent and her GCP agent share memory, what's the security boundary? Same Agent Identity, different instances? Or different Agent Identities with a shared Blueprint?
 5. **Forgetting:** when does a memory go away? TTL? Explicit delete? Automatic if not accessed in N days? Compliance-driven retention windows?
-6. **Inspection UX:** how does Maya see what her agent has remembered about her? The entraclaw portal view is the right place — but what's the right granularity?
+6. **Inspection UX:** how does Maya see what her agent has remembered about her? The entrabot portal view is the right place — but what's the right granularity?
 
 ---
 
 ## Closing thought
 
-The interesting realization from this survey: **memory for agents is at the same architectural inflection point that identity was two years ago.** Everyone has a bolted-on solution. No one has built the governed, identity-scoped, cross-cloud, audit-trail-complete version. Entraclaw's advantage isn't that we can match Mem0 on extraction quality or match Anthropic on protocol elegance — it's that we already have the identity and governance primitives everyone else is missing. Memory sits naturally inside those primitives. It's not a new product; it's a new resource type in the existing product.
+The interesting realization from this survey: **memory for agents is at the same architectural inflection point that identity was two years ago.** Everyone has a bolted-on solution. No one has built the governed, identity-scoped, cross-cloud, audit-trail-complete version. Entrabot's advantage isn't that we can match Mem0 on extraction quality or match Anthropic on protocol elegance — it's that we already have the identity and governance primitives everyone else is missing. Memory sits naturally inside those primitives. It's not a new product; it's a new resource type in the existing product.
 
 That's the contribution worth making.

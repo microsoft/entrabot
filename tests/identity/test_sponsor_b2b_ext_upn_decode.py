@@ -22,7 +22,7 @@ the EXT decoder.
 
 from __future__ import annotations
 
-from entraclaw.identity.sponsors import (
+from entrabot.identity.sponsors import (
     AgentIdentitySponsor,
     _decode_b2b_ext_upn,
 )

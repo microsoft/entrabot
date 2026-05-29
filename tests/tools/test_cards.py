@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 
-from entraclaw.tools.cards import (
+from entrabot.tools.cards import (
     build_result_card,
     card_attachment,
     task_status_card,

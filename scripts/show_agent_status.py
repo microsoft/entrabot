@@ -33,8 +33,8 @@ from entra_provisioning import (  # noqa: E402
 )
 
 # fmt: on
-from entraclaw.config import get_config  # noqa: E402
-from entraclaw.graph_helpers import GRAPH_BETA, GRAPH_V1, graph_request  # noqa: E402
+from entrabot.config import get_config  # noqa: E402
+from entrabot.graph_helpers import GRAPH_BETA, GRAPH_V1, graph_request  # noqa: E402
 
 
 @dataclass
@@ -171,15 +171,15 @@ def _storage_account_from_endpoint(endpoint: str | None) -> str | None:
 
 def _storage_info() -> dict[str, object]:
     config = get_config()
-    blob_endpoint = config.blob_endpoint or os.environ.get("ENTRACLAW_BLOB_ENDPOINT")
-    blob_container = config.blob_container or os.environ.get("ENTRACLAW_BLOB_CONTAINER")
+    blob_endpoint = config.blob_endpoint or os.environ.get("ENTRABOT_BLOB_ENDPOINT")
+    blob_container = config.blob_container or os.environ.get("ENTRABOT_BLOB_CONTAINER")
     keep_local = config.keep_memory_local or os.environ.get(
-        "ENTRACLAW_KEEP_MEMORY_LOCAL", ""
+        "ENTRABOT_KEEP_MEMORY_LOCAL", ""
     ).lower() in {"1", "true", "yes"}
     mode = "local" if keep_local or not (blob_endpoint and blob_container) else "azure_blob"
     return {
         "mode": mode,
-        "resource_group": os.environ.get("ENTRACLAW_RESOURCE_GROUP", "entraclaw-rg"),
+        "resource_group": os.environ.get("ENTRABOT_RESOURCE_GROUP", "entrabot-rg"),
         "blob_endpoint": blob_endpoint,
         "blob_container": blob_container,
         "storage_account": _storage_account_from_endpoint(blob_endpoint),
@@ -427,7 +427,7 @@ def _v(state: dict[str, str | None], key: str) -> str:
 def _print_health(snapshot: dict[str, object], *, title: bool = True) -> None:
     health = snapshot["health"]
     if title:
-        print("\n=== EntraClaw Health Check ===\n")
+        print("\n=== EntraBot Health Check ===\n")
     for check in health["checks"]:
         icon = _STATUS_ICON.get(check["status"], check["status"])
         print(f"  {icon}  {check['name']}")
@@ -446,7 +446,7 @@ def _print_text(snapshot: dict[str, object]) -> None:
     storage = snapshot["storage"]
     platform_info = snapshot["platform"]
 
-    print("\n=== EntraClaw Agent Identity Status ===\n")
+    print("\n=== EntraBot Agent Identity Status ===\n")
     _print_health(snapshot, title=False)
 
     print("  Local Platform")

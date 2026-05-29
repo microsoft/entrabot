@@ -3,7 +3,7 @@
 > **HISTORICAL.** This planning prompt is preserved as the spec that drove the multi-tenant lightweight chat feature. The feature has shipped (commit `c8ec521`). Read for context on how the plan was framed, not as an active workstream.
 
 **For:** A Copilot CLI instance (or any planning LLM) that will design the implementation plan for the multi-tenant-lightweight-chat phase.
-**Produced by:** EntraClaw Agent (Claude Opus 4.6) + the user, 2026-04-09
+**Produced by:** EntraBot Agent (Claude Opus 4.6) + the user, 2026-04-09
 **Branch:** `feature/multi-tenant-lightweight-chat`
 
 ---
@@ -18,7 +18,7 @@ The feature is already approved (PM leadership: "I'm supportive of this directio
 
 ## Project Context — Read This First
 
-**EntraClaw** is a research project exploring how AI agents should authenticate and operate in Microsoft Entra ID. It's a Python MCP server that gives an AI agent its own Teams identity via the Entra "Agent User" pattern — a real directory user object specifically for autonomous agents, parented to an Agent Identity (service principal), authenticated via a three-hop machine-to-machine token flow (Blueprint → Agent Identity → Agent User). No human in the loop after initial provisioning.
+**EntraBot** is a research project exploring how AI agents should authenticate and operate in Microsoft Entra ID. It's a Python MCP server that gives an AI agent its own Teams identity via the Entra "Agent User" pattern — a real directory user object specifically for autonomous agents, parented to an Agent Identity (service principal), authenticated via a three-hop machine-to-machine token flow (Blueprint → Agent Identity → Agent User). No human in the loop after initial provisioning.
 
 The project currently works end-to-end: the agent can send/receive Teams messages, @mention people, add members cross-tenant, and participate in group chats as a real Teams user. The gap: per-user setup requires 10-15 minutes of provisioning + admin work. The multi-tenant lightweight chat feature closes that gap with a progressive identity approach — start with the human's delegated token for instant UX, background-provision the Agent User, then seamlessly swap to it.
 
@@ -54,9 +54,9 @@ The project currently works end-to-end: the agent can send/receive Teams message
 10. **`docs/platform-learnings/teams-graph-api.md`** — Graph API quirks for Teams (create chat Example 6 vs Example 7, cross-tenant federation, etc.).
 
 ### Current Implementation
-11. **`src/entraclaw/mcp_server.py`** — Current MCP server. Shows how tools are wired up, how the background poll works, how state is managed.
-12. **`src/entraclaw/tools/teams.py`** — Teams Graph API integration. Three-hop token acquisition, create_chat, send/read/list, member management.
-13. **`src/entraclaw/auth/certificate.py`** — Certificate-based JWT assertion for Hop 1.
+11. **`src/entrabot/mcp_server.py`** — Current MCP server. Shows how tools are wired up, how the background poll works, how state is managed.
+12. **`src/entrabot/tools/teams.py`** — Teams Graph API integration. Three-hop token acquisition, create_chat, send/read/list, member management.
+13. **`src/entrabot/auth/certificate.py`** — Certificate-based JWT assertion for Hop 1.
 14. **`scripts/setup.sh` + `scripts/create_entra_agent_ids.py` + `scripts/entra_provisioning.py`** — Current provisioning flow. You'll need to understand this to design the background provisioning for the multi-tenant version.
 15. **`CLAUDE.md`** — Project non-negotiables. **READ THIS.** Contains hard rules like "TDD: tests first", "security fails closed", "never use `az rest` or Azure CLI tokens for Agent Identity APIs", etc.
 
@@ -142,7 +142,7 @@ Key decisions to make:
 - **MSAL client type:** public (desktop app) vs confidential (secret-holding). For a CLI tool on user's machine, public is usually correct.
 - **Token storage:** in-memory only vs persistent cache. MSAL's default cache is in-memory; for persistence across restarts, where do we store it securely? (Keychain? File + encryption?)
 - **Multi-tenant app registration ownership:** Brandon's tenant (werner.ac) or a new shared tenant?
-- **Phase 1 message identity:** how does the agent identify itself when using the human's token? (Prefix like `[EntraClaw]` per the spec, but what does this look like in practice?)
+- **Phase 1 message identity:** how does the agent identify itself when using the human's token? (Prefix like `[EntraBot]` per the spec, but what does this look like in practice?)
 - **Phase 2 trigger:** when does the Agent User provisioning START? Immediately on first auth? On user command? Lazy?
 - **Phase 2 swap:** how is the token swap communicated to the user? Silent? Notification?
 - **MCP client compatibility:** the existing channel push is Claude Code-specific. Should Phase 1 also work for Copilot CLI via tool-based polling? (Yes — the plan should support both.)
@@ -219,6 +219,6 @@ Brandon will review the plan, ask follow-up questions, and when he's satisfied, 
 
 ## Final Note
 
-The existing EntraClaw codebase is working, tested, and well-documented. Your job is to extend it thoughtfully, not to rewrite it. When in doubt, read the existing code first. The patterns are already there — you just need to add a new auth path (multi-tenant + delegated) without disrupting the existing path (certificate + three-hop Agent User).
+The existing EntraBot codebase is working, tested, and well-documented. Your job is to extend it thoughtfully, not to rewrite it. When in doubt, read the existing code first. The patterns are already there — you just need to add a new auth path (multi-tenant + delegated) without disrupting the existing path (certificate + three-hop Agent User).
 
 Good luck. Ping the team in Teams if you get stuck.

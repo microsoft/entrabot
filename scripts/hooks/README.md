@@ -1,4 +1,4 @@
-# Entraclaw enforcement registry
+# Entrabot enforcement registry
 
 Single source of truth for every gate that enforces agent-body rules
 mechanically. The pattern: prompt-text rules drift; mechanical
@@ -15,8 +15,8 @@ is unenforced when it actually is.
 | Layer | Where | Host coverage | Storage coverage |
 |---|---|---|---|
 | Harness (Claude Code hooks) | `scripts/hooks/*.py` + `.claude/settings.json` | Claude Code only | n/a |
-| Server-side (MCP tool wrappers) | `src/entraclaw/mcp_server.py` + `src/entraclaw/tools/*.py` | All hosts that speak MCP | All backends (Local/Blob) |
-| Process-boot (fail-closed gates) | `src/entraclaw/singleton.py`, `src/entraclaw/tools/files.py` | All hosts | n/a (in-process) |
+| Server-side (MCP tool wrappers) | `src/entrabot/mcp_server.py` + `src/entrabot/tools/*.py` | All hosts that speak MCP | All backends (Local/Blob) |
+| Process-boot (fail-closed gates) | `src/entrabot/singleton.py`, `src/entrabot/tools/files.py` | All hosts | n/a (in-process) |
 
 The architectural preference is **server-side over harness** wherever
 feasible: server-side gates apply on Copilot CLI, Codex, Cursor, and
@@ -31,13 +31,13 @@ follow it.
 | Gate | Layer | Trigger | Action | File | Bypass | Failure mode reference |
 |---|---|---|---|---|---|---|
 | `inject_body_prompt` | Harness | `SessionStart` | Inject `prompts/agent_system.md` into LLM context | `scripts/hooks/inject_body_prompt.py` | (none) | Body prompt missing → reduced rule context |
-| `block_local_memory_write` | Harness | `PreToolUse(Write\|Edit\|NotebookEdit)` | Block writes to `~/.claude/projects/*/memory/**` | `scripts/hooks/block_local_memory_write.py` | `ENTRACLAW_KEEP_MEMORY_LOCAL=true` | Routes memory writes to persona-sati |
-| `require_body_prompt` | Harness | `PreToolUse(send_email\|send_teams_message\|send_card\|add_teams_member\|create_chat\|delete_teams_message)` | Block until body prompt loaded this session | `scripts/hooks/require_body_prompt.py` | `ENTRACLAW_SKIP_BODY_PROMPT_GATE=true` | High-blast-radius tool used without rule context |
+| `block_local_memory_write` | Harness | `PreToolUse(Write\|Edit\|NotebookEdit)` | Block writes to `~/.claude/projects/*/memory/**` | `scripts/hooks/block_local_memory_write.py` | `ENTRABOT_KEEP_MEMORY_LOCAL=true` | Routes memory writes to persona-sati |
+| `require_body_prompt` | Harness | `PreToolUse(send_email\|send_teams_message\|send_card\|add_teams_member\|create_chat\|delete_teams_message)` | Block until body prompt loaded this session | `scripts/hooks/require_body_prompt.py` | `ENTRABOT_SKIP_BODY_PROMPT_GATE=true` | High-blast-radius tool used without rule context |
 | post-send context echo | Harness | `PostToolUse(send_teams_message)` | Inject "background channel will push replies" reminder | `.claude/settings.json` (inline) | (none) | Agent calling `watch_teams_replies` unnecessarily |
-| singleton flock | Process-boot | `main()` startup | Refuse second instance (Learning #56) | `src/entraclaw/singleton.py` | (none) | Two MCP servers contend for `~/.entraclaw/` state |
-| `share_file` two-gate | Server-side | `share_file` invocation | Requester must be sponsor AND member of cited chat (Learning #59) | `src/entraclaw/tools/files.py:share_file` | (none) | LLM fabricates sponsor email + chat to share data |
-| Placeholder discipline | Server-side | `send_teams_message` invocation, message > ~200 chars | Block if no `post_thinking_placeholder` for this chat in last 5 min | `src/entraclaw/mcp_server.py:send_teams_message` | `ENTRACLAW_SKIP_PLACEHOLDER_CHECK=true` | Substantive Teams send without "thinking…" ack |
-| Commitment-language | Server-side | `send_teams_message` invocation, message contains commitment phrase | WARN (not block): no recent `add_promise` found | `src/entraclaw/mcp_server.py:send_teams_message` | `ENTRACLAW_SKIP_COMMITMENT_CHECK=true` | Agent commits to "I'll do X later" without persistent promise |
+| singleton flock | Process-boot | `main()` startup | Refuse second instance (Learning #56) | `src/entrabot/singleton.py` | (none) | Two MCP servers contend for `~/.entrabot/` state |
+| `share_file` two-gate | Server-side | `share_file` invocation | Requester must be sponsor AND member of cited chat (Learning #59) | `src/entrabot/tools/files.py:share_file` | (none) | LLM fabricates sponsor email + chat to share data |
+| Placeholder discipline | Server-side | `send_teams_message` invocation, message > ~200 chars | Block if no `post_thinking_placeholder` for this chat in last 5 min | `src/entrabot/mcp_server.py:send_teams_message` | `ENTRABOT_SKIP_PLACEHOLDER_CHECK=true` | Substantive Teams send without "thinking…" ack |
+| Commitment-language | Server-side | `send_teams_message` invocation, message contains commitment phrase | WARN (not block): no recent `add_promise` found | `src/entrabot/mcp_server.py:send_teams_message` | `ENTRABOT_SKIP_COMMITMENT_CHECK=true` | Agent commits to "I'll do X later" without persistent promise |
 
 ## Known coverage gaps
 
@@ -74,11 +74,11 @@ Tracked in `docs/engineering-status.md` under "Known Issues (Open)".
 
 | Env var | Effect |
 |---|---|
-| `ENTRACLAW_KEEP_MEMORY_LOCAL=true` | Allow `Write`/`Edit` to `~/.claude/projects/*/memory/**` |
-| `ENTRACLAW_SKIP_BODY_PROMPT_GATE=true` | Skip body-prompt-loaded check on high-blast tools |
-| `ENTRACLAW_SKIP_PLACEHOLDER_CHECK=true` | Skip placeholder discipline for this MCP server boot |
-| `ENTRACLAW_SKIP_COMMITMENT_CHECK=true` | Skip commitment-language scan |
-| `ENTRACLAW_PLACEHOLDER_GRACE_SECONDS=N` | Grace window (seconds) for placeholder check (default 300) |
+| `ENTRABOT_KEEP_MEMORY_LOCAL=true` | Allow `Write`/`Edit` to `~/.claude/projects/*/memory/**` |
+| `ENTRABOT_SKIP_BODY_PROMPT_GATE=true` | Skip body-prompt-loaded check on high-blast tools |
+| `ENTRABOT_SKIP_PLACEHOLDER_CHECK=true` | Skip placeholder discipline for this MCP server boot |
+| `ENTRABOT_SKIP_COMMITMENT_CHECK=true` | Skip commitment-language scan |
+| `ENTRABOT_PLACEHOLDER_GRACE_SECONDS=N` | Grace window (seconds) for placeholder check (default 300) |
 
 Bypass env vars are deliberately **server-side environment**, not
 MCP tool parameters. LLMs that can flip a parameter will flip it to

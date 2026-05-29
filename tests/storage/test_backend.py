@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from entraclaw.storage.backend import (
+from entrabot.storage.backend import (
     BlobBackend,
     LocalBackend,
     MemoryBackend,
@@ -171,9 +171,9 @@ class TestGetBackend:
     def test_default_returns_local_rooted_at_data_dir(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
-        monkeypatch.delenv("ENTRACLAW_BLOB_ENDPOINT", raising=False)
-        monkeypatch.delenv("ENTRACLAW_BLOB_CONTAINER", raising=False)
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
+        monkeypatch.delenv("ENTRABOT_BLOB_ENDPOINT", raising=False)
+        monkeypatch.delenv("ENTRABOT_BLOB_CONTAINER", raising=False)
         # Phase 5 will introduce cloud branching; for Phase 2 default = Local.
         backend = get_backend()
         assert isinstance(backend, LocalBackend)
@@ -183,8 +183,8 @@ class TestGetBackend:
     def test_keep_memory_local_flag_forces_local(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
-        monkeypatch.setenv("ENTRACLAW_KEEP_MEMORY_LOCAL", "true")
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_KEEP_MEMORY_LOCAL", "true")
         assert isinstance(get_backend(), LocalBackend)
 
     def test_blob_endpoint_set_returns_blob_backend(
@@ -193,13 +193,13 @@ class TestGetBackend:
         """When blob_endpoint and blob_container are both set and
         keep_memory_local is False, get_backend() returns a BlobBackend.
         """
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
-        monkeypatch.setenv("ENTRACLAW_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net")
-        monkeypatch.setenv("ENTRACLAW_BLOB_CONTAINER", "agent-abc-123")
-        monkeypatch.delenv("ENTRACLAW_KEEP_MEMORY_LOCAL", raising=False)
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net")
+        monkeypatch.setenv("ENTRABOT_BLOB_CONTAINER", "agent-abc-123")
+        monkeypatch.delenv("ENTRABOT_KEEP_MEMORY_LOCAL", raising=False)
         # Stub the storage-token acquisition so this doesn't hit Entra
         monkeypatch.setattr(
-            "entraclaw.storage.backend.acquire_agent_user_storage_token",
+            "entrabot.storage.backend.acquire_agent_user_storage_token",
             lambda cfg: "fake-storage-token",
         )
         backend = get_backend()
@@ -211,18 +211,18 @@ class TestGetBackend:
         """Half-configured cloud (endpoint without container) falls back
         to Local — better safe than panicking inside the hot path.
         """
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
-        monkeypatch.setenv("ENTRACLAW_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net")
-        monkeypatch.delenv("ENTRACLAW_BLOB_CONTAINER", raising=False)
-        monkeypatch.delenv("ENTRACLAW_KEEP_MEMORY_LOCAL", raising=False)
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net")
+        monkeypatch.delenv("ENTRABOT_BLOB_CONTAINER", raising=False)
+        monkeypatch.delenv("ENTRABOT_KEEP_MEMORY_LOCAL", raising=False)
         assert isinstance(get_backend(), LocalBackend)
 
     def test_keep_memory_local_overrides_blob_endpoint(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Even with blob endpoint configured, the escape-hatch flag wins."""
-        monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
-        monkeypatch.setenv("ENTRACLAW_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net")
-        monkeypatch.setenv("ENTRACLAW_BLOB_CONTAINER", "agent-abc-123")
-        monkeypatch.setenv("ENTRACLAW_KEEP_MEMORY_LOCAL", "true")
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net")
+        monkeypatch.setenv("ENTRABOT_BLOB_CONTAINER", "agent-abc-123")
+        monkeypatch.setenv("ENTRABOT_KEEP_MEMORY_LOCAL", "true")
         assert isinstance(get_backend(), LocalBackend)

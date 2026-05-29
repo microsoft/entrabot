@@ -60,8 +60,8 @@ def test_smoke_runner_has_separate_teams_and_a365_gates() -> None:
 
     assert "--test-teams" in script
     assert "--test-a365" in script
-    assert "ENTRACLAW_ASSIGN_TEAMS_LICENSE" in script
-    assert "ENTRACLAW_ASSIGN_WORK_IQ_LICENSE" in script
+    assert "ENTRABOT_ASSIGN_TEAMS_LICENSE" in script
+    assert "ENTRABOT_ASSIGN_WORK_IQ_LICENSE" in script
     assert "Pass --test-teams when providing --chat-id or --sponsor-upn" in script
 
 

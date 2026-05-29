@@ -2,7 +2,7 @@
 
 One-shot scripts that bootstrap the agent on a fresh machine. All are idempotent: re-running them detects existing state and only fills the gaps.
 
-State lives in `.entraclaw-state.json`. The OS credential store (Keychain on macOS, Keyring on Linux, Cert Store on Windows) holds private keys.
+State lives in `.entrabot-state.json`. The OS credential store (Keychain on macOS, Keyring on Linux, Cert Store on Windows) holds private keys.
 
 ## `setup.sh`
 
@@ -34,7 +34,7 @@ Run `./scripts/setup.sh --help` for the full flag matrix.
 - Generates a Blueprint cert, stores the private key in the OS keystore, uploads the public cert to the Blueprint app.
 - Writes `.env` with the resulting IDs and thumbprints.
 - Optionally provisions Azure Blob Storage when `--use-cloud-memory` is passed (see `provision_blob_storage.py`).
-- Registers `entraclaw` in `.mcp.json` and `~/.copilot/mcp-config.json` via `mcp_config.py`.
+- Registers `entrabot` in `.mcp.json` and `~/.copilot/mcp-config.json` via `mcp_config.py`.
 - With `--status`, skips provisioning and delegates to `./status.sh`, forwarding status arguments such as `--json`, `--health-only`, and `--strict`.
 
 ### Idempotency
@@ -61,7 +61,7 @@ One-time provisioning for `bot` mode. Creates a multi-tenant app registration, g
 - Generates a cert and stores the private key in the OS keystore (Keychain / TPM / Keyring).
 - Uploads the public cert to the app registration.
 - Creates the Azure Bot resource linked to the app.
-- Persists results to `.env` and `.entraclaw-state.json`.
+- Persists results to `.env` and `.entrabot-state.json`.
 
 After this runs once, use `start_bot.sh` to launch the tunnel + bot server.
 
@@ -77,7 +77,7 @@ Browser-sign-in setup for `delegated` mode. Caches an MSAL token in the OS keyst
 
 ### What it does
 
-- Reads `ENTRACLAW_CLIENT_ID` from `.env`.
+- Reads `ENTRABOT_CLIENT_ID` from `.env`.
 - Opens the browser for Entra sign-in (MSAL localhost redirect, port 8400).
 - Caches the token in Keychain.
 - Next Claude Code session picks it up via `try_silent()` — no blocking prompt.
@@ -114,7 +114,7 @@ scripts\setup-windows.cmd
 - Refuses to run under WSL (use `setup.sh` there).
 - Probes for PowerShell 7, Python 3.12+, `az` CLI, and Git.
 - Bootstraps the venv and installs the package.
-- Runs the legacy `~/.entraclaw` migration helper.
+- Runs the legacy `~/.entrabot` migration helper.
 - Provisions identity via `entra_provisioning.py` + `create_entra_agent_ids.py`.
 - Generates the Blueprint cert (TPM-first via `generate_windows_cert.py`, falls back to the software KSP).
 - Uploads the cert public key to the Blueprint and writes both thumbprints to `.env`.
@@ -167,17 +167,17 @@ Windows cert rotation. Wraps `rotate_cert_windows.py` with the smoke-test rollba
 
 ## `mcp_config.py`
 
-Dual-host MCP config writer. `setup.sh` and `setup-windows.ps1` call this to register the `entraclaw` server with both Claude Code and Copilot CLI.
+Dual-host MCP config writer. `setup.sh` and `setup-windows.ps1` call this to register the `entrabot` server with both Claude Code and Copilot CLI.
 
 ### Usage
 
 ```bash
-python scripts/mcp_config.py register --command <path-to-entraclaw-mcp>
+python scripts/mcp_config.py register --command <path-to-entrabot-mcp>
 python scripts/mcp_config.py unregister
 ```
 
 ### What it does
 
-- Writes `entraclaw` into `<project-root>/.mcp.json` (Claude Code).
+- Writes `entrabot` into `<project-root>/.mcp.json` (Claude Code).
 - Writes the same entry into `$COPILOT_HOME/mcp-config.json`, defaulting to `~/.copilot/mcp-config.json` (Copilot CLI).
 - Both entries are byte-identical; the host distinction happens at runtime via `clientInfo.name` in the MCP server.

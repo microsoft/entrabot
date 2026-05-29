@@ -10,7 +10,7 @@ import httpx
 import pytest
 import respx
 
-from entraclaw.tools.rate_limit import RetryOn429Transport
+from entrabot.tools.rate_limit import RetryOn429Transport
 
 
 class TestRetryOn429Transport:
@@ -151,7 +151,7 @@ class TestAllow5xxRetry:
     @pytest.mark.asyncio
     async def test_retries_503_then_succeeds(self, monkeypatch) -> None:
         """503 followed by 200 — retries once and returns the success."""
-        from entraclaw.tools import rate_limit
+        from entrabot.tools import rate_limit
 
         # Zero-delay backoff for test speed.
         monkeypatch.setattr(rate_limit, "RETRY_5XX_BASE_DELAYS_S", (0.0, 0.0, 0.0))
@@ -172,7 +172,7 @@ class TestAllow5xxRetry:
     @pytest.mark.asyncio
     async def test_retries_502_504_alongside_503(self, monkeypatch) -> None:
         """502 and 504 are also retried when allow_5xx_retry=True."""
-        from entraclaw.tools import rate_limit
+        from entrabot.tools import rate_limit
 
         monkeypatch.setattr(rate_limit, "RETRY_5XX_BASE_DELAYS_S", (0.0, 0.0, 0.0))
 
@@ -192,7 +192,7 @@ class TestAllow5xxRetry:
     @pytest.mark.asyncio
     async def test_5xx_retry_exhausted_returns_last_response(self, monkeypatch) -> None:
         """After 3 5xx retries, the last 5xx response is returned (fail clean)."""
-        from entraclaw.tools import rate_limit
+        from entrabot.tools import rate_limit
 
         monkeypatch.setattr(rate_limit, "RETRY_5XX_BASE_DELAYS_S", (0.0, 0.0, 0.0))
 
@@ -213,7 +213,7 @@ class TestAllow5xxRetry:
     @pytest.mark.asyncio
     async def test_500_not_retried_even_with_flag(self, monkeypatch) -> None:
         """500 is *not* in the transient-5xx set — only 502/503/504 retry."""
-        from entraclaw.tools import rate_limit
+        from entrabot.tools import rate_limit
 
         monkeypatch.setattr(rate_limit, "RETRY_5XX_BASE_DELAYS_S", (0.0, 0.0, 0.0))
 
@@ -235,7 +235,7 @@ class TestAllow5xxRetry:
     @pytest.mark.asyncio
     async def test_429_and_5xx_compose(self, monkeypatch) -> None:
         """Sequential 429 then 503 then 200 — both retry paths fire."""
-        from entraclaw.tools import rate_limit
+        from entrabot.tools import rate_limit
 
         monkeypatch.setattr(rate_limit, "RETRY_5XX_BASE_DELAYS_S", (0.0, 0.0, 0.0))
 

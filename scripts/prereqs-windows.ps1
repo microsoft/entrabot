@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-  EntraClaw — Windows prerequisite installer.
+  EntraBot — Windows prerequisite installer.
 
 .DESCRIPTION
   Checks for and installs all prerequisites needed to run setup-windows.ps1:

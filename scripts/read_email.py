@@ -7,8 +7,8 @@ import sys
 
 import httpx
 
-from entraclaw.config import get_config
-from entraclaw.tools.teams import acquire_agent_user_token
+from entrabot.config import get_config
+from entrabot.tools.teams import acquire_agent_user_token
 
 
 async def main() -> None:

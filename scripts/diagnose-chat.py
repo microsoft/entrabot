@@ -15,8 +15,8 @@ import sys
 # Ensure the source is importable
 sys.path.insert(0, "src")
 
-from entraclaw.config import EntraClawConfig
-from entraclaw.tools.teams import (
+from entrabot.config import EntraBotConfig
+from entrabot.tools.teams import (
     GRAPH_BASE,
     acquire_agent_user_token,
     create_or_find_chat,
@@ -25,10 +25,10 @@ from entraclaw.tools.teams import (
 
 
 async def main() -> None:
-    config = EntraClawConfig.from_env()
+    config = EntraBotConfig.from_env()
 
     print("=" * 60)
-    print("EntraClaw Chat Diagnostic")
+    print("EntraBot Chat Diagnostic")
     print("=" * 60)
     print(f"Tenant ID:          {config.tenant_id}")
     print(f"Agent User ID:      {config.agent_user_id}")

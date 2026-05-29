@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# EntraClaw Identity Research — one-command setup
+# EntraBot Identity Research — one-command setup
 #
 # Thin orchestrator that calls Python scripts for Entra provisioning.
 # No device-code flow.  No OBO.  The Agent User authenticates autonomously
@@ -10,7 +10,7 @@
 #   2. create_entra_agent_ids.py — Blueprint + Agent Identity + Agent User
 #   3. This script — venv + .env + tests
 #
-# State is persisted in .entraclaw-state.json so re-runs are idempotent.
+# State is persisted in .entrabot-state.json so re-runs are idempotent.
 #
 # NOTE: The Agent User requires a Teams-capable M365 license (E3/E5/Teams
 # Enterprise) to be assigned AFTER this script runs. License assignment is
@@ -40,7 +40,7 @@ WITH_CONTAINER=""
 CREATE_NEW_STORAGE=false
 WITH_A365_WORK_IQ=false
 CONFIGURE_A365_WORK_IQ=false
-A365_AGENT_NAME="EntraClaw Code Agent"
+A365_AGENT_NAME="EntraBot Code Agent"
 A365_WORK_IQ_MCP_SERVERS=(mcp_WordServer mcp_ODSPRemoteServer)
 
 SETUP_STATUS=false
@@ -153,14 +153,14 @@ if [ "$SHOW_HELP" = true ]; then
     echo ""
     echo "  --with-upn-suffix=NAME Agent User UPN suffix (required with --new)."
     echo "                         e.g., --with-upn-suffix=sati-agent"
-    echo "                         produces: entraclaw-agent-sati-agent@yourdomain.com"
+    echo "                         produces: entrabot-agent-sati-agent@yourdomain.com"
     echo "                         If omitted with --new, you will be prompted."
     echo "                         Also supported with --use-blueprint to select"
     echo "                         an existing suffixed Agent User under that Blueprint."
     echo "  --agent-user-upn=UPN   Explicit Agent User UPN. With --use-blueprint,"
     echo "                         selects an existing Agent User to reuse; with"
     echo "                         --new, creates exactly that UPN, e.g."
-    echo "                         entraclaw-agent-sati-agent@yourtenant.onmicrosoft.com."
+    echo "                         entrabot-agent-sati-agent@yourtenant.onmicrosoft.com."
     echo "  --switch-user          Sign in as a different user before setup."
     echo "                         The new user becomes the agent's owner and sponsor."
     echo "  --teams-user=EMAIL     Set a different user as the Teams chat recipient."
@@ -171,14 +171,14 @@ if [ "$SHOW_HELP" = true ]; then
     echo "                         Provisions a resource group, storage account, and"
     echo "                         container scoped to the Agent User. Recommended"
     echo "                         for durable, cross-device operation. ADR-005."
-    echo "                         Also unsets ENTRACLAW_KEEP_MEMORY_LOCAL so the"
+    echo "                         Also unsets ENTRABOT_KEEP_MEMORY_LOCAL so the"
     echo "                         PreToolUse hook blocks local Claude Code auto-memory"
     echo "                         writes — mind content routes through persona-sati."
     echo "  --keep-memory-local    [default] Operational data stays on the local"
-    echo "                         filesystem (~/.entraclaw/data). Kept as an explicit"
+    echo "                         filesystem (~/.entrabot/data). Kept as an explicit"
     echo "                         flag for backwards compatibility; this is now the"
     echo "                         default behavior. Pass --use-cloud-memory to override."
-    echo "                         Also sets ENTRACLAW_KEEP_MEMORY_LOCAL=true, which"
+    echo "                         Also sets ENTRABOT_KEEP_MEMORY_LOCAL=true, which"
     echo "                         opts the PreToolUse hook out so Claude Code's local"
     echo "                         auto-memory directory is writable again."
     echo ""
@@ -187,7 +187,7 @@ if [ "$SHOW_HELP" = true ]; then
     echo "                         Use the named Azure Storage Account instead of the"
     echo "                         deterministic per-tenant default (entclaw<hash>)."
     echo "                         The account is created if it doesn't exist, in"
-    echo "                         resource group 'entraclaw-rg'. Useful for attaching"
+    echo "                         resource group 'entrabot-rg'. Useful for attaching"
     echo "                         to a pre-existing account in a different naming"
     echo "                         convention. Mutually exclusive with"
     echo "                         --create-new-storage."
@@ -209,9 +209,9 @@ if [ "$SHOW_HELP" = true ]; then
     echo "                         Run the interactive developer setup for Work IQ"
     echo "                         Word: a365 develop add-mcp-servers mcp_WordServer,"
     echo "                         a365 setup permissions mcp against the existing"
-    echo "                         Entraclaw Blueprint, then manifest validation."
+    echo "                         Entrabot Blueprint, then manifest validation."
     echo "  --a365-agent-name=NAME Deprecated compatibility flag; Work IQ setup now"
-    echo "                         uses the existing Entraclaw Blueprint from state."
+    echo "                         uses the existing Entrabot Blueprint from state."
     echo "  --help, -h             Show this help"
     echo ""
     echo "Diagnostics:"
@@ -252,7 +252,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 echo -e "${GREEN}╔══════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║   EntraClaw Identity Research — Setup         ║${NC}"
+echo -e "${GREEN}║   EntraBot Identity Research — Setup         ║${NC}"
 echo -e "${GREEN}║   (Agent User — no OBO, no device-code flow) ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════╝${NC}"
 
@@ -274,15 +274,15 @@ if [ "$DIAGNOSE" = true ]; then
 import sys
 from pathlib import Path
 
-from entraclaw.config import EntraClawConfig
-from entraclaw.preflight import format_report, overall_exit_code, run_diagnostics
+from entrabot.config import EntraBotConfig
+from entrabot.preflight import format_report, overall_exit_code, run_diagnostics
 
-config = EntraClawConfig.from_env()
+config = EntraBotConfig.from_env()
 project_root = Path("$PROJECT_ROOT")
 checks = run_diagnostics(
     config,
-    state_path=project_root / ".entraclaw-state.json",
-    expected_binary=project_root / ".venv" / "bin" / "entraclaw-mcp",
+    state_path=project_root / ".entrabot-state.json",
+    expected_binary=project_root / ".venv" / "bin" / "entrabot-mcp",
     claude_mcp_path=project_root / ".mcp.json",
     copilot_mcp_path=Path.home() / ".copilot" / "mcp-config.json",
 )
@@ -300,13 +300,13 @@ PY
     exit "$DIAG_EXIT"
 fi
 
-# ── Helper: read value from .entraclaw-state.json ───────────────────────────
+# ── Helper: read value from .entrabot-state.json ───────────────────────────
 
 read_state() {
     local key="$1"
     "$PYTHON" -c "
 import json, pathlib, sys
-state_file = pathlib.Path('$PROJECT_ROOT/.entraclaw-state.json')
+state_file = pathlib.Path('$PROJECT_ROOT/.entrabot-state.json')
 if not state_file.is_file():
     sys.exit(0)
 data = json.loads(state_file.read_text())
@@ -385,7 +385,7 @@ ensure_a365_cli() {
 }
 
 if [ "$WITH_A365_WORK_IQ" = true ]; then
-    export ENTRACLAW_ASSIGN_WORK_IQ_LICENSE=1
+    export ENTRABOT_ASSIGN_WORK_IQ_LICENSE=1
     ensure_a365_cli
 fi
 
@@ -406,11 +406,11 @@ write_a365_config() {
         fail "Agent 365 CLI app was not found. Re-run and choose C during 'a365 setup requirements', or create the app before configuring Work IQ."
     fi
     if [ -z "${BLUEPRINT_APP_ID:-}" ]; then
-        fail "Blueprint ID not found. Entraclaw provisioning must complete before configuring A365 Work IQ."
+        fail "Blueprint ID not found. Entrabot provisioning must complete before configuring A365 Work IQ."
     fi
     agent_identity_display_name=$(az ad sp show --id "$AGENT_ID" --query displayName -o tsv 2>/dev/null || echo "")
     if [ -z "$agent_identity_display_name" ]; then
-        fail "Agent Identity display name not found for $AGENT_ID. Entraclaw provisioning must complete before configuring A365 Work IQ."
+        fail "Agent Identity display name not found for $AGENT_ID. Entrabot provisioning must complete before configuring A365 Work IQ."
     fi
 
     "$PYTHON" - "$PROJECT_ROOT" "$TENANT_ID" "$client_app_id" "$BLUEPRINT_APP_ID" "${BLUEPRINT_OBJECT_ID:-}" "${AGENT_ID:-}" "$agent_identity_display_name" <<'PY'
@@ -432,7 +432,7 @@ data.update(
         "tenantId": tenant_id,
         "clientAppId": client_app_id,
         "agentBlueprintId": blueprint_app_id,
-        "agentBlueprintDisplayName": "EntraClaw Code Agent",
+        "agentBlueprintDisplayName": "EntraBot Code Agent",
         "agentIdentityDisplayName": agent_identity_display_name,
         "deploymentProjectPath": str(project_root),
     }
@@ -444,7 +444,7 @@ if agent_id:
 
 config_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY
-    success "A365 config points to existing Entraclaw Blueprint"
+    success "A365 config points to existing Entrabot Blueprint"
 }
 
 configure_a365_work_iq() {
@@ -512,7 +512,7 @@ if command -v az >/dev/null 2>&1 && [ -d "$PROJECT_ROOT/.venv" ]; then
         set +e
         "$PROJECT_ROOT/.venv/bin/python" - "$GRAPH_TOKEN" <<'PY' 2>&1 || true
 import sys
-from entraclaw.preflight import (
+from entrabot.preflight import (
     check_teams_license_availability,
     format_report,
 )
@@ -528,7 +528,7 @@ PY
         if [ "$WITH_A365_WORK_IQ" = true ]; then
             "$PROJECT_ROOT/.venv/bin/python" - "$GRAPH_TOKEN" <<'PY' 2>&1 || true
 import sys
-from entraclaw.preflight import (
+from entrabot.preflight import (
     check_copilot_license_availability,
     format_report,
 )
@@ -695,7 +695,7 @@ fi
 #       fresh discovery against the new Blueprint. Keep PROVISIONER_* (the
 #       helper app is machine-scoped, unaffected by the switch).
 if [ -n "$USE_BLUEPRINT" ] && [ "$NEW_CHAIN" = false ]; then
-    STATE_FILE="$PROJECT_ROOT/.entraclaw-state.json"
+    STATE_FILE="$PROJECT_ROOT/.entrabot-state.json"
     CURRENT_BP=$(read_state "BLUEPRINT_APP_ID")
 
     if [ -n "$CURRENT_BP" ] && [ "$CURRENT_BP" != "$USE_BLUEPRINT" ]; then
@@ -732,10 +732,10 @@ sf.write_text(json.dumps(data, indent=2))
         echo "  State file updated with Blueprint ID"
     fi
     if [ -n "$AGENT_USER_UPN" ]; then
-        export ENTRACLAW_AGENT_USER_UPN="$AGENT_USER_UPN"
+        export ENTRABOT_AGENT_USER_UPN="$AGENT_USER_UPN"
         echo -e "  ${GREEN}Using existing Agent User UPN: ${AGENT_USER_UPN}${NC}"
     elif [ -n "$UPN_SUFFIX" ]; then
-        export _ENTRACLAW_UPN_SUFFIX="$UPN_SUFFIX"
+        export _ENTRABOT_UPN_SUFFIX="$UPN_SUFFIX"
         echo -e "  ${GREEN}Using existing Agent User suffix: ${UPN_SUFFIX}${NC}"
     fi
     # From here create_entra_agent_ids.py discovers Agent Identity + Agent User
@@ -744,7 +744,7 @@ fi
 
 # ── Handle --new: back up state, force fresh identity chain ───────────────
 if [ "$NEW_CHAIN" = true ]; then
-    STATE_FILE="$PROJECT_ROOT/.entraclaw-state.json"
+    STATE_FILE="$PROJECT_ROOT/.entrabot-state.json"
     if [ -f "$STATE_FILE" ]; then
         BACKUP="$STATE_FILE.bak.$(date +%Y%m%d-%H%M%S)"
         cp "$STATE_FILE" "$BACKUP"
@@ -761,15 +761,15 @@ print('  Cleared identity state (kept provisioner app)')
 "
     fi
     # Resolve UPN — explicit UPN wins; otherwise suffix comes from flag or prompt.
-    # Example: ./scripts/setup.sh --new --agent-user-upn=entraclaw-agent@yourtenant.onmicrosoft.com
+    # Example: ./scripts/setup.sh --new --agent-user-upn=entrabot-agent@yourtenant.onmicrosoft.com
     if [ -n "$AGENT_USER_UPN" ]; then
-        export ENTRACLAW_AGENT_USER_UPN="$AGENT_USER_UPN"
+        export ENTRABOT_AGENT_USER_UPN="$AGENT_USER_UPN"
         echo -e "  ${GREEN}--new: will create explicit Agent User UPN '${AGENT_USER_UPN}'${NC}"
     elif [ -z "$UPN_SUFFIX" ]; then
         echo ""
         echo -e "  ${YELLOW}--new requires a UPN suffix to avoid collision with existing agents.${NC}"
         echo "  This becomes part of the Agent User's email-like identity:"
-        echo "    entraclaw-<suffix>@yourdomain.com"
+        echo "    entrabot-<suffix>@yourdomain.com"
         echo ""
         echo "  Examples: sati-agent, dev-bot, test-agent"
         echo ""
@@ -779,13 +779,13 @@ print('  Cleared identity state (kept provisioner app)')
             echo "ERROR: UPN suffix is required with --new" >&2
             exit 1
         fi
-        export _ENTRACLAW_UPN_SUFFIX="$UPN_SUFFIX"
+        export _ENTRABOT_UPN_SUFFIX="$UPN_SUFFIX"
     else
-        export _ENTRACLAW_UPN_SUFFIX="$UPN_SUFFIX"
+        export _ENTRABOT_UPN_SUFFIX="$UPN_SUFFIX"
     fi
 
     # Tell create_entra_agent_ids.py to skip display-name lookups
-    export ENTRACLAW_NEW_CHAIN=1
+    export ENTRABOT_NEW_CHAIN=1
     if [ -n "$UPN_SUFFIX" ]; then
         echo -e "  ${YELLOW}--new: will create fresh identity chain with suffix '${UPN_SUFFIX}'${NC}"
     fi
@@ -880,7 +880,7 @@ if [ -z "$CERT_THUMBPRINT" ]; then
         CERT_THUMBPRINT="$RECOVERED_THUMBPRINT"
         "$PYTHON" -c "
 import json, pathlib
-state_file = pathlib.Path('$PROJECT_ROOT/.entraclaw-state.json')
+state_file = pathlib.Path('$PROJECT_ROOT/.entrabot-state.json')
 data = json.loads(state_file.read_text()) if state_file.is_file() else {}
 data['BLUEPRINT_CERT_THUMBPRINT'] = '$CERT_THUMBPRINT'
 data.pop('BLUEPRINT_SECRET', None)
@@ -909,7 +909,7 @@ if [ -z "$CERT_THUMBPRINT" ]; then
         echo -e "  ${YELLOW}WARNING${NC}: Blueprint app already has ${YELLOW}$EXISTING_COUNT${NC} registered cert(s) (shown above)."
         echo -e "  Generating a new cert here will ${YELLOW}REPLACE${NC} that list (Graph PATCH semantics)."
         echo -e "  Any machine currently authenticating with one of those certs will stop"
-        echo -e "  working until it re-runs setup.sh. EntraClaw is designed to run from one"
+        echo -e "  working until it re-runs setup.sh. EntraBot is designed to run from one"
         echo -e "  machine at a time, so this is usually what you want — but confirm."
         echo ""
         if [ -t 0 ]; then
@@ -944,8 +944,8 @@ _HOST = socket.gethostname().split('.')[0] or 'unknown'
 # --- Generate RSA 2048 key + self-signed cert ---
 key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 subject = issuer = x509.Name([
-    x509.NameAttribute(NameOID.COMMON_NAME, 'entraclaw-blueprint-$BLUEPRINT_APP_ID'),
-    x509.NameAttribute(NameOID.ORGANIZATION_NAME, 'EntraClaw Device Agent'),
+    x509.NameAttribute(NameOID.COMMON_NAME, 'entrabot-blueprint-$BLUEPRINT_APP_ID'),
+    x509.NameAttribute(NameOID.ORGANIZATION_NAME, 'EntraBot Device Agent'),
 ])
 cert = (x509.CertificateBuilder()
     .subject_name(subject)
@@ -966,7 +966,7 @@ pem_key = key.private_bytes(
     serialization.PrivateFormat.PKCS8,
     serialization.NoEncryption(),
 ).decode()
-keyring.set_password('entraclaw', 'blueprint-private-key', pem_key)
+keyring.set_password('entrabot', 'blueprint-private-key', pem_key)
 
 # --- Upload public cert to Blueprint app via Graph API ---
 # Uses Provisioner token (not az CLI) to avoid Directory.AccessAsUser.All rejection.
@@ -974,7 +974,7 @@ keyring.set_password('entraclaw', 'blueprint-private-key', pem_key)
 # checks, admin-consent status, cached-secret notices). We redirect those to
 # stderr so the shell-level \$(...) capture only sees the final thumbprint
 # line — previously the diagnostic output leaked into .env as the literal
-# ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT value and broke Hop 1 auth until
+# ENTRABOT_BLUEPRINT_CERT_THUMBPRINT value and broke Hop 1 auth until
 # manually repaired.
 sys.path.insert(0, '$PROJECT_ROOT/scripts')
 from entra_provisioning import get_bootstrap_graph_token
@@ -995,7 +995,7 @@ resp = requests.patch(
         'type': 'AsymmetricX509Cert',
         'usage': 'Verify',
         'key': cert_b64,
-        'displayName': f'EntraClaw Device Certificate — {_HOST}',
+        'displayName': f'EntraBot Device Certificate — {_HOST}',
         'startDateTime': start_date,
         'endDateTime': end_date,
     }]},
@@ -1005,7 +1005,7 @@ if resp.status_code >= 400:
     sys.exit(1)
 
 # --- Persist thumbprint in state file ---
-state_file = pathlib.Path('$PROJECT_ROOT/.entraclaw-state.json')
+state_file = pathlib.Path('$PROJECT_ROOT/.entrabot-state.json')
 data = json.loads(state_file.read_text()) if state_file.is_file() else {}
 data['BLUEPRINT_CERT_THUMBPRINT'] = thumbprint
 data.pop('BLUEPRINT_SECRET', None)  # clean up old secret if present
@@ -1047,28 +1047,28 @@ pip install --quiet -e ".[dev]"
 success "Installed dependencies (including dev)"
 
 cat > .env << EOF
-# EntraClaw Identity Research — generated by scripts/setup.sh
+# EntraBot Identity Research — generated by scripts/setup.sh
 # Uses Agent User (three-hop flow) with certificate auth — no secrets on disk
 # Private key stored in OS credential store (Keychain/TPM/Keyring)
 # DO NOT commit this file (it is in .gitignore)
 
-ENTRACLAW_TENANT_ID=$TENANT_ID
-ENTRACLAW_BLUEPRINT_APP_ID=$BLUEPRINT_APP_ID
-ENTRACLAW_BLUEPRINT_OBJECT_ID=$BLUEPRINT_OBJECT_ID
-ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT=$CERT_THUMBPRINT
-ENTRACLAW_AGENT_ID=$AGENT_ID
-ENTRACLAW_AGENT_OBJECT_ID=$AGENT_OBJECT_ID
-ENTRACLAW_AGENT_USER_ID=${AGENT_USER_ID:-}
-ENTRACLAW_AGENT_USER_UPN=${AGENT_USER_UPN:-}
-ENTRACLAW_HUMAN_USER_ID=$HUMAN_USER_ID
-ENTRACLAW_HUMAN_UPN=$HUMAN_UPN
-ENTRACLAW_HUMAN_USER_IDS=$HUMAN_USER_IDS
-ENTRACLAW_HUMAN_UPNS=$HUMAN_UPNS
-ENTRACLAW_HUMAN_USER_TENANT_IDS=$HUMAN_USER_TENANT_IDS
-ENTRACLAW_HUMAN_USER_MAILS=$HUMAN_USER_MAILS
-ENTRACLAW_HUMAN_USER_TYPES=$HUMAN_USER_TYPES
-ENTRACLAW_PROVISIONER_APP_ID=$PROV_CLIENT_ID
-ENTRACLAW_LOG_LEVEL=INFO
+ENTRABOT_TENANT_ID=$TENANT_ID
+ENTRABOT_BLUEPRINT_APP_ID=$BLUEPRINT_APP_ID
+ENTRABOT_BLUEPRINT_OBJECT_ID=$BLUEPRINT_OBJECT_ID
+ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=$CERT_THUMBPRINT
+ENTRABOT_AGENT_ID=$AGENT_ID
+ENTRABOT_AGENT_OBJECT_ID=$AGENT_OBJECT_ID
+ENTRABOT_AGENT_USER_ID=${AGENT_USER_ID:-}
+ENTRABOT_AGENT_USER_UPN=${AGENT_USER_UPN:-}
+ENTRABOT_HUMAN_USER_ID=$HUMAN_USER_ID
+ENTRABOT_HUMAN_UPN=$HUMAN_UPN
+ENTRABOT_HUMAN_USER_IDS=$HUMAN_USER_IDS
+ENTRABOT_HUMAN_UPNS=$HUMAN_UPNS
+ENTRABOT_HUMAN_USER_TENANT_IDS=$HUMAN_USER_TENANT_IDS
+ENTRABOT_HUMAN_USER_MAILS=$HUMAN_USER_MAILS
+ENTRABOT_HUMAN_USER_TYPES=$HUMAN_USER_TYPES
+ENTRABOT_PROVISIONER_APP_ID=$PROV_CLIENT_ID
+ENTRABOT_LOG_LEVEL=INFO
 EOF
 
 chmod 600 .env
@@ -1080,7 +1080,7 @@ success ".env file created (chmod 600)"
 if [ "$KEEP_MEMORY_LOCAL" = true ]; then
     echo "" >> .env
     echo "# ADR-005: keep agent memory local (skip cloud sync)" >> .env
-    echo "ENTRACLAW_KEEP_MEMORY_LOCAL=true" >> .env
+    echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> .env
     success "Memory mode: LOCAL (--keep-memory-local set)"
 elif [ -z "${AGENT_USER_ID:-}" ]; then
     warn "Skipping blob storage — no Agent User to scope RBAC against"
@@ -1104,10 +1104,10 @@ else
 
     PROVISION_OUT=$("$PYTHON" "$PROJECT_ROOT/scripts/provision_blob_storage.py" \
         "${PROVISION_ARGS[@]}" \
-        2>&1 1>/tmp/entraclaw-provision-stdout.$$)
+        2>&1 1>/tmp/entrabot-provision-stdout.$$)
     PROVISION_RC=$?
-    PROVISION_STDOUT=$(cat /tmp/entraclaw-provision-stdout.$$)
-    rm -f /tmp/entraclaw-provision-stdout.$$
+    PROVISION_STDOUT=$(cat /tmp/entrabot-provision-stdout.$$)
+    rm -f /tmp/entrabot-provision-stdout.$$
     # Echo the provisioner's progress lines (it prints them to stderr)
     echo "$PROVISION_OUT" | sed 's/^/  /'
 
@@ -1115,28 +1115,28 @@ else
         warn "Blob storage provisioning failed — falling back to local-only memory"
         echo "" >> .env
         echo "# ADR-005: provisioning failed, using local-only memory" >> .env
-        echo "ENTRACLAW_KEEP_MEMORY_LOCAL=true" >> .env
+        echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> .env
     else
         BLOB_ENDPOINT=$(echo "$PROVISION_STDOUT" | grep '^BLOB_ENDPOINT=' | cut -d= -f2-)
         BLOB_CONTAINER=$(echo "$PROVISION_STDOUT" | grep '^BLOB_CONTAINER=' | cut -d= -f2-)
         if [ -z "$BLOB_ENDPOINT" ] || [ -z "$BLOB_CONTAINER" ]; then
             warn "Provisioner returned no endpoint/container — using local-only memory"
             echo "" >> .env
-            echo "ENTRACLAW_KEEP_MEMORY_LOCAL=true" >> .env
+            echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> .env
         else
             echo "" >> .env
             echo "# ADR-005: cloud-hosted agent memory (Azure Blob Storage)" >> .env
-            echo "ENTRACLAW_BLOB_ENDPOINT=$BLOB_ENDPOINT" >> .env
-            echo "ENTRACLAW_BLOB_CONTAINER=$BLOB_CONTAINER" >> .env
+            echo "ENTRABOT_BLOB_ENDPOINT=$BLOB_ENDPOINT" >> .env
+            echo "ENTRABOT_BLOB_CONTAINER=$BLOB_CONTAINER" >> .env
             success "Blob storage ready: $BLOB_ENDPOINT/$BLOB_CONTAINER"
 
             # Migration prompt — upload existing local data + Claude Code
             # persona memory (ADR-005 Phase 6a), leave both trees in place.
-            DATA_DIR="${ENTRACLAW_DATA_DIR:-$HOME/.entraclaw/data}"
+            DATA_DIR="${ENTRABOT_DATA_DIR:-$HOME/.entrabot/data}"
             # Resolve Claude Code per-project memory dir (may be absent).
             PERSONA_DIR=$("$PYTHON" -c "
 from pathlib import Path
-from entraclaw.storage.persona import claude_code_memory_dir
+from entrabot.storage.persona import claude_code_memory_dir
 print(claude_code_memory_dir(Path('$PROJECT_ROOT')))
 " 2>/dev/null || echo "")
             HAS_DATA=false
@@ -1169,8 +1169,8 @@ print(claude_code_memory_dir(Path('$PROJECT_ROOT')))
                     "$PYTHON" -c "
 import sys
 from pathlib import Path
-from entraclaw.storage.backend import get_backend
-from entraclaw.storage.migration import migrate_local_to_backend
+from entrabot.storage.backend import get_backend
+from entrabot.storage.migration import migrate_local_to_backend
 RED = '\033[0;31m'
 GREEN = '\033[0;32m'
 NC = '\033[0m'
@@ -1200,7 +1200,7 @@ if report.errors:
                 else
                     echo "  Skipped migration. You can run it later with:"
                     echo "    .venv/bin/python scripts/claude_memory_sync.py push   # persona files"
-                    echo "    .venv/bin/python -c 'from entraclaw.storage.backend import get_backend; from entraclaw.storage.migration import migrate_local_to_backend; from pathlib import Path; print(migrate_local_to_backend([(Path(\"$DATA_DIR\"), \"\")], get_backend()))'"
+                    echo "    .venv/bin/python -c 'from entrabot.storage.backend import get_backend; from entrabot.storage.migration import migrate_local_to_backend; from pathlib import Path; print(migrate_local_to_backend([(Path(\"$DATA_DIR\"), \"\")], get_backend()))'"
                 fi
             fi
         fi
@@ -1227,10 +1227,10 @@ elif [ -d "$PROJECT_ROOT/.venv" ] && [ -f "$PROJECT_ROOT/.env" ]; then
     set -a; . "$PROJECT_ROOT/.env"; set +a
     "$PROJECT_ROOT/.venv/bin/python" - <<'PY'
 import sys
-from entraclaw.config import EntraClawConfig
-from entraclaw.preflight import format_report, overall_exit_code, run_smoke_checks
+from entrabot.config import EntraBotConfig
+from entrabot.preflight import format_report, overall_exit_code, run_smoke_checks
 
-config = EntraClawConfig.from_env()
+config = EntraBotConfig.from_env()
 checks = run_smoke_checks(config)
 print(format_report(checks, color=sys.stdout.isatty()))
 sys.exit(overall_exit_code(checks))
@@ -1288,11 +1288,11 @@ fi
 # corrupt files) lives in ``scripts/mcp_config.py`` so it's unit-tested.
 #
 # To add persona-sati (mind server), see .mcp.json.example for the dual-
-# server configuration. persona-sati is optional — entraclaw works
+# server configuration. persona-sati is optional — entrabot works
 # standalone as a Teams tool server without it.
-ENTRACLAW_MCP_BIN="$PROJECT_ROOT/.venv/bin/entraclaw-mcp"
+ENTRABOT_MCP_BIN="$PROJECT_ROOT/.venv/bin/entrabot-mcp"
 "$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/scripts/mcp_config.py" \
-    --binary "$ENTRACLAW_MCP_BIN" \
+    --binary "$ENTRABOT_MCP_BIN" \
     --project-root "$PROJECT_ROOT"
 success "MCP server config written (.mcp.json + ~/.copilot/mcp-config.json)"
 

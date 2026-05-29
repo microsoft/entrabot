@@ -2,7 +2,7 @@
 
 ## Overview
 
-macOS provides a layered security model that is highly relevant to Entraclaw's autonomous agent architecture. The key subsystems are:
+macOS provides a layered security model that is highly relevant to Entrabot's autonomous agent architecture. The key subsystems are:
 
 - **Keychain Services** — hardware-backed credential storage with per-process access control
 - **launchd** — the system and user process manager for background execution
@@ -11,7 +11,7 @@ macOS provides a layered security model that is highly relevant to Entraclaw's a
 - **App Sandbox** — optional process-level capability restrictions
 - **XPC** — secure inter-process communication
 
-For an Entraclaw agent running on macOS, the critical path is: the agent is a **code-signed, launchd-managed background process** that stores credentials in the **Keychain**, has a distinct **process identity** via its code signature, and requests necessary **TCC permissions** from the user.
+For an Entrabot agent running on macOS, the critical path is: the agent is a **code-signed, launchd-managed background process** that stores credentials in the **Keychain**, has a distinct **process identity** via its code signature, and requests necessary **TCC permissions** from the user.
 
 ---
 
@@ -42,7 +42,7 @@ import Security
 func saveCredential(service: String, account: String, token: Data) -> OSStatus {
     let query: [String: Any] = [
         kSecClass as String:       kSecClassGenericPassword,
-        kSecAttrService as String: service,      // e.g. "com.entraclaw.agent"
+        kSecAttrService as String: service,      // e.g. "com.entrabot.agent"
         kSecAttrAccount as String: account,      // e.g. "agent-id-abc123"
         kSecValueData as String:   token,        // the OBO token bytes
         kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
@@ -102,7 +102,7 @@ OSStatus SecItemDelete(CFDictionaryRef query);
 | Key | Purpose |
 |-----|---------|
 | `kSecClass` | Item class: `kSecClassGenericPassword`, `kSecClassInternetPassword`, `kSecClassCertificate`, `kSecClassKey` |
-| `kSecAttrService` | Service identifier (reverse-DNS, e.g. `com.entraclaw.agent`) |
+| `kSecAttrService` | Service identifier (reverse-DNS, e.g. `com.entrabot.agent`) |
 | `kSecAttrAccount` | Account name (e.g. agent ID or username) |
 | `kSecValueData` | The secret data (password, token bytes) |
 | `kSecAttrAccessible` | When the item is accessible (e.g. `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`) |
@@ -125,7 +125,7 @@ let access = SecAccessControlCreateWithFlags(
 
 let query: [String: Any] = [
     kSecClass as String:          kSecClassGenericPassword,
-    kSecAttrService as String:    "com.entraclaw.agent",
+    kSecAttrService as String:    "com.entrabot.agent",
     kSecAttrAccount as String:    "obo-token",
     kSecValueData as String:      tokenData,
     kSecAttrAccessControl as String: access!,
@@ -146,13 +146,13 @@ The `keyring` library provides a cross-platform abstraction over OS credential s
 import keyring
 
 # Store an OBO token
-keyring.set_password("com.entraclaw.agent", "agent-id-abc123", "eyJhbGciOi...")
+keyring.set_password("com.entrabot.agent", "agent-id-abc123", "eyJhbGciOi...")
 
 # Retrieve it
-token = keyring.get_password("com.entraclaw.agent", "agent-id-abc123")
+token = keyring.get_password("com.entrabot.agent", "agent-id-abc123")
 
 # Delete it
-keyring.delete_password("com.entraclaw.agent", "agent-id-abc123")
+keyring.delete_password("com.entrabot.agent", "agent-id-abc123")
 ```
 
 **Installation:**
@@ -170,13 +170,13 @@ keyring.set_keyring(macOS.Keyring())
 **CLI usage:**
 ```bash
 # Store (prompts for password interactively)
-keyring set com.entraclaw.agent agent-id-abc123
+keyring set com.entrabot.agent agent-id-abc123
 
 # Retrieve
-keyring get com.entraclaw.agent agent-id-abc123
+keyring get com.entrabot.agent agent-id-abc123
 
 # Delete
-keyring del com.entraclaw.agent agent-id-abc123
+keyring del com.entrabot.agent agent-id-abc123
 ```
 
 ### Python Access: `security` CLI Tool
@@ -187,23 +187,23 @@ The `security` command-line tool provides direct Keychain manipulation from shel
 # Add a generic password
 security add-generic-password \
     -a "agent-id-abc123" \
-    -s "com.entraclaw.agent" \
+    -s "com.entrabot.agent" \
     -w "eyJhbGciOi..." \
     -U  # Update if exists
 
 # Retrieve (prints only the password)
 security find-generic-password \
     -a "agent-id-abc123" \
-    -s "com.entraclaw.agent" \
+    -s "com.entrabot.agent" \
     -w
 
 # Delete
 security delete-generic-password \
     -a "agent-id-abc123" \
-    -s "com.entraclaw.agent"
+    -s "com.entrabot.agent"
 
 # Use in scripts as environment variable
-export OBO_TOKEN=$(security find-generic-password -a "$USER" -s "com.entraclaw.agent" -w 2>/dev/null)
+export OBO_TOKEN=$(security find-generic-password -a "$USER" -s "com.entrabot.agent" -w 2>/dev/null)
 ```
 
 **Key flags:**
@@ -228,7 +228,7 @@ from Security import (
 # Store
 query = {
     kSecClass: kSecClassGenericPassword,
-    kSecAttrService: "com.entraclaw.agent",
+    kSecAttrService: "com.entrabot.agent",
     kSecAttrAccount: "agent-id-abc123",
     kSecValueData: b"eyJhbGciOi...",
 }
@@ -237,7 +237,7 @@ status, _ = SecItemAdd(query, None)
 # Retrieve
 query = {
     kSecClass: kSecClassGenericPassword,
-    kSecAttrService: "com.entraclaw.agent",
+    kSecAttrService: "com.entrabot.agent",
     kSecAttrAccount: "agent-id-abc123",
     kSecReturnData: True,
     kSecMatchLimit: kSecMatchLimitOne,
@@ -260,15 +260,15 @@ status, result = SecItemCopyMatching(query, None)
 | **GUI access** | ✅ Yes — can show dialogs | ❌ No |
 | **Keychain** | ✅ Login keychain available | ⚠️ System keychain only |
 | **Plist location** | `~/Library/LaunchAgents/` (per-user) or `/Library/LaunchAgents/` (all users) | `/Library/LaunchDaemons/` |
-| **Use for Entraclaw** | ✅ **Primary choice** — needs Keychain + consent UI | ❌ Cannot show consent prompts |
+| **Use for Entrabot** | ✅ **Primary choice** — needs Keychain + consent UI | ❌ Cannot show consent prompts |
 
-**For Entraclaw: Use a Launch Agent**, not a Daemon. The agent needs access to the login keychain and may need to present consent dialogs.
+**For Entrabot: Use a Launch Agent**, not a Daemon. The agent needs access to the login keychain and may need to present consent dialogs.
 
 ### Plist Configuration
 
-#### Entraclaw Agent Plist Example
+#### Entrabot Agent Plist Example
 
-**File:** `~/Library/LaunchAgents/com.entraclaw.agent.plist`
+**File:** `~/Library/LaunchAgents/com.entrabot.agent.plist`
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -278,14 +278,14 @@ status, result = SecItemCopyMatching(query, None)
 <dict>
     <!-- Unique identifier for the job -->
     <key>Label</key>
-    <string>com.entraclaw.agent</string>
+    <string>com.entrabot.agent</string>
 
     <!-- The program and arguments to run -->
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/entraclaw-agent</string>
+        <string>/usr/local/bin/entrabot-agent</string>
         <string>--config</string>
-        <string>~/.config/entraclaw/config.toml</string>
+        <string>~/.config/entrabot/config.toml</string>
     </array>
 
     <!-- Start when the plist is loaded (i.e., on user login) -->
@@ -306,19 +306,19 @@ status, result = SecItemCopyMatching(query, None)
     <!-- Environment variables -->
     <key>EnvironmentVariables</key>
     <dict>
-        <key>ENTRACLAW_HOME</key>
-        <string>/Users/username/.config/entraclaw</string>
+        <key>ENTRABOT_HOME</key>
+        <string>/Users/username/.config/entrabot</string>
     </dict>
 
     <!-- Working directory -->
     <key>WorkingDirectory</key>
-    <string>/Users/username/.config/entraclaw</string>
+    <string>/Users/username/.config/entrabot</string>
 
     <!-- Log output -->
     <key>StandardOutPath</key>
-    <string>/Users/username/.config/entraclaw/logs/agent.out.log</string>
+    <string>/Users/username/.config/entrabot/logs/agent.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/username/.config/entraclaw/logs/agent.err.log</string>
+    <string>/Users/username/.config/entrabot/logs/agent.err.log</string>
 
     <!-- Nice level (lower priority to not interfere with user) -->
     <key>Nice</key>
@@ -333,29 +333,29 @@ status, result = SecItemCopyMatching(query, None)
 
 ```bash
 # Load (register + start) — modern approach
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.entraclaw.agent.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.entrabot.agent.plist
 
 # Unload (stop + deregister) — modern approach
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.entraclaw.agent.plist
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.entrabot.agent.plist
 
 # Start/Stop a loaded job
-launchctl kickstart gui/$(id -u)/com.entraclaw.agent
-launchctl kill SIGTERM gui/$(id -u)/com.entraclaw.agent
+launchctl kickstart gui/$(id -u)/com.entrabot.agent
+launchctl kill SIGTERM gui/$(id -u)/com.entrabot.agent
 
 # Check status
-launchctl print gui/$(id -u)/com.entraclaw.agent
+launchctl print gui/$(id -u)/com.entrabot.agent
 
 # List all loaded user agents
-launchctl list | grep entraclaw
+launchctl list | grep entrabot
 ```
 
 #### Legacy commands (still functional but deprecated)
 
 ```bash
-launchctl load   ~/Library/LaunchAgents/com.entraclaw.agent.plist
-launchctl unload ~/Library/LaunchAgents/com.entraclaw.agent.plist
-launchctl start  com.entraclaw.agent
-launchctl stop   com.entraclaw.agent
+launchctl load   ~/Library/LaunchAgents/com.entrabot.agent.plist
+launchctl unload ~/Library/LaunchAgents/com.entrabot.agent.plist
+launchctl start  com.entrabot.agent
+launchctl stop   com.entrabot.agent
 ```
 
 ### Important Plist Keys Reference
@@ -385,11 +385,11 @@ import os
 import plistlib
 import subprocess
 
-def install_launch_agent(agent_binary: str, label: str = "com.entraclaw.agent"):
-    """Install an Entraclaw agent as a launchd LaunchAgent."""
+def install_launch_agent(agent_binary: str, label: str = "com.entrabot.agent"):
+    """Install an Entrabot agent as a launchd LaunchAgent."""
     home = os.path.expanduser("~")
     plist_path = os.path.join(home, "Library", "LaunchAgents", f"{label}.plist")
-    log_dir = os.path.join(home, ".config", "entraclaw", "logs")
+    log_dir = os.path.join(home, ".config", "entrabot", "logs")
     os.makedirs(log_dir, exist_ok=True)
 
     plist = {
@@ -410,8 +410,8 @@ def install_launch_agent(agent_binary: str, label: str = "com.entraclaw.agent"):
         check=True,
     )
 
-def uninstall_launch_agent(label: str = "com.entraclaw.agent"):
-    """Uninstall the Entraclaw LaunchAgent."""
+def uninstall_launch_agent(label: str = "com.entrabot.agent"):
+    """Uninstall the Entrabot LaunchAgent."""
     home = os.path.expanduser("~")
     plist_path = os.path.join(home, "Library", "LaunchAgents", f"{label}.plist")
     uid = os.getuid()
@@ -444,23 +444,23 @@ macOS uses **code signatures** to establish process identity. Every process has 
 3. **Ad-hoc signed** — locally signed, no certificate authority (local testing only)
 4. **Unsigned** — blocked by Gatekeeper by default
 
-#### Signing an Entraclaw agent binary
+#### Signing an Entrabot agent binary
 
 ```bash
 # Ad-hoc signing (development/testing only)
-codesign --force --options=runtime --sign - /usr/local/bin/entraclaw-agent
+codesign --force --options=runtime --sign - /usr/local/bin/entrabot-agent
 
 # Developer ID signing (distribution)
 codesign --force --options=runtime --timestamp \
-    --entitlements entraclaw.entitlements \
-    --sign "Developer ID Application: Entraclaw Inc (TEAMID)" \
-    /usr/local/bin/entraclaw-agent
+    --entitlements entrabot.entitlements \
+    --sign "Developer ID Application: Entrabot Inc (TEAMID)" \
+    /usr/local/bin/entrabot-agent
 
 # Verify signature
-codesign --verify --verbose /usr/local/bin/entraclaw-agent
+codesign --verify --verbose /usr/local/bin/entrabot-agent
 
 # Display signing details
-codesign --display --verbose=4 /usr/local/bin/entraclaw-agent
+codesign --display --verbose=4 /usr/local/bin/entrabot-agent
 ```
 
 ### Bundle Identifiers
@@ -468,16 +468,16 @@ codesign --display --verbose=4 /usr/local/bin/entraclaw-agent
 The **Bundle Identifier** (`CFBundleIdentifier`) is a reverse-DNS string that uniquely identifies an application within Apple's ecosystem. For command-line tools and agents without a `.app` bundle, the code signing identifier serves a similar purpose.
 
 ```
-com.entraclaw.agent        — main agent process
-com.entraclaw.agent.helper — privileged helper (if needed)
-com.entraclaw.consent-ui   — consent prompt UI app
+com.entrabot.agent        — main agent process
+com.entrabot.agent.helper — privileged helper (if needed)
+com.entrabot.consent-ui   — consent prompt UI app
 ```
 
 ### Entitlements
 
 Entitlements are key-value pairs embedded in the code signature that declare which system capabilities a process may use.
 
-**Example `entraclaw.entitlements` plist:**
+**Example `entrabot.entitlements` plist:**
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -488,7 +488,7 @@ Entitlements are key-value pairs embedded in the code signature that declare whi
     <!-- Access keychain items shared within the team -->
     <key>keychain-access-groups</key>
     <array>
-        <string>$(AppIdentifierPrefix)com.entraclaw.shared</string>
+        <string>$(AppIdentifierPrefix)com.entrabot.shared</string>
     </array>
 
     <!-- Network access (client) -->
@@ -509,21 +509,21 @@ For distribution, macOS requires the **hardened runtime** and **notarization**:
 ```bash
 # 1. Sign with hardened runtime
 codesign --force --options=runtime --timestamp \
-    --sign "Developer ID Application: Entraclaw Inc (TEAMID)" \
-    /usr/local/bin/entraclaw-agent
+    --sign "Developer ID Application: Entrabot Inc (TEAMID)" \
+    /usr/local/bin/entrabot-agent
 
 # 2. Package for notarization
-ditto -c -k --keepParent /usr/local/bin/entraclaw-agent entraclaw-agent.zip
+ditto -c -k --keepParent /usr/local/bin/entrabot-agent entrabot-agent.zip
 
 # 3. Submit for notarization
-xcrun notarytool submit entraclaw-agent.zip \
-    --apple-id "dev@entraclaw.com" \
+xcrun notarytool submit entrabot-agent.zip \
+    --apple-id "dev@entrabot.com" \
     --team-id "TEAMID" \
     --password "@keychain:AC_PASSWORD" \
     --wait
 
 # 4. Staple the ticket
-xcrun stapler staple /usr/local/bin/entraclaw-agent
+xcrun stapler staple /usr/local/bin/entrabot-agent
 ```
 
 ### How macOS Identifies Processes
@@ -555,7 +555,7 @@ These are tracked in TCC databases, Keychain ACLs, and firewall rules. Changing 
   - User: `~/Library/Application Support/com.apple.TCC/TCC.db`
   - System: `/Library/Application Support/com.apple.TCC/TCC.db` (SIP-protected)
 
-### Permissions Relevant to Entraclaw
+### Permissions Relevant to Entrabot
 
 | Permission | TCC Service Key | Needed? | Notes |
 |-----------|----------------|---------|-------|
@@ -599,12 +599,12 @@ For managed deployments, PPPC (Privacy Preferences Policy Control) profiles can 
     <key>Authorization</key>
     <string>Allow</string>
     <key>CodeRequirement</key>
-    <string>identifier "com.entraclaw.agent" and anchor apple generic and
+    <string>identifier "com.entrabot.agent" and anchor apple generic and
         certificate leaf[subject.OU] = "TEAMID"</string>
     <key>IdentifierType</key>
     <string>bundleID</string>
     <key>Identifier</key>
-    <string>com.entraclaw.agent</string>
+    <string>com.entrabot.agent</string>
     <key>Services</key>
     <dict>
         <key>SystemPolicyAllFiles</key>
@@ -620,10 +620,10 @@ For managed deployments, PPPC (Privacy Preferences Policy Control) profiles can 
 
 ```bash
 # Reset all TCC permissions for an app
-tccutil reset All com.entraclaw.agent
+tccutil reset All com.entrabot.agent
 
 # Reset specific service
-tccutil reset ScreenCapture com.entraclaw.agent
+tccutil reset ScreenCapture com.entrabot.agent
 
 # Reset all apps for a service
 tccutil reset ScreenCapture
@@ -637,9 +637,9 @@ tccutil reset ScreenCapture
 
 The App Sandbox is an opt-in macOS security mechanism that restricts what an application can do. It limits file system access, network access, hardware access, and IPC to only what the app declares via entitlements.
 
-### Implications for Entraclaw Agents
+### Implications for Entrabot Agents
 
-**Recommendation: Do NOT sandbox the Entraclaw agent process.** Here's why:
+**Recommendation: Do NOT sandbox the Entrabot agent process.** Here's why:
 
 | Factor | Sandboxed | Non-Sandboxed |
 |--------|-----------|---------------|
@@ -652,7 +652,7 @@ The App Sandbox is an opt-in macOS security mechanism that restricts what an app
 
 **Key considerations:**
 
-1. **Child process inheritance** — If a sandboxed app launches the Entraclaw agent as a subprocess, the agent inherits the sandbox restrictions. The agent must be an independent launchd-managed process.
+1. **Child process inheritance** — If a sandboxed app launches the Entrabot agent as a subprocess, the agent inherits the sandbox restrictions. The agent must be an independent launchd-managed process.
 2. **Keychain scope** — Sandboxed apps can only access their own keychain items (within their app group). Non-sandboxed agents can access any item the user has authorized.
 3. **File system** — Agents often need to read project files, config files, etc. A sandbox would require security-scoped bookmarks for each file path.
 
@@ -662,7 +662,7 @@ Even without App Sandbox, you can apply a custom sandbox profile for defense in 
 
 ```bash
 # Create a custom sandbox profile
-cat > /tmp/entraclaw-sandbox.sb << 'EOF'
+cat > /tmp/entrabot-sandbox.sb << 'EOF'
 (version 1)
 (allow default)
 (deny file-write*
@@ -673,7 +673,7 @@ cat > /tmp/entraclaw-sandbox.sb << 'EOF'
 EOF
 
 # Run agent with custom profile
-sandbox-exec -f /tmp/entraclaw-sandbox.sb /usr/local/bin/entraclaw-agent
+sandbox-exec -f /tmp/entrabot-sandbox.sb /usr/local/bin/entrabot-agent
 ```
 
 > **Note:** `sandbox-exec` is technically deprecated but still functional. Apple has not provided a public replacement for CLI tools.
@@ -686,17 +686,17 @@ sandbox-exec -f /tmp/entraclaw-sandbox.sb /usr/local/bin/entraclaw-agent
 
 XPC (Cross-Process Communication) is macOS's preferred mechanism for inter-process communication. It enables privilege separation by allowing a main application to offload tasks to separate, isolated helper processes.
 
-### Architecture for Entraclaw
+### Architecture for Entrabot
 
 ```
 ┌─────────────────────────────┐
-│  Entraclaw Consent UI (.app) │  ← GUI app for consent prompts
+│  Entrabot Consent UI (.app) │  ← GUI app for consent prompts
 │     NSXPCConnection         │
 └──────────┬──────────────────┘
            │ XPC Protocol
            ▼
 ┌─────────────────────────────┐
-│  Entraclaw Agent (launchd)   │  ← Background agent process
+│  Entrabot Agent (launchd)   │  ← Background agent process
 │     NSXPCConnection         │
 └──────────┬──────────────────┘
            │ XPC Protocol
@@ -710,7 +710,7 @@ XPC (Cross-Process Communication) is macOS's preferred mechanism for inter-proce
 ### XPC Connection Types
 
 1. **XPC Service (bundled)** — Lives inside an app bundle, launched on demand, inherits app's sandbox. Terminates when parent exits.
-2. **Mach Service (launchd)** — Registered with launchd, independently managed, persists across app launches. This is what Entraclaw should use.
+2. **Mach Service (launchd)** — Registered with launchd, independently managed, persists across app launches. This is what Entrabot should use.
 3. **Anonymous connection** — Direct pipe between parent and child process.
 
 ### NSXPCConnection Example (Swift)
@@ -718,7 +718,7 @@ XPC (Cross-Process Communication) is macOS's preferred mechanism for inter-proce
 **Define a protocol:**
 
 ```swift
-@objc protocol EntraclawAgentProtocol {
+@objc protocol EntrabotAgentProtocol {
     func storeToken(_ token: String, forAgentID agentID: String,
                     reply: @escaping (Bool, String?) -> Void)
     func getToken(forAgentID agentID: String,
@@ -737,7 +737,7 @@ class AgentDelegate: NSObject, NSXPCListenerDelegate {
     func listener(_ listener: NSXPCListener,
                   shouldAcceptNewConnection conn: NSXPCConnection) -> Bool {
         conn.exportedInterface = NSXPCInterface(
-            with: EntraclawAgentProtocol.self
+            with: EntrabotAgentProtocol.self
         )
         conn.exportedObject = AgentService()
         conn.resume()
@@ -746,7 +746,7 @@ class AgentDelegate: NSObject, NSXPCListenerDelegate {
 }
 
 // Register as a Mach service (label must match launchd plist)
-let listener = NSXPCListener(machServiceName: "com.entraclaw.agent.xpc")
+let listener = NSXPCListener(machServiceName: "com.entrabot.agent.xpc")
 listener.delegate = AgentDelegate()
 listener.resume()
 RunLoop.main.run()
@@ -756,16 +756,16 @@ RunLoop.main.run()
 
 ```swift
 let connection = NSXPCConnection(
-    machServiceName: "com.entraclaw.agent.xpc"
+    machServiceName: "com.entrabot.agent.xpc"
 )
 connection.remoteObjectInterface = NSXPCInterface(
-    with: EntraclawAgentProtocol.self
+    with: EntrabotAgentProtocol.self
 )
 connection.resume()
 
 let proxy = connection.remoteObjectProxyWithErrorHandler { error in
     print("XPC error: \(error)")
-} as! EntraclawAgentProtocol
+} as! EntrabotAgentProtocol
 
 proxy.getToken(forAgentID: "abc123") { token in
     print("Got token: \(token ?? "nil")")
@@ -780,18 +780,18 @@ Python can't use `NSXPCConnection` directly, but it can communicate with XPC ser
 2. **Unix domain sockets** — simpler alternative for Python agents
 3. **Named pipes / stdin-stdout** — if spawned as a subprocess
 
-For a Python-based Entraclaw agent, **Unix domain sockets** are the pragmatic choice for IPC with a Swift-based consent UI.
+For a Python-based Entrabot agent, **Unix domain sockets** are the pragmatic choice for IPC with a Swift-based consent UI.
 
 ---
 
 ## Integration Patterns
 
-### Recommended Architecture for Entraclaw on macOS
+### Recommended Architecture for Entrabot on macOS
 
 ```
 Installation:
-  1. Install agent binary to /usr/local/bin/entraclaw-agent (or ~/.local/bin/)
-  2. Install consent UI to /Applications/Entraclaw.app
+  1. Install agent binary to /usr/local/bin/entrabot-agent (or ~/.local/bin/)
+  2. Install consent UI to /Applications/Entrabot.app
   3. Create launchd plist in ~/Library/LaunchAgents/
   4. Sign & notarize both binaries with Developer ID
   5. Load agent: launchctl bootstrap gui/$(id -u) <plist>
@@ -804,7 +804,7 @@ Runtime:
              │ IPC (socket/pipe)
              ▼
   ┌──────────────────────┐
-  │  entraclaw-agent      │──── Keychain (login)
+  │  entrabot-agent      │──── Keychain (login)
   │  (LaunchAgent)       │     ├── OBO tokens
   │  PID: distinct       │     ├── Agent private key
   │  Code-signed         │     └── Refresh tokens
@@ -812,7 +812,7 @@ Runtime:
              │ XPC / Socket
              ▼
   ┌──────────────────────┐
-  │  Entraclaw.app        │──── TCC permissions
+  │  Entrabot.app        │──── TCC permissions
   │  (Consent UI)        │     └── User approvals
   │  Shows dialogs       │
   └──────────────────────┘
@@ -828,7 +828,7 @@ import time
 class MacOSCredentialStore:
     """Credential store using macOS Keychain via keyring."""
 
-    SERVICE = "com.entraclaw.agent"
+    SERVICE = "com.entrabot.agent"
 
     def store_token(self, agent_id: str, token_data: dict) -> None:
         """Store an OBO token with metadata."""
@@ -875,9 +875,9 @@ import os
 import plistlib
 
 class MacOSAgentInstaller:
-    """Install/manage the Entraclaw agent as a macOS LaunchAgent."""
+    """Install/manage the Entrabot agent as a macOS LaunchAgent."""
 
-    LABEL = "com.entraclaw.agent"
+    LABEL = "com.entrabot.agent"
 
     @property
     def plist_path(self) -> str:
@@ -887,7 +887,7 @@ class MacOSAgentInstaller:
 
     def install(self, agent_binary: str) -> None:
         """Install and start the agent."""
-        log_dir = os.path.expanduser("~/.config/entraclaw/logs")
+        log_dir = os.path.expanduser("~/.config/entrabot/logs")
         os.makedirs(log_dir, exist_ok=True)
 
         plist = {
@@ -945,7 +945,7 @@ Since a LaunchAgent can technically display UI (it runs in the user's GUI sessio
 3. **If not, agent launches a consent dialog** — either:
    - A native macOS alert via `NSAlert` (requires a Swift helper)
    - A system notification via `terminal-notifier` or `osascript`
-   - A dedicated Entraclaw.app consent window
+   - A dedicated Entrabot.app consent window
 4. **User approves/denies** → decision is cached locally
 5. **Agent proceeds** with the OBO token exchange
 
@@ -959,7 +959,7 @@ def show_consent_dialog(scope: str, requesting_app: str) -> bool:
     script = f'''
     display dialog "The application '{requesting_app}' is requesting access to:\\n\\n{scope}\\n\\nAllow this agent to act on your behalf?" ¬
         buttons {{"Deny", "Allow"}} default button "Allow" ¬
-        with title "Entraclaw Agent Consent" ¬
+        with title "Entrabot Agent Consent" ¬
         with icon caution
     '''
     result = subprocess.run(
@@ -975,7 +975,7 @@ def show_consent_dialog(scope: str, requesting_app: str) -> bool:
 
 ### Keychain Gotchas
 
-1. **Binary-specific ACLs** — Keychain items are ACL'd to the specific binary that created them. If you update the Entraclaw agent binary (new cdhash), the user may be prompted again to allow access. Mitigation: use the `keyring` library which handles ACL management, or store items with permissive ACLs during development.
+1. **Binary-specific ACLs** — Keychain items are ACL'd to the specific binary that created them. If you update the Entrabot agent binary (new cdhash), the user may be prompted again to allow access. Mitigation: use the `keyring` library which handles ACL management, or store items with permissive ACLs during development.
 
 2. **Python binary fragmentation** — Credentials stored by `/usr/bin/python3` are NOT accessible from `/opt/homebrew/bin/python3` (different binaries = different ACL entries). Always use a consistent Python path or use a bundled interpreter.
 
@@ -1021,13 +1021,13 @@ def show_consent_dialog(scope: str, requesting_app: str) -> bool:
 
 ## Open Questions
 
-1. **Agent ID persistence** — Should the Entraclaw Agent ID be stored in the Keychain as a credential, or as a configuration file? Keychain provides integrity guarantees but adds complexity.
+1. **Agent ID persistence** — Should the Entrabot Agent ID be stored in the Keychain as a credential, or as a configuration file? Keychain provides integrity guarantees but adds complexity.
 
 2. **Consent caching** — Where should user consent decisions be cached? Options: Keychain (encrypted), a local SQLite database (simpler), or a signed plist (tamper-evident).
 
 3. **Token refresh in background** — When the LaunchAgent refreshes OBO tokens, will Keychain access work reliably without user interaction? Need to test with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` vs `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`.
 
-4. **Multi-user scenarios** — Each macOS user gets their own LaunchAgent and Keychain. How does Entraclaw handle shared machines with multiple users who each have their own Agent ID?
+4. **Multi-user scenarios** — Each macOS user gets their own LaunchAgent and Keychain. How does Entrabot handle shared machines with multiple users who each have their own Agent ID?
 
 5. **MDM deployment** — For enterprise customers, should we provide a PPPC profile template? How do we handle the case where IT pre-approves TCC permissions?
 

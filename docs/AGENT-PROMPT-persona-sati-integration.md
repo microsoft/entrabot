@@ -1,10 +1,10 @@
-# Agent prompt: wire entraclaw to consume `PERSONA_SATI_MCP_URL`
+# Agent prompt: wire entrabot to consume `PERSONA_SATI_MCP_URL`
 
-**Status: DONE (2026-04-18, v1).** Implemented in `src/entraclaw/mcp_server.py:_load_agent_instructions()`. This prompt is kept as a reference example of how to delegate a scoped, self-contained task to a fresh Claude Code session — the spec below is what shipped. For the historical TODO doc see `docs/TODO-persona-sati-integration.md`.
+**Status: DONE (2026-04-18, v1).** Implemented in `src/entrabot/mcp_server.py:_load_agent_instructions()`. This prompt is kept as a reference example of how to delegate a scoped, self-contained task to a fresh Claude Code session — the spec below is what shipped. For the historical TODO doc see `docs/TODO-persona-sati-integration.md`.
 
 ---
 
-Paste this into a fresh Claude Code session running in the `entraclaw-identity-research` directory.
+Paste this into a fresh Claude Code session running in the `entrabot-identity-research` directory.
 
 ---
 
@@ -15,11 +15,11 @@ plan. The full spec is already written in this repo at:
   docs/TODO-persona-sati-integration.md
 
 Read that file end-to-end before writing any code. It contains:
-- Why this is being done (body/mind separation; entraclaw should pull
+- Why this is being done (body/mind separation; entrabot should pull
   its system prompt from the cloud persona-sati, falling back to a
   local string when persona-sati is unavailable).
 - The exact function replacement for _load_agent_instructions() in
-  src/entraclaw/mcp_server.py.
+  src/entrabot/mcp_server.py.
 - Four test cases to add.
 - A verification checklist.
 
@@ -28,7 +28,7 @@ Your task in order:
 1. Read docs/TODO-persona-sati-integration.md end-to-end.
 
 2. Replace the existing `_load_agent_instructions()` in
-   src/entraclaw/mcp_server.py with the reference implementation from
+   src/entrabot/mcp_server.py with the reference implementation from
    the TODO doc. Do not change anything else in that file; only that
    one function.
 
@@ -57,17 +57,17 @@ Your task in order:
        persona-sati/docs/plans/remaining-work-to-two-command-goal.md
 
 DO NOT:
-- Edit any file other than src/entraclaw/mcp_server.py and a test
+- Edit any file other than src/entrabot/mcp_server.py and a test
   file.
 - Add new dependencies. The mcp package is already a dep (this repo
   IS an MCP server).
 - Remove or change the local fallback prompt text. Downstream tests
-  rely on its prefix "EntraClaw Teams Interface".
+  rely on its prefix "EntraBot Teams Interface".
 - Write anything to stdout from _load_agent_instructions() or the
   code paths it calls. All diagnostic logging goes to sys.stderr.
 - Let any exception escape _load_agent_instructions(). The MCP server
   boot must succeed even if persona-sati is completely unreachable.
-- Commit .entraclaw-state.json, any backup files, or local secrets.
+- Commit .entrabot-state.json, any backup files, or local secrets.
 
 When the PR is open, reply with:
   (a) PR URL
@@ -89,5 +89,5 @@ ls docs/TODO-persona-sati-integration.md
 And optionally back up the current mcp_server.py in case you want to compare:
 
 ```bash
-cp src/entraclaw/mcp_server.py /tmp/mcp_server.py.before
+cp src/entrabot/mcp_server.py /tmp/mcp_server.py.before
 ```

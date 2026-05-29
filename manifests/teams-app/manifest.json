@@ -4,18 +4,18 @@
   "version": "0.1.0",
   "id": "00000000-0000-0000-0000-000000000000",
   "developer": {
-    "name": "EntraClaw Research",
-    "websiteUrl": "https://github.com/microsoft/entraclaw",
-    "privacyUrl": "https://github.com/microsoft/entraclaw",
-    "termsOfUseUrl": "https://github.com/microsoft/entraclaw"
+    "name": "EntraBot Research",
+    "websiteUrl": "https://github.com/microsoft/entrabot",
+    "privacyUrl": "https://github.com/microsoft/entrabot",
+    "termsOfUseUrl": "https://github.com/microsoft/entrabot"
   },
   "name": {
-    "short": "EntraClaw Agent",
-    "full": "EntraClaw Agent \u2014 AI Code Agent for Teams"
+    "short": "EntraBot Agent",
+    "full": "EntraBot Agent \u2014 AI Code Agent for Teams"
   },
   "description": {
     "short": "AI agent that sends build results, PR updates, and status cards",
-    "full": "EntraClaw Agent is an AI-powered code agent that communicates through Teams. It sends Adaptive Cards with build results, PR updates, and task status. Messages from the agent show as the bot identity \u2014 not the human developer."
+    "full": "EntraBot Agent is an AI-powered code agent that communicates through Teams. It sends Adaptive Cards with build results, PR updates, and task status. Messages from the agent show as the bot identity \u2014 not the human developer."
   },
   "icons": {
     "color": "color.png",

@@ -20,12 +20,12 @@ import httpx
 import pytest
 import respx
 
-from entraclaw.errors import (
+from entrabot.errors import (
     RequesterNotInChatError,
     RequesterNotSponsorError,
 )
-from entraclaw.identity.sponsors import AgentIdentitySponsor
-from entraclaw.tools.teams import GRAPH_BASE, add_member
+from entrabot.identity.sponsors import AgentIdentitySponsor
+from entrabot.tools.teams import GRAPH_BASE, add_member
 
 
 def _sponsor(
@@ -67,7 +67,7 @@ class TestAddMemberRequesterMustBeSponsor:
         sponsor = _sponsor()
         with (
             patch(
-                "entraclaw.tools.teams._get_sponsor_records",
+                "entrabot.tools.teams._get_sponsor_records",
                 new=AsyncMock(return_value=[sponsor]),
             ),
             pytest.raises(RequesterNotSponsorError) as exc_info,
@@ -88,11 +88,11 @@ class TestAddMemberRequesterMustBeChatMember:
         sponsor = _sponsor()
         with (
             patch(
-                "entraclaw.tools.teams._get_sponsor_records",
+                "entrabot.tools.teams._get_sponsor_records",
                 new=AsyncMock(return_value=[sponsor]),
             ),
             patch(
-                "entraclaw.tools.teams._fetch_chat_members_for_gate",
+                "entrabot.tools.teams._fetch_chat_members_for_gate",
                 new=AsyncMock(
                     return_value=[
                         {"user_id": "different-user", "email": "stranger@example.com"}
@@ -144,18 +144,18 @@ class TestAddMemberHappyPath:
 
         with (
             patch(
-                "entraclaw.tools.teams._get_sponsor_records",
+                "entrabot.tools.teams._get_sponsor_records",
                 new=AsyncMock(return_value=[sponsor]),
             ),
             patch(
-                "entraclaw.tools.teams._fetch_chat_members_for_gate",
+                "entrabot.tools.teams._fetch_chat_members_for_gate",
                 new=AsyncMock(
                     return_value=[
                         {"user_id": "sponsor-uid", "email": "sponsor@contoso.com"}
                     ]
                 ),
             ),
-            patch("entraclaw.tools.teams.log_event", side_effect=fake_log_event),
+            patch("entrabot.tools.teams.log_event", side_effect=fake_log_event),
         ):
             result = await add_member(
                 chat_id="19:abcd@thread.v2",

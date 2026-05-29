@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from entraclaw.a365.odsp import (
+from entrabot.a365.odsp import (
     OdspFileContent,
     OdspFileMetadata,
     get_file_or_folder_metadata_by_url,

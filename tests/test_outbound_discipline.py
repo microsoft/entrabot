@@ -14,7 +14,7 @@ Two pre-checks fire inside the MCP wrapper:
    ``_discipline_warning`` to the result JSON. Warn-not-block by
    design (false positives on language detection are real).
 
-Both hooks live in ``src/entraclaw/mcp_server.py`` (the MCP tool
+Both hooks live in ``src/entrabot/mcp_server.py`` (the MCP tool
 wrapper), not in ``.claude/settings.json`` — they apply on every host
 that speaks MCP and every storage backend. See
 ``scripts/hooks/README.md``.
@@ -32,7 +32,7 @@ import pytest
 @pytest.fixture
 def fake_state():
     """Reset ``mcp_server._state`` for each test, restore on teardown."""
-    from entraclaw import mcp_server
+    from entrabot import mcp_server
 
     old_state = mcp_server._state.copy()
     mcp_server._state.clear()
@@ -144,10 +144,10 @@ class TestPlaceholderDiscipline:
 
     @pytest.mark.asyncio
     async def test_placeholder_bypass_env_var(self, monkeypatch, fake_state):
-        """ENTRACLAW_SKIP_PLACEHOLDER_CHECK=true disables the gate."""
+        """ENTRABOT_SKIP_PLACEHOLDER_CHECK=true disables the gate."""
         mcp_server = fake_state
         _patch_send(monkeypatch, mcp_server)
-        monkeypatch.setenv("ENTRACLAW_SKIP_PLACEHOLDER_CHECK", "true")
+        monkeypatch.setenv("ENTRABOT_SKIP_PLACEHOLDER_CHECK", "true")
 
         long_message = "<p>" + ("This is a long substantive reply. " * 10) + "</p>"
 
@@ -206,7 +206,7 @@ class TestCommitmentLanguageDiscipline:
         async def fake_list_promises(open_only=True):  # noqa: ARG001
             return []
 
-        monkeypatch.setattr("entraclaw.tools.promises.list_promises", fake_list_promises)
+        monkeypatch.setattr("entrabot.tools.promises.list_promises", fake_list_promises)
 
         # Commitment phrase included. Length is irrelevant — commitment
         # scan runs on every message; placeholder gate already passes
@@ -232,7 +232,7 @@ class TestCommitmentLanguageDiscipline:
         mcp_server._state["recent_placeholders"] = {"chat-A": _time.monotonic()}
 
         # Build a recent open promise tied to the same chat_id.
-        from entraclaw.tools.promises import Promise
+        from entrabot.tools.promises import Promise
 
         recent = Promise(
             id="p-1",
@@ -245,7 +245,7 @@ class TestCommitmentLanguageDiscipline:
         async def fake_list_promises(open_only=True):  # noqa: ARG001
             return [recent]
 
-        monkeypatch.setattr("entraclaw.tools.promises.list_promises", fake_list_promises)
+        monkeypatch.setattr("entrabot.tools.promises.list_promises", fake_list_promises)
 
         message = (
             "<p>Got it. I'll write up the design doc tonight and ping you when "
@@ -268,7 +268,7 @@ class TestCommitmentLanguageDiscipline:
         _patch_send(monkeypatch, mcp_server)
         mcp_server._state["recent_placeholders"] = {"chat-A": _time.monotonic()}
 
-        from entraclaw.tools.promises import Promise
+        from entrabot.tools.promises import Promise
 
         terminal_promise = Promise(
             id="p-term",
@@ -281,7 +281,7 @@ class TestCommitmentLanguageDiscipline:
         async def fake_list_promises(open_only=True):  # noqa: ARG001
             return [terminal_promise]
 
-        monkeypatch.setattr("entraclaw.tools.promises.list_promises", fake_list_promises)
+        monkeypatch.setattr("entrabot.tools.promises.list_promises", fake_list_promises)
 
         message = (
             "<p>Got it. I'll write up the design doc tonight and ping you when "
@@ -302,7 +302,7 @@ class TestCommitmentLanguageDiscipline:
         _patch_send(monkeypatch, mcp_server)
         mcp_server._state["recent_placeholders"] = {"chat-A": _time.monotonic()}
 
-        from entraclaw.tools.promises import Promise
+        from entrabot.tools.promises import Promise
 
         # 10 minutes ago — well past the 120s lookback.
         old_created = (datetime.now(UTC) - timedelta(minutes=10)).isoformat()
@@ -317,7 +317,7 @@ class TestCommitmentLanguageDiscipline:
         async def fake_list_promises(open_only=True):  # noqa: ARG001
             return [old_promise]
 
-        monkeypatch.setattr("entraclaw.tools.promises.list_promises", fake_list_promises)
+        monkeypatch.setattr("entrabot.tools.promises.list_promises", fake_list_promises)
 
         message = (
             "<p>Got it. I'll write up the design doc tonight and ping you when "
@@ -330,13 +330,13 @@ class TestCommitmentLanguageDiscipline:
 
     @pytest.mark.asyncio
     async def test_commitment_bypass_env_var(self, monkeypatch, fake_state):
-        """ENTRACLAW_SKIP_COMMITMENT_CHECK=true silences the warning."""
+        """ENTRABOT_SKIP_COMMITMENT_CHECK=true silences the warning."""
         import time as _time
 
         mcp_server = fake_state
         _patch_send(monkeypatch, mcp_server)
         mcp_server._state["recent_placeholders"] = {"chat-A": _time.monotonic()}
-        monkeypatch.setenv("ENTRACLAW_SKIP_COMMITMENT_CHECK", "true")
+        monkeypatch.setenv("ENTRABOT_SKIP_COMMITMENT_CHECK", "true")
 
         # list_promises must NOT even be queried. Make it explode if called.
         called = {"hit": False}
@@ -345,7 +345,7 @@ class TestCommitmentLanguageDiscipline:
             called["hit"] = True
             return []
 
-        monkeypatch.setattr("entraclaw.tools.promises.list_promises", boom_list_promises)
+        monkeypatch.setattr("entrabot.tools.promises.list_promises", boom_list_promises)
 
         message = (
             "<p>Got it. I'll write up the design doc tonight and ping you when "
@@ -370,7 +370,7 @@ class TestCommitmentLanguageDiscipline:
         async def fake_list_promises(open_only=True):  # noqa: ARG001
             return []
 
-        monkeypatch.setattr("entraclaw.tools.promises.list_promises", fake_list_promises)
+        monkeypatch.setattr("entrabot.tools.promises.list_promises", fake_list_promises)
 
         # Long enough to be substantive but no commitment phrase.
         message = (

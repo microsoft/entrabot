@@ -26,7 +26,7 @@ This is not a bug in our implementation. It is a **fundamental architectural con
 | floriscornel/teams-mcp | Teams | Yes | No |
 | carterlasalle/mac_messages_mcp | iMessage | Yes | No |
 | barryyip0625/mcp-discord | Discord | Yes | No |
-| **Entraclaw** | **Teams** | **Yes** | **Yes (watch_teams_replies)** |
+| **Entrabot** | **Teams** | **Yes** | **Yes (watch_teams_replies)** |
 
 We are the only MCP messaging server that even provides a polling tool for replies.
 
@@ -86,7 +86,7 @@ After `send_teams_message`, a Claude Code hook injects a system reminder: "You j
 {
   "hooks": {
     "PostToolUse": [{
-      "matcher": "mcp__entraclaw__send_teams_message",
+      "matcher": "mcp__entrabot__send_teams_message",
       "hooks": [{
         "type": "command",
         "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Message sent. You should now call watch_teams_replies to wait for the human reply.\"}}'"

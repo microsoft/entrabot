@@ -1,20 +1,20 @@
 ﻿<#
 .SYNOPSIS
-  EntraClaw — Windows setup. Mirror of scripts/setup.sh for Windows.
+  EntraBot — Windows setup. Mirror of scripts/setup.sh for Windows.
 
 .DESCRIPTION
   Provisions the agent identity on a Windows host:
     1. Refuse-on-WSL (Phase 2 finding — WSL users should run setup.sh).
     2. Probe prereqs (pwsh 7, python 3.12+, az CLI, git).
     3. Bootstrap venv + pip install.
-    4. Run config.py migration helper (one-shot move of legacy ~/.entraclaw).
+    4. Run config.py migration helper (one-shot move of legacy ~/.entrabot).
     5. Call entra_provisioning.py + create_entra_agent_ids.py via az login.
     6. Generate the Blueprint cert (TPM-first, software-fallback) via
        generate_windows_cert.py and PATCH it into the Blueprint.
     7. Write .env with both thumbprints (SHA-1 hex + SHA-256 b64url).
        icacls -M (D10) — modify, NOT readonly. Setup re-runs need to
        update .env or rotation halts.
-    8. Register the entraclaw MCP server via mcp_config.py.
+    8. Register the entrabot MCP server via mcp_config.py.
 
   See docs/architecture/PLAN-windows-port.md for the full design and the
   failure-modes table.
@@ -31,7 +31,7 @@
 
 .PARAMETER AgentUserUpn
   Explicit existing Agent User UPN to reuse with -UseBlueprint, e.g.
-  entraclaw-agent-sati-agent@yourtenant.onmicrosoft.com.
+  entrabot-agent-sati-agent@yourtenant.onmicrosoft.com.
 
 .PARAMETER UseCloudMemory
   Provision Azure Blob Storage for operational data (default: local).
@@ -53,11 +53,11 @@
 .PARAMETER ConfigureA365WorkIq
   Run the interactive Microsoft Agent 365 Work IQ Word developer setup:
   a365 develop add-mcp-servers mcp_WordServer, a365 setup permissions mcp
-  against the existing Entraclaw Blueprint, then validate ToolingManifest.json.
+  against the existing Entrabot Blueprint, then validate ToolingManifest.json.
 
 .PARAMETER A365AgentName
   Deprecated compatibility parameter. Work IQ setup now uses the existing
-  Entraclaw Blueprint ID from .entraclaw-state.json.
+  Entrabot Blueprint ID from .entrabot-state.json.
 
 .PARAMETER Status
     Skip setup and run the consolidated status command via status-windows.ps1.
@@ -90,7 +90,7 @@ param(
     [string]$WithContainer = "",
     [switch]$CreateNewStorage,
     [switch]$ConfigureA365WorkIq,
-    [string]$A365AgentName = "EntraClaw Code Agent",
+    [string]$A365AgentName = "EntraBot Code Agent",
     [switch]$Migrate,
     [switch]$Status,
     [switch]$Json,
@@ -191,11 +191,11 @@ function Write-A365Config {
         Fail "Agent 365 CLI app was not found. Re-run and choose C during 'a365 setup requirements', or create the app before configuring Work IQ."
     }
     if (-not $BlueprintAppId) {
-        Fail "Blueprint ID not found. Entraclaw provisioning must complete before configuring A365 Work IQ."
+        Fail "Blueprint ID not found. Entrabot provisioning must complete before configuring A365 Work IQ."
     }
     $AgentIdentityDisplayName = az ad sp show --id $AgentId --query displayName -o tsv 2>$null
     if (-not $AgentIdentityDisplayName) {
-        Fail "Agent Identity display name not found for $AgentId. Entraclaw provisioning must complete before configuring A365 Work IQ."
+        Fail "Agent Identity display name not found for $AgentId. Entrabot provisioning must complete before configuring A365 Work IQ."
     }
 
     $configPath = Join-Path $ProjectRoot 'a365.config.json'
@@ -210,14 +210,14 @@ function Write-A365Config {
     $config["tenantId"] = $TenantId
     $config["clientAppId"] = $clientAppId
     $config["agentBlueprintId"] = $BlueprintAppId
-    $config["agentBlueprintDisplayName"] = "EntraClaw Code Agent"
+    $config["agentBlueprintDisplayName"] = "EntraBot Code Agent"
     $config["agentIdentityDisplayName"] = $AgentIdentityDisplayName
     $config["deploymentProjectPath"] = $ProjectRoot
     if ($BlueprintObjectId) { $config["agentBlueprintObjectId"] = $BlueprintObjectId }
     if ($AgentId) { $config["agentIdentityId"] = $AgentId }
 
     $config | ConvertTo-Json -Depth 8 | Set-Content -Path $configPath -Encoding utf8
-    Success "A365 config points to existing Entraclaw Blueprint"
+    Success "A365 config points to existing Entrabot Blueprint"
 }
 
 function Configure-A365WorkIq {
@@ -288,7 +288,7 @@ Success "Python $pyVer"
 Step 2 "Migrating legacy data dir (idempotent)"
 
 $migrateScript = @'
-from entraclaw.config import migrate_legacy_data_dir
+from entrabot.config import migrate_legacy_data_dir
 moved = migrate_legacy_data_dir()
 print(f"migrated={moved}")
 '@
@@ -336,12 +336,12 @@ if ($NewChain)             { $args += '--new' }
 if ($UseBlueprint)         { $args += "--use-blueprint=$UseBlueprint" }
 if ($UpnSuffix)            { $args += "--with-upn-suffix=$UpnSuffix" }
 if ($AgentUserUpn) {
-    $env:ENTRACLAW_AGENT_USER_UPN = $AgentUserUpn
+    $env:ENTRABOT_AGENT_USER_UPN = $AgentUserUpn
 } elseif ($UseBlueprint -and $UpnSuffix) {
-    $env:_ENTRACLAW_UPN_SUFFIX = $UpnSuffix
+    $env:_ENTRABOT_UPN_SUFFIX = $UpnSuffix
 }
 if ($ConfigureA365WorkIq) {
-    $env:ENTRACLAW_ASSIGN_WORK_IQ_LICENSE = '1'
+    $env:ENTRABOT_ASSIGN_WORK_IQ_LICENSE = '1'
 }
 
 # entra_provisioning.py + create_entra_agent_ids.py both read az CLI
@@ -352,8 +352,8 @@ if ($LASTEXITCODE -ne 0) { Fail "entra_provisioning.py failed" }
 & $VenvPython (Join-Path $ScriptDir 'create_entra_agent_ids.py') @args
 if ($LASTEXITCODE -ne 0) { Fail "create_entra_agent_ids.py failed" }
 
-# Read back IDs from .entraclaw-state.json — needed for cloud-memory step
-$statePath = Join-Path $ProjectRoot '.entraclaw-state.json'
+# Read back IDs from .entrabot-state.json — needed for cloud-memory step
+$statePath = Join-Path $ProjectRoot '.entrabot-state.json'
 $BlueprintAppId = ""
 $BlueprintObjectId = ""
 $AgentId = ""
@@ -375,9 +375,9 @@ if ($ConfigureA365WorkIq) {
 # ═══════════════════════════════════════════════════════════════════════════
 Step 6 "Generating Blueprint cert (TPM-first / software-fallback)"
 
-$derPath = Join-Path $env:TEMP "entraclaw-blueprint-$(Get-Random).cer"
+$derPath = Join-Path $env:TEMP "entrabot-blueprint-$(Get-Random).cer"
 $certOutput = & $VenvPython (Join-Path $ScriptDir 'generate_windows_cert.py') `
-    --subject "CN=entraclaw-blueprint" `
+    --subject "CN=entrabot-blueprint" `
     --days 365 `
     --export-der $derPath
 if ($LASTEXITCODE -ne 0) { Fail "generate_windows_cert.py failed" }
@@ -402,10 +402,10 @@ Step 7 "Writing .env"
 
 $envPath = Join-Path $ProjectRoot '.env'
 @(
-    "ENTRACLAW_TENANT_ID=$($account.tenantId)",
-    "ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT=$x5tS256",
-    "ENTRACLAW_BLUEPRINT_CERT_SHA1=$thumbprint",
-    "ENTRACLAW_BLUEPRINT_KSP=$ksp"
+    "ENTRABOT_TENANT_ID=$($account.tenantId)",
+    "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=$x5tS256",
+    "ENTRABOT_BLUEPRINT_CERT_SHA1=$thumbprint",
+    "ENTRABOT_BLUEPRINT_KSP=$ksp"
 ) | Out-File -FilePath $envPath -Encoding utf8 -Append
 
 # icacls :M (modify) — NOT :R (read-only). :R would self-brick: setup
@@ -422,12 +422,12 @@ Step 8 "Cloud memory (Azure Blob Storage)"
 if (-not $UseCloudMemory) {
     Add-Content -Path $envPath -Value ""
     Add-Content -Path $envPath -Value "# ADR-005: keep agent memory local (skip cloud sync)"
-    Add-Content -Path $envPath -Value "ENTRACLAW_KEEP_MEMORY_LOCAL=true"
+    Add-Content -Path $envPath -Value "ENTRABOT_KEEP_MEMORY_LOCAL=true"
     Success "Memory mode: LOCAL (pass -UseCloudMemory to opt in)"
 } elseif (-not $AgentUserId) {
     Write-Host "  ⚠ Skipping blob storage — no Agent User ID found in state" -ForegroundColor Yellow
     Add-Content -Path $envPath -Value ""
-    Add-Content -Path $envPath -Value "ENTRACLAW_KEEP_MEMORY_LOCAL=true"
+    Add-Content -Path $envPath -Value "ENTRABOT_KEEP_MEMORY_LOCAL=true"
 } else {
     $provArgs = @(
         '--tenant-id', $account.tenantId,
@@ -447,19 +447,19 @@ if (-not $UseCloudMemory) {
         Write-Host "  ⚠ Blob storage provisioning failed — falling back to local-only memory" -ForegroundColor Yellow
         Add-Content -Path $envPath -Value ""
         Add-Content -Path $envPath -Value "# ADR-005: provisioning failed, using local-only memory"
-        Add-Content -Path $envPath -Value "ENTRACLAW_KEEP_MEMORY_LOCAL=true"
+        Add-Content -Path $envPath -Value "ENTRABOT_KEEP_MEMORY_LOCAL=true"
     } else {
         $blobEndpoint  = ($provStdout | Select-String '^BLOB_ENDPOINT=(.+)$').Matches[0].Groups[1].Value
         $blobContainer = ($provStdout | Select-String '^BLOB_CONTAINER=(.+)$').Matches[0].Groups[1].Value
         if (-not $blobEndpoint -or -not $blobContainer) {
             Write-Host "  ⚠ Provisioner returned no endpoint/container — using local-only memory" -ForegroundColor Yellow
             Add-Content -Path $envPath -Value ""
-            Add-Content -Path $envPath -Value "ENTRACLAW_KEEP_MEMORY_LOCAL=true"
+            Add-Content -Path $envPath -Value "ENTRABOT_KEEP_MEMORY_LOCAL=true"
         } else {
             Add-Content -Path $envPath -Value ""
             Add-Content -Path $envPath -Value "# ADR-005: cloud-hosted agent memory (Azure Blob Storage)"
-            Add-Content -Path $envPath -Value "ENTRACLAW_BLOB_ENDPOINT=$blobEndpoint"
-            Add-Content -Path $envPath -Value "ENTRACLAW_BLOB_CONTAINER=$blobContainer"
+            Add-Content -Path $envPath -Value "ENTRABOT_BLOB_ENDPOINT=$blobEndpoint"
+            Add-Content -Path $envPath -Value "ENTRABOT_BLOB_CONTAINER=$blobContainer"
             Success "Blob storage ready: $blobEndpoint/$blobContainer"
         }
     }
@@ -470,7 +470,7 @@ if (-not $UseCloudMemory) {
 # ═══════════════════════════════════════════════════════════════════════════
 Step 9 "Registering MCP server"
 
-$mcpBinary = Join-Path $ProjectRoot '.venv\Scripts\entraclaw-mcp.exe'
+$mcpBinary = Join-Path $ProjectRoot '.venv\Scripts\entrabot-mcp.exe'
 if (-not (Test-Path $mcpBinary)) { Fail "MCP binary not found at $mcpBinary" }
 & $VenvPython (Join-Path $ScriptDir 'mcp_config.py') --binary $mcpBinary --project-root $ProjectRoot
 if ($LASTEXITCODE -ne 0) { Fail "mcp_config.py failed" }

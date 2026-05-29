@@ -34,8 +34,8 @@ from entra_provisioning import (  # noqa: E402
 )
 
 # fmt: on
-from entraclaw.graph_helpers import GRAPH_V1, graph_request  # noqa: E402
-from entraclaw.preflight import COPILOT_CAPABLE_SKUS, TEAMS_CAPABLE_SKUS  # noqa: E402
+from entrabot.graph_helpers import GRAPH_V1, graph_request  # noqa: E402
+from entrabot.preflight import COPILOT_CAPABLE_SKUS, TEAMS_CAPABLE_SKUS  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers (extracted from create_entra_agent_ids.py)

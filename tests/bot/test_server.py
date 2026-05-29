@@ -13,8 +13,8 @@ from botbuilder.schema import (
     ConversationAccount,
 )
 
-from entraclaw.bot.server import (
-    EntraClawBot,
+from entrabot.bot.server import (
+    EntraBotBot,
     _convo_ref_to_dict,
     _dict_to_convo_ref,
     create_bot_app,
@@ -36,33 +36,33 @@ def _make_activity(
         text=text,
         timestamp="2026-04-10T20:00:00Z",
         from_property=ChannelAccount(id=from_id, name=from_name, aad_object_id=from_aad_id),
-        recipient=ChannelAccount(id="bot-id", name="EntraClaw Bot"),
+        recipient=ChannelAccount(id="bot-id", name="EntraBot Bot"),
         conversation=ConversationAccount(id=conversation_id),
         channel_id="msteams",
         service_url="https://smba.trafficmanager.net/amer/",
     )
 
 
-class TestEntraClawBot:
-    """Tests for the EntraClaw bot activity handler."""
+class TestEntraBotBot:
+    """Tests for the EntraBot bot activity handler."""
 
     @pytest.fixture
-    def bot(self) -> EntraClawBot:
-        return EntraClawBot()
+    def bot(self) -> EntraBotBot:
+        return EntraBotBot()
 
-    def test_bot_creation(self, bot: EntraClawBot) -> None:
+    def test_bot_creation(self, bot: EntraBotBot) -> None:
         assert bot is not None
 
     @pytest.mark.asyncio
-    async def test_on_message_writes_inbound(self, bot: EntraClawBot) -> None:
+    async def test_on_message_writes_inbound(self, bot: EntraBotBot) -> None:
         """When bot receives a message, it writes to inbound.jsonl."""
         activity = _make_activity(text="hello from teams")
         turn_context = MagicMock(spec=TurnContext)
         turn_context.activity = activity
 
         with (
-            patch("entraclaw.bot.server.write_inbound") as mock_write,
-            patch("entraclaw.bot.server.save_reference"),
+            patch("entrabot.bot.server.write_inbound") as mock_write,
+            patch("entrabot.bot.server.save_reference"),
         ):
             await bot.on_message_activity(turn_context)
 
@@ -74,19 +74,19 @@ class TestEntraClawBot:
         assert written["conversation_id"] == "conv-abc"
 
     @pytest.mark.asyncio
-    async def test_on_message_skips_empty_text(self, bot: EntraClawBot) -> None:
+    async def test_on_message_skips_empty_text(self, bot: EntraBotBot) -> None:
         """Messages with no text (images, cards) are skipped."""
         activity = _make_activity(text=None)
         turn_context = MagicMock(spec=TurnContext)
         turn_context.activity = activity
 
-        with patch("entraclaw.bot.server.write_inbound") as mock_write:
+        with patch("entrabot.bot.server.write_inbound") as mock_write:
             await bot.on_message_activity(turn_context)
 
         mock_write.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_on_members_added_saves_convo_ref(self, bot: EntraClawBot) -> None:
+    async def test_on_members_added_saves_convo_ref(self, bot: EntraBotBot) -> None:
         """When bot is installed, conversation reference is saved."""
         activity = _make_activity()
         turn_context = MagicMock(spec=TurnContext)
@@ -94,7 +94,7 @@ class TestEntraClawBot:
 
         bot_member = ChannelAccount(id="bot-id")
 
-        with patch("entraclaw.bot.server.save_reference") as mock_save:
+        with patch("entrabot.bot.server.save_reference") as mock_save:
             await bot.on_members_added_activity(
                 [bot_member],
                 turn_context,
@@ -115,7 +115,7 @@ class TestConvoRefSerialization:
             channel_id="msteams",
             activity_id="act-1",
             conversation=ConversationAccount(id="conv-123", name="Test Chat"),
-            bot=ChannelAccount(id="bot-1", name="EntraClaw Bot"),
+            bot=ChannelAccount(id="bot-1", name="EntraBot Bot"),
             user=ChannelAccount(id="user-1", name="Brandon"),
         )
         d = _convo_ref_to_dict(ref)
@@ -133,7 +133,7 @@ class TestCreateBotApp:
 
     def test_creates_app_with_routes(self) -> None:
         adapter = MagicMock()
-        bot = EntraClawBot()
+        bot = EntraBotBot()
         app = create_bot_app(adapter, bot)
         routes = [
             r.resource.canonical

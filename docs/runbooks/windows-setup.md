@@ -33,7 +33,7 @@ Optional but recommended:
 From a Windows PowerShell terminal (NOT a WSL shell):
 
 ```powershell
-cd C:\path\to\entraclaw-identity-research
+cd C:\path\to\entrabot-identity-research
 .\scripts\setup-windows.cmd --new --with-upn-suffix=winagent
 ```
 
@@ -46,7 +46,7 @@ What it does:
    `scripts/setup.sh` there instead.
 2. Probes prereqs (`python`, `az`, `git`, `pwsh`).
 3. Runs the **idempotent legacy data migration** —
-   `~/.entraclaw/` → `%LOCALAPPDATA%\entraclaw\`. If both
+   `~/.entrabot/` → `%LOCALAPPDATA%\entrabot\`. If both
    directories already have content, setup halts and asks you to
    triage manually (don't bypass — see Failure Modes below).
 4. Creates a venv at `.venv\Scripts\python.exe`.
@@ -59,7 +59,7 @@ What it does:
    back to software KSP if the TPM is missing/disabled.
 7. Writes `.env` and locks it with `icacls /grant:r {USER}:M`
    (modify, NOT readonly — rotation needs to update it).
-8. Registers the entraclaw MCP server via `mcp_config.py` for
+8. Registers the entrabot MCP server via `mcp_config.py` for
    both Claude Code and Copilot CLI.
 
 Final summary lists the chosen KSP and the cert SHA-1 so you can
@@ -68,7 +68,7 @@ verify both paths were honored.
 ## Smoke test
 
 ```powershell
-.venv\Scripts\python.exe -c "from entraclaw.tools.teams import acquire_agent_user_token; from entraclaw.config import get_config; print('token len=', len(acquire_agent_user_token(get_config())))"
+.venv\Scripts\python.exe -c "from entrabot.tools.teams import acquire_agent_user_token; from entrabot.config import get_config; print('token len=', len(acquire_agent_user_token(get_config())))"
 ```
 
 A green print means the three-hop flow worked end-to-end on this
@@ -93,7 +93,7 @@ Contract:
 - Runs a smoke test (acquires a fresh agent-user token).
 - On success: deletes the old cert from `Cert:\CurrentUser\My`.
 - On smoke failure: re-PATCHes the old DER, restores `.env`,
-  invalidates the MSAL cache (`%LOCALAPPDATA%\entraclaw\.msal-cache.bin`),
+  invalidates the MSAL cache (`%LOCALAPPDATA%\entrabot\.msal-cache.bin`),
   raises `RotationRolledBack`.
 - On rollback PATCH also failing: raises `ManualInterventionRequired`
   — triage required before next agent run.
@@ -104,7 +104,7 @@ Contract:
 .\scripts\teardown-windows.ps1
 ```
 
-Removes local cert(s), `%LOCALAPPDATA%\entraclaw\`, BLUEPRINT_CERT_*
+Removes local cert(s), `%LOCALAPPDATA%\entrabot\`, BLUEPRINT_CERT_*
 lines from `.env`, MSAL cache, and the MCP registration. Does NOT
 delete the Entra app registrations from the tenant — those are
 shared and persistent.
@@ -114,17 +114,17 @@ shared and persistent.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `setup-windows.ps1 invoked from inside WSL` | running setup from a WSL shell | run from native PowerShell, or use `setup.sh` for the Linux path |
-| `Legacy entraclaw data found at ~\.entraclaw but target ... is empty` | partial migration on an older entraclaw install | run setup again — migration is idempotent — or move the legacy dir manually |
-| `two entraclaw dirs detected: legacy ~\.entraclaw and current %LOCALAPPDATA%\entraclaw both contain data` | parallel installs landed both | pick one: usually the `%LOCALAPPDATA%` copy is newer; remove `~\.entraclaw` |
+| `Legacy entrabot data found at ~\.entrabot but target ... is empty` | partial migration on an older entrabot install | run setup again — migration is idempotent — or move the legacy dir manually |
+| `two entrabot dirs detected: legacy ~\.entrabot and current %LOCALAPPDATA%\entrabot both contain data` | parallel installs landed both | pick one: usually the `%LOCALAPPDATA%` copy is newer; remove `~\.entrabot` |
 | `New-SelfSignedCertificate failed` | provider name typo, KSP missing, or PowerShell-down-version | confirm `pwsh -Version` ≥ 7; if TPM-disabled host, force software KSP via `--ksp software` |
 | `thumbprint validation failed — not 40 hex chars` | `az` warning corrupted stdout (Learning #29 cousin) | re-run setup; if it persists, file a bug with the captured stdout |
 | `Initial Graph PATCH failed` (rotation) | tenant RBAC, expired Blueprint, or network | check `az account show`; the old cert is untouched, no rollback needed |
-| `MANUAL INTERVENTION: rollback PATCH failed` | both new + rollback PATCH failed | re-PATCH the old DER (in `%TEMP%\entraclaw-old-*.cer`) by hand via Graph PATCH |
-| `entraclaw-mcp.exe` exits silently mid-run | likely the same MCP-disconnect bug under investigation on Mac | see `docs/runbooks/mcp-disconnect-investigation.md` |
+| `MANUAL INTERVENTION: rollback PATCH failed` | both new + rollback PATCH failed | re-PATCH the old DER (in `%TEMP%\entrabot-old-*.cer`) by hand via Graph PATCH |
+| `entrabot-mcp.exe` exits silently mid-run | likely the same MCP-disconnect bug under investigation on Mac | see `docs/runbooks/mcp-disconnect-investigation.md` |
 
 ## What's intentionally not here
 
 - **Bot Gateway on Windows.** The Bot Gateway lives on a Linux host
   (werner.ac); Windows runs the agent_user mode only.
-- **WSL2 entraclaw.** WSL inherits the Linux setup verbatim — run
+- **WSL2 entrabot.** WSL inherits the Linux setup verbatim — run
   `scripts/setup.sh` from inside WSL. The two paths don't share state.

@@ -9,7 +9,7 @@ Proposed — 2026-04-24, author: Claude (PM: Brandon).
 
 ## Problem statement
 
-Today the three-hop flow runs end-to-end on macOS only. The Mac path leans on `bash`, Homebrew `openssl` (transitively, via `cryptography`), and the macOS Keychain accessed through Python `keyring`. Brandon wants the same one-command UX on Windows: `scripts/setup-windows.ps1` provisions a fresh device; `scripts/deploy-windows.ps1` re-mints the cert and refreshes registration without rebuilding the Blueprint or Agent User. The interesting design call is *where the private key lives* — the Mac path picked Keychain because it was the smallest viable step; Windows has a strictly stronger primitive (TPM-backed CNG) that is one PowerShell line away, but it requires a non-trivial change to how Hop 1's JWT assertion gets signed (`src/entraclaw/auth/certificate.py:48` loads PEM bytes; CNG won't hand those over). This doc resolves that and the six other surface decisions, then sketches the two scripts and the `windows.py` rewrite.
+Today the three-hop flow runs end-to-end on macOS only. The Mac path leans on `bash`, Homebrew `openssl` (transitively, via `cryptography`), and the macOS Keychain accessed through Python `keyring`. Brandon wants the same one-command UX on Windows: `scripts/setup-windows.ps1` provisions a fresh device; `scripts/deploy-windows.ps1` re-mints the cert and refreshes registration without rebuilding the Blueprint or Agent User. The interesting design call is *where the private key lives* — the Mac path picked Keychain because it was the smallest viable step; Windows has a strictly stronger primitive (TPM-backed CNG) that is one PowerShell line away, but it requires a non-trivial change to how Hop 1's JWT assertion gets signed (`src/entrabot/auth/certificate.py:48` loads PEM bytes; CNG won't hand those over). This doc resolves that and the six other surface decisions, then sketches the two scripts and the `windows.py` rewrite.
 
 ## Mac path inventory
 
@@ -20,12 +20,12 @@ What `scripts/setup.sh` actually does, mapped to the file that does it:
 - **Step 3 — bootstrap deps.** `pip install azure-identity requests` into the venv (`setup.sh:324-339`). Direct port.
 - **Step 4 — Provisioner app.** `python scripts/entra_provisioning.py` (`setup.sh:454-462`). The Python script is portable; one `subprocess.run(["az", ...])` call at `entra_provisioning.py:274` works identically on Windows.
 - **Step 5 — Blueprint + Agent Identity + Agent User.** `python scripts/create_entra_agent_ids.py` (`setup.sh:466-490`). Portable — no shell-isms in the 1061-line script (verified with `grep`; only `subprocess.run`, `requests`, `pathlib`).
-- **Step 6 — Cert generation + upload + private-key persist.** Inline Python in setup.sh (`setup.sh:494-669`). This is the load-bearing decision point. Today: `cryptography` generates RSA-2048 in process memory; PEM is written to Keychain via `keyring.set_password("entraclaw", "blueprint-private-key", pem_key)`; DER is uploaded via Graph PATCH `/applications/{id}` with `keyCredentials`. The only Mac-specific bit is *where the key sits* — generation and upload are portable.
+- **Step 6 — Cert generation + upload + private-key persist.** Inline Python in setup.sh (`setup.sh:494-669`). This is the load-bearing decision point. Today: `cryptography` generates RSA-2048 in process memory; PEM is written to Keychain via `keyring.set_password("entrabot", "blueprint-private-key", pem_key)`; DER is uploaded via Graph PATCH `/applications/{id}` with `keyCredentials`. The only Mac-specific bit is *where the key sits* — generation and upload are portable.
 - **Step 7 — venv + .env.** `python -m venv .venv`, `source .venv/bin/activate`, `pip install -e ".[dev]"`, write `.env` with `chmod 600` (`setup.sh:671-715`). PowerShell needs `.\.venv\Scripts\Activate.ps1` and ACL tightening instead of `chmod 600`.
 - **Step 7b — Blob storage.** `python scripts/provision_blob_storage.py --tenant-id ... --agent-user-object-id ...` (`setup.sh:717-835`). Portable — Python script only shells out via `subprocess.run(["az", ...])` at `provision_blob_storage.py:54`. The bash-side migration prompt and the multi-line heredoc `python -c` invocations need PowerShell equivalents.
-- **Step 8 — MCP config + summary.** `python scripts/mcp_config.py --binary $PROJECT_ROOT/.venv/bin/entraclaw-mcp ...` (`setup.sh:885-890`). Portable — but the `--binary` path is `.venv\Scripts\entraclaw-mcp.exe` on Windows.
+- **Step 8 — MCP config + summary.** `python scripts/mcp_config.py --binary $PROJECT_ROOT/.venv/bin/entrabot-mcp ...` (`setup.sh:885-890`). Portable — but the `--binary` path is `.venv\Scripts\entrabot-mcp.exe` on Windows.
 
-The runtime touchpoint is `src/entraclaw/tools/teams.py:104` — `store.retrieve("entraclaw", "blueprint-private-key")` returns a PEM string that `build_client_assertion` (`src/entraclaw/auth/certificate.py:48`) feeds to `load_pem_private_key`. **Anything we do for Windows must keep this contract or replace it cleanly** — the call site is the canonical seam.
+The runtime touchpoint is `src/entrabot/tools/teams.py:104` — `store.retrieve("entrabot", "blueprint-private-key")` returns a PEM string that `build_client_assertion` (`src/entrabot/auth/certificate.py:48`) feeds to `load_pem_private_key`. **Anything we do for Windows must keep this contract or replace it cleanly** — the call site is the canonical seam.
 
 ## Windows-equivalent decisions
 
@@ -35,7 +35,7 @@ Recommendation: generate the cert with `New-SelfSignedCertificate -Provider 'Mic
 
 Why not the lazy port (Credential Manager via `keyring`): it works, but it's strictly worse than the Mac baseline. macOS Keychain on Apple Silicon backs into the Secure Enclave; the equivalent move on Windows is TPM, not Credential Manager. Credential Manager is DPAPI-backed, current-user scope, and additionally has a hard `CRED_MAX_CREDENTIAL_BLOB_SIZE = 2560 bytes` ceiling (per the [`CREDENTIALW`](https://learn.microsoft.com/windows/win32/api/wincred/ns-wincred-credentialw) struct). RSA-2048 PKCS#8 PEM (~1700 bytes) fits with ~30% headroom, but RSA-3072+ PEM does not. We are knowingly designing in a future-incompatibility for an algorithmic agility cost we don't need to pay.
 
-The non-trivial cost of CNG: `python-cryptography` (which `auth/certificate.py:48` uses) is OpenSSL-bound and only operates on PEM/DER bytes loaded into process memory. A non-exportable CNG key cannot be handed to it. The Windows Hop 1 signer must instead call `ncrypt.dll` via `ctypes`: `CryptAcquireCertificatePrivateKey(CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG)` → `NCryptSignHash(NCRYPT_PAD_PKCS1_FLAG, BCRYPT_PKCS1_PADDING_INFO{pszAlgId="SHA256"})` over the JWT signing input (the dot-joined base64url of header and payload). The signer assembles the final JWT and hands it to the existing Hop 1 POST. ~half-day of plumbing, isolated to a new function in `src/entraclaw/auth/certificate_windows.py`. The `build_client_assertion` interface stays unchanged for callers.
+The non-trivial cost of CNG: `python-cryptography` (which `auth/certificate.py:48` uses) is OpenSSL-bound and only operates on PEM/DER bytes loaded into process memory. A non-exportable CNG key cannot be handed to it. The Windows Hop 1 signer must instead call `ncrypt.dll` via `ctypes`: `CryptAcquireCertificatePrivateKey(CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG)` → `NCryptSignHash(NCRYPT_PAD_PKCS1_FLAG, BCRYPT_PKCS1_PADDING_INFO{pszAlgId="SHA256"})` over the JWT signing input (the dot-joined base64url of header and payload). The signer assembles the final JWT and hands it to the existing Hop 1 POST. ~half-day of plumbing, isolated to a new function in `src/entrabot/auth/certificate_windows.py`. The `build_client_assertion` interface stays unchanged for callers.
 
 Native-Windows feel: 10/10 (one PowerShell line + ctypes shim is the documented pattern). Security: TPM > DPAPI > Cert: store > file. Failure mode: no UAC required for `CurrentUser` scope. PR-attestation capability comes for free if we ever want to assert "this key is in a TPM" to a downstream RP.
 
@@ -43,11 +43,11 @@ Native-Windows feel: 10/10 (one PowerShell line + ctypes shim is the documented 
 
 Microsoft published [Sandboxing Python with Win32 app isolation](https://blogs.windows.com/windowsdeveloper/2024/03/06/sandboxing-python-with-win32-app-isolation/) in March 2024, which is the canonical walkthrough for the spike Brandon and the identity architect discussed. Win32 app isolation is AppContainer + MSIX-packaged, with the Application Capability Profiler (ACP) running the app in "learn mode" to enumerate the capability SIDs Python actually needs (file paths, registry keys, named-pipe servers).
 
-For the setup script the deliverable is *not* "ship a sandboxed entraclaw v1." It is: arrange the file system so a future MSIX wrapper can drop in without the install layout fighting it.
+For the setup script the deliverable is *not* "ship a sandboxed entrabot v1." It is: arrange the file system so a future MSIX wrapper can drop in without the install layout fighting it.
 
-- Use `%LOCALAPPDATA%\entraclaw\` for state (writable from inside an AppContainer with the right capability — the historical Windows pattern, and what AppContainer expects).
+- Use `%LOCALAPPDATA%\entrabot\` for state (writable from inside an AppContainer with the right capability — the historical Windows pattern, and what AppContainer expects).
 - Avoid writing to `%PROGRAMFILES%\` or anywhere needing admin elevation. Setup must run as a regular user end-to-end.
-- Keep the entraclaw MCP binary path as `.venv\Scripts\entraclaw-mcp.exe`, not a system-wide install. MSIX packaging is a separate downstream step.
+- Keep the entrabot MCP binary path as `.venv\Scripts\entrabot-mcp.exe`, not a system-wide install. MSIX packaging is a separate downstream step.
 - Surface this as **OPEN QUESTION 2** below — owner: Brandon, with proposed default = "ship without sandboxing in v1, leave the layout AppContainer-ready."
 
 ### 3. `az` CLI parity — recommended: assume parity, hard-fail on the two known divergences.
@@ -72,17 +72,17 @@ Result: the cert thumbprint round-trips to Entra and the local Cert: store, with
 
 Stock pattern. The script must check `Get-ExecutionPolicy -Scope CurrentUser`; if it's `Restricted`, either fail with a clear message ("run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`") or invoke the activate script via `& .\.venv\Scripts\Activate.ps1` after temporarily relaxing for the process scope (`Set-ExecutionPolicy -Scope Process Bypass`). Recommendation: process-scope Bypass with a comment explaining why; never touch CurrentUser policy from setup.
 
-### 6. Path conventions — recommended: `%LOCALAPPDATA%\entraclaw\`. Keep `~/.entraclaw/` as a fallback during migration.
+### 6. Path conventions — recommended: `%LOCALAPPDATA%\entrabot\`. Keep `~/.entrabot/` as a fallback during migration.
 
-Today every reader uses `Path.home() / ".entraclaw" / subdir` (`src/entraclaw/config.py:36`). Six call sites total: `config.py`, `bot/handler.py:20`, `bot/convo_store.py:17`, `bot/server.py:5-6`, `tools/audit.py:5`, `mcp_server.py:2607`. None of them are publicly documented as user-facing.
+Today every reader uses `Path.home() / ".entrabot" / subdir` (`src/entrabot/config.py:36`). Six call sites total: `config.py`, `bot/handler.py:20`, `bot/convo_store.py:17`, `bot/server.py:5-6`, `tools/audit.py:5`, `mcp_server.py:2607`. None of them are publicly documented as user-facing.
 
-Pick `%LOCALAPPDATA%\entraclaw\` because:
+Pick `%LOCALAPPDATA%\entrabot\` because:
 
 - AppContainer-friendly without extra capability declarations (decision 2).
 - The Windows-idiomatic location for per-user app state.
-- `~/.entraclaw/` on Windows resolves to `C:\Users\<name>\.entraclaw\` — works, but uses a dot-prefix convention nobody else on Windows uses.
+- `~/.entrabot/` on Windows resolves to `C:\Users\<name>\.entrabot\` — works, but uses a dot-prefix convention nobody else on Windows uses.
 
-Cleanest implementation: change `_default_dir` in `config.py` to consult `platform.system()` and `os.environ.get("LOCALAPPDATA")` on Windows, falling back to `Path.home() / ".entraclaw"` everywhere else. One change, all six call sites pick it up. Add a one-time migration pass: if `~\.entraclaw\` exists *and* `%LOCALAPPDATA%\entraclaw\` does not, rename. Single warning printed on first run; idempotent on re-run.
+Cleanest implementation: change `_default_dir` in `config.py` to consult `platform.system()` and `os.environ.get("LOCALAPPDATA")` on Windows, falling back to `Path.home() / ".entrabot"` everywhere else. One change, all six call sites pick it up. Add a one-time migration pass: if `~\.entrabot\` exists *and* `%LOCALAPPDATA%\entrabot\` does not, rename. Single warning printed on first run; idempotent on re-run.
 
 ### 7. Token storage — already DPAPI on Windows; no change needed.
 
@@ -143,9 +143,9 @@ Step 4 'Bootstrapping provisioner app'
 & python "$ProjectRoot\scripts\entra_provisioning.py"
 
 Step 5 'Creating Blueprint + Agent Identity + Agent User'
-if ($New) { $env:ENTRACLAW_NEW_CHAIN = '1'; $env:_ENTRACLAW_UPN_SUFFIX = $WithUpnSuffix }
+if ($New) { $env:ENTRABOT_NEW_CHAIN = '1'; $env:_ENTRABOT_UPN_SUFFIX = $WithUpnSuffix }
 & python "$ProjectRoot\scripts\create_entra_agent_ids.py"
-$state = Get-Content "$ProjectRoot\.entraclaw-state.json" | ConvertFrom-Json
+$state = Get-Content "$ProjectRoot\.entrabot-state.json" | ConvertFrom-Json
 $blueprintAppId = $state.BLUEPRINT_APP_ID
 $blueprintObjectId = $state.BLUEPRINT_OBJECT_ID
 $agentUserId = $state.AGENT_USER_ID
@@ -155,7 +155,7 @@ Step 6 'Generating TPM-backed Blueprint certificate'
 $certParams = @{
     Type             = 'Custom'
     Provider         = 'Microsoft Platform Crypto Provider'   # TPM CNG KSP
-    Subject          = "CN=entraclaw-blueprint-$blueprintAppId"
+    Subject          = "CN=entrabot-blueprint-$blueprintAppId"
     KeyExportPolicy  = 'NonExportable'
     KeyUsage         = 'DigitalSignature'
     KeyAlgorithm     = 'RSA'
@@ -169,17 +169,17 @@ $cert = New-SelfSignedCertificate @certParams
 & python "$ProjectRoot\scripts\upload_blueprint_cert.py" --thumbprint $cert.Thumbprint --blueprint-object-id $blueprintObjectId
 # Defense-in-depth: validate the thumbprint shape before writing state (Learning #29)
 
-# Step 7: venv + .env (use %LOCALAPPDATA%\entraclaw\ via config.py change)
+# Step 7: venv + .env (use %LOCALAPPDATA%\entrabot\ via config.py change)
 Step 7 'Setting up venv and writing .env'
 if (-not (Test-Path "$ProjectRoot\.venv")) { & python -m venv .venv }
 & "$ProjectRoot\.venv\Scripts\Activate.ps1"
 & pip install --quiet -e ".[dev]"
-# Write .env with all ENTRACLAW_* values; lock ACL to current user only (DPAPI-equivalent for files)
+# Write .env with all ENTRABOT_* values; lock ACL to current user only (DPAPI-equivalent for files)
 $envContent = @"
-ENTRACLAW_TENANT_ID=$tenantId
-ENTRACLAW_BLUEPRINT_APP_ID=$blueprintAppId
-ENTRACLAW_BLUEPRINT_OBJECT_ID=$blueprintObjectId
-ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT=$($cert.Thumbprint)
+ENTRABOT_TENANT_ID=$tenantId
+ENTRABOT_BLUEPRINT_APP_ID=$blueprintAppId
+ENTRABOT_BLUEPRINT_OBJECT_ID=$blueprintObjectId
+ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=$($cert.Thumbprint)
 # ... etc
 "@
 $envContent | Set-Content "$ProjectRoot\.env" -Encoding utf8
@@ -194,7 +194,7 @@ if ($UseCloudMemory) {
 # Step 8: MCP config (write .mcp.json + %USERPROFILE%\.copilot\mcp-config.json)
 Step 8 'Writing MCP server config'
 & python "$ProjectRoot\scripts\mcp_config.py" `
-    --binary "$ProjectRoot\.venv\Scripts\entraclaw-mcp.exe" `
+    --binary "$ProjectRoot\.venv\Scripts\entrabot-mcp.exe" `
     --project-root $ProjectRoot
 Ok 'Setup complete. Restart Claude Code / Copilot CLI in this project.'
 ```
@@ -209,7 +209,7 @@ param([switch]$Force)
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = (Resolve-Path "$PSScriptRoot\..").Path
-$state = Get-Content "$ProjectRoot\.entraclaw-state.json" | ConvertFrom-Json
+$state = Get-Content "$ProjectRoot\.entrabot-state.json" | ConvertFrom-Json
 $blueprintObjectId = $state.BLUEPRINT_OBJECT_ID
 if (-not $blueprintObjectId) { Die 'No Blueprint found — run setup-windows.ps1 first' }
 
@@ -218,7 +218,7 @@ if (-not $blueprintObjectId) { Die 'No Blueprint found — run setup-windows.ps1
 if ($LASTEXITCODE -eq 0 -and -not $Force) { Ok 'Cert still valid; nothing to do (--Force to rotate anyway)'; exit 0 }
 
 # 2. Generate a NEW TPM cert (keeping the old one in Cert: store until rotation completes)
-$newCert = New-SelfSignedCertificate -Subject "CN=entraclaw-blueprint-$($state.BLUEPRINT_APP_ID)" `
+$newCert = New-SelfSignedCertificate -Subject "CN=entrabot-blueprint-$($state.BLUEPRINT_APP_ID)" `
     -Provider 'Microsoft Platform Crypto Provider' -KeyExportPolicy NonExportable `
     -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 `
     -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(365)
@@ -228,11 +228,11 @@ $newCert = New-SelfSignedCertificate -Subject "CN=entraclaw-blueprint-$($state.B
 
 # 4. Update .env in place (just the thumbprint line)
 (Get-Content "$ProjectRoot\.env") `
-    -replace '^ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT=.*$', "ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT=$($newCert.Thumbprint)" `
+    -replace '^ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=.*$', "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=$($newCert.Thumbprint)" `
     | Set-Content "$ProjectRoot\.env"
 
 # 5. Smoke-test: try Hop 1 with the new cert before we delete the old key
-& "$ProjectRoot\.venv\Scripts\python.exe" -m entraclaw.tools.teams --smoke-test
+& "$ProjectRoot\.venv\Scripts\python.exe" -m entrabot.tools.teams --smoke-test
 if ($LASTEXITCODE -ne 0) { Die 'Smoke test failed — old cert kept; investigate before re-running' }
 
 # 6. Delete the old cert from Cert:\CurrentUser\My (TPM key slot is reclaimed)
@@ -242,7 +242,7 @@ if ($oldThumb -and $oldThumb -ne $newCert.Thumbprint) {
 }
 
 # 7. Refresh MCP config in case the binary path moved
-& python "$ProjectRoot\scripts\mcp_config.py" --binary "$ProjectRoot\.venv\Scripts\entraclaw-mcp.exe" --project-root $ProjectRoot
+& python "$ProjectRoot\scripts\mcp_config.py" --binary "$ProjectRoot\.venv\Scripts\entrabot-mcp.exe" --project-root $ProjectRoot
 Ok 'Deploy complete. Old cert revoked.'
 ```
 
@@ -250,14 +250,14 @@ Ok 'Deploy complete. Old cert revoked.'
 
 ## CredentialStore Windows implementation plan
 
-Today `src/entraclaw/platform/windows.py` is a copy-paste of `mac.py` against `keyring` — fine if the key were a software-backed PEM, useless if the key is TPM-resident. Rewrite:
+Today `src/entrabot/platform/windows.py` is a copy-paste of `mac.py` against `keyring` — fine if the key were a software-backed PEM, useless if the key is TPM-resident. Rewrite:
 
 ```python
-# src/entraclaw/platform/windows.py
+# src/entrabot/platform/windows.py
 """Windows credential store backed by CNG (TPM when available) + DPAPI fallback.
 
 The Blueprint's private key is stored as a non-exportable CNG key in
-Cert:\\CurrentUser\\My. ``store()`` for service='entraclaw',
+Cert:\\CurrentUser\\My. ``store()`` for service='entrabot',
 key='blueprint-private-key' is a no-op — generation happens in
 setup-windows.ps1 and the key never leaves the TPM. ``retrieve()`` for
 that key returns a sentinel object that the JWT signer recognizes and
@@ -280,20 +280,20 @@ class WindowsCredentialStore:
     BLUEPRINT_KEY_NAMES = frozenset({"blueprint-private-key"})
 
     def store(self, service, key, value):
-        if (service, key) == ("entraclaw", "blueprint-private-key"):
+        if (service, key) == ("entrabot", "blueprint-private-key"):
             # No-op — TPM keys are created by New-SelfSignedCertificate, not stored from Python
             return
         keyring.set_password(service, key, value)
 
     def retrieve(self, service, key):
-        if (service, key) == ("entraclaw", "blueprint-private-key"):
+        if (service, key) == ("entrabot", "blueprint-private-key"):
             # Read thumbprint from .env; return a handle, not bytes
-            thumb = os.environ.get("ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT")
+            thumb = os.environ.get("ENTRABOT_BLUEPRINT_CERT_THUMBPRINT")
             return CngKeyHandle(thumb) if thumb else None
         return keyring.get_password(service, key)
 
     def delete(self, service, key):
-        if (service, key) == ("entraclaw", "blueprint-private-key"):
+        if (service, key) == ("entrabot", "blueprint-private-key"):
             # Delegated to PowerShell deploy script (Remove-Item Cert:\)
             return
         with contextlib.suppress(keyring.errors.PasswordDeleteError):
@@ -332,7 +332,7 @@ sequenceDiagram
     participant Cert as Cert:\CurrentUser\My
     participant Graph as Graph beta API
     participant Entra as Entra ID /token
-    participant App as entraclaw-mcp (Python)
+    participant App as entrabot-mcp (Python)
 
     Dev->>PS: .\scripts\setup-windows.ps1 -New -WithUpnSuffix sati
     PS->>Graph: az login + create Provisioner app + Blueprint + Agent Identity + Agent User
@@ -369,21 +369,21 @@ sequenceDiagram
 
 ## Risks and rollback
 
-- **Mixed-platform `.entraclaw` directory.** A user who runs `setup.sh` on Mac then `setup-windows.ps1` on the same Dropbox-synced repo (or the same WSL share) will end up with state in two places. Mitigation: the migration helper reads from both `~/.entraclaw/` and `%LOCALAPPDATA%\entraclaw\`, prefers the newer one, and prints both paths on first divergence. Don't auto-merge — the data shapes match but the cert thumbprints don't, and silently picking one would soft-brick Hop 1.
-- **TPM key slot exhaustion.** TPMs have ~25-30 key slots. Repeated `setup-windows.ps1 -New` with bad cleanup will fill it. Mitigation: `setup-windows.ps1 -New` enumerates `Cert:\CurrentUser\My\*` for the same `CN=entraclaw-blueprint-*` subject and offers to `Remove-Item` stale entries before the new generation. The deploy script already handles the rotation case cleanly.
+- **Mixed-platform `.entrabot` directory.** A user who runs `setup.sh` on Mac then `setup-windows.ps1` on the same Dropbox-synced repo (or the same WSL share) will end up with state in two places. Mitigation: the migration helper reads from both `~/.entrabot/` and `%LOCALAPPDATA%\entrabot\`, prefers the newer one, and prints both paths on first divergence. Don't auto-merge — the data shapes match but the cert thumbprints don't, and silently picking one would soft-brick Hop 1.
+- **TPM key slot exhaustion.** TPMs have ~25-30 key slots. Repeated `setup-windows.ps1 -New` with bad cleanup will fill it. Mitigation: `setup-windows.ps1 -New` enumerates `Cert:\CurrentUser\My\*` for the same `CN=entrabot-blueprint-*` subject and offers to `Remove-Item` stale entries before the new generation. The deploy script already handles the rotation case cleanly.
 - **Blueprint cert replacement on Entra is a list-replace, not append.** Same risk as Mac (`setup.sh:534-564`) — `keyCredentials` PATCH wipes other devs' certs from the same Blueprint. Mitigation: same warning flow, ported. Worth re-emphasizing because Windows admins may have stronger expectations of additive operations than bash users.
 - **Cert: store leak across user accounts.** `Cert:\CurrentUser\My` is per-user, not per-process, and not per-AppContainer. If a future MSIX package runs in a different identity (LocalService, etc.) the cert won't be visible. Acknowledge in the AppContainer spike's design.
-- **Rollback plan.** `setup-windows.ps1 -Rollback` (not in v1, but trivial to add): `Remove-Item Cert:\CurrentUser\My\$thumb`, delete `.entraclaw-state.json`, delete `%LOCALAPPDATA%\entraclaw\`, leave Entra-side identities untouched (use `scripts/cleanup-orphans.sh`'s logic via Python — already portable). The Entra-side cleanup remains a Python script invocation, same as Mac.
-- **What if a developer runs setup.sh then setup-windows.ps1 on the same `.entraclaw` dir later?** State file is shared. The Windows script would see `BLUEPRINT_OBJECT_ID` already set, attempt to verify the Mac cert thumbprint (fails — Mac cert isn't in TPM), trigger the regeneration path, replace the Blueprint's `keyCredentials` list, and effectively kick the Mac off. This is the correct behavior per the existing Mac-side warning (`setup.sh:548-563`) but the cross-platform case must be called out in the warning text. Add: "If you set this Blueprint up on Mac and are now on Windows, the Mac install will stop working until you re-run `setup.sh` there." Same model as switching machines.
+- **Rollback plan.** `setup-windows.ps1 -Rollback` (not in v1, but trivial to add): `Remove-Item Cert:\CurrentUser\My\$thumb`, delete `.entrabot-state.json`, delete `%LOCALAPPDATA%\entrabot\`, leave Entra-side identities untouched (use `scripts/cleanup-orphans.sh`'s logic via Python — already portable). The Entra-side cleanup remains a Python script invocation, same as Mac.
+- **What if a developer runs setup.sh then setup-windows.ps1 on the same `.entrabot` dir later?** State file is shared. The Windows script would see `BLUEPRINT_OBJECT_ID` already set, attempt to verify the Mac cert thumbprint (fails — Mac cert isn't in TPM), trigger the regeneration path, replace the Blueprint's `keyCredentials` list, and effectively kick the Mac off. This is the correct behavior per the existing Mac-side warning (`setup.sh:548-563`) but the cross-platform case must be called out in the warning text. Add: "If you set this Blueprint up on Mac and are now on Windows, the Mac install will stop working until you re-run `setup.sh` there." Same model as switching machines.
 
 ## Sources
 
 - `scripts/setup.sh` (canonical Mac flow — every step mapped above).
-- `src/entraclaw/platform/{base,mac,linux,windows,__init__}.py` — current `CredentialStore` shim; Windows is a stub.
-- `src/entraclaw/auth/certificate.py:48` — PEM-only signer; the seam that needs a CNG sibling.
-- `src/entraclaw/auth/delegated.py:35` — `msal_extensions.build_encrypted_persistence` already DPAPI-backed on Windows.
-- `src/entraclaw/tools/teams.py:104` — runtime call site for the private key retrieval.
-- `src/entraclaw/config.py:36` — `_default_dir` — the one place to plumb `%LOCALAPPDATA%`.
+- `src/entrabot/platform/{base,mac,linux,windows,__init__}.py` — current `CredentialStore` shim; Windows is a stub.
+- `src/entrabot/auth/certificate.py:48` — PEM-only signer; the seam that needs a CNG sibling.
+- `src/entrabot/auth/delegated.py:35` — `msal_extensions.build_encrypted_persistence` already DPAPI-backed on Windows.
+- `src/entrabot/tools/teams.py:104` — runtime call site for the private key retrieval.
+- `src/entrabot/config.py:36` — `_default_dir` — the one place to plumb `%LOCALAPPDATA%`.
 - `scripts/create_entra_agent_ids.py`, `scripts/provision_blob_storage.py`, `scripts/entra_provisioning.py` — verified portable (only `subprocess.run(["az", ...])` and `requests`).
 - `docs/decisions/003-certificate-auth-over-client-secrets.md` — the WHY for cert auth, including the "Windows: TPM 2.0" line that this doc operationalizes.
 - `docs/runbooks/hard-won-learnings.md` — Learning #1 (no `az` tokens for Agent Identity APIs), #15 (Graph v1.0 for keyCredentials), #29 (thumbprint capture validation).

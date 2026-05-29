@@ -14,8 +14,8 @@ import httpx
 import pytest
 import respx
 
-from entraclaw.errors import FilesError
-from entraclaw.tools.files import (
+from entrabot.errors import FilesError
+from entrabot.tools.files import (
     FileRef,
     add_file_comment,
     list_recent_files,
@@ -54,7 +54,7 @@ async def test_happy_path_resolve_read_comment(load_trace, install_responses):
         # The fixture returns a stub PDF body; pypdf would fail. Patch
         # the extractor for the test scope (acceptable: PR1's eval is
         # grading wire shape, not pypdf).
-        from entraclaw.tools import files as files_mod
+        from entrabot.tools import files as files_mod
 
         original = files_mod._extract_pdf_text
         files_mod._extract_pdf_text = lambda data: ("Stub spec body.", 1)
@@ -133,7 +133,7 @@ async def test_denied_site_blocks_resolve(
     load_trace, install_responses, monkeypatch: pytest.MonkeyPatch
 ):
     trace, responses = load_trace("scenario1_denied_site")
-    monkeypatch.setenv("ENTRACLAW_FILES_DENIED_SITES", trace["denied_sites"])
+    monkeypatch.setenv("ENTRABOT_FILES_DENIED_SITES", trace["denied_sites"])
     install_responses(responses)
 
     actual_tools: list[str] = []

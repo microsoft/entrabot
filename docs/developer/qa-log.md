@@ -7,7 +7,7 @@
 | All tests pass | `pytest -v` | 0 failures |
 | Lint clean | `ruff check .` | No errors |
 | Package installs | `pip install -e ".[dev]"` | No errors |
-| Coverage gate | `pytest --cov=entraclaw --cov-fail-under=80` | passes |
+| Coverage gate | `pytest --cov=entrabot --cov-fail-under=80` | passes |
 
 ## Known Issues
 

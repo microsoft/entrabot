@@ -59,7 +59,7 @@ SPONSORS_AFTER = [
 
 @pytest.fixture(autouse=True)
 def _patch_provisioning():
-    """Stub entra_provisioning so the script can import without .entraclaw-state.json."""
+    """Stub entra_provisioning so the script can import without .entrabot-state.json."""
     prov = MagicMock()
     prov.get_graph_token.return_value = "fake-token"
     prov.get_state.return_value = AGENT_OID

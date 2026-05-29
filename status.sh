@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# EntraClaw status wrapper: ensure the local Python environment exists, then
+# EntraBot status wrapper: ensure the local Python environment exists, then
 # run the consolidated Agent Identity status command.
 set -euo pipefail
 
@@ -26,7 +26,7 @@ PY
 if [ ! -x "$PROJECT_ROOT/.venv/bin/python3" ]; then
     PYTHON="$(find_python || true)"
     if [ -z "$PYTHON" ]; then
-        echo "ERROR: Python 3.12+ is required to run EntraClaw status." >&2
+        echo "ERROR: Python 3.12+ is required to run EntraBot status." >&2
         exit 1
     fi
     echo "Creating local Python environment at .venv..." >&2
@@ -37,10 +37,10 @@ VENV_PYTHON="$PROJECT_ROOT/.venv/bin/python3"
 
 if ! "$VENV_PYTHON" - <<'PY' >/dev/null 2>&1
 import azure.identity
-import entraclaw
+import entrabot
 PY
 then
-    echo "Installing EntraClaw status dependencies into .venv..." >&2
+    echo "Installing EntraBot status dependencies into .venv..." >&2
     "$VENV_PYTHON" -m pip install -e ".[provisioning]"
 fi
 

@@ -1,6 +1,6 @@
 """Tests for Pydantic domain models — especially token/credential redaction."""
 
-from entraclaw.models import (
+from entrabot.models import (
     AgentIdentity,
     AuditEvent,
     BlueprintCredentials,
@@ -94,7 +94,7 @@ class TestAgentIdentity:
             tenant_id="t1",
             object_id="o1",
         )
-        assert ai.display_name == "EntraClaw Agent"
+        assert ai.display_name == "EntraBot Agent"
 
     def test_roundtrip(self) -> None:
         ai = AgentIdentity(

@@ -35,7 +35,7 @@ from entra_provisioning import (  # noqa: E402
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from entraclaw.graph_helpers import GRAPH_V1, graph_request  # noqa: E402
+from entrabot.graph_helpers import GRAPH_V1, graph_request  # noqa: E402
 
 
 def _print_usage() -> None:

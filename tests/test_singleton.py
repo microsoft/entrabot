@@ -1,7 +1,7 @@
-"""Tests for entraclaw.singleton — process-singleton flock for entraclaw-mcp.
+"""Tests for entrabot.singleton — process-singleton flock for entrabot-mcp.
 
 Background: GitHub issue #62. Two simultaneous MCP clients each spawn their
-own entraclaw-mcp subprocess (correct per stdio spec) and race on macOS
+own entrabot-mcp subprocess (correct per stdio spec) and race on macOS
 Keychain, the local interaction log, and the Azure Blob container. The
 singleton lock fails the second spawn loudly with a clean stderr message
 and exit code 2 instead of letting it die silently.
@@ -30,7 +30,7 @@ POSIX_ONLY = pytest.mark.skipif(
 
 def _hold_lock_until_signaled(lock_path: str, ready: mp.Event, release: mp.Event) -> None:
     """Subprocess body: acquire lock, signal ready, hold until told to release."""
-    from entraclaw.singleton import acquire_singleton_lock
+    from entrabot.singleton import acquire_singleton_lock
 
     handle = acquire_singleton_lock(Path(lock_path))
     ready.set()
@@ -50,7 +50,7 @@ def lock_path(tmp_path: Path) -> Path:
 
 
 def test_acquire_returns_handle_with_path_and_fd(lock_path: Path) -> None:
-    from entraclaw.singleton import acquire_singleton_lock
+    from entrabot.singleton import acquire_singleton_lock
 
     handle = acquire_singleton_lock(lock_path)
     try:
@@ -63,7 +63,7 @@ def test_acquire_returns_handle_with_path_and_fd(lock_path: Path) -> None:
 
 def test_acquire_creates_parent_directory(tmp_path: Path) -> None:
     """Lock dir is auto-created so callers don't have to."""
-    from entraclaw.singleton import acquire_singleton_lock
+    from entrabot.singleton import acquire_singleton_lock
 
     nested = tmp_path / "deeply" / "nested" / "dir" / "singleton.lock"
     handle = acquire_singleton_lock(nested)
@@ -76,7 +76,7 @@ def test_acquire_creates_parent_directory(tmp_path: Path) -> None:
 
 def test_acquire_writes_holder_pid_file(lock_path: Path) -> None:
     """The .holder.pid sidecar reflects the holding PID for diagnostics."""
-    from entraclaw.singleton import acquire_singleton_lock
+    from entrabot.singleton import acquire_singleton_lock
 
     handle = acquire_singleton_lock(lock_path)
     try:
@@ -88,7 +88,7 @@ def test_acquire_writes_holder_pid_file(lock_path: Path) -> None:
 
 
 def test_close_releases_lock_and_removes_holder_pid(lock_path: Path) -> None:
-    from entraclaw.singleton import acquire_singleton_lock
+    from entrabot.singleton import acquire_singleton_lock
 
     handle = acquire_singleton_lock(lock_path)
     holder_file = lock_path.with_suffix(lock_path.suffix + ".holder.pid")
@@ -108,7 +108,7 @@ def test_close_releases_lock_and_removes_holder_pid(lock_path: Path) -> None:
 
 def test_close_is_idempotent(lock_path: Path) -> None:
     """Double-close must not raise — destructors and explicit close coexist."""
-    from entraclaw.singleton import acquire_singleton_lock
+    from entrabot.singleton import acquire_singleton_lock
 
     handle = acquire_singleton_lock(lock_path)
     handle.close()
@@ -116,7 +116,7 @@ def test_close_is_idempotent(lock_path: Path) -> None:
 
 
 def test_context_manager_releases_on_exit(lock_path: Path) -> None:
-    from entraclaw.singleton import acquire_singleton_lock
+    from entrabot.singleton import acquire_singleton_lock
 
     holder_file = lock_path.with_suffix(lock_path.suffix + ".holder.pid")
     with acquire_singleton_lock(lock_path):
@@ -132,7 +132,7 @@ def test_context_manager_releases_on_exit(lock_path: Path) -> None:
 @POSIX_ONLY
 def test_acquire_raises_when_held_by_another_process(lock_path: Path) -> None:
     """A second acquire from a different process must raise SingletonLockHeldError."""
-    from entraclaw.singleton import SingletonLockHeldError, acquire_singleton_lock
+    from entrabot.singleton import SingletonLockHeldError, acquire_singleton_lock
 
     ctx = mp.get_context("spawn")
     ready = ctx.Event()
@@ -162,7 +162,7 @@ def test_held_error_holder_pid_falls_back_to_none_when_sidecar_missing(
     lock_path: Path,
 ) -> None:
     """If holder.pid was deleted out from under us, the error still raises with None."""
-    from entraclaw.singleton import SingletonLockHeldError, acquire_singleton_lock
+    from entrabot.singleton import SingletonLockHeldError, acquire_singleton_lock
 
     ctx = mp.get_context("spawn")
     ready = ctx.Event()
@@ -194,7 +194,7 @@ def test_acquire_succeeds_after_holder_dies_uncleanly(lock_path: Path) -> None:
     """Kernel auto-releases flock on process death; new acquire must succeed even
     when a stale .holder.pid sidecar still points at the dead PID.
     """
-    from entraclaw.singleton import acquire_singleton_lock
+    from entrabot.singleton import acquire_singleton_lock
 
     ctx = mp.get_context("spawn")
     ready = ctx.Event()
@@ -233,7 +233,7 @@ def test_acquire_succeeds_after_holder_dies_uncleanly(lock_path: Path) -> None:
 
 
 def test_run_or_exit_returns_handle_when_uncontended(lock_path: Path) -> None:
-    from entraclaw.singleton import run_or_exit_if_held
+    from entrabot.singleton import run_or_exit_if_held
 
     handle = run_or_exit_if_held(lock_path)
     try:
@@ -248,7 +248,7 @@ def test_run_or_exit_exits_with_code_2_when_held(
     lock_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The wrapper used in main(): on contention, exit(2) with stderr remediation."""
-    from entraclaw.singleton import run_or_exit_if_held
+    from entrabot.singleton import run_or_exit_if_held
 
     ctx = mp.get_context("spawn")
     ready = ctx.Event()
@@ -267,7 +267,7 @@ def test_run_or_exit_exits_with_code_2_when_held(
         assert excinfo.value.code == 2
 
         captured = capsys.readouterr()
-        assert "[entraclaw]" in captured.err
+        assert "[entrabot]" in captured.err
         assert str(holder.pid) in captured.err, "stderr must name the holder PID"
         assert "refusing to start" in captured.err
     finally:
@@ -280,9 +280,9 @@ def test_run_or_exit_exits_with_code_2_when_held(
 
 def test_default_lock_path_uses_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Default lock path lives under the configured data_dir as .singleton.lock."""
-    from entraclaw.singleton import acquire_singleton_lock, default_lock_path
+    from entrabot.singleton import acquire_singleton_lock, default_lock_path
 
-    monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
 
     expected = tmp_path / ".singleton.lock"
     assert default_lock_path() == expected

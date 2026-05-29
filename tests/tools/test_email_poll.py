@@ -19,7 +19,7 @@ import httpx
 import pytest
 import respx
 
-from entraclaw.tools.email_poll import (
+from entrabot.tools.email_poll import (
     GRAPH_MESSAGES_URL,
     is_substantive,
     load_cursor,
@@ -30,7 +30,7 @@ from entraclaw.tools.email_poll import (
 
 @pytest.fixture
 def tmp_data_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
     return tmp_path
 
 
@@ -106,7 +106,7 @@ def _msg(
         "receivedDateTime": received,
         "bodyPreview": preview,
         "from": {"emailAddress": {"name": sender.split("@")[0], "address": sender}},
-        "toRecipients": [{"emailAddress": {"address": "entraclaw-agent@fabrikam.onmicrosoft.com"}}],
+        "toRecipients": [{"emailAddress": {"address": "entrabot-agent@fabrikam.onmicrosoft.com"}}],
         "hasAttachments": has_attachments,
         "conversationId": conversation_id,
     }
@@ -248,7 +248,7 @@ class TestPollOnce:
 
     @pytest.mark.asyncio
     async def test_401_raises(self) -> None:
-        from entraclaw.errors import TokenExpiredError
+        from entrabot.errors import TokenExpiredError
 
         with respx.mock:
             respx.get(GRAPH_MESSAGES_URL).mock(return_value=httpx.Response(401))

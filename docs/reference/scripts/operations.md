@@ -96,7 +96,7 @@ python scripts/show_agent_status.py --health-only
 
 ### What it does
 
-- Reads `.entraclaw-state.json` and `.env`.
+- Reads `.entrabot-state.json` and `.env`.
 - Queries Graph for the Blueprint app, Agent Identity SP, Agent User.
 - Lists sponsors, OAuth grants, cert thumbprints, license assignments.
 - With `--health-only`, runs just the green / red checks and exits non-zero on failure (`--strict`).
@@ -133,7 +133,7 @@ Forwards to `show_agent_status.main([*args, "--health-only"])`.
 
 ## `start_bot.sh`
 
-Launch the EntraClaw bot gateway: Dev Tunnel + bot server (aiohttp on `localhost:PORT`).
+Launch the EntraBot bot gateway: Dev Tunnel + bot server (aiohttp on `localhost:PORT`).
 
 ### Usage
 
@@ -149,6 +149,6 @@ Launch the EntraClaw bot gateway: Dev Tunnel + bot server (aiohttp on `localhost
 - Starts the bot server.
 - Prints the tunnel URL to register in Azure Bot Service.
 
-The MCP server itself is launched separately by Claude Code via the `entraclaw` MCP entry. Prerequisite: `setup_bot.sh` has been run once.
+The MCP server itself is launched separately by Claude Code via the `entrabot` MCP entry. Prerequisite: `setup_bot.sh` has been run once.
 
 See `docs/architecture/DESIGN-teams-bot-gateway.md` for the bot mode design.

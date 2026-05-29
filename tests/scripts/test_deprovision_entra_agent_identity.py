@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import entraclaw.graph_helpers as _graph_helpers_mod
+import entrabot.graph_helpers as _graph_helpers_mod
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "deprovision_entra_agent_identity.py"
@@ -49,7 +49,7 @@ def _fake_resolver(method: str, path: str, token: str, **kw) -> SimpleNamespace:
                 "value": [
                     {
                         "id": "agent-user-id",
-                        "userPrincipalName": "entraclaw-agent-sati-agent@fabrikam.onmicrosoft.com",
+                        "userPrincipalName": "entrabot-agent-sati-agent@fabrikam.onmicrosoft.com",
                         "identityParentId": "agent-identity-object-id",
                         "assignedLicenses": [
                             {"skuId": "teams-sku"},
@@ -65,7 +65,7 @@ def _fake_resolver(method: str, path: str, token: str, **kw) -> SimpleNamespace:
             {
                 "id": "agent-identity-object-id",
                 "appId": "agent-identity-app-id",
-                "displayName": "EntraClaw Agent (sati-agent)",
+                "displayName": "EntraBot Agent (sati-agent)",
                 "agentIdentityBlueprintId": "blueprint-app-id",
             },
         )
@@ -77,7 +77,7 @@ def _fake_resolver(method: str, path: str, token: str, **kw) -> SimpleNamespace:
                     {
                         "id": "blueprint-object-id",
                         "appId": "blueprint-app-id",
-                        "displayName": "EntraClaw Code Agent",
+                        "displayName": "EntraBot Code Agent",
                     }
                 ]
             },
@@ -114,7 +114,7 @@ def test_deprovisions_license_user_agent_identity_and_blueprint_in_order(
     monkeypatch.setattr(_graph_helpers_mod, "graph_request", fake_graph_request)
 
     result = deprovision_module.deprovision_agent_user(
-        "token", "entraclaw-agent-sati-agent@fabrikam.onmicrosoft.com"
+        "token", "entrabot-agent-sati-agent@fabrikam.onmicrosoft.com"
     )
 
     assert result == "deleted"
@@ -122,7 +122,7 @@ def test_deprovisions_license_user_agent_identity_and_blueprint_in_order(
         (
             "GET",
             "/users?$filter=userPrincipalName eq "
-            "'entraclaw-agent-sati-agent@fabrikam.onmicrosoft.com'"
+            "'entrabot-agent-sati-agent@fabrikam.onmicrosoft.com'"
             "&$select=id,userPrincipalName,identityParentId,assignedLicenses,"
             "licenseAssignmentStates",
             None,
@@ -169,7 +169,7 @@ def test_license_removal_failure_stops_before_deleting_user(
 
     with pytest.raises(RuntimeError, match="Failed to remove licenses"):
         deprovision_module.deprovision_agent_user(
-            "token", "entraclaw-agent-sati-agent@fabrikam.onmicrosoft.com"
+            "token", "entrabot-agent-sati-agent@fabrikam.onmicrosoft.com"
         )
 
     assert ("DELETE", "/users/agent-user-id") not in calls
@@ -192,7 +192,7 @@ def test_only_direct_licenses_are_removed_when_group_licenses_exist(
                         {
                             "id": "agent-user-id",
                             "userPrincipalName": (
-                                "entraclaw-agent-sati-agent"
+                                "entrabot-agent-sati-agent"
                                 "@fabrikam.onmicrosoft.com"
                             ),
                             "identityParentId": "agent-identity-object-id",
@@ -219,7 +219,7 @@ def test_only_direct_licenses_are_removed_when_group_licenses_exist(
     monkeypatch.setattr(_graph_helpers_mod, "graph_request", fake_graph_request)
 
     result = deprovision_module.deprovision_agent_user(
-        "token", "entraclaw-agent-sati-agent@fabrikam.onmicrosoft.com"
+        "token", "entrabot-agent-sati-agent@fabrikam.onmicrosoft.com"
     )
 
     assert result == "deleted"
@@ -246,7 +246,7 @@ def test_dry_run_resolves_chain_but_does_not_mutate_graph(
     monkeypatch.setattr(_graph_helpers_mod, "graph_request", fake_graph_request)
 
     result = deprovision_module.deprovision_agent_user(
-        "token", "entraclaw-agent-sati-agent@fabrikam.onmicrosoft.com", dry_run=True
+        "token", "entrabot-agent-sati-agent@fabrikam.onmicrosoft.com", dry_run=True
     )
 
     assert result == "dry-run"
@@ -282,7 +282,7 @@ def test_refuses_to_delete_blueprint_with_other_agent_identities(
 
     with pytest.raises(RuntimeError, match="Blueprint has 1 other Agent Identity"):
         deprovision_module.deprovision_agent_user(
-            "token", "entraclaw-agent-sati-agent@fabrikam.onmicrosoft.com"
+            "token", "entrabot-agent-sati-agent@fabrikam.onmicrosoft.com"
         )
 
 

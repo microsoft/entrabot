@@ -10,7 +10,7 @@
 Source of truth for detail: `TODOS.md` in the repository root. One line each below.
 
 - **Script-toolkit docs closeout** — `./status.sh` is the canonical entry; finish the remaining script-reference polish and smoke verification. See `TODOS.md` P1.
-- **Test isolation: blob env leakage** — `tmp_data_dir` fixture in `tests/tools/test_interaction_log.py` doesn't clear `ENTRACLAW_BLOB_ENDPOINT`; 10 tests fail on any machine with blob env configured.
+- **Test isolation: blob env leakage** — `tmp_data_dir` fixture in `tests/tools/test_interaction_log.py` doesn't clear `ENTRABOT_BLOB_ENDPOINT`; 10 tests fail on any machine with blob env configured.
 - **MCP server orphans on Claude Code exit** — background poll tasks sit outside FastMCP's lifespan cancel scope; new sessions spawn a second server, both poll Graph independently.
 - **Daily summary scheduler — wrong day + double-fire** — UTC-based `target_day` summarizes the brand-new UTC day at 5pm PDT; scheduler fired twice at the same second on 2026-04-17.
 - **Email cursor sub-second precision** — cursor file at second precision; an email at the cursor's exact second gets re-pushed once on every server restart.
@@ -78,7 +78,7 @@ Blueprint (client_credentials)
 │                               │                         │
 │                               ▼                         │
 │  ┌──────────────────────────────────────────────────┐   │
-│  │ Entraclaw MCP Server (Python)                    │   │
+│  │ Entrabot MCP Server (Python)                    │   │
 │  │                                                  │   │
 │  │  Body prompt: agent_system.md + anatomy/*.md     │   │
 │  │    + Persona (optional): persona-sati /sse       │   │
@@ -111,7 +111,7 @@ Blueprint (client_credentials)
 - Three-hop Agent User token flow (Blueprint → Agent Identity → Agent User, `idtyp=user`)
 - Agent User creation, license assignment, and consent grant via Graph
 - Dedicated provisioner app (avoids Azure CLI token rejection)
-- State persisted in `.entraclaw-state.json` (idempotent setup, no secret reset)
+- State persisted in `.entrabot-state.json` (idempotent setup, no secret reset)
 - Certificate auth for Blueprint — private key in OS keystore, no secrets on disk (ADR-003)
 - Token auto-refresh: eager (55-min) + lazy (401 retry) for all tools
 - Bidirectional Teams channel — background polling + `notifications/claude/channel` push, 2s overlap dedup window
@@ -127,7 +127,7 @@ Blueprint (client_credentials)
 - Microsoft Agent 365 Work IQ Word — create, read, comment, reply-to-comment
 - Files MCP — SharePoint / OneDrive read, write, upload, share (two-gate sponsor authorization on share)
 - Email — background poll with Purview-encrypted detection, daily summary at 5pm PDT
-- Promises — `add_promise` / `list_promises` / `resolve_promise` backed by entraclaw blob, ETag concurrency, identity-scoped
+- Promises — `add_promise` / `list_promises` / `resolve_promise` backed by entrabot blob, ETag concurrency, identity-scoped
 - Storage backends — `LocalBackend` (default) and `BlobBackend` (opt-in via `setup.sh --use-cloud-memory`)
 - ARM64 Windows 11 acceptance — full CNG signing via TPM-backed cert, three-hop flow live against Entra, Copilot CLI MCP registration, Teams DM round-trip
 - 66 hard-won learnings documented in `docs/runbooks/hard-won-learnings.md`

@@ -18,7 +18,7 @@ Three subcommands, all idempotent and safe to call manually:
 
     push-one PATH   Upload a single file to ``claude_memory/``.
 
-All commands respect ``ENTRACLAW_PERSONA_SYNC`` — when unset or not ``on``
+All commands respect ``ENTRABOT_PERSONA_SYNC`` — when unset or not ``on``
 the script exits 0 without touching the backend. Every error path returns
 0 and logs to stderr.
 """
@@ -32,20 +32,20 @@ from pathlib import Path
 
 
 def _resolve_backend():  # pragma: no cover — monkey-patched in tests
-    from entraclaw.storage.backend import get_backend
+    from entrabot.storage.backend import get_backend
 
     return get_backend()
 
 
 def _resolve_memory_dir() -> Path:  # pragma: no cover — monkey-patched in tests
-    from entraclaw.storage.persona import claude_code_memory_dir
+    from entrabot.storage.persona import claude_code_memory_dir
 
     project_root = Path.cwd()
     return claude_code_memory_dir(project_root)
 
 
 def _feature_flag_on() -> bool:
-    return os.environ.get("ENTRACLAW_PERSONA_SYNC", "").lower() == "on"
+    return os.environ.get("ENTRABOT_PERSONA_SYNC", "").lower() == "on"
 
 
 def _log(msg: str) -> None:
@@ -55,7 +55,7 @@ def _log(msg: str) -> None:
 def _cmd_pull() -> int:
     if not _feature_flag_on():
         return 0
-    from entraclaw.storage.persona import PersonaBackend
+    from entrabot.storage.persona import PersonaBackend
 
     mem_dir = _resolve_memory_dir()
     backend = _resolve_backend()
@@ -68,7 +68,7 @@ def _cmd_pull() -> int:
 def _cmd_push() -> int:
     if not _feature_flag_on():
         return 0
-    from entraclaw.storage.persona import PersonaBackend
+    from entrabot.storage.persona import PersonaBackend
 
     mem_dir = _resolve_memory_dir()
     backend = _resolve_backend()
@@ -84,7 +84,7 @@ def _cmd_push() -> int:
 def _cmd_push_one(path: str) -> int:
     if not _feature_flag_on():
         return 0
-    from entraclaw.storage.persona import PersonaBackend
+    from entrabot.storage.persona import PersonaBackend
 
     mem_dir = _resolve_memory_dir()
     target = Path(path)

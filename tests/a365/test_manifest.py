@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from entraclaw.a365.catalog import WORD_SERVER_NAME
-from entraclaw.a365.errors import (
+from entrabot.a365.catalog import WORD_SERVER_NAME
+from entrabot.a365.errors import (
     A365ManifestInvalidError,
     A365ManifestNotFoundError,
     A365ServerNotConfiguredError,
 )
-from entraclaw.a365.manifest import WorkIqManifest, load_manifest
+from entrabot.a365.manifest import WorkIqManifest, load_manifest
 
 
 def _write_manifest(path: Path, body: dict) -> Path:

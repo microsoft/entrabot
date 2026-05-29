@@ -3,8 +3,8 @@
 
 Prevents ``Write`` / ``Edit`` / ``NotebookEdit`` against paths under
 ``~/.claude/projects/<slug>/memory/`` unless the user has opted in to
-local memory via ``ENTRACLAW_KEEP_MEMORY_LOCAL=true`` — the same env
-var that ``src/entraclaw/config.py`` uses to gate operational storage.
+local memory via ``ENTRABOT_KEEP_MEMORY_LOCAL=true`` — the same env
+var that ``src/entrabot/config.py`` uses to gate operational storage.
 
 Rationale: the project's memory ownership moved to persona-sati, whose
 ``mcp__persona-sati__write_memory_file`` tool lands content in cloud
@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 _EDITING_TOOLS = {"Write", "Edit", "NotebookEdit"}
-_ENV_OVERRIDE = "ENTRACLAW_KEEP_MEMORY_LOCAL"
+_ENV_OVERRIDE = "ENTRABOT_KEEP_MEMORY_LOCAL"
 
 
 def _is_local_memory_path(file_path: str) -> bool:

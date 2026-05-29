@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from entraclaw.auth import cncrypt_signer
+from entrabot.auth import cncrypt_signer
 
 NTE_BUFFER_TOO_SMALL = 0x80090028
 

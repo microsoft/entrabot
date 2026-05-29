@@ -13,7 +13,7 @@ This is the predictable convention from Learning #50.
 
 from __future__ import annotations
 
-from entraclaw.identity.sponsors import (
+from entrabot.identity.sponsors import (
     AgentIdentitySponsor,
     SponsorGate,
 )

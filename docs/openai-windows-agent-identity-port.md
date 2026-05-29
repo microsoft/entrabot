@@ -6,17 +6,17 @@ Kept for the Python-orchestrator-with-PS1-shim recommendation (which was adopted
 **Status:** Draft (architecture plan, no code) — written by Agent 2 / Product Manager review
 **Date:** 2026-04-24
 **Audience:** the user, future Windows-machine contributor
-**Source-of-truth scripts referenced:** `scripts/setup.sh`, `scripts/entra_provisioning.py`, `scripts/create_entra_agent_ids.py`, `scripts/provision_blob_storage.py`, `scripts/teardown.sh`, `src/entraclaw/platform/windows.py`, `src/entraclaw/auth/certificate.py`, `src/entraclaw/tools/teams.py`, ADR-003, ADR-005, hard-won-learnings.md (#1, #2, #5, #7, #8, #29, #34, #36)
+**Source-of-truth scripts referenced:** `scripts/setup.sh`, `scripts/entra_provisioning.py`, `scripts/create_entra_agent_ids.py`, `scripts/provision_blob_storage.py`, `scripts/teardown.sh`, `src/entrabot/platform/windows.py`, `src/entrabot/auth/certificate.py`, `src/entrabot/tools/teams.py`, ADR-003, ADR-005, hard-won-learnings.md (#1, #2, #5, #7, #8, #29, #34, #36)
 
 ---
 
 ## Executive summary
 
-**Recommended path:** *Ship a thin PowerShell shim (`scripts/setup-windows.ps1`, `scripts/deploy-windows.ps1`, `scripts/teardown-windows.ps1`) that delegates 95% of the work to a new pure-Python orchestrator (`scripts/entraclaw_setup/__main__.py`). Use the existing `keyring` Windows-Credential-Locker backend for the Blueprint private key in v1. Defer Windows Certificate Store / CNG / TPM-backed keys to v2 behind a feature flag.*
+**Recommended path:** *Ship a thin PowerShell shim (`scripts/setup-windows.ps1`, `scripts/deploy-windows.ps1`, `scripts/teardown-windows.ps1`) that delegates 95% of the work to a new pure-Python orchestrator (`scripts/entrabot_setup/__main__.py`). Use the existing `keyring` Windows-Credential-Locker backend for the Blueprint private key in v1. Defer Windows Certificate Store / CNG / TPM-backed keys to v2 behind a feature flag.*
 
 Rationale in one paragraph: setup.sh is already mostly Python under a bash orchestrator. The Windows gap is **not** identity-protocol differences (Entra and Graph behave identically) and **not** the basic credential-store abstraction (`keyring` has a Windows backend today). The gaps are: (a) bash-isms in `setup.sh` (color escapes, `$(…)` capture patterns, `/tmp` writes, `chmod 600`, interactive `read -p`), (b) `az` CLI bootstrap UX on Windows (PowerShell execution policy, `az login` browser handling), and (c) the unmet aspirational claim in ADR-003 that Windows uses "Certificate Store (TPM 2.0)" — today it does not, on any platform. We can reach Mac parity by extracting the bash logic into Python and adding a thin PowerShell wrapper. TPM-backed CNG storage is a separate, larger v2 effort with real value but real schedule risk.
 
-**Key recommendation:** Do *not* re-implement setup.sh as native PowerShell. Move the orchestration logic into Python (a `scripts/entraclaw_setup/` package), which already runs cross-platform, and ship two thin PS1 wrappers (one for setup, one for deploy/MCP wiring). Same approach for teardown. This keeps Mac parity automatic — every fix lands in one place.
+**Key recommendation:** Do *not* re-implement setup.sh as native PowerShell. Move the orchestration logic into Python (a `scripts/entrabot_setup/` package), which already runs cross-platform, and ship two thin PS1 wrappers (one for setup, one for deploy/MCP wiring). Same approach for teardown. This keeps Mac parity automatic — every fix lands in one place.
 
 ---
 
@@ -29,7 +29,7 @@ Rationale in one paragraph: setup.sh is already mostly Python under a bash orche
 | Windows cert-auth path | Untested. Should work in theory because `cryptography`/`PyJWT` are pure Python; the cert generation + upload code in setup.sh would need to run from Python, not bash |
 | Windows setup script | Does not exist |
 | Windows deploy script | Does not exist |
-| Windows MCP wiring (`.mcp.json`, `~/.copilot/mcp-config.json`) | `scripts/mcp_config.py` accepts an absolute binary path and writes it verbatim; Windows setup must pass `.venv\Scripts\entraclaw-mcp.exe` and add path-shape tests |
+| Windows MCP wiring (`.mcp.json`, `~/.copilot/mcp-config.json`) | `scripts/mcp_config.py` accepts an absolute binary path and writes it verbatim; Windows setup must pass `.venv\Scripts\entrabot-mcp.exe` and add path-shape tests |
 | TPM/CNG-backed Blueprint key | Aspirational only — ADR-003 mentions it but no implementation exists on any platform |
 
 ---
@@ -41,14 +41,14 @@ The 8-step flow:
 1. **Prereqs** — `az`, `python3.12+`, `git` on `PATH`. Python is auto-discovered (`python3.12`/`python3.13`/`python3`) and version-checked via `bc` or a Python fallback.
 2. **Azure login verification** — `az account show`, captures `tenantId`, signed-in UPN, signed-in user object ID. Optional `--switch-user` re-runs `az login`. Optional `--teams-user=` resolves recipient(s) and detects B2B-guest UPNs (`#EXT#`) for federated chat.
 3. **Provisioning prereqs** — `pip install azure-identity requests` into `.venv` if it exists, else system Python.
-4. **Provisioner bootstrap** — runs `scripts/entra_provisioning.py`. This creates (or rediscovers) the dedicated **EntraClaw Agent ID Provisioner** app registration. The provisioner authenticates with a **certificate JWT** (private key in `keyring`, public cert on the app reg) and holds Graph application permissions for Blueprint/Agent Identity/Agent User CRUD + delegated permission grants. **Critical:** `az` CLI tokens are *never* used for Agent Identity APIs — Learning #1 (Directory.AccessAsUser.All causes 403).
-5. **Identity creation** — runs `scripts/create_entra_agent_ids.py`. Creates Blueprint, **explicitly** creates `BlueprintPrincipal` (Learning #2 — not auto-created), creates Agent Identity (sponsor = signed-in user; Learning #5 — sponsors must be users, not SPs), creates Agent User, grants `oauth2PermissionGrant` for Graph and (if cloud memory) Storage scopes. Uses retry/backoff for permission propagation (Learning #8). Persists everything to `.entraclaw-state.json`.
-6. **Blueprint cert** — creates `.venv` if missing, `pip install -e ".[dev]"`, generates self-signed RSA-2048 cert in Python, computes SHA-256/base64url thumbprint, stores PEM private key in `keyring` (`service="entraclaw"`, `key="blueprint-private-key"`), uploads public cert to Blueprint app via Graph `PATCH /applications/{id}` `keyCredentials`. Idempotent: cached thumbprint is verified against Entra; if missing, regenerates after warning the user.
-7. **Venv + .env** — full editable install, writes `.env` (`chmod 600`) with all `ENTRACLAW_*` config. **No secrets** — only IDs, the cert thumbprint, and config flags.
-   - **7b. Optional blob provisioning** (`--use-cloud-memory` flag) — `scripts/provision_blob_storage.py` ensures `entraclaw-rg` resource group, a tenant-scoped storage account, a per-Agent-User container, and `Storage Blob Data Contributor` RBAC scoped to the container. Storage scope also requires its own `oauth2PermissionGrant` (Learning #34) — handled in step 5.
-8. **Summary + MCP wiring** — invokes `scripts/mcp_config.py` to write/upsert the entraclaw entry in both `.mcp.json` (project-local) and `~/.copilot/mcp-config.json`.
+4. **Provisioner bootstrap** — runs `scripts/entra_provisioning.py`. This creates (or rediscovers) the dedicated **EntraBot Agent ID Provisioner** app registration. The provisioner authenticates with a **certificate JWT** (private key in `keyring`, public cert on the app reg) and holds Graph application permissions for Blueprint/Agent Identity/Agent User CRUD + delegated permission grants. **Critical:** `az` CLI tokens are *never* used for Agent Identity APIs — Learning #1 (Directory.AccessAsUser.All causes 403).
+5. **Identity creation** — runs `scripts/create_entra_agent_ids.py`. Creates Blueprint, **explicitly** creates `BlueprintPrincipal` (Learning #2 — not auto-created), creates Agent Identity (sponsor = signed-in user; Learning #5 — sponsors must be users, not SPs), creates Agent User, grants `oauth2PermissionGrant` for Graph and (if cloud memory) Storage scopes. Uses retry/backoff for permission propagation (Learning #8). Persists everything to `.entrabot-state.json`.
+6. **Blueprint cert** — creates `.venv` if missing, `pip install -e ".[dev]"`, generates self-signed RSA-2048 cert in Python, computes SHA-256/base64url thumbprint, stores PEM private key in `keyring` (`service="entrabot"`, `key="blueprint-private-key"`), uploads public cert to Blueprint app via Graph `PATCH /applications/{id}` `keyCredentials`. Idempotent: cached thumbprint is verified against Entra; if missing, regenerates after warning the user.
+7. **Venv + .env** — full editable install, writes `.env` (`chmod 600`) with all `ENTRABOT_*` config. **No secrets** — only IDs, the cert thumbprint, and config flags.
+   - **7b. Optional blob provisioning** (`--use-cloud-memory` flag) — `scripts/provision_blob_storage.py` ensures `entrabot-rg` resource group, a tenant-scoped storage account, a per-Agent-User container, and `Storage Blob Data Contributor` RBAC scoped to the container. Storage scope also requires its own `oauth2PermissionGrant` (Learning #34) — handled in step 5.
+8. **Summary + MCP wiring** — invokes `scripts/mcp_config.py` to write/upsert the entrabot entry in both `.mcp.json` (project-local) and `~/.copilot/mcp-config.json`.
 
-State files: `.entraclaw-state.json` (provisioning state, idempotency keys), `.env` (runtime config, mode 600).
+State files: `.entrabot-state.json` (provisioning state, idempotency keys), `.env` (runtime config, mode 600).
 
 ---
 
@@ -81,7 +81,7 @@ State files: `.entraclaw-state.json` (provisioning state, idempotency keys), `.e
 
 - **`chmod 600` on `.env`** — does not exist on Windows. Replace with NTFS ACL: `icacls .env /inheritance:r /grant:r "$env:USERNAME:R"` (read-only to the current user, no inheritance from the project directory's looser ACL). Exposing the file to other local users would matter only on shared workstations, but it's a non-zero risk and easy to fix.
 - **Path separator + drive-letter handling in `mcp_config.py`** — must emit Windows paths. The existing tests need a Windows-path case.
-- **`/tmp` writes in `setup.sh`** — `/tmp/entraclaw-provision-stdout.$$` (line 734). Doesn't exist on Windows. Already a known smell. The Python rewrite removes this entirely (use a tempfile or in-memory pipe).
+- **`/tmp` writes in `setup.sh`** — `/tmp/entrabot-provision-stdout.$$` (line 734). Doesn't exist on Windows. Already a known smell. The Python rewrite removes this entirely (use a tempfile or in-memory pipe).
 - **Bash heredocs writing `.env`** — translate to Python `pathlib.Path(".env").write_text(...)`.
 - **Color escape codes** — `\033[…]` works in modern Windows Terminal and PowerShell 7. Works in conhost on Windows 10 1909+ if `VirtualTerminalLevel` is enabled (default since 1809). Use `colorama` or `rich` from Python so we stop caring.
 - **Interactive `read -r -p`** — replace with Python `input()` from the orchestrator. Make non-interactive defaults explicit.
@@ -99,12 +99,12 @@ State files: `.entraclaw-state.json` (provisioning state, idempotency keys), `.e
 
 | Gap | Severity | Where | Fix |
 |---|---|---|---|
-| `setup.sh` is bash-only | **Blocker** | `scripts/setup.sh` (903 lines) | Extract orchestration logic into a Python package (`scripts/entraclaw_setup/`). New PS1 wrapper invokes it. Mac/Linux can keep the existing bash entry-point or migrate later. |
+| `setup.sh` is bash-only | **Blocker** | `scripts/setup.sh` (903 lines) | Extract orchestration logic into a Python package (`scripts/entrabot_setup/`). New PS1 wrapper invokes it. Mac/Linux can keep the existing bash entry-point or migrate later. |
 | `teardown.sh` is bash-only | High | `scripts/teardown.sh` | Same treatment. Smaller — quicker port. |
-| `mcp_config.py` may emit Unix paths | Medium | `scripts/mcp_config.py` | Add Windows-path round-trip test; ensure `command` is `<project>\.venv\Scripts\entraclaw-mcp.exe`. |
+| `mcp_config.py` may emit Unix paths | Medium | `scripts/mcp_config.py` | Add Windows-path round-trip test; ensure `command` is `<project>\.venv\Scripts\entrabot-mcp.exe`. |
 | `setup.sh` uses `/tmp` | Medium | `setup.sh:734` | Replaced by Python rewrite. |
-| `chmod 600` on `.env` | Medium | `setup.sh:714` | Use `icacls` on Windows; helper module `entraclaw_setup.fs.lock_down_file()` handles both. |
-| `keyring` PEM round-trip on Windows untested | Medium | `platform/windows.py` | Add a tests/integration smoke test (skipped unless `ENTRACLAW_TEST_WINDOWS_KEYRING=1`). Run on a Windows VM in CI or by hand. |
+| `chmod 600` on `.env` | Medium | `setup.sh:714` | Use `icacls` on Windows; helper module `entrabot_setup.fs.lock_down_file()` handles both. |
+| `keyring` PEM round-trip on Windows untested | Medium | `platform/windows.py` | Add a tests/integration smoke test (skipped unless `ENTRABOT_TEST_WINDOWS_KEYRING=1`). Run on a Windows VM in CI or by hand. |
 | Editable-install on Windows path with spaces (e.g., `C:\Users\the user\…`) | Medium | Generic | The repo path on Mac may contain spaces (path with spaces confirmed working). Confirm on Windows. |
 | Microsoft Store Python is broken for editable installs | Medium | New | Detect via `sys.base_prefix` pointing into `WindowsApps\` and refuse with a clean error. |
 | `.venv\Scripts\python.exe` vs `.venv/bin/python3` | Low | `setup.sh:331,504,684,886` | Python orchestrator computes once via `sys.executable`. |
@@ -118,9 +118,9 @@ State files: `.entraclaw-state.json` (provisioning state, idempotency keys), `.e
 
 ```
 scripts/
-  entraclaw_setup/
+  entrabot_setup/
     __init__.py
-    __main__.py            # python -m entraclaw_setup [setup|deploy|teardown]
+    __main__.py            # python -m entrabot_setup [setup|deploy|teardown]
     cli.py                 # argparse / typer entry points (setup/deploy/teardown)
     prereqs.py             # az/python/git presence + version checks
     azlogin.py             # az account show wrapper, --switch-user
@@ -134,9 +134,9 @@ scripts/
     fs.py                  # lock_down_file(), tempfile helpers
     ui.py                  # colored output (rich), prompts, non-interactive defaults
 
-  setup-windows.ps1        # ~50 lines: prereq nudges, venv create, invokes python -m entraclaw_setup setup
-  deploy-windows.ps1       # ~30 lines: invokes python -m entraclaw_setup deploy (= MCP wiring + final summary, no Entra changes)
-  teardown-windows.ps1     # ~30 lines: invokes python -m entraclaw_setup teardown
+  setup-windows.ps1        # ~50 lines: prereq nudges, venv create, invokes python -m entrabot_setup setup
+  deploy-windows.ps1       # ~30 lines: invokes python -m entrabot_setup deploy (= MCP wiring + final summary, no Entra changes)
+  teardown-windows.ps1     # ~30 lines: invokes python -m entrabot_setup teardown
   setup-windows.cmd        # one-liner: pwsh -ExecutionPolicy Bypass -File "%~dp0setup-windows.ps1" %*
 ```
 
@@ -179,7 +179,7 @@ if (-not (Test-Path .venv)) { python -m venv .venv }
 python -m pip install --quiet -e ".[dev,provisioning]"
 
 # Hand off to Python orchestrator
-$pyArgs = @('-m', 'entraclaw_setup', 'setup')
+$pyArgs = @('-m', 'entrabot_setup', 'setup')
 if ($New)         { $pyArgs += '--new' }
 if ($UpnSuffix)   { $pyArgs += '--with-upn-suffix', $UpnSuffix }
 # ...remaining flags...
@@ -193,8 +193,8 @@ Notably absent: any provisioning logic. The PS1 is a launcher, period.
 
 **Yes — by deprecating setup.sh, not by duplicating it.** Concretely:
 
-- **Phase 1 (this work):** ship `scripts/entraclaw_setup/` and the PS1 wrappers. `setup.sh` keeps working, untouched. Mac users see no change.
-- **Phase 2 (follow-up):** rewrite `setup.sh` as a 30-line bash shim that invokes `python -m entraclaw_setup setup`. Single source of truth. This step needs its own go/no-go because it changes Mac behavior.
+- **Phase 1 (this work):** ship `scripts/entrabot_setup/` and the PS1 wrappers. `setup.sh` keeps working, untouched. Mac users see no change.
+- **Phase 2 (follow-up):** rewrite `setup.sh` as a 30-line bash shim that invokes `python -m entrabot_setup setup`. Single source of truth. This step needs its own go/no-go because it changes Mac behavior.
 
 This avoids a long-lived two-implementations problem and keeps every learning (`#29` shell-capture corruption, `#34` storage consent, `#36` worktree venv) fixed in one place.
 
@@ -211,9 +211,9 @@ This avoids a long-lived two-implementations problem and keeps every learning (`
 ### Phase 1 — Extract Python orchestrator
 
 Files changed/added:
-- `scripts/entraclaw_setup/` (new package, ~600 lines net after extracting from setup.sh)
+- `scripts/entrabot_setup/` (new package, ~600 lines net after extracting from setup.sh)
 - `scripts/setup-windows.ps1`, `scripts/deploy-windows.ps1`, `scripts/teardown-windows.ps1`, `scripts/setup-windows.cmd` (new, ~120 lines total)
-- `pyproject.toml`: add `[project.scripts] entraclaw-setup = "entraclaw_setup.cli:main"` so users can also run `entraclaw-setup setup` once the venv is active.
+- `pyproject.toml`: add `[project.scripts] entrabot-setup = "entrabot_setup.cli:main"` so users can also run `entrabot-setup setup` once the venv is active.
 - `tests/test_setup_orchestrator.py`, `tests/test_setup_windows_paths.py`, `tests/test_mcp_config_windows.py`
 
 Acceptance:
@@ -225,11 +225,11 @@ Acceptance:
 
 - `keyring` size sanity check + automatic fallback if the platform can't store a 2048-bit PEM.
 - NTFS ACL `.env` lockdown via `icacls`, with a Python fallback using `os.chmod` (which sets read-only attribute, not ACLs) if `icacls` is missing.
-- Detect WSL and refuse OR offer to call out to PowerShell — running setup inside WSL but storing a key in the WSL `keyring` produces a key that `entraclaw-mcp.exe` running on Windows host won't see. Document clearly.
+- Detect WSL and refuse OR offer to call out to PowerShell — running setup inside WSL but storing a key in the WSL `keyring` produces a key that `entrabot-mcp.exe` running on Windows host won't see. Document clearly.
 
 ### Phase 3 — Rewrite setup.sh as a shim (optional, separate go-decision)
 
-- `setup.sh` becomes 30 lines: load `.entraclaw-state.json`, activate venv, exec `python -m entraclaw_setup setup "$@"`.
+- `setup.sh` becomes 30 lines: load `.entrabot-state.json`, activate venv, exec `python -m entrabot_setup setup "$@"`.
 - Same for `teardown.sh`.
 
 ### Phase 4 — TPM / CNG (separate v2, not blocking parity)
@@ -242,7 +242,7 @@ See **Certificate storage design** below.
 
 ### v1 (recommended for parity ship): `keyring` + Windows Credential Locker
 
-This is what `platform/windows.py` already does. The PEM lives in `Windows Credential Manager` under `service="entraclaw"`, `target="blueprint-private-key"`. DPAPI encrypts the value at rest, scoped to the current Windows user profile. The key cannot be extracted by another local user without the user's password (or admin + DPAPI master-key access).
+This is what `platform/windows.py` already does. The PEM lives in `Windows Credential Manager` under `service="entrabot"`, `target="blueprint-private-key"`. DPAPI encrypts the value at rest, scoped to the current Windows user profile. The key cannot be extracted by another local user without the user's password (or admin + DPAPI master-key access).
 
 **Pros:** zero new code, identical to Mac's Keychain story. Honest about its security profile.
 **Cons:** key is exfiltratable by malware running as the user. Same constraint as Mac's login keychain when the screen is unlocked.
@@ -266,14 +266,14 @@ For the JWT assertion, swap `cryptography.hazmat.primitives.asymmetric.rsa.sign`
 
 ### Fallback if v1 is too constrained
 
-If the PEM-in-Credential-Locker round-trip fails (size limit, encoding bug, future Microsoft change), the immediate fallback is to write the PEM to `%LOCALAPPDATA%\entraclaw\blueprint-private-key.pem` with `icacls` ACL locking it to the current user, encrypted via DPAPI (`win32crypt.CryptProtectData`). This is functionally equivalent to today's Mac flow at a lower abstraction level. Document the choice in code; do not silently change storage backends.
+If the PEM-in-Credential-Locker round-trip fails (size limit, encoding bug, future Microsoft change), the immediate fallback is to write the PEM to `%LOCALAPPDATA%\entrabot\blueprint-private-key.pem` with `icacls` ACL locking it to the current user, encrypted via DPAPI (`win32crypt.CryptProtectData`). This is functionally equivalent to today's Mac flow at a lower abstraction level. Document the choice in code; do not silently change storage backends.
 
 ---
 
 ## Security model (must be true on Windows)
 
 1. **No client secrets ever.** Cert-auth-only, exactly per ADR-003. Same on every platform.
-2. **No tokens in logs.** Already enforced via `__repr__` overrides. Verify on Windows by grepping `~/.entraclaw/logs/entraclaw.log` after a test run for the substring `eyJ` (start of any JWT).
+2. **No tokens in logs.** Already enforced via `__repr__` overrides. Verify on Windows by grepping `~/.entrabot/logs/entrabot.log` after a test run for the substring `eyJ` (start of any JWT).
 3. **Private key never on disk in plaintext** in v1's recommended path — it lives in DPAPI-encrypted Credential Locker.
 4. **`.env` ACL-locked** to the current user via `icacls /inheritance:r /grant:r`. Equivalent to `chmod 600` on Mac.
 5. **Audit-first:** every Teams/Graph action calls `audit/` before returning. Already cross-platform; no Windows-specific work.
@@ -299,12 +299,12 @@ If the PEM-in-Credential-Locker round-trip fails (size limit, encoding bug, futu
 A clean Windows 11 VM, bare:
 1. `winget install Python.Python.3.12 Microsoft.AzureCLI Git.Git Microsoft.PowerShell`
 2. New shell, `az login` (interactive browser).
-3. `git clone <repo>; cd entraclaw-identity-research`
+3. `git clone <repo>; cd entrabot-identity-research`
 4. `.\scripts\setup-windows.cmd --new --with-upn-suffix=wintest1`
 5. Expect green "Setup complete" with Blueprint/Agent ID/Agent User IDs printed.
-6. `Get-Content .env` — has `ENTRACLAW_*` keys, no secrets, ACL: user-only-read (`(Get-Acl .env).Access | Format-List`).
-7. `python -c "from entraclaw.platform import get_credential_store; s = get_credential_store(); print(bool(s.retrieve('entraclaw', 'blueprint-private-key')))"` — `True`.
-8. `.venv\Scripts\entraclaw-mcp.exe` starts cleanly, MCP `tools/list` returns the Teams tool set.
+6. `Get-Content .env` — has `ENTRABOT_*` keys, no secrets, ACL: user-only-read (`(Get-Acl .env).Access | Format-List`).
+7. `python -c "from entrabot.platform import get_credential_store; s = get_credential_store(); print(bool(s.retrieve('entrabot', 'blueprint-private-key')))"` — `True`.
+8. `.venv\Scripts\entrabot-mcp.exe` starts cleanly, MCP `tools/list` returns the Teams tool set.
 9. From Claude Code on the same VM, send a Teams DM to the agent's UPN — message arrives in Claude Code's channel.
 10. `.\scripts\teardown-windows.ps1` removes Agent User → Agent Identity → Blueprint → Provisioner cleanly. Re-run: "Nothing to clean up."
 
@@ -320,10 +320,10 @@ A clean Windows 11 VM, bare:
 ## Open questions and risks
 
 1. **`keyring` PEM size on Windows Credential Locker.** Documented limits are inconsistent (some sources say 2.5 KB, some 5 KB, some unlimited via Credential Locker API). 2048-bit RSA PEM is ~1.7 KB; should be fine, but verify on real hardware before declaring victory. *Verification:* one-line script on a Windows VM.
-2. **WSL/native ambiguity.** A user running `wsl` and then `python -m entraclaw_setup setup` will write to the WSL Linux keyring, not Windows. The MCP server invoked by Windows Claude Code won't find the key. *Mitigation:* PS1 wrapper aborts if `$env:WSL_DISTRO_NAME` is set, with a clean message: "Run setup-windows.ps1 from PowerShell on the Windows host, not from WSL."
+2. **WSL/native ambiguity.** A user running `wsl` and then `python -m entrabot_setup setup` will write to the WSL Linux keyring, not Windows. The MCP server invoked by Windows Claude Code won't find the key. *Mitigation:* PS1 wrapper aborts if `$env:WSL_DISTRO_NAME` is set, with a clean message: "Run setup-windows.ps1 from PowerShell on the Windows host, not from WSL."
 3. **Azure CLI under PowerShell quoting.** The provisioning Python already shells out to `az` with explicit `subprocess.run([…])` (list-form, not shell-string). PowerShell quoting issues only arise if our PS1 passes user input as a single string. *Mitigation:* PS1 splat (`@pyArgs`) into the Python invocation.
 4. **Microsoft Store Python detection.** `sys.base_prefix.lower().contains("windowsapps")` works. False-positive risk: zero (Microsoft Store Python is the only Python that lives there).
-5. **Path with spaces** (e.g., `C:\Users\the user\…`). Most-used quirk on Windows. The Python orchestrator handles this trivially; the PS1 needs `&` invocation with quoted paths. Test with `C:\Users\Test User\Code\entraclaw` explicitly.
+5. **Path with spaces** (e.g., `C:\Users\the user\…`). Most-used quirk on Windows. The Python orchestrator handles this trivially; the PS1 needs `&` invocation with quoted paths. Test with `C:\Users\Test User\Code\entrabot` explicitly.
 6. **Code-signing the PS1.** Out of scope. The `.cmd` shim with `-ExecutionPolicy Bypass` is the documented way around it. Mention in README.
 7. **Azure Blob provisioning identity propagation on Windows.** The `Storage Blob Data Contributor` role assignment Learning #34 + permission-propagation backoff (Learning #8) takes 30–120 s. Same on every platform. No Windows-specific concern.
 8. **Multi-user Windows boxes.** `keyring` keys are per-user. Two Windows users on the same machine each need their own setup. Same as Mac. Document clearly.

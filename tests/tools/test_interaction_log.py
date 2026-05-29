@@ -25,7 +25,7 @@ from unittest.mock import patch
 
 import pytest
 
-from entraclaw.tools.interaction_log import (
+from entrabot.tools.interaction_log import (
     detect_channel,
     log_interaction,
     read_day,
@@ -36,12 +36,12 @@ from entraclaw.tools.interaction_log import (
 def tmp_data_dir(tmp_path, monkeypatch):
     """Point the interaction log at a temp directory for each test.
 
-    EntraClawConfig is frozen, so we redirect by setting the env var
+    EntraBotConfig is frozen, so we redirect by setting the env var
     that from_env() reads each call. get_config() has no caching.
     """
-    monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
-    monkeypatch.delenv("ENTRACLAW_BLOB_ENDPOINT", raising=False)
-    monkeypatch.delenv("ENTRACLAW_BLOB_CONTAINER", raising=False)
+    monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("ENTRABOT_BLOB_ENDPOINT", raising=False)
+    monkeypatch.delenv("ENTRABOT_BLOB_CONTAINER", raising=False)
     return tmp_path
 
 
@@ -78,7 +78,7 @@ class TestLogInteraction:
         log_interaction(
             channel="teams_dm",
             direction="outbound",
-            sender="entraclaw-agent@fabrikam.onmicrosoft.com",
+            sender="entrabot-agent@fabrikam.onmicrosoft.com",
             recipient="19:xyz@unq.gbl.spaces",
             summary="Sent Brandon the phase plan",
             action="send_teams_message",
@@ -92,7 +92,7 @@ class TestLogInteraction:
         entry = json.loads(lines[0])
         assert entry["channel"] == "teams_dm"
         assert entry["direction"] == "outbound"
-        assert entry["sender"] == "entraclaw-agent@fabrikam.onmicrosoft.com"
+        assert entry["sender"] == "entrabot-agent@fabrikam.onmicrosoft.com"
         assert entry["summary"] == "Sent Brandon the phase plan"
 
     def test_creates_directory(self, tmp_data_dir: Path) -> None:
@@ -122,7 +122,7 @@ class TestLogInteraction:
 
     def test_rotates_by_utc_date(self, tmp_data_dir: Path) -> None:
         # Simulate two calls on different UTC days by patching datetime
-        from entraclaw.tools import interaction_log as il
+        from entrabot.tools import interaction_log as il
 
         day1 = datetime(2026, 4, 16, 23, 45, tzinfo=UTC)
         day2 = datetime(2026, 4, 17, 0, 15, tzinfo=UTC)
@@ -194,7 +194,7 @@ class TestInteractionSchema:
             channel="email",
             direction="inbound",
             sender="alice.example@example.com",
-            recipient="entraclaw-agent@fabrikam.onmicrosoft.com",
+            recipient="entrabot-agent@fabrikam.onmicrosoft.com",
             summary="Re: Project Apollo",
             action="noted",
             content_ref="AAMk...message-id",
@@ -202,7 +202,7 @@ class TestInteractionSchema:
         )
         day = datetime.now(UTC).strftime("%Y-%m-%d")
         entry = json.loads((tmp_data_dir / "interactions" / f"{day}.jsonl").read_text().strip())
-        assert entry["recipient"] == "entraclaw-agent@fabrikam.onmicrosoft.com"
+        assert entry["recipient"] == "entrabot-agent@fabrikam.onmicrosoft.com"
         assert entry["action"] == "noted"
         assert entry["content_ref"] == "AAMk...message-id"
         assert entry["metadata"]["subject"] == "Re: Project Apollo"
@@ -233,7 +233,7 @@ class TestReadDay:
         assert read_day("1999-01-01") == []
 
     def test_explicit_date_string(self, tmp_data_dir: Path) -> None:
-        from entraclaw.tools import interaction_log as il
+        from entrabot.tools import interaction_log as il
 
         fixed = datetime(2026, 4, 10, 12, 0, tzinfo=UTC)
         with patch.object(il, "_now", return_value=fixed):

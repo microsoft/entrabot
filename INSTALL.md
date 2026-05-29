@@ -1,4 +1,4 @@
-# Installing EntraClaw
+# Installing EntraBot
 
 Platform-specific setup instructions. Run the prerequisites step first, then
 the one-command setup for your platform.
@@ -197,7 +197,7 @@ After setup completes on any platform, verify the three-hop flow works:
 # Mac/Linux: source .venv/bin/activate
 
 # Test three-hop token acquisition
-python -c "from entraclaw.tools.teams import acquire_agent_user_token; print(acquire_agent_user_token()[:40])"
+python -c "from entrabot.tools.teams import acquire_agent_user_token; print(acquire_agent_user_token()[:40])"
 ```
 
 You should see a 40-character token prefix. If you get an AADSTS error, check:
@@ -222,7 +222,7 @@ You should see a 40-character token prefix. If you get an AADSTS error, check:
 | Problem | Fix |
 |---------|-----|
 | `pip install` fails with "Microsoft Visual C++ required" | Run `prereqs-windows.ps1` — it installs VS Build Tools |
-| `entraclaw-mcp.exe` locked during reinstall | Kill stale processes: `Get-Process entraclaw-mcp \| Stop-Process` |
+| `entrabot-mcp.exe` locked during reinstall | Kill stale processes: `Get-Process entrabot-mcp \| Stop-Process` |
 | Python is the Microsoft Store stub | Install real Python via `winget install Python.Python.3.12` |
 | `Get-Tpm` requires admin | Use non-elevated PowerShell — the script falls back to Software KSP automatically |
 | 36 "missing YAML frontmatter" skill errors | Run from the correct repo directory; skill symlinks don't work on Windows |
@@ -247,4 +247,4 @@ You should see a 40-character token prefix. If you get an AADSTS error, check:
 |---------|-----|
 | AADSTS700024 (client assertion invalid) | Cert thumbprint mismatch — re-run setup to regenerate |
 | 403 on `wait_for_sponsor_dm` | Agent Identity missing `Application.Read.All` — re-run provisioning or grant manually |
-| MCP server exits silently | Check `~/.entraclaw/logs/entraclaw.log` for errors |
+| MCP server exits silently | Check `~/.entrabot/logs/entrabot.log` for errors |

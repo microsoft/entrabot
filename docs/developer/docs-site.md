@@ -21,7 +21,7 @@ The workflow:
 4. Uploads the `site/` artifact to GitHub Pages.
 5. Deploys via `actions/deploy-pages@v4`.
 
-Published at <https://microsoft.github.io/entraclaw/>. GitHub Pages is configured with `build_type=workflow`; re-enable via:
+Published at <https://microsoft.github.io/entrabot/>. GitHub Pages is configured with `build_type=workflow`; re-enable via:
 
 ```bash
 gh api -X POST repos/<owner>/<repo>/pages -f 'build_type=workflow'

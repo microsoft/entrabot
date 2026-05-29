@@ -1,4 +1,4 @@
-# AGENTS.md — Entraclaw Identity Research
+# AGENTS.md — Entrabot Identity Research
 
 > Instructions for AI agents working in this codebase (Copilot, Claude Code, Codex, etc.)
 
@@ -31,7 +31,7 @@
 - Agent IDs are service principals, not users — never create fake user accounts with passwords
 - Parse `az` CLI output as JSON, not TSV — TSV can be corrupted by warnings (Learning #7)
 - Graph API `$filter`/`$orderby` are unreliable for chat messages — always filter client-side (Learning #16)
-- **Sub-agent worktree installs must use a worktree-local venv, never the parent venv** (Learning #36) — running `pip install -e .` from inside a git worktree against the main repo's `.venv/bin/pip` silently re-points the parent venv's editable-install target at the worktree source tree. Every subsequent MCP server boot then loads code from the worktree — which has no `.env`, no auth, no polling, and no visible error. Always create `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"` inside the worktree BEFORE any editable install. After any session that used sub-agent worktrees, verify the main venv's target via `.venv/bin/python3 -c "from entraclaw import config; print(config.__file__)"` — the path must not contain `.claude/worktrees/`.
+- **Sub-agent worktree installs must use a worktree-local venv, never the parent venv** (Learning #36) — running `pip install -e .` from inside a git worktree against the main repo's `.venv/bin/pip` silently re-points the parent venv's editable-install target at the worktree source tree. Every subsequent MCP server boot then loads code from the worktree — which has no `.env`, no auth, no polling, and no visible error. Always create `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"` inside the worktree BEFORE any editable install. After any session that used sub-agent worktrees, verify the main venv's target via `.venv/bin/python3 -c "from entrabot import config; print(config.__file__)"` — the path must not contain `.claude/worktrees/`.
 - **Sponsor DM wait pattern (host-gated).** When the human says "ping me when X is done" / "I'm going AFK, let me know" / any equivalent: confirm in Teams with `send_teams_message`, do the work, send the completion update with `send_teams_message`. Claude Code receives the sponsor's reply via channel-push next-turn input, so do not call `wait_for_sponsor_dm` there. Non-Claude-Code hosts such as Copilot CLI and Codex get the sponsor's reply inline from `send_teams_message` as `sponsor_reply`. `wait_for_sponsor_dm` is reserved for the rare explicit "block until they reply" request. NEVER poll in a loop. NEVER spawn `copilot -p` / headless subprocesses. NEVER use `watch_teams_replies` for this pattern. Full protocol: `prompts/anatomy/channel-discipline.md`; see Learning #54.
 
 ## Required reading per topic
@@ -58,7 +58,7 @@ These are not optional. Skipping them is the documented cause of 4 design errors
 - External dependencies: Microsoft Entra ID, Microsoft Teams + Outlook mailbox (Graph API or Bot Framework), Azure Blob Storage (optional, opt-in via `setup.sh --use-cloud-memory`)
 - **No default group chat.** Every Teams tool requires an explicit `chat_id`. Chats come from `create_chat`, the persisted `watched_chats` file, or the auto-discovery sweep over `/me/chats`.
 - **Body-first prompt.** `prompts/agent_system.md` loads at boot with `@include` expansion of `prompts/anatomy/*.md`. Persona-sati output (if configured) is appended AFTER the body and cannot override body rules.
-- Three auth modes via `ENTRACLAW_MODE`: `agent_user` (three-hop), `delegated` (MSAL), `bot` (M365 Agents SDK). Agent memory has a **parallel third hop** against `https://storage.azure.com/.default` (`acquire_agent_user_storage_token`).
+- Three auth modes via `ENTRABOT_MODE`: `agent_user` (three-hop), `delegated` (MSAL), `bot` (M365 Agents SDK). Agent memory has a **parallel third hop** against `https://storage.azure.com/.default` (`acquire_agent_user_storage_token`).
 - Certificate auth: private key in OS keystore (Keychain/TPM/Keyring), JWT assertion for Hop 1 (ADR-003)
 - Background tasks (eagerly started at MCP server boot in `agent_user` mode):
   - Teams chat poll (5s), email poll (60s), chat auto-discovery via `/me/chats` (120s), daily summary scheduler (5pm PDT)
@@ -70,7 +70,7 @@ These are not optional. Skipping them is the documented cause of 4 design errors
 This repo is the **body** (Teams interface). The **mind** (personality, memory, behavioral rules) is served by a separate MCP server: **persona-sati**.
 
 - Both MCPs are listed in `.mcp.json` (see `.mcp.json.example` for dual-server config)
-- If persona-sati is not configured, entraclaw works standalone as a generic Teams tool
+- If persona-sati is not configured, entrabot works standalone as a generic Teams tool
 - Memory operations go through persona-sati's tools, not through local blob sync hooks
 - The system prompt comes from persona-sati, not from this repo
 
@@ -138,7 +138,7 @@ pip install -e ".[dev]"
 pytest -v --tb=short && ruff check .
 
 # Test with coverage
-pytest -v --cov=entraclaw --cov-report=term-missing --cov-fail-under=80
+pytest -v --cov=entrabot --cov-report=term-missing --cov-fail-under=80
 
 # Single test
 pytest tests/tools/test_teams.py::TestAcquireAgentUserToken::test_success -v
@@ -146,20 +146,20 @@ pytest tests/tools/test_teams.py::TestAcquireAgentUserToken::test_success -v
 # Format
 ruff format .
 
-# Run with channel notifications (entraclaw MCP auto-loads via .mcp.json)
-claude --dangerously-load-development-channels server:entraclaw
+# Run with channel notifications (entrabot MCP auto-loads via .mcp.json)
+claude --dangerously-load-development-channels server:entrabot
 ```
 
 ## High-Value Repo Areas
 
-- `src/entraclaw/platform/`: OS-specific credential storage — `CredentialStore` protocol with Mac/Linux/Windows implementations
-- `src/entraclaw/auth/`: Certificate-based JWT assertion builder + MSAL delegated auth
-- `src/entraclaw/a365/`: Microsoft Agent 365 Work IQ provider boundary and Word adapter
-- `src/entraclaw/identity/`: Progressive identity state machine (UNAUTHENTICATED → DELEGATED → PROVISIONING → AGENT_USER)
-- `src/entraclaw/bot/`: Bot Gateway — M365 Agents SDK server, JSONL IPC, Dev Tunnel
-- `src/entraclaw/tools/`: Teams Graph API + interaction log (Phase 1) + email poll (Phase 2) + daily summary (Phase 3) + Adaptive Cards
-- `src/entraclaw/storage/`: Cloud-memory backend (ADR-005 Phase 1: `BlobStore` client only; Phase 2 wires it in)
-- `src/entraclaw/mcp_server.py`: FastMCP server — Teams tools + 4 background tasks + channel push + token refresh (generic instructions — personality in persona-sati)
+- `src/entrabot/platform/`: OS-specific credential storage — `CredentialStore` protocol with Mac/Linux/Windows implementations
+- `src/entrabot/auth/`: Certificate-based JWT assertion builder + MSAL delegated auth
+- `src/entrabot/a365/`: Microsoft Agent 365 Work IQ provider boundary and Word adapter
+- `src/entrabot/identity/`: Progressive identity state machine (UNAUTHENTICATED → DELEGATED → PROVISIONING → AGENT_USER)
+- `src/entrabot/bot/`: Bot Gateway — M365 Agents SDK server, JSONL IPC, Dev Tunnel
+- `src/entrabot/tools/`: Teams Graph API + interaction log (Phase 1) + email poll (Phase 2) + daily summary (Phase 3) + Adaptive Cards
+- `src/entrabot/storage/`: Cloud-memory backend (ADR-005 Phase 1: `BlobStore` client only; Phase 2 wires it in)
+- `src/entrabot/mcp_server.py`: FastMCP server — Teams tools + 4 background tasks + channel push + token refresh (generic instructions — personality in persona-sati)
 - `prompts/agent_system.md.archive`: Original system prompt (archived — personality now in persona-sati)
 - `prompts/agent_system.md.example`: Sanitized standalone prompt for open-source users
 - `docs/decisions/`: ADRs — every significant architectural choice is recorded here

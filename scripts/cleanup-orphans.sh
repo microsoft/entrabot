@@ -5,7 +5,7 @@
 # az CLI tokens include Directory.AccessAsUser.All which Agent Identity
 # APIs reject), those resources become orphaned.
 #
-# This script uses the EntraClaw Provisioner app (cert-auth, re-created
+# This script uses the EntraBot Provisioner app (cert-auth, re-created
 # by ensure_app_registration if teardown wiped it) to get a clean Graph
 # token, then deletes the orphans. No client secrets on disk or in the
 # shell environment.

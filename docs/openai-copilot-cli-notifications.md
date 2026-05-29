@@ -1,9 +1,9 @@
-# Copilot CLI Notifications — Portable Inbound Channel for Entraclaw
+# Copilot CLI Notifications — Portable Inbound Channel for Entrabot
 
 **Status:** Draft / Architecture proposal
 **Author:** Agent 1 (research) / Product Manager review
 **Date:** 2026-04-24
-**Owners:** Entraclaw maintainers
+**Owners:** Entrabot maintainers
 **Scope:** Make inbound Teams + Email work on GitHub Copilot CLI without
 losing the Claude Code experience.
 **Non-goals:** Re-implementing the persona-sati mind. Changing Entra
@@ -14,11 +14,11 @@ new Teams transport.
 
 ## 1. Executive summary
 
-Today Entraclaw ships inbound Teams DMs and email into the LLM session
+Today Entrabot ships inbound Teams DMs and email into the LLM session
 through a **Claude-Code-proprietary** transport: a JSON-RPC
 notification with method `notifications/claude/channel`, gated on
 the `experimental: {"claude/channel": {}}` capability and the
-`--dangerously-load-development-channels server:entraclaw` launch
+`--dangerously-load-development-channels server:entrabot` launch
 flag (Learning #26, #39). **Copilot CLI does not implement this
 method, has no published equivalent, and per the public help surface
 exposes no documented client API for server-initiated turn injection.**
@@ -34,20 +34,20 @@ Recommendation, in order:
 2. **Phase 1 — Portable inbox in the existing MCP server.** Surface
    inbound messages through three orthogonal mechanisms that any MCP
    client can consume:
-   (a) a durable on-disk **inbox file** (`~/.entraclaw/inbox.jsonl`
+   (a) a durable on-disk **inbox file** (`~/.entrabot/inbox.jsonl`
    plus an `unread` count in `inbox.state.json`) that the agent
    reads via a new `inbox_pull(since=...)` tool;
    (b) a spec-defined MCP logging notification
-   (`notifications/message`) with logger `entraclaw.inbox`, harmless
+   (`notifications/message`) with logger `entrabot.inbox`, harmless
    on clients that ignore it, useful on clients that surface server
    logs;
-   (c) a **MCP resource** (`entraclaw://inbox`) that emits
+   (c) a **MCP resource** (`entrabot://inbox`) that emits
    `notifications/resources/updated` whenever the inbox grows, for
    any future client that subscribes.
    The interaction log + email/Teams polling **already exists**;
    Phase 1 is mostly wiring, not new I/O.
 3. **Phase 2 — Optional terminal companion.** A tiny long-lived
-   sidecar (`entraclaw watch`) prints colored one-line nudges to the
+   sidecar (`entrabot watch`) prints colored one-line nudges to the
    user's terminal when new messages arrive, plus optional OS toast
    (`osascript`/`notify-send`/`BurntToast`). This restores the
    "you have mail" UX outside the LLM. It is **not** a second MCP
@@ -68,10 +68,10 @@ three-hop token flow changes.
 
 ## 2. Current Claude Code architecture (verified)
 
-What `--dangerously-load-development-channels server:entraclaw` plus
+What `--dangerously-load-development-channels server:entrabot` plus
 `experimental_capabilities={"claude/channel": {}}` actually buys us:
 
-- **Server side** (`src/entraclaw/mcp_server.py`):
+- **Server side** (`src/entrabot/mcp_server.py`):
   - `_run_stdio_with_write_stream` (line ~2726) wraps the FastMCP
     `stdio_server()` so we keep a handle to the write stream after
     `Initialize`. Default `mcp.run(transport="stdio")` does not
@@ -146,14 +146,14 @@ surfaces for everyone else.
 - **MCP support is real and first-class.** The `/mcp` slash command
   manages MCP server configuration. Official docs document
   `~/.copilot/mcp-config.json` as the editable user-level config.
-  Entraclaw's `scripts/mcp_config.py` already writes that file and
+  Entrabot's `scripts/mcp_config.py` already writes that file and
   also writes project-local `.mcp.json`; whether Copilot CLI honors the
   project-local file without the user-level copy is repo-documented but
   should be verified in Phase 0.
 - **Custom instructions surfaces:** `AGENTS.md` (git root + cwd),
   `CLAUDE.md`, `GEMINI.md`, `.github/instructions/**/*.instructions.md`,
   `.github/copilot-instructions.md`,
-  `~/.copilot/copilot-instructions.md`. Entraclaw already has
+  `~/.copilot/copilot-instructions.md`. Entrabot already has
   `AGENTS.md` and `CLAUDE.md` — Copilot CLI loads both.
 - **Background tasks exist:** `/tasks` is a documented slash command
   ("View and manage background tasks (subagents and shell sessions)").
@@ -183,7 +183,7 @@ surfaces for everyone else.
   `notifications/claude/channel`, `notifications/message`,
   `notifications/resources/updated`, or any other server-initiated
   method as a way to inject a turn.
-  *Verification:* run `copilot` with `entraclaw` configured, fire each
+  *Verification:* run `copilot` with `entrabot` configured, fire each
   notification method from a tracer MCP, and inspect what (if
   anything) appears in the conversation. Capture the JSON-RPC trace
   via whatever debug log surface Copilot exposes; do not assume a
@@ -204,7 +204,7 @@ surfaces for everyone else.
   whether that client implements `resources/subscribe` and reacts to
   `notifications/resources/updated` is undocumented. Claude Code
   closed this as "not planned" (mcp-close-the-loop.md, Issue #7252).
-  *Verification:* register a resource on the entraclaw server and
+  *Verification:* register a resource on the entrabot server and
   see whether Copilot CLI subscribes during init.
 
 ### Citations (web)
@@ -227,7 +227,7 @@ the one-running-MCP-server constraint?
 | # | Approach | UX on Copilot CLI | Feasibility | Effort | Risks | Single MCP? |
 |---|---|---|---|---|---|---|
 | **A** | **Portable inbox tool + log ping + resource update** (recommended Phase 1) | Agent calls `inbox_pull` on demand or after body-prompt/tool-description nudges; `notifications/message` shows in any client that surfaces logs; resource update fires for future MCP-spec-conformant clients. Latency ≈ poll cadence + agent's next turn. | High — uses only spec-defined primitives, plus a plain JSONL file. | Small. The polling, dedup, sanitization, and interaction log already exist. | Agent forgets to call `inbox_pull` (mitigated by `AGENTS.md` rule + tool descriptions). | ✅ Yes |
-| **B** | **Companion daemon `entraclaw watch`** (Phase 2 add-on) | Terminal banner / OS toast / tray icon when a message arrives. The human sees the alert and tells Copilot to read the inbox. | High — independent process, talks to same JSONL. | Small-medium. Terminal printer first; OS toast across three platforms can follow. | Two processes to keep alive; user has to start it; dies on logoff. | ✅ Still one MCP; companion is not an MCP. |
+| **B** | **Companion daemon `entrabot watch`** (Phase 2 add-on) | Terminal banner / OS toast / tray icon when a message arrives. The human sees the alert and tells Copilot to read the inbox. | High — independent process, talks to same JSONL. | Small-medium. Terminal printer first; OS toast across three platforms can follow. | Two processes to keep alive; user has to start it; dies on logoff. | ✅ Still one MCP; companion is not an MCP. |
 | **C** | **Local SSE/WebSocket push from MCP to a Copilot-CLI–side bridge** | Real-time inbound, but Copilot CLI has to *consume* the bridge. Today there is no such consumer; we'd need a Copilot skill/plugin that re-injects, which the docs do not support. | Low — depends on undocumented Copilot internals. | Medium-high. | Likely impossible without Copilot CLI changes; speculative. | ❌ Adds a bridge process. |
 | **D** | **Copilot skill that the user manually triggers (`/inbox`)** | User types `/inbox` to flush queue into the conversation. Equivalent to option A but with a slash command instead of a tool call. | High — skills are documented. | Small. Mostly a thin wrapper over `inbox_pull`. | Still user-initiated; doesn't give "push" feel. | ✅ Yes |
 | **E** | **MCP `ctx.sample()` / `ctx.elicit()` from a long-running tool** | A `watch_teams_replies`-style tool that calls `ctx.sample()` to make the LLM react mid-tool when a message arrives. | Unverified. Untested with Copilot CLI. (Learning #23 says even Claude Code likely doesn't honor it.) | Medium. | High — speculative; would block one tool slot indefinitely; client may reject. | ✅ Yes |
@@ -284,7 +284,7 @@ process, all reading the same dedup state.
 
 #### 5.2.1 Durable inbox JSONL
 
-Path: `~/.entraclaw/inbox/<YYYY-MM-DD>.jsonl` (rolling daily; matches
+Path: `~/.entrabot/inbox/<YYYY-MM-DD>.jsonl` (rolling daily; matches
 existing data-dir layout). Each line is the same shape we already
 push over the channel:
 
@@ -307,7 +307,7 @@ Durability rules:
 - Append-only. One write per inbound message. Atomic via
   `os.replace` on a `.tmp` sibling, or `O_APPEND` short writes
   (single-process, fine).
-- A separate `~/.entraclaw/inbox/state.json` holds
+- A separate `~/.entrabot/inbox/state.json` holds
   `{ "unread": <int>, "last_id": "<id>", "last_seen_consumer":
   {"<consumer_id>": "<id>"} }`.
 - **Same sanitization as today's push** (`_summarize_content`).
@@ -346,7 +346,7 @@ we emit:
 ```
 notifications/message
   level: "info"
-  logger: "entraclaw.inbox"
+  logger: "entrabot.inbox"
   data: { "channel": "teams", "from": "...", "summary": "...", "unread": <int>,
           "id": "<message_id>" }
 ```
@@ -356,7 +356,7 @@ useful on any client that surfaces server logs (VS Code MCP panel
 does), and free to emit. **Not** a substitute for the inbox file —
 it's a hint.
 
-#### 5.2.4 MCP resource `entraclaw://inbox`
+#### 5.2.4 MCP resource `entrabot://inbox`
 
 Register a resource exposing the latest inbox state. Emit
 `notifications/resources/updated` on every inbox grow. Per
@@ -373,14 +373,14 @@ existing dedup (separate background-poll seen-set, Learning #27),
 plus an `id`-keyed dedup in `inbox_pull` so a Claude Code agent that
 already saw a turn-injection won't re-pull it.
 
-### 5.3 Phase 2 — Optional terminal companion `entraclaw watch`
+### 5.3 Phase 2 — Optional terminal companion `entrabot watch`
 
 A separate command in the existing CLI entry point:
 
 ```bash
-entraclaw watch          # tails ~/.entraclaw/inbox/*.jsonl, prints + toasts
-entraclaw watch --quiet  # toast only, no terminal print
-entraclaw watch --teams  # only teams channel
+entrabot watch          # tails ~/.entrabot/inbox/*.jsonl, prints + toasts
+entrabot watch --quiet  # toast only, no terminal print
+entrabot watch --teams  # only teams channel
 ```
 
 - Reads the **same** inbox JSONL the MCP server writes. Zero new
@@ -418,22 +418,22 @@ out of TDD.
 
 | Phase | Repo file(s) | Change |
 |---|---|---|
-| 0 | `src/entraclaw/mcp_server.py` | New `_supports_claude_channel(host)`. Wrap the `write_stream.send` call in `_push_channel_notification` behind the check. Startup banner log of detected host. |
+| 0 | `src/entrabot/mcp_server.py` | New `_supports_claude_channel(host)`. Wrap the `write_stream.send` call in `_push_channel_notification` behind the check. Startup banner log of detected host. |
 | 0 | `tests/test_mcp_server_integration.py` (extend existing channel-push tests) | Unit tests: claude-code host → proprietary push fires; copilot/unknown host → proprietary push suppressed but inbox write still happens. |
-| 1 | `src/entraclaw/inbox/__init__.py` (new module) | `Inbox` class — append, read-since, mark-consumed, state-file accessor. Atomic writes. Same sanitization helper as channel push. |
-| 1 | `src/entraclaw/mcp_server.py` | Call `Inbox.append(...)` inside `_push_channel_notification` *before* the proprietary send (so observe → durable → push). Add `inbox_pull` tool. Register `entraclaw://inbox` resource + emit `resources/updated`. Emit `notifications/message` log ping. |
+| 1 | `src/entrabot/inbox/__init__.py` (new module) | `Inbox` class — append, read-since, mark-consumed, state-file accessor. Atomic writes. Same sanitization helper as channel push. |
+| 1 | `src/entrabot/mcp_server.py` | Call `Inbox.append(...)` inside `_push_channel_notification` *before* the proprietary send (so observe → durable → push). Add `inbox_pull` tool. Register `entrabot://inbox` resource + emit `resources/updated`. Emit `notifications/message` log ping. |
 | 1 | `prompts/anatomy/channel-discipline.md` | Add "On Copilot CLI / non-channel clients: every turn that interacts with a watched chat, call `inbox_pull` first." Body-rule, non-overridable. |
 | 1 | `AGENTS.md` (root + this doc, optional) | Tiny note linking to the rule above so Copilot CLI surfaces it from session start. |
 | 1 | `tests/inbox/` (new) | Unit tests for the inbox module (append, read-since, dedup, sanitization). MCP-tool tests via `respx` and an in-memory Inbox. |
-| 2 | `src/entraclaw/cli/watch.py` (new) | `entraclaw watch` subcommand. Tail JSONL, format, optional OS toast. |
-| 2 | `pyproject.toml` | Add `entraclaw watch` script entry if not already routed through a Click/Typer group. |
-| 2 | `docs/runbooks/copilot-cli-runbook.md` (new) | Operator instructions: install, configure, start `entraclaw watch`, body-rule reminder. |
-| 3 | `src/entraclaw/mcp_server.py` | Add MCP-spec event emit alongside proprietary push when WG ships. Eventually retire the host gate. |
+| 2 | `src/entrabot/cli/watch.py` (new) | `entrabot watch` subcommand. Tail JSONL, format, optional OS toast. |
+| 2 | `pyproject.toml` | Add `entrabot watch` script entry if not already routed through a Click/Typer group. |
+| 2 | `docs/runbooks/copilot-cli-runbook.md` (new) | Operator instructions: install, configure, start `entrabot watch`, body-rule reminder. |
+| 3 | `src/entrabot/mcp_server.py` | Add MCP-spec event emit alongside proprietary push when WG ships. Eventually retire the host gate. |
 
 Dedicated **non-changes** worth calling out:
-- `src/entraclaw/tools/teams.py` — unchanged. Polling, sanitization,
+- `src/entrabot/tools/teams.py` — unchanged. Polling, sanitization,
   send/read/filter all stay.
-- `src/entraclaw/auth/` — unchanged.
+- `src/entrabot/auth/` — unchanged.
 - The three-hop token flow — unchanged.
 - The interaction log — unchanged. Inbox JSONL is **additional**;
   it does not replace the audit log.
@@ -460,7 +460,7 @@ below.
 
 ### 7.3 Inbox (new)
 
-Two files in `~/.entraclaw/inbox/`:
+Two files in `~/.entrabot/inbox/`:
 
 ```
 <YYYY-MM-DD>.jsonl     # append-only, one record per inbound
@@ -474,7 +474,7 @@ in `last_seen_consumer` so:
 - Claude Code can mark turn-injected messages "consumed" and have
   `inbox_pull` skip them.
 - Copilot CLI's `inbox_pull` advances independently.
-- `entraclaw watch` advances a third cursor for terminal display.
+- `entrabot watch` advances a third cursor for terminal display.
 
 Dedup at the inbox layer is by `id` (Graph `message_id` for Teams,
 `internetMessageId` for email, synthetic UUID for Bot Gateway).
@@ -487,7 +487,7 @@ Dedup at the inbox layer is by `id` (Graph `message_id` for Teams,
 | Inbox JSONL | server → disk | Full meta, sanitized content, consumer cursors | No — durable |
 | `inbox_pull` tool result | server → any MCP client | Same | No |
 | `notifications/message` (log) | server → any MCP client | Summary + count | Yes — best effort |
-| `entraclaw://inbox` resource updated | server → subscribers | Pointer | Yes — depends on subscription |
+| `entrabot://inbox` resource updated | server → subscribers | Pointer | Yes — depends on subscription |
 | Interaction log | server → blob/local | Audit record (every event) | No — durable, source of truth for daily summary |
 
 The interaction log remains the audit source of truth. The inbox is
@@ -503,7 +503,7 @@ the **agent-readable** mirror tuned for low-latency consumption.
   push. Raw Teams HTML never lands on disk in the inbox. Quoted
   messages are sanitized recursively (matches today's behavior in
   `_push_channel_notification`).
-- **Inbox is local-only by default.** `~/.entraclaw/inbox/` is
+- **Inbox is local-only by default.** `~/.entrabot/inbox/` is
   user-mode 0700, files 0600. **No cloud sync.** ADR-005 cloud
   memory does not extend to the inbox — it is operational state, not
   persona memory, and pushing it to blob would expand the
@@ -511,9 +511,9 @@ the **agent-readable** mirror tuned for low-latency consumption.
   already there for auditing).
 - **No tokens, no secrets, no PII beyond what Teams/email already
   surface.** Inbox writer reuses the existing log-redaction
-  discipline; any field we wouldn't put in `entraclaw.log` we don't
+  discipline; any field we wouldn't put in `entrabot.log` we don't
   put in the inbox.
-- **`entraclaw watch` does not authenticate, does not network, does
+- **`entrabot watch` does not authenticate, does not network, does
   not handle Graph tokens.** It only reads the local JSONL. Reduces
   blast radius if the watch process is compromised.
 - **Dedup state is per-consumer.** A misbehaving client cannot
@@ -534,12 +534,12 @@ the **agent-readable** mirror tuned for low-latency consumption.
 ## 9. Open questions and validation plan
 
 1. **Does Copilot CLI surface `notifications/message`?** Run
-   `copilot` with entraclaw, fire a synthetic `notifications/message`,
+   `copilot` with entrabot, fire a synthetic `notifications/message`,
    inspect `/env` and any debug log. If yes, it is bonus visibility;
    if no, the inbox tool path is sufficient.
 2. **Does Copilot CLI honor MCP `resources/subscribe` /
    `notifications/resources/updated`?** Probe by registering
-   `entraclaw://inbox` and watching the wire. Likely no today.
+   `entrabot://inbox` and watching the wire. Likely no today.
 3. **Does Copilot CLI's `clientInfo.name` arrive as `copilot` or
    something more specific?** Verify by logging the value during
    first connect. Adjust `_supports_claude_channel` allowlist if a
@@ -556,7 +556,7 @@ the **agent-readable** mirror tuned for low-latency consumption.
 6. **Should `inbox_pull` auto-fire on tool boot?** Tempting, but it
    would silently consume messages without the agent reading them.
    Reject. Use the body-prompt rule instead.
-7. **Should `entraclaw watch` ship by default?** No — opt-in. It is
+7. **Should `entrabot watch` ship by default?** No — opt-in. It is
    a UX nicety, not a correctness requirement. Document in the
    runbook.
 
@@ -579,11 +579,11 @@ the **agent-readable** mirror tuned for low-latency consumption.
 ## 10. Can this be one running MCP server?
 
 **Yes.** Phases 0 and 1 keep all polling, all auth, all push, all
-inbox writes inside the existing `entraclaw-mcp` process. Claude
+inbox writes inside the existing `entrabot-mcp` process. Claude
 Code keeps its proprietary turn-injection path; Copilot CLI gets a
 durable inbox + a portable tool + a spec-conformant log ping + a
 resource update — all from the same process, the same poll loop,
-the same dedup state. Phase 2's `entraclaw watch` is **not** an MCP
+the same dedup state. Phase 2's `entrabot watch` is **not** an MCP
 server; it is a separate user-launched terminal companion that
 reads the same JSONL on disk. Phase 3 is also single-process.
 

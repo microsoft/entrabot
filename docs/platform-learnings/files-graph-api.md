@@ -1,7 +1,7 @@
 # Files & SharePoint Graph API
 
 > **Last updated:** 2026-04-30
-> **Context:** Entraclaw identity research — research into Microsoft Graph capabilities for documents (Word, Excel, PowerPoint), SharePoint sites, file comments, and sharing, with the goal of giving the Agent User the same document-level powers as a human user.
+> **Context:** Entrabot identity research — research into Microsoft Graph capabilities for documents (Word, Excel, PowerPoint), SharePoint sites, file comments, and sharing, with the goal of giving the Agent User the same document-level powers as a human user.
 > **Companion:** [`teams-graph-api.md`](./teams-graph-api.md) covers the Teams/Chat surface; this doc covers everything else a human user does in Microsoft 365 with files.
 
 ## Overview
@@ -14,7 +14,7 @@ The Microsoft Graph API exposes Microsoft 365 documents through three layered re
 
 Base URL: `https://graph.microsoft.com/v1.0` (stable) or `/beta` (preview, **required for file comments**).
 
-### Why this matters for Entraclaw
+### Why this matters for Entrabot
 
 Today the Agent User can talk in Teams. It cannot read a spec document, leave a comment on a draft, author a Word/Excel file, or upload it to a SharePoint site. Those are the four core "knowledge worker" verbs a human user does in M365 every day. Graph exposes all of them under the same `Files.ReadWrite` / `Sites.ReadWrite.All` scopes the Agent User can already consent to via the existing third hop (`https://graph.microsoft.com/.default`).
 
@@ -35,7 +35,7 @@ The Agent User gets these via the standard Hop 3 (`acquire_agent_user_token`, `r
 | `Sites.Read.All` | Read SharePoint sites | Site discovery, document-library traversal |
 | `Sites.ReadWrite.All` | Write to SharePoint sites | Upload to SharePoint document libraries (vs. only the agent's OneDrive) |
 
-Recommended baseline for Entraclaw: `Files.ReadWrite.All` + `Sites.ReadWrite.All`. The pair gives the agent the same file capabilities as a human user without making it a tenant-wide admin.
+Recommended baseline for Entrabot: `Files.ReadWrite.All` + `Sites.ReadWrite.All`. The pair gives the agent the same file capabilities as a human user without making it a tenant-wide admin.
 
 `Files.ReadWrite` (delegated, user-scoped) is sufficient for "agent only writes to its own OneDrive" but the moment the agent needs to touch a sponsor-shared file, you need `.All`.
 
@@ -167,7 +167,7 @@ Pass `Workbook-Session-Id: <session-id>` on every subsequent request, then eithe
 
 Sessions exist for two reasons: (1) atomic multi-write batches, and (2) **performance** — without a session, every write reloads the workbook server-side. With one, Excel keeps it in memory.
 
-**Entraclaw discipline:** Open a session for any sequence ≥ 3 writes. Always close it. Treat session-id leaks as a bug.
+**Entrabot discipline:** Open a session for any sequence ≥ 3 writes. Always close it. Treat session-id leaks as a bug.
 
 ### Permissions
 
@@ -198,7 +198,7 @@ DELETE /beta/drives/{drive-id}/items/{item-id}/comments/{comment-id}
 
 **Hard limitations to encode in the tool layer:**
 
-| Constraint | Implication for Entraclaw |
+| Constraint | Implication for Entrabot |
 |------------|---------------------------|
 | **Beta only** — no `v1.0` equivalent | Tool docstrings must say "uses Graph beta; subject to breaking change." Pin `httpx` baseURL on the `/beta` host explicitly for these calls. |
 | **Word + Excel only** — PowerPoint comments unsupported | The `add_file_comment` tool must reject `.pptx` files with a clear error. Don't silently 404. |
@@ -231,7 +231,7 @@ POST /v1.0/drives/{drive-id}/items/{item-id}/createLink
 
 Returns a `sharingLink.webUrl` you can paste in chat or email. **Anyone with the link** (within the chosen scope) can open the file.
 
-Use case fit for Entraclaw: rare. Anonymous links are a secret-leak hazard; org-scoped links bypass the sponsor-only model.
+Use case fit for Entrabot: rare. Anonymous links are a secret-leak hazard; org-scoped links bypass the sponsor-only model.
 
 ### `invite` — explicit user invitation
 
@@ -246,9 +246,9 @@ POST /v1.0/drives/{drive-id}/items/{item-id}/invite
 }
 ```
 
-Permissions are scoped per-recipient and survive link revocation. **This is the right primitive for Entraclaw**: matches the sponsor-only trust model (the agent shares only with people on its sponsor list), creates an audit trail, and the recipient sees the file in their `sharedWithMe`.
+Permissions are scoped per-recipient and survive link revocation. **This is the right primitive for Entrabot**: matches the sponsor-only trust model (the agent shares only with people on its sponsor list), creates an audit trail, and the recipient sees the file in their `sharedWithMe`.
 
-**Discipline for the `share_file` tool:** validate that every `recipients[*].email` matches a sponsor on the Agent Identity's Graph sponsors relationship before calling Graph. If a non-sponsor email appears, reject in the tool, not at Graph — Graph will accept any tenant user, but Entraclaw's policy is sponsor-only.
+**Discipline for the `share_file` tool:** validate that every `recipients[*].email` matches a sponsor on the Agent Identity's Graph sponsors relationship before calling Graph. If a non-sponsor email appears, reject in the tool, not at Graph — Graph will accept any tenant user, but Entrabot's policy is sponsor-only.
 
 ### Listing & revoking permissions
 
@@ -292,7 +292,7 @@ Content-Range: bytes 0-1048575/16777216
 
 **Resilience:** if a chunk fails, you can `GET <uploadUrl>` to ask "where am I?" and resume from the last accepted byte. The session is good for ~7 days.
 
-For Entraclaw, treat 4 MB as the small/large boundary: Word specs are virtually always small; PowerPoints with media are virtually always large. Pick one upload primitive based on `os.path.getsize()`.
+For Entrabot, treat 4 MB as the small/large boundary: Word specs are virtually always small; PowerPoints with media are virtually always large. Pick one upload primitive based on `os.path.getsize()`.
 
 ---
 
@@ -305,7 +305,7 @@ Graph's PowerPoint surface is materially weaker than Word/Excel:
 - ❌ **No structured slide manipulation** in Graph. The `presentation` resource exists in `/beta` but exposes only metadata (slide titles, count) — no shape/text/image creation, no layout control.
 - ❌ **No "create blank presentation"** endpoint.
 
-If Entraclaw needs to author a PowerPoint, the right architecture is:
+If Entrabot needs to author a PowerPoint, the right architecture is:
 
 1. Generate the `.pptx` client-side using [`python-pptx`](https://python-pptx.readthedocs.io/) (full slide / shape / image / chart control, MIT license, no Microsoft dependency).
 2. Upload the result via the chunked upload endpoint above.
@@ -324,7 +324,7 @@ General DriveItem and Workbook traffic is bounded by:
 - **Workbook sessions:** session creation itself is rate-limited; reuse a session across calls.
 - **Search:** stricter; treat as a turn-gated tool, not a per-tool-call lookup.
 
-Always honor `Retry-After`. The standard Entraclaw retry harness (`_with_token_retry`) does not currently handle `429` — wrap Graph calls in a separate `_with_throttle_retry` helper that backs off on 429/503.
+Always honor `Retry-After`. The standard Entrabot retry harness (`_with_token_retry`) does not currently handle `429` — wrap Graph calls in a separate `_with_throttle_retry` helper that backs off on 429/503.
 
 ---
 

@@ -4,9 +4,9 @@
 
 **Goal:** Design and build a reusable runtime layer that composes a body MCP server and persona-sati into one coherent agent surface, so host LLMs no longer have to manually coordinate body and mind from prompt instructions alone.
 
-**Architecture:** Phase 3 introduces a "nervous system" broker that sits between the host LLM and the separate body/mind MCP servers. The broker does not collapse body and mind; it makes their coordination explicit by owning session bootstrap, tool-call observation, degraded-mode state, and safety gates. The first deliverable should be a design document and proof-of-concept wrapper, not a full replacement for entraclaw or persona-sati.
+**Architecture:** Phase 3 introduces a "nervous system" broker that sits between the host LLM and the separate body/mind MCP servers. The broker does not collapse body and mind; it makes their coordination explicit by owning session bootstrap, tool-call observation, degraded-mode state, and safety gates. The first deliverable should be a design document and proof-of-concept wrapper, not a full replacement for entrabot or persona-sati.
 
-**Tech Stack:** Python 3.12, MCP client/server SDK, FastMCP, pytest, ruff, JSON-RPC proxying, persona-sati `bootstrap_session()`, entraclaw body tools.
+**Tech Stack:** Python 3.12, MCP client/server SDK, FastMCP, pytest, ruff, JSON-RPC proxying, persona-sati `bootstrap_session()`, entrabot body tools.
 
 ---
 
@@ -18,8 +18,8 @@ The long-term problem is structural: MCP exposes tools, but it does not guarante
 
 ## Boundary decisions
 
-- Keep persona-sati body-agnostic. It must not learn Teams, email, or entraclaw-specific state.
-- Keep entraclaw body-first. It owns Teams/email/tools/security/audit.
+- Keep persona-sati body-agnostic. It must not learn Teams, email, or entrabot-specific state.
+- Keep entrabot body-first. It owns Teams/email/tools/security/audit.
 - The broker may know how to connect body and mind, but it should avoid embedding persona content or body business logic.
 - Start with read-only proxy and bootstrap enforcement before adding write or high-blast-radius gating.
 - Treat this as a new runtime layer, not a patch inside either existing repo until the design proves itself.
@@ -28,24 +28,24 @@ The long-term problem is structural: MCP exposes tools, but it does not guarante
 
 There are two viable placements:
 
-1. **New package inside entraclaw:** `src/entraclaw/runtime/`
-   - Faster because entraclaw already owns body tools and efferent-copy.
-   - Risk: makes the broker look entraclaw-specific.
+1. **New package inside entrabot:** `src/entrabot/runtime/`
+   - Faster because entrabot already owns body tools and efferent-copy.
+   - Risk: makes the broker look entrabot-specific.
 2. **New independent repo/package:** `agent-nervous-system`
    - Cleaner product boundary.
    - More setup work.
 
-Recommendation for the proof of concept: create a small `src/entraclaw/runtime/` prototype first, then extract once the interface is stable.
+Recommendation for the proof of concept: create a small `src/entrabot/runtime/` prototype first, then extract once the interface is stable.
 
 ## File map for proof of concept
 
-### Entraclaw repo: `/path/to/entraclaw-identity-research`
+### Entrabot repo: `/path/to/entrabot-identity-research`
 
 - Create: `docs/architecture/DESIGN-mind-body-nervous-system.md` — final architecture before code.
-- Create: `src/entraclaw/runtime/__init__.py` — package marker.
-- Create: `src/entraclaw/runtime/broker.py` — broker data model and routing policy.
-- Create: `src/entraclaw/runtime/mcp_client.py` — thin MCP client abstraction for body/mind upstreams.
-- Create: `src/entraclaw/runtime/server.py` — FastMCP wrapper server proof of concept.
+- Create: `src/entrabot/runtime/__init__.py` — package marker.
+- Create: `src/entrabot/runtime/broker.py` — broker data model and routing policy.
+- Create: `src/entrabot/runtime/mcp_client.py` — thin MCP client abstraction for body/mind upstreams.
+- Create: `src/entrabot/runtime/server.py` — FastMCP wrapper server proof of concept.
 - Create: `tests/runtime/test_broker.py` — pure routing/bootstrap tests.
 - Create: `tests/runtime/test_runtime_server.py` — in-process wrapper tests.
 - Modify: `.mcp.json.example` — optional broker entry once the proof of concept works.
@@ -58,7 +58,7 @@ Recommendation for the proof of concept: create a small `src/entraclaw/runtime/`
 ### Task 1: Write the architecture design
 
 **Files:**
-- Create: `/path/to/entraclaw-identity-research/docs/architecture/DESIGN-mind-body-nervous-system.md`
+- Create: `/path/to/entrabot-identity-research/docs/architecture/DESIGN-mind-body-nervous-system.md`
 
 - [ ] **Step 1: Create the design document**
 
@@ -82,7 +82,7 @@ and persona-sati while preserving their separation.
 
 ## Non-goals
 
-- Do not merge persona-sati into entraclaw.
+- Do not merge persona-sati into entrabot.
 - Do not make persona-sati know Teams, Slack, email, or body-specific
   state.
 - Do not load full memory into every prompt.
@@ -135,7 +135,7 @@ Confirm the design assumes persona-sati has `bootstrap_session()`. If Phase 2 ha
 Run:
 
 ```bash
-cd "/path/to/entraclaw-identity-research"
+cd "/path/to/entrabot-identity-research"
 git add docs/architecture/DESIGN-mind-body-nervous-system.md
 git commit -m "docs: design mind-body nervous-system runtime" \
   -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
@@ -148,14 +148,14 @@ git commit -m "docs: design mind-body nervous-system runtime" \
 ### Task 2: Write broker tests
 
 **Files:**
-- Create: `/path/to/entraclaw-identity-research/tests/runtime/test_broker.py`
+- Create: `/path/to/entrabot-identity-research/tests/runtime/test_broker.py`
 
 - [ ] **Step 1: Create the test directory**
 
 Run:
 
 ```bash
-cd "/path/to/entraclaw-identity-research"
+cd "/path/to/entrabot-identity-research"
 mkdir -p tests/runtime
 ```
 
@@ -166,7 +166,7 @@ Create `tests/runtime/test_broker.py` with:
 ```python
 from __future__ import annotations
 
-from entraclaw.runtime.broker import BrokerState, ToolClassification
+from entrabot.runtime.broker import BrokerState, ToolClassification
 
 
 def test_broker_starts_unbootstrapped() -> None:
@@ -221,21 +221,21 @@ def test_tool_classification_marks_human_visible_writes() -> None:
 Run:
 
 ```bash
-cd "/path/to/entraclaw-identity-research"
+cd "/path/to/entrabot-identity-research"
 pytest tests/runtime/test_broker.py -v
 ```
 
-Expected: FAIL because `entraclaw.runtime.broker` does not exist.
+Expected: FAIL because `entrabot.runtime.broker` does not exist.
 
 ### Task 3: Implement broker state and tool classification
 
 **Files:**
-- Create: `/path/to/entraclaw-identity-research/src/entraclaw/runtime/__init__.py`
-- Create: `/path/to/entraclaw-identity-research/src/entraclaw/runtime/broker.py`
+- Create: `/path/to/entrabot-identity-research/src/entrabot/runtime/__init__.py`
+- Create: `/path/to/entrabot-identity-research/src/entrabot/runtime/broker.py`
 
 - [ ] **Step 1: Create runtime package**
 
-Create `src/entraclaw/runtime/__init__.py`:
+Create `src/entrabot/runtime/__init__.py`:
 
 ```python
 """Mind-body runtime broker prototype."""
@@ -243,7 +243,7 @@ Create `src/entraclaw/runtime/__init__.py`:
 
 - [ ] **Step 2: Implement broker core**
 
-Create `src/entraclaw/runtime/broker.py`:
+Create `src/entrabot/runtime/broker.py`:
 
 ```python
 """State and policy for the mind-body runtime broker."""
@@ -300,7 +300,7 @@ class ToolClassification:
 Run:
 
 ```bash
-cd "/path/to/entraclaw-identity-research"
+cd "/path/to/entrabot-identity-research"
 pytest tests/runtime/test_broker.py -v
 ```
 
@@ -313,7 +313,7 @@ Expected: PASS.
 ### Task 4: Define MCP client abstraction tests
 
 **Files:**
-- Create: `/path/to/entraclaw-identity-research/tests/runtime/test_runtime_server.py`
+- Create: `/path/to/entrabot-identity-research/tests/runtime/test_runtime_server.py`
 
 - [ ] **Step 1: Write fake upstream tests**
 
@@ -324,7 +324,7 @@ from __future__ import annotations
 
 import pytest
 
-from entraclaw.runtime.server import create_runtime_server
+from entrabot.runtime.server import create_runtime_server
 
 
 class FakeUpstream:
@@ -392,20 +392,20 @@ async def test_runtime_proxies_body_tool_after_bootstrap() -> None:
 Run:
 
 ```bash
-cd "/path/to/entraclaw-identity-research"
+cd "/path/to/entrabot-identity-research"
 pytest tests/runtime/test_runtime_server.py -v
 ```
 
-Expected: FAIL because `entraclaw.runtime.server` does not exist.
+Expected: FAIL because `entrabot.runtime.server` does not exist.
 
 ### Task 5: Implement runtime server POC
 
 **Files:**
-- Create: `/path/to/entraclaw-identity-research/src/entraclaw/runtime/server.py`
+- Create: `/path/to/entrabot-identity-research/src/entrabot/runtime/server.py`
 
 - [ ] **Step 1: Create runtime server**
 
-Create `src/entraclaw/runtime/server.py`:
+Create `src/entrabot/runtime/server.py`:
 
 ```python
 """FastMCP proof-of-concept runtime broker."""
@@ -417,7 +417,7 @@ from typing import Protocol
 
 from mcp.server.fastmcp import FastMCP
 
-from entraclaw.runtime.broker import BrokerState
+from entrabot.runtime.broker import BrokerState
 
 
 class Upstream(Protocol):
@@ -428,7 +428,7 @@ class Upstream(Protocol):
 def create_runtime_server(*, mind: Upstream, body: Upstream) -> FastMCP:
     state = BrokerState()
     server = FastMCP(
-        "entraclaw-runtime",
+        "entrabot-runtime",
         instructions=(
             "Runtime broker for body + persona-sati. "
             "Call runtime_bootstrap before body_tool."
@@ -479,7 +479,7 @@ def create_runtime_server(*, mind: Upstream, body: Upstream) -> FastMCP:
 Run:
 
 ```bash
-cd "/path/to/entraclaw-identity-research"
+cd "/path/to/entrabot-identity-research"
 pytest tests/runtime/test_broker.py tests/runtime/test_runtime_server.py -v
 ```
 
@@ -488,14 +488,14 @@ Expected: PASS.
 ### Task 6: Wire example MCP config for later manual use
 
 **Files:**
-- Modify: `/path/to/entraclaw-identity-research/.mcp.json.example`
+- Modify: `/path/to/entrabot-identity-research/.mcp.json.example`
 
 - [ ] **Step 1: Add a strict-JSON runtime note**
 
 Add this top-level string next to the existing `mcpServers` object:
 
 ```json
-"_phase3_note": "Future Phase 3 runtime broker will expose one composed MCP surface after the proof of concept is promoted to a real entry point. Until then, keep entraclaw and persona-sati as separate MCP entries and use bootstrap_session()."
+"_phase3_note": "Future Phase 3 runtime broker will expose one composed MCP surface after the proof of concept is promoted to a real entry point. Until then, keep entrabot and persona-sati as separate MCP entries and use bootstrap_session()."
 ```
 
 The resulting file must remain valid JSON. With the current file shape, the root object should contain both `_phase3_note` and `mcpServers`.
@@ -505,7 +505,7 @@ The resulting file must remain valid JSON. With the current file shape, the root
 Run:
 
 ```bash
-cd "/path/to/entraclaw-identity-research"
+cd "/path/to/entrabot-identity-research"
 python3 -m json.tool .mcp.json.example >/tmp/mcp-json-check
 ```
 
@@ -521,9 +521,9 @@ Expected: exit code 0.
 Run:
 
 ```bash
-cd "/path/to/entraclaw-identity-research"
+cd "/path/to/entrabot-identity-research"
 pytest tests/runtime/test_broker.py tests/runtime/test_runtime_server.py -v
-ruff check src/entraclaw/runtime tests/runtime
+ruff check src/entrabot/runtime tests/runtime
 ```
 
 Expected: PASS.
@@ -533,7 +533,7 @@ Expected: PASS.
 Run:
 
 ```bash
-cd "/path/to/entraclaw-identity-research"
+cd "/path/to/entrabot-identity-research"
 pytest tests/test_prompt_doctrine.py tests/hooks/test_inject_body_prompt.py tests/runtime -v
 ```
 
@@ -544,9 +544,9 @@ Expected: PASS.
 Run:
 
 ```bash
-cd "/path/to/entraclaw-identity-research"
+cd "/path/to/entrabot-identity-research"
 git add docs/architecture/DESIGN-mind-body-nervous-system.md \
-  src/entraclaw/runtime \
+  src/entrabot/runtime \
   tests/runtime \
   .mcp.json.example \
   docs/TODO-persona-sati-host-bootstrap.md
@@ -571,7 +571,7 @@ Do not replace the current dual-MCP setup until all of these are true:
 
 Phase 3 should end with a reviewed design and a small proof of concept, not a mandatory migration. The current production path remains:
 
-1. Host connects to entraclaw body.
+1. Host connects to entrabot body.
 2. Host connects to persona-sati mind.
 3. Host calls `bootstrap_session()` first.
 4. Efferent-copy and tool docstrings cover the critical action boundaries.

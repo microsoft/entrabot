@@ -15,7 +15,7 @@ Agent Identity Blueprint (application)
           └─ Agent User (user object, optional, 1:1)
 ```
 
-> **Note:** The BlueprintPrincipal must be **explicitly created** after the Blueprint via a separate `POST /v1.0/serviceprincipals/microsoft.graph.agentIdentityBlueprintPrincipal` call. It is NOT auto-created when the Blueprint is created. This is a load-bearing detail — see the entraclaw `CLAUDE.md` Non-Negotiables and `msal-entra-agent-ids.md` Step 1 for the canonical creation flow.
+> **Note:** The BlueprintPrincipal must be **explicitly created** after the Blueprint via a separate `POST /v1.0/serviceprincipals/microsoft.graph.agentIdentityBlueprintPrincipal` call. It is NOT auto-created when the Blueprint is created. This is a load-bearing detail — see the entrabot `CLAUDE.md` Non-Negotiables and `msal-entra-agent-ids.md` Step 1 for the canonical creation flow.
 
 The Agent User is:
 - Created via `POST /beta/users` with `@odata.type: microsoft.graph.agentUser`
@@ -55,10 +55,10 @@ Authorization: Bearer <token>
 
 {
   "@odata.type": "microsoft.graph.agentUser",
-  "displayName": "Entraclaw Agent",
-  "userPrincipalName": "entraclaw-agent@tenant.onmicrosoft.com",
+  "displayName": "Entrabot Agent",
+  "userPrincipalName": "entrabot-agent@tenant.onmicrosoft.com",
   "identityParentId": "{agent-identity-object-id}",
-  "mailNickname": "entraclaw-agent",
+  "mailNickname": "entrabot-agent",
   "accountEnabled": true
 }
 ```
@@ -75,14 +75,14 @@ The token must come from the Blueprint (client_credentials) with the `AgentIdUse
 
 After assigning a license, resource provisioning (mailbox, OneDrive) typically completes within 10-15 minutes but can take up to 24 hours.
 
-### What This Means for Entraclaw
+### What This Means for Entrabot
 
 To give the agent its own Teams presence, we need:
 1. An Agent User created and linked to the Agent Identity
 2. A Teams-capable license assigned to the Agent User (E3, E5, or Teams Enterprise)
 3. Wait for mailbox/Teams provisioning to complete
 
-The agent then gets its own UPN (e.g., `entraclaw-agent@tenant.onmicrosoft.com`), its own Teams identity, and can be @mentioned, receive messages, and participate in chats.
+The agent then gets its own UPN (e.g., `entrabot-agent@tenant.onmicrosoft.com`), its own Teams identity, and can be @mentioned, receive messages, and participate in chats.
 
 ## Authentication: The Three-Hop Token Flow
 
@@ -130,7 +130,7 @@ The result is a **delegated access token** with `idtyp=user` that can call any G
 
 **No human in the loop. No device-code flow. No OBO. Fully autonomous.**
 
-### Parameter naming reconciliation (Microsoft canonical doc vs. entraclaw)
+### Parameter naming reconciliation (Microsoft canonical doc vs. entrabot)
 
 The Microsoft GA doc [`agent-user-oauth-flow`](https://learn.microsoft.com/en-us/entra/agent-id/identity-platform/autonomous-agent-request-agent-user-tokens) (updated 2026-05-01) shows the third hop with these parameter names:
 
@@ -149,7 +149,7 @@ Notable differences from this document's Hop 3 example above:
 - Microsoft adds an explicit `&requested_token_use=on_behalf_of` parameter.
 - Microsoft naming convention: T1 (Blueprint→Agent Identity), T2 (Agent Identity self-impersonation), then Hop 3 is the OBO-style call passing both T1 (as `client_assertion`) and T2 (as `user_federated_identity_credential`).
 
-**Recommended action:** Verify the entraclaw implementation against the Microsoft canonical doc and harmonize parameter names. If `&user_id=` works against the live Entra endpoint, document it as an undocumented-but-functional alias and note that Microsoft's preferred parameter is `&username=`. Don't depend on either parameter being permanently aliased — the `user_fic` parameter naming may converge in a future post-GA migration.
+**Recommended action:** Verify the entrabot implementation against the Microsoft canonical doc and harmonize parameter names. If `&user_id=` works against the live Entra endpoint, document it as an undocumented-but-functional alias and note that Microsoft's preferred parameter is `&username=`. Don't depend on either parameter being permanently aliased — the `user_fic` parameter naming may converge in a future post-GA migration.
 
 ## Consent for Agent User
 
@@ -201,7 +201,7 @@ The Agent User gets:
 - If the agent only needs to call other agents (use Agent Identity with app roles)
 - Scale-out replicas (share one Agent Identity, don't create per-replica)
 
-## Implications for Entraclaw
+## Implications for Entrabot
 
 ### What Changes
 1. **No device-code flow needed** — Agent User authenticates via the three-hop machine-to-machine flow

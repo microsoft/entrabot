@@ -1,10 +1,10 @@
 # Identity
 
-Identity state machine and sponsor enforcement. Source under `src/entraclaw/identity/`.
+Identity state machine and sponsor enforcement. Source under `src/entrabot/identity/`.
 
 ## `IdentityStateMachine`
 
-`src/entraclaw/identity/state_machine.py`. Manages identity state transitions with `asyncio.Lock` protection. The lock covers only the state mutation (microsecond hold time); auth and provisioning operations run outside the lock.
+`src/entrabot/identity/state_machine.py`. Manages identity state transitions with `asyncio.Lock` protection. The lock covers only the state mutation (microsecond hold time); auth and provisioning operations run outside the lock.
 
 ### States
 
@@ -57,7 +57,7 @@ Sponsors are users authorized to give the Agent Identity operational instruction
 
 ### `AgentIdentitySponsor`
 
-`src/entraclaw/identity/sponsors.py`:
+`src/entrabot/identity/sponsors.py`:
 
 ```python
 @dataclass(frozen=True)
@@ -109,7 +109,7 @@ Allow inbound Teams messages only from the Agent Identity's user sponsors.
 
 ```python
 def fetch_agent_identity_sponsors(
-    config: EntraClawConfig,
+    config: EntraBotConfig,
     *,
     token_provider: Callable[[], str] | None = None,
 ) -> list[AgentIdentitySponsor]
@@ -120,14 +120,14 @@ Fetch the sponsors from Graph. Uses `acquire_agent_identity_token` (app-only) �
 ### `load_agent_identity_sponsor_gate`
 
 ```python
-def load_agent_identity_sponsor_gate(config: EntraClawConfig) -> SponsorGate
+def load_agent_identity_sponsor_gate(config: EntraBotConfig) -> SponsorGate
 ```
 
 The convenience constructor used by the MCP server at boot: fetches sponsors, builds the gate, then layers `with_chat_members` and `with_watched_chat_ids` for each watched 1:1 chat.
 
 ## Files-tool sponsor gate
 
-`src/entraclaw/tools/files.py` carries the same gating model for `share_file` and `add_teams_member`. Both require a `requester_email` argument and reject any requester that is not in the resolved sponsor allowlist. The recipient (`recipient_email` / `email`) is unrestricted — sponsors may share with anyone they choose.
+`src/entrabot/tools/files.py` carries the same gating model for `share_file` and `add_teams_member`. Both require a `requester_email` argument and reject any requester that is not in the resolved sponsor allowlist. The recipient (`recipient_email` / `email`) is unrestricted — sponsors may share with anyone they choose.
 
 Functions:
 
@@ -136,16 +136,16 @@ Functions:
 
 ## Auth modes
 
-`ENTRACLAW_MODE` selects which identity path the MCP server runs:
+`ENTRABOT_MODE` selects which identity path the MCP server runs:
 
 | Mode | Description |
 |------|-------------|
 | `agent_user` | Three-hop cert flow. The Agent User authenticates autonomously. Default. |
-| `delegated` | MSAL interactive auth with the human's token. Messages prefixed `[EntraClaw]`. |
+| `delegated` | MSAL interactive auth with the human's token. Messages prefixed `[EntraBot]`. |
 | `bot` | M365 Agents SDK bot server with JSONL IPC. Bot has its own Teams identity. |
 | `auto` | Pick the best mode based on config. |
 
-See `src/entraclaw/config.py` for the env-var contract.
+See `src/entrabot/config.py` for the env-var contract.
 
 ## Related
 

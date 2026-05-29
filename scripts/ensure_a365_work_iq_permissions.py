@@ -3,7 +3,7 @@
 
 The A365 CLI can fail to materialize the first-party resource service
 principals it needs, then still exit successfully after printing
-``OAuth2 grants failed``. This script uses Entraclaw's provisioner app token to
+``OAuth2 grants failed``. This script uses Entrabot's provisioner app token to
 create the resource service principals and Blueprint-wide OAuth grants before
 the CLI runs its own permission step.
 """
@@ -27,9 +27,9 @@ from entra_provisioning import (  # noqa: E402
     get_state,
 )
 
-# The repo root is one directory up; src/ contains the entraclaw package.
+# The repo root is one directory up; src/ contains the entrabot package.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from entraclaw.graph_helpers import odata_escape as _odata_escape  # noqa: E402
+from entrabot.graph_helpers import odata_escape as _odata_escape  # noqa: E402
 
 GRAPH_V1 = "https://graph.microsoft.com/v1.0"
 
@@ -192,7 +192,7 @@ def _resolve_blueprint_sp_object_id(
     existing = _find_service_principal(blueprint_app_id, token, request=request)
     if not existing or not existing.get("id"):
         raise A365PermissionError(
-            "Blueprint service principal was not found. Run Entraclaw provisioning before "
+            "Blueprint service principal was not found. Run Entrabot provisioning before "
             "configuring A365 Work IQ."
         )
     return str(existing["id"])
@@ -370,7 +370,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--blueprint-app-id",
         default="",
-        help="Agent Identity Blueprint application ID. Defaults to .entraclaw-state.json.",
+        help="Agent Identity Blueprint application ID. Defaults to .entrabot-state.json.",
     )
     return parser.parse_args(argv)
 

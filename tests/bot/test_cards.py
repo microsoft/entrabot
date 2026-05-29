@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from entraclaw.bot.cards import (
+from entrabot.bot.cards import (
     CONTENT_TYPE,
     build_card,
     pr_card,

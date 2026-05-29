@@ -1,6 +1,6 @@
 """Tests for the efferent-copy dispatch middleware.
 
-See `src/entraclaw/efferent_copy.py`. The middleware fires a generic
+See `src/entrabot/efferent_copy.py`. The middleware fires a generic
 `observe(tool_name, args[, result])` MCP call to any peer that advertises
 a compatibly-typed `observe` tool, before and after every @mcp.tool()
 dispatch. Discovery is schema-based; there are no peer-specific names.
@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from entraclaw import efferent_copy as ec
+from entrabot import efferent_copy as ec
 
 # ---------------------------------------------------------------------------
 # Helpers — an in-memory fake Sink that records observe invocations.
@@ -424,9 +424,9 @@ class TestDiscoverSinks:
     ):
         """Regression: a peer whose stdio command resolves to our own
         executable MUST NOT be opened — doing so spawns a child
-        entraclaw-mcp which itself runs discover_sinks, which spawns a
+        entrabot-mcp which itself runs discover_sinks, which spawns a
         grandchild, recurring until every level's 5s timeout fires. The
-        April 2026 incident: ~30 child entraclaw-mcp subprocesses per
+        April 2026 incident: ~30 child entrabot-mcp subprocesses per
         minute for 2h+, each reporting clientInfo.name='mcp' and
         clobbering the leader-host cache, which silently dropped every
         Teams DM push.
@@ -478,11 +478,11 @@ class TestDiscoverSinks:
         """A peer whose `command` points at a thin shell wrapper that exec's
         into our running binary MUST be skipped — same root cause as the
         direct self-reference case. The wrapper declares its target via a
-        `# entraclaw-self-ref-target: <path>` comment so this check works
+        `# entrabot-self-ref-target: <path>` comment so this check works
         without parsing arbitrary shell.
 
-        Background: the debug wrapper at scripts/entraclaw-mcp-debug.sh tees
-        stderr to a log file and exec's into .venv/bin/entraclaw-mcp. Pointing
+        Background: the debug wrapper at scripts/entrabot-mcp-debug.sh tees
+        stderr to a log file and exec's into .venv/bin/entrabot-mcp. Pointing
         .mcp.json at the wrapper bypassed _is_self_referential_peer (the
         wrapper path doesn't match sys.argv[0]), restoring the self-spawn
         cascade that PR #36 originally fixed. Learning #45 has the writeup.
@@ -490,13 +490,13 @@ class TestDiscoverSinks:
         import sys
 
         # Stage a fake "running binary" and a wrapper that exec's it.
-        fake_target = tmp_path / "entraclaw-mcp"
+        fake_target = tmp_path / "entrabot-mcp"
         fake_target.write_text("#!/bin/sh\nexit 0\n")
         fake_target.chmod(0o755)
 
         wrapper = tmp_path / "wrapper.sh"
         wrapper.write_text(
-            f'#!/bin/bash\n# entraclaw-self-ref-target: {fake_target}\nexec "{fake_target}"\n'
+            f'#!/bin/bash\n# entrabot-self-ref-target: {fake_target}\nexec "{fake_target}"\n'
         )
         wrapper.chmod(0o755)
 
@@ -540,14 +540,14 @@ class TestDiscoverSinks:
         """Unit-level coverage for the wrapper-marker branch."""
         import sys
 
-        fake_target = tmp_path / "entraclaw-mcp"
+        fake_target = tmp_path / "entrabot-mcp"
         fake_target.write_text("#!/bin/sh\nexit 0\n")
         fake_target.chmod(0o755)
 
         # Marker uses a relative path; resolves against the script's dir.
         wrapper = tmp_path / "wrapper.sh"
         wrapper.write_text(
-            f'#!/bin/bash\n# entraclaw-self-ref-target: ./entraclaw-mcp\nexec "{fake_target}"\n'
+            f'#!/bin/bash\n# entrabot-self-ref-target: ./entrabot-mcp\nexec "{fake_target}"\n'
         )
         wrapper.chmod(0o755)
 
@@ -566,7 +566,7 @@ class TestDiscoverSinks:
         """
         import sys
 
-        fake_target = tmp_path / "entraclaw-mcp"
+        fake_target = tmp_path / "entrabot-mcp"
         fake_target.write_text("#!/bin/sh\nexit 0\n")
         fake_target.chmod(0o755)
 

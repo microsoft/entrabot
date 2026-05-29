@@ -352,7 +352,7 @@ PKCE works against Entra. The metadata is just missing. MCP clients (Claude Code
 
 ## What changed at the May 1, 2026 GA
 
-For comparison: the existing `/path/to/entraclaw-identity-research/docs/platform-learnings/msal-entra-agent-ids.md` was last updated 2025-07-14, when Agent ID was in public preview. The doc lists "preview only", "Microsoft Graph beta API required — not yet in v1.0", and "Single-tenant only". Many of those statements are now outdated.
+For comparison: the existing `/path/to/entrabot-identity-research/docs/platform-learnings/msal-entra-agent-ids.md` was last updated 2025-07-14, when Agent ID was in public preview. The doc lists "preview only", "Microsoft Graph beta API required — not yet in v1.0", and "Single-tenant only". Many of those statements are now outdated.
 
 ### What's GA'd
 
@@ -523,8 +523,8 @@ When designing any auth flow that touches an Agent Identity, Agent Blueprint, or
 
 ### Related repo docs
 
-- **Entraclaw `docs/platform-learnings/msal-entra-agent-ids.md`** (last updated 2025-07-14): pre-GA preview-era reference. Extends with: device-code flow patterns for human bootstrap, MSAL Python class breakdown, OBO mechanics. **Now superseded** for any post-GA Agent Blueprint claims; this doc supersedes the "Current Limitations (Preview)" section.
-- **Entraclaw `docs/platform-learnings/entra-agent-users.md`**: the three-hop user_fic flow walkthrough, directory-quota analysis. **Still accurate for the user_fic mechanics**, but the "preview" framing is outdated post-2026-05-01.
+- **Entrabot `docs/platform-learnings/msal-entra-agent-ids.md`** (last updated 2025-07-14): pre-GA preview-era reference. Extends with: device-code flow patterns for human bootstrap, MSAL Python class breakdown, OBO mechanics. **Now superseded** for any post-GA Agent Blueprint claims; this doc supersedes the "Current Limitations (Preview)" section.
+- **Entrabot `docs/platform-learnings/entra-agent-users.md`**: the three-hop user_fic flow walkthrough, directory-quota analysis. **Still accurate for the user_fic mechanics**, but the "preview" framing is outdated post-2026-05-01.
 - **Conditional Access notes (Microsoft Learn)**: CA semantics for agents — agent risk, custom security attributes, target scoping. Complements this doc when designing tenant-policy enforcement; the public Learn pages are the current source of truth.
 - **Persona-sati delegation refresh plan** (private repo, archived): the 12h refresh plan that surfaced this constraint. The discovery-shim and OIDC-injection parts were correct; the Task 0 Step 2 assumption about flipping the Blueprint to public-client mode is what broke. See the case study below for the full post-mortem.
 

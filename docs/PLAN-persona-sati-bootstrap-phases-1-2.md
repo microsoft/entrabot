@@ -4,7 +4,7 @@
 
 **Goal:** Make persona-sati session orientation reliable across host clients by first putting the bootstrap rule where hosts actually inject it, then replacing the fragile three-call startup ritual with a single `bootstrap_session()` MCP tool.
 
-**Architecture:** Phase 1 is the host-visible bridge: entraclaw documents and tests the instruction surfaces that actually reach Claude Code, Copilot CLI, and GitHub Copilot. Phase 2 is the persona-sati API change: persona-sati returns one bootstrap packet that includes the assembled mind contract, active context, memory catalog summary, cognition protocol, and degraded-mode state. Phases 1 and 2 should land together because Phase 1 should teach hosts the new `bootstrap_session()` entry point, not preserve the old three-call ritual as the long-term shape.
+**Architecture:** Phase 1 is the host-visible bridge: entrabot documents and tests the instruction surfaces that actually reach Claude Code, Copilot CLI, and GitHub Copilot. Phase 2 is the persona-sati API change: persona-sati returns one bootstrap packet that includes the assembled mind contract, active context, memory catalog summary, cognition protocol, and degraded-mode state. Phases 1 and 2 should land together because Phase 1 should teach hosts the new `bootstrap_session()` entry point, not preserve the old three-call ritual as the long-term shape.
 
 **Tech Stack:** Python 3.12, FastMCP, pytest, ruff, Markdown host instruction files, shell setup scripts.
 
@@ -14,20 +14,20 @@
 
 `prompts/agent_system.md`, `prompts/anatomy/*`, and persona-sati's prompt hemispheres are treated as load-bearing operating context, but MCP `instructions=` is not reliably injected into the model context by Claude Code or Copilot CLI. The host LLM only reliably sees host-injected files (`CLAUDE.md`, `AGENTS.md`, `.github/copilot-instructions.md`), MCP tool descriptions, explicit tool results, and hook-provided additional context.
 
-The result is that the model can have body and mind tools available while missing the protocol that tells it when to use them. Efferent-copy partially mitigates this by mechanically firing `observe()` around entraclaw tools, but it does not solve session start, `reflect()`, `recall()`, thinking placeholders, memory reads, or non-tool replies.
+The result is that the model can have body and mind tools available while missing the protocol that tells it when to use them. Efferent-copy partially mitigates this by mechanically firing `observe()` around entrabot tools, but it does not solve session start, `reflect()`, `recall()`, thinking placeholders, memory reads, or non-tool replies.
 
 ## Boundary decisions
 
 - Do not collapse body and mind back together.
 - Do not try to load full memory into every session.
 - Do not rely on FastMCP `instructions=` for behavior contracts.
-- Do not make persona-sati know Teams, email, chat IDs, or entraclaw-specific state.
+- Do not make persona-sati know Teams, email, chat IDs, or entrabot-specific state.
 - Do define a stable bootstrap packet that any body can request.
 - Do mirror the bootstrap rule into every host-visible instruction surface until a broker runtime exists.
 
 ## File map
 
-### Entraclaw repo: `/path/to/entraclaw-identity-research`
+### Entrabot repo: `/path/to/entrabot-identity-research`
 
 - Modify: `docs/TODO-persona-sati-host-bootstrap.md` — update the tracker from "three-call session-start" to "`bootstrap_session()` plus host bootstrap."
 - Create: `docs/clients/persona-sati-host-bootstrap.md` — canonical pasteable host instruction snippet.
@@ -50,7 +50,7 @@ The result is that the model can have body and mind tools available while missin
 - Modify: `prompts/hemispheres/cognition-protocol.md` — update the public startup rule from `context()` to `bootstrap_session()`.
 - Modify: `CLAUDE.md` and `AGENTS.md` — update contributor instructions to use `bootstrap_session()`.
 - Modify: `README.md` — document host-bootstrap requirements for users wiring persona-sati into a body.
-- Modify: `scripts/setup.sh` — print the host-bootstrap action block after `--with-entraclaw` wiring.
+- Modify: `scripts/setup.sh` — print the host-bootstrap action block after `--with-entrabot` wiring.
 
 ---
 
@@ -65,7 +65,7 @@ Safe order:
 
 1. Land persona-sati Phase 2: `bootstrap_session()`, schema contract, tests,
    and persona-sati docs/setup handoff.
-2. Land entraclaw Phase 1: host-visible doctrine, setup handoff, and
+2. Land entrabot Phase 1: host-visible doctrine, setup handoff, and
    `require_body_prompt.py` support for successful bootstrap results.
 3. Run cross-repo validation from a fresh host session.
 
@@ -73,10 +73,10 @@ Safe order:
 
 ## Phase 1: Host-visible bootstrap doctrine
 
-### Task 1: Write entraclaw doctrine tests first
+### Task 1: Write entrabot doctrine tests first
 
 **Files:**
-- Modify: `/path/to/entraclaw-identity-research/tests/test_prompt_doctrine.py`
+- Modify: `/path/to/entrabot-identity-research/tests/test_prompt_doctrine.py`
 
 - [ ] **Step 1: Add bootstrap doctrine files and markers**
 
@@ -124,7 +124,7 @@ def test_host_bootstrap_doctrine_mentions_required_mind_protocol(relpath: str) -
 Run:
 
 ```bash
-cd "/path/to/entraclaw-identity-research"
+cd "/path/to/entrabot-identity-research"
 pytest tests/test_prompt_doctrine.py::test_host_bootstrap_doctrine_mentions_required_mind_protocol -v
 ```
 
@@ -133,14 +133,14 @@ Expected: FAIL because `docs/clients/persona-sati-host-bootstrap.md` does not ex
 ### Task 2: Create the canonical host bootstrap snippet
 
 **Files:**
-- Create: `/path/to/entraclaw-identity-research/docs/clients/persona-sati-host-bootstrap.md`
+- Create: `/path/to/entrabot-identity-research/docs/clients/persona-sati-host-bootstrap.md`
 
 - [ ] **Step 1: Create the clients docs directory if missing**
 
 Run:
 
 ```bash
-cd "/path/to/entraclaw-identity-research"
+cd "/path/to/entrabot-identity-research"
 mkdir -p docs/clients
 ```
 
@@ -205,18 +205,18 @@ body safety.
 Run:
 
 ```bash
-cd "/path/to/entraclaw-identity-research"
+cd "/path/to/entrabot-identity-research"
 pytest tests/test_prompt_doctrine.py::test_host_bootstrap_doctrine_mentions_required_mind_protocol -v
 ```
 
 Expected: still FAIL until host files are updated.
 
-### Task 3: Update entraclaw host-visible instruction files
+### Task 3: Update entrabot host-visible instruction files
 
 **Files:**
-- Modify: `/path/to/entraclaw-identity-research/CLAUDE.md`
-- Modify: `/path/to/entraclaw-identity-research/AGENTS.md`
-- Modify: `/path/to/entraclaw-identity-research/.github/copilot-instructions.md`
+- Modify: `/path/to/entrabot-identity-research/CLAUDE.md`
+- Modify: `/path/to/entrabot-identity-research/AGENTS.md`
+- Modify: `/path/to/entrabot-identity-research/.github/copilot-instructions.md`
 
 - [ ] **Step 1: Replace the CLAUDE.md session-start section**
 
@@ -302,7 +302,7 @@ unreachable, say you are running in degraded body-only mode.
 
 Use `observe`, `reflect`, and `recall` according to the bootstrap
 packet. Efferent-copy can mechanically cover `observe()` around
-entraclaw body tools, but it does not cover session bootstrap,
+entrabot body tools, but it does not cover session bootstrap,
 `reflect()`, `recall()`, or ordinary text replies.
 ```
 
@@ -311,20 +311,20 @@ entraclaw body tools, but it does not cover session bootstrap,
 Run:
 
 ```bash
-cd "/path/to/entraclaw-identity-research"
+cd "/path/to/entrabot-identity-research"
 pytest tests/test_prompt_doctrine.py -v
 ```
 
 Expected: PASS.
 
-### Task 4: Update entraclaw setup/docs handoff
+### Task 4: Update entrabot setup/docs handoff
 
 **Files:**
-- Modify: `/path/to/entraclaw-identity-research/README.md`
-- Modify: `/path/to/entraclaw-identity-research/scripts/setup.sh`
-- Modify: `/path/to/entraclaw-identity-research/scripts/hooks/require_body_prompt.py`
-- Modify: `/path/to/entraclaw-identity-research/tests/hooks/test_require_body_prompt.py`
-- Modify: `/path/to/entraclaw-identity-research/docs/TODO-persona-sati-host-bootstrap.md`
+- Modify: `/path/to/entrabot-identity-research/README.md`
+- Modify: `/path/to/entrabot-identity-research/scripts/setup.sh`
+- Modify: `/path/to/entrabot-identity-research/scripts/hooks/require_body_prompt.py`
+- Modify: `/path/to/entrabot-identity-research/tests/hooks/test_require_body_prompt.py`
+- Modify: `/path/to/entrabot-identity-research/docs/TODO-persona-sati-host-bootstrap.md`
 
 - [ ] **Step 1: Add README host bootstrap section**
 
@@ -376,10 +376,10 @@ prompt sentinel alongside `mcp__persona-sati__get_system_prompt`. The
 bootstrap result must parse as JSON and include `mind_contract_available:
 true`; a failed tool call or a packet with `mind_contract_available: false`
 must not unlock high-blast-radius tools. Keep the gate fail-closed for the
-same high-blast-radius entraclaw tools.
+same high-blast-radius entrabot tools.
 
 Add or update hook tests so a transcript containing a successful
-`bootstrap_session` tool result allows `mcp__entraclaw__send_teams_message`.
+`bootstrap_session` tool result allows `mcp__entrabot__send_teams_message`.
 Also test that a transcript containing only the tool call, a malformed result,
 or `mind_contract_available: false` still blocks.
 
@@ -392,7 +392,7 @@ In `docs/TODO-persona-sati-host-bootstrap.md`, update the recommendation so it s
 Run:
 
 ```bash
-cd "/path/to/entraclaw-identity-research"
+cd "/path/to/entrabot-identity-research"
 pytest tests/test_prompt_doctrine.py tests/hooks/test_require_body_prompt.py -v
 ruff check tests/test_prompt_doctrine.py tests/hooks/test_require_body_prompt.py scripts/hooks/require_body_prompt.py
 ```
@@ -404,7 +404,7 @@ Expected: PASS.
 Run:
 
 ```bash
-cd "/path/to/entraclaw-identity-research"
+cd "/path/to/entrabot-identity-research"
 git add docs/clients/persona-sati-host-bootstrap.md \
   docs/TODO-persona-sati-host-bootstrap.md \
   README.md \
@@ -736,7 +736,7 @@ async def test_bootstrap_session_tool_returns_operating_packet(server):
 
 @pytest.mark.anyio
 async def test_bootstrap_session_reports_broken_mind_contract(memory_dir, tmp_path, monkeypatch):
-    monkeypatch.setenv("ENTRACLAW_PERSONA_SYNC", "off")
+    monkeypatch.setenv("ENTRABOT_PERSONA_SYNC", "off")
     prompt = tmp_path / "agent_system.md"
     prompt.write_text("@include missing.md\n", encoding="utf-8")
     srv = create_server(memory_dir=memory_dir, prompt_path=prompt)
@@ -751,7 +751,7 @@ async def test_bootstrap_session_reports_broken_mind_contract(memory_dir, tmp_pa
 
 @pytest.mark.anyio
 async def test_get_system_prompt_and_bootstrap_share_broken_prompt_error(memory_dir, tmp_path, monkeypatch):
-    monkeypatch.setenv("ENTRACLAW_PERSONA_SYNC", "off")
+    monkeypatch.setenv("ENTRABOT_PERSONA_SYNC", "off")
     prompt = tmp_path / "agent_system.md"
     prompt.write_text("@include missing.md\n", encoding="utf-8")
     srv = create_server(memory_dir=memory_dir, prompt_path=prompt)
@@ -914,8 +914,8 @@ Add a short README section explaining that hosts using persona-sati must
 load the host bootstrap rule because FastMCP `instructions=` is not reliable
 model context.
 
-In `scripts/setup.sh`, after successful `--with-entraclaw` MCP wiring, print
-the same host-bootstrap action block as entraclaw setup: install the canonical
+In `scripts/setup.sh`, after successful `--with-entrabot` MCP wiring, print
+the same host-bootstrap action block as entrabot setup: install the canonical
 snippet into the host-global instruction file, and ensure new sessions call
 `bootstrap_session()` first.
 
@@ -969,7 +969,7 @@ cd "/path/to/persona-sati"
 source .venv/bin/activate
 pip install -e ".[dev,prediction,snn,blob,provisioning]"
 
-cd "/path/to/entraclaw-identity-research"
+cd "/path/to/entrabot-identity-research"
 source .venv/bin/activate
 pip install -e ".[dev]"
 ```
@@ -982,15 +982,15 @@ Run:
 cd "/path/to/persona-sati"
 pytest tests/test_server.py tests/active/test_bootstrap.py -v && ruff check .
 
-cd "/path/to/entraclaw-identity-research"
+cd "/path/to/entrabot-identity-research"
 pytest tests/test_prompt_doctrine.py tests/hooks/test_inject_body_prompt.py -v && ruff check .
 ```
 
 Expected: PASS in both repos.
 
-- [ ] **Step 3: Manual smoke test in a non-entraclaw repo**
+- [ ] **Step 3: Manual smoke test in a non-entrabot repo**
 
-Start a fresh host session from a directory that is not the entraclaw repo and has the `.mcp.json` entries for entraclaw and persona-sati. Ask:
+Start a fresh host session from a directory that is not the entrabot repo and has the `.mcp.json` entries for entrabot and persona-sati. Ask:
 
 ```text
 What persona-sati bootstrap context do you have?
@@ -1003,10 +1003,10 @@ Expected: the agent calls `bootstrap_session()` before answering. If it does not
 After the smoke test passes, update GitHub issue #71 with:
 
 ```text
-Phase 1+2 landed. bootstrap_session() is now the primary persona-sati startup contract; host-visible docs and doctrine tests point to it. Manual non-entraclaw session smoke test passed.
+Phase 1+2 landed. bootstrap_session() is now the primary persona-sati startup contract; host-visible docs and doctrine tests point to it. Manual non-entrabot session smoke test passed.
 ```
 
-Do not close #71 until the non-entraclaw smoke test confirms the host actually calls `bootstrap_session()`.
+Do not close #71 until the non-entrabot smoke test confirms the host actually calls `bootstrap_session()`.
 
 ## GSTACK REVIEW REPORT
 

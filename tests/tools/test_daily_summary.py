@@ -24,7 +24,7 @@ import httpx
 import pytest
 import respx
 
-from entraclaw.tools.daily_summary import (
+from entrabot.tools.daily_summary import (
     GRAPH_SENDMAIL_URL,
     archive_summary,
     next_run_at,
@@ -36,9 +36,9 @@ from entraclaw.tools.daily_summary import (
 
 @pytest.fixture
 def tmp_data_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENTRACLAW_DATA_DIR", str(tmp_path))
-    monkeypatch.delenv("ENTRACLAW_BLOB_ENDPOINT", raising=False)
-    monkeypatch.delenv("ENTRACLAW_BLOB_CONTAINER", raising=False)
+    monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("ENTRABOT_BLOB_ENDPOINT", raising=False)
+    monkeypatch.delenv("ENTRABOT_BLOB_CONTAINER", raising=False)
     return tmp_path
 
 
@@ -104,7 +104,7 @@ class TestTriage:
                 ts="2026-04-16T10:30:00+00:00",
                 channel="email",
                 direction="outbound",
-                sender="entraclaw-agent",
+                sender="entrabot-agent",
                 recipient="alice.example@example.com",
                 summary="Thanks for sharing — three quick thoughts",
             ),
@@ -121,7 +121,7 @@ class TestTriage:
                 ts="2026-04-16T09:00:00+00:00",
                 channel="teams_dm",
                 direction="outbound",
-                sender="entraclaw-agent",
+                sender="entrabot-agent",
                 recipient="19:xyz@unq.gbl.spaces",
                 summary="Heads up — I updated the phase plan",
             ),
@@ -154,7 +154,7 @@ class TestTriage:
                 ts="2026-04-16T11:05:00+00:00",
                 channel="teams_group",
                 direction="outbound",
-                sender="entraclaw-agent",
+                sender="entrabot-agent",
                 recipient="19:group@thread.v2",
                 summary="My take is ...",
             ),
@@ -163,7 +163,7 @@ class TestTriage:
                 ts="2026-04-16T12:00:00+00:00",
                 channel="teams_dm",
                 direction="outbound",
-                sender="entraclaw-agent",
+                sender="entrabot-agent",
                 recipient="19:brandon@unq.gbl.spaces",
                 summary="Phase 2 shipped",
             ),
@@ -191,8 +191,8 @@ class TestTriage:
                 ts="2026-04-17T23:11:00+00:00",
                 channel="email",
                 direction="inbound",
-                sender="entraclaw-agent@fabrikam.onmicrosoft.com",
-                summary="EntraClaw email pipeline test",
+                sender="entrabot-agent@fabrikam.onmicrosoft.com",
+                summary="EntraBot email pipeline test",
             ),
             _entry(
                 ts="2026-04-17T23:12:00+00:00",
@@ -202,7 +202,7 @@ class TestTriage:
                 summary="Actually needs attention",
             ),
         ]
-        buckets = triage_interactions(entries, agent_upn="entraclaw-agent@fabrikam.onmicrosoft.com")
+        buckets = triage_interactions(entries, agent_upn="entrabot-agent@fabrikam.onmicrosoft.com")
         assert len(buckets["needs_you"]) == 1
         assert buckets["needs_you"][0]["sender"] == "alice@example.com"
 
@@ -212,11 +212,11 @@ class TestTriage:
                 ts="2026-04-17T23:11:00+00:00",
                 channel="email",
                 direction="inbound",
-                sender="EntraClaw-Agent@Fabrikam.Onmicrosoft.com",
+                sender="EntraBot-Agent@Fabrikam.Onmicrosoft.com",
                 summary="self-echo with mixed case",
             ),
         ]
-        buckets = triage_interactions(entries, agent_upn="entraclaw-agent@fabrikam.onmicrosoft.com")
+        buckets = triage_interactions(entries, agent_upn="entrabot-agent@fabrikam.onmicrosoft.com")
         assert buckets == {"needs_you": [], "handled": [], "heads_up": []}
 
     def test_no_agent_upn_means_no_filtering(self) -> None:
@@ -226,7 +226,7 @@ class TestTriage:
                 ts="2026-04-17T23:11:00+00:00",
                 channel="email",
                 direction="inbound",
-                sender="entraclaw-agent@fabrikam.onmicrosoft.com",
+                sender="entrabot-agent@fabrikam.onmicrosoft.com",
                 summary="Would be filtered if upn were passed",
             ),
         ]
@@ -311,7 +311,7 @@ class TestSendSummary:
 
     @pytest.mark.asyncio
     async def test_401_raises_token_expired(self) -> None:
-        from entraclaw.errors import TokenExpiredError
+        from entrabot.errors import TokenExpiredError
 
         with respx.mock:
             respx.post(GRAPH_SENDMAIL_URL).mock(return_value=httpx.Response(401))

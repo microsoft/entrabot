@@ -22,7 +22,7 @@ from unittest.mock import patch
 
 import pytest
 
-from entraclaw.tools.promises import (
+from entrabot.tools.promises import (
     PROMISES_KEY,
     Promise,
     PromiseNotFound,
@@ -370,7 +370,7 @@ class ETaggedBackend:
         *,
         if_match: str | None = None,
     ) -> str:
-        from entraclaw.storage.blob import ConcurrencyError
+        from entrabot.storage.blob import ConcurrencyError
 
         self.put_calls.append((data, if_match))
         if self.trip_next:
@@ -388,7 +388,7 @@ class TestETagContention:
     async def test_retry_on_412_succeeds(self) -> None:
         """When a conditional put hits 412, the module re-reads the blob
         and retries once. Second try succeeds."""
-        from entraclaw.tools import promises as promises_mod
+        from entrabot.tools import promises as promises_mod
 
         fake_store = ETaggedBackend()
 
@@ -424,8 +424,8 @@ class TestETagContention:
     @pytest.mark.asyncio
     async def test_exhausted_retry_raises(self) -> None:
         """After one failed retry, a second 412 raises PromiseStoreConflict."""
-        from entraclaw.storage.blob import ConcurrencyError
-        from entraclaw.tools import promises as promises_mod
+        from entrabot.storage.blob import ConcurrencyError
+        from entrabot.tools import promises as promises_mod
 
         class AlwaysConflictBackend:
             async def get(self, path):

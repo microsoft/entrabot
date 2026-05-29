@@ -14,12 +14,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from entraclaw.errors import (
+from entrabot.errors import (
     GraphFilesError,
     MissingPermissionError,
     SiteNotAllowedError,
 )
-from entraclaw.tools.files import (
+from entrabot.tools.files import (
     OneDriveTarget,
     SharePointTarget,
     write_text_file,
@@ -35,7 +35,7 @@ class TestWriteTextFile:
         target = OneDriveTarget(folder_path="/")
         token = "mock_token_123"
 
-        with patch("entraclaw.tools.files._client") as mock_client_ctx:
+        with patch("entrabot.tools.files._client") as mock_client_ctx:
             mock_response = MagicMock()
             mock_response.status_code = 201
             mock_response.json.return_value = {
@@ -70,10 +70,10 @@ class TestWriteTextFile:
         )
         token = "mock_token_123"
 
-        with patch("entraclaw.tools.files._check_site_allowed") as mock_check:
+        with patch("entrabot.tools.files._check_site_allowed") as mock_check:
             mock_check.return_value = None  # Site allowed
 
-            with patch("entraclaw.tools.files._client") as mock_client_ctx:
+            with patch("entrabot.tools.files._client") as mock_client_ctx:
                 mock_response = MagicMock()
                 mock_response.status_code = 201
                 mock_response.json.return_value = {
@@ -108,7 +108,7 @@ class TestWriteTextFile:
         )
         token = "mock_token_123"
 
-        with patch("entraclaw.tools.files._check_site_allowed") as mock_check:
+        with patch("entrabot.tools.files._check_site_allowed") as mock_check:
             mock_check.side_effect = SiteNotAllowedError("site_denied")
 
             with pytest.raises(SiteNotAllowedError):
@@ -125,7 +125,7 @@ class TestWriteTextFile:
         target = OneDriveTarget()
         token = "mock_token_123"
 
-        with patch("entraclaw.tools.files._client") as mock_client_ctx:
+        with patch("entrabot.tools.files._client") as mock_client_ctx:
             mock_response = MagicMock()
             mock_response.status_code = 201
             mock_response.json.return_value = {
@@ -154,7 +154,7 @@ class TestWriteTextFile:
         target = OneDriveTarget()
         token = "mock_token_123"
 
-        with patch("entraclaw.tools.files._client") as mock_client_ctx:
+        with patch("entrabot.tools.files._client") as mock_client_ctx:
             mock_response = MagicMock()
             mock_response.status_code = 200  # 200 on replace
             mock_response.json.return_value = {
@@ -183,7 +183,7 @@ class TestWriteTextFile:
         target = OneDriveTarget()
         token = "mock_token_123"
 
-        with patch("entraclaw.tools.files._client") as mock_client_ctx:
+        with patch("entrabot.tools.files._client") as mock_client_ctx:
             mock_response = MagicMock()
             mock_response.status_code = 403
             mock_response.text = "Access Denied"
@@ -208,7 +208,7 @@ class TestWriteTextFile:
         target = OneDriveTarget()
         token = "mock_token_123"
 
-        with patch("entraclaw.tools.files._client") as mock_client_ctx:
+        with patch("entrabot.tools.files._client") as mock_client_ctx:
             mock_response = MagicMock()
             mock_response.status_code = 503
             mock_response.text = "Service Unavailable"

@@ -19,17 +19,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from entraclaw.errors import (
+from entrabot.errors import (
     InvalidTransitionError,
     TransitionError,
     TransitionTimeoutError,
 )
-from entraclaw.identity.state_machine import (
+from entrabot.identity.state_machine import (
     LOCK_TIMEOUT,
     VALID_TRANSITIONS,
     IdentityStateMachine,
 )
-from entraclaw.models import IdentitySession, IdentityState
+from entrabot.models import IdentitySession, IdentityState
 
 
 class TestValidTransitions:
@@ -202,7 +202,7 @@ class TestLockTimeout:
 
         with pytest.raises(TransitionTimeoutError):
             # Use a very short timeout by monkey-patching the constant
-            import entraclaw.identity.state_machine as sm_mod
+            import entrabot.identity.state_machine as sm_mod
 
             original_timeout = sm_mod.LOCK_TIMEOUT
             sm_mod.LOCK_TIMEOUT = 0.05  # 50ms

@@ -1,8 +1,8 @@
-# Entraclaw Identity Research
+# Entrabot Identity Research
 
-**Source:** <https://github.com/microsoft/entraclaw> · **License:** MIT
+**Source:** <https://github.com/microsoft/entrabot> · **License:** MIT
 
-Entraclaw is a Python MCP server that gives a device-local agent its own Entra **Agent ID** and an **Agent User** that has all the capabilities of a human user in a Microsoft tenant. It can have a Teams presence and be invited to meetings to chat with your colleagues 1:1, a mailbox it can monitor and respond to, create and edit Word documents, make PowerPoint presentations, and allows you to access your CLI. The agent signs in autonomously, sends Teams messages from its own account, and writes audit events against its own object ID. It runs on macOS, Linux, and Windows, and works with Claude Code, Copilot CLI, or any MCP-speaking client.
+Entrabot is a Python MCP server that gives a device-local agent its own Entra **Agent ID** and an **Agent User** that has all the capabilities of a human user in a Microsoft tenant. It can have a Teams presence and be invited to meetings to chat with your colleagues 1:1, a mailbox it can monitor and respond to, create and edit Word documents, make PowerPoint presentations, and allows you to access your CLI. The agent signs in autonomously, sends Teams messages from its own account, and writes audit events against its own object ID. It runs on macOS, Linux, and Windows, and works with Claude Code, Copilot CLI, or any MCP-speaking client.
 
 **All you need to get started is:**
 
@@ -12,7 +12,7 @@ Entraclaw is a Python MCP server that gives a device-local agent its own Entra *
 
 The scripts take care of the rest: provisioning the Agent Identity Blueprint, Agent Identity, and Agent User in Entra; uploading a self-signed certificate; assigning the license; and configuring the local MCP server.
 
-**Microsoft Entra Agent ID** and **Microsoft Agent 365** — which enable these experiences — went GA on 2026-05-01. Entraclaw is the reference implementation that pulls those primitives together on a real device, today.
+**Microsoft Entra Agent ID** and **Microsoft Agent 365** — which enable these experiences — went GA on 2026-05-01. Entrabot is the reference implementation that pulls those primitives together on a real device, today.
 
 ## Where to Start
 

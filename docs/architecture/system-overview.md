@@ -64,14 +64,14 @@ The Blueprint's underlying app type post-GA cannot be flipped to fallback-public
 
 | Module | Purpose | Location |
 |--------|---------|----------|
-| **`platform/`** | OS-specific credential storage (Keychain, Credential Manager, Secret Service) | `src/entraclaw/platform/` |
-| **`auth/`** | Three-hop token exchange (cert JWT + MSAL delegated) | `src/entraclaw/auth/` |
-| **`audit/`** | Action tracking — every resource access emits an audit event before executing | `src/entraclaw/audit/` |
-| **`tools/`** | MCP tools (Teams Graph API, interaction log, email poll, daily summary, cards) | `src/entraclaw/tools/` |
-| **`bot/`** | Bot Gateway — M365 Agents SDK server, JSONL IPC, Dev Tunnel manager | `src/entraclaw/bot/` |
-| **`identity/`** | Progressive identity state machine | `src/entraclaw/identity/` |
-| **`storage/`** | LocalBackend / BlobBackend / PersonaBackend + migration helper (ADR-005) | `src/entraclaw/storage/` |
-| **`mcp_server.py`** | FastMCP entry — three auth modes + body-first prompt loader + background poll + channel push | `src/entraclaw/mcp_server.py` |
+| **`platform/`** | OS-specific credential storage (Keychain, Credential Manager, Secret Service) | `src/entrabot/platform/` |
+| **`auth/`** | Three-hop token exchange (cert JWT + MSAL delegated) | `src/entrabot/auth/` |
+| **`audit/`** | Action tracking — every resource access emits an audit event before executing | `src/entrabot/audit/` |
+| **`tools/`** | MCP tools (Teams Graph API, interaction log, email poll, daily summary, cards) | `src/entrabot/tools/` |
+| **`bot/`** | Bot Gateway — M365 Agents SDK server, JSONL IPC, Dev Tunnel manager | `src/entrabot/bot/` |
+| **`identity/`** | Progressive identity state machine | `src/entrabot/identity/` |
+| **`storage/`** | LocalBackend / BlobBackend / PersonaBackend + migration helper (ADR-005) | `src/entrabot/storage/` |
+| **`mcp_server.py`** | FastMCP entry — three auth modes + body-first prompt loader + background poll + channel push | `src/entrabot/mcp_server.py` |
 
 The agent system prompt lives in `prompts/agent_system.md` plus the `@include`-expanded `prompts/anatomy/*.md` modules. When persona-sati is reachable, its mind contract layers on top of the body — never underneath. See `docs/architecture/DESIGN-persona-sati-integration.md`.
 
@@ -79,9 +79,9 @@ The agent system prompt lives in `prompts/agent_system.md` plus the `@include`-e
 
 The MCP server runs four background tasks: Teams chat poll (5s), email poll (60s), chat auto-discovery (120s), and a daily-summary scheduler at 5pm PDT. All four are server-side and always running in `agent_user` mode. What differs between hosts is how those messages reach the LLM.
 
-**Claude Code (channel push).** Claude Code implements the `notifications/claude/channel` extension. When the background poll detects an inbound Teams message or email, the server emits a channel notification and the LLM receives it as a next-turn `<channel source="entraclaw">` system reminder — no tool call, no human prompt. The agent sees DMs the moment they land; the Teams conversation IS the conversation with the agent. Start Claude Code with `--dangerously-load-development-channels server:entraclaw` to enable the extension.
+**Claude Code (channel push).** Claude Code implements the `notifications/claude/channel` extension. When the background poll detects an inbound Teams message or email, the server emits a channel notification and the LLM receives it as a next-turn `<channel source="entrabot">` system reminder — no tool call, no human prompt. The agent sees DMs the moment they land; the Teams conversation IS the conversation with the agent. Start Claude Code with `--dangerously-load-development-channels server:entrabot` to enable the extension.
 
-**Copilot CLI / Codex / Cursor / other MCP hosts (polling fallback).** Hosts without the channel-push extension still get the background poll running — messages accumulate in the interaction log (`~/.entraclaw/data/interactions/<day>.jsonl` or the equivalent blob path), but they don't stream into the LLM. The agent reads them on demand:
+**Copilot CLI / Codex / Cursor / other MCP hosts (polling fallback).** Hosts without the channel-push extension still get the background poll running — messages accumulate in the interaction log (`~/.entrabot/data/interactions/<day>.jsonl` or the equivalent blob path), but they don't stream into the LLM. The agent reads them on demand:
 
 - `read_teams_messages(chat_id)` — current state of a chat
 - `send_teams_message(...)` — on non-Claude-Code hosts, auto-blocks after sending until the sponsor's reply arrives, then returns it inline as `sponsor_reply`. This is the deterministic, host-detected wait pattern; no parameter the model can disable.
@@ -97,7 +97,7 @@ Setup is handled by two Python scripts called from `setup.sh`:
 1. **`entra_provisioning.py`** — Creates/manages the dedicated provisioner app (client_credentials, avoids Azure CLI token rejection)
 2. **`create_entra_agent_ids.py`** — Creates Blueprint, BlueprintPrincipal, Agent Identity, Agent User, and grants consent
 
-State persists in `.entraclaw-state.json` so re-runs are idempotent and don't reset secrets.
+State persists in `.entrabot-state.json` so re-runs are idempotent and don't reset secrets.
 
 ## Testing
 

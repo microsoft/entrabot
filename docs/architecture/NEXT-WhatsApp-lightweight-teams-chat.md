@@ -14,7 +14,7 @@
 
 ## Problem Statement
 
-The current EntraClaw setup requires per-user admin work:
+The current EntraBot setup requires per-user admin work:
 - Entra provisioner app creation
 - Blueprint + BlueprintPrincipal + Agent Identity
 - Agent User creation + M365 license (E3/E5 at $25/mo)
@@ -69,7 +69,7 @@ Phase 1: INSTANT (human's delegated token)
 ┌──────────────────────────────────────────────────────────┐
 │ User installs MCP server → device code login             │
 │ MCP server gets delegated token → Chat.ReadWrite         │
-│ Agent chats on Teams AS the human (prefixed [EntraClaw]) │
+│ Agent chats on Teams AS the human (prefixed [EntraBot]) │
 │ Works in < 60 seconds                                    │
 └──────────────────────────────────┬───────────────────────┘
                                    │ (background, async)
@@ -97,7 +97,7 @@ Phase 2: UPGRADE (Agent User)      ▼
      │ Phase 1: human's delegated token
      │ Phase 2: Agent User token (idtyp=user)
      │
-[EntraClaw MCP Server]
+[EntraBot MCP Server]
      │
      ├── Device code auth (MSAL, multi-tenant app)
      ├── Background provisioner (Blueprint → Agent ID → Agent User)
@@ -109,7 +109,7 @@ Phase 2: UPGRADE (Agent User)      ▼
 
 **After admin one-time setup:**
 
-1. `pip install entraclaw` + add to `.mcp.json` (or Claude Code marketplace eventually)
+1. `pip install entrabot` + add to `.mcp.json` (or Claude Code marketplace eventually)
 2. Start Claude Code / Copilot CLI
 3. MCP server starts → shows device code URL + code
 4. User opens URL, enters code, signs in with their Microsoft account (10 seconds)
@@ -118,7 +118,7 @@ Phase 2: UPGRADE (Agent User)      ▼
 7. Once Agent User is ready: seamless switch to agent's own identity
 
 **What the admin does once:**
-- Approves the EntraClaw multi-tenant app in their tenant (standard enterprise app onboarding)
+- Approves the EntraBot multi-tenant app in their tenant (standard enterprise app onboarding)
 
 **What the user never has to do:**
 - No Blueprint or Agent Identity creation
@@ -143,9 +143,9 @@ Create an app registration in Brandon's tenant (werner.ac) configured as multi-t
 Add MSAL-based device code authentication to the MCP server.
 
 **Files to create/modify:**
-- `src/entraclaw/auth/device_code.py` — new module for device code flow using MSAL
-- `src/entraclaw/mcp_server.py` — add device code auth as alternative to certificate auth
-- `src/entraclaw/config.py` — add multi-tenant app config (app ID, scopes)
+- `src/entrabot/auth/device_code.py` — new module for device code flow using MSAL
+- `src/entrabot/mcp_server.py` — add device code auth as alternative to certificate auth
+- `src/entrabot/config.py` — add multi-tenant app config (app ID, scopes)
 
 **Flow:**
 1. MCP server starts, checks for existing token cache
@@ -162,7 +162,7 @@ Modify the existing tools to work with the human's delegated token (not just Age
 **Changes:**
 - `send_teams_message` — works with either token type
 - `read_teams_messages` — works with either token type
-- Message prefixing: when using human's token, prepend `[EntraClaw]` to distinguish agent messages
+- Message prefixing: when using human's token, prepend `[EntraBot]` to distinguish agent messages
 - Chat creation: create a "self-chat" or use existing chat
 
 ### Step 4: Background Agent User Provisioning
@@ -187,7 +187,7 @@ Reuse existing provisioning logic from `scripts/` but run it as a background tas
 When Agent User provisioning completes:
 1. Acquire Agent User token
 2. Update `_state["token"]` and `_state["identity_mode"]`
-3. Notify the channel: "Upgraded to Agent User identity — messages now come from EntraClaw Agent"
+3. Notify the channel: "Upgraded to Agent User identity — messages now come from EntraBot Agent"
 4. All subsequent messages sent as Agent User, not human
 
 ## Testing Plan
@@ -207,7 +207,7 @@ When Agent User provisioning completes:
 | Auth flow | Device code | Works headless, no browser redirect needed for CLI |
 | Token library | MSAL | Standard for multi-tenant apps, handles caching/refresh |
 | License for Agent User | FLW F1/F3 preferred | Cheaper ($2.25/mo vs $23/mo), includes Teams |
-| Message prefix in Phase 1 | `[EntraClaw]` | Distinguishes agent messages when using human's identity |
+| Message prefix in Phase 1 | `[EntraBot]` | Distinguishes agent messages when using human's identity |
 
 ## Conversation Context (Raw Notes)
 
@@ -229,7 +229,7 @@ A teammate asked: if the corp admin requires MFA for external users, can the age
 
 ### Path B: No Admin Needed (Existing Capability)
 
-If the admin doesn't approve the multi-tenant app, users can still set up their own tenant (like Brandon with werner.ac), create an Agent User there, and federate into any Teams chat in any org. This is the existing EntraClaw capability. The multi-tenant app just makes it seamless for users who can get admin approval.
+If the admin doesn't approve the multi-tenant app, users can still set up their own tenant (like Brandon with werner.ac), create an Agent User there, and federate into any Teams chat in any org. This is the existing EntraBot capability. The multi-tenant app just makes it seamless for users who can get admin approval.
 
 ## Open Questions
 

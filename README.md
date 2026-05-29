@@ -1,7 +1,7 @@
-# Entraclaw: Identity Research for Microsoft 365 Agents
+# Entrabot: Identity Research for Microsoft 365 Agents
 
 
-Entraclaw is a research project. It is a Python MCP server that gives a device-local agent its own Entra **Agent ID** and an **Agent User** that has all the capabilities of a human user in a Microsoft tenant. It can have a Teams presence and be invited to meetings to chat with your colleagues 1:1, a mailbox it can monitor and respond to, create and edit Word documents, make PowerPoint presentations, and allows you to access your CLI. The agent signs in autonomously, sends Teams messages from its own account, and writes audit events against its own object ID. It runs on macOS, Linux, and Windows, and works with Claude Code, Copilot CLI, or any MCP-speaking client.
+Entrabot is a research project. It is a Python MCP server that gives a device-local agent its own Entra **Agent ID** and an **Agent User** that has all the capabilities of a human user in a Microsoft tenant. It can have a Teams presence and be invited to meetings to chat with your colleagues 1:1, a mailbox it can monitor and respond to, create and edit Word documents, make PowerPoint presentations, and allows you to access your CLI. The agent signs in autonomously, sends Teams messages from its own account, and writes audit events against its own object ID. It runs on macOS, Linux, and Windows, and works with Claude Code, Copilot CLI, or any MCP-speaking client.
 
 **All you need to get started is:**
 
@@ -11,7 +11,7 @@ Entraclaw is a research project. It is a Python MCP server that gives a device-l
 
 The scripts will take care of the rest: provisioning the Agent Identity Blueprint, Agent Identity, and Agent User in Entra; uploading a self-signed certificate; assigning the license; and configuring the local MCP server.
 
-**Microsoft Entra Agent ID** and **Microsoft Agent 365** — which enable these experiences — went GA on 2026-05-01. Entraclaw is the reference implementation that pulls those primitives together on a real device, today.
+**Microsoft Entra Agent ID** and **Microsoft Agent 365** — which enable these experiences — went GA on 2026-05-01. Entrabot is the reference implementation that pulls those primitives together on a real device, today.
 
 ---
 
@@ -23,24 +23,24 @@ A device-local MCP server that turns an LLM agent into a first-class principal i
 - **Authorization.** Conditional Access, ID Protection, and DLP apply to the agent's own object. You can restrict what the agent can do without restricting yourself.
 - **Autonomy.** No device-code prompt, no OBO, no human in the loop on every token refresh. The agent authenticates with its own certificate-backed credentials and minds its own session.
 
-It is for developers building agents on Microsoft 365 who want the security posture to match the architecture. The agent's smarts are up to you. entraclaw gives it a secure seat at the table and the keys to the kingdom; what it does with that power is your call.
+It is for developers building agents on Microsoft 365 who want the security posture to match the architecture. The agent's smarts are up to you. entrabot gives it a secure seat at the table and the keys to the kingdom; what it does with that power is your call.
 
-The body prompt (`prompts/agent_system.md` plus `prompts/anatomy/*.md`) is non-overridable and loads before any user turn. Security rules, channel discipline, and instruction-injection defense are baked in below the persona line. An agent that runs on entraclaw cannot be jailbroken into impersonating its operator.
+The body prompt (`prompts/agent_system.md` plus `prompts/anatomy/*.md`) is non-overridable and loads before any user turn. Security rules, channel discipline, and instruction-injection defense are baked in below the persona line. An agent that runs on entrabot cannot be jailbroken into impersonating its operator.
 
 ---
 
 ## The stack
 
-entraclaw is the device-side glue for a set of platform primitives Microsoft shipped at GA.
+entrabot is the device-side glue for a set of platform primitives Microsoft shipped at GA.
 
 - **Entra Agent ID** — the four-object hierarchy: Agent Identity Blueprint → BlueprintPrincipal → Agent Identity → Agent User. Confidential clients only; no public-client flows; tokens carry `idtyp=user` for the Agent User leaf. ([platform learning](docs/platform-learnings/agent-id-blueprints-and-users.md))
 - **Microsoft Agent 365** — the control plane: admin-center inventory, OTel observability, Work IQ MCP servers (Mail, Calendar, Teams, SharePoint, OneDrive, Word, User, Copilot, Dataverse), AI-teammate lifecycle. GA 2026-05-01. ([platform learning](docs/platform-learnings/microsoft-agent-365.md))
 - **Conditional Access for agents** — GA. Apply CA policies to Agent Identity sign-ins the same way you apply them to users.
 - **ID Protection for agents** — GA. Risk scoring and remediation against the agent's own object.
-- **FastMCP** — the Python MCP server framework. entraclaw registers every Teams, Outlook, Files, Word, audit, and identity tool through it.
+- **FastMCP** — the Python MCP server framework. entrabot registers every Teams, Outlook, Files, Word, audit, and identity tool through it.
 - **Three-hop certificate chain** — Blueprint token (cert JWT) → Agent Identity token (federated identity credential) → Agent User token (`user_fic` grant). No client secret in flight. Private key in macOS Keychain, Windows TPM via CNG, or Linux Secret Service.
 
-entraclaw connects these. The Blueprint is provisioned via Graph. The Agent User is licensed and visible in Teams. The MCP server runs locally, mints tokens against Entra without a human, and exposes the resulting capability surface to the agent.
+entrabot connects these. The Blueprint is provisioned via Graph. The Agent User is licensed and visible in Teams. The MCP server runs locally, mints tokens against Entra without a human, and exposes the resulting capability surface to the agent.
 
 ---
 
@@ -50,7 +50,7 @@ entraclaw connects these. The Blueprint is provisioned via Graph. The Agent User
 flowchart LR
     subgraph Device["Local device — Mac / Windows / Linux"]
         Client["MCP client<br/>(Claude Code, Copilot CLI)"]
-        Server["entraclaw MCP server<br/>(FastMCP)"]
+        Server["entrabot MCP server<br/>(FastMCP)"]
         Body["Body prompt<br/>(non-overridable)"]
         Keys[("OS keystore<br/>Keychain / TPM / Keyring")]
     end
@@ -89,11 +89,11 @@ Full walkthrough in [`docs/architecture/system-overview.md`](docs/architecture/s
 Mac or Linux:
 
 ```bash
-git clone https://github.com/microsoft/entraclaw.git
-cd Entraclaw
+git clone https://github.com/microsoft/entrabot.git
+cd Entrabot
 ./scripts/setup.sh --new --with-upn-suffix=yourname
 source .venv/bin/activate
-claude --dangerously-load-development-channels server:entraclaw
+claude --dangerously-load-development-channels server:entrabot
 ```
 
 `setup.sh` is idempotent. It provisions the Blueprint, BlueprintPrincipal, Agent Identity, and Agent User; assigns a Teams-capable license; uploads a self-signed certificate to Entra; and writes `.env` plus `.mcp.json` with no secrets on disk. Full walkthrough — including Windows, cloud memory, cross-tenant group chats, and the Work IQ Word setup — is in [`docs/getting-started/quickstart.md`](docs/getting-started/quickstart.md) and [`INSTALL.md`](INSTALL.md).
@@ -110,7 +110,7 @@ After setup, use `./status.sh` as the canonical health and identity check:
 
 ## Documentation
 
-The full doc site: **<https://microsoft.github.io/entraclaw/>**
+The full doc site: **<https://microsoft.github.io/entrabot/>**
 
 Direct pointers:
 

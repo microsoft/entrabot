@@ -1,4 +1,4 @@
-"""Tests for entraclaw.tools.email.send_email.
+"""Tests for entrabot.tools.email.send_email.
 
 The helper wraps Graph's ``/me/sendMail`` (new mail) and
 ``/me/messages/{id}/reply`` (threaded reply), returns a dict with
@@ -22,7 +22,7 @@ GRAPH_REPLY_URL_TEMPLATE = "https://graph.microsoft.com/v1.0/me/messages/{messag
 class TestSendEmailSingleRecipient:
     @pytest.mark.asyncio
     async def test_posts_to_sendmail_with_correct_shape(self) -> None:
-        from entraclaw.tools.email import send_email
+        from entrabot.tools.email import send_email
 
         captured: dict = {}
 
@@ -56,7 +56,7 @@ class TestSendEmailSingleRecipient:
 class TestSendEmailMultipleRecipients:
     @pytest.mark.asyncio
     async def test_posts_with_to_cc_bcc(self) -> None:
-        from entraclaw.tools.email import send_email
+        from entrabot.tools.email import send_email
 
         captured: dict = {}
 
@@ -87,7 +87,7 @@ class TestSendEmailMultipleRecipients:
 class TestSendEmailReply:
     @pytest.mark.asyncio
     async def test_reply_posts_to_reply_endpoint(self) -> None:
-        from entraclaw.tools.email import send_email
+        from entrabot.tools.email import send_email
 
         message_id = "AAMkADf0=="
         reply_url = GRAPH_REPLY_URL_TEMPLATE.format(message_id=message_id)
@@ -125,7 +125,7 @@ class TestSendEmailReply:
 class TestSendEmailStatusCodes:
     @pytest.mark.asyncio
     async def test_returns_sent_at_on_202(self) -> None:
-        from entraclaw.tools.email import send_email
+        from entrabot.tools.email import send_email
 
         with respx.mock:
             respx.post(GRAPH_SENDMAIL_URL).mock(return_value=httpx.Response(202))
@@ -140,8 +140,8 @@ class TestSendEmailStatusCodes:
 
     @pytest.mark.asyncio
     async def test_401_raises_token_expired(self) -> None:
-        from entraclaw.errors import TokenExpiredError
-        from entraclaw.tools.email import send_email
+        from entrabot.errors import TokenExpiredError
+        from entrabot.tools.email import send_email
 
         with respx.mock:
             respx.post(GRAPH_SENDMAIL_URL).mock(return_value=httpx.Response(401))
@@ -155,8 +155,8 @@ class TestSendEmailStatusCodes:
 
     @pytest.mark.asyncio
     async def test_429_raises_rate_limit(self) -> None:
-        from entraclaw.errors import RateLimitError
-        from entraclaw.tools.email import send_email
+        from entrabot.errors import RateLimitError
+        from entrabot.tools.email import send_email
 
         with respx.mock:
             respx.post(GRAPH_SENDMAIL_URL).mock(
@@ -173,7 +173,7 @@ class TestSendEmailStatusCodes:
 
     @pytest.mark.asyncio
     async def test_400_raises_email_send_error_with_graph_body(self) -> None:
-        from entraclaw.tools.email import EmailSendError, send_email
+        from entrabot.tools.email import EmailSendError, send_email
 
         with respx.mock:
             respx.post(GRAPH_SENDMAIL_URL).mock(
@@ -201,7 +201,7 @@ class TestSendEmailStatusCodes:
 
     @pytest.mark.asyncio
     async def test_500_raises_email_send_error(self) -> None:
-        from entraclaw.tools.email import EmailSendError, send_email
+        from entrabot.tools.email import EmailSendError, send_email
 
         with respx.mock:
             respx.post(GRAPH_SENDMAIL_URL).mock(return_value=httpx.Response(500, text="boom"))
@@ -217,7 +217,7 @@ class TestSendEmailStatusCodes:
 class TestSendEmailContentType:
     @pytest.mark.asyncio
     async def test_html_content_type_sent_as_html_capitalized(self) -> None:
-        from entraclaw.tools.email import send_email
+        from entrabot.tools.email import send_email
 
         captured: dict = {}
 
@@ -238,7 +238,7 @@ class TestSendEmailContentType:
 
     @pytest.mark.asyncio
     async def test_text_content_type_sent_as_text_capitalized(self) -> None:
-        from entraclaw.tools.email import send_email
+        from entrabot.tools.email import send_email
 
         captured: dict = {}
 

@@ -17,7 +17,7 @@ Usage::
     python3 scripts/revoke_consent.py --all
 
 The script:
-  1. Reads AGENT_OBJECT_ID + AGENT_USER_ID from ``.entraclaw-state.json``.
+  1. Reads AGENT_OBJECT_ID + AGENT_USER_ID from ``.entrabot-state.json``.
   2. Finds the matching ``oauth2PermissionGrant`` via Graph v1.0.
   3a. If ``--scopes`` is partial: PATCHes the grant to remove those scopes.
   3b. If ``--all`` or remaining scopes are empty: DELETEs the grant.

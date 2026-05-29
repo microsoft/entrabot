@@ -40,14 +40,14 @@ from entra_provisioning import ProvisionerBootstrapError, get_existing_graph_tok
 
 def main() -> int:
     print("=" * 60)
-    print("EntraClaw — PATCH Agent User Files / Sites consent")
+    print("EntraBot — PATCH Agent User Files / Sites consent")
     print("=" * 60)
 
     agent_obj_id = get_state("AGENT_OBJECT_ID")
     agent_user_id = get_state("AGENT_USER_ID")
     if not agent_obj_id or not agent_user_id:
         print("ERROR: AGENT_OBJECT_ID and AGENT_USER_ID must be present in")
-        print("       .entraclaw-state.json. Run scripts/setup.sh first.")
+        print("       .entrabot-state.json. Run scripts/setup.sh first.")
         return 1
 
     print(f"  Agent Identity object ID: {agent_obj_id}")
@@ -64,7 +64,7 @@ def main() -> int:
 
     print("")
     print("Done. The next three-hop Agent User token mint will pick up the")
-    print("updated scopes — restart entraclaw-mcp (e.g., via /mcp Reconnect)")
+    print("updated scopes — restart entrabot-mcp (e.g., via /mcp Reconnect)")
     print("so the new token is acquired with the patched grant.")
     return 0
 

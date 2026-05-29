@@ -32,19 +32,19 @@ V2 (`PLAN-files-llm-authoring-v2.md`) adds Office-format (.docx / .xlsx / .pptx)
 | D7 | Upload `conflictResolution` default | **`rename`** (no overwrite) |
 | D8 | LLM eval gating | **Include LLM eval; gate the PR1 merge** |
 | D10 | URL → ID resolution | **`resolve_file_url` is a first-class PR1 tool** |
-| D11 | Site scope governance | **Configurable site denylist** via `ENTRACLAW_FILES_DENIED_SITES` (default empty) |
+| D11 | Site scope governance | **Configurable site denylist** via `ENTRABOT_FILES_DENIED_SITES` (default empty) |
 
 D9 was not asked (premise 4 was committed without question).
 
 ## Premises
 
 1. **The Agent User is a real Entra user.** Existing third hop (`acquire_agent_user_token`, scope `https://graph.microsoft.com/.default`) returns a Graph token covering whatever scopes the Agent User was provisioned for. **No new auth hop.**
-2. **Sharing is sponsor-only by Entraclaw policy.** `share_file` enforces it via `entraclaw.identity.sponsors.list_sponsors()`; Graph itself does not.
+2. **Sharing is sponsor-only by Entrabot policy.** `share_file` enforces it via `entrabot.identity.sponsors.list_sponsors()`; Graph itself does not.
 3. **Every mutation enforces the sponsor allowlist** — not just `share_file`. `upload_file` and `write_text_file` audit the recipient/site context against the allowlist before the Graph call. (Premise 4 from CEO review, committed.)
 4. **PowerPoint slide commenting is not possible via Graph.** `comment_on_file` rejects `.pptx`/`.ppt`/`.odp` and falls back to chat reply with a deep link.
 5. **File comments require beta.** `/beta` host is isolated to one helper. Comment endpoints are the **only** beta calls.
 6. **No anonymous links.** `createLink` with `scope="anonymous"` is never exposed. `invite` only.
-7. **Site denylist gates every read AND write.** `_check_site_allowed(site_id)` runs before every Graph call that touches a site/library. Denylist defaults empty (no restriction); operators set `ENTRACLAW_FILES_DENIED_SITES` to opt in.
+7. **Site denylist gates every read AND write.** `_check_site_allowed(site_id)` runs before every Graph call that touches a site/library. Denylist defaults empty (no restriction); operators set `ENTRABOT_FILES_DENIED_SITES` to opt in.
 
 ## Scope
 
@@ -96,18 +96,18 @@ A new helper in `create_entra_agent_ids.py` (mirror of `grant_agent_user_storage
 
 ### Sponsor-only enforcement (Premise 3)
 
-`entraclaw.identity.sponsors.list_sponsors()` is the **single** authority. Reused by every mutation tool: `share_file` (recipient must be in list), `upload_file` (target site must NOT be in deny list), `write_text_file` (same).
+`entrabot.identity.sponsors.list_sponsors()` is the **single** authority. Reused by every mutation tool: `share_file` (recipient must be in list), `upload_file` (target site must NOT be in deny list), `write_text_file` (same).
 
 ### Site denylist (D11)
 
 ```python
-# src/entraclaw/tools/files.py
+# src/entrabot/tools/files.py
 def _check_site_allowed(site_id: str) -> None:
-    denied = os.getenv("ENTRACLAW_FILES_DENIED_SITES", "").split(",")
+    denied = os.getenv("ENTRABOT_FILES_DENIED_SITES", "").split(",")
     denied = [s.strip() for s in denied if s.strip()]
     if site_id in denied:
         raise SiteNotAllowedError(
-            f"Site {site_id} is in ENTRACLAW_FILES_DENIED_SITES; "
+            f"Site {site_id} is in ENTRABOT_FILES_DENIED_SITES; "
             f"the agent is not permitted to read from or write to this site."
         )
 ```
@@ -116,7 +116,7 @@ Called by `read_file`, `resolve_file_url`, `list_recent_files`, `comment_on_file
 
 ## Tool surface (9 tools)
 
-Each tool is `@mcp.tool()`-decorated in `mcp_server.py` (wrapped with `_with_token_retry`), implemented in `src/entraclaw/tools/files.py`, and audit-logged via the shared `_audit_graph_call` async context manager (one helper, used 9 times — see Cross-cutting concerns).
+Each tool is `@mcp.tool()`-decorated in `mcp_server.py` (wrapped with `_with_token_retry`), implemented in `src/entrabot/tools/files.py`, and audit-logged via the shared `_audit_graph_call` async context manager (one helper, used 9 times — see Cross-cutting concerns).
 
 **All tool functions are `async`** with the contract `*, token: str, transport: httpx.AsyncBaseTransport | None = None` (mirrors `tools/email.py` and `tools/teams.py`). The MCP wrapper supplies `token` from `acquire_agent_user_token` and leaves `transport` defaulted; tests inject a `respx`-driven transport.
 
@@ -133,7 +133,7 @@ async def add_file_comment(file_ref: FileRef, content: str,
 
 **A1 (eng review): module boundary preserved.** `tools/files.py` does NOT import `tools/teams.py`. The chat-reply leg from D1 is the model's job — it calls `add_file_comment` for the document side and `send_teams_message` for the Teams side as two separate tool calls. This keeps comment-side errors isolated from Teams-side errors and lets each surface its own audit event.
 
-**A2 (eng review): `FileRef` carries `site_id`.** The resolver does the site lookup once; downstream tools never re-resolve. `_check_site_allowed(site_id)` is a pure local function that reads `ENTRACLAW_FILES_DENIED_SITES`.
+**A2 (eng review): `FileRef` carries `site_id`.** The resolver does the site lookup once; downstream tools never re-resolve. `_check_site_allowed(site_id)` is a pure local function that reads `ENTRABOT_FILES_DENIED_SITES`.
 
 ```python
 @dataclass(frozen=True)
@@ -160,9 +160,9 @@ class FileRef:
 - `.pptx` / `.ppt` → **reject** with `UnsupportedReadFormatError(message="PowerPoint reading is not supported in V1; user can paste slide content into chat")`
 - everything else → `UnsupportedReadFormatError`
 
-**P1 (eng review): size cap before download.** Before fetching `.pdf` content, `read_file` issues a `GET /items/{id}` and rejects with `FileTooLargeError` if `size > ENTRACLAW_FILES_MAX_PDF_BYTES` (default `52_428_800` = 50 MiB). For `.docx`-via-PDF the same check applies after the format=pdf conversion's `Content-Length`. Avoids a 200 MB download to extract one paragraph of text.
+**P1 (eng review): size cap before download.** Before fetching `.pdf` content, `read_file` issues a `GET /items/{id}` and rejects with `FileTooLargeError` if `size > ENTRABOT_FILES_MAX_PDF_BYTES` (default `52_428_800` = 50 MiB). For `.docx`-via-PDF the same check applies after the format=pdf conversion's `Content-Length`. Avoids a 200 MB download to extract one paragraph of text.
 
-`FileContent = {drive_id, item_id, name, mime_type, text: str, page_count: int | None, truncated: bool}`. `truncated=True` if extracted text exceeds `ENTRACLAW_FILES_MAX_TEXT_BYTES` (default `200_000` — a 50-page spec).
+`FileContent = {drive_id, item_id, name, mime_type, text: str, page_count: int | None, truncated: bool}`. `truncated=True` if extracted text exceeds `ENTRABOT_FILES_MAX_TEXT_BYTES` (default `200_000` — a 50-page spec).
 
 **A1+A4+A5 (eng review): `add_file_comment` is Files-only and tightly scoped.**
 
@@ -200,7 +200,7 @@ async def share_file(file_ref: FileRef, recipient_email: str,
 
 **T2 (eng review): chunked-upload uses protocol-native `nextExpectedRanges` resume.** On a 5xx mid-stream, re-issue `GET {uploadUrl}` to read `nextExpectedRanges`, then resume from the first byte the server still wants. Up to 3 retries per chunk; cap on total wall-time. This is the only mutation that retries on 5xx, and only for an in-progress upload session — D6 fail-fast still applies to fresh mutation calls.
 
-`share_file` takes a `FileRef` (A2 — no re-resolve). Pre-call check: `recipient_email` must be in `entraclaw.identity.sponsors.list_sponsors()`. Otherwise raise `NotASponsorError` with the sponsor list so the model can correct itself. `requireSignIn=true` always. `sendInvitation=true` always. Audit records the Graph permission ID for clean future revocation (V1.1 `unshare_file`).
+`share_file` takes a `FileRef` (A2 — no re-resolve). Pre-call check: `recipient_email` must be in `entrabot.identity.sponsors.list_sponsors()`. Otherwise raise `NotASponsorError` with the sponsor list so the model can correct itself. `requireSignIn=true` always. `sendInvitation=true` always. Audit records the Graph permission ID for clean future revocation (V1.1 `unshare_file`).
 
 ### PR 3 — Workbook depth (read-only) — **2 tools**
 
@@ -220,7 +220,7 @@ Three PRs, each independently shippable. **Each PR reuses `RetryOn429Transport` 
 ### PR 1 — Read & Comment (Scenario 1)
 
 - 4 tools above (`resolve_file_url`, `list_recent_files`, `read_file`, `add_file_comment`) + `_check_site_allowed`, `_audit_graph_call` helper, `RetryOn429Transport` extended with `allow_5xx_retry=True` for read calls (D6)
-- Provisioning: `Files.ReadWrite.All` consent grant, `--with-files` flag, `ENTRACLAW_FILES_DENIED_SITES` env doc
+- Provisioning: `Files.ReadWrite.All` consent grant, `--with-files` flag, `ENTRABOT_FILES_DENIED_SITES` env doc
 - **Eval scaffolding (T1, eng review):** `tests/evals/__init__.py`, `tests/evals/conftest.py`, `tests/evals/rubric.py`, `tests/evals/test_files_scenario_1.py` (5 traces) — full directory ships in PR1, not a follow-up
 - **LLM eval suite (gates merge per D8):** five Scenario-1 traces — agent reads spec, asks clarifying question, posts `add_file_comment` + `send_teams_message` (model orchestrates both legs). Eval asserts: comment lands on doc, chat reply lands in chat, deep link works, denied site rejects with correct error, truncated doc surfaces truncation honestly.
 - Tests: ~50 new unit tests (T4, eng review), mirroring `tests/tools/test_email.py` + `tests/tools/test_teams.py` (respx mocks, real Graph response shapes, both 5xx-retry paths exercised, T3 regression-safe default for existing email/teams)
@@ -242,7 +242,7 @@ Three PRs, each independently shippable. **Each PR reuses `RetryOn429Transport` 
 
 ### Throttling & retry (extends existing `RetryOn429Transport`)
 
-`src/entraclaw/tools/rate_limit.py` already implements `RetryOn429Transport` (async httpx transport with Retry-After backoff). Files PR1 extends it with one new kwarg:
+`src/entrabot/tools/rate_limit.py` already implements `RetryOn429Transport` (async httpx transport with Retry-After backoff). Files PR1 extends it with one new kwarg:
 
 ```python
 class RetryOn429Transport(httpx.AsyncBaseTransport):
@@ -290,7 +290,7 @@ Mirror `tests/tools/test_email.py` and `tests/tools/test_teams.py`. Target count
 - **Chunked upload (T2):** multi-chunk happy path; mid-stream 503 → `nextExpectedRanges` resume; per-chunk retry cap exhausted; protocol-aborted upload-session 410 surfaces cleanly
 - **`add_file_comment` reject tests (A5):** `.pptx`, `.pdf`, `.md`, personal-OneDrive `.docx`, folder driveItem, denylisted site
 - **`share_file` reject test** for non-sponsor recipient
-- **`read_file` reject tests** for `.xlsx`, `.pptx`, denylisted site, **PDF over `ENTRACLAW_FILES_MAX_PDF_BYTES` (P1)**
+- **`read_file` reject tests** for `.xlsx`, `.pptx`, denylisted site, **PDF over `ENTRABOT_FILES_MAX_PDF_BYTES` (P1)**
 - **`resolve_file_url` tests** for SharePoint URL, OneDrive personal URL, OneDrive business URL, malformed URL, denylisted site, 404, 429 backoff
 - **T3 regression test** for `RetryOn429Transport` default behavior — `allow_5xx_retry=False` (default) MUST NOT retry on 5xx (proves PR1 didn't change existing email/teams retry semantics)
 - **T5 fixture factories** in `tests/tools/conftest.py`: `make_file_ref()`, `make_file_summary()`, `make_file_content()`, `make_excel_range()` — keep test bodies focused on the path under test, not Pydantic boilerplate
@@ -326,11 +326,11 @@ P2 (eng review): live/snapshot/replay modes for the eval LLM are deferred — V1
 | 401 token expired | all | `_with_token_retry` (existing) | refresh + retry once |
 | 404 file not found | all | no retry | `FileNotFoundError` → model surfaces to user |
 | 403 missing permission | all | no retry | `MissingPermissionError` → operator must re-consent |
-| Denied site | all | no retry | `SiteNotAllowedError` → operator updates `ENTRACLAW_FILES_DENIED_SITES` |
+| Denied site | all | no retry | `SiteNotAllowedError` → operator updates `ENTRABOT_FILES_DENIED_SITES` |
 | Non-sponsor share | `share_file` | no retry | `NotASponsorError` with sponsor list → model corrects |
 | Unsupported read format | `read_file` | no retry | `UnsupportedReadFormatError` with hint to `read_workbook_range` |
 | Unsupported comment target (A5) | `add_file_comment` | no retry | `UnsupportedCommentFormatError` (rejects `.pptx`, personal OneDrive, folder, non-Office formats) |
-| **File too large (P1)** | `read_file` | no retry | `FileTooLargeError` when `size > ENTRACLAW_FILES_MAX_PDF_BYTES` (default 50 MiB) |
+| **File too large (P1)** | `read_file` | no retry | `FileTooLargeError` when `size > ENTRABOT_FILES_MAX_PDF_BYTES` (default 50 MiB) |
 | Upload conflict | `upload_file` / `write_text_file` | no retry (default `rename` resolves it) | renamed file returned in `FileSummary` |
 
 ## Deferred / TODOs (P2 work)
@@ -352,7 +352,7 @@ P2 (eng review): live/snapshot/replay modes for the eval LLM are deferred — V1
 
 ## The Assignment (now de-risked, not deferred)
 
-Before PR1 lands: open this plan in a Teams chat with your sponsor and ask one question — **"Are there any sites or document libraries the Agent User must NOT touch?"** Capture the answer in `ENTRACLAW_FILES_DENIED_SITES` in `.env.example` and document it in PR1's setup notes. The denylist is configurable, so the answer doesn't need to be perfect — but capturing it now beats finding out after a tool accidentally reads from a Legal-restricted SharePoint site.
+Before PR1 lands: open this plan in a Teams chat with your sponsor and ask one question — **"Are there any sites or document libraries the Agent User must NOT touch?"** Capture the answer in `ENTRABOT_FILES_DENIED_SITES` in `.env.example` and document it in PR1's setup notes. The denylist is configurable, so the answer doesn't need to be perfect — but capturing it now beats finding out after a tool accidentally reads from a Legal-restricted SharePoint site.
 
 ## GSTACK REVIEW REPORT
 
@@ -377,7 +377,7 @@ Before PR1 lands: open this plan in a Teams chat with your sponsor and ask one q
 - **T1:** PR1 includes eval scaffolding — `tests/evals/conftest.py` (replay harness), `pyproject.toml` `eval` marker registration, `tests/evals/rubric.py` (dataclass schema), `tests/evals/test_files_scenario_1.py` (5 traces). PR1 cannot merge until `pytest tests/evals -m eval` passes.
 - **T2:** Chunked upload uses protocol-native `nextExpectedRanges` resume per chunk (max 3 attempts/chunk); session-create failures fail-fast per D6.
 - **T3-T6:** Test plan revisions — regression test for `RetryOn429Transport.allow_5xx_retry=False` default; PR1 ~50 tests / PR2 ~30 / PR3 ~15 (plan undercounted ~30%); fixture factories in `tests/tools/conftest.py`; denylist tests assert `respx_mock.calls.call_count == 0`.
-- **P1:** `ENTRACLAW_FILES_MAX_PDF_BYTES` env (default 50 MB) + `FileTooLargeError`; rejection happens BEFORE PDF download.
+- **P1:** `ENTRABOT_FILES_MAX_PDF_BYTES` env (default 50 MB) + `FileTooLargeError`; rejection happens BEFORE PDF download.
 - **P2:** Plan needs to specify whether eval-mode LLM is live, snapshotted, or replayed (affects CI cost + gate reliability).
 
 **Outside voice (this run):** SKIPPED — plan was outside-voice'd 6h ago in CEO review; calling again on same content is noise. CEO-stage outside voice surfaced 7 findings (5 committed, 2 became D10/D11). This eng review caught the implementation-detail layer (architectural module boundaries, API mismatches, eval scaffolding, chunked-upload semantics) that the strategy-level outside voice could not.
@@ -386,9 +386,9 @@ Before PR1 lands: open this plan in a Teams chat with your sponsor and ask one q
 
 **TODOS.md updates:** 6 entries added under P2 — `search_files`+`list_sites`, Excel writes + workbook session manager, comment-reply webhook subs, `unshare_file`, V2 Office authoring (back-ref to V2 plan), site/library creation. All carry back-references to this plan's §"Deferred / TODOs".
 
-**Test plan artifact:** `~/.gstack/projects/entraclaw-identity-research/user-main-eng-review-test-plan-20260430-110538.md`.
+**Test plan artifact:** `~/.gstack/projects/entrabot-identity-research/user-main-eng-review-test-plan-20260430-110538.md`.
 
-**Worktree parallelization:** Sequential — PR1 → PR2 → PR3 all touch `src/entraclaw/tools/files.py`. Within PR1, the 4 tools share the file + the `_audit_graph_call` helper, so splitting tools across worktrees would create merge conflicts. Single PR per phase is correct.
+**Worktree parallelization:** Sequential — PR1 → PR2 → PR3 all touch `src/entrabot/tools/files.py`. Within PR1, the 4 tools share the file + the `_audit_graph_call` helper, so splitting tools across worktrees would create merge conflicts. Single PR per phase is correct.
 
 **Failure-mode critical gaps:** 0. Every codepath in the test diagram has either a planned test, an error handler, or both. After P1's `FileTooLargeError` addition, the failure registry is complete.
 

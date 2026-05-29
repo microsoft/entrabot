@@ -1,26 +1,26 @@
-# TODO — Entraclaw: consume `PERSONA_SATI_MCP_URL` at boot
+# TODO — Entrabot: consume `PERSONA_SATI_MCP_URL` at boot
 
 **Status: DONE (2026-04-18, v1).**
-Implemented in `src/entraclaw/mcp_server.py:_load_agent_instructions()` (lines ~100–170). The function composes `body + persona`: `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` env vars, when both present, trigger an SSE fetch of the persona via `get_system_prompt`; missing env or fetch failure falls back to the body prompt alone.
+Implemented in `src/entrabot/mcp_server.py:_load_agent_instructions()` (lines ~100–170). The function composes `body + persona`: `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` env vars, when both present, trigger an SSE fetch of the persona via `get_system_prompt`; missing env or fetch failure falls back to the body prompt alone.
 
 This doc is retained for historical context — the spec below is what shipped.
 
 ---
 
-**Original scope: `src/entraclaw/mcp_server.py` only**
+**Original scope: `src/entrabot/mcp_server.py` only**
 **Original size: ~60 LOC + ~30 LOC of tests**
-**Dependency:** `persona-sati` repo's setup.sh --with-entraclaw must have been run first (so the cross-blueprint consent grant and `.mcp.json` env vars are in place).
+**Dependency:** `persona-sati` repo's setup.sh --with-entrabot must have been run first (so the cross-blueprint consent grant and `.mcp.json` env vars are in place).
 
 ---
 
 ## Why this exists
 
-Persona-sati's setup.sh --with-entraclaw now wires two env vars into this repo's `.mcp.json`:
+Persona-sati's setup.sh --with-entrabot now wires two env vars into this repo's `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
-    "entraclaw": {
+    "entrabot": {
       ...
       "env": {
         "PERSONA_SATI_MCP_URL": "https://persona-sati-<suffix>.<region>.cloudapp.azure.com",
@@ -31,15 +31,15 @@ Persona-sati's setup.sh --with-entraclaw now wires two env vars into this repo's
 }
 ```
 
-Without consuming those, entraclaw still boots with its hardcoded local tool-description prompt (`_load_agent_instructions()`). The persona lives remotely but the body doesn't know. This TODO wires them together.
+Without consuming those, entrabot still boots with its hardcoded local tool-description prompt (`_load_agent_instructions()`). The persona lives remotely but the body doesn't know. This TODO wires them together.
 
 The governing principle from `persona-sati/docs/plans/end-to-end-mind-body.md`:
 
-> **EntraClaw is a body. Persona-sati is the mind.** A body's behavior should come from its mind, not from a local fallback. Revokng the mind should downgrade the body to a generic tool (fallback prompt), not crash it.
+> **EntraBot is a body. Persona-sati is the mind.** A body's behavior should come from its mind, not from a local fallback. Revokng the mind should downgrade the body to a generic tool (fallback prompt), not crash it.
 
 ## The change
 
-Replace `_load_agent_instructions()` in `src/entraclaw/mcp_server.py` with a function that:
+Replace `_load_agent_instructions()` in `src/entrabot/mcp_server.py` with a function that:
 
 1. Checks `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` env vars.
 2. If either is missing → return the existing local fallback prompt.
@@ -62,8 +62,8 @@ def _load_agent_instructions() -> str:
     persona-sati MCP server via get_system_prompt(). Otherwise (or on
     any failure), return the local tool-description fallback.
 
-    The body (entraclaw) delegates personality to the mind (persona-
-    sati). Revoking persona-sati access gracefully degrades entraclaw
+    The body (entrabot) delegates personality to the mind (persona-
+    sati). Revoking persona-sati access gracefully degrades entrabot
     to a generic communication tool; it never crashes the boot.
     """
     import os
@@ -71,7 +71,7 @@ def _load_agent_instructions() -> str:
     import sys
 
     local_fallback = (
-        "EntraClaw Teams Interface: provides tools for sending and "
+        "EntraBot Teams Interface: provides tools for sending and "
         "receiving Microsoft Teams messages, managing group chats, "
         "email polling, and daily summary generation. This server "
         "handles communication channels only. For personality, memory, "
@@ -89,14 +89,14 @@ def _load_agent_instructions() -> str:
         ).strip()
     except (subprocess.SubprocessError, OSError) as exc:
         print(
-            f"[entraclaw] could not mint persona-sati token "
+            f"[entrabot] could not mint persona-sati token "
             f"({token_cmd}): {exc}; using local fallback prompt",
             file=sys.stderr,
         )
         return local_fallback
     if not token:
         print(
-            f"[entraclaw] token command {token_cmd} returned empty; "
+            f"[entrabot] token command {token_cmd} returned empty; "
             "using local fallback prompt",
             file=sys.stderr,
         )
@@ -128,7 +128,7 @@ def _load_agent_instructions() -> str:
         remote = asyncio.run(_fetch_remote_prompt())
     except Exception as exc:  # noqa: BLE001 — never break boot
         print(
-            f"[entraclaw] persona-sati fetch failed: {exc}; "
+            f"[entrabot] persona-sati fetch failed: {exc}; "
             "using local fallback prompt",
             file=sys.stderr,
         )
@@ -136,14 +136,14 @@ def _load_agent_instructions() -> str:
 
     if not remote:
         print(
-            "[entraclaw] persona-sati returned empty prompt; "
+            "[entrabot] persona-sati returned empty prompt; "
             "using local fallback",
             file=sys.stderr,
         )
         return local_fallback
 
     print(
-        f"[entraclaw] loaded system prompt from persona-sati ({remote_url})",
+        f"[entrabot] loaded system prompt from persona-sati ({remote_url})",
         file=sys.stderr,
     )
     return remote
@@ -153,7 +153,7 @@ def _load_agent_instructions() -> str:
 
 Add to `tests/test_mcp_server_integration.py` (or a new file):
 
-1. **`test_load_instructions_uses_local_when_env_unset`** — both env vars cleared → returns the local fallback string (check the "EntraClaw Teams Interface" prefix).
+1. **`test_load_instructions_uses_local_when_env_unset`** — both env vars cleared → returns the local fallback string (check the "EntraBot Teams Interface" prefix).
 
 2. **`test_load_instructions_uses_local_when_token_cmd_fails`** — env vars set but token command returns non-zero / timeout / missing. Use `monkeypatch` on `subprocess.check_output` to raise. Returns local fallback. Verify a stderr log mentions the failure.
 

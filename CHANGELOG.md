@@ -27,7 +27,7 @@ First public release. Reference implementation for Microsoft Entra Agent ID and 
 
 **Body prompt architecture**
 - Non-overridable body prompt at `prompts/agent_system.md` with `@include` expansion of `prompts/anatomy/*.md`. Security, channel discipline, identity/tools rules load below the persona line.
-- Instruction-injection defense at the architectural level — an agent that runs on entraclaw cannot be jailbroken into impersonating its operator.
+- Instruction-injection defense at the architectural level — an agent that runs on entrabot cannot be jailbroken into impersonating its operator.
 
 **Mind / persona (optional)**
 - Persona-sati MCP integration. Body composes `body + persona` at boot when `PERSONA_SATI_MCP_URL` is set. Clean fallback to body-only mode when persona-sati is unreachable.
@@ -36,12 +36,12 @@ First public release. Reference implementation for Microsoft Entra Agent ID and 
 - ADR-005 Phases 1, 2, 5, 6a: opt-in cloud-hosted memory via Azure Blob. Per-Agent-User container, RBAC scoped to the agent's object ID. Local filesystem fallback.
 
 **Agent 365 Work IQ provider**
-- Reusable `entraclaw.a365` provider boundary for Work IQ MCP servers (Word, Mail, Copilot, Dataverse). Manifest loading, audience-specific token acquisition, MCP-client calls. Teams intentionally remains Graph-native.
+- Reusable `entrabot.a365` provider boundary for Work IQ MCP servers (Word, Mail, Copilot, Dataverse). Manifest loading, audience-specific token acquisition, MCP-client calls. Teams intentionally remains Graph-native.
 
 **Discipline**
 - 1,237 tests, ruff clean, 80% coverage threshold enforced.
 - 66 hard-won learnings at `docs/runbooks/hard-won-learnings.md`.
-- Full docs site at <https://microsoft.github.io/entraclaw/> with API reference, script reference, ADRs, platform learnings, and runbooks.
+- Full docs site at <https://microsoft.github.io/entrabot/> with API reference, script reference, ADRs, platform learnings, and runbooks.
 
 ### Known limitations
 

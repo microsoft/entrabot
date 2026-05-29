@@ -174,6 +174,6 @@ python3 scripts/revoke_consent.py --all
 
 ### What it does
 
-- Reads `AGENT_OBJECT_ID` and `AGENT_USER_ID` from `.entraclaw-state.json`.
+- Reads `AGENT_OBJECT_ID` and `AGENT_USER_ID` from `.entrabot-state.json`.
 - With `--scopes`: PATCH to drop just those scopes.
 - With `--all`: DELETE the grant entirely.

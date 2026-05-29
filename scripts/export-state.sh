@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# EntraClaw — export state for transfer to another machine
+# EntraBot — export state for transfer to another machine
 #
 # Exports everything needed to run the MCP server on a new machine
 # WITHOUT re-provisioning. Creates an encrypted archive that can be
@@ -10,7 +10,7 @@
 #
 # The archive includes:
 #   - .env (MCP server config)
-#   - .entraclaw-state.json or .openclaw-state.json (provisioning state)
+#   - .entrabot-state.json or .openclaw-state.json (provisioning state)
 #   - chat_id (persisted Teams chat ID)
 #   - blueprint private key (from OS keychain)
 #   - Claude Code memory files
@@ -27,7 +27,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 EXPORT_DIR="$PROJECT_ROOT/.export-tmp"
-ARCHIVE="$PROJECT_ROOT/entraclaw-state-export.tar.gz.enc"
+ARCHIVE="$PROJECT_ROOT/entrabot-state-export.tar.gz.enc"
 
 # Parse args
 PASSWORD=""
@@ -43,7 +43,7 @@ if [ -z "$PASSWORD" ]; then
     echo
 fi
 
-echo -e "${BLUE}Exporting EntraClaw state...${NC}"
+echo -e "${BLUE}Exporting EntraBot state...${NC}"
 
 # Clean up any previous export
 rm -rf "$EXPORT_DIR"
@@ -58,9 +58,9 @@ else
 fi
 
 # 2. Copy state file (check both names)
-if [ -f "$PROJECT_ROOT/.entraclaw-state.json" ]; then
-    cp "$PROJECT_ROOT/.entraclaw-state.json" "$EXPORT_DIR/.entraclaw-state.json"
-    echo -e "  ${GREEN}✅ .entraclaw-state.json${NC}"
+if [ -f "$PROJECT_ROOT/.entrabot-state.json" ]; then
+    cp "$PROJECT_ROOT/.entrabot-state.json" "$EXPORT_DIR/.entrabot-state.json"
+    echo -e "  ${GREEN}✅ .entrabot-state.json${NC}"
 elif [ -f "$PROJECT_ROOT/.openclaw-state.json" ]; then
     cp "$PROJECT_ROOT/.openclaw-state.json" "$EXPORT_DIR/.openclaw-state.json"
     echo -e "  ${GREEN}✅ .openclaw-state.json${NC}"
@@ -69,7 +69,7 @@ else
 fi
 
 # 3. Copy chat_id
-CHAT_ID_FILE="$HOME/.entraclaw/data/chat_id"
+CHAT_ID_FILE="$HOME/.entrabot/data/chat_id"
 if [ -f "$CHAT_ID_FILE" ]; then
     cp "$CHAT_ID_FILE" "$EXPORT_DIR/chat_id"
     echo -e "  ${GREEN}✅ chat_id: $(cat "$CHAT_ID_FILE")${NC}"
@@ -95,7 +95,7 @@ if [ -n "$PYTHON" ]; then
     KEY=$("$PYTHON" -c "
 try:
     import keyring
-    key = keyring.get_password('entraclaw', 'blueprint-private-key')
+    key = keyring.get_password('entrabot', 'blueprint-private-key')
     if key:
         print(key, end='')
     else:
@@ -117,11 +117,11 @@ except Exception as e:
 fi
 
 # 5. Copy Claude Code memory files
-# Glob matches both the current entraclaw project slug and any legacy openclaw
+# Glob matches both the current entrabot project slug and any legacy openclaw
 # slug, so exports still round-trip for installs that renamed at different
-# times. Order checks entraclaw first; falls back to openclaw.
+# times. Order checks entrabot first; falls back to openclaw.
 MEMORY_DIR=""
-for candidate in "$HOME/.claude/projects/"*entraclaw*/memory "$HOME/.claude/projects/"*openclaw*/memory; do
+for candidate in "$HOME/.claude/projects/"*entrabot*/memory "$HOME/.claude/projects/"*openclaw*/memory; do
     if [ -d "$candidate" ]; then
         MEMORY_DIR="$candidate"
         break

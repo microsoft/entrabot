@@ -1,14 +1,14 @@
-"""Tests for the EntraClaw error hierarchy."""
+"""Tests for the EntraBot error hierarchy."""
 
 import pytest
 
-from entraclaw.errors import (
+from entrabot.errors import (
     AgentIDNotAvailable,
     AuthCancelledError,
     AuthError,
     AuthTimeoutError,
     ChatNotFound,
-    EntraClawError,
+    EntraBotError,
     GraphApiError,
     InvalidTransitionError,
     MessageTooLong,
@@ -27,8 +27,8 @@ from entraclaw.errors import (
 class TestErrorHierarchy:
     """Verify that error classes inherit from the expected bases."""
 
-    def test_auth_errors_inherit_entraclaw(self) -> None:
-        assert issubclass(AuthError, EntraClawError)
+    def test_auth_errors_inherit_entrabot(self) -> None:
+        assert issubclass(AuthError, EntraBotError)
 
     def test_token_exchange_error_inherits_auth(self) -> None:
         assert issubclass(TokenExchangeError, AuthError)
@@ -39,8 +39,8 @@ class TestErrorHierarchy:
     def test_token_expired_inherits_auth(self) -> None:
         assert issubclass(TokenExpiredError, AuthError)
 
-    def test_teams_errors_inherit_entraclaw(self) -> None:
-        assert issubclass(TeamsError, EntraClawError)
+    def test_teams_errors_inherit_entrabot(self) -> None:
+        assert issubclass(TeamsError, EntraBotError)
 
     def test_teams_not_licensed_inherits_teams(self) -> None:
         assert issubclass(TeamsNotLicensed, TeamsError)
@@ -51,8 +51,8 @@ class TestErrorHierarchy:
     def test_message_too_long_inherits_teams(self) -> None:
         assert issubclass(MessageTooLong, TeamsError)
 
-    def test_rate_limit_inherits_entraclaw(self) -> None:
-        assert issubclass(RateLimitError, EntraClawError)
+    def test_rate_limit_inherits_entrabot(self) -> None:
+        assert issubclass(RateLimitError, EntraBotError)
 
     # --- New Lane B error hierarchy tests ---
 
@@ -65,17 +65,17 @@ class TestErrorHierarchy:
     def test_msal_auth_error_inherits_auth(self) -> None:
         assert issubclass(MsalAuthError, AuthError)
 
-    def test_invalid_transition_inherits_entraclaw(self) -> None:
-        assert issubclass(InvalidTransitionError, EntraClawError)
+    def test_invalid_transition_inherits_entrabot(self) -> None:
+        assert issubclass(InvalidTransitionError, EntraBotError)
 
-    def test_transition_timeout_inherits_entraclaw(self) -> None:
-        assert issubclass(TransitionTimeoutError, EntraClawError)
+    def test_transition_timeout_inherits_entrabot(self) -> None:
+        assert issubclass(TransitionTimeoutError, EntraBotError)
 
-    def test_transition_error_inherits_entraclaw(self) -> None:
-        assert issubclass(TransitionError, EntraClawError)
+    def test_transition_error_inherits_entrabot(self) -> None:
+        assert issubclass(TransitionError, EntraBotError)
 
-    def test_provisioning_error_inherits_entraclaw(self) -> None:
-        assert issubclass(ProvisioningError, EntraClawError)
+    def test_provisioning_error_inherits_entrabot(self) -> None:
+        assert issubclass(ProvisioningError, EntraBotError)
 
     def test_graph_api_error_inherits_teams(self) -> None:
         assert issubclass(GraphApiError, TeamsError)
@@ -99,8 +99,8 @@ class TestErrorMessages:
         err = RateLimitError()
         assert err.retry_after == 60
 
-    def test_catch_all_entraclaw_errors(self) -> None:
-        """All custom errors can be caught with ``except EntraClawError``."""
+    def test_catch_all_entrabot_errors(self) -> None:
+        """All custom errors can be caught with ``except EntraBotError``."""
         errors = [
             TokenExchangeError("hop1", "e", "d"),
             AgentIDNotAvailable("a"),
@@ -119,7 +119,7 @@ class TestErrorMessages:
             GraphApiError(status_code=403, message="Forbidden"),
         ]
         for err in errors:
-            with pytest.raises(EntraClawError):
+            with pytest.raises(EntraBotError):
                 raise err
 
 

@@ -196,7 +196,7 @@ This changes nothing about what we should build for BUILD. The bridge plan stand
 
 ## Relationship to Existing Work
 
-- **EntraClaw (Brandon + agent runtime team):** Currently implements Track 2 (Agent User) end-to-end. Working today with Teams identity, @mentions, cross-tenant federation, multi-chat. Proves Agent User viability.
+- **EntraBot (Brandon + agent runtime team):** Currently implements Track 2 (Agent User) end-to-end. Working today with Teams identity, @mentions, cross-tenant federation, multi-chat. Proves Agent User viability.
 - **Coclaw (agent runtime team):** Agent in sandbox, does coding directly. Complementary to identity layer.
 - **Multi-tenant lightweight chat spec:** `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` — implements the progressive model (start with delegated token, background-provision Agent User).
 - **Actor-attribution working group:** Designing the OBO + actor attribution model — non-directory FMI/SPIFFE-like actor identity.

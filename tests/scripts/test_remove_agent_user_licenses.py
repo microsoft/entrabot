@@ -62,7 +62,7 @@ def _patch_provisioning():
     sys.modules.pop("entra_provisioning", None)
 
 
-import entraclaw.graph_helpers as _graph_helpers_mod  # noqa: E402
+import entrabot.graph_helpers as _graph_helpers_mod  # noqa: E402
 
 
 class TestRemoveAllDirectLicenses:

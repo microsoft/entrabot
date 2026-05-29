@@ -1,6 +1,6 @@
 # MCP tools
 
-The EntraClaw MCP server (`src/entraclaw/mcp_server.py`) exposes 34 tools across five domains. Every tool that targets a Teams chat requires an explicit `chat_id` — there is no default chat.
+The EntraBot MCP server (`src/entrabot/mcp_server.py`) exposes 34 tools across five domains. Every tool that targets a Teams chat requires an explicit `chat_id` — there is no default chat.
 
 All Teams / Files / Email tools authenticate via the Agent User three-hop token (see [Auth](auth.md) and [Token Flows](../token-flows.md)). Tokens are minted on demand and cached — no credentials need to be supplied at tool-call time.
 
@@ -128,7 +128,7 @@ async def send_card(
 | `task_status` | Show task progress with optional `duration` and `extra` key/value block. |
 | `build_result` | Pass / fail summary with `summary`, `details_text`. |
 
-Cards are sent without the `[EntraClaw]` prefix — the card itself identifies the agent.
+Cards are sent without the `[EntraBot]` prefix — the card itself identifies the agent.
 
 ### `list_chat_members`
 
@@ -201,7 +201,7 @@ Fetch and display an image from a Teams chat message. Pass the Graph API hosted 
 
 ## Promises
 
-Persistent commitment tracking. Survives restart. Persisted to the entraclaw blob (or local backend) under `promises.jsonl`.
+Persistent commitment tracking. Survives restart. Persisted to the entrabot blob (or local backend) under `promises.jsonl`.
 
 ### `add_promise`
 
@@ -245,7 +245,7 @@ Resolve a SharePoint / OneDrive / shared-link URL to a stable `FileRef`. The ret
 async def list_recent_files(limit: int = 25) -> str
 ```
 
-List files recently shared with the agent. Post-filtered by the operator site denylist (`ENTRACLAW_FILES_DENIED_SITES`). The `denied_count` field reports how many files were filtered — surface that to the user.
+List files recently shared with the agent. Post-filtered by the operator site denylist (`ENTRABOT_FILES_DENIED_SITES`). The `denied_count` field reports how many files were filtered — surface that to the user.
 
 ### `read_file`
 
@@ -424,7 +424,7 @@ def audit_log(
 ) -> str
 ```
 
-Record an audit event. Call BEFORE performing any action on the user's behalf. The audit trail proves the agent (not the human) performed the action. Events are written to `~/.entraclaw/audit/` as daily JSONL files. See [Audit](audit.md).
+Record an audit event. Call BEFORE performing any action on the user's behalf. The audit trail proves the agent (not the human) performed the action. Events are written to `~/.entrabot/audit/` as daily JSONL files. See [Audit](audit.md).
 
 ### `run_daily_summary`
 

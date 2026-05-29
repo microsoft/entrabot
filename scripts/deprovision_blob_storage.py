@@ -34,7 +34,7 @@ import shutil
 import subprocess
 import sys
 
-DEFAULT_RESOURCE_GROUP = "entraclaw-rg"
+DEFAULT_RESOURCE_GROUP = "entrabot-rg"
 
 
 def _eprint(*args: object) -> None:
@@ -113,7 +113,7 @@ def deprovision(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Deprovision Azure Blob Storage for an EntraClaw Agent User."
+        description="Deprovision Azure Blob Storage for an EntraBot Agent User."
     )
     parser.add_argument(
         "--storage-account",

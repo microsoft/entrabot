@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude Code PreToolUse hook: gate high-blast-radius entraclaw tools on body-prompt load.
+"""Claude Code PreToolUse hook: gate high-blast-radius entrabot tools on body-prompt load.
 
 Why this exists
 ---------------
@@ -26,7 +26,7 @@ sentinels:
 The SessionStart hook output is NOT a sentinel — that's the exact
 failure mode this gate exists to catch.
 
-Override: ``ENTRACLAW_SKIP_BODY_PROMPT_GATE=true`` for emergency
+Override: ``ENTRABOT_SKIP_BODY_PROMPT_GATE=true`` for emergency
 bypass, mirroring ``block_local_memory_write.py``'s convention.
 
 Exit codes (Claude Code convention):
@@ -42,14 +42,14 @@ import sys
 from pathlib import Path
 
 _GATED_TOOLS = {
-    "mcp__entraclaw__send_email",
-    "mcp__entraclaw__send_teams_message",
-    "mcp__entraclaw__send_card",
-    "mcp__entraclaw__add_teams_member",
-    "mcp__entraclaw__create_chat",
-    "mcp__entraclaw__delete_teams_message",
+    "mcp__entrabot__send_email",
+    "mcp__entrabot__send_teams_message",
+    "mcp__entrabot__send_card",
+    "mcp__entrabot__add_teams_member",
+    "mcp__entrabot__create_chat",
+    "mcp__entrabot__delete_teams_message",
 }
-_ENV_OVERRIDE = "ENTRACLAW_SKIP_BODY_PROMPT_GATE"
+_ENV_OVERRIDE = "ENTRABOT_SKIP_BODY_PROMPT_GATE"
 _PERSONA_SENTINEL = "mcp__persona-sati__get_system_prompt"
 _BOOTSTRAP_SENTINEL = "mcp__persona-sati__bootstrap_session"
 _BODY_FILE_SUFFIX = "prompts/agent_system.md"

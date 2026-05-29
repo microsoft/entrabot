@@ -44,32 +44,32 @@ Pinpoint why a sponsor's email fields come back null. Read-only. Probes 8 differ
 
 Surface this when `SponsorGate` rejects a known sponsor and the symptom is null `mail`.
 
-## `entraclaw-mcp-debug.sh`
+## `entrabot-mcp-debug.sh`
 
-Debug wrapper for the `entraclaw-mcp` MCP server. Tees the server's stderr to `/tmp/entraclaw-debug.log` while passing it through to the parent (Claude Code) so normal error reporting still works.
+Debug wrapper for the `entrabot-mcp` MCP server. Tees the server's stderr to `/tmp/entrabot-debug.log` while passing it through to the parent (Claude Code) so normal error reporting still works.
 
 ### Usage
 
-Edit `.mcp.json` so the `entraclaw` server's `command` points at this script instead of `.venv/bin/entraclaw-mcp` directly:
+Edit `.mcp.json` so the `entrabot` server's `command` points at this script instead of `.venv/bin/entrabot-mcp` directly:
 
 ```json
-"command": "scripts/entraclaw-mcp-debug.sh"
+"command": "scripts/entrabot-mcp-debug.sh"
 ```
 
 Then tail the log:
 
 ```bash
-tail -f /tmp/entraclaw-debug.log
+tail -f /tmp/entrabot-debug.log
 ```
 
 ### What it does
 
 - Writes a `===== wrapper start <ts> pid=<pid> =====` marker on every restart so you can tell restarts apart in the shared log.
-- Execs the real `entraclaw-mcp` with stderr both written to the log and passed through.
+- Execs the real `entrabot-mcp` with stderr both written to the log and passed through.
 
 ### Self-reference defence
 
-The script contains an `entraclaw-self-ref-target: ../.venv/bin/entraclaw-mcp` marker. `efferent_copy._is_self_referential_peer` reads this marker so peer discovery skips the wrapper and avoids spawning a duplicate `entraclaw-mcp`. Without it, swapping `.mcp.json` to point at this wrapper reintroduces the self-spawn cascade originally fixed by PR #36 (Learning #45).
+The script contains an `entrabot-self-ref-target: ../.venv/bin/entrabot-mcp` marker. `efferent_copy._is_self_referential_peer` reads this marker so peer discovery skips the wrapper and avoids spawning a duplicate `entrabot-mcp`. Without it, swapping `.mcp.json` to point at this wrapper reintroduces the self-spawn cascade originally fixed by PR #36 (Learning #45).
 
 ## `list_agent_identities.py`
 
@@ -108,7 +108,7 @@ python scripts/list_sponsors.py --json
 
 ### What it does
 
-- Reads `AGENT_OBJECT_ID` from `.entraclaw-state.json` (or `--agent-object-id`).
+- Reads `AGENT_OBJECT_ID` from `.entrabot-state.json` (or `--agent-object-id`).
 - Queries `/servicePrincipals/{agent}/microsoft.graph.agentIdentity/sponsors`.
 - Prints sponsor user ID, UPN, and mail for each.
 

@@ -20,7 +20,7 @@
 
 Today the three-hop Agent User flow ships only on macOS (and de-facto Linux):
 `scripts/setup.sh` is bash, the Blueprint private key lives in macOS Keychain
-via `keyring`, and `~/.entraclaw/` uses a dot-prefix path that is non-idiomatic
+via `keyring`, and `~/.entrabot/` uses a dot-prefix path that is non-idiomatic
 on Windows. We want one-command UX on Windows — `setup-windows` provisions a
 fresh device, `deploy-windows` re-mints the cert and refreshes registration —
 that wires both Copilot CLI (`~/.copilot/mcp-config.json`) and Claude Code
@@ -60,7 +60,7 @@ and returns a thumbprint. Cert generation is the one task on Windows that
 diverges meaningfully from the Mac path (Keychain PEM gen) and warrants its
 own helper rather than being inlined into PS1.
 
-Rejected alternative: extracting `setup.sh` into a `scripts/entraclaw_setup/`
+Rejected alternative: extracting `setup.sh` into a `scripts/entrabot_setup/`
 Python package. That was the original v1 proposal — see `.v1-bak` for the
 file layout. Rejected because it bundles "port to Windows" with "rewrite
 1,032 lines of bash" and the second is a separate refactor that should stand
@@ -80,7 +80,7 @@ runtime signer does not care which KSP is behind it.
 Either path is **at least as strong as the Mac baseline** (Mac uses Keychain
 PEM, software-bound to the login keychain). The TPM path is strictly stronger;
 the software-KSP path is roughly Mac-equivalent (DPAPI ≈ Keychain). Fallback
-is silent-but-logged — the `.env` records `ENTRACLAW_BLUEPRINT_KSP=tpm|software`
+is silent-but-logged — the `.env` records `ENTRABOT_BLUEPRINT_KSP=tpm|software`
 so triage can tell the two apart.
 
 The runtime change isolates to a new `auth/cncrypt_signer.py` that calls
@@ -95,14 +95,14 @@ the platform branch picks the signer.
 - **`az` parsing:** `-o json | ConvertFrom-Json` everywhere — never TSV (Learning #7).
 - **Thumbprint capture:** Python helper validates with regex `^[A-F0-9]{40}$` and rejects empty/multi-line stdout (Learning #29).
 - **`.env` lockdown:** `icacls .env /inheritance:r /grant:r "$env:USERNAME:M"` — modify (read+write+delete-self), strips inherited ACLs. Matches `chmod 600` semantics; allows setup re-runs and rotation to update `.env` (eng-review finding D10, codex tension #3).
-- **Path conventions:** `%LOCALAPPDATA%\entraclaw\` on Windows; keep `~/.entraclaw/` everywhere else. One change in `_default_dir` covers all six call sites. **Migration is one-shot at setup time, not lazy at every read** (eng-review finding D2). PLUS: runtime guard in `config.py` — at MCP boot, if legacy `~/.entraclaw\` exists with content while target `%LOCALAPPDATA%\entraclaw\` is empty/missing, fail loud with "run setup-windows.cmd --migrate" (eng-review finding D11, codex tension #4).
+- **Path conventions:** `%LOCALAPPDATA%\entrabot\` on Windows; keep `~/.entrabot/` everywhere else. One change in `_default_dir` covers all six call sites. **Migration is one-shot at setup time, not lazy at every read** (eng-review finding D2). PLUS: runtime guard in `config.py` — at MCP boot, if legacy `~/.entrabot\` exists with content while target `%LOCALAPPDATA%\entrabot\` is empty/missing, fail loud with "run setup-windows.cmd --migrate" (eng-review finding D11, codex tension #4).
 - **Cert-gen crypto params (Windows):** `generate_windows_cert.py` invokes `New-SelfSignedCertificate` with `-KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 -KeyUsage DigitalSignature -KeySpec Signature` explicitly — never trust defaults, which have shifted across Windows builds and would silently produce a cert the cncrypt_signer (PKCS1+SHA256) cannot use (eng-review finding D9, codex tension #2).
 - **Token cache:** `msal_extensions.build_encrypted_persistence` already uses DPAPI on Windows. No change.
 - **Microsoft Store Python:** detect via `sys.base_prefix` containing `WindowsApps`, refuse with a clean error.
 - **PowerShell version:** target 7.x; warn on 5.1. Distribute via `setup-windows.cmd` (one-liner: `pwsh -ExecutionPolicy Bypass -File "%~dp0setup-windows.ps1" %*`) so the user never has to touch `Set-ExecutionPolicy`.
-- **AppContainer / sandbox:** out of scope for v1. File layout (`%LOCALAPPDATA%\entraclaw\`, no `%PROGRAMFILES%` writes, no admin elevation) leaves the door open for an MSIX wrapper later.
-- **MCP wiring:** `scripts/mcp_config.py` already writes both `.mcp.json` (Claude Code) and `~/.copilot/mcp-config.json` (Copilot CLI). On Windows the binary path becomes `<project>\.venv\Scripts\entraclaw-mcp.exe`. Add a Windows-path round-trip test.
-- **WSL detection:** if `setup-windows.ps1` somehow gets invoked from inside WSL, refuse with a clear message that **native-Windows entraclaw must be set up from native PowerShell**. WSL itself is fine — that's the Linux path, run `./scripts/setup.sh` from WSL instead.
+- **AppContainer / sandbox:** out of scope for v1. File layout (`%LOCALAPPDATA%\entrabot\`, no `%PROGRAMFILES%` writes, no admin elevation) leaves the door open for an MSIX wrapper later.
+- **MCP wiring:** `scripts/mcp_config.py` already writes both `.mcp.json` (Claude Code) and `~/.copilot/mcp-config.json` (Copilot CLI). On Windows the binary path becomes `<project>\.venv\Scripts\entrabot-mcp.exe`. Add a Windows-path round-trip test.
+- **WSL detection:** if `setup-windows.ps1` somehow gets invoked from inside WSL, refuse with a clear message that **native-Windows entrabot must be set up from native PowerShell**. WSL itself is fine — that's the Linux path, run `./scripts/setup.sh` from WSL instead.
 - **ADR-003:** amend to describe what we actually do per platform — Keychain (Mac), Cert Store + CNG with TPM-or-software KSP (Windows), Secret Service (Linux).
 
 ## File layout (new + modified)
@@ -128,7 +128,7 @@ scripts/
                                # PATCHes new DER, runs smoke test, on failure: re-PATCHes old
                                # DER, restores .env, invalidates MSAL cache, halts.
 
-src/entraclaw/
+src/entrabot/
   auth/
     certificate.py             # MODIFIED: dispatch by sys.platform — Mac/Linux call
                                # existing PEM signer; Windows calls cncrypt_signer.
@@ -141,7 +141,7 @@ src/entraclaw/
   config.py                    # MODIFIED: _default_dir consults %LOCALAPPDATA% on Windows;
                                # one-shot migration helper called from setup-windows.ps1
                                # (NOT lazily on every read); PLUS startup runtime guard that
-                               # halts loud if legacy ~/.entraclaw\ has content while target
+                               # halts loud if legacy ~/.entrabot\ has content while target
                                # is empty (D11).
 
 tests/
@@ -183,8 +183,8 @@ docs/
 - New `scripts/generate_windows_cert.py` with hard-locked crypto params (D9).
 - New `scripts/rotate_cert_windows.py` — Python helper called by `deploy-windows.ps1` for the rotation logic (Graph PATCH, smoke test, rollback). Extracted from PS1 so the regression test is testable from pytest (D7).
 - New `auth/cncrypt_signer.py` with TPM-first / software-fallback signer.
-- Rewrite `src/entraclaw/platform/windows.py` to use Cert: store thumbprint lookups.
-- `config.py`: `_default_dir` → `%LOCALAPPDATA%\entraclaw\` on Windows + one-shot migration helper + **runtime guard** that fails loud if legacy dir is non-empty post-migration (D11).
+- Rewrite `src/entrabot/platform/windows.py` to use Cert: store thumbprint lookups.
+- `config.py`: `_default_dir` → `%LOCALAPPDATA%\entrabot\` on Windows + one-shot migration helper + **runtime guard** that fails loud if legacy dir is non-empty post-migration (D11).
 - `.github/workflows/test-windows.yml` — `pytest` on `windows-latest`. Mandatory, NOT a follow-up.
 - Tests: cncrypt_signer (mock-based, always-runs), platform/windows (mock-based, always-runs), config Windows path + migration + runtime-guard (always-runs), certificate_windows (gated on win32, runs in CI), **`test_deploy_rollback.py` — REGRESSION-CRITICAL test for cert rotation rollback (D7)**, generate_windows_cert (mocks subprocess; verifies hard-locked crypto params land in the New-SelfSignedCertificate call).
 
@@ -193,7 +193,7 @@ docs/
 - New tests pass on macOS (mock-based) AND on `windows-latest` GitHub runner (full suite).
 - Clean Windows 11 VM (only Python + az + git installed): `scripts\setup-windows.cmd --new --with-upn-suffix=winagent` runs to a green summary, three-hop token flow succeeds, `send_teams_message` round-trips.
 - **Both hosts boot:** Copilot CLI AND Claude Code MCP wiring verified by booting each host in the same project and listing tools.
-- **Long-running runtime exercised** (eng-review finding D6): on the Windows VM, leave `entraclaw-mcp.exe` running for 5 minutes, send a Teams DM from another account, confirm the channel-push notification fires AND `wait_for_sponsor_dm` blocks then wakes correctly.
+- **Long-running runtime exercised** (eng-review finding D6): on the Windows VM, leave `entrabot-mcp.exe` running for 5 minutes, send a Teams DM from another account, confirm the channel-push notification fires AND `wait_for_sponsor_dm` blocks then wakes correctly.
 - TPM path tested on a TPM-2.0 box (Azure VM with vTPM); software-fallback path tested on a TPM-disabled VM.
 
 ### Phase 2 — Hardening (separate, smaller PR)
@@ -210,7 +210,7 @@ Three-step transactional rollback when smoke test fails post-Graph-PATCH:
 
 1. Re-PATCH the original public DER bytes back to the Agent Identity (capture old DER BEFORE the new PATCH — non-exportable TPM keys cannot be recovered if missed).
 2. Restore previous thumbprint in `.env` (and re-apply `:M` icacls).
-3. **Invalidate MSAL token cache** (`%LOCALAPPDATA%\entraclaw\.msal-cache.bin`) — otherwise tokens issued under the now-invalid new public key cause a 401 storm on next call (eng-review D13, codex tension #9).
+3. **Invalidate MSAL token cache** (`%LOCALAPPDATA%\entrabot\.msal-cache.bin`) — otherwise tokens issued under the now-invalid new public key cause a 401 storm on next call (eng-review D13, codex tension #9).
 
 Old cert is NOT deleted from `Cert:\CurrentUser\My` until smoke succeeds. On rollback, halt with explicit user-facing error.
 
@@ -226,7 +226,7 @@ Old cert is NOT deleted from `Cert:\CurrentUser\My` until smoke succeeds. On rol
 - AppContainer / Win32 app isolation / MSIX packaging — file layout is friendly, but the wrapping work is its own project.
 - Linux native cert-store (e.g., `gnome-keyring` PKCS#11) — current Linux path uses `keyring` Secret Service for PEM; that's the Mac-equivalent baseline and we keep it.
 - Bot Gateway port — separate plan; Bot Framework SDK already runs cross-platform.
-- WSL setup support — Linux entraclaw works under WSL today via the existing `setup.sh`. The Windows port targets native-Windows.
+- WSL setup support — Linux entrabot works under WSL today via the existing `setup.sh`. The Windows port targets native-Windows.
 
 ## Failure modes (per new codepath)
 
@@ -238,7 +238,7 @@ Old cert is NOT deleted from `Cert:\CurrentUser\My` until smoke succeeds. On rol
 | `generate_windows_cert` | TPM provider unavailable mid-run | ⚠️ manual | ✅ fall back | Logged "TPM not ready, using software KSP" |
 | `rotate_cert_windows` | Smoke test fails post-PATCH | ✅ regression (D7) | ✅ rollback | Clear "rotation rolled back, original cert restored" |
 | `rotate_cert_windows` | Rollback PATCH itself fails | ✅ regression (D7) | ⚠️ halt-loud | "MANUAL INTERVENTION: rollback PATCH failed, agent identity may be in inconsistent state" |
-| `config._default_dir` | Both legacy and target dir non-empty | ✅ unit | ✅ halt | "two entraclaw dirs detected, manual triage needed" |
+| `config._default_dir` | Both legacy and target dir non-empty | ✅ unit | ✅ halt | "two entrabot dirs detected, manual triage needed" |
 | `config` startup guard | Legacy dir non-empty, target empty | ✅ unit | ✅ halt | "run setup-windows.cmd --migrate" |
 | `platform/windows.py` lookup | Thumbprint missing from Cert: store | ✅ unit | ✅ raise | Clear "cert not found: <thumbprint>" |
 | MSAL cache invalidation post-rollback | Cache file locked by another process | ⚠️ manual | ✅ retry+log | Warning, next call re-mints clean |

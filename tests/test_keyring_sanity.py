@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from entraclaw.platform import keyring_sanity
+from entrabot.platform import keyring_sanity
 
 
 class TestKeyringSanity:

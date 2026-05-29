@@ -1,8 +1,8 @@
 """Tests for the Blueprint-scoped lookup logic in create_entra_agent_ids.py.
 
-The wire fix being guarded: when a tenant hosts multiple EntraClaw
+The wire fix being guarded: when a tenant hosts multiple EntraBot
 Blueprints, every Blueprint gets its own Agent Identity SP with the
-same display name (``EntraClaw Agent - <host>``). A lookup that
+same display name (``EntraBot Agent - <host>``). A lookup that
 filters only on displayName can return the wrong Blueprint's
 identity. These tests pin the fix: both ``find_existing_agent_identity``
 and ``find_existing_agent_user`` must scope their results to the
@@ -39,7 +39,7 @@ def _resp(status: int, body: dict) -> SimpleNamespace:
 
 BLUEPRINT_OURS = "9bfb75b3-e65f-4e56-bdbe-3ed213135c3b"
 BLUEPRINT_OTHER = "11111111-1111-1111-1111-111111111111"
-DISPLAY_NAME = "EntraClaw Agent - test-host"
+DISPLAY_NAME = "EntraBot Agent - test-host"
 
 
 def _sp(app_id: str, blueprint: str) -> dict:
@@ -154,7 +154,7 @@ class TestFindExistingAgentUser:
                 200,
                 {
                     "id": "aaaabbbb-cccc-dddd-eeee-111122223333",
-                    "userPrincipalName": "entraclaw-agent-sati-agent@fabrikam.onmicrosoft.com",
+                    "userPrincipalName": "entrabot-agent-sati-agent@fabrikam.onmicrosoft.com",
                     "identityParentId": self._OUR_AI,
                 },
             )

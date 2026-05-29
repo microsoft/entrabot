@@ -16,7 +16,7 @@ import httpx
 import pytest
 import respx
 
-from entraclaw.errors import (
+from entrabot.errors import (
     AgentIDNotAvailable,
     ChatNotFound,
     MessageTooLong,
@@ -24,7 +24,7 @@ from entraclaw.errors import (
     TokenExchangeError,
     TokenExpiredError,
 )
-from entraclaw.tools.teams import (
+from entrabot.tools.teams import (
     GRAPH_BASE,
     MAX_MESSAGE_LENGTH,
     TOKEN_ENDPOINT,
@@ -39,11 +39,11 @@ from entraclaw.tools.teams import (
 # ---------------------------------------------------------------------------
 
 FULL_ENV = {
-    "ENTRACLAW_BLUEPRINT_APP_ID": "bp-id",
-    "ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT": "fake-thumbprint",
-    "ENTRACLAW_TENANT_ID": "tid",
-    "ENTRACLAW_AGENT_ID": "agent-id",
-    "ENTRACLAW_AGENT_USER_ID": "agent-user-oid",
+    "ENTRABOT_BLUEPRINT_APP_ID": "bp-id",
+    "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT": "fake-thumbprint",
+    "ENTRABOT_TENANT_ID": "tid",
+    "ENTRABOT_AGENT_ID": "agent-id",
+    "ENTRABOT_AGENT_USER_ID": "agent-user-oid",
 }
 
 
@@ -53,33 +53,33 @@ def _mock_credential_store():
     return store
 
 
-_P_STORE = "entraclaw.tools.teams.get_credential_store"
-_P_ASSERT = "entraclaw.tools.teams.build_client_assertion"
+_P_STORE = "entrabot.tools.teams.get_credential_store"
+_P_ASSERT = "entrabot.tools.teams.build_client_assertion"
 
 TOKEN_URL = TOKEN_ENDPOINT.format(tenant="tid")
 
 
 class TestAcquireAgentUserToken:
     def test_missing_config_raises(self) -> None:
-        cleaned = {k: v for k, v in os.environ.items() if not k.startswith("ENTRACLAW_")}
+        cleaned = {k: v for k, v in os.environ.items() if not k.startswith("ENTRABOT_")}
         with (
             patch.dict(os.environ, cleaned, clear=True),
             pytest.raises(AgentIDNotAvailable),
         ):
-            from entraclaw.config import get_config
+            from entrabot.config import get_config
 
             acquire_agent_user_token(get_config())
 
     def test_missing_agent_user_id_raises(self) -> None:
-        env = {k: v for k, v in FULL_ENV.items() if k != "ENTRACLAW_AGENT_USER_ID"}
-        # Clear all ENTRACLAW_ vars to avoid interference, then set only ours
-        cleaned = {k: v for k, v in os.environ.items() if not k.startswith("ENTRACLAW_")}
+        env = {k: v for k, v in FULL_ENV.items() if k != "ENTRABOT_AGENT_USER_ID"}
+        # Clear all ENTRABOT_ vars to avoid interference, then set only ours
+        cleaned = {k: v for k, v in os.environ.items() if not k.startswith("ENTRABOT_")}
         cleaned.update(env)
         with (
             patch.dict(os.environ, cleaned, clear=True),
             pytest.raises(AgentIDNotAvailable),
         ):
-            from entraclaw.config import get_config
+            from entrabot.config import get_config
 
             acquire_agent_user_token(get_config())
 
@@ -100,7 +100,7 @@ class TestAcquireAgentUserToken:
             patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
             pytest.raises(TokenExchangeError, match="hop1:blueprint"),
         ):
-            from entraclaw.config import get_config
+            from entrabot.config import get_config
 
             acquire_agent_user_token(get_config())
 
@@ -125,7 +125,7 @@ class TestAcquireAgentUserToken:
             patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
             pytest.raises(TokenExchangeError, match="hop2:agent_identity"),
         ):
-            from entraclaw.config import get_config
+            from entrabot.config import get_config
 
             acquire_agent_user_token(get_config())
 
@@ -150,7 +150,7 @@ class TestAcquireAgentUserToken:
             patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
             pytest.raises(TokenExchangeError, match="hop3:agent_user"),
         ):
-            from entraclaw.config import get_config
+            from entrabot.config import get_config
 
             acquire_agent_user_token(get_config())
 
@@ -168,7 +168,7 @@ class TestAcquireAgentUserToken:
             patch(_P_STORE, return_value=_mock_credential_store()),
             patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
         ):
-            from entraclaw.config import get_config
+            from entrabot.config import get_config
 
             token = acquire_agent_user_token(get_config())
         assert token == "agent-user-token-123"
@@ -188,7 +188,7 @@ class TestAcquireAgentUserToken:
             patch(_P_STORE, return_value=_mock_credential_store()),
             patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
         ):
-            from entraclaw.config import get_config
+            from entrabot.config import get_config
 
             acquire_agent_user_token(get_config())
 
@@ -231,7 +231,7 @@ class TestAcquireAgentUserToken:
             patch(_P_STORE, return_value=_mock_credential_store()),
             patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
         ):
-            from entraclaw.config import get_config
+            from entrabot.config import get_config
 
             acquire_agent_user_token(get_config())
 
@@ -241,7 +241,7 @@ class TestAcquireAgentUserToken:
     @respx.mock
     def test_resource_scope_override(self) -> None:
         """Explicit resource_scope must replace the Hop 3 scope only."""
-        from entraclaw.tools.teams import STORAGE_RESOURCE_SCOPE
+        from entrabot.tools.teams import STORAGE_RESOURCE_SCOPE
 
         route = respx.post(TOKEN_URL).mock(
             side_effect=[
@@ -255,7 +255,7 @@ class TestAcquireAgentUserToken:
             patch(_P_STORE, return_value=_mock_credential_store()),
             patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
         ):
-            from entraclaw.config import get_config
+            from entrabot.config import get_config
 
             token = acquire_agent_user_token(get_config(), resource_scope=STORAGE_RESOURCE_SCOPE)
 
@@ -273,7 +273,7 @@ class TestAcquireAgentUserToken:
 class TestAcquireAgentUserStorageToken:
     @respx.mock
     def test_uses_storage_scope(self) -> None:
-        from entraclaw.tools.teams import acquire_agent_user_storage_token
+        from entrabot.tools.teams import acquire_agent_user_storage_token
 
         route = respx.post(TOKEN_URL).mock(
             side_effect=[
@@ -287,7 +287,7 @@ class TestAcquireAgentUserStorageToken:
             patch(_P_STORE, return_value=_mock_credential_store()),
             patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
         ):
-            from entraclaw.config import get_config
+            from entrabot.config import get_config
 
             token = acquire_agent_user_storage_token(get_config())
 
@@ -354,7 +354,7 @@ class TestCreateOrFindChat:
         # Verify group chat type was used
         body = route.calls.last.request.content
         assert b'"group"' in body
-        assert b"EntraClaw Agent Chat" in body
+        assert b"EntraBot Agent Chat" in body
 
     @respx.mock
     @pytest.mark.asyncio
@@ -554,7 +554,7 @@ def _sponsor_gate_patches():
     """
     from unittest.mock import AsyncMock, patch
 
-    from entraclaw.identity.sponsors import AgentIdentitySponsor
+    from entrabot.identity.sponsors import AgentIdentitySponsor
 
     sponsor = AgentIdentitySponsor(
         user_id="sponsor-uid",
@@ -563,11 +563,11 @@ def _sponsor_gate_patches():
     )
     return [
         patch(
-            "entraclaw.tools.teams._get_sponsor_records",
+            "entrabot.tools.teams._get_sponsor_records",
             new=AsyncMock(return_value=[sponsor]),
         ),
         patch(
-            "entraclaw.tools.teams._fetch_chat_members_for_gate",
+            "entrabot.tools.teams._fetch_chat_members_for_gate",
             new=AsyncMock(
                 return_value=[
                     {"user_id": "sponsor-uid", "email": "sponsor@contoso.com"}
@@ -582,7 +582,7 @@ class TestAddMember:
     @pytest.mark.asyncio
     async def test_add_federated_member(self) -> None:
         """Add a federated user to an existing chat."""
-        from entraclaw.tools.teams import add_member
+        from entrabot.tools.teams import add_member
 
         route = respx.post(f"{GRAPH_BASE}/chats/19:chat-id@thread.v2/members").mock(
             return_value=httpx.Response(
@@ -620,7 +620,7 @@ class TestAddMember:
     @pytest.mark.asyncio
     async def test_add_in_tenant_member(self) -> None:
         """Add an in-tenant member by object ID (no tenantId)."""
-        from entraclaw.tools.teams import add_member
+        from entrabot.tools.teams import add_member
 
         route = respx.post(f"{GRAPH_BASE}/chats/19:chat-id@thread.v2/members").mock(
             return_value=httpx.Response(
@@ -656,7 +656,7 @@ class TestAddMember:
     @pytest.mark.asyncio
     async def test_add_member_404(self) -> None:
         """404 when user email doesn't resolve."""
-        from entraclaw.tools.teams import add_member
+        from entrabot.tools.teams import add_member
 
         respx.post(f"{GRAPH_BASE}/chats/19:chat-id@thread.v2/members").mock(
             return_value=httpx.Response(
@@ -833,7 +833,7 @@ class TestListMembers:
     @respx.mock
     @pytest.mark.asyncio
     async def test_happy_path(self) -> None:
-        from entraclaw.tools.teams import list_members
+        from entrabot.tools.teams import list_members
 
         respx.get(f"{GRAPH_BASE}/chats/c1/members").mock(
             return_value=httpx.Response(
@@ -865,7 +865,7 @@ class TestListMembers:
     @respx.mock
     @pytest.mark.asyncio
     async def test_token_expired(self) -> None:
-        from entraclaw.tools.teams import list_members
+        from entrabot.tools.teams import list_members
 
         respx.get(f"{GRAPH_BASE}/chats/c1/members").mock(return_value=httpx.Response(401))
         with pytest.raises(TokenExpiredError):
@@ -1038,29 +1038,29 @@ class TestTeamsRead:
 
 class TestExtractReplyToIds:
     def test_empty_or_none_returns_empty_list(self) -> None:
-        from entraclaw.tools.teams import extract_reply_to_ids
+        from entrabot.tools.teams import extract_reply_to_ids
 
         assert extract_reply_to_ids("") == []
         assert extract_reply_to_ids(None) == []  # type: ignore[arg-type]
 
     def test_no_attachment_returns_empty(self) -> None:
-        from entraclaw.tools.teams import extract_reply_to_ids
+        from entrabot.tools.teams import extract_reply_to_ids
 
         assert extract_reply_to_ids("<p>plain message</p>") == []
 
     def test_single_attachment_double_quotes(self) -> None:
-        from entraclaw.tools.teams import extract_reply_to_ids
+        from entrabot.tools.teams import extract_reply_to_ids
 
         body = '<attachment id="ABC123"></attachment><p>reply</p>'
         assert extract_reply_to_ids(body) == ["ABC123"]
 
     def test_single_attachment_single_quotes(self) -> None:
-        from entraclaw.tools.teams import extract_reply_to_ids
+        from entrabot.tools.teams import extract_reply_to_ids
 
         assert extract_reply_to_ids("<attachment id='XYZ'></attachment>") == ["XYZ"]
 
     def test_multiple_attachments_dedup_preserves_order(self) -> None:
-        from entraclaw.tools.teams import extract_reply_to_ids
+        from entrabot.tools.teams import extract_reply_to_ids
 
         body = (
             '<attachment id="A"></attachment>'
@@ -1071,7 +1071,7 @@ class TestExtractReplyToIds:
 
     def test_case_insensitive_tag_name(self) -> None:
         """Teams HTML sometimes normalizes tag case differently."""
-        from entraclaw.tools.teams import extract_reply_to_ids
+        from entrabot.tools.teams import extract_reply_to_ids
 
         assert extract_reply_to_ids('<ATTACHMENT ID="X"></ATTACHMENT>') == ["X"]
 
@@ -1086,7 +1086,7 @@ class TestFetchMessage:
     @pytest.mark.asyncio
     async def test_returns_parsed_dict_on_200(self) -> None:
         """Happy path: parse body.content, from.user.displayName, createdDateTime."""
-        from entraclaw.tools.teams import fetch_message
+        from entrabot.tools.teams import fetch_message
 
         respx.get(f"{GRAPH_BASE}/chats/c1/messages/m1").mock(
             return_value=httpx.Response(
@@ -1111,7 +1111,7 @@ class TestFetchMessage:
     @pytest.mark.asyncio
     async def test_returns_none_on_404(self) -> None:
         """Fail-open: quoted message missing (e.g. soft-deleted) → None, no raise."""
-        from entraclaw.tools.teams import fetch_message
+        from entrabot.tools.teams import fetch_message
 
         respx.get(f"{GRAPH_BASE}/chats/c1/messages/gone").mock(return_value=httpx.Response(404))
         result = await fetch_message(chat_id="c1", message_id="gone", token="tok")
@@ -1121,7 +1121,7 @@ class TestFetchMessage:
     @pytest.mark.asyncio
     async def test_returns_none_on_500(self) -> None:
         """Fail-open: Graph transient failure → None. Observability, not security."""
-        from entraclaw.tools.teams import fetch_message
+        from entrabot.tools.teams import fetch_message
 
         respx.get(f"{GRAPH_BASE}/chats/c1/messages/m1").mock(return_value=httpx.Response(500))
         result = await fetch_message(chat_id="c1", message_id="m1", token="tok")
@@ -1131,7 +1131,7 @@ class TestFetchMessage:
     @pytest.mark.asyncio
     async def test_missing_fields_default_gracefully(self) -> None:
         """If Graph omits from.user or body.content, we coerce to safe defaults."""
-        from entraclaw.tools.teams import fetch_message
+        from entrabot.tools.teams import fetch_message
 
         respx.get(f"{GRAPH_BASE}/chats/c1/messages/m2").mock(
             return_value=httpx.Response(
@@ -1158,7 +1158,7 @@ class TestCreateOneOnOneChat:
     @pytest.mark.asyncio
     async def test_creates_one_on_one_by_email(self) -> None:
         """Creates a 1:1 chat using the target user's email."""
-        from entraclaw.tools.teams import create_one_on_one_chat
+        from entrabot.tools.teams import create_one_on_one_chat
 
         route = respx.post(f"{GRAPH_BASE}/chats").mock(
             return_value=httpx.Response(
@@ -1190,7 +1190,7 @@ class TestCreateOneOnOneChat:
     @pytest.mark.asyncio
     async def test_cross_tenant_includes_tenant_id(self) -> None:
         """Cross-tenant 1:1 chat includes tenantId in the member payload."""
-        from entraclaw.tools.teams import create_one_on_one_chat
+        from entrabot.tools.teams import create_one_on_one_chat
 
         route = respx.post(f"{GRAPH_BASE}/chats").mock(
             return_value=httpx.Response(
@@ -1221,7 +1221,7 @@ class TestCreateOneOnOneChat:
     @respx.mock
     @pytest.mark.asyncio
     async def test_token_expired(self) -> None:
-        from entraclaw.tools.teams import create_one_on_one_chat
+        from entrabot.tools.teams import create_one_on_one_chat
 
         respx.post(f"{GRAPH_BASE}/chats").mock(return_value=httpx.Response(401))
         with pytest.raises(TokenExpiredError):
@@ -1234,7 +1234,7 @@ class TestCreateOneOnOneChat:
     @respx.mock
     @pytest.mark.asyncio
     async def test_not_licensed(self) -> None:
-        from entraclaw.tools.teams import create_one_on_one_chat
+        from entrabot.tools.teams import create_one_on_one_chat
 
         respx.post(f"{GRAPH_BASE}/chats").mock(return_value=httpx.Response(403))
         with pytest.raises(TeamsNotLicensed):
@@ -1254,7 +1254,7 @@ class TestFetchHostedImage:
     @respx.mock
     @pytest.mark.asyncio
     async def test_fetches_image_bytes(self) -> None:
-        from entraclaw.tools.teams import fetch_hosted_image
+        from entrabot.tools.teams import fetch_hosted_image
 
         img_url = f"{GRAPH_BASE}/chats/c1/messages/m1/hostedContents/img1/$value"
         fake_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
@@ -1266,7 +1266,7 @@ class TestFetchHostedImage:
     @respx.mock
     @pytest.mark.asyncio
     async def test_401_raises_token_expired(self) -> None:
-        from entraclaw.tools.teams import fetch_hosted_image
+        from entrabot.tools.teams import fetch_hosted_image
 
         img_url = f"{GRAPH_BASE}/chats/c1/messages/m1/hostedContents/img1/$value"
         respx.get(img_url).mock(return_value=httpx.Response(401))
@@ -1277,7 +1277,7 @@ class TestFetchHostedImage:
     @respx.mock
     @pytest.mark.asyncio
     async def test_404_returns_none(self) -> None:
-        from entraclaw.tools.teams import fetch_hosted_image
+        from entrabot.tools.teams import fetch_hosted_image
 
         img_url = f"{GRAPH_BASE}/chats/c1/messages/m1/hostedContents/img1/$value"
         respx.get(img_url).mock(return_value=httpx.Response(404))
@@ -1288,7 +1288,7 @@ class TestFetchHostedImage:
     @respx.mock
     @pytest.mark.asyncio
     async def test_rejects_non_graph_urls(self) -> None:
-        from entraclaw.tools.teams import fetch_hosted_image
+        from entrabot.tools.teams import fetch_hosted_image
 
         with pytest.raises(ValueError, match="not a Graph API"):
             await fetch_hosted_image(token="tok", url="https://evil.com/steal-token")
@@ -1303,7 +1303,7 @@ class TestPostThinkingPlaceholder:
     @respx.mock
     @pytest.mark.asyncio
     async def test_returns_message_id(self) -> None:
-        from entraclaw.tools.teams import post_thinking_placeholder
+        from entrabot.tools.teams import post_thinking_placeholder
 
         respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
             return_value=httpx.Response(201, json={"id": "msg-p1", "createdDateTime": "2024-01-01"})
@@ -1317,7 +1317,7 @@ class TestPostThinkingPlaceholder:
         """Placeholder must go out as HTML, italicized — not plain text."""
         import json as _json
 
-        from entraclaw.tools.teams import post_thinking_placeholder
+        from entrabot.tools.teams import post_thinking_placeholder
 
         route = respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
             return_value=httpx.Response(201, json={"id": "msg-p2", "createdDateTime": "2024-01-01"})
@@ -1335,7 +1335,7 @@ class TestPostThinkingPlaceholder:
     async def test_custom_text(self) -> None:
         import json as _json
 
-        from entraclaw.tools.teams import post_thinking_placeholder
+        from entrabot.tools.teams import post_thinking_placeholder
 
         route = respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
             return_value=httpx.Response(201, json={"id": "msg-p3", "createdDateTime": "2024-01-01"})
@@ -1352,7 +1352,7 @@ class TestResolvePlaceholder:
         """mode='edit' issues PATCH with the final body."""
         import json as _json
 
-        from entraclaw.tools.teams import resolve_placeholder
+        from entrabot.tools.teams import resolve_placeholder
 
         route = respx.patch(f"{GRAPH_BASE}/chats/c1/messages/msg-p1").mock(
             return_value=httpx.Response(200, json={"id": "msg-p1"})
@@ -1375,7 +1375,7 @@ class TestResolvePlaceholder:
     async def test_edit_with_mentions(self) -> None:
         import json as _json
 
-        from entraclaw.tools.teams import resolve_placeholder
+        from entrabot.tools.teams import resolve_placeholder
 
         route = respx.patch(f"{GRAPH_BASE}/chats/c1/messages/msg-p1").mock(
             return_value=httpx.Response(200, json={"id": "msg-p1"})
@@ -1409,7 +1409,7 @@ class TestResolvePlaceholder:
     @pytest.mark.asyncio
     async def test_edit_fallback_on_patch_error(self) -> None:
         """If PATCH fails 4xx/5xx, post the final message as NEW, return fallback_new."""
-        from entraclaw.tools.teams import resolve_placeholder
+        from entrabot.tools.teams import resolve_placeholder
 
         respx.patch(f"{GRAPH_BASE}/chats/c1/messages/msg-p1").mock(
             return_value=httpx.Response(403, json={"error": "forbidden"})
@@ -1438,7 +1438,7 @@ class TestResolvePlaceholder:
         ``POST /chats/{chat_id}/messages/{id}/softDelete``. The correct
         route for delegated tokens is the ``/me/`` alias.
         """
-        from entraclaw.tools.teams import resolve_placeholder
+        from entrabot.tools.teams import resolve_placeholder
 
         sd_route = respx.post(f"{GRAPH_BASE}/me/chats/c1/messages/msg-p1/softDelete").mock(
             return_value=httpx.Response(204)
@@ -1466,7 +1466,7 @@ class TestResolvePlaceholder:
     @pytest.mark.asyncio
     async def test_delete_repost_fallback_on_softdelete_error(self) -> None:
         """If softDelete fails, post final as NEW and return fallback_new."""
-        from entraclaw.tools.teams import resolve_placeholder
+        from entrabot.tools.teams import resolve_placeholder
 
         respx.post(f"{GRAPH_BASE}/me/chats/c1/messages/msg-p1/softDelete").mock(
             return_value=httpx.Response(500)
@@ -1491,7 +1491,7 @@ class TestResolvePlaceholder:
 
     @pytest.mark.asyncio
     async def test_rejects_invalid_mode(self) -> None:
-        from entraclaw.tools.teams import resolve_placeholder
+        from entrabot.tools.teams import resolve_placeholder
 
         with pytest.raises(ValueError, match="mode"):
             await resolve_placeholder(
@@ -1515,7 +1515,7 @@ class TestUpdatePlaceholder:
     async def test_patches_with_italic_progress_text(self) -> None:
         import json as _json
 
-        from entraclaw.tools.teams import update_placeholder
+        from entrabot.tools.teams import update_placeholder
 
         route = respx.patch(f"{GRAPH_BASE}/chats/c1/messages/msg-p1").mock(
             return_value=httpx.Response(200, json={"id": "msg-p1"})
@@ -1541,7 +1541,7 @@ class TestUpdatePlaceholder:
     async def test_same_placeholder_id_across_multiple_updates(self) -> None:
         """Calling update_placeholder N times PATCHes the same placeholder
         N times — each call just re-edits in place."""
-        from entraclaw.tools.teams import update_placeholder
+        from entrabot.tools.teams import update_placeholder
 
         route = respx.patch(f"{GRAPH_BASE}/chats/c1/messages/msg-p1").mock(
             return_value=httpx.Response(200, json={"id": "msg-p1"})
@@ -1559,8 +1559,8 @@ class TestUpdatePlaceholder:
     @respx.mock
     @pytest.mark.asyncio
     async def test_token_expired_raises(self) -> None:
-        from entraclaw.errors import TokenExpiredError
-        from entraclaw.tools.teams import update_placeholder
+        from entrabot.errors import TokenExpiredError
+        from entrabot.tools.teams import update_placeholder
 
         respx.patch(f"{GRAPH_BASE}/chats/c1/messages/msg-p1").mock(return_value=httpx.Response(401))
 
@@ -1580,7 +1580,7 @@ class TestUpdatePlaceholder:
         failure — a spurious progress message in the chat would be
         worse than a stale placeholder. The eventual resolve_placeholder
         handles the real fallback."""
-        from entraclaw.tools.teams import update_placeholder
+        from entrabot.tools.teams import update_placeholder
 
         patch_route = respx.patch(f"{GRAPH_BASE}/chats/c1/messages/msg-p1").mock(
             return_value=httpx.Response(500)
@@ -1616,7 +1616,7 @@ class TestDeleteChatMessage:
         """Regression: Graph returns 405 on /chats/... — only /me/chats/...
         accepts softDelete for a delegated user token. Verify the exact URL.
         """
-        from entraclaw.tools.teams import delete_chat_message
+        from entrabot.tools.teams import delete_chat_message
 
         route = respx.post(f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete").mock(
             return_value=httpx.Response(204)
@@ -1634,7 +1634,7 @@ class TestDeleteChatMessage:
     @respx.mock
     @pytest.mark.asyncio
     async def test_returns_true_on_204(self) -> None:
-        from entraclaw.tools.teams import delete_chat_message
+        from entrabot.tools.teams import delete_chat_message
 
         respx.post(f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete").mock(
             return_value=httpx.Response(204)
@@ -1645,7 +1645,7 @@ class TestDeleteChatMessage:
     @pytest.mark.asyncio
     async def test_returns_true_on_200(self) -> None:
         """Some Graph paths return 200 with an empty body."""
-        from entraclaw.tools.teams import delete_chat_message
+        from entrabot.tools.teams import delete_chat_message
 
         respx.post(f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete").mock(
             return_value=httpx.Response(200, json={})
@@ -1656,7 +1656,7 @@ class TestDeleteChatMessage:
     @pytest.mark.asyncio
     async def test_returns_false_on_403(self) -> None:
         """403 = trying to delete someone else's message. Log, don't raise."""
-        from entraclaw.tools.teams import delete_chat_message
+        from entrabot.tools.teams import delete_chat_message
 
         respx.post(f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete").mock(
             return_value=httpx.Response(403, json={"error": {"code": "Forbidden"}})
@@ -1666,7 +1666,7 @@ class TestDeleteChatMessage:
     @respx.mock
     @pytest.mark.asyncio
     async def test_returns_false_on_404(self) -> None:
-        from entraclaw.tools.teams import delete_chat_message
+        from entrabot.tools.teams import delete_chat_message
 
         respx.post(f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete").mock(
             return_value=httpx.Response(404)
@@ -1676,7 +1676,7 @@ class TestDeleteChatMessage:
     @respx.mock
     @pytest.mark.asyncio
     async def test_raises_token_expired_on_401(self) -> None:
-        from entraclaw.tools.teams import delete_chat_message
+        from entrabot.tools.teams import delete_chat_message
 
         respx.post(f"{GRAPH_BASE}/me/chats/c1/messages/msg-1/softDelete").mock(
             return_value=httpx.Response(401)
@@ -1692,7 +1692,7 @@ class TestFetchChatType:
     @respx.mock
     @pytest.mark.asyncio
     async def test_returns_one_on_one(self) -> None:
-        from entraclaw.tools.teams import fetch_chat_type
+        from entrabot.tools.teams import fetch_chat_type
 
         respx.get(f"{GRAPH_BASE}/chats/c1").mock(
             return_value=httpx.Response(200, json={"id": "c1", "chatType": "oneOnOne"})
@@ -1702,7 +1702,7 @@ class TestFetchChatType:
     @respx.mock
     @pytest.mark.asyncio
     async def test_returns_group(self) -> None:
-        from entraclaw.tools.teams import fetch_chat_type
+        from entrabot.tools.teams import fetch_chat_type
 
         respx.get(f"{GRAPH_BASE}/chats/c2").mock(
             return_value=httpx.Response(200, json={"id": "c2", "chatType": "group"})
@@ -1712,14 +1712,14 @@ class TestFetchChatType:
     @respx.mock
     @pytest.mark.asyncio
     async def test_fails_open_on_404(self) -> None:
-        from entraclaw.tools.teams import fetch_chat_type
+        from entrabot.tools.teams import fetch_chat_type
 
         respx.get(f"{GRAPH_BASE}/chats/cX").mock(return_value=httpx.Response(404))
         assert await fetch_chat_type(chat_id="cX", token="tok") == ""
 
     @pytest.mark.asyncio
     async def test_empty_inputs_return_empty(self) -> None:
-        from entraclaw.tools.teams import fetch_chat_type
+        from entrabot.tools.teams import fetch_chat_type
 
         assert await fetch_chat_type(chat_id="", token="tok") == ""
         assert await fetch_chat_type(chat_id="c1", token="") == ""

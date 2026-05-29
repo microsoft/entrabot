@@ -7,14 +7,14 @@
 
 GitHub Copilot Extensions were a mechanism that allowed third-party developers to extend GitHub Copilot Chat with custom agents invoked via `@agent-name` syntax. Introduced in public beta in September 2024, they enabled external tools, services, and AI capabilities to be surfaced directly inside Copilot Chat across VS Code, JetBrains, and GitHub.com.
 
-**Why this matters for Entraclaw:** The Copilot Extension model demonstrates one of the most production-ready patterns for a platform hosting third-party AI agents with delegated identity. Even though the GitHub App-based model is being sunset, the architectural patterns — particularly around identity delegation, request signing, and the shift to MCP — are directly relevant to Entraclaw's Agent ID and OBO flow design.
+**Why this matters for Entrabot:** The Copilot Extension model demonstrates one of the most production-ready patterns for a platform hosting third-party AI agents with delegated identity. Even though the GitHub App-based model is being sunset, the architectural patterns — particularly around identity delegation, request signing, and the shift to MCP — are directly relevant to Entrabot's Agent ID and OBO flow design.
 
 ### Key Takeaway
 
 GitHub tried a proprietary extension model (GitHub App + SSE endpoint) and is now **abandoning it in favor of the open MCP standard**. This is a strong signal that:
 1. Proprietary agent extension protocols don't survive — open standards win
 2. MCP is becoming the de facto standard for AI agent tool integration
-3. Entraclaw should design for MCP compatibility from day one
+3. Entrabot should design for MCP compatibility from day one
 
 ## Extension Architecture
 
@@ -108,10 +108,10 @@ Skillsets were the simpler path for building Copilot Extensions. Instead of mana
 }
 ```
 
-### Skillsets vs Agents — Relevance to Entraclaw
+### Skillsets vs Agents — Relevance to Entrabot
 
-For Entraclaw, the **agent model** (not skillsets) is more relevant because:
-- Entraclaw agents need full autonomy over their behavior
+For Entrabot, the **agent model** (not skillsets) is more relevant because:
+- Entrabot agents need full autonomy over their behavior
 - Agents need to manage their own identity and tool calling
 - The skillset model delegates too much control to the platform
 
@@ -119,7 +119,7 @@ However, skillsets demonstrate an important pattern: **the platform can mediate 
 
 ## Auth & Identity Model
 
-> **This is the most relevant section for Entraclaw.**
+> **This is the most relevant section for Entrabot.**
 
 ### GitHub App as Identity
 
@@ -180,16 +180,16 @@ const { data: user } = await octokit.request("GET /user");
 console.log(`Acting on behalf of: ${user.login}`);
 ```
 
-### Identity Model Analysis for Entraclaw
+### Identity Model Analysis for Entrabot
 
-| Aspect | Copilot Extension Model | Entraclaw Consideration |
+| Aspect | Copilot Extension Model | Entrabot Consideration |
 |--------|------------------------|----------------------|
 | **Agent Identity** | GitHub App (app ID + private key) | Agent ID (similar concept — registered identity) |
 | **User Delegation** | `X-GitHub-Token` (platform-issued, short-lived) | OBO token (similar — platform issues token for agent to act as user) |
 | **Trust Verification** | Public key signature on requests | Could use similar pattern — platform signs requests to agents |
 | **Permission Scoping** | GitHub App permissions + token scopes | Agent permissions defined at registration |
 | **Token Lifetime** | Per-request, short-lived | Should be similarly short-lived |
-| **Who Issues Tokens** | Copilot Platform (GitHub) | Entraclaw Platform (identity service) |
+| **Who Issues Tokens** | Copilot Platform (GitHub) | Entrabot Platform (identity service) |
 
 ### Key Insight: No True OBO Flow
 
@@ -200,7 +200,7 @@ The Copilot Extension model does **not** use a formal OAuth 2.0 OBO flow. Instea
 
 This is a **platform-mediated delegation** pattern, not a standard OBO flow. The extension never directly authenticates with the user; the platform vouches for both parties.
 
-**For Entraclaw:** This is actually simpler than full OBO and may be a better fit for device-based agents. The platform (Entraclaw identity service) could issue scoped tokens to agents without requiring the agent to participate in an OAuth dance.
+**For Entrabot:** This is actually simpler than full OBO and may be a better fit for device-based agents. The platform (Entrabot identity service) could issue scoped tokens to agents without requiring the agent to participate in an OAuth dance.
 
 ### GitHub App-Based Auth is Being Deprecated
 
@@ -316,17 +316,17 @@ To list an extension on the GitHub Marketplace:
 
 ## Integration Patterns
 
-### Could an Entraclaw Agent Be a Copilot Extension?
+### Could an Entrabot Agent Be a Copilot Extension?
 
-**Short answer: Not anymore (or not via the GitHub App model).** But the question becomes: could an Entraclaw agent expose itself as an MCP server?
+**Short answer: Not anymore (or not via the GitHub App model).** But the question becomes: could an Entrabot agent expose itself as an MCP server?
 
-### Entraclaw Agent as MCP Server
+### Entrabot Agent as MCP Server
 
 This is the forward-looking integration pattern:
 
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────────┐
-│  Copilot Chat │────▶│  MCP Host    │────▶│  Entraclaw Agent  │
+│  Copilot Chat │────▶│  MCP Host    │────▶│  Entrabot Agent  │
 │  (IDE)        │     │  (VS Code)   │     │  (MCP Server)    │
 │               │◀────│              │◀────│                  │
 └──────────────┘     └──────────────┘     └──────────────────┘
@@ -340,7 +340,7 @@ This is the forward-looking integration pattern:
 
 **How it would work:**
 
-1. Entraclaw agent runs on a device (local runtime)
+1. Entrabot agent runs on a device (local runtime)
 2. Agent exposes an MCP server interface (stdio for local, HTTP for remote)
 3. User configures the MCP server in their IDE (VS Code, JetBrains, etc.)
 4. Copilot (or any MCP-compatible AI) can invoke the agent's tools
@@ -349,15 +349,15 @@ This is the forward-looking integration pattern:
 ### Architectural Bridge: Agent on Device + MCP
 
 ```json
-// .vscode/mcp.json — configure Entraclaw agent as MCP server
+// .vscode/mcp.json — configure Entrabot agent as MCP server
 {
   "servers": {
-    "entraclaw-agent": {
+    "entrabot-agent": {
       "type": "stdio",
-      "command": "entraclaw-agent",
+      "command": "entrabot-agent",
       "args": ["serve", "--mcp"],
       "env": {
-        "ENTRACLAW_AGENT_ID": "agent-xyz-123"
+        "ENTRABOT_AGENT_ID": "agent-xyz-123"
       }
     }
   }
@@ -368,12 +368,12 @@ For remote agents:
 ```json
 {
   "servers": {
-    "entraclaw-agent": {
+    "entrabot-agent": {
       "type": "http",
-      "url": "https://agent.entraclaw.dev/mcp",
+      "url": "https://agent.entrabot.dev/mcp",
       "auth": {
         "type": "oauth",
-        "issuer": "https://identity.entraclaw.dev"
+        "issuer": "https://identity.entrabot.dev"
       }
     }
   }
@@ -382,8 +382,8 @@ For remote agents:
 
 ### Key Design Considerations
 
-1. **MCP doesn't have built-in identity delegation** — the host (e.g., VS Code) manages auth. Entraclaw would need to handle its own OBO flow within the MCP tool execution.
-2. **MCP is tool-oriented, not agent-oriented** — MCP servers expose tools, not autonomous agents. An Entraclaw agent would need to expose its capabilities as discrete tools.
+1. **MCP doesn't have built-in identity delegation** — the host (e.g., VS Code) manages auth. Entrabot would need to handle its own OBO flow within the MCP tool execution.
+2. **MCP is tool-oriented, not agent-oriented** — MCP servers expose tools, not autonomous agents. An Entrabot agent would need to expose its capabilities as discrete tools.
 3. **MCP supports both local and remote** — local (stdio) is simpler but limited to the device; remote (HTTP + OAuth) enables cloud agents but adds auth complexity.
 
 ## Community Learnings & Gotchas
@@ -416,23 +416,23 @@ The most important community learning: **GitHub deprecated the entire model afte
 
 ## Open Questions
 
-### For Entraclaw's Scenario
+### For Entrabot's Scenario
 
-1. **Should Entraclaw agents expose MCP interfaces?** Given that MCP is the emerging standard, it seems wise. But MCP is tool-oriented, not agent-oriented — how do we reconcile this with autonomous agent behavior?
+1. **Should Entrabot agents expose MCP interfaces?** Given that MCP is the emerging standard, it seems wise. But MCP is tool-oriented, not agent-oriented — how do we reconcile this with autonomous agent behavior?
 
-2. **How does OBO work in MCP?** MCP doesn't have a built-in OBO concept. The host manages auth. For Entraclaw agents that need to act on behalf of users across services, we'd need to layer OBO on top of MCP's auth model.
+2. **How does OBO work in MCP?** MCP doesn't have a built-in OBO concept. The host manages auth. For Entrabot agents that need to act on behalf of users across services, we'd need to layer OBO on top of MCP's auth model.
 
-3. **Local vs Remote agents in MCP:** Entraclaw agents on devices could be local MCP servers (stdio), but this limits them to the local machine. Remote MCP servers add auth complexity but enable cloud-based agents. Which model fits Entraclaw better?
+3. **Local vs Remote agents in MCP:** Entrabot agents on devices could be local MCP servers (stdio), but this limits them to the local machine. Remote MCP servers add auth complexity but enable cloud-based agents. Which model fits Entrabot better?
 
-4. **Agent discovery in MCP:** The GitHub MCP Registry exists but is nascent. How would users discover and trust Entraclaw agents? The GitHub App model had a marketplace; MCP doesn't (yet).
+4. **Agent discovery in MCP:** The GitHub MCP Registry exists but is nascent. How would users discover and trust Entrabot agents? The GitHub App model had a marketplace; MCP doesn't (yet).
 
 5. **Token scoping:** The Copilot Extension model had platform-mediated token scoping (GitHub controlled what the extension could access). In MCP, who controls what the agent can do? The host? The user? The agent itself?
 
-6. **Multi-platform compatibility:** With MCP, an Entraclaw agent could work with Copilot, Claude Code, Cursor, and others. But each host may have different auth flows and policies. How do we ensure consistent identity across hosts?
+6. **Multi-platform compatibility:** With MCP, an Entrabot agent could work with Copilot, Claude Code, Cursor, and others. But each host may have different auth flows and policies. How do we ensure consistent identity across hosts?
 
-7. **The deprecated model's auth pattern is still useful:** Even though GitHub App extensions are dying, the pattern of **platform-issued, short-lived, scoped tokens for agent delegation** is exactly what Entraclaw needs. Can we implement this pattern within MCP?
+7. **The deprecated model's auth pattern is still useful:** Even though GitHub App extensions are dying, the pattern of **platform-issued, short-lived, scoped tokens for agent delegation** is exactly what Entrabot needs. Can we implement this pattern within MCP?
 
-8. **Enterprise governance:** GitHub has MCP policies (enable/disable/allowlist per org). Entraclaw needs similar governance for Agent IDs in enterprise contexts.
+8. **Enterprise governance:** GitHub has MCP policies (enable/disable/allowlist per org). Entrabot needs similar governance for Agent IDs in enterprise contexts.
 
 ## Sources
 

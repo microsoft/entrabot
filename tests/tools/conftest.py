@@ -12,7 +12,7 @@ from collections.abc import Callable
 
 import pytest
 
-from entraclaw.tools.files import (
+from entrabot.tools.files import (
     CommentResult,
     FileContent,
     FileRef,

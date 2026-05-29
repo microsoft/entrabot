@@ -58,7 +58,7 @@ class TestPushOneSubcommand:
     def test_pushes_single_file(
         self, sync_module, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("ENTRACLAW_PERSONA_SYNC", "on")
+        monkeypatch.setenv("ENTRABOT_PERSONA_SYNC", "on")
         backend = _FakeBackend()
         mem_dir = tmp_path / "memory"
         mem_dir.mkdir()
@@ -80,7 +80,7 @@ class TestPushOneSubcommand:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture,
     ) -> None:
-        monkeypatch.setenv("ENTRACLAW_PERSONA_SYNC", "on")
+        monkeypatch.setenv("ENTRABOT_PERSONA_SYNC", "on")
         backend = _FakeBackend()
         mem_dir = tmp_path / "memory"
         mem_dir.mkdir()
@@ -101,7 +101,7 @@ class TestPushSubcommand:
     def test_pushes_every_memory_file(
         self, sync_module, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("ENTRACLAW_PERSONA_SYNC", "on")
+        monkeypatch.setenv("ENTRABOT_PERSONA_SYNC", "on")
         backend = _FakeBackend()
         mem_dir = tmp_path / "memory"
         mem_dir.mkdir()
@@ -122,7 +122,7 @@ class TestPullSubcommand:
     def test_pull_downloads_all_claude_memory_keys(
         self, sync_module, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("ENTRACLAW_PERSONA_SYNC", "on")
+        monkeypatch.setenv("ENTRABOT_PERSONA_SYNC", "on")
         backend = _FakeBackend()
         backend.store["claude_memory/MEMORY.md"] = "index"
         backend.store["claude_memory/user_brandon_role.md"] = "Brandon"
@@ -149,7 +149,7 @@ class TestFeatureFlag:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture,
     ) -> None:
-        monkeypatch.delenv("ENTRACLAW_PERSONA_SYNC", raising=False)
+        monkeypatch.delenv("ENTRABOT_PERSONA_SYNC", raising=False)
 
         # _resolve_backend must not be called when flag is off
         def boom() -> None:
@@ -167,7 +167,7 @@ class TestFeatureFlag:
         # push-one IS the hot-path hook — it respects the flag too. When
         # flag is off it must silently succeed so the hook doesn't leak
         # noise into Claude Code.
-        monkeypatch.delenv("ENTRACLAW_PERSONA_SYNC", raising=False)
+        monkeypatch.delenv("ENTRABOT_PERSONA_SYNC", raising=False)
         mem_dir = tmp_path / "memory"
         mem_dir.mkdir()
         f = mem_dir / "feedback_tone.md"

@@ -6,12 +6,12 @@ import json
 
 import pytest
 
-from entraclaw.bot import handler
+from entrabot.bot import handler
 
 
 @pytest.fixture(autouse=True)
 def _override_bot_dir(tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Redirect BOT_DIR to a temp directory so tests never touch ~/.entraclaw/."""
+    """Redirect BOT_DIR to a temp directory so tests never touch ~/.entrabot/."""
     monkeypatch.setattr(handler, "BOT_DIR", tmp_path)
 
 

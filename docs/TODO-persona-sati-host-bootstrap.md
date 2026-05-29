@@ -1,8 +1,8 @@
 # TODO: Persona-sati host bootstrap (CLAUDE.md / AGENTS.md propagation)
 
-> **Status:** Open. Tracked as [#71](https://github.com/example/entraclaw-identity-research/issues/71).
+> **Status:** Open. Tracked as [#71](https://github.com/example/entrabot-identity-research/issues/71).
 > **Owner:** unassigned
-> **Priority:** medium — affects every session that uses entraclaw + persona-sati from a non-entraclaw cwd, which is most of them.
+> **Priority:** medium — affects every session that uses entrabot + persona-sati from a non-entrabot cwd, which is most of them.
 
 ## Problem
 
@@ -19,8 +19,8 @@ Three things conspire to defeat this:
    carefully-assembled body+persona prompt that
    `_load_agent_instructions` builds at boot never reaches the model.
 2. **CLAUDE.md / AGENTS.md is per-cwd.** Both hosts load these from
-   the current working directory (and walk up the tree). The entraclaw
-   repo's CLAUDE.md only fires when the user is `cd`'d into entraclaw,
+   the current working directory (and walk up the tree). The entrabot
+   repo's CLAUDE.md only fires when the user is `cd`'d into entrabot,
    which is almost never the case in real sessions — the MCP runs while
    the user is in some other repo whose CLAUDE.md has no awareness
    of persona-sati.
@@ -36,7 +36,7 @@ per-turn.
 
 ## What's already in place (partial mitigations)
 
-- **`EFFERENT_COPY_ENABLE=1`** — when set, `src/entraclaw/efferent_copy.py`
+- **`EFFERENT_COPY_ENABLE=1`** — when set, `src/entrabot/efferent_copy.py`
   wraps every `@mcp.tool()` to fire pre/post `observe()` against any
   peer in `.mcp.json` that advertises a compatibly-shaped `observe`
   tool. Mechanically enforces the per-tool-call cognition hook with no
@@ -44,7 +44,7 @@ per-turn.
   Windows already had it. **This is enough for `observe()` only —
   not the session-start trio, not `reflect()`.**
 - **PreToolUse hook for memory routing** — blocks Write/Edit to the
-  local Claude memory dir unless `ENTRACLAW_KEEP_MEMORY_LOCAL=true`.
+  local Claude memory dir unless `ENTRABOT_KEEP_MEMORY_LOCAL=true`.
   Forces memory writes through `mcp__persona-sati__write_memory_file`.
   Claude Code only.
 
@@ -77,7 +77,7 @@ copy it manually.
 ### Option B — Ship a snippet in this repo for users to copy
 
 Ship `docs/clients/CLAUDE.md.snippet` (and an `AGENTS.md.snippet`) in
-this repo. README documents: "After installing the entraclaw MCP, copy
+this repo. README documents: "After installing the entrabot MCP, copy
 this into your global `~/.claude/CLAUDE.md`."
 
 **Pros:** Distributed via the install path; new operators get the
@@ -86,7 +86,7 @@ right content. Versioned alongside the protocol.
 
 ### Option C — Per-repo CLAUDE.md template
 
-For repos where entraclaw is a primary tool, include the protocol in
+For repos where entrabot is a primary tool, include the protocol in
 that repo's CLAUDE.md.
 
 **Pros:** Loads automatically when the user is in that repo.
@@ -133,7 +133,7 @@ auto-injects the session-start trio results into a system message.
 - [ ] `docs/TODO-persona-sati-integration.md` (the historical one)
       links here so the trail is followable.
 - [ ] When this is done, validate by starting a fresh Copilot CLI
-      session in a non-entraclaw repo, ask the agent something
+      session in a non-entrabot repo, ask the agent something
       tool-using, and confirm `context()` was called before the first
       external tool call.
 
@@ -141,6 +141,6 @@ auto-injects the session-start trio results into a system message.
 
 - `prompts/anatomy/cognition-protocol.md` — canonical source of the per-turn discipline
 - `prompts/agent_system.md` — body prompt root
-- `src/entraclaw/efferent_copy.py` — partial mitigation, observe() only
+- `src/entrabot/efferent_copy.py` — partial mitigation, observe() only
 - `docs/architecture/DESIGN-persona-sati-integration.md` — mind-body split design
 - `docs/TODO-persona-sati-integration.md` — historical, mostly resolved by PR #14/#15

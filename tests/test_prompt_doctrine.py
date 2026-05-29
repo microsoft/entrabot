@@ -75,11 +75,11 @@ def test_wait_tool_docstring_reaches_model_via_tool_description() -> None:
     """The wait tool's docstring is the only LLM-visible enforcement point
     inside the running MCP server (Learning #48). It must name the tool and
     forbid the wrong alternatives."""
-    from entraclaw.tools import wait_tool  # noqa: F401  (import-smoke)
+    from entrabot.tools import wait_tool  # noqa: F401  (import-smoke)
 
     # The MCP-registered tool's runtime description is set in mcp_server.py;
     # check that source instead since the function is decorated at import.
-    mcp_src = (REPO_ROOT / "src/entraclaw/mcp_server.py").read_text(encoding="utf-8")
+    mcp_src = (REPO_ROOT / "src/entrabot/mcp_server.py").read_text(encoding="utf-8")
     assert "wait_for_sponsor_dm" in mcp_src
     # The registered tool body or docstring must name the canonical pattern.
     assert "sponsor" in mcp_src.lower()
@@ -93,7 +93,7 @@ def test_send_teams_message_docstring_directs_to_wait_for_sponsor_dm() -> None:
     prompt's ``instructions=`` field. Pin the doctrine here so a future
     docstring rewrite can't silently regress it.
     """
-    from entraclaw import mcp_server  # noqa: F401
+    from entrabot import mcp_server  # noqa: F401
 
     # The decorated coroutine still carries the docstring at import time.
     docstring = mcp_server.send_teams_message.__doc__ or ""

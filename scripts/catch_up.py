@@ -11,8 +11,8 @@ from pathlib import Path
 
 import httpx
 
-from entraclaw.config import get_config
-from entraclaw.tools.teams import acquire_agent_user_token
+from entrabot.config import get_config
+from entrabot.tools.teams import acquire_agent_user_token
 
 
 async def fetch(
@@ -35,11 +35,11 @@ async def main() -> None:
     _hours = int(sys.argv[1]) if len(sys.argv) > 1 else 6  # noqa: F841 — reserved for future filtering
     token = acquire_agent_user_token(get_config())
 
-    watched = Path.home() / ".entraclaw" / "data" / "watched_chats"
+    watched = Path.home() / ".entrabot" / "data" / "watched_chats"
     chat_ids: list[str] = []
     if watched.exists():
         chat_ids = [ln.strip() for ln in watched.read_text().splitlines() if ln.strip()]
-    default_chat = Path.home() / ".entraclaw" / "data" / "chat_id"
+    default_chat = Path.home() / ".entrabot" / "data" / "chat_id"
     if default_chat.exists():
         cid = default_chat.read_text().strip()
         if cid and cid not in chat_ids:

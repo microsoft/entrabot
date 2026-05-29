@@ -3,8 +3,8 @@
 The hook is a Claude Code PreToolUse hook that blocks Write/Edit/NotebookEdit
 against the local Claude Code auto-memory directory
 (``~/.claude/projects/<slug>/memory/**``) unless the user has explicitly
-opted in via ``ENTRACLAW_KEEP_MEMORY_LOCAL=true`` — the same env var that
-gates operational storage mode in ``src/entraclaw/config.py``.
+opted in via ``ENTRABOT_KEEP_MEMORY_LOCAL=true`` — the same env var that
+gates operational storage mode in ``src/entrabot/config.py``.
 
 We drive the script as a subprocess to validate the stdio contract that
 Claude Code relies on (exit code 0 = allow, 2 = block, JSON decision on
@@ -27,9 +27,9 @@ HOOK_SCRIPT = REPO_ROOT / "scripts" / "hooks" / "block_local_memory_write.py"
 
 def _run_hook(payload: dict, env_overrides: dict | None = None) -> subprocess.CompletedProcess:
     """Run the hook script with the given JSON payload on stdin."""
-    # Build a clean env that does NOT inherit ENTRACLAW_KEEP_MEMORY_LOCAL
+    # Build a clean env that does NOT inherit ENTRABOT_KEEP_MEMORY_LOCAL
     # from the caller — we want each test to control the env explicitly.
-    env = {k: v for k, v in os.environ.items() if k != "ENTRACLAW_KEEP_MEMORY_LOCAL"}
+    env = {k: v for k, v in os.environ.items() if k != "ENTRABOT_KEEP_MEMORY_LOCAL"}
     if env_overrides:
         env.update(env_overrides)
     return subprocess.run(
@@ -75,7 +75,7 @@ class TestAllow:
                 "tool_name": "Write",
                 "tool_input": {"file_path": _home_memory_path(), "content": "hi"},
             },
-            env_overrides={"ENTRACLAW_KEEP_MEMORY_LOCAL": "true"},
+            env_overrides={"ENTRABOT_KEEP_MEMORY_LOCAL": "true"},
         )
         assert result.returncode == 0, result.stderr
 
@@ -86,7 +86,7 @@ class TestAllow:
                 "tool_name": "Write",
                 "tool_input": {"file_path": _home_memory_path(), "content": "hi"},
             },
-            env_overrides={"ENTRACLAW_KEEP_MEMORY_LOCAL": "TRUE"},
+            env_overrides={"ENTRABOT_KEEP_MEMORY_LOCAL": "TRUE"},
         )
         assert result.returncode == 0, result.stderr
 
@@ -171,7 +171,7 @@ class TestBlock:
         assert decision["decision"] == "block"
         reason = decision["reason"]
         assert "mcp__persona-sati__write_memory_file" in reason
-        assert "ENTRACLAW_KEEP_MEMORY_LOCAL" in reason
+        assert "ENTRABOT_KEEP_MEMORY_LOCAL" in reason
 
     def test_block_emits_human_readable_stderr(self):
         path = _home_memory_path()
@@ -185,7 +185,7 @@ class TestBlock:
         assert result.returncode == 2
         # The model reads stderr on exit 2 — make sure it's actionable.
         assert "blocked" in result.stderr.lower()
-        assert "ENTRACLAW_KEEP_MEMORY_LOCAL" in result.stderr
+        assert "ENTRABOT_KEEP_MEMORY_LOCAL" in result.stderr
 
     def test_env_var_unset_blocks(self):
         # Belt-and-suspenders: explicit empty env var also blocks.
@@ -196,7 +196,7 @@ class TestBlock:
                 "tool_name": "Write",
                 "tool_input": {"file_path": path, "content": "hi"},
             },
-            env_overrides={"ENTRACLAW_KEEP_MEMORY_LOCAL": ""},
+            env_overrides={"ENTRABOT_KEEP_MEMORY_LOCAL": ""},
         )
         assert result.returncode == 2, result.stderr
 
@@ -209,6 +209,6 @@ class TestBlock:
                 "tool_name": "Write",
                 "tool_input": {"file_path": path, "content": "hi"},
             },
-            env_overrides={"ENTRACLAW_KEEP_MEMORY_LOCAL": "1"},
+            env_overrides={"ENTRABOT_KEEP_MEMORY_LOCAL": "1"},
         )
         assert result.returncode == 2, result.stderr

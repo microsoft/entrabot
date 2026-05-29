@@ -66,7 +66,7 @@ The private key never leaves the secure hardware. Only the public certificate is
 2. Upload the public cert to the Blueprint app registration (automate via Graph API)
 3. Store the private key in the OS credential store (extend `platform/` layer)
 4. Modify `acquire_agent_user_token()` Hop 1 to construct a JWT assertion instead of sending `client_secret`
-5. Remove `ENTRACLAW_BLUEPRINT_SECRET` from `.env` — it's no longer needed
+5. Remove `ENTRABOT_BLUEPRINT_SECRET` from `.env` — it's no longer needed
 
 ## Alternatives Considered
 
@@ -121,7 +121,7 @@ ADR's spirit holds, but the mechanics are now per-platform:
 | Thumbprint | SHA-256 b64url (used as JWT ``x5t#S256``) | SHA-1 hex (used to find cert in store) **plus** SHA-256 b64url (header) |
 | Rotation | ``deploy.sh`` | ``deploy-windows.ps1`` + ``rotate_cert_windows.py`` (transactional rollback per D7) |
 
-The dispatch lives in ``src/entraclaw/auth/certificate.py``:
+The dispatch lives in ``src/entrabot/auth/certificate.py``:
 ``build_client_assertion`` accepts either ``private_key_pem`` (Mac/Linux)
 or ``cert_sha1`` (Windows). Callers in ``tools/teams.py`` go through
 ``_build_blueprint_assertion`` which selects by ``sys.platform``.

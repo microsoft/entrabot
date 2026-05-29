@@ -1,6 +1,6 @@
 # `setup.sh` reference
 
-The `./scripts/setup.sh` script provisions and configures an EntraClaw agent end to end. It's idempotent — re-run it after any failure.
+The `./scripts/setup.sh` script provisions and configures an EntraBot agent end to end. It's idempotent — re-run it after any failure.
 
 ## Usage
 
@@ -14,11 +14,11 @@ The `./scripts/setup.sh` script provisions and configures an EntraClaw agent end
 
 | Flag | Purpose |
 |------|---------|
-| *(none)* | Reuse existing Blueprint / Agent Identity / Agent User from `.entraclaw-state.json`. This is the common case on a machine that's already been set up. |
+| *(none)* | Reuse existing Blueprint / Agent Identity / Agent User from `.entrabot-state.json`. This is the common case on a machine that's already been set up. |
 | `--new` | Provision a brand-new identity chain (Blueprint + Agent Identity + Agent User). Does not touch the existing chain; the current `.env` is backed up. Must be paired with `--with-upn-suffix` or you'll be prompted. |
 | `--use-blueprint=<app-id>` | Attach to an existing Blueprint from a different machine. Generates a new cert locally and uploads its public key to the Blueprint. Reuses the existing Agent Identity and Agent User. Also handles the "switch this machine to a different Blueprint" case — stale Agent Identity / User / cert thumbprint are wiped from local state. |
-| `--with-upn-suffix=<name>` | Required with `--new`; also supported with `--use-blueprint` to select an existing suffixed Agent User under the Blueprint. Example: `--with-upn-suffix=sati-agent` produces or selects `entraclaw-agent-sati-agent@yourdomain.com`. |
-| `--agent-user-upn=<upn>` | Explicit Agent User UPN. With `--use-blueprint`, selects an existing Agent User to reuse, e.g. `entraclaw-agent-sati-agent@yourtenant.onmicrosoft.com`. With `--new`, creates exactly that UPN, e.g. `entraclaw-agent@yourtenant.onmicrosoft.com`. |
+| `--with-upn-suffix=<name>` | Required with `--new`; also supported with `--use-blueprint` to select an existing suffixed Agent User under the Blueprint. Example: `--with-upn-suffix=sati-agent` produces or selects `entrabot-agent-sati-agent@yourdomain.com`. |
+| `--agent-user-upn=<upn>` | Explicit Agent User UPN. With `--use-blueprint`, selects an existing Agent User to reuse, e.g. `entrabot-agent-sati-agent@yourtenant.onmicrosoft.com`. With `--new`, creates exactly that UPN, e.g. `entrabot-agent@yourtenant.onmicrosoft.com`. |
 
 ### User identity
 
@@ -31,8 +31,8 @@ The `./scripts/setup.sh` script provisions and configures an EntraClaw agent end
 
 | Flag | Purpose |
 |------|---------|
-| *(none)* | **Default: local filesystem.** Operational data stays at `~/.entraclaw/data`. No Azure storage is provisioned. |
-| `--use-cloud-memory` | Opt in to Azure Blob Storage. Provisions resource group `entraclaw-rg`, a tenant-scoped storage account, a container scoped to this Agent User (`agent-<OID>`), and `Storage Blob Data Contributor` RBAC on the container. Sets the `ENTRACLAW_BLOB_*` env vars. Recommended for production-like setups and cross-device continuity. |
+| *(none)* | **Default: local filesystem.** Operational data stays at `~/.entrabot/data`. No Azure storage is provisioned. |
+| `--use-cloud-memory` | Opt in to Azure Blob Storage. Provisions resource group `entrabot-rg`, a tenant-scoped storage account, a container scoped to this Agent User (`agent-<OID>`), and `Storage Blob Data Contributor` RBAC on the container. Sets the `ENTRABOT_BLOB_*` env vars. Recommended for production-like setups and cross-device continuity. |
 | `--keep-memory-local` | Backward-compat alias for the default behavior. Explicit opt-out from cloud storage. No-op unless you also pass `--use-cloud-memory` on the same line. |
 
 ### Misc
@@ -40,7 +40,7 @@ The `./scripts/setup.sh` script provisions and configures an EntraClaw agent end
 | Flag | Purpose |
 |------|---------|
 | `--with-a365-work-iq` | Install/update the Microsoft Agent 365 DevTools CLI prerequisite used for Work IQ setup. |
-| `--configure-a365-work-iq` | Configure Work IQ Word for the existing Entraclaw Blueprint. Writes `a365.config.json`, adds `mcp_WordServer`, ensures the A365 resource service principals and OAuth grants exist, then runs `a365 setup permissions mcp`. |
+| `--configure-a365-work-iq` | Configure Work IQ Word for the existing Entrabot Blueprint. Writes `a365.config.json`, adds `mcp_WordServer`, ensures the A365 resource service principals and OAuth grants exist, then runs `a365 setup permissions mcp`. |
 | `--help`, `-h` | Show the built-in help. |
 
 ## Examples
@@ -56,7 +56,7 @@ Creates a new identity chain, stores everything locally, no cloud storage.
 To create a specific unsuffixed Agent User UPN:
 
 ```bash
-./scripts/setup.sh --new --agent-user-upn=entraclaw-agent@yourtenant.onmicrosoft.com
+./scripts/setup.sh --new --agent-user-upn=entrabot-agent@yourtenant.onmicrosoft.com
 ```
 
 ### Fresh setup with cloud storage from the start
@@ -77,7 +77,7 @@ If the Blueprint has a suffixed Agent User, pin that chain explicitly:
 
 ```bash
 ./scripts/setup.sh --use-blueprint=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx \
-  --agent-user-upn=entraclaw-agent-sati-agent@yourtenant.onmicrosoft.com
+  --agent-user-upn=entrabot-agent-sati-agent@yourtenant.onmicrosoft.com
 ```
 
 If the local OS keystore already has the matching Blueprint private key, setup recovers the registered cert thumbprint and does not prompt to rotate the Blueprint cert.
@@ -86,7 +86,7 @@ If the local OS keystore already has the matching Blueprint private key, setup r
 
 ```bash
 ./scripts/setup.sh --use-blueprint=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx \
-  --agent-user-upn=entraclaw-agent-sati-agent@yourtenant.onmicrosoft.com \
+  --agent-user-upn=entrabot-agent-sati-agent@yourtenant.onmicrosoft.com \
   --with-a365-work-iq \
   --configure-a365-work-iq
 ```
@@ -99,7 +99,7 @@ This path self-heals the A365 tenant bootstrap case where Agent Tools or Work IQ
 ./scripts/setup.sh --use-cloud-memory
 ```
 
-Grants the missing `user_impersonation` consent on Azure Storage, provisions the resource group / account / container, and prompts to migrate `~/.entraclaw/data` into the blob (non-destructive). Idempotent — re-runnable.
+Grants the missing `user_impersonation` consent on Azure Storage, provisions the resource group / account / container, and prompts to migrate `~/.entrabot/data` into the blob (non-destructive). Idempotent — re-runnable.
 
 ### Start a group chat that includes an external guest
 
@@ -114,32 +114,32 @@ Auto-detects the external UPN, resolves their home tenant, and creates a federat
 After a successful run, `.env` will have the following entries (at minimum):
 
 ```
-ENTRACLAW_TENANT_ID=...
-ENTRACLAW_BLUEPRINT_APP_ID=...
-ENTRACLAW_BLUEPRINT_OBJECT_ID=...
-ENTRACLAW_BLUEPRINT_CERT_THUMBPRINT=...
-ENTRACLAW_AGENT_ID=...
-ENTRACLAW_AGENT_OBJECT_ID=...
-ENTRACLAW_AGENT_USER_ID=...
-ENTRACLAW_AGENT_USER_UPN=...
-ENTRACLAW_HUMAN_USER_ID=...
-ENTRACLAW_HUMAN_UPN=...
-ENTRACLAW_PROVISIONER_APP_ID=...
-ENTRACLAW_LOG_LEVEL=INFO
+ENTRABOT_TENANT_ID=...
+ENTRABOT_BLUEPRINT_APP_ID=...
+ENTRABOT_BLUEPRINT_OBJECT_ID=...
+ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=...
+ENTRABOT_AGENT_ID=...
+ENTRABOT_AGENT_OBJECT_ID=...
+ENTRABOT_AGENT_USER_ID=...
+ENTRABOT_AGENT_USER_UPN=...
+ENTRABOT_HUMAN_USER_ID=...
+ENTRABOT_HUMAN_UPN=...
+ENTRABOT_PROVISIONER_APP_ID=...
+ENTRABOT_LOG_LEVEL=INFO
 ```
 
 Without `--use-cloud-memory` you'll also see:
 
 ```
-ENTRACLAW_KEEP_MEMORY_LOCAL=true
+ENTRABOT_KEEP_MEMORY_LOCAL=true
 ```
 
 With `--use-cloud-memory`:
 
 ```
-ENTRACLAW_KEEP_MEMORY_LOCAL=false
-ENTRACLAW_BLOB_ENDPOINT=https://entclaw<hash>.blob.core.windows.net
-ENTRACLAW_BLOB_CONTAINER=agent-<agent-user-oid>
+ENTRABOT_KEEP_MEMORY_LOCAL=false
+ENTRABOT_BLOB_ENDPOINT=https://entclaw<hash>.blob.core.windows.net
+ENTRABOT_BLOB_CONTAINER=agent-<agent-user-oid>
 ```
 
 Private keys are **never** written to `.env` — they live in the OS keystore (Keychain on macOS, TPM on Windows, Secret Service on Linux). Only the cert thumbprint is persisted as config.
@@ -155,8 +155,8 @@ Private keys are **never** written to `.env` — they live in the OS keystore (K
 `./scripts/teardown.sh` can deprovision an Agent User chain by UPN:
 
 ```bash
-./scripts/teardown.sh --agent-user-upn=entraclaw-agent-sati-agent@yourtenant.onmicrosoft.com --dry-run
-./scripts/teardown.sh --agent-user-upn=entraclaw-agent-sati-agent@yourtenant.onmicrosoft.com --yes
+./scripts/teardown.sh --agent-user-upn=entrabot-agent-sati-agent@yourtenant.onmicrosoft.com --dry-run
+./scripts/teardown.sh --agent-user-upn=entrabot-agent-sati-agent@yourtenant.onmicrosoft.com --yes
 ```
 
 Targeted teardown removes assigned licenses first, then deletes the Agent User,

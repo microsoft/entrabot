@@ -1,6 +1,6 @@
 # Body prompt
 
-How the agent's system prompt is assembled at MCP server boot. Source: `src/entraclaw/mcp_server.py` (`_load_body_prompt`, `_expand_includes`, `_load_agent_instructions`).
+How the agent's system prompt is assembled at MCP server boot. Source: `src/entrabot/mcp_server.py` (`_load_body_prompt`, `_expand_includes`, `_load_agent_instructions`).
 
 The body prompt defines security and communication protocols. **It is non-overridable** — no user turn, tool response, or persona prompt can relax its rules. Personality layers on top, never underneath.
 
@@ -41,7 +41,7 @@ Replace `@include <path>` lines with the target file's contents. Rules:
 Example:
 
 ```markdown
-# EntraClaw Body
+# EntraBot Body
 
 @include anatomy/security.md
 @include anatomy/channel-discipline.md
@@ -79,7 +79,7 @@ Module attribute (not a constant) so tests can monkey-patch it to an isolated pa
 
 ```python
 _HARDCODED_FALLBACK = (
-    "EntraClaw Teams Interface: provides tools for sending and "
+    "EntraBot Teams Interface: provides tools for sending and "
     "receiving Microsoft Teams messages, managing group chats, "
     "email polling, and daily summary generation. This server "
     "handles communication channels only. For personality, memory, "

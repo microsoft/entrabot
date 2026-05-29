@@ -1,4 +1,4 @@
-# EntraClaw E2E Smoke Test
+# EntraBot E2E Smoke Test
 
 `smokeit` is an opt-in, destructive integration smoke test. It provisions a fresh
 Agent Identity chain and cloud memory storage, optionally exercises Teams or A365
@@ -19,7 +19,7 @@ Azure, and Microsoft 365 resources.
 8. `scripts/teardown.sh --agent-user-upn=...` targeted teardown.
 9. Graph deletion verification for Agent User, Agent Identity, and Blueprint.
 10. Azure storage account deletion and verification.
-11. Local `.env`, `.entraclaw-state.json`, and `entraclaw/blueprint-private-key`
+11. Local `.env`, `.entrabot-state.json`, and `entrabot/blueprint-private-key`
    restoration after the run.
 
 ## Required Flag

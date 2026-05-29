@@ -1,11 +1,11 @@
 # Teams Graph API
 
 > **Last updated:** 2025-07-17
-> **Context:** Entraclaw identity research — autonomous agents communicating with humans via Microsoft Teams
+> **Context:** Entrabot identity research — autonomous agents communicating with humans via Microsoft Teams
 
 ## Overview
 
-The Microsoft Graph API provides a comprehensive REST interface for interacting with Microsoft Teams programmatically. For Entraclaw, Graph API is the primary pathway for an autonomous agent to:
+The Microsoft Graph API provides a comprehensive REST interface for interacting with Microsoft Teams programmatically. For Entrabot, Graph API is the primary pathway for an autonomous agent to:
 
 - **Send messages** (status updates, results, alerts) to a human operator in Teams
 - **Receive commands** from the human via webhook-driven notifications
@@ -14,7 +14,7 @@ The Microsoft Graph API provides a comprehensive REST interface for interacting 
 
 The base URL for all endpoints is `https://graph.microsoft.com/v1.0` (stable) or `https://graph.microsoft.com/beta` (preview).
 
-### Why This Matters for Entraclaw
+### Why This Matters for Entrabot
 
 Our agent architecture has agents running on Mac/Linux/Windows with Agent IDs, using OBO (On-Behalf-Of) token flows. The agent connects to Teams as an "Agent User" — a real Entra ID user account — for bidirectional communication. Understanding Graph API's capabilities, permissions model, and limitations is critical to designing this integration correctly.
 
@@ -53,7 +53,7 @@ POST https://graph.microsoft.com/v1.0/chats
 
 **Permissions:** `Chat.Create` (delegated)
 
-**Entraclaw note:** If a 1:1 chat between two users already exists, this endpoint returns the existing chat rather than creating a duplicate. This is idempotent and safe for agent startup flows.
+**Entrabot note:** If a 1:1 chat between two users already exists, this endpoint returns the existing chat rather than creating a duplicate. This is idempotent and safe for agent startup flows.
 
 #### Send a Message in a Chat
 
@@ -73,7 +73,7 @@ POST https://graph.microsoft.com/v1.0/chats/{chat-id}/messages
 
 **Permissions:** `ChatMessage.Send` (delegated only for normal use)
 
-**⚠️ CRITICAL:** Application permissions CANNOT send regular chat messages. Only delegated permissions (user context) can send messages. This is the single most important constraint for Entraclaw — the agent MUST have a user identity and use delegated auth (OBO flow) to send messages.
+**⚠️ CRITICAL:** Application permissions CANNOT send regular chat messages. Only delegated permissions (user context) can send messages. This is the single most important constraint for Entrabot — the agent MUST have a user identity and use delegated auth (OBO flow) to send messages.
 
 #### List Messages in a Chat
 
@@ -179,7 +179,7 @@ POST https://graph.microsoft.com/v1.0/users/{userId}/presence/setPresence
 
 **Permissions:** `Presence.ReadWrite.All` (application permission, admin consent required)
 
-**Entraclaw pattern:** Agent sets presence to `Available` on startup, `Busy` when processing a task, and `Away` or `Offline` on shutdown. A background timer re-sets presence every 55 minutes to prevent expiration.
+**Entrabot pattern:** Agent sets presence to `Available` on startup, `Busy` when processing a task, and `Away` or `Offline` on shutdown. A background timer re-sets presence every 55 minutes to prevent expiration.
 
 #### Clear Presence
 
@@ -282,7 +282,7 @@ An alternative to chat messages for sending notifications to a user's Teams acti
 POST https://graph.microsoft.com/v1.0/users/{userId}/teamwork/sendActivityNotification
 ```
 
-This requires a Teams app manifest and is typically used for bots/apps installed in Teams, not for user-to-user messaging. Less relevant for the Entraclaw "Agent User" pattern but worth noting.
+This requires a Teams app manifest and is typically used for bots/apps installed in Teams, not for user-to-user messaging. Less relevant for the Entrabot "Agent User" pattern but worth noting.
 
 ---
 
@@ -295,7 +295,7 @@ This requires a Teams app manifest and is typically used for bots/apps installed
 | **Delegated** | Acts on behalf of a signed-in user | User or Admin | Send messages, read own chats, set own presence |
 | **Application** | Acts as the app itself (no user) | Admin only | Read all messages (compliance), tenant-wide subscriptions |
 
-### Key Permission Scopes for Entraclaw
+### Key Permission Scopes for Entrabot
 
 | Permission | Type | Purpose | Admin Consent? |
 |---|---|---|---|
@@ -312,18 +312,18 @@ This requires a Teams app manifest and is typically used for bots/apps installed
 | `Chat.ReadWrite.All` | Application | Read/write all chats | Yes |
 | `TeamsAppInstallation.ReadWriteSelfForUser.All` | Application | Install bot app for users | Yes |
 
-### OBO (On-Behalf-Of) Flow for Entraclaw Agents
+### OBO (On-Behalf-Of) Flow for Entrabot Agents
 
-The OBO flow is the recommended pattern for Entraclaw's "Agent User" scenario:
+The OBO flow is the recommended pattern for Entrabot's "Agent User" scenario:
 
-1. **Agent authenticates as itself** to the Entraclaw identity service
-2. **Entraclaw service** holds a user token (or refresh token) for the Agent User account
+1. **Agent authenticates as itself** to the Entrabot identity service
+2. **Entrabot service** holds a user token (or refresh token) for the Agent User account
 3. **OBO exchange:** The service exchanges the agent's token for a Microsoft Graph token scoped to the Agent User's delegated permissions
 4. **Agent calls Graph API** with the resulting delegated token — messages appear as sent by the Agent User
 
 **Architecture:**
 ```
-Agent Process → Entraclaw Identity Service → (OBO Token Exchange) → Microsoft Graph API
+Agent Process → Entrabot Identity Service → (OBO Token Exchange) → Microsoft Graph API
                                                                           ↓
                                                                Teams Chat (as Agent User)
 ```
@@ -334,7 +334,7 @@ Agent Process → Entraclaw Identity Service → (OBO Token Exchange) → Micros
 
 **No, not via Graph API alone.** Graph API does not support application permissions for sending chat messages (except for data migration). To send messages "as" a distinct identity:
 
-- **Option A (Recommended for Entraclaw):** Create a dedicated Entra ID user account (the "Agent User") and use OBO/delegated flow. Messages show the Agent User's display name.
+- **Option A (Recommended for Entrabot):** Create a dedicated Entra ID user account (the "Agent User") and use OBO/delegated flow. Messages show the Agent User's display name.
 - **Option B:** Build a Teams Bot using Bot Framework. The bot sends messages as the app, but requires Bot Framework SDK + Azure Bot Service, not just Graph API.
 - **Option C:** Use a combination — Graph API for chat operations + Bot Framework for proactive messaging.
 
@@ -481,7 +481,7 @@ Retry-After: 30
 5. Batch requests using `POST /$batch` where applicable (but note: batch requests can still trigger per-resource throttling)
 6. The `Retry-After` header is NOT always present — implement fallback backoff
 
-### Entraclaw Implications
+### Entrabot Implications
 
 For a single agent sending periodic status updates (a few messages per hour), throttling is unlikely. However:
 - Multiple agents per tenant could hit per-tenant limits
@@ -530,7 +530,7 @@ These are available under `/beta` but not stable for production:
 **The #1 surprise for developers:** You cannot use client_credentials (application-only) flow to send chat messages. `ChatMessage.Send` requires delegated permissions. This is explicitly by design — Microsoft considers message authorship tied to user identity.
 
 **Workarounds:**
-- Use OBO flow with a service account (Entraclaw's approach)
+- Use OBO flow with a service account (Entrabot's approach)
 - Use Bot Framework for app-identity messaging
 - For channels only: some limited app-permission sending exists but is throttled to migration rates
 
@@ -594,7 +594,7 @@ Files shared in Teams are stored in SharePoint. SharePoint's rate limits and sto
 
 ---
 
-## Open Questions for Entraclaw
+## Open Questions for Entrabot
 
 ### Critical Path Questions
 
@@ -610,7 +610,7 @@ Files shared in Teams are stored in SharePoint. SharePoint's rate limits and sto
 
 4. **Multi-Agent Fan-Out:** If 50 agents share one tenant, do their API calls aggregate against per-tenant limits? (Yes — this needs capacity planning.)
 
-5. **Agent Display Name:** Can we set the Agent User's display name to something like "🤖 Entraclaw Agent — Pipeline Runner" so humans easily distinguish agents from people?
+5. **Agent Display Name:** Can we set the Agent User's display name to something like "🤖 Entrabot Agent — Pipeline Runner" so humans easily distinguish agents from people?
 
 6. **Conditional Access:** Will tenant Conditional Access policies (MFA, device compliance, IP restrictions) block the OBO flow for agent accounts? May need CA policy exclusions for agent accounts.
 

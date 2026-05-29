@@ -2,7 +2,7 @@
 """
 Shared helpers for Entra Graph provisioning.
 
-Centralizes the dedicated "EntraClaw Agent ID Provisioner" app registration
+Centralizes the dedicated "EntraBot Agent ID Provisioner" app registration
 used for Agent Identity Blueprint and Agent Identity creation via the
 Graph beta API.
 
@@ -38,7 +38,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 MS_GRAPH_API_ID = "00000003-0000-0000-c000-000000000000"
-PROVISIONER_APP_DISPLAY_NAME = "EntraClaw Agent ID Provisioner"
+PROVISIONER_APP_DISPLAY_NAME = "EntraBot Agent ID Provisioner"
 
 # Application.ReadWrite.All — required for Blueprint CRUD
 APP_READWRITE_ALL_ID = "1bfefb4e-e0b5-418b-a88f-73c46d2cc8e9"
@@ -71,7 +71,7 @@ class ProvisionerBootstrapError(RuntimeError):
 # registered on the app registration in Entra. No client_secret
 # anywhere. Matches the Blueprint-cert pattern already used for agent-
 # body auth.
-_KEYCHAIN_SERVICE_CERT = "entraclaw-provisioner-cert"
+_KEYCHAIN_SERVICE_CERT = "entrabot-provisioner-cert"
 
 
 def _keyring_module():
@@ -98,7 +98,7 @@ def _keychain_store_cert(account: str, pem_bundle: str) -> None:
     """Store the PEM (cert+key) bundle in Keychain/local file — overwrites if present.
 
     On Windows, Credential Manager has a 2560-byte blob limit which PEM bundles
-    exceed. Fall back to a file in %LOCALAPPDATA%\\entraclaw\\ with strict ACLs.
+    exceed. Fall back to a file in %LOCALAPPDATA%\\entrabot\\ with strict ACLs.
     """
     if sys.platform == "win32":
         _windows_file_store_cert(account, pem_bundle)
@@ -108,8 +108,8 @@ def _keychain_store_cert(account: str, pem_bundle: str) -> None:
 
 
 def _windows_file_store_cert(account: str, pem_bundle: str) -> None:
-    """Store PEM in %LOCALAPPDATA%\\entraclaw\\provisioner-cert-<account>.pem."""
-    cert_dir = Path(os.environ.get("LOCALAPPDATA", ""), "entraclaw")
+    """Store PEM in %LOCALAPPDATA%\\entrabot\\provisioner-cert-<account>.pem."""
+    cert_dir = Path(os.environ.get("LOCALAPPDATA", ""), "entrabot")
     cert_dir.mkdir(parents=True, exist_ok=True)
     cert_path = cert_dir / f"provisioner-cert-{account}.pem"
     cert_path.write_text(pem_bundle, encoding="utf-8")
@@ -123,9 +123,9 @@ def _windows_file_store_cert(account: str, pem_bundle: str) -> None:
 
 
 def _windows_file_get_cert(account: str) -> str | None:
-    """Read PEM from %LOCALAPPDATA%\\entraclaw\\provisioner-cert-<account>.pem."""
+    """Read PEM from %LOCALAPPDATA%\\entrabot\\provisioner-cert-<account>.pem."""
     cert_path = Path(
-        os.environ.get("LOCALAPPDATA", ""), "entraclaw", f"provisioner-cert-{account}.pem"
+        os.environ.get("LOCALAPPDATA", ""), "entrabot", f"provisioner-cert-{account}.pem"
     )
     if cert_path.is_file():
         return cert_path.read_text(encoding="utf-8")
@@ -136,7 +136,7 @@ def _keychain_delete_cert(account: str) -> None:
     """Remove the Keychain/file entry. No-op if absent."""
     if sys.platform == "win32":
         cert_path = Path(
-            os.environ.get("LOCALAPPDATA", ""), "entraclaw", f"provisioner-cert-{account}.pem"
+            os.environ.get("LOCALAPPDATA", ""), "entrabot", f"provisioner-cert-{account}.pem"
         )
         cert_path.unlink(missing_ok=True)
         return
@@ -168,8 +168,8 @@ def _generate_provisioner_cert() -> tuple[str, str, str]:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     subject = issuer = x509.Name(
         [
-            x509.NameAttribute(NameOID.COMMON_NAME, "entraclaw-provisioner"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "EntraClaw"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "entrabot-provisioner"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "EntraBot"),
         ]
     )
     cert = (
@@ -304,7 +304,7 @@ def _remove_legacy_password_credentials(app_id: str) -> int:
 # State persistence
 # ---------------------------------------------------------------------------
 
-_STATE_FILE = Path(__file__).resolve().parent.parent / ".entraclaw-state.json"
+_STATE_FILE = Path(__file__).resolve().parent.parent / ".entrabot-state.json"
 
 
 def _load_state() -> dict:
@@ -322,19 +322,19 @@ def _save_state(state: dict) -> None:
 
 
 def get_state(key: str) -> str | None:
-    """Read a value from .entraclaw-state.json."""
+    """Read a value from .entrabot-state.json."""
     return _load_state().get(key)
 
 
 def set_state(key: str, value: str) -> None:
-    """Write a value to .entraclaw-state.json."""
+    """Write a value to .entrabot-state.json."""
     state = _load_state()
     state[key] = value
     _save_state(state)
 
 
 def clear_state(key: str) -> None:
-    """Remove a key from .entraclaw-state.json."""
+    """Remove a key from .entrabot-state.json."""
     state = _load_state()
     state.pop(key, None)
     _save_state(state)
@@ -578,7 +578,7 @@ def ensure_app_registration(
     memory is transient — callers must not write it to disk. State
     file tracks only non-secret identifiers (app id, thumbprint).
     """
-    tenant_id = os.environ.get("ENTRACLAW_TENANT_ID") or get_state("TENANT_ID")
+    tenant_id = os.environ.get("ENTRABOT_TENANT_ID") or get_state("TENANT_ID")
     if not tenant_id:
         rc, out, err = run_az(["account", "show", "--query", "tenantId", "-o", "tsv"])
         if rc != 0 or not out:
@@ -631,7 +631,7 @@ def ensure_app_registration(
             print(f"  Found existing provisioner app: {client_id}")
             set_state("PROVISIONER_CLIENT_ID", client_id)
         else:
-            print("  Creating dedicated EntraClaw provisioner app...")
+            print("  Creating dedicated EntraBot provisioner app...")
             rc, out, err = run_az(
                 [
                     "ad",
@@ -709,7 +709,7 @@ def load_existing_app_registration() -> tuple[str, str, str]:
     Utility scripts use this path so read/status/action commands don't create
     app registrations, add permissions, grant consent, or wait for propagation.
     """
-    tenant_id = os.environ.get("ENTRACLAW_TENANT_ID") or get_state("TENANT_ID")
+    tenant_id = os.environ.get("ENTRABOT_TENANT_ID") or get_state("TENANT_ID")
     client_id = get_state("PROVISIONER_CLIENT_ID")
     if not tenant_id or not client_id:
         raise ProvisionerBootstrapError(

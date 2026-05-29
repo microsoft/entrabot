@@ -1,6 +1,6 @@
 """Dual-host MCP config writer used by ``scripts/setup.sh``.
 
-EntraClaw supports two MCP clients: Claude Code (leader) and Copilot CLI
+EntraBot supports two MCP clients: Claude Code (leader) and Copilot CLI
 (slave). Both read a JSON config file listing the MCP servers to launch,
 but from different locations:
 
@@ -16,8 +16,8 @@ identical — the runtime leader/slave split happens dynamically via
 ``clientInfo.name`` at session initialize inside the MCP server itself,
 NOT via separate configs.
 
-See :func:`entraclaw.mcp_server._current_host` for the host detection,
-and :func:`entraclaw.mcp_server._is_leader_host` for the gating.
+See :func:`entrabot.mcp_server._current_host` for the host detection,
+and :func:`entrabot.mcp_server._is_leader_host` for the gating.
 """
 
 from __future__ import annotations
@@ -46,8 +46,8 @@ def copilot_config_path() -> Path:
     return base / COPILOT_CONFIG_REL_PATH
 
 
-def build_entraclaw_entry(binary_path: str) -> dict:
-    """Return the MCP server entry dict for the ``entraclaw`` server.
+def build_entrabot_entry(binary_path: str) -> dict:
+    """Return the MCP server entry dict for the ``entrabot`` server.
 
     Shape matches both Claude Code's and Copilot CLI's MCP config schema
     (``type``, ``command``, ``args``, ``description``).
@@ -57,7 +57,7 @@ def build_entraclaw_entry(binary_path: str) -> dict:
         "command": binary_path,
         "args": [],
         "description": (
-            "EntraClaw Agent Identity — Teams tools + background DM/email poll "
+            "EntraBot Agent Identity — Teams tools + background DM/email poll "
             "(leader/slave auto-detected from MCP clientInfo)"
         ),
     }
@@ -111,14 +111,14 @@ def main(argv: list[str] | None = None) -> int:
 
     Usage:
         python scripts/mcp_config.py \
-            --binary /path/to/entraclaw-mcp \
+            --binary /path/to/entrabot-mcp \
             --project-root /path/to/repo
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--binary",
         required=True,
-        help="Absolute path to the entraclaw-mcp binary.",
+        help="Absolute path to the entrabot-mcp binary.",
     )
     parser.add_argument(
         "--project-root",
@@ -132,17 +132,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    entry = build_entraclaw_entry(args.binary)
+    entry = build_entrabot_entry(args.binary)
 
     # 1. Project-local .mcp.json (Claude Code + Copilot CLI project override).
     claude_target = Path(args.project_root) / ".mcp.json"
-    upsert_mcp_entry(claude_target, "entraclaw", entry)
+    upsert_mcp_entry(claude_target, "entrabot", entry)
     print(f"[mcp-config] wrote {claude_target}")
 
     # 2. Copilot CLI user-level config.
     if not args.skip_copilot:
         copilot_target = copilot_config_path()
-        upsert_mcp_entry(copilot_target, "entraclaw", entry)
+        upsert_mcp_entry(copilot_target, "entrabot", entry)
         print(f"[mcp-config] wrote {copilot_target}")
 
     return 0

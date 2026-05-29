@@ -25,7 +25,7 @@ from entra_provisioning import (  # noqa: E402
 )
 
 # fmt: on
-from entraclaw.graph_helpers import GRAPH_V1, graph_request  # noqa: E402
+from entrabot.graph_helpers import GRAPH_V1, graph_request  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
