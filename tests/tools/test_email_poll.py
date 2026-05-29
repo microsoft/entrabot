@@ -21,6 +21,7 @@ import respx
 
 from entrabot.tools.email_poll import (
     GRAPH_MESSAGES_URL,
+    advance_cursor,
     is_substantive,
     load_cursor,
     poll_once,
@@ -31,6 +32,8 @@ from entrabot.tools.email_poll import (
 @pytest.fixture
 def tmp_data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("ENTRABOT_BLOB_ENDPOINT", raising=False)
+    monkeypatch.delenv("ENTRABOT_BLOB_CONTAINER", raising=False)
     return tmp_path
 
 
@@ -63,6 +66,20 @@ class TestIsSubstantive:
 
     def test_case_insensitive(self) -> None:
         assert not is_substantive("NO-REPLY@Teams.Mail.Microsoft")
+
+
+# ---------------------------------------------------------------------------
+# advance_cursor
+# ---------------------------------------------------------------------------
+class TestAdvanceCursor:
+    def test_bumps_second_precision_timestamp_by_one_millisecond(self) -> None:
+        assert advance_cursor("2026-04-16T19:00:00Z") == "2026-04-16T19:00:00.001Z"
+
+    def test_bumps_subsecond_timestamp_by_one_millisecond(self) -> None:
+        assert advance_cursor("2026-04-16T19:00:00.500Z") == "2026-04-16T19:00:00.501Z"
+
+    def test_carries_overflow_into_next_second(self) -> None:
+        assert advance_cursor("2026-04-16T19:00:00.999Z") == "2026-04-16T19:00:01Z"
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +168,7 @@ class TestPollOnce:
         assert msgs[0]["id"] == "2"
         # Cursor advances to the latest received message across ALL returned
         # (including filtered) so we don't re-scan the same noise next poll.
-        assert new_cursor == "2026-04-16T19:07:00Z"
+        assert new_cursor == "2026-04-16T19:07:00.001Z"
 
     @pytest.mark.asyncio
     async def test_advances_cursor_to_latest(self) -> None:
@@ -166,7 +183,29 @@ class TestPollOnce:
             )
             msgs, new_cursor = await poll_once(token="tok", cursor="2026-04-16T19:00:00Z")
         assert len(msgs) == 3
-        assert new_cursor == "2026-04-16T19:09:00Z"
+        assert new_cursor == "2026-04-16T19:09:00.001Z"
+
+    @pytest.mark.asyncio
+    async def test_same_second_message_not_re_fetched_on_next_poll(self) -> None:
+        """Cursor must advance past the latest message so gt filter skips it."""
+        ts = "2026-04-16T19:00:00Z"
+        value = [_msg(msg_id="same-sec", sender="u@example.com", received=ts)]
+        captured_filters: list[str] = []
+
+        def handler(request):
+            captured_filters.append(dict(request.url.params).get("$filter", ""))
+            payload = {"value": value} if not captured_filters[0] else {"value": []}
+            return httpx.Response(200, json=payload)
+
+        with respx.mock:
+            respx.get(GRAPH_MESSAGES_URL).mock(side_effect=handler)
+            _, first_cursor = await poll_once(token="tok", cursor=None)
+            _, second_cursor = await poll_once(token="tok", cursor=first_cursor)
+
+        assert first_cursor == "2026-04-16T19:00:00.001Z"
+        assert len(captured_filters) == 2
+        assert captured_filters[1] == "receivedDateTime gt 2026-04-16T19:00:00.001Z"
+        assert second_cursor == first_cursor
 
     @pytest.mark.asyncio
     async def test_cursor_filter_passed_to_graph(self) -> None:
