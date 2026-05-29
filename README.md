@@ -141,7 +141,7 @@ After setup, use `./status.sh` as the canonical health and identity check:
 
 ## Documentation
 
-The full doc site: **<https://brandonwerner.com/entrabot-identity-research/>**
+The full doc site: **<https://microsoft.github.io/entrabot/>**
 
 Direct pointers:
 
