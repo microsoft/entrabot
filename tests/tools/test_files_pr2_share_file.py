@@ -447,3 +447,65 @@ class TestGetSponsorAllowlistCompat:
                 "alice.proxy@contoso.com",
                 "alice@outlook.com",
             }
+
+
+@pytest.mark.asyncio
+class TestShareFileAuditOnGateFailure:
+    """share_file must emit audit events for gate failures, not only Graph failures.
+
+    Pre-fix the audit context wrapped only the Graph /invite call, so
+    Gate-1/Gate-2 rejections produced no audit log. This is a security
+    visibility hole — the move to audit-first ordering closes it.
+    """
+
+    async def test_non_sponsor_failure_produces_audit_event(self, monkeypatch):
+        from entrabot.tools.files import FileRef, share_file
+
+        events: list[dict] = []
+
+        def fake_log_event(*, action, resource, outcome, metadata):
+            events.append(
+                {
+                    "action": action,
+                    "resource": resource,
+                    "outcome": outcome,
+                    "metadata": dict(metadata),
+                }
+            )
+
+        monkeypatch.setattr("entrabot.tools.files.log_event", fake_log_event)
+
+        async def _empty_sponsors():
+            return []
+
+        monkeypatch.setattr(
+            "entrabot.tools.files._get_sponsor_records", _empty_sponsors
+        )
+
+        ref = FileRef(
+            drive_id="d-1",
+            item_id="i-1",
+            name="x.txt",
+            mime_type="text/plain",
+            kind="onedrive_business",
+        )
+
+        with pytest.raises(RequesterNotSponsorError):
+            await share_file(
+                file_ref=ref,
+                recipient_email="bob@example.com",
+                requester_email="non-sponsor@evil.com",
+                chat_id="19:somechat@thread.v2",
+                role="read",
+                token="t",
+            )
+
+        failure_events = [e for e in events if e["outcome"] == "failure"]
+        assert failure_events, (
+            "share_file gate failure must emit at least one audit event "
+            "with outcome=failure"
+        )
+        last = failure_events[-1]
+        assert "RequesterNotSponsorError" in str(last["metadata"].get("error", ""))
+        # And it must be tagged as a share_file action (not some unrelated audit).
+        assert last["action"].endswith("share_file")

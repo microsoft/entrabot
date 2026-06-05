@@ -1269,68 +1269,74 @@ async def share_file(
     if file_ref.site_id:
         _check_site_allowed(file_ref.site_id)
 
-    # Gate 1: requester must be in the static sponsor allowlist.
-    sponsors = await _get_sponsor_records()
-    requester_lower = requester_email.strip().lower()
-    matched_sponsor = next(
-        (
-            s
-            for s in sponsors
-            if any(email.lower() == requester_lower for email in s.email_identifiers())
-        ),
-        None,
-    )
-    if matched_sponsor is None or not matched_sponsor.user_id:
-        raise RequesterNotSponsorError(requester=requester_email)
-
-    # Gate 2: matched sponsor must be a member of the cited chat.
-    import asyncio
-
-    from entrabot.config import get_config
-    from entrabot.identity.sponsors import fetch_chat_members
-
-    members = await asyncio.to_thread(fetch_chat_members, get_config(), chat_id)
-    matched_user_id = matched_sponsor.user_id.lower()
-    if not any(
-        (m.get("user_id") or "").strip().lower() == matched_user_id for m in members
-    ):
-        raise RequesterNotInChatError(requester=requester_email, chat_id=chat_id)
-
     resource = f"{file_ref.drive_id}:{file_ref.item_id}"
-    request_url = f"{GRAPH_V1_HOST}/drives/{file_ref.drive_id}/items/{file_ref.item_id}/invite"
-
-    payload = {
-        "recipients": [
-            {
-                "email": recipient_email,
-            }
-        ],
-        "roles": [role],
-        "requireSignIn": True,
-        # sendInvitation=True is required for cross-MySite shares: without
-        # it Graph creates the permission record but never registers the
-        # recipient in the target SharePoint site's user list, so the
-        # recipient gets a 500 "something went wrong" page when opening
-        # the doc, and the share never surfaces in their Outlook /
-        # OneDrive "shared with me" view (because no invitation email
-        # is sent). Verified live 2026-05-04 against an agent-owned
-        # ODB doc shared to a tenant user — without sendInvitation,
-        # SP returned a "SharePoint Foundation" 500 server error;
-        # with sendInvitation, the share appears and opens normally.
-        "sendInvitation": True,
+    audit_metadata = {
+        "requester_email": requester_email,
+        "chat_id": chat_id,
+        "recipient_email": recipient_email,
+        "role": role,
+        "site_id": file_ref.site_id,
     }
 
+    # Audit-first ordering: every share_file invocation — including
+    # gate rejections — emits a pending + (success|failure) audit pair.
+    # Before this refactor only Graph /invite failures were audited;
+    # Gate 1 / Gate 2 rejections were security-invisible (audit-first prep).
     async with _audit_graph_call(
         "share_file",
         resource,
-        metadata={
-            "requester_email": requester_email,
-            "chat_id": chat_id,
-            "recipient_email": recipient_email,
-            "role": role,
-            "site_id": file_ref.site_id,
-        },
+        metadata=audit_metadata,
     ):
+        # Gate 1: requester must be in the static sponsor allowlist.
+        sponsors = await _get_sponsor_records()
+        requester_lower = requester_email.strip().lower()
+        matched_sponsor = next(
+            (
+                s
+                for s in sponsors
+                if any(email.lower() == requester_lower for email in s.email_identifiers())
+            ),
+            None,
+        )
+        if matched_sponsor is None or not matched_sponsor.user_id:
+            raise RequesterNotSponsorError(requester=requester_email)
+
+        # Gate 2: matched sponsor must be a member of the cited chat.
+        import asyncio
+
+        from entrabot.config import get_config
+        from entrabot.identity.sponsors import fetch_chat_members
+
+        members = await asyncio.to_thread(fetch_chat_members, get_config(), chat_id)
+        matched_user_id = matched_sponsor.user_id.lower()
+        if not any(
+            (m.get("user_id") or "").strip().lower() == matched_user_id for m in members
+        ):
+            raise RequesterNotInChatError(requester=requester_email, chat_id=chat_id)
+
+        request_url = f"{GRAPH_V1_HOST}/drives/{file_ref.drive_id}/items/{file_ref.item_id}/invite"
+
+        payload = {
+            "recipients": [
+                {
+                    "email": recipient_email,
+                }
+            ],
+            "roles": [role],
+            "requireSignIn": True,
+            # sendInvitation=True is required for cross-MySite shares: without
+            # it Graph creates the permission record but never registers the
+            # recipient in the target SharePoint site's user list, so the
+            # recipient gets a 500 "something went wrong" page when opening
+            # the doc, and the share never surfaces in their Outlook /
+            # OneDrive "shared with me" view (because no invitation email
+            # is sent). Verified live 2026-05-04 against an agent-owned
+            # ODB doc shared to a tenant user — without sendInvitation,
+            # SP returned a "SharePoint Foundation" 500 server error;
+            # with sendInvitation, the share appears and opens normally.
+            "sendInvitation": True,
+        }
+
         async with _client(transport, allow_5xx_retry=False) as client:
             resp = await client.post(
                 request_url,
