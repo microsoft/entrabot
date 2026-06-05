@@ -1,7 +1,7 @@
 # Engineering Status
 
-**Last updated:** 2026-05-27
-**Status:** v1 released. Three auth modes (Agent User / Delegated / Bot Gateway) running locally on macOS, Linux, and ARM64 Windows 11. **1,248 tests** across the suite, ruff clean. Body-first prompt architecture loads at boot; persona-sati MCP wires personality and memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped — blob storage is opt-in via `setup.sh --use-cloud-memory`. Work IQ Word migration landed (PR #75) and the `send_teams_message` auto-wait pattern is host-gated and deterministic. README, docs site, and GitHub Pages auto-deploy refreshed 2026-05-21.
+**Last updated:** 2026-06-04
+**Status:** v1 released. Three auth modes (Agent User / Delegated / Bot Gateway) running locally on macOS, Linux, and ARM64 Windows 11. **1,298 tests** across the suite, ruff clean. Body-first prompt architecture loads at boot; persona-sati MCP wires personality and memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped — blob storage is opt-in via `setup.sh --use-cloud-memory`. Work IQ Word migration landed (PR #75) and the `send_teams_message` auto-wait pattern is host-gated and deterministic. Confused-deputy authorization fix in `add_teams_member` / `share_file` shipped via active-sponsor-channel binding (Gate 3) on 2026-06-04. README, docs site, and GitHub Pages auto-deploy refreshed 2026-05-21.
 
 ---
 
@@ -9,6 +9,8 @@
 
 Source of truth for detail: `TODOS.md` in the repository root. One line each below.
 
+- **Follow-up: two-phase sponsor confirmation flow** — Gate 3 closes Chain A. Chain B (prompt injection from `read_file` content where sponsor is genuinely active in target chat) needs explicit per-action sponsor approval. See `TODOS.md` P1.
+- **Follow-up: `read_file` content spotlighting** — broader prompt-injection mitigation than the Gate 3 fix. See `TODOS.md` P1.
 - **Script-toolkit docs closeout** — `./status.sh` is the canonical entry; finish the remaining script-reference polish and smoke verification. See `TODOS.md` P1.
 - **Test isolation: blob env leakage** — `tmp_data_dir` fixture in `tests/tools/test_interaction_log.py` doesn't clear `ENTRABOT_BLOB_ENDPOINT`; 10 tests fail on any machine with blob env configured. Partially addressed: `test_interaction_log.py`, `test_daily_summary.py`, and `test_email_poll.py` fixtures now unset blob env; session-scoped autouse fixture still open.
 - **MCP server orphans on Claude Code exit** — background poll tasks sit outside FastMCP's lifespan cancel scope; new sessions spawn a second server, both poll Graph independently.
@@ -16,8 +18,9 @@ Source of truth for detail: `TODOS.md` in the repository root. One line each bel
 
 ## Recently Shipped
 
-Last ~30 days. Full diff: `git log --since="2026-04-21"`.
+Last ~30 days. Full diff: `git log --since="2026-05-04"`.
 
+- **Confused-deputy fix: active-sponsor-channel binding (Gate 3)** (2026-06-04, branch `fix/msrc-active-sponsor-channel-binding`) — closes Chain A in `add_teams_member` and `share_file`. New `ActiveChannelBindings` store keyed by Graph `user_id`, TTL on `graph_sent_at` (not server-observed time) to defend bootstrap-replay, updated only after `write_stream.send()` succeeds. `share_file` refactored to audit-first so gate failures emit audit events. Audit metadata records both `supplied_chat_id` and `bound_chat_id`. +50 tests across `tests/identity/test_active_channel.py`, `tests/test_mcp_push_channel_binding.py`, `tests/tools/test_add_member_channel_binding.py`, `tests/tools/test_share_file_channel_binding.py`. Hard-won learning #67. Follow-up: two-phase confirmation for Chain B (tracked in TODOS P1).
 - **`read_email` MCP tool** (2026-05-27) — fetches the full body + all recipient lists + headers of an inbound mail by `message_id`. Fixes the gap where the 60s email-poll channel push truncates the preview of long forwarded mails. Same three-hop Agent User token + `Mail.Read` scope as the poll. +7 tests.
 - **Email cursor sub-second precision** (2026-05-27) — `advance_cursor()` bumps the poll watermark by 1 ms so Graph's `gt` filter does not re-fetch messages at the cursor's exact second after a server restart.
 - **README + docs-site refresh** (2026-05-21, ff9a8dd, 9b73dee, b495073) — developer-first README rewrite, GitHub Pages auto-deploy, nav restructure.

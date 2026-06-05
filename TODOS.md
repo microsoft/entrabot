@@ -17,6 +17,22 @@ Claude Code v2.1.152 now does MCP OAuth 2.1 discovery and ignores `.mcp.json` `h
 
 ## P1
 
+### Follow-up: two-phase sponsor confirmation flow for mutating tools
+The active-sponsor-channel binding shipped in PR `fix/msrc-active-sponsor-channel-binding` closes Chain A from the security confused-deputy report (attacker in low-priv chat manipulating action on a chat where sponsor is passive) but does NOT close the residual window where a sponsor IS actively engaged in the target chat. An attacker who gets a sponsor to read an injected SharePoint doc (Chain B) can still trigger a malicious `add_member` / `share_file` because all binding checks pass.
+
+The architectural fix is a two-phase confirmation: when a high-risk mutation is requested, the server posts a concrete summary of the action ("share `spec.docx` with `bob@example.com`?") into the bound chat, addressed to the sponsor; the mutation only executes after the sponsor explicitly approves in Teams. Active-channel binding remains as a pre-check.
+
+- **Why deferred:** larger UX shift than the authorization fix — needs a UI for the confirmation card, a pending-mutation store, and an inbound-approval matcher. Worth its own design ADR.
+- **Effort:** L
+- **Source:** Internal security report 2026-06-04; rubber-duck review on the authorization fix plan flagged this as the only path to fully close Chain B without LLM-level taint tracking.
+
+### Follow-up: `read_file` content sanitization / spotlighting
+Document content currently enters LLM context unguarded. Sponsor-readable but attacker-authored content can carry instructions that survive into tool-call reasoning. Pair with a content-spotlighting pass on `read_file` output so injected instructions are marked as data, not commands.
+
+- **Why deferred:** distinct from the security authorization fix; covers a wider class of prompt-injection vectors than just the add/share confused-deputy.
+- **Effort:** M
+- **Source:** Internal security report 2026-06-04, Chain B.
+
 ### Script toolkit final phase: README + GitHub Pages script reference
 After the remaining script-toolkit phases land, do a dedicated documentation
 closeout pass so the new operational surface is discoverable and stable.
