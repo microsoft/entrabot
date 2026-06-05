@@ -47,9 +47,11 @@ from entrabot.errors import (
     FileTooLargeError,
     GraphFilesError,
     MissingPermissionError,
+    NoActiveSponsorChannelError,
     RequesterNotInChatError,
     RequesterNotSponsorError,
     SiteNotAllowedError,
+    SponsorChannelMismatchError,
     TokenExpiredError,
     UnsupportedCommentFormatError,
     UnsupportedReadFormatError,
@@ -1270,9 +1272,11 @@ async def share_file(
         _check_site_allowed(file_ref.site_id)
 
     resource = f"{file_ref.drive_id}:{file_ref.item_id}"
-    audit_metadata = {
+    audit_metadata: dict = {
         "requester_email": requester_email,
         "chat_id": chat_id,
+        "supplied_chat_id": chat_id,
+        "bound_chat_id": "",
         "recipient_email": recipient_email,
         "role": role,
         "site_id": file_ref.site_id,
@@ -1301,7 +1305,33 @@ async def share_file(
         if matched_sponsor is None or not matched_sponsor.user_id:
             raise RequesterNotSponsorError(requester=requester_email)
 
-        # Gate 2: matched sponsor must be a member of the cited chat.
+        # Gate 3 (authorization fix): matched sponsor must be actively engaged in
+        # the cited chat — the server must have successfully pushed a
+        # recent (within TTL) inbound message from this sponsor in this
+        # chat. Defends Chain A confused-deputy: attacker in chat A
+        # cannot get the agent to share a file in chat B's authority
+        # context even when the sponsor is a genuine member of B.
+        # See docs/runbooks/hard-won-learnings.md Learning #67.
+        from entrabot.identity.active_channel import get_bindings
+
+        binding = get_bindings().lookup(matched_sponsor.user_id)
+        if binding is None:
+            raise NoActiveSponsorChannelError(
+                sponsor_user_id=matched_sponsor.user_id,
+                chat_id=chat_id,
+            )
+        # Surface the bound chat in the audit metadata for forensic
+        # visibility on the success path. (Failure path: the raised
+        # exception's repr already includes both chat_ids.)
+        audit_metadata["bound_chat_id"] = binding.chat_id
+        if binding.chat_id != chat_id:
+            raise SponsorChannelMismatchError(
+                sponsor_user_id=matched_sponsor.user_id,
+                supplied_chat_id=chat_id,
+                bound_chat_id=binding.chat_id,
+            )
+
+        # Gate 2 (defense-in-depth): matched sponsor must be a member of the cited chat.
         import asyncio
 
         from entrabot.config import get_config
