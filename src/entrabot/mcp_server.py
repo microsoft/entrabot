@@ -798,6 +798,16 @@ async def _initialize() -> None:
     await _init_auth()
     await _init_poll()
 
+    # authorization fix: log the active-sponsor-channel binding TTL so operators
+    # can verify the security configuration in production logs.
+    if logger:
+        from entrabot.identity.active_channel import get_bindings
+
+        logger.info(
+            "Active-sponsor-channel binding active (TTL=%ds, Gate 3)",
+            get_bindings().ttl_seconds,
+        )
+
     _state["initialized"] = True
 
 
