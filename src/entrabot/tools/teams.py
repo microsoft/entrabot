@@ -21,10 +21,13 @@ from entrabot.config import EntraBotConfig
 from entrabot.errors import (
     AgentIDNotAvailable,
     ChatNotFound,
+    ExpiredSponsorChannelError,
     MessageTooLong,
+    NoActiveSponsorChannelError,
     RateLimitError,
     RequesterNotInChatError,
     RequesterNotSponsorError,
+    SponsorChannelMismatchError,
     TeamsNotLicensed,
     TokenExchangeError,
     TokenExpiredError,
@@ -626,13 +629,66 @@ async def add_member(
                 outcome="failure",
                 metadata={
                     **audit_metadata,
+                    "supplied_chat_id": chat_id,
+                    "bound_chat_id": "",
                     "error": type(err).__name__,
                     "message": str(err),
                 },
             )
             raise err
 
-        # Gate 2: matched sponsor must be a member of the cited chat.
+        # Gate 3 (authorization fix): matched sponsor must be actively engaged in the
+        # cited chat — i.e., the server must have successfully pushed a recent
+        # (within TTL) inbound message from this sponsor in this chat. Defends
+        # the Chain A confused-deputy: an attacker in chat A cannot get the
+        # agent to mutate chat B even when the sponsor is a genuine member of
+        # B. See docs/runbooks/hard-won-learnings.md Learning #67 and
+        # src/entrabot/identity/active_channel.py.
+        from entrabot.identity.active_channel import get_bindings
+
+        binding = get_bindings().lookup(matched_sponsor.user_id)
+        bound_chat_id = binding.chat_id if binding is not None else ""
+
+        if binding is None:
+            err = NoActiveSponsorChannelError(
+                sponsor_user_id=matched_sponsor.user_id,
+                chat_id=chat_id,
+            )
+            log_event(
+                action="teams.add_member",
+                resource=audit_resource,
+                outcome="failure",
+                metadata={
+                    **audit_metadata,
+                    "supplied_chat_id": chat_id,
+                    "bound_chat_id": "",
+                    "error": type(err).__name__,
+                    "message": str(err),
+                },
+            )
+            raise err
+
+        if binding.chat_id != chat_id:
+            err = SponsorChannelMismatchError(
+                sponsor_user_id=matched_sponsor.user_id,
+                supplied_chat_id=chat_id,
+                bound_chat_id=binding.chat_id,
+            )
+            log_event(
+                action="teams.add_member",
+                resource=audit_resource,
+                outcome="failure",
+                metadata={
+                    **audit_metadata,
+                    "supplied_chat_id": chat_id,
+                    "bound_chat_id": binding.chat_id,
+                    "error": type(err).__name__,
+                    "message": str(err),
+                },
+            )
+            raise err
+
+        # Gate 2 (defense-in-depth): existing Graph membership check.
         members = await _fetch_chat_members_for_gate(chat_id)
         matched_user_id = matched_sponsor.user_id.lower()
         if not any(
@@ -648,12 +704,20 @@ async def add_member(
                 outcome="failure",
                 metadata={
                     **audit_metadata,
+                    "supplied_chat_id": chat_id,
+                    "bound_chat_id": bound_chat_id,
                     "error": type(err).__name__,
                     "message": str(err),
                 },
             )
             raise err
-    except (RequesterNotSponsorError, RequesterNotInChatError):
+    except (
+        RequesterNotSponsorError,
+        RequesterNotInChatError,
+        NoActiveSponsorChannelError,
+        SponsorChannelMismatchError,
+        ExpiredSponsorChannelError,
+    ):
         raise
 
     headers = {
@@ -710,6 +774,8 @@ async def add_member(
             outcome="failure",
             metadata={
                 **audit_metadata,
+                "supplied_chat_id": chat_id,
+                "bound_chat_id": bound_chat_id,
                 "error": type(exc).__name__,
                 "message": str(exc),
             },
@@ -722,6 +788,8 @@ async def add_member(
         outcome="success",
         metadata={
             **audit_metadata,
+            "supplied_chat_id": chat_id,
+            "bound_chat_id": bound_chat_id,
             "member_id": result.get("id", ""),
             "display_name": display_name,
         },
