@@ -280,6 +280,81 @@ class RequesterNotInChatError(FilesError):
         )
 
 
+class NoActiveSponsorChannelError(FilesError):
+    """No live sponsor binding exists for this sponsor.
+
+    Raised when ``add_teams_member`` / ``share_file`` is called but the
+    server has not observed a recent inbound Teams message from the
+    matched sponsor that was successfully pushed to the LLM. Defends
+    against the LLM acting on a chat that the agent has been admitted
+    to but where the sponsor is not actively present (authorization fix).
+    """
+
+    def __init__(self, *, sponsor_user_id: str, chat_id: str) -> None:
+        self.sponsor_user_id = sponsor_user_id
+        self.chat_id = chat_id
+        super().__init__(
+            f"No active sponsor channel binding for sponsor user_id={sponsor_user_id!r}; "
+            f"refusing mutation on chat_id={chat_id!r}. The sponsor must post in the "
+            f"target chat before authorizing this action."
+        )
+
+
+class ExpiredSponsorChannelError(FilesError):
+    """Sponsor binding exists but is older than the authorization TTL.
+
+    authorization fix. Distinct from ``NoActiveSponsorChannelError`` so audit
+    logs can distinguish "sponsor never posted" from "sponsor stopped
+    being active in time" — operationally different signals.
+    """
+
+    def __init__(
+        self,
+        *,
+        sponsor_user_id: str,
+        chat_id: str,
+        age_seconds: int,
+        ttl_seconds: int,
+    ) -> None:
+        self.sponsor_user_id = sponsor_user_id
+        self.chat_id = chat_id
+        self.age_seconds = age_seconds
+        self.ttl_seconds = ttl_seconds
+        super().__init__(
+            f"Sponsor channel binding for user_id={sponsor_user_id!r} on "
+            f"chat_id={chat_id!r} is {age_seconds}s old (TTL={ttl_seconds}s). "
+            f"Sponsor must post again to re-authorize."
+        )
+
+
+class SponsorChannelMismatchError(FilesError):
+    """Supplied chat_id does not match the sponsor's bound active channel.
+
+    The LLM may have been induced (Chain A confused-deputy from the security report
+    report) to act on a chat the sponsor is a passive member of but is
+    not actively engaged in. Only the chat from which the sponsor's
+    most-recent successfully-pushed message originated authorizes
+    mutations targeting that chat.
+    """
+
+    def __init__(
+        self,
+        *,
+        sponsor_user_id: str,
+        supplied_chat_id: str,
+        bound_chat_id: str,
+    ) -> None:
+        self.sponsor_user_id = sponsor_user_id
+        self.supplied_chat_id = supplied_chat_id
+        self.bound_chat_id = bound_chat_id
+        super().__init__(
+            f"Sponsor user_id={sponsor_user_id!r} most recently posted in "
+            f"chat_id={bound_chat_id!r}, but the call targets "
+            f"chat_id={supplied_chat_id!r}. Refusing — sponsor must post in "
+            f"the target chat to authorize a mutation there."
+        )
+
+
 class GraphFilesError(FilesError):
     """Graph returned a non-2xx for a Files API call (not covered above)."""
 
