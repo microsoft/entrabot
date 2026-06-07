@@ -544,22 +544,38 @@ class TestCreateOrFindChat:
 # ---------------------------------------------------------------------------
 
 
-def _sponsor_gate_patches():
-    """Pre-baked sponsor + chat-membership mocks so existing add_member
-    happy-path tests don't have to repeat the gate plumbing.
+def _sponsor_gate_patches(*, chat_id: str = "19:chat-id@thread.v2"):
+    """Pre-baked sponsor + chat-membership + active-channel-binding mocks
+    so existing add_member happy-path tests don't have to repeat the
+    gate plumbing.
+
+    Pre-seeds the active-channel binding (Gate 3) so the
+    matched sponsor is "actively engaged" in ``chat_id``. The default
+    ``chat_id`` matches the value the existing TestAddMember tests use;
+    pass an override for tests targeting a different chat.
 
     The sponsor record uses the same address the tests pass as
     ``requester_email``, and chat-members returns a single entry whose
     ``user_id`` matches the sponsor.
     """
+    import time as _t
     from unittest.mock import AsyncMock, patch
 
+    from entrabot.identity.active_channel import get_bindings, reset_for_tests
     from entrabot.identity.sponsors import AgentIdentitySponsor
 
     sponsor = AgentIdentitySponsor(
         user_id="sponsor-uid",
         user_principal_name="sponsor@contoso.com",
         mail="sponsor@contoso.com",
+    )
+    # Reset and pre-seed a fresh sponsor binding for the target chat.
+    reset_for_tests()
+    get_bindings().record(
+        sponsor_user_id="sponsor-uid",
+        chat_id=chat_id,
+        graph_sent_at_epoch=_t.time() - 1.0,
+        message_id="m-prebind",
     )
     return [
         patch(

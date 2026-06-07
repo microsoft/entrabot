@@ -193,3 +193,92 @@ class TestGraphApiError:
         err = GraphApiError(status_code=404, message="Not Found")
         assert "404" in str(err)
         assert "Not Found" in str(err)
+
+
+class TestNoActiveSponsorChannelError:
+    """authorization fix: sponsor has no live binding for any chat."""
+
+    def test_subclasses_files_error(self) -> None:
+        from entrabot.errors import FilesError, NoActiveSponsorChannelError
+
+        assert issubclass(NoActiveSponsorChannelError, FilesError)
+
+    def test_message_includes_sponsor_and_chat(self) -> None:
+        from entrabot.errors import NoActiveSponsorChannelError
+
+        err = NoActiveSponsorChannelError(sponsor_user_id="u-1", chat_id="c-1")
+        assert "u-1" in str(err)
+        assert "c-1" in str(err)
+
+    def test_stores_fields(self) -> None:
+        from entrabot.errors import NoActiveSponsorChannelError
+
+        err = NoActiveSponsorChannelError(sponsor_user_id="u-1", chat_id="c-1")
+        assert err.sponsor_user_id == "u-1"
+        assert err.chat_id == "c-1"
+
+
+class TestExpiredSponsorChannelError:
+    """authorization fix: sponsor binding exists but is past TTL."""
+
+    def test_subclasses_files_error(self) -> None:
+        from entrabot.errors import ExpiredSponsorChannelError, FilesError
+
+        assert issubclass(ExpiredSponsorChannelError, FilesError)
+
+    def test_message_includes_age_and_ttl(self) -> None:
+        from entrabot.errors import ExpiredSponsorChannelError
+
+        err = ExpiredSponsorChannelError(
+            sponsor_user_id="u-1",
+            chat_id="c-1",
+            age_seconds=300,
+            ttl_seconds=120,
+        )
+        s = str(err)
+        assert "300" in s
+        assert "120" in s
+
+    def test_stores_fields(self) -> None:
+        from entrabot.errors import ExpiredSponsorChannelError
+
+        err = ExpiredSponsorChannelError(
+            sponsor_user_id="u-1",
+            chat_id="c-1",
+            age_seconds=300,
+            ttl_seconds=120,
+        )
+        assert err.age_seconds == 300
+        assert err.ttl_seconds == 120
+
+
+class TestSponsorChannelMismatchError:
+    """authorization fix: LLM-supplied chat_id does not match sponsor's bound channel."""
+
+    def test_subclasses_files_error(self) -> None:
+        from entrabot.errors import FilesError, SponsorChannelMismatchError
+
+        assert issubclass(SponsorChannelMismatchError, FilesError)
+
+    def test_message_includes_both_chat_ids(self) -> None:
+        from entrabot.errors import SponsorChannelMismatchError
+
+        err = SponsorChannelMismatchError(
+            sponsor_user_id="u-1",
+            supplied_chat_id="c-supplied",
+            bound_chat_id="c-bound",
+        )
+        s = str(err)
+        assert "c-supplied" in s
+        assert "c-bound" in s
+
+    def test_stores_fields(self) -> None:
+        from entrabot.errors import SponsorChannelMismatchError
+
+        err = SponsorChannelMismatchError(
+            sponsor_user_id="u-1",
+            supplied_chat_id="c-supplied",
+            bound_chat_id="c-bound",
+        )
+        assert err.supplied_chat_id == "c-supplied"
+        assert err.bound_chat_id == "c-bound"

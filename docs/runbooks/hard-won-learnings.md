@@ -863,6 +863,27 @@ Auth model uses **Entra Agent ID** delegated tokens — the same identity primit
 
 ---
 
+### Learning #67: MCP Tool Args From the LLM Are Attacker-Controllable Even When They Look Like "Context"
+
+**Date:** 2026-06-04
+**Status:** **CONFIRMED — fixed by ActiveChannelBindings store (Gate 3) in `add_member` and `share_file`.**
+**Context:** The internal security report on `add_teams_member` and `share_file` showed that two existing gates (Gate 1: sponsor allowlist; Gate 2: sponsor-is-member-of-cited-chat per Graph) only validated consistency between two attacker-controlled MCP tool arguments — `requester_email` and `chat_id`. An attacker speaking to the agent in any chat A could ask the agent to call `add_member(chat_id=B, requester_email=sponsor@…)` for a confidential chat B where the sponsor is a passive member. Both gates pass because both values were independently plausible. The audit log recorded `requester_email=sponsor@…` and looked forensically identical to a legitimate request.
+**Problem:** MCP doesn't bind tool calls to triggering messages. The server pushes via `notifications/claude/channel`, then the LLM decides freely when/which tool to call. There is no transactional "tool call N is in response to push M" relationship the server can rely on. So the reporter's first-choice fix ("inject `chat_id` as a verified server-controlled tool parameter") was not directly implementable — the server doesn't know which push triggered a given tool call. Validating two LLM-supplied identifiers against each other was the original mistake; that's not authorization, it's just consistency-checking forgeable values.
+**Fix:** New module `src/entrabot/identity/active_channel.py` (`ActiveChannelBindings`) maintains a per-sponsor `(chat_id, graph_sent_at, message_id)` binding that is updated ONLY after a sponsor message is successfully pushed to the LLM (`write_stream.send()` succeeded). Mutating tools require the LLM-supplied `chat_id` to match the matched sponsor's bound `chat_id` within a tight TTL (120s). Existing Gates 1 and 2 retained as defense-in-depth. Audit metadata now records both `supplied_chat_id` (LLM) and `bound_chat_id` (server) on every outcome.
+**Prevention — sub-rules baked into the binding store:**
+
+- **Key by Graph `user_id`, not email.** Email is unreliable for federated/B2B/MSA identities and is often missing. `sender_id` from the Graph chat-messages payload is canonical.
+- **TTL on `graph_sent_at`, not `server_observed_at`.** The bootstrap path (`_bootstrap_chat` at `mcp_server.py:1087-1093`) intentionally leaves the newest message unseen so the first poll pushes it. Using `server_observed_at` would mint fresh authority off old messages at restart.
+- **Bind AFTER successful push, not before.** If the LLM never received the message (no write stream, transport error), the server must not grant authority off of it. Hook must fire post-`write_stream.send()`, not in the log-first observe phase.
+- **TTL is an authorization window, not a context-freshness window.** 120s is intentional. Workflows that need multi-minute gaps between sponsor request and agent action need an explicit confirmation flow (see TODOS).
+- **Email-channel pushes never bind.** The synthetic `chat_id="email"` cannot authorize a Teams chat mutation.
+- **Audit-first ordering.** Pre-fix `share_file` only audited Graph `/invite` failures; Gate 1/2/3 rejections were security-invisible. Moving the gates inside `_audit_graph_call` ensures every refused authorization is logged.
+
+**Residual risk acknowledged:** This closes Chain A (attacker in low-priv chat manipulating action on high-priv chat where sponsor is not engaged). It does NOT close Chain B (prompt injection from `read_file` content where sponsor IS engaged in the target chat). Mitigations tracked in TODOS: two-phase sponsor confirmation flow + `read_file` content sanitization.
+**Evidence/references:** Internal security report 2026-06-04. Fix: `src/entrabot/identity/active_channel.py`, `src/entrabot/tools/teams.py` (Gate 3 in `add_member`), `src/entrabot/tools/files.py` (Gate 3 in `share_file` + audit-first refactor), `src/entrabot/mcp_server.py` (`_maybe_record_sponsor_binding` hook). 38 new tests across `tests/identity/test_active_channel.py`, `tests/test_mcp_push_channel_binding.py`, `tests/tools/test_add_member_channel_binding.py`, `tests/tools/test_share_file_channel_binding.py`. Rubber-duck review caught 5 blocking issues in the initial design (user_id keying, bootstrap-replay defense, post-send binding, audit boundary, TTL value) — every one was real and is encoded in the sub-rules above.
+
+---
+
 ### [HISTORICAL] Learning #4: OBO Requires Matching Token Audience
 
 **Date:** 2026-04-06

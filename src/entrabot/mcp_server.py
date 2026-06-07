@@ -798,6 +798,16 @@ async def _initialize() -> None:
     await _init_auth()
     await _init_poll()
 
+    # authorization fix: log the active-sponsor-channel binding TTL so operators
+    # can verify the security configuration in production logs.
+    if logger:
+        from entrabot.identity.active_channel import get_bindings
+
+        logger.info(
+            "Active-sponsor-channel binding active (TTL=%ds, Gate 3)",
+            get_bindings().ttl_seconds,
+        )
+
     _state["initialized"] = True
 
 
@@ -1586,6 +1596,117 @@ def _summarize_content(content: str, limit: int = 200) -> str:
     return text[: limit - 1].rstrip() + "\u2026"
 
 
+# ---------------------------------------------------------------------------
+# Active-sponsor-channel binding (confused-deputy authorization fix)
+# ---------------------------------------------------------------------------
+# When an inbound Teams message from a configured Agent Identity sponsor is
+# successfully pushed to the LLM, record (sponsor_user_id -> chat_id) so
+# add_member / share_file can verify the sponsor is actively engaged in the
+# chat the LLM is asking to mutate. See:
+#   src/entrabot/identity/active_channel.py
+#   docs/runbooks/hard-won-learnings.md (Learning #67)
+
+
+async def _get_sponsor_records_for_binding() -> list:
+    """Return cached sponsor records for the binding-update path.
+
+    Wrapper so tests can patch a single symbol on ``mcp_server``. Reuses
+    the existing sponsor cache used by add_member / share_file (Gate 1)
+    via the shared ``entrabot.tools.files._get_sponsor_records`` helper.
+    """
+    from entrabot.tools.files import _get_sponsor_records
+
+    return await _get_sponsor_records()
+
+
+def _parse_iso8601_to_epoch(value: str) -> float | None:
+    """Parse an ISO 8601 string (Graph ``sent_at``) to epoch seconds.
+
+    Returns ``None`` on missing / non-string / unparseable input. Accepts
+    both the ``Z`` UTC suffix and explicit ``+00:00`` offsets.
+    """
+    if not value or not isinstance(value, str):
+        return None
+    import datetime as _dt
+
+    try:
+        s = value.replace("Z", "+00:00")
+        dt = _dt.datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_dt.UTC)
+        return dt.timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
+async def _maybe_record_sponsor_binding(
+    *,
+    message: dict,
+    chat_id: str,
+) -> None:
+    """Update the active-channel binding if conditions are met.
+
+    MUST be called only AFTER the channel-push to ``write_stream`` has
+    succeeded. Skipped silently when:
+
+    - ``chat_id`` is empty or the synthetic ``"email"`` channel (email
+      arrival cannot authorize a Teams mutation),
+    - the message has no Graph ``sender_id`` (cannot key the binding),
+    - the message's ``sent_at`` is missing / unparseable / past TTL /
+      in the future,
+    - the sender is not a configured Agent Identity sponsor.
+
+    Failures of the sponsor lookup are logged and swallowed — the
+    binding is a defense layer, not a critical path.
+    """
+    if not chat_id or chat_id == "email":
+        return
+
+    sender_id = str(message.get("sender_id") or "").strip()
+    if not sender_id:
+        return
+
+    sent_at_epoch = _parse_iso8601_to_epoch(message.get("sent_at", ""))
+    if sent_at_epoch is None:
+        return
+
+    try:
+        sponsors = await _get_sponsor_records_for_binding()
+    except Exception as exc:
+        if logger:
+            logger.warning(
+                "Sponsor-binding lookup failed for chat %s: %s", chat_id, exc
+            )
+        return
+
+    sender_lower = sender_id.lower()
+    matched = next(
+        (
+            s
+            for s in sponsors
+            if (getattr(s, "user_id", "") or "").lower() == sender_lower
+        ),
+        None,
+    )
+    if matched is None:
+        return
+
+    from entrabot.identity.active_channel import get_bindings
+
+    recorded = get_bindings().record(
+        sponsor_user_id=sender_id,
+        chat_id=chat_id,
+        graph_sent_at_epoch=sent_at_epoch,
+        message_id=str(message.get("message_id") or ""),
+    )
+    if recorded and logger:
+        logger.info(
+            "Recorded active-sponsor-channel binding: user_id=%s chat_id=%s",
+            sender_id,
+            chat_id,
+        )
+
+
 async def _push_channel_notification(
     message: dict,
     *,
@@ -1672,6 +1793,14 @@ async def _push_channel_notification(
                 exc,
             )
         return
+
+    # authorization fix: only after a successful push do we consider the sponsor
+    # "actively engaged" in this chat for authorization purposes. If the
+    # LLM never received the message, the server must not mint authority
+    # off of it.
+    await _maybe_record_sponsor_binding(
+        message=message, chat_id=resolved_chat_id
+    )
 
     if logger:
         logger.info(

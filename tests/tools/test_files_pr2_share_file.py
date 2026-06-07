@@ -9,6 +9,7 @@ Authorization model:
 - The RECIPIENT is unrestricted. Sponsors may share with anyone.
 """
 
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,11 +19,35 @@ from entrabot.errors import (
     RequesterNotSponsorError,
     SiteNotAllowedError,
 )
+from entrabot.identity.active_channel import get_bindings, reset_for_tests
 from entrabot.identity.sponsors import AgentIdentitySponsor
 from entrabot.tools.files import (
     FileRef,
     share_file,
 )
+
+
+@pytest.fixture(autouse=True)
+def _seed_active_channel_binding():
+    """Gate 3 needs a live sponsor binding for the test chat.
+
+    All Gate-1/Gate-2/happy-path tests in this file use sponsor_uid
+    'sponsor-uid' (or 'msa-uid'/'u1') and chat '19:abcd@thread.v2'.
+    Pre-seed the binding for both so existing assertions still
+    exercise the intended gate, not Gate 3. The Chain-A regression
+    lives in tests/tools/test_share_file_channel_binding.py.
+    """
+    reset_for_tests()
+    now = time.time()
+    for uid in ("sponsor-uid", "msa-uid", "u1"):
+        get_bindings().record(
+            sponsor_user_id=uid,
+            chat_id="19:abcd@thread.v2",
+            graph_sent_at_epoch=now - 1.0,
+            message_id=f"m-prebind-{uid}",
+        )
+    yield
+    reset_for_tests()
 
 
 def _file_ref(site_id: str | None = None) -> FileRef:
@@ -172,6 +197,15 @@ class TestRequesterMustBeChatMember:
 
     async def test_sponsor_not_in_chat_rejected(self):
         sponsor = _sponsor()
+        # Pre-bind to the same chat the test targets so Gate 3
+        # passes through and Gate 2's RequesterNotInChatError is the
+        # exception we exercise.
+        get_bindings().record(
+            sponsor_user_id="sponsor-uid",
+            chat_id="19:wrong-chat@thread.v2",
+            graph_sent_at_epoch=time.time() - 1.0,
+            message_id="m-gate2-test",
+        )
         with (
             patch("entrabot.tools.files._get_sponsor_records") as mock_records,
             patch("entrabot.identity.sponsors.fetch_chat_members") as mock_members,
@@ -200,6 +234,12 @@ class TestRequesterMustBeChatMember:
     async def test_empty_chat_members_rejected(self):
         """Graph returned 403/404 for the chat — no membership = no auth."""
         sponsor = _sponsor()
+        get_bindings().record(
+            sponsor_user_id="sponsor-uid",
+            chat_id="19:fake-chat@thread.v2",
+            graph_sent_at_epoch=time.time() - 1.0,
+            message_id="m-gate2-empty",
+        )
         with (
             patch("entrabot.tools.files._get_sponsor_records") as mock_records,
             patch("entrabot.identity.sponsors.fetch_chat_members") as mock_members,
@@ -447,3 +487,65 @@ class TestGetSponsorAllowlistCompat:
                 "alice.proxy@contoso.com",
                 "alice@outlook.com",
             }
+
+
+@pytest.mark.asyncio
+class TestShareFileAuditOnGateFailure:
+    """share_file must emit audit events for gate failures, not only Graph failures.
+
+    Pre-fix the audit context wrapped only the Graph /invite call, so
+    Gate-1/Gate-2 rejections produced no audit log. This is a security
+    visibility hole — the move to audit-first ordering closes it.
+    """
+
+    async def test_non_sponsor_failure_produces_audit_event(self, monkeypatch):
+        from entrabot.tools.files import FileRef, share_file
+
+        events: list[dict] = []
+
+        def fake_log_event(*, action, resource, outcome, metadata):
+            events.append(
+                {
+                    "action": action,
+                    "resource": resource,
+                    "outcome": outcome,
+                    "metadata": dict(metadata),
+                }
+            )
+
+        monkeypatch.setattr("entrabot.tools.files.log_event", fake_log_event)
+
+        async def _empty_sponsors():
+            return []
+
+        monkeypatch.setattr(
+            "entrabot.tools.files._get_sponsor_records", _empty_sponsors
+        )
+
+        ref = FileRef(
+            drive_id="d-1",
+            item_id="i-1",
+            name="x.txt",
+            mime_type="text/plain",
+            kind="onedrive_business",
+        )
+
+        with pytest.raises(RequesterNotSponsorError):
+            await share_file(
+                file_ref=ref,
+                recipient_email="bob@example.com",
+                requester_email="non-sponsor@evil.com",
+                chat_id="19:somechat@thread.v2",
+                role="read",
+                token="t",
+            )
+
+        failure_events = [e for e in events if e["outcome"] == "failure"]
+        assert failure_events, (
+            "share_file gate failure must emit at least one audit event "
+            "with outcome=failure"
+        )
+        last = failure_events[-1]
+        assert "RequesterNotSponsorError" in str(last["metadata"].get("error", ""))
+        # And it must be tagged as a share_file action (not some unrelated audit).
+        assert last["action"].endswith("share_file")

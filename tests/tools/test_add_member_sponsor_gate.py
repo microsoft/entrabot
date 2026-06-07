@@ -14,6 +14,7 @@ Authorization model (mirrors ``share_file`` 2026-04-30 inverted gate):
 
 from __future__ import annotations
 
+import time
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -24,8 +25,31 @@ from entrabot.errors import (
     RequesterNotInChatError,
     RequesterNotSponsorError,
 )
+from entrabot.identity.active_channel import get_bindings, reset_for_tests
 from entrabot.identity.sponsors import AgentIdentitySponsor
 from entrabot.tools.teams import GRAPH_BASE, add_member
+
+
+@pytest.fixture(autouse=True)
+def _clean_bindings():
+    """Reset the active-channel binding singleton between tests."""
+    reset_for_tests()
+    yield
+    reset_for_tests()
+
+
+def _prebind_sponsor_to(chat_id: str, *, sponsor_uid: str = "sponsor-uid") -> None:
+    """Seed a fresh Gate-3 binding so tests can exercise Gate 1 / Gate 2 in isolation.
+
+    Without this the new Gate 3 raises NoActiveSponsorChannelError
+    before Gate 2 ever runs.
+    """
+    get_bindings().record(
+        sponsor_user_id=sponsor_uid,
+        chat_id=chat_id,
+        graph_sent_at_epoch=time.time() - 1.0,
+        message_id="m-prebind",
+    )
 
 
 def _sponsor(
@@ -85,6 +109,8 @@ class TestAddMemberRequesterMustBeSponsor:
 @pytest.mark.asyncio
 class TestAddMemberRequesterMustBeChatMember:
     async def test_sponsor_not_in_chat_rejected(self) -> None:
+        # Pre-bind so Gate 3 lets us through to Gate 2 here.
+        _prebind_sponsor_to("19:wrong-chat@thread.v2")
         sponsor = _sponsor()
         with (
             patch(
@@ -116,6 +142,8 @@ class TestAddMemberRequesterMustBeChatMember:
 class TestAddMemberHappyPath:
     @respx.mock
     async def test_sponsor_in_chat_can_add_anyone_and_audit_fires_first(self) -> None:
+        # Pre-bind so Gate 3 lets us through to the happy path.
+        _prebind_sponsor_to("19:abcd@thread.v2")
         sponsor = _sponsor()
         audit_calls: list[dict] = []
 
