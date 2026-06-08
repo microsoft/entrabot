@@ -37,6 +37,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "^mcp__persona-sati__",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\"}}'",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PostToolUse": [
