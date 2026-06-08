@@ -48,6 +48,7 @@ When the task touches a topic, read the listed platform-learnings BEFORE draftin
 | Files Graph (drives, items, comments)       | `docs/platform-learnings/files-graph-api.md`                    |
 | MCP server design (transports, lifecycle)   | `docs/platform-learnings/mcp-messaging-servers.md` + `mcp-close-the-loop.md` |
 | Platform-specific (cert store, OS keystore) | `docs/platform-learnings/platform-{macos,linux,windows}.md`     |
+| Sandboxing / execution containment (MXC)    | `docs/platform-learnings/mxc-windows-sandbox.md`                |
 
 These are not optional. Skipping them is the documented cause of 4 design errors as of 2026-05-05. The cost is minutes; the cost of skipping is hours-to-days of rework.
 
