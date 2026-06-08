@@ -1685,33 +1685,6 @@ class TestPollTaskAutoStart:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
 
-    @pytest.mark.asyncio
-    async def test_bot_mode_does_not_start_graph_poll(self, monkeypatch) -> None:
-        """In bot mode, the graph poll must not start — the bot gateway
-        handles inbound via _background_poll_bot instead."""
-        monkeypatch.setenv("ENTRABOT_SKIP_PROVISIONING", "true")
-
-        from entrabot import mcp_server
-
-        old_state = mcp_server._state.copy()
-        try:
-            mcp_server._state.clear()
-            mcp_server._state["watched_chats"] = {}
-            mcp_server._state["poll_task"] = None
-
-            fake_config = MagicMock()
-            fake_config.mode = "bot"
-            fake_config.data_dir = None
-            mcp_server._state["config"] = fake_config
-
-            loop = MagicMock()
-            loop.create_task.side_effect = AssertionError("bot mode must not spawn the graph poll")
-            with patch("asyncio.get_event_loop", return_value=loop):
-                mcp_server._register_watched_chat("19:bot@thread.v2", persist=False)
-        finally:
-            mcp_server._state.clear()
-            mcp_server._state.update(old_state)
-
 
 # ---------------------------------------------------------------------------
 # Sponsor gate cache invalidation on new watched chat

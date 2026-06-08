@@ -631,12 +631,6 @@ async def _init_auth() -> None:
     config = get_config()
     _state["config"] = config
 
-    # Bot mode: no Graph token needed — bot server handles Teams I/O
-    if config.mode == "bot":
-        if logger:
-            logger.info("Bot mode: skipping Graph auth — bot server handles Teams I/O")
-        return
-
     # Fast path: try three-hop with existing creds (unless SKIP_PROVISIONING)
     if not config.skip_provisioning and config.blueprint_app_id and config.tenant_id:
         try:
@@ -751,11 +745,7 @@ async def _init_poll() -> None:
     # Start background polling unconditionally. Every client that
     # spawns entrabot (stdio) gets its own process and its own poll
     # loops — no gating is needed.
-    if config and config.mode == "bot":
-        import asyncio
-
-        _state["poll_task"] = asyncio.get_event_loop().create_task(_background_poll_bot())
-    elif _state.get("watched_chats"):
+    if _state.get("watched_chats"):
         _ensure_poll_task_running()
 
     # Start email poll + daily summary when authenticated as the Agent User
@@ -812,7 +802,6 @@ async def _initialize() -> None:
 
 
 BACKGROUND_POLL_INTERVAL = 5  # seconds between polls
-BOT_POLL_INTERVAL = 2  # seconds between bot inbound file checks
 EMAIL_POLL_INTERVAL = 60  # seconds between /me/messages polls
 CHAT_DISCOVER_INTERVAL = 120  # seconds between /me/chats auto-discovery sweeps
 PERSONA_SATI_HEARTBEAT_INTERVAL = 300  # 5 min smoke test against persona-sati
@@ -954,57 +943,11 @@ async def _background_persona_sati_heartbeat() -> None:
         await asyncio.sleep(PERSONA_SATI_HEARTBEAT_INTERVAL)
 
 
-async def _background_poll_bot() -> None:
-    """Background polling loop for bot mode — reads from inbound.jsonl.
-
-    Instead of polling Graph API, reads the shared JSONL file that the
-    bot server writes inbound Teams messages to.
-    """
-    import asyncio
-
-    from entrabot.bot.handler import read_inbound
-
-    if logger:
-        logger.info("Starting bot-mode inbound poll (interval=%ds)", BOT_POLL_INTERVAL)
-
-    seen_ids: set[str] = set()
-
-    while True:
-        try:
-            await asyncio.sleep(BOT_POLL_INTERVAL)
-
-            messages = read_inbound()
-            for msg in messages:
-                msg_id = msg.get("message_id", "")
-                if msg_id in seen_ids:
-                    continue
-                seen_ids.add(msg_id)
-
-                await _push_channel_notification(
-                    msg,
-                    chat_id=msg.get("conversation_id"),
-                )
-
-            # Bounded cleanup
-            if len(seen_ids) > SEEN_SET_MAX:
-                seen_ids = set(sorted(seen_ids)[-100:])
-
-        except Exception as exc:
-            if logger:
-                logger.warning("Bot inbound poll error: %s", exc)
-            await asyncio.sleep(BOT_POLL_INTERVAL)
-
-
 def _ensure_poll_task_running() -> None:
     """Start the Graph background poll task if one isn't already running.
 
-    Idempotent. Bot mode is skipped — the bot gateway handles inbound via
-    _background_poll_bot which is started explicitly in _init_poll.
+    Idempotent.
     """
-    config = _state.get("config")
-    if config is not None and getattr(config, "mode", None) == "bot":
-        return
-
     existing = _state.get("poll_task")
     if existing is not None and not existing.done():
         return
@@ -1027,8 +970,7 @@ def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
 
     If no background poll task is currently running (e.g. the MCP server
     booted with zero watched chats and this is the first chat being added
-    via create_chat), lazily spins one up. Bot mode is excluded — the bot
-    gateway handles inbound via _background_poll_bot.
+    via create_chat), lazily spins one up.
     """
     watched = _state.get("watched_chats", {})
     if chat_id not in watched:
@@ -1887,29 +1829,6 @@ async def send_teams_message(
         regardless of host.
     """
     await _initialize()
-
-    config = _state.get("config")
-
-    # Bot mode: write to outbound.jsonl for the bot server to pick up
-    if config and config.mode == "bot":
-        from entrabot.bot.handler import write_outbound
-
-        outbound_msg = {
-            "content": message,
-            "content_type": content_type,
-            "chat_id": chat_id or "",
-        }
-        if mentions:
-            outbound_msg["mentions"] = mentions
-        write_outbound(outbound_msg)
-        return json.dumps(
-            {
-                "message_id": f"bot-outbound-{id(outbound_msg)}",
-                "sent_at": datetime.now(UTC).isoformat(),
-                "mode": "bot",
-            },
-            indent=2,
-        )
 
     from entrabot.tools.teams import send
 

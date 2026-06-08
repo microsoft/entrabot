@@ -54,11 +54,11 @@ These are not optional. Skipping them is the documented cause of 4 design errors
 ## Current Runtime Model
 
 - Python 3.12+ research project — no deployed service yet
-- Nine modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `a365/` (Work IQ MCP provider + Word adapter) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `bot/` (Bot Gateway) → `identity/` (state machine) → `storage/` (`LocalBackend`/`BlobBackend`/`PersonaBackend` + `migration` helper — ADR-005 Phases 1, 2, 5, 6a shipped) → `mcp_server.py` (FastMCP + background channel)
+- Eight modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `a365/` (Work IQ MCP provider + Word adapter) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `identity/` (state machine) → `storage/` (`LocalBackend`/`BlobBackend`/`PersonaBackend` + `migration` helper — ADR-005 Phases 1, 2, 5, 6a shipped) → `mcp_server.py` (FastMCP + background channel)
 - External dependencies: Microsoft Entra ID, Microsoft Teams + Outlook mailbox (Graph API or Bot Framework), Azure Blob Storage (optional, opt-in via `setup.sh --use-cloud-memory`)
 - **No default group chat.** Every Teams tool requires an explicit `chat_id`. Chats come from `create_chat`, the persisted `watched_chats` file, or the auto-discovery sweep over `/me/chats`.
 - **Body-first prompt.** `prompts/agent_system.md` loads at boot with `@include` expansion of `prompts/anatomy/*.md`. Persona-sati output (if configured) is appended AFTER the body and cannot override body rules.
-- Three auth modes via `ENTRABOT_MODE`: `agent_user` (three-hop), `delegated` (MSAL), `bot` (M365 Agents SDK). Agent memory has a **parallel third hop** against `https://storage.azure.com/.default` (`acquire_agent_user_storage_token`).
+- Two auth modes via `ENTRABOT_MODE`: `agent_user` (three-hop), `delegated` (MSAL). Agent memory has a **parallel third hop** against `https://storage.azure.com/.default` (`acquire_agent_user_storage_token`).
 - Certificate auth: private key in OS keystore (Keychain/TPM/Keyring), JWT assertion for Hop 1 (ADR-003)
 - Background tasks (eagerly started at MCP server boot in `agent_user` mode):
   - Teams chat poll (5s), email poll (60s), chat auto-discovery via `/me/chats` (120s), daily summary scheduler (5pm PDT)
@@ -156,7 +156,6 @@ claude --dangerously-load-development-channels server:entrabot
 - `src/entrabot/auth/`: Certificate-based JWT assertion builder + MSAL delegated auth
 - `src/entrabot/a365/`: Microsoft Agent 365 Work IQ provider boundary and Word adapter
 - `src/entrabot/identity/`: Progressive identity state machine (UNAUTHENTICATED → DELEGATED → PROVISIONING → AGENT_USER)
-- `src/entrabot/bot/`: Bot Gateway — M365 Agents SDK server, JSONL IPC, Dev Tunnel
 - `src/entrabot/tools/`: Teams Graph API + interaction log (Phase 1) + email poll (Phase 2) + daily summary (Phase 3) + Adaptive Cards
 - `src/entrabot/storage/`: Cloud-memory backend (ADR-005 Phase 1: `BlobStore` client only; Phase 2 wires it in)
 - `src/entrabot/mcp_server.py`: FastMCP server — Teams tools + 4 background tasks + channel push + token refresh (generic instructions — personality in persona-sati)

@@ -1,7 +1,7 @@
 # Engineering Status
 
 **Last updated:** 2026-06-04
-**Status:** v1 released. Three auth modes (Agent User / Delegated / Bot Gateway) running locally on macOS, Linux, and ARM64 Windows 11. **1,298 tests** across the suite, ruff clean. Body-first prompt architecture loads at boot; persona-sati MCP wires personality and memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped — blob storage is opt-in via `setup.sh --use-cloud-memory`. Work IQ Word migration landed (PR #75) and the `send_teams_message` auto-wait pattern is host-gated and deterministic. Confused-deputy authorization fix in `add_teams_member` / `share_file` shipped via active-sponsor-channel binding (Gate 3) on 2026-06-04. README, docs site, and GitHub Pages auto-deploy refreshed 2026-05-21.
+**Status:** v1 released. Two auth modes (Agent User / Delegated) running locally on macOS, Linux, and ARM64 Windows 11. **1,243 tests** across the suite, ruff clean. Body-first prompt architecture loads at boot; persona-sati MCP wires personality and memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped — blob storage is opt-in via `setup.sh --use-cloud-memory`. Work IQ Word migration landed (PR #75) and the `send_teams_message` auto-wait pattern is host-gated and deterministic. Confused-deputy authorization fix in `add_teams_member` / `share_file` shipped via active-sponsor-channel binding (Gate 3) on 2026-06-04. The Teams Bot Gateway mode was removed on 2026-06-08 (ADR-006) — it bypassed Agent Identity and was superseded by Microsoft Agent 365's managed AI teammate. README, docs site, and GitHub Pages auto-deploy refreshed 2026-05-21.
 
 ---
 
@@ -122,7 +122,7 @@ Blueprint (client_credentials)
 - 429 rate-limit handling with `Retry-After` propagation
 - Multi-user group chat support and cross-tenant federated B2B chats (auto-detects guest UPN, resolves home tenant via OpenID discovery)
 - `add_teams_member` — add users to a chat at runtime
-- Three auth modes: `agent_user`, `delegated` (MSAL interactive + device-code fallback), `bot` (M365 Agents SDK + JSONL IPC + Dev Tunnel)
+- Two auth modes: `agent_user`, `delegated` (MSAL interactive + device-code fallback)
 - Progressive identity state machine: `UNAUTHENTICATED → DELEGATED → PROVISIONING → AGENT_USER` with `asyncio.Lock`-protected transitions
 - Identity-aware user ID — `_effective_user_id()` returns the right object ID per mode
 - Body-first prompt architecture — `@include` expansion of `prompts/anatomy/*.md`, non-overridable security and channel discipline

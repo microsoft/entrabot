@@ -14,6 +14,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from entrabot.errors import RemovedModeError
+
 
 def _parse_csv(value: str | None) -> list[str]:
     """Parse a comma-separated string into a list, filtering empty strings."""
@@ -140,11 +142,29 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 
-VALID_MODES = {"auto", "bot", "delegated", "agent_user"}
+VALID_MODES = {"auto", "delegated", "agent_user"}
+
+# Modes that once existed but were removed. Setting one of these is a
+# hard error (fail loud) rather than a silent fallback to ``auto`` — see
+# RemovedModeError and ADR-006.
+_REMOVED_MODES = {
+    "bot": (
+        "ENTRABOT_MODE=bot was removed. Bot mode used the Bot Framework "
+        "gateway, which bypasses the Agent Identity this project is built "
+        "around. Use 'agent_user' (recommended) or 'delegated' instead."
+    ),
+}
 
 
 def _validate_mode(value: str) -> str:
-    """Return the mode if valid, otherwise default to 'auto'."""
+    """Return the mode if valid.
+
+    Raises ``RemovedModeError`` for a mode that was removed (e.g. ``bot``),
+    so an existing config never silently switches identity modes. Any other
+    unrecognized value falls back to ``auto``.
+    """
+    if value in _REMOVED_MODES:
+        raise RemovedModeError(_REMOVED_MODES[value])
     return value if value in VALID_MODES else "auto"
 
 
@@ -177,9 +197,6 @@ class EntraBotConfig:
     skip_provisioning: bool = field(default=False)
     authority: str = field(default="https://login.microsoftonline.com/common")
     mode: str = field(default="auto")
-    bot_app_id: str | None = field(default=None)
-    bot_cert_thumbprint: str | None = field(default=None)
-    bot_tunnel_port: int = field(default=3978)
     blob_endpoint: str | None = field(default=None)
     blob_container: str | None = field(default=None)
     keep_memory_local: bool = field(default=False)
@@ -222,9 +239,6 @@ class EntraBotConfig:
                 "ENTRABOT_AUTHORITY", "https://login.microsoftonline.com/common"
             ),
             mode=_validate_mode(os.environ.get("ENTRABOT_MODE", "auto")),
-            bot_app_id=os.environ.get("ENTRABOT_BOT_APP_ID"),
-            bot_cert_thumbprint=os.environ.get("ENTRABOT_BOT_CERT_THUMBPRINT"),
-            bot_tunnel_port=int(os.environ.get("ENTRABOT_BOT_TUNNEL_PORT", "3978")),
             blob_endpoint=os.environ.get("ENTRABOT_BLOB_ENDPOINT"),
             blob_container=os.environ.get("ENTRABOT_BLOB_CONTAINER"),
             keep_memory_local=os.environ.get("ENTRABOT_KEEP_MEMORY_LOCAL", "").lower()

@@ -142,7 +142,6 @@ Functions:
 |------|-------------|
 | `agent_user` | Three-hop cert flow. The Agent User authenticates autonomously. Default. |
 | `delegated` | MSAL interactive auth with the human's token. Messages prefixed `[EntraBot]`. |
-| `bot` | M365 Agents SDK bot server with JSONL IPC. Bot has its own Teams identity. |
 | `auto` | Pick the best mode based on config. |
 
 See `src/entrabot/config.py` for the env-var contract.

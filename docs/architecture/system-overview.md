@@ -68,10 +68,9 @@ The Blueprint's underlying app type post-GA cannot be flipped to fallback-public
 | **`auth/`** | Three-hop token exchange (cert JWT + MSAL delegated) | `src/entrabot/auth/` |
 | **`audit/`** | Action tracking — every resource access emits an audit event before executing | `src/entrabot/audit/` |
 | **`tools/`** | MCP tools (Teams Graph API, interaction log, email poll, daily summary, cards) | `src/entrabot/tools/` |
-| **`bot/`** | Bot Gateway — M365 Agents SDK server, JSONL IPC, Dev Tunnel manager | `src/entrabot/bot/` |
 | **`identity/`** | Progressive identity state machine | `src/entrabot/identity/` |
 | **`storage/`** | LocalBackend / BlobBackend / PersonaBackend + migration helper (ADR-005) | `src/entrabot/storage/` |
-| **`mcp_server.py`** | FastMCP entry — three auth modes + body-first prompt loader + background poll + channel push | `src/entrabot/mcp_server.py` |
+| **`mcp_server.py`** | FastMCP entry — two auth modes + body-first prompt loader + background poll + channel push | `src/entrabot/mcp_server.py` |
 
 The agent system prompt lives in `prompts/agent_system.md` plus the `@include`-expanded `prompts/anatomy/*.md` modules. When persona-sati is reachable, its mind contract layers on top of the body — never underneath. See `docs/architecture/DESIGN-persona-sati-integration.md`.
 

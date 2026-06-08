@@ -34,7 +34,7 @@ Agent wants to access a resource
 └─────────────────┘
 ```
 
-The token check uses the three-hop Agent User token (ADR-002) for `agent_user` mode; in `delegated` mode the human's MSAL-cached token; in `bot` mode the bot's app credentials.
+The token check uses the three-hop Agent User token (ADR-002) for `agent_user` mode; in `delegated` mode the human's MSAL-cached token.
 
 ## Key Invariant
 

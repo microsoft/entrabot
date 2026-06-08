@@ -124,7 +124,5 @@ shared and persistent.
 
 ## What's intentionally not here
 
-- **Bot Gateway on Windows.** The Bot Gateway lives on a Linux host
-  (werner.ac); Windows runs the agent_user mode only.
 - **WSL2 entrabot.** WSL inherits the Linux setup verbatim — run
   `scripts/setup.sh` from inside WSL. The two paths don't share state.
