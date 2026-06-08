@@ -203,7 +203,12 @@ class TestRequesterMustBeChatMember:
         get_bindings().record(
             sponsor_user_id="sponsor-uid",
             chat_id="19:wrong-chat@thread.v2",
-            graph_sent_at_epoch=time.time() - 1.0,
+            # Record at "now" so this override is deterministically newer
+            # than the autouse fixture's ``now - 1.0`` seed. Using
+            # ``time.time() - 1.0`` here ties with the seed on Windows'
+            # coarse (~15ms) clock, so record() rejects the override and
+            # the stale 19:abcd binding wins (Gate 3 fires instead of Gate 2).
+            graph_sent_at_epoch=time.time(),
             message_id="m-gate2-test",
         )
         with (
@@ -237,7 +242,11 @@ class TestRequesterMustBeChatMember:
         get_bindings().record(
             sponsor_user_id="sponsor-uid",
             chat_id="19:fake-chat@thread.v2",
-            graph_sent_at_epoch=time.time() - 1.0,
+            # "now" beats the autouse fixture's ``now - 1.0`` seed
+            # deterministically — ``time.time() - 1.0`` ties on Windows'
+            # coarse clock and record() keeps the stale binding (see the
+            # sibling test for the full explanation).
+            graph_sent_at_epoch=time.time(),
             message_id="m-gate2-empty",
         )
         with (
