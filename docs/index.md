@@ -33,6 +33,7 @@ The scripts take care of the rest: provisioning the Agent Identity Blueprint, Ag
 - **Why we made a decision?** Browse [Architecture Decision Records](decisions/README.md)
 - **Agent User deep dive?** See [Platform Learnings: Agent Users](platform-learnings/entra-agent-users.md)
 - **Platform constraints (post-GA Agent Blueprints / Users)?** Read [Agent ID Blueprints and Users](platform-learnings/agent-id-blueprints-and-users.md) — required reading before any OAuth or Agent Identity work.
+- **OS-level agent sandboxing (Build 2026)?** Read [Microsoft Execution Containers (MXC)](platform-learnings/mxc-windows-sandbox.md) — the containment half of the device-agent security story; complements entrabot's identity stack.
 - **Open security work?** See [Security Debt: Provisioner client secret](SECURITY-DEBT-PROVISIONER-SECRET.md)
 
 ## Open Research Questions
