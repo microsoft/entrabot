@@ -50,7 +50,6 @@ src/entrabot/
   auth/           # Certificate JWT builder (build_client_assertion)
   tools/          # MCP tools (Teams, Files, email, cards, promises, A365)
   audit/          # Action tracking / audit log
-  bot/            # Bot Gateway
   identity/       # Progressive identity state machine
   storage/        # Local/Blob/Persona backends
   mcp_server.py   # FastMCP server + background poll + channel push

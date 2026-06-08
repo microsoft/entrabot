@@ -27,7 +27,7 @@ async def send_teams_message(
 | `content_type` | `"text" \| "html"` | no (default `"html"`) | `html` is required for URLs, lists, code blocks, structured content. |
 | `mentions` | `list[dict] \| None` | no | `@mention` payload. Each dict needs `id` (int matching `<at id="N">`), `name`, `user_id` (Entra GUID). |
 
-Returns JSON with `message_id` and `sent_at`. In `bot` mode, writes to `outbound.jsonl` and returns a placeholder `bot-outbound-<id>`.
+Returns JSON with `message_id` and `sent_at`.
 
 **Auto-wait behaviour**: on non-Claude-Code hosts (Copilot CLI, Codex, etc.), `send_teams_message` blocks after sending and returns the sponsor's reply inline as `sponsor_reply`. Claude Code ends the turn and gets the reply pushed via `notifications/claude/channel`. Server-side host detection — not a parameter.
 

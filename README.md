@@ -164,7 +164,7 @@ This is a research repo, not a production service. It runs reliably on a develop
 
 **Shipped:**
 
-- Three auth modes: `agent_user` (full three-hop), `delegated` (MSAL interactive for demos without an E5), `bot` (M365 Agents SDK + Bot Framework)
+- Two auth modes: `agent_user` (full three-hop), `delegated` (MSAL interactive for demos without an E5)
 - Teams: 1:1 DMs, group chats, cross-tenant B2B group chats with federated home-tenant resolution
 - Outlook: background email poll with Purview-encrypted detection, daily summary at 5pm PT
 - Files: SharePoint / OneDrive read, write, upload, share — two-gate sponsor authorization on share
@@ -186,7 +186,6 @@ This is a research repo, not a production service. It runs reliably on a develop
 
 **Open:**
 
-- Bot Gateway is functional but not yet live-tested at a real domain
 - AppContainer sandbox spike on Windows for stronger process isolation
 - A few platform-edge bugs tracked in [`docs/engineering-status.md`](docs/engineering-status.md) (Agent Identity missing `Application.Read.All`; `add_file_comment` Word 404; persona-sati 12h MCP refresh bug paused at the Blueprint public-client constraint)
 

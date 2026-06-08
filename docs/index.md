@@ -25,7 +25,7 @@ The scripts take care of the rest: provisioning the Agent Identity Blueprint, Ag
 - **`setup.sh` flags?** See [setup.sh reference](reference/setup-script.md)
 - **Script + API reference?** Browse [Reference: Scripts](reference/scripts/operations.md) and [Reference: API](reference/api/mcp-tools.md)
 - **Understanding the design?** Read [System Overview](architecture/system-overview.md)
-- **Bot Gateway design?** Read [DESIGN: Teams Bot Gateway](architecture/DESIGN-teams-bot-gateway.md)
+- **Why was Bot Gateway mode removed?** Read [ADR-006: Remove the Teams Bot Gateway Auth Mode](decisions/006-remove-bot-gateway-mode.md)
 - **Delegated mode / multi-tenant chat?** Read [Lightweight Teams Chat](architecture/NEXT-WhatsApp-lightweight-teams-chat.md) (landed)
 - **Cloud memory work?** See [ADR-005: Cloud-Hosted Memory](decisions/005-cloud-hosted-memory.md) (Phases 1, 2, 5, 6a shipped)
 - **How tokens flow?** See [Token Flows](reference/token-flows.md)

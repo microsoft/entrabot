@@ -5,7 +5,10 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from entrabot.config import EntraBotConfig, get_config
+from entrabot.errors import RemovedModeError
 
 
 def _expected_default_root() -> Path:
@@ -180,7 +183,7 @@ class TestEntraBotConfig:
         assert cfg.mode == "auto"
 
     def test_mode_from_env(self) -> None:
-        for val in ("bot", "delegated", "agent_user", "auto"):
+        for val in ("delegated", "agent_user", "auto"):
             with patch.dict(os.environ, {"ENTRABOT_MODE": val}, clear=False):
                 cfg = EntraBotConfig.from_env()
             assert cfg.mode == val, f"Expected '{val}'"
@@ -190,27 +193,14 @@ class TestEntraBotConfig:
             cfg = EntraBotConfig.from_env()
         assert cfg.mode == "auto"
 
-    def test_bot_config_fields(self) -> None:
-        env = {
-            "ENTRABOT_MODE": "bot",
-            "ENTRABOT_BOT_APP_ID": "bot-app-123",
-            "ENTRABOT_BOT_CERT_THUMBPRINT": "bot-cert-thumb",
-            "ENTRABOT_BOT_TUNNEL_PORT": "4000",
-        }
-        with patch.dict(os.environ, env, clear=False):
-            cfg = EntraBotConfig.from_env()
-        assert cfg.bot_app_id == "bot-app-123"
-        assert cfg.bot_cert_thumbprint == "bot-cert-thumb"
-        assert cfg.bot_tunnel_port == 4000
-
-    def test_bot_tunnel_port_default(self) -> None:
-        cfg = EntraBotConfig()
-        assert cfg.bot_tunnel_port == 3978
-
-    def test_bot_fields_default_none(self) -> None:
-        cfg = EntraBotConfig()
-        assert cfg.bot_app_id is None
-        assert cfg.bot_cert_thumbprint is None
+    def test_mode_bot_raises_removed(self) -> None:
+        """Bot mode was removed — it must fail loud, not silently fall back
+        to auto. Honors the zero-silent-failures rule (ADR-006)."""
+        with (
+            patch.dict(os.environ, {"ENTRABOT_MODE": "bot"}, clear=False),
+            pytest.raises(RemovedModeError, match="agent_user"),
+        ):
+            EntraBotConfig.from_env()
 
 
 class TestBlobStorageConfig:

@@ -11,6 +11,19 @@ class EntraBotError(Exception):
     """Base class for all EntraBot errors."""
 
 
+class ConfigError(EntraBotError):
+    """Configuration errors (invalid or removed settings)."""
+
+
+class RemovedModeError(ConfigError):
+    """Raised when a removed ``ENTRABOT_MODE`` value is still configured.
+
+    Bot mode was removed (it bypassed Agent Identity, which is the point of
+    the project). Fail loud with a migration message rather than silently
+    falling back to another mode — honors the zero-silent-failures rule.
+    """
+
+
 class AuthError(EntraBotError):
     """Authentication/identity errors."""
 

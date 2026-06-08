@@ -130,25 +130,3 @@ python scripts/health_check.py --json     # machine-readable
 ```
 
 Forwards to `show_agent_status.main([*args, "--health-only"])`.
-
-## `start_bot.sh`
-
-Launch the EntraBot bot gateway: Dev Tunnel + bot server (aiohttp on `localhost:PORT`).
-
-### Usage
-
-```bash
-./scripts/start_bot.sh             # start tunnel + bot server
-./scripts/start_bot.sh --stop      # kill running tunnel + bot server
-```
-
-### What it does
-
-- Validates prerequisites (`devtunnel` CLI, `.env`, venv).
-- Starts a Dev Tunnel on the configured port.
-- Starts the bot server.
-- Prints the tunnel URL to register in Azure Bot Service.
-
-The MCP server itself is launched separately by Claude Code via the `entrabot` MCP entry. Prerequisite: `setup_bot.sh` has been run once.
-
-See `docs/architecture/DESIGN-teams-bot-gateway.md` for the bot mode design.

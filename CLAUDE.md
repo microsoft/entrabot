@@ -56,14 +56,13 @@
 ## Current Runtime Model
 
 - Python 3.12+ research project — no deployed service yet
-- Nine modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `a365/` (Work IQ MCP provider + Word adapter) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `bot/` (Bot Gateway) → `identity/` (state machine) → `storage/` (`LocalBackend`/`BlobBackend`/`PersonaBackend` + `migration` helper — ADR-005 Phases 1, 2, 5, 6a shipped) → `mcp_server.py` (FastMCP + background channel)
-- External dependencies: Microsoft Entra ID (identity), Microsoft Teams + Outlook mailbox (Graph API or Bot Framework), Azure Blob Storage (optional, opt-in via `setup.sh --use-cloud-memory`)
+- Eight modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `a365/` (Work IQ MCP provider + Word adapter) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `identity/` (state machine) → `storage/` (`LocalBackend`/`BlobBackend`/`PersonaBackend` + `migration` helper — ADR-005 Phases 1, 2, 5, 6a shipped) → `mcp_server.py` (FastMCP + background channel)
+- External dependencies: Microsoft Entra ID (identity), Microsoft Teams + Outlook mailbox (Graph API), Azure Blob Storage (optional, opt-in via `setup.sh --use-cloud-memory`)
 - **No default group chat.** Every Teams tool requires an explicit `chat_id`. Chats come from `create_chat`, the persisted `watched_chats` file, or the auto-discovery sweep over `/me/chats`.
 - **Body-first prompt.** `prompts/agent_system.md` loads at boot with `@include` expansion of `prompts/anatomy/*.md`. Persona-sati output (if configured) is appended AFTER the body and cannot override body rules. See the "Body prompt is non-overridable" rule above.
-- Three auth modes via `ENTRABOT_MODE` config switch:
+- Two auth modes via `ENTRABOT_MODE` config switch:
   - `agent_user` — three-hop Agent User flow (Blueprint cert → Agent Identity FIC → Agent User `user_fic`)
   - `delegated` — MSAL interactive auth with human's token, messages prefixed `[EntraBot]`
-  - `bot` — M365 Agents SDK bot server with JSONL IPC, bot has its own Teams identity
 - Certificate auth: private key in OS keystore (Keychain/TPM/Keyring), JWT assertion for Hop 1 (ADR-003)
 - Background tasks (all started eagerly at MCP server boot in `agent_user` mode):
   - Teams chat poll (5s) — pushes inbound DMs / group-chat messages via `notifications/claude/channel`
@@ -222,7 +221,7 @@ Two memory systems coexist in this project:
 - `prompts/agent_system.md` + `prompts/anatomy/*.md` — the body prompt (security, channel discipline, identity/tools)
 - `docs/architecture/DESIGN-persona-sati-integration.md` — mind-body split design
 - `docs/decisions/005-cloud-hosted-memory.md` — cloud memory spec (phase plan + open TODOs)
-- `docs/architecture/DESIGN-teams-bot-gateway.md` — Bot Gateway design
+- `docs/decisions/006-remove-bot-gateway-mode.md` — why the Bot Gateway mode was removed
 - `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` — delegated mode spec (landed)
 - `docs/index.md` — doc site entry point
 - `docs/runbooks/mcp-disconnect-investigation.md` — **OPEN issue.** Entrabot MCP dies after 2–10 min of sustained activity. Two amplifiers fixed (PR #40, PR #41), root cause still unknown. Read this before debugging any MCP-drop symptom — do NOT restart the investigation from scratch.
@@ -260,11 +259,10 @@ pip install mkdocs-material && mkdocs serve
 - `src/entrabot/platform/`: OS-specific credential storage — `CredentialStore` protocol with Mac/Linux/Windows implementations
 - `src/entrabot/auth/`: Certificate-based JWT assertion builder + MSAL delegated auth (localhost redirect + device code fallback)
 - `src/entrabot/a365/`: Microsoft Agent 365 Work IQ provider boundary and Word adapter
-- `src/entrabot/bot/`: Bot Gateway — M365 Agents SDK server, JSONL IPC handler, Dev Tunnel manager, conversation reference persistence
 - `src/entrabot/identity/`: Progressive identity state machine (UNAUTHENTICATED → DELEGATED → PROVISIONING → AGENT_USER)
 - `src/entrabot/tools/teams.py`: Three-hop token flow + Teams Graph API (send, read, filter, chat creation, add members cross-tenant)
-- `src/entrabot/mcp_server.py`: FastMCP server — Teams tools + 3 auth modes + background poll + channel push + token refresh (generic instructions — personality in persona-sati)
-- `src/entrabot/config.py`: `ENTRABOT_MODE` switch (auto/bot/delegated/agent_user) + all env config
+- `src/entrabot/mcp_server.py`: FastMCP server — Teams tools + 2 auth modes + background poll + channel push + token refresh (generic instructions — personality in persona-sati)
+- `src/entrabot/config.py`: `ENTRABOT_MODE` switch (auto/delegated/agent_user) + all env config
 - `docs/decisions/`: ADRs — every significant architectural choice is recorded here
 - `docs/runbooks/hard-won-learnings.md`: 66 hard-won learnings — READ THIS before making changes
 - `docs/runbooks/mcp-disconnect-investigation.md`: OPEN MCP-disconnect dossier — READ before touching MCP transport, logging, or efferent-copy code

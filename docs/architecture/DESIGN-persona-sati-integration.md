@@ -203,7 +203,7 @@ This is NOT needed for the initial integration (Claude Code bridges both MCPs). 
 - **Teams tools** — `send_teams_message`, `read_teams_messages`, `watch_teams_replies`, `add_teams_member`, `create_chat`, `list_chat_members` — all unchanged
 - **Background polls** — Teams (5s), email (60s), chat-discovery (120s) — unchanged
 - **Daily summary scheduler** — unchanged
-- **Auth flows** — three-hop cert auth, MSAL delegated, bot mode — unchanged
+- **Auth flows** — three-hop cert auth, MSAL delegated — unchanged
 - **Interaction log** — `tools/interaction_log.py` still writes to `interactions/` blob prefix — unchanged (this is agent operational data, not persona memory)
 - **Email poll** — unchanged
 - **Channel notifications** — unchanged

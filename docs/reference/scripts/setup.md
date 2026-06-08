@@ -43,28 +43,6 @@ Re-runs reuse the existing chain unless `--new` is passed. Each step short-circu
 
 See `docs/reference/setup-script.md` for the long form. ADR-003 covers the cert-auth choice. ADR-005 covers cloud memory.
 
-## `setup_bot.sh`
-
-One-time provisioning for `bot` mode. Creates a multi-tenant app registration, generates a cert, creates an Azure Bot resource, and writes bot config to `.env`.
-
-### Usage
-
-```bash
-./scripts/setup_bot.sh                  # provision
-./scripts/setup_bot.sh --teardown       # delete Azure resources
-```
-
-### What it does
-
-- Verifies `az` CLI, Python 3.12+, and the `devtunnel` CLI.
-- Creates or reuses the multi-tenant bot app registration.
-- Generates a cert and stores the private key in the OS keystore (Keychain / TPM / Keyring).
-- Uploads the public cert to the app registration.
-- Creates the Azure Bot resource linked to the app.
-- Persists results to `.env` and `.entrabot-state.json`.
-
-After this runs once, use `start_bot.sh` to launch the tunnel + bot server.
-
 ## `setup_delegated.sh`
 
 Browser-sign-in setup for `delegated` mode. Caches an MSAL token in the OS keystore so the MCP server can pick it up silently — no device-code flow.

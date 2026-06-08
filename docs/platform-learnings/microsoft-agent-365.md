@@ -46,7 +46,7 @@ A365 is explicitly designed for incremental adoption — you don't have to buy t
 | **1. Register** | Agent appears in M365 admin center inventory. Inherits Entra ID governance, Purview, and Defender if blueprint-based. | ✅ Provisioned — but via direct Graph `POST /servicePrincipals` extending `Microsoft.Graph.AgentIdentity`, NOT via the A365 blueprint flow. The admin center shows 173 agents in the registry; the Sati Agent is one of them. |
 | **2. Observability** | OpenTelemetry tracing on every inference + tool call + agent lifecycle event. Visible in admin center, Purview, Defender. | ❌ Not wired. Entrabot has its own audit log (`tools/audit.py` + `~/.entrabot/audit/`) but it's local JSONL, not OTel. |
 | **3. Work IQ tools** | Agent calls Microsoft-hosted MCP servers (Mail/Calendar/Teams/SharePoint/OneDrive/Word/User/Copilot/Dataverse). Permissions admin-controlled. | ❌ Not connected. We've built parallel Graph-based implementations for Teams, email, Files; Work IQ Word is the **headline gap** that motivated the Learning #60 pivot. |
-| **4. AI teammate** | Mailbox, Teams presence, directory entry. Frontier preview only. | 🟡 Self-built equivalent — Bot Gateway (`src/entrabot/bot/`), Teams Graph integration, Bot Framework SDK. Functional but not under MS-managed lifecycle. |
+| **4. AI teammate** | Mailbox, Teams presence, directory entry. Frontier preview only. | 🟢 entrabot's `agent_user` mode IS this — the Agent User has its own mailbox, Teams presence, and directory entry. (A self-built Bot Gateway was removed in ADR-006 in favor of the Agent User identity + Microsoft's managed AI teammate.) |
 
 **Where entrabot and A365 overlap-vs-supersede:**
 

@@ -80,7 +80,9 @@ class ActiveChannelBindings:
         - empty sponsor_user_id or chat_id
         - graph_sent_at_epoch is in the future
         - graph_sent_at_epoch is already past TTL (bootstrap-replay defense)
-        - an existing binding has a strictly newer graph_sent_at
+        - an existing binding has a newer-or-equal graph_sent_at
+          (ties are rejected so a replayed message with the same
+          authored time cannot displace the live binding)
 
         ``sponsor_user_id`` is normalized to lowercase for storage.
         """
