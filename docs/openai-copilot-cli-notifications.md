@@ -87,8 +87,7 @@ What `--dangerously-load-development-channels server:entrabot` plus
     "quoted_messages"}}` and calls `write_stream.send(...)`. Failure
     is swallowed (Learning #29).
   - Background loops that fire it: `_background_poll` (5 s Teams DM
-    poll, line ~965), `_background_poll_email` (60 s, line ~1063),
-    `_background_poll_bot` (Bot Gateway, line ~820).
+    poll), `_background_poll_email` (60 s).
   - Every push is **observed first** to the interaction log. The
     log is the durable record; the channel push is "best effort"
     (Learning #29 / #38).
@@ -124,7 +123,7 @@ observation — is portable.
 | `--dangerously-load-development-channels` launch flag | ✅ | — |
 | Turn-injection UX | ✅ | — |
 | Three-hop Agent User token flow | — | ✅ |
-| Graph polling (`_background_poll`, email, bot) | — | ✅ |
+| Graph polling (`_background_poll`, email) | — | ✅ |
 | Interaction log + dedup + cursors | — | ✅ |
 | HTML sanitization (`_summarize_content`) | — | ✅ |
 | FastMCP stdio + tool surface | — | ✅ |
@@ -477,7 +476,7 @@ in `last_seen_consumer` so:
 - `entrabot watch` advances a third cursor for terminal display.
 
 Dedup at the inbox layer is by `id` (Graph `message_id` for Teams,
-`internetMessageId` for email, synthetic UUID for Bot Gateway).
+`internetMessageId` for email).
 
 ### 7.4 Notification surfaces
 
