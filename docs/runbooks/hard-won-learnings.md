@@ -884,6 +884,33 @@ Auth model uses **Entra Agent ID** delegated tokens — the same identity primit
 
 ---
 
+### Learning #68: Package Renames Must Migrate OS Keystore Service Names, and `security(1) -w` Is Not a Safe Copy Transport
+
+**Date:** 2026-06-09
+**Status:** **CONFIRMED — fixed manually via Python `keyring` round-trip after a hex-encoding gotcha.**
+**Context:** The `entraclaw → entrabot` package rename (commit `2e22527`) updated every Python import, every console-script entrypoint, and every config string. `src/entrabot/preflight.py` and `src/entrabot/tools/teams.py` now look up the Blueprint private key with `keyring.get_password("entrabot", "blueprint-private-key")`. But the actual cert had been stored months earlier under service `"entraclaw"` — a string that lives in the macOS Keychain, not in the repo. `git grep` shows zero stale `entraclaw` references in the source tree, so the rename PR looked clean. The keystore entry was invisible to the refactor.
+**Problem:** After a fresh `/mcp` connect, every Teams/email tool failed with "Blueprint private key not found in credential store. Run ./scripts/setup.sh". `setup.sh --diagnose` confirmed: state file PASS, cert in OS keystore FAIL. The natural fix — "just re-run setup with `--use-blueprint=<id>`" — would have worked but discards a cert Entra already trusts and forces a fresh upload. The faster fix is to copy the existing Keychain entry from the old service name to the new one. **First attempt did it wrong**: a shell one-liner using `security find-generic-password -s entraclaw -a blueprint-private-key -w` to read and `security add-generic-password … -w "$PEM"` to write. Diagnostic then upgraded from "key not found" to a different failure: `Unable to load PEM file … MalformedFraming`. The cert was now "present" but unparseable.
+**Root cause of the second failure:** `security -w` displays the password attribute in **hex** when any byte triggers its non-printable heuristic — newlines, certain control chars, occasionally just because of the data shape. The PEM came back as `2d2d2d2d2d424547494e2050524956415445204b45592d2d2d2d2d0a4d49…` (`-----BEGIN PRIVATE KEY-----\nMI…`), and the shell happily stored that hex string *as the new password's literal text*. The next read returned the hex string unchanged — `keyring` got `"2d2d2d…"` instead of `-----BEGIN…` and `cryptography` rejected it.
+**Fix:** Round-trip through Python's `keyring` library — same code path the app uses for both read and write, so encoding is symmetric by construction:
+```python
+import keyring
+pem = keyring.get_password("entraclaw", "blueprint-private-key")
+assert pem and pem.startswith("-----BEGIN")
+keyring.set_password("entrabot", "blueprint-private-key", pem)
+```
+After this, `setup.sh --diagnose` passed all 7 checks including the three-hop token mint and Graph identity confirmation (`entrabot-agent@werner.ac`).
+**Prevention:**
+
+- **Never grep for "is the rename done"; also enumerate persistent surfaces outside the repo.** A package rename can touch four surfaces the source tree doesn't show: (1) OS keystore service names (Keychain on macOS, Secret Service on Linux, Credential Manager / DPAPI on Windows), (2) per-user state directories (`~/.entraclaw/` vs `~/.entrabot/`), (3) per-machine MCP config files (`.mcp.json`, `~/.copilot/mcp-config.json` — see also #16 `chore(setup)` and the same-day `.mcp.json` stale-binary fix), (4) installed console scripts in old venvs. Walk all four explicitly before declaring a rename complete.
+- **Never use `security(1) -w` as a transport for binary-ish data.** It silently switches to hex when the heuristic trips, and there is no flag to force raw bytes. Read and write via the same higher-level library the application uses (`keyring` on Python; `CredentialManager` API on .NET; etc.). If you must use `security`, write the value to a temp file via `-w "$(cat tmpfile)"` is still wrong because the shell stringifies — use the GUI Keychain Access app instead, which does honor raw bytes.
+- **`security … -w "$SECRET"` also leaks the secret on argv.** Visible briefly to `ps`. On a single-user machine that's a low-tier concern; on a shared host treat it as disqualifying. The `keyring` Python path avoids both this and the hex problem.
+- **When migrating, validate the roundtrip in the same process that wrote.** The Python snippet above includes `back = keyring.get_password(...); assert back == pem` — this would have caught the hex bug immediately if I'd added it the first time around.
+- **Decision rule for "re-mint vs. migrate" on rename day:** if the new cert can be re-uploaded to the Blueprint cheaply (no human-in-the-loop approval, no ops ticket), prefer `setup.sh --use-blueprint=<id>` — it's idempotent and leaves no shell-history exposure. Use the keystore migration only when the existing cert has trust state you can't cheaply replay.
+
+**Evidence/references:** Live session 2026-06-09. Stale state confirmed in `.entrabot-state.json` (new schema, new AGENT_USER_UPN) and `.env` (already pointed at new UPN) — only the Keychain service name lagged. Symptom progression: missing key → hex-encoded "key" → genuine round-trip. Sibling rename miss the same day: `.mcp.json` still pointed at the deleted `entraclaw-mcp` console script (fixed by editing the `mcpServers` key to `entrabot` and the command path to `.venv/bin/entrabot-mcp`). Both are instances of the same root cause — a rename PR can only touch what's in the repo. Related code paths: `src/entrabot/platform/mac.py` (thin keyring wrapper, no per-rename migration logic), `src/entrabot/preflight.py:422` and `src/entrabot/tools/teams.py:65` (hardcoded service name `"entrabot"`).
+
+---
+
 ### [HISTORICAL] Learning #4: OBO Requires Matching Token Audience
 
 **Date:** 2026-04-06
