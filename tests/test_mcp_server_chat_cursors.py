@@ -269,3 +269,106 @@ class TestDebouncedSave:
         await asyncio.sleep(0.25)
 
         assert call_count["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# _serialize_chat_state — deterministic seen_ids_tail
+# ---------------------------------------------------------------------------
+class TestSerializeChatStateDeterministic:
+    """Regression for PR #18 review comment #1.
+
+    ``seen_ids`` is a Python ``set`` in memory; iteration order is not
+    guaranteed across runs (depends on insertion order, hash collisions, and
+    Python's hash randomization). When the serializer slices ``[-50:]`` to
+    bound the tail, a non-deterministic ``list(seen)`` can drop the actual
+    most-recent IDs that the overlap-window dedupe needs after restart —
+    causing duplicate notifications.
+
+    Teams message IDs are numeric-as-string (e.g. ``"1781031555261"``) so
+    lexicographic sort on the string is monotonic with sent-at; that's the
+    correct ordering key.
+    """
+
+    def test_seen_ids_tail_keeps_highest_value_ids_when_over_cap(self) -> None:
+        """Over-cap set must yield the lexicographically-highest IDs as the tail."""
+        # Construct a set larger than the 50-id cap with a mix of low and high
+        # numeric IDs in arbitrary insertion order.
+        high_ids = [f"178103155{i:04d}" for i in range(60)]
+        # Shuffle insertion to make it more likely that list(set) ordering
+        # would NOT happen to produce the right tail by accident.
+        scrambled_order = high_ids[30:] + high_ids[:30]
+        seen = set(scrambled_order)
+        chat_state = {
+            "last_ts": "2026-06-09T18:59:15.261Z",
+            "seen_ids": seen,
+            "bootstrapped": True,
+        }
+
+        serialized = mcp_server._serialize_chat_state(chat_state)
+        tail = serialized["seen_ids_tail"]
+
+        # The tail must be bounded to 50 (matches MAX_SEEN_IDS_TAIL).
+        assert len(tail) == 50
+        # The tail must end with the 50 highest IDs — the ones we actually
+        # need to dedupe against in the 2-second overlap window after restart.
+        expected_highest = sorted(high_ids)[-50:]
+        assert tail == expected_highest
+
+    def test_seen_ids_tail_is_deterministic_across_calls(self) -> None:
+        """Same input set → identical serialized output, every time."""
+        # Mix of IDs designed to exercise hash collisions / insertion-order
+        # sensitivity. Build the same set twice via different insertion paths.
+        ids = [f"id-{i:03d}" for i in range(100)]
+        a = set()
+        for i in ids:
+            a.add(i)
+        b = set()
+        for i in reversed(ids):
+            b.add(i)
+        result_a = mcp_server._serialize_chat_state(
+            {"last_ts": "t", "seen_ids": a, "bootstrapped": True}
+        )
+        result_b = mcp_server._serialize_chat_state(
+            {"last_ts": "t", "seen_ids": b, "bootstrapped": True}
+        )
+        assert result_a["seen_ids_tail"] == result_b["seen_ids_tail"]
+
+
+# ---------------------------------------------------------------------------
+# _schedule_cursor_save sync fallback — dirty-set cleanup
+# ---------------------------------------------------------------------------
+class TestScheduleCursorSaveSyncFallback:
+    """Regression for PR #18 review comment #2.
+
+    When ``_schedule_cursor_save`` runs without a current event loop (test
+    contexts / shutdown), it falls back to a synchronous backend write. The
+    async branch removes the chat from ``_dirty_cursor_chats`` after a
+    successful write; the sync fallback must mirror that behavior or the
+    chat stays "dirty" forever, causing redundant flush attempts.
+    """
+
+    def test_sync_fallback_clears_dirty_set_on_success(self, monkeypatch) -> None:
+        # Pre-register the chat and stage some advanced state.
+        mcp_server._register_watched_chat("chat-syncfb", persist=False)
+        st = mcp_server._state["watched_chats"]["chat-syncfb"]
+        st["last_ts"] = "2026-06-09T18:00:00Z"
+        st["seen_ids"] = {"x"}
+        st["bootstrapped"] = True
+
+        # Force the no-running-loop fallback path. ``_schedule_cursor_save``
+        # calls ``asyncio.get_event_loop()`` and treats ``RuntimeError`` as
+        # the no-loop signal.
+        import asyncio as _asyncio
+
+        def boom() -> None:
+            raise RuntimeError("no running event loop")
+
+        monkeypatch.setattr(_asyncio, "get_event_loop", boom)
+
+        mcp_server._schedule_cursor_save("chat-syncfb")
+
+        # After a successful sync write the chat must NOT remain dirty.
+        dirty = mcp_server._state.get("_dirty_cursor_chats") or set()
+        assert "chat-syncfb" not in dirty
+        # And the write itself must have landed.
+        assert chat_cursors.load_cursor("chat-syncfb") is not None

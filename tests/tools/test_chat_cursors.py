@@ -218,13 +218,14 @@ class TestIsStale:
         )
         assert is_stale(recent) is False
 
-    def test_at_cap_boundary_is_stale(self) -> None:
-        # Exactly at the cap — treat as stale; better to bootstrap than to
-        # surface a borderline-old message as live.
-        at_cap = (
+    def test_one_second_past_cap_is_stale(self) -> None:
+        # One second past the cap — treat as stale; better to bootstrap than
+        # to surface a borderline-old message as live. (A separate test
+        # covers behavior strictly within the cap.)
+        past_cap = (
             datetime.now(UTC) - timedelta(seconds=CURSOR_STALENESS_SECONDS + 1)
         ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        assert is_stale(at_cap) is True
+        assert is_stale(past_cap) is True
 
     def test_staleness_cap_is_24_hours(self) -> None:
         # Explicit assertion: 24h is the policy. If this constant changes,

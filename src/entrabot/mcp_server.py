@@ -605,11 +605,20 @@ def _serialize_chat_state(chat_state: dict) -> dict:
 
     ``seen_ids`` is a set in memory; ``seen_ids_tail`` is a list on disk so it
     serializes deterministically across MemoryBackend implementations.
+
+    Set iteration order is not stable across Python runs (depends on insertion
+    order, hash collisions, and ``PYTHONHASHSEED``). Sort lexicographically
+    and keep the highest-valued tail so the persisted tail covers the IDs
+    most likely to land inside the poll's overlap window after restart. Teams
+    message IDs are numeric-as-string, so lexicographic order is monotonic
+    with sent-at — same approach the poll loop uses at ``mcp_server.py:1301``
+    when bounding the in-memory ``seen_ids`` set.
     """
     seen = chat_state.get("seen_ids") or set()
+    bounded = sorted(seen)[-50:]
     return {
         "last_ts": chat_state.get("last_ts"),
-        "seen_ids_tail": list(seen),
+        "seen_ids_tail": bounded,
         "bootstrapped": bool(chat_state.get("bootstrapped", False)),
     }
 
@@ -694,6 +703,12 @@ def _schedule_cursor_save(chat_id: str) -> None:
             chat_state = (_state.get("watched_chats") or {}).get(chat_id)
             if chat_state is not None:
                 _chat_cursor_save(chat_id, _serialize_chat_state(chat_state))
+                # Mirror the async branch: drop from dirty set on success so the
+                # chat doesn't stay "dirty" forever and trigger redundant flush
+                # attempts on shutdown.
+                dirty = _state.get("_dirty_cursor_chats") or set()
+                dirty.discard(chat_id)
+                _state["_dirty_cursor_chats"] = dirty
         except Exception as exc:  # noqa: BLE001
             if logger:
                 logger.warning("Sync cursor save failed for %s: %s", chat_id, exc)

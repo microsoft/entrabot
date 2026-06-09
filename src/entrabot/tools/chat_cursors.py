@@ -122,9 +122,10 @@ def save_cursor(chat_id: str, state: dict) -> None:
     serialized payload stays small even after a long-lived poll session.
     ``last_written_at`` is stamped here so callers don't have to track it.
 
-    Best-effort: backend write failures are logged and re-raised. Call sites
-    inside the poll loop must wrap this in try/except so a single bad write
-    doesn't take down the loop. (See ``mcp_server._schedule_cursor_save``.)
+    Backend write failures are propagated to the caller. Callers are
+    expected to log + decide whether to retry — the poll-loop call sites
+    (``mcp_server._chat_cursor_save`` / ``mcp_server._flush_chat_cursors``)
+    already do this, so a single bad write doesn't take down the loop.
     """
     payload = {
         "last_ts": state.get("last_ts"),
