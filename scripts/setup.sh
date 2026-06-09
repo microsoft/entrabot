@@ -868,6 +868,9 @@ if [ ! -d ".venv" ]; then
 fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
+# Python 3.12+ venv no longer seeds setuptools/wheel; editable install from
+# pyproject.toml needs both. Seed them before the editable install.
+pip install --quiet --upgrade pip setuptools wheel
 pip install --quiet -e ".[dev]" 2>/dev/null || pip install --quiet -e "." 2>/dev/null
 VENV_PY="$PROJECT_ROOT/.venv/bin/python3"
 
@@ -1067,6 +1070,9 @@ fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
+# Python 3.12+ venv no longer seeds setuptools/wheel; editable install from
+# pyproject.toml needs both. Seed them before the editable install.
+pip install --quiet --upgrade pip setuptools wheel
 pip install --quiet -e ".[dev]"
 success "Installed dependencies (including dev)"
 
