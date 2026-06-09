@@ -569,6 +569,153 @@ OVERLAP_SECONDS = 2
 SEEN_SET_MAX = 500
 SEEN_SET_PRUNE_MINUTES = 10
 
+# Debounce window for per-chat cursor saves (issue #17). The poll loop calls
+# ``_schedule_cursor_save`` after every cycle that advances ``last_ts`` or
+# ``seen_ids``; multiple advances inside this window coalesce to one backend
+# write so a chatty group conversation doesn't trigger a write per message.
+CURSOR_SAVE_DEBOUNCE_SECONDS = 1.0
+
+
+# Indirection so tests can patch the actual backend-write site without having
+# to monkeypatch through the chat_cursors module import.
+def _chat_cursor_save(chat_id: str, state: dict) -> None:
+    """Persist *state* as *chat_id*'s cursor through the configured backend.
+
+    Thin wrapper around :func:`entrabot.tools.chat_cursors.save_cursor` so
+    tests can swap it out at one site.
+    """
+    from entrabot.tools.chat_cursors import save_cursor as _save
+
+    _save(chat_id, state)
+
+
+def _mark_cursor_dirty(chat_id: str) -> None:
+    """Record that *chat_id*'s in-memory cursor has advanced past last save.
+
+    The flush path reads this set, persists each chat, and clears it. Kept
+    separate from ``_schedule_cursor_save`` so graceful shutdown can flush
+    even if the asyncio loop is already torn down.
+    """
+    dirty: set[str] = _state.setdefault("_dirty_cursor_chats", set())
+    dirty.add(chat_id)
+
+
+def _serialize_chat_state(chat_state: dict) -> dict:
+    """Convert an in-memory ``chat_state`` dict into the on-disk cursor shape.
+
+    ``seen_ids`` is a set in memory; ``seen_ids_tail`` is a list on disk so it
+    serializes deterministically across MemoryBackend implementations.
+
+    Set iteration order is not stable across Python runs (depends on insertion
+    order, hash collisions, and ``PYTHONHASHSEED``). Sort lexicographically
+    and keep the highest-valued tail so the persisted tail covers the IDs
+    most likely to land inside the poll's overlap window after restart. Teams
+    message IDs are numeric-as-string, so lexicographic order is monotonic
+    with sent-at — same approach the poll loop uses at ``mcp_server.py:1301``
+    when bounding the in-memory ``seen_ids`` set.
+    """
+    seen = chat_state.get("seen_ids") or set()
+    bounded = sorted(seen)[-50:]
+    return {
+        "last_ts": chat_state.get("last_ts"),
+        "seen_ids_tail": bounded,
+        "bootstrapped": bool(chat_state.get("bootstrapped", False)),
+    }
+
+
+def _flush_chat_cursors() -> None:
+    """Synchronously write every dirty chat's cursor through the backend.
+
+    Called on graceful shutdown so the next process inherits the latest
+    cursors. Failures are logged per-chat and never propagate — one bad write
+    must not block the rest.
+    """
+    dirty: set[str] = _state.get("_dirty_cursor_chats") or set()
+    if not dirty:
+        return
+    watched = _state.get("watched_chats") or {}
+    failures: list[str] = []
+    for chat_id in list(dirty):
+        chat_state = watched.get(chat_id)
+        if not chat_state:
+            continue
+        try:
+            _chat_cursor_save(chat_id, _serialize_chat_state(chat_state))
+        except Exception as exc:  # noqa: BLE001
+            failures.append(chat_id)
+            if logger:
+                logger.warning(
+                    "Cursor flush failed for chat %s: %s: %s",
+                    chat_id,
+                    type(exc).__name__,
+                    exc,
+                )
+    # Clear only the chats that successfully flushed (or had no state to write).
+    _state["_dirty_cursor_chats"] = set(failures)
+
+
+def _schedule_cursor_save(chat_id: str) -> None:
+    """Debounced async save: mark dirty + (re)arm the per-chat save timer.
+
+    A burst of advances inside ``CURSOR_SAVE_DEBOUNCE_SECONDS`` coalesces to
+    one backend write. The pending task is tracked in ``_cursor_save_tasks``
+    so a follow-up schedule cancels the in-flight timer and starts a fresh
+    one (last-write-wins debounce).
+    """
+    import asyncio
+
+    _mark_cursor_dirty(chat_id)
+
+    tasks: dict = _state.setdefault("_cursor_save_tasks", {})
+    pending = tasks.get(chat_id)
+    if pending is not None and not pending.done():
+        pending.cancel()
+
+    async def _delayed_save() -> None:
+        try:
+            await asyncio.sleep(CURSOR_SAVE_DEBOUNCE_SECONDS)
+        except asyncio.CancelledError:
+            return
+        try:
+            chat_state = (_state.get("watched_chats") or {}).get(chat_id)
+            if chat_state is None:
+                return
+            _chat_cursor_save(chat_id, _serialize_chat_state(chat_state))
+            # Successful write → drop from dirty set.
+            dirty = _state.get("_dirty_cursor_chats") or set()
+            dirty.discard(chat_id)
+            _state["_dirty_cursor_chats"] = dirty
+        except Exception as exc:  # noqa: BLE001
+            if logger:
+                logger.warning(
+                    "Debounced cursor save failed for chat %s: %s: %s",
+                    chat_id,
+                    type(exc).__name__,
+                    exc,
+                )
+
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        # No running loop (rare — happens in some unit-test contexts). Best-effort
+        # synchronous flush.
+        try:
+            chat_state = (_state.get("watched_chats") or {}).get(chat_id)
+            if chat_state is not None:
+                _chat_cursor_save(chat_id, _serialize_chat_state(chat_state))
+                # Mirror the async branch: drop from dirty set on success so the
+                # chat doesn't stay "dirty" forever and trigger redundant flush
+                # attempts on shutdown.
+                dirty = _state.get("_dirty_cursor_chats") or set()
+                dirty.discard(chat_id)
+                _state["_dirty_cursor_chats"] = dirty
+        except Exception as exc:  # noqa: BLE001
+            if logger:
+                logger.warning("Sync cursor save failed for %s: %s", chat_id, exc)
+        return
+
+    tasks[chat_id] = loop.create_task(_delayed_save())
+
 
 def _overlap_timestamp(iso_timestamp: str) -> str:
     """Subtract OVERLAP_SECONDS from an ISO 8601 timestamp.
@@ -974,10 +1121,48 @@ def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
     """
     watched = _state.get("watched_chats", {})
     if chat_id not in watched:
-        watched[chat_id] = {"seen_ids": set(), "last_ts": None, "bootstrapped": False}
+        # Issue #17: try to rehydrate a persisted cursor first. If it exists
+        # and ``last_ts`` is within the staleness cap, we keep the prior
+        # process's seen-set + watermark and skip ``_bootstrap_chat`` (which
+        # would otherwise re-fire the "newest at boot" message even when that
+        # message is days old). If absent, stale, or corrupt, fall through to
+        # the existing fresh-state path and let the bootstrap path baseline.
+        from entrabot.tools.chat_cursors import is_stale, load_cursor
+
+        rehydrated: dict | None = None
+        try:
+            cursor = load_cursor(chat_id)
+        except Exception as exc:  # noqa: BLE001
+            # Backend read failure (transient disk/blob error) → bootstrap.
+            cursor = None
+            if logger:
+                logger.warning(
+                    "Cursor load failed for %s (treating as absent): %s: %s",
+                    chat_id,
+                    type(exc).__name__,
+                    exc,
+                )
+        if cursor and not is_stale(cursor.get("last_ts")):
+            rehydrated = cursor
+
+        if rehydrated is not None:
+            watched[chat_id] = {
+                "seen_ids": set(rehydrated.get("seen_ids_tail") or []),
+                "last_ts": rehydrated.get("last_ts"),
+                "bootstrapped": True,
+            }
+            if logger:
+                logger.info(
+                    "Rehydrated chat cursor (last_ts=%s, seen_ids=%d): %s",
+                    rehydrated.get("last_ts"),
+                    len(watched[chat_id]["seen_ids"]),
+                    chat_id,
+                )
+        else:
+            watched[chat_id] = {"seen_ids": set(), "last_ts": None, "bootstrapped": False}
+            if logger:
+                logger.info("Registered chat for background polling: %s", chat_id)
         _state["watched_chats"] = watched
-        if logger:
-            logger.info("Registered chat for background polling: %s", chat_id)
         # Invalidate the cached sponsor gate so the next wait_for_sponsor_dm
         # call rebuilds it with the new chat's members enriched in. Without
         # this, a chat created mid-session (e.g. via create_chat in a fresh
@@ -1047,6 +1232,10 @@ async def _bootstrap_chat(chat_id: str) -> None:
         if logger:
             logger.warning("Bootstrap failed for chat %s: %s", chat_id, exc)
     chat_state["bootstrapped"] = True
+    # Issue #17: persist the bootstrap watermark so a restart inherits it.
+    # Without this, every restart re-baselines from "the newest message at
+    # boot" — including days-old messages.
+    _schedule_cursor_save(chat_id)
 
 
 async def _background_poll() -> None:
@@ -1131,6 +1320,13 @@ async def _background_poll() -> None:
                             key=lambda m: m.get("sent_at", ""),
                         ):
                             await _push_channel_notification(m, chat_id=chat_id)
+
+                        # Issue #17: persist the advanced cursor through the
+                        # MemoryBackend so the next process picks up where we
+                        # left off instead of replaying the newest-at-boot
+                        # message as fresh. Debounced ~1s so a chatty group
+                        # chat doesn't trigger a write per message.
+                        _schedule_cursor_save(chat_id)
                 except Exception as chat_exc:
                     # One chat's failure must not starve the others in this
                     # cycle. Log and move on; the next cycle will retry.
@@ -3495,6 +3691,18 @@ async def _run_stdio_with_write_stream() -> None:
             )
         finally:
             init_task.cancel()
+            # Issue #17: flush any pending per-chat cursor writes before exit
+            # so the next process inherits the latest watermarks instead of
+            # re-bootstrapping from "newest at boot."
+            try:
+                _flush_chat_cursors()
+            except Exception as exc:  # noqa: BLE001
+                if logger:
+                    logger.warning(
+                        "Cursor flush on shutdown failed: %s: %s",
+                        type(exc).__name__,
+                        exc,
+                    )
 
 
 @mcp.tool()
