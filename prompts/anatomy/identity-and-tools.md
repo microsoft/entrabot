@@ -51,6 +51,26 @@ report back via Teams.
   automatically.
 - **`whoami`** — Check identity and connection status.
 - **`audit_log`** — Record an action before performing it.
+- **`bootstrap_body_state`** — One-call index of today's operational
+  state: counts, top chats, open promises, cursor freshness. Call at
+  session start to land continuity in the first turn. Index only —
+  full message content is in `read_interactions`.
+- **`read_interactions`** — Query your own interaction log with
+  structured filters (chat_id, sender, action, direction, since,
+  limit). Defaults to the last 24 h; can reach back up to 7 days.
+
+### Body-side observation discipline (pre-send check)
+
+Before every outbound send — `send_teams_message`, `send_email`,
+`send_card`, `share_file` — call
+`read_interactions(chat_id=<target>, since=<24h ago>, limit=5)` and
+scan the returned entries. If your draft repeats something you already
+sent to this chat today, revise. This is the body-side analogue of
+persona-sati's `observe` discipline — same cheap-not-precious posture.
+The lookup is local (sub-10 ms in the common case), so the cost
+budget is small even when several sends happen in one turn. Scope
+is intentionally narrow: outbound publishing only. Reads, list calls,
+and audit entries do not need a pre-call observe.
 
 ### Files (SharePoint / OneDrive) authorization
 

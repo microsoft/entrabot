@@ -3876,6 +3876,83 @@ async def list_promises(open_only: bool = True) -> str:
 
 
 @mcp.tool()
+async def read_interactions(
+    chat_id: str = "",
+    sender: str = "",
+    action: str = "",
+    direction: str = "",
+    since: str = "",
+    limit: int = 10,
+) -> str:
+    """Query the agent's own interaction log — body-side analogue of recall.
+
+    Every inbound + outbound message the agent handles is appended to
+    ``interactions/<day>.jsonl`` by the MCP server. This tool reads
+    that log with structured filters so the model can answer "did I
+    already say this?" / "what did the sponsor ping me about earlier?"
+    without re-hitting Graph.
+
+    Default window is the last 24 h; ``since`` may reach back up to 7
+    days. Use BEFORE every outbound send (``send_teams_message``,
+    ``send_email``, ``send_card``, ``share_file``) with
+    ``chat_id=<target>`` to avoid repeating yourself.
+
+    Args:
+        chat_id: Teams chat ID. For outbound entries this matches
+            ``recipient``; for inbound, ``metadata.chat_id``. Empty
+            string = no filter.
+        sender: Exact sender (case-insensitive). Empty = no filter.
+        action: Exact action name, e.g. ``"send_teams_message"``.
+            Empty = no filter.
+        direction: ``"inbound"`` or ``"outbound"``. Empty = no filter.
+        since: ISO 8601 timestamp. Default = now − 24 h. Entries at or
+            before this cutoff are excluded.
+        limit: Max entries to return (default 10).
+
+    Returns:
+        JSON array of raw interaction-log entries, most-recent first.
+        On validation failure: ``{"error": "..."}``.
+    """
+    from entrabot.tools.read_interactions import read_interactions as _read
+
+    try:
+        entries = _read(
+            chat_id=chat_id or None,
+            sender=sender or None,
+            action=action or None,
+            direction=direction or None,
+            since=since or None,
+            limit=limit,
+        )
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+    return json.dumps(entries, indent=2)
+
+
+@mcp.tool()
+async def bootstrap_body_state() -> str:
+    """Single-packet snapshot of body-side operational state.
+
+    Counterpart to persona-sati's ``bootstrap_session``. Returns an
+    INDEX (not content) of today's activity, the most-active chats,
+    every open promise, and watched-chat cursor freshness. Call at
+    session start to land operational continuity in the first turn
+    without chaining multiple read tools.
+
+    Full message content stays in ``read_interactions`` — bootstrap
+    is the catalog, ``read_interactions`` is the read.
+
+    Returns:
+        JSON object: ``today_counts``, ``top_chats_today``,
+        ``open_promises``, ``cursor_freshness``, ``watched_chat_count``,
+        ``generated_at``.
+    """
+    from entrabot.tools.body_bootstrap import bootstrap_body_state as _bootstrap
+
+    return json.dumps(_bootstrap(), indent=2)
+
+
+@mcp.tool()
 async def resolve_promise(promise_id: str, resolution: str) -> str:
     """Mark a promise resolved.
 
