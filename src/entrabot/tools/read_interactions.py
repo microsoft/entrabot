@@ -52,9 +52,15 @@ def _days_to_scan(cutoff: datetime, now: datetime) -> list[str]:
     Always includes today + yesterday (matches the issue's default window
     even when cutoff is within today). Extends backwards if cutoff is
     older, never exceeding :data:`_MAX_DAYS_SCAN`.
+
+    Both ``cutoff`` and ``now`` are normalized to UTC before extracting
+    calendar dates because interaction logs are keyed by UTC day. A
+    ``since`` value supplied in a non-UTC offset whose offset-local date
+    differs from its UTC date would otherwise skip the earliest required
+    day file.
     """
-    today = now.date()
-    cutoff_date = cutoff.date()
+    today = now.astimezone(UTC).date()
+    cutoff_date = cutoff.astimezone(UTC).date()
     span_days = (today - cutoff_date).days + 1  # inclusive of both ends
     span_days = max(span_days, 2)  # always today + yesterday
     if span_days > _MAX_DAYS_SCAN:

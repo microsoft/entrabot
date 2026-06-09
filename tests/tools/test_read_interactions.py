@@ -346,6 +346,43 @@ class TestSinceFilter:
         assert "today" in summaries
         assert "yesterday-ish" in summaries
 
+    def test_since_with_non_utc_offset_scans_correct_utc_day(
+        self, tmp_data_dir: Path
+    ) -> None:
+        """Regression for PR #21 review (medium): cutoff.date() in a
+        non-UTC offset must not skip the earliest required UTC day file.
+
+        Construct a `since` whose offset-local date is one day LATER
+        than its UTC date, with an entry living on the UTC day. If
+        `_days_to_scan` uses the un-normalized date, the day file the
+        entry lives in is skipped and the entry is silently lost.
+        """
+        from datetime import timezone
+
+        now_utc = datetime.now(UTC)
+        # Entry: 3 days ago at 22:00 UTC → lands in that day's file.
+        entry_ts = (now_utc - timedelta(days=3)).replace(
+            hour=22, minute=0, second=0, microsecond=0
+        )
+        _log_at(
+            entry_ts,
+            channel="terminal",
+            direction="inbound",
+            sender="u",
+            summary="deep-past-utc-day",
+        )
+
+        # Cutoff: 1h before the entry in UTC, expressed as +12:00 — the
+        # offset rotates the calendar date forward into the next day.
+        cutoff_utc = entry_ts - timedelta(hours=1)
+        cutoff_in_offset = cutoff_utc.astimezone(timezone(timedelta(hours=12)))
+        # Sanity: this construction actually exposes the bug condition.
+        assert cutoff_in_offset.date() > cutoff_utc.date()
+
+        results = read_interactions(since=cutoff_in_offset.isoformat())
+        summaries = [e["summary"] for e in results]
+        assert "deep-past-utc-day" in summaries
+
     def test_seven_day_cap_does_not_scan_further(self, tmp_data_dir: Path, caplog) -> None:
         """Pass since=10d ago — we cap at 7 day files. 10d-old entry NOT returned."""
         now = datetime.now(UTC)

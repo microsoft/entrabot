@@ -193,8 +193,10 @@ class TestTopChatsToday:
 
     def test_includes_last_activity_and_last_sender(self, tmp_data_dir: Path) -> None:
         now = datetime.now(UTC)
+        earlier_ts = now - timedelta(minutes=10)
+        latest_ts = now - timedelta(minutes=1)
         _log_at(
-            now - timedelta(minutes=10),
+            earlier_ts,
             channel="teams_group",
             direction="outbound",
             sender="agent",
@@ -202,7 +204,7 @@ class TestTopChatsToday:
             summary="earlier",
         )
         _log_at(
-            now - timedelta(minutes=1),
+            latest_ts,
             channel="teams_group",
             direction="inbound",
             sender="brandon@x.com",
@@ -214,12 +216,12 @@ class TestTopChatsToday:
         top = result["top_chats_today"][0]
         assert top["interaction_count"] == 2
         assert top["last_sender"] == "brandon@x.com"
-        # last_activity should be the more-recent ts (parseable)
+        # last_activity must reflect the NEWER of the two entries, not
+        # the earlier one — regression for the recency selection in
+        # _top_chats.
         last = datetime.fromisoformat(top["last_activity"].replace("Z", "+00:00"))
-        earlier = datetime.fromisoformat(
-            (result["top_chats_today"][0]["last_activity"]).replace("Z", "+00:00")
-        )
-        assert last == earlier  # sanity
+        assert last == latest_ts
+        assert last > earlier_ts
 
     def test_excludes_entries_with_no_chat_id(self, tmp_data_dir: Path) -> None:
         """Terminal sends have no chat_id and shouldn't pollute top_chats."""
