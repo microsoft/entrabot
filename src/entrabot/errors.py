@@ -15,6 +15,22 @@ class ConfigError(EntraBotError):
     """Configuration errors (invalid or removed settings)."""
 
 
+class InsecureKeyringBackendError(EntraBotError):
+    """The selected keyring backend is not an approved OS keystore."""
+
+    def __init__(
+        self,
+        backend: str,
+        expected: list[str] | tuple[str, ...] | None = None,
+    ) -> None:
+        self.backend = backend
+        self.expected = tuple(expected or ())
+        message = f"insecure backend selected: {backend}"
+        if self.expected:
+            message += f" (expected one of: {', '.join(self.expected)})"
+        super().__init__(message)
+
+
 class RemovedModeError(ConfigError):
     """Raised when a removed ``ENTRABOT_MODE`` value is still configured.
 

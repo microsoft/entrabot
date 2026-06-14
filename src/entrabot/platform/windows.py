@@ -27,6 +27,8 @@ from typing import Any
 import keyring
 import keyring.errors
 
+from entrabot.platform.keyring_backend import assert_allowed_keyring_backend
+
 _THUMBPRINT_RE = re.compile(r"^[0-9A-Fa-f]{40}$")
 
 CERT_STORE_PROV_SYSTEM_W = 10
@@ -87,6 +89,9 @@ def _load_crypt32() -> Any:
 
 class WindowsCredentialStore:
     """Credential Locker for KV secrets + Cert: store query for thumbprints."""
+
+    def __init__(self) -> None:
+        assert_allowed_keyring_backend("Windows")
 
     def store(self, service: str, key: str, value: str) -> None:
         keyring.set_password(service, key, value)

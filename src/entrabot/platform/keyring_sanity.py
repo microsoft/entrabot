@@ -17,7 +17,9 @@ import contextlib
 import secrets
 from dataclasses import dataclass
 
+from entrabot.errors import InsecureKeyringBackendError
 from entrabot.platform.base import CredentialStore
+from entrabot.platform.keyring_backend import assert_allowed_keyring_backend
 
 _SANITY_SERVICE = "entrabot-sanity"
 _SANITY_KEY = "roundtrip-probe"
@@ -30,6 +32,7 @@ _SANITY_VALUE_BYTES = 2048
 class SanityResult:
     ok: bool
     stored_bytes: int
+    backend: str
     diagnostic: str = ""
 
 
@@ -38,17 +41,33 @@ def check(store: CredentialStore) -> SanityResult:
 
     Always cleans up the probe entry, even on failure.
     """
+    try:
+        backend = assert_allowed_keyring_backend()
+    except InsecureKeyringBackendError as exc:
+        return SanityResult(
+            ok=False,
+            stored_bytes=0,
+            backend=exc.backend,
+            diagnostic=f"insecure backend selected: {exc.backend}",
+        )
+
+    key = f"{_SANITY_KEY}-{secrets.token_hex(8)}"
     payload = secrets.token_hex(_SANITY_VALUE_BYTES // 2)  # 2 hex chars per byte
     diagnostic = ""
     ok = False
     try:
-        store.store(_SANITY_SERVICE, _SANITY_KEY, payload)
+        store.store(_SANITY_SERVICE, key, payload)
     except Exception as exc:
         diagnostic = f"store() raised: {exc!r}"
-        return SanityResult(ok=False, stored_bytes=len(payload), diagnostic=diagnostic)
+        return SanityResult(
+            ok=False,
+            stored_bytes=len(payload),
+            backend=backend,
+            diagnostic=diagnostic,
+        )
 
     try:
-        retrieved = store.retrieve(_SANITY_SERVICE, _SANITY_KEY)
+        retrieved = store.retrieve(_SANITY_SERVICE, key)
         if retrieved is None:
             diagnostic = "retrieve() returned None — credential is missing after store()."
         elif retrieved != payload:
@@ -65,6 +84,11 @@ def check(store: CredentialStore) -> SanityResult:
         diagnostic = f"retrieve() raised: {exc!r}"
     finally:
         with contextlib.suppress(Exception):
-            store.delete(_SANITY_SERVICE, _SANITY_KEY)
+            store.delete(_SANITY_SERVICE, key)
 
-    return SanityResult(ok=ok, stored_bytes=len(payload), diagnostic=diagnostic)
+    return SanityResult(
+        ok=ok,
+        stored_bytes=len(payload),
+        backend=backend,
+        diagnostic=diagnostic,
+    )

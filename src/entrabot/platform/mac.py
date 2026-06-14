@@ -7,9 +7,14 @@ import contextlib
 import keyring
 import keyring.errors
 
+from entrabot.platform.keyring_backend import assert_allowed_keyring_backend
+
 
 class MacCredentialStore:
     """Uses ``keyring`` which maps to macOS Keychain by default."""
+
+    def __init__(self) -> None:
+        assert_allowed_keyring_backend("Darwin")
 
     def store(self, service: str, key: str, value: str) -> None:
         keyring.set_password(service, key, value)
