@@ -7,7 +7,10 @@ opt-in path for Claude Code. See ``docs/architecture/PLAN-copilot-cli-watcher.md
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from collections import deque
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -44,6 +47,137 @@ def _msg(message_id: str, sender_id: str, sent_at: str, **extra) -> dict:
         "content_text": extra.pop("content_text", "hello"),
         **extra,
     }
+
+
+@pytest.mark.asyncio
+async def test_wait_for_sponsor_dm_populates_chat_type_from_config() -> None:
+    """wait_for_sponsor_dm must thread oneOnOne/group chat_type into the result."""
+    from entrabot import mcp_server
+    from entrabot.config import EntraBotConfig
+
+    cfg = EntraBotConfig(
+        tenant_id="tenant-id",
+        blueprint_app_id="blueprint-app-id",
+        agent_id="agent-id",
+        agent_user_upn="entrabot@example.com",
+    )
+    picked = _msg(
+        "message-1",
+        "sponsor-user-1",
+        "2026-04-28T12:00:01Z",
+        chat_id="known-chat-id",
+        content="<p>Hello</p>",
+    )
+
+    old_state = mcp_server._state.copy()
+    old_identity = mcp_server._identity
+    old_logger = mcp_server.logger
+    try:
+        mcp_server.logger = logging.getLogger("entrabot.mcp_server")
+        mcp_server._identity = None
+        mcp_server._state.clear()
+        mcp_server._state.update(
+            {
+                "config": cfg,
+                "watched_chats": {"known-chat-id": {}},
+                "wait_tool_dedup": deque(),
+            }
+        )
+
+        with (
+            patch("entrabot.mcp_server._initialize", new=AsyncMock(return_value=None)),
+            patch("entrabot.tools.audit.log_event", new=MagicMock()),
+            patch(
+                "entrabot.identity.sponsors.load_agent_identity_sponsor_gate",
+                return_value=_make_gate(),
+            ),
+            patch(
+                "entrabot.tools.wait_tool.wait_loop",
+                new=AsyncMock(return_value=picked),
+            ),
+            patch(
+                "entrabot.tools.teams.acquire_agent_user_token",
+                return_value="agent-token",
+            ) as acquire,
+            patch(
+                "entrabot.tools.teams.fetch_chat_type",
+                new=AsyncMock(return_value="oneOnOne"),
+            ) as fetch_chat_type,
+        ):
+            result = json.loads(await mcp_server.wait_for_sponsor_dm(timeout_seconds=1))
+
+        assert result["chat_id"] == "known-chat-id"
+        assert result["chat_type"] == "oneOnOne"
+        acquire.assert_called_once_with(cfg)
+        fetch_chat_type.assert_awaited_once_with(chat_id="known-chat-id", token="agent-token")
+    finally:
+        mcp_server._state.clear()
+        mcp_server._state.update(old_state)
+        mcp_server._identity = old_identity
+        mcp_server.logger = old_logger
+
+
+@pytest.mark.asyncio
+async def test_wait_for_sponsor_dm_logs_warning_when_chat_type_lookup_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """chat_type lookup failures must be visible instead of silently swallowed."""
+    from entrabot import mcp_server
+    from entrabot.config import EntraBotConfig
+
+    cfg = EntraBotConfig(
+        tenant_id="tenant-id",
+        blueprint_app_id="blueprint-app-id",
+        agent_id="agent-id",
+        agent_user_upn="entrabot@example.com",
+    )
+    picked = _msg(
+        "message-1",
+        "sponsor-user-1",
+        "2026-04-28T12:00:01Z",
+        chat_id="known-chat-id",
+        content="<p>Hello</p>",
+    )
+
+    old_state = mcp_server._state.copy()
+    old_identity = mcp_server._identity
+    old_logger = mcp_server.logger
+    try:
+        mcp_server.logger = logging.getLogger("entrabot.mcp_server")
+        mcp_server._identity = None
+        mcp_server._state.clear()
+        mcp_server._state.update(
+            {
+                "config": cfg,
+                "watched_chats": {"known-chat-id": {}},
+                "wait_tool_dedup": deque(),
+            }
+        )
+
+        with (
+            caplog.at_level("WARNING", logger="entrabot.mcp_server"),
+            patch("entrabot.mcp_server._initialize", new=AsyncMock(return_value=None)),
+            patch("entrabot.tools.audit.log_event", new=MagicMock()),
+            patch(
+                "entrabot.identity.sponsors.load_agent_identity_sponsor_gate",
+                return_value=_make_gate(),
+            ),
+            patch("entrabot.tools.wait_tool.wait_loop", new=AsyncMock(return_value=picked)),
+            patch(
+                "entrabot.tools.teams.acquire_agent_user_token",
+                side_effect=AttributeError("missing credential field"),
+            ),
+        ):
+            result = json.loads(await mcp_server.wait_for_sponsor_dm(timeout_seconds=1))
+
+        assert result["chat_type"] == ""
+        assert "Failed to detect chat_type for chat known-chat-id" in caplog.text
+        assert "AttributeError" in caplog.text
+    finally:
+        mcp_server._state.clear()
+        mcp_server._state.update(old_state)
+        mcp_server._identity = old_identity
+        mcp_server.logger = old_logger
 
 
 def test_dedup_key_uses_chat_id_and_message_id() -> None:
@@ -260,8 +394,6 @@ def test_wait_for_sponsor_dm_result_timeout_is_structured() -> None:
     """Timeout MUST return a structured payload, not raise. A bare TimeoutError
     surfaces as an empty MCP error in Copilot CLI / Claude Code, leaving the
     LLM unable to recover."""
-    import json
-
     result = WaitForSponsorDmResult.timeout(timeout_seconds=20)
     payload = json.loads(result.to_json())
     assert payload["timed_out"] is True

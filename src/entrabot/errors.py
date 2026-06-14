@@ -62,6 +62,15 @@ class TokenExpiredError(AuthError):
     """Cached token has expired and needs refresh."""
 
 
+class AuthRefreshRequiredError(AuthError):
+    """Silent refresh failed and interactive auth is required from a user path."""
+
+    def __init__(self, error: str, error_description: str) -> None:
+        self.error = error
+        self.error_description = error_description
+        super().__init__(f"Auth refresh required: {error} — {error_description}")
+
+
 class AuthTimeoutError(AuthError):
     """Auth flow exceeded timeout (e.g. no browser opened in 10s)."""
 
