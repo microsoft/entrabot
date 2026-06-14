@@ -246,7 +246,12 @@ async def test_call_tool_audit_metadata_records_argument_keys_only(
     )
 
     assert [event["outcome"] for event in audit_events] == ["pending", "success"]
-    assert audit_events[0]["resource"] == "fileName=plan.docx"
+    # User-supplied file names / URLs / paths must NEVER appear in the
+    # audit resource string — CodeQL flags them as clear-text logging
+    # of sensitive data. Only ID-shape values (driveId, itemId, etc.)
+    # are eligible; when none are present we fall back to a stable
+    # "{server}.{tool}" handle.
+    assert audit_events[0]["resource"] == "a365.mcp_WordServer.CreateDocument"
     for event in audit_events:
         assert event["metadata"] == {
             "server": "mcp_WordServer",
@@ -254,6 +259,9 @@ async def test_call_tool_audit_metadata_records_argument_keys_only(
             "args_keys": ["fileName", "contentInHtml"],
         }
         assert secret_sentinel not in repr(event)
+        # Defence in depth: assert the file name itself is also absent
+        # from the entire event (it can leak via resource OR metadata).
+        assert "plan.docx" not in repr(event)
 
 
 @pytest.mark.asyncio
@@ -281,3 +289,82 @@ async def test_call_tool_fails_closed_when_audit_raises(
         )
 
     assert mcp_client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_url_and_path_args_never_leak_into_audit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """User-supplied URLs / paths / file names must never appear in the audit
+    resource string or metadata. CodeQL flags them as clear-text logging of
+    sensitive data (data-flow source = LLM-controlled tool arg, sink = audit
+    file write + logger.info). Only ID-shape values (driveId, itemId, etc.)
+    are eligible to surface in the resource handle.
+    """
+    audit_events: list[dict[str, Any]] = []
+
+    def record_audit(**kwargs: Any) -> dict[str, Any]:
+        audit_events.append(kwargs)
+        return kwargs
+
+    monkeypatch.setattr("entrabot.a365.provider.log_event", record_audit, raising=False)
+
+    user_url = "https://contoso.sharepoint.com/sites/Secret/Documents/Plan.docx"
+    user_path = "/Documents/Q4/Plan.docx"
+    user_filename = "Q4-strategy.docx"
+
+    await _provider(_manifest(tmp_path / "ToolingManifest.json"), FakeMcpClient()).call_tool(
+        server_name="mcp_WordServer",
+        tool_name="GetDocumentMetadata",
+        arguments={
+            "fileOrFolderUrl": user_url,
+            "url": user_url,
+            "webUrl": user_url,
+            "filePath": user_path,
+            "path": user_path,
+            "fileName": user_filename,
+        },
+    )
+
+    assert audit_events, "expected at least one audit event"
+    for event in audit_events:
+        rendered = repr(event)
+        for leak in (user_url, user_path, user_filename, "contoso", "Plan.docx", "Q4-strategy"):
+            assert leak not in rendered, f"audit event leaked user data: {leak!r}"
+        # Resource must fall back to the stable {server}.{tool} handle
+        # when no ID-shape key is present in arguments.
+        assert event["resource"] == "a365.mcp_WordServer.GetDocumentMetadata"
+
+
+@pytest.mark.asyncio
+async def test_id_shape_args_surface_in_audit_resource(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID-shape values (UUIDs, opaque handles) are safe to surface in the
+    audit resource because they are not user-controlled free-form text and
+    are the canonical reference operators need to correlate events.
+    """
+    audit_events: list[dict[str, Any]] = []
+
+    def record_audit(**kwargs: Any) -> dict[str, Any]:
+        audit_events.append(kwargs)
+        return kwargs
+
+    monkeypatch.setattr("entrabot.a365.provider.log_event", record_audit, raising=False)
+
+    await _provider(_manifest(tmp_path / "ToolingManifest.json"), FakeMcpClient()).call_tool(
+        server_name="mcp_WordServer",
+        tool_name="WordReplyToComment",
+        arguments={
+            "driveId": "b!1234",
+            "itemId": "01ABCDEF",
+            "commentId": "c1",
+        },
+    )
+
+    resource = audit_events[0]["resource"]
+    assert "driveId=b!1234" in resource
+    assert "itemId=01ABCDEF" in resource
+    assert "commentId=c1" in resource

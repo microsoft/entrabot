@@ -26,13 +26,15 @@ _SENSITIVE_RESOURCE_KEYS = frozenset(
     }
 )
 
+# Only ID-shape values (opaque handles, UUIDs) are eligible for the audit
+# resource string. URL / path / file-name keys are excluded by design — they
+# are LLM-controlled free-form text whose values can contain customer data
+# (tenant URLs, internal site paths, document titles). CodeQL flags surfacing
+# them as clear-text logging of sensitive information. When none of these
+# ID-shape keys are present we fall back to "{server}.{tool}" — matches the
+# existing Teams/Graph audit pattern in mcp_server.py:2402-2422 which only
+# uses ID handles like f"{chat_id}:{placeholder_id}".
 _RESOURCE_KEY_PRIORITY = (
-    "fileOrFolderUrl",
-    "url",
-    "webUrl",
-    "filePath",
-    "path",
-    "fileName",
     "driveId",
     "documentLibraryId",
     "documentId",
@@ -63,7 +65,10 @@ def _audit_resource(
     parts = _safe_resource_parts(arguments)
     if parts:
         return " ".join(parts)
-    return f"{server_name}.{tool_name}"
+    # Fall back to a stable, self-identifying handle when no ID-shape arg is
+    # present. Mirrors `action` so audit consumers can correlate resource
+    # back to provider scope without ambiguity.
+    return f"a365.{server_name}.{tool_name}"
 
 
 class WorkIqProvider:
