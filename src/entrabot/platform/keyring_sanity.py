@@ -32,7 +32,7 @@ _SANITY_VALUE_BYTES = 2048
 class SanityResult:
     ok: bool
     stored_bytes: int
-    backend: str
+    backend: str | None
     diagnostic: str = ""
 
 
@@ -44,10 +44,11 @@ def check(store: CredentialStore) -> SanityResult:
     try:
         backend = assert_allowed_keyring_backend()
     except InsecureKeyringBackendError as exc:
+        backend = None if exc.backend.startswith("uninspectable keyring backend") else exc.backend
         return SanityResult(
             ok=False,
             stored_bytes=0,
-            backend=exc.backend,
+            backend=backend,
             diagnostic=f"insecure backend selected: {exc.backend}",
         )
 
