@@ -14,9 +14,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import warnings
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import anyio
 import pytest
 
 from entrabot import efferent_copy as ec
@@ -281,6 +283,94 @@ class TestMiddleware:
         wrapped = ec.wrap_tool_fn(sinks, "send", send)
         out = await wrapped()
         assert out == {"id": "ok"}
+
+    async def test_sync_tool_dispatched_from_worker_thread_returns_unchanged(self):
+        rec = _RecorderSink("r")
+        sinks = [rec.as_sink()]
+
+        def double(x: int) -> int:
+            return x * 2
+
+        wrapped = ec.wrap_tool_fn(sinks, "double", double)
+
+        out = await anyio.to_thread.run_sync(lambda: wrapped(21))
+
+        assert out == 42
+
+    async def test_sync_tool_dispatched_from_worker_thread_fires_pre_and_post_observe(self):
+        rec = _RecorderSink("r")
+        sinks = [rec.as_sink()]
+
+        def double(x: int) -> int:
+            return x * 2
+
+        wrapped = ec.wrap_tool_fn(sinks, "double", double)
+
+        out = await anyio.to_thread.run_sync(lambda: wrapped(21))
+        assert out == 42
+
+        await asyncio.sleep(0.05)
+        assert len(rec.calls) == 2
+        pre, post = rec.calls
+        assert pre["payload"] == {
+            "tool_name": "double",
+            "args": {"x": 21},
+        }
+        assert post["payload"] == {
+            "tool_name": "double",
+            "args": {"x": 21},
+            "result": {"value": 42},
+        }
+
+    async def test_sync_tool_worker_thread_dispatch_emits_no_deprecation_warning(self):
+        rec = _RecorderSink("r")
+        sinks = [rec.as_sink()]
+
+        def double(x: int) -> int:
+            return x * 2
+
+        wrapped = ec.wrap_tool_fn(sinks, "double", double)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            out = await anyio.to_thread.run_sync(lambda: wrapped(21))
+
+        assert out == 42
+        assert not [w for w in caught if issubclass(w.category, DeprecationWarning)]
+
+    async def test_sync_tool_without_running_main_loop_returns_unchanged(self):
+        rec = _RecorderSink("r")
+        sinks = [rec.as_sink()]
+
+        def double(x: int) -> int:
+            return x * 2
+
+        wrapped = ec.wrap_tool_fn(sinks, "double", double, main_loop=None)
+
+        out = await anyio.to_thread.run_sync(lambda: wrapped(21))
+
+        assert out == 42
+        await asyncio.sleep(0.05)
+        assert rec.calls == []
+
+    async def test_sync_tool_with_stopped_main_loop_returns_unchanged(self):
+        rec = _RecorderSink("r")
+        sinks = [rec.as_sink()]
+        stopped_loop = asyncio.new_event_loop()
+
+        def double(x: int) -> int:
+            return x * 2
+
+        try:
+            wrapped = ec.wrap_tool_fn(sinks, "double", double, main_loop=stopped_loop)
+
+            out = await anyio.to_thread.run_sync(lambda: wrapped(21))
+        finally:
+            stopped_loop.close()
+
+        assert out == 42
+        await asyncio.sleep(0.05)
+        assert rec.calls == []
 
 
 # ---------------------------------------------------------------------------
