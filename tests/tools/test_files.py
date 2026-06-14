@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import json
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -34,10 +35,15 @@ from entrabot.errors import (
 from entrabot.tools.files import (
     GRAPH_BETA_HOST,
     GRAPH_V1_HOST,
+    OneDriveTarget,
+    SharePointTarget,
+    _build_upload_url,
     add_file_comment,
     list_recent_files,
     read_file,
     resolve_file_url,
+    upload_file,
+    write_text_file,
 )
 
 TOKEN = "test-token"
@@ -635,3 +641,173 @@ class TestAddFileComment:
             ref, "Q?", token=TOKEN, transport=httpx.AsyncHTTPTransport()
         )
         assert result.comment_id == "c2"
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Tool 5 — upload URL construction
+# ───────────────────────────────────────────────────────────────────────
+
+
+def _upload_response(name: str = "report.docx", size: int = 12) -> httpx.Response:
+    return httpx.Response(
+        201,
+        json={
+            "id": "item-1",
+            "name": name,
+            "webUrl": f"https://tenant.sharepoint.com/{name}",
+            "size": size,
+            "file": {"mimeType": "application/octet-stream"},
+            "parentReference": {"driveId": "drive-1"},
+        },
+    )
+
+
+class TestUploadUrlValidation:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("target", "file_name", "conflict_behavior"),
+        [
+            (OneDriveTarget(), "a#b.txt", "fail"),
+            (OneDriveTarget(), "a?x=y", "fail"),
+            (OneDriveTarget(), "../foo.txt", "fail"),
+            (OneDriveTarget(), "foo:/content", "fail"),
+            (OneDriveTarget(folder_path="/legit/../../other"), "safe.txt", "fail"),
+            (OneDriveTarget(), "a\nb.txt", "fail"),
+            (OneDriveTarget(), "a/b.txt", "fail"),
+            (OneDriveTarget(), "safe.txt", "replace&extra=x"),
+        ],
+    )
+    async def test_write_text_file_rejects_upload_url_bypasses(
+        self,
+        target: OneDriveTarget,
+        file_name: str,
+        conflict_behavior: str,
+    ) -> None:
+        with pytest.raises(ValueError):
+            await write_text_file(
+                target,
+                file_name,
+                "hello",
+                conflict_behavior=conflict_behavior,  # type: ignore[arg-type]
+                token=TOKEN,
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("target", "file_name", "conflict_behavior"),
+        [
+            (OneDriveTarget(), "a#b.txt", "fail"),
+            (OneDriveTarget(), "a?x=y", "fail"),
+            (OneDriveTarget(), "../foo.txt", "fail"),
+            (OneDriveTarget(), "foo:/content", "fail"),
+            (OneDriveTarget(folder_path="/legit/../../other"), "safe.txt", "fail"),
+            (OneDriveTarget(), "a\nb.txt", "fail"),
+            (OneDriveTarget(), "a/b.txt", "fail"),
+            (OneDriveTarget(), "safe.txt", "replace&extra=x"),
+        ],
+    )
+    async def test_upload_file_rejects_upload_url_bypasses(
+        self,
+        target: OneDriveTarget,
+        file_name: str,
+        conflict_behavior: str,
+    ) -> None:
+        with pytest.raises(ValueError):
+            await upload_file(
+                target,
+                file_name,
+                b"hello",
+                conflict_behavior=conflict_behavior,  # type: ignore[arg-type]
+                token=TOKEN,
+            )
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_write_text_file_encodes_folder_path_segments(self) -> None:
+        target = OneDriveTarget(folder_path="/Documents/Q4")
+        expected_url = (
+            f"{GRAPH_V1_HOST}/me/drive/root:/Documents/Q4/report.docx:/content"
+            "?@microsoft.graph.conflictBehavior=replace"
+        )
+        route = respx.put(expected_url).mock(return_value=_upload_response("report.docx"))
+
+        ref = await write_text_file(
+            target,
+            "report.docx",
+            "hello",
+            conflict_behavior="replace",
+            token=TOKEN,
+            transport=httpx.AsyncHTTPTransport(),
+        )
+
+        assert route.called
+        assert ref.item_id == "item-1"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_upload_file_encodes_space_in_file_name(self) -> None:
+        target = SharePointTarget(
+            site_id="tenant.sharepoint.com,site,web",
+            drive_id="drive-1",
+            folder_path="/Documents/Q4",
+        )
+        expected_url = (
+            f"{GRAPH_V1_HOST}/drives/drive-1/root:"
+            "/Documents/Q4/report%20%28final%29.docx:/content"
+            "?@microsoft.graph.conflictBehavior=rename"
+        )
+        route = respx.put(expected_url).mock(
+            return_value=_upload_response("report (final).docx", size=5)
+        )
+
+        ref = await upload_file(
+            target,
+            "report (final).docx",
+            b"hello",
+            conflict_behavior="rename",
+            token=TOKEN,
+            transport=httpx.AsyncHTTPTransport(),
+        )
+
+        assert route.called
+        assert ref.name == "report (final).docx"
+
+    @pytest.mark.parametrize("conflict_behavior", ["rename", "replace", "fail"])
+    def test_build_upload_url_encodes_segments_and_validates_conflict_behavior(
+        self, conflict_behavior: str
+    ) -> None:
+        target = SharePointTarget(
+            site_id="tenant.sharepoint.com,site,web",
+            drive_id="drive-1",
+            folder_path="/Docs & Plans/Q+4",
+        )
+
+        url = _build_upload_url(
+            target,
+            "report final.txt",
+            conflict_behavior=conflict_behavior,  # type: ignore[arg-type]
+        )
+
+        parsed = urlparse(url)
+        assert parsed.path.endswith(
+            "/drives/drive-1/root:/Docs%20%26%20Plans/Q%2B4/report%20final.txt:/content"
+        )
+        assert "#" not in parsed.path
+        assert ".." not in parsed.path
+        assert parsed.query == f"@microsoft.graph.conflictBehavior={conflict_behavior}"
+
+    def test_build_upload_url_encodes_drive_id_as_path_segment(self) -> None:
+        target = SharePointTarget(
+            site_id="tenant.sharepoint.com,site,web",
+            drive_id="b!drive/root:/evil.txt:/content?x=y",
+            folder_path="/Safe",
+        )
+
+        url = _build_upload_url(target, "report.docx", conflict_behavior="fail")
+
+        parsed = urlparse(url)
+        assert parsed.path.endswith("/root:/Safe/report.docx:/content")
+        assert "/root:/evil.txt:/content" not in parsed.path
+        assert "?" not in parsed.path
+        assert "%2Froot%3A%2Fevil.txt%3A%2Fcontent%3Fx%3Dy" in parsed.path
+        assert parsed.query == "@microsoft.graph.conflictBehavior=fail"
