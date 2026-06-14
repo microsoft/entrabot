@@ -15,12 +15,33 @@ using Claude Code's slug convention: absolute project path with every
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
 
 from entrabot.storage.backend import LocalBackend
 from entrabot.storage.persona import PersonaBackend, claude_code_memory_dir
+
+
+class FakeBackend:
+    def __init__(self, data: dict[str, str]) -> None:
+        self._data = data
+
+    def read_text(self, key: str) -> str | None:
+        return self._data.get(key)
+
+    def write_text(self, key: str, content: str) -> None:
+        self._data[key] = content
+
+    def append_text(self, key: str, content: str) -> None:
+        self._data[key] = self._data.get(key, "") + content
+
+    def exists(self, key: str) -> bool:
+        return key in self._data
+
+    def list(self, prefix: str = "") -> list[str]:
+        return [key for key in self._data if key.startswith(prefix)]
 
 
 class TestClaudeCodeMemoryDir:
@@ -163,3 +184,96 @@ class TestPersonaBackendPullAll:
         persona = PersonaBackend(backend, local_root=tmp_path / "mem")
         report = persona.pull_all()
         assert report.pulled == 0
+
+    def test_pull_all_rejects_dot_dot_blob_key(self, tmp_path: Path) -> None:
+        outside = tmp_path / "etc" / "x"
+        backend = FakeBackend({"claude_memory/../../etc/x": "owned"})
+
+        persona = PersonaBackend(backend, local_root=tmp_path / "memory")
+        report = persona.pull_all()
+
+        assert not outside.exists()
+        assert not (tmp_path / "etc").exists()
+        assert report.pulled == 0
+        assert report.skipped == 1
+        assert report.skipped_keys == ["claude_memory/../../etc/x"]
+
+    def test_pull_all_logs_warning_for_traversal_blob_key(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        key = "claude_memory/../../etc/x"
+        backend = FakeBackend({key: "owned"})
+
+        persona = PersonaBackend(backend, local_root=tmp_path / "memory")
+        report = persona.pull_all()
+
+        assert report.skipped_keys == [key]
+        assert "Skipping blob with traversal-shaped key" in caplog.text
+        assert key in caplog.text
+        assert any(record.levelno == logging.WARNING for record in caplog.records)
+
+    def test_pull_all_rejects_prefix_only_key_and_continues(self, tmp_path: Path) -> None:
+        key = "claude_memory/"
+        backend = FakeBackend(
+            {
+                key: "not a file",
+                "claude_memory/MEMORY.md": "index",
+            }
+        )
+
+        mem_dir = tmp_path / "memory"
+        persona = PersonaBackend(backend, local_root=mem_dir)
+        report = persona.pull_all()
+
+        assert mem_dir.is_dir()
+        assert (mem_dir / "MEMORY.md").read_text() == "index"
+        assert report.pulled == 1
+        assert report.skipped == 1
+        assert report.skipped_keys == [key]
+
+    def test_pull_all_rejects_absolute_blob_key(self, tmp_path: Path) -> None:
+        outside = tmp_path / "absolute" / "x"
+        key = f"claude_memory/{outside.as_posix()}"
+        backend = FakeBackend({key: "owned"})
+
+        persona = PersonaBackend(backend, local_root=tmp_path / "memory")
+        report = persona.pull_all()
+
+        assert not outside.exists()
+        assert not (tmp_path / "absolute").exists()
+        assert report.pulled == 0
+        assert report.skipped == 1
+        assert report.skipped_keys == [key]
+
+    def test_pull_all_rejects_prefix_relative_dot_dot_key(self, tmp_path: Path) -> None:
+        key = "claude_memory/../../etc/x"
+        backend = FakeBackend({key: "owned"})
+
+        persona = PersonaBackend(backend, local_root=tmp_path / "memory")
+        rel = key[len(persona.prefix) :]
+        report = persona.pull_all()
+
+        assert persona.prefix == "claude_memory/"
+        assert rel == "../../etc/x"
+        assert report.skipped_keys == [key]
+
+    def test_pull_all_processes_legitimate_keys_when_rejecting_traversal(
+        self, tmp_path: Path
+    ) -> None:
+        backend = FakeBackend(
+            {
+                "claude_memory/../../etc/x": "owned",
+                "claude_memory/MEMORY.md": "index",
+                "claude_memory/nested/user.md": "Alice",
+            }
+        )
+
+        mem_dir = tmp_path / "memory"
+        persona = PersonaBackend(backend, local_root=mem_dir)
+        report = persona.pull_all()
+
+        assert (mem_dir / "MEMORY.md").read_text() == "index"
+        assert (mem_dir / "nested" / "user.md").read_text() == "Alice"
+        assert report.pulled == 2
+        assert report.skipped == 1
+        assert report.skipped_keys == ["claude_memory/../../etc/x"]
