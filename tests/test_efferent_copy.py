@@ -14,7 +14,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -75,9 +77,9 @@ class _RecorderSink:
 
 
 class TestResultCoercion:
-    def test_dict_passes_through_unchanged(self):
+    def test_non_sensitive_dict_values_pass_through_unchanged(self):
         r = {"a": 1, "b": [2, 3]}
-        assert ec._wrap_result(r) is r
+        assert ec._wrap_result(r) == r
 
     def test_string_wrapped_as_value(self):
         assert ec._wrap_result("hello") == {"value": "hello"}
@@ -103,6 +105,19 @@ class TestResultCoercion:
 
         out = ec._wrap_result(Weird())
         assert out == {"value": "<Weird>"}
+
+    def test_recursive_dict_result_redacts_sensitive_keys(self):
+        out = ec._wrap_result({"data": {"refresh_token": "xyz"}})
+
+        assert out == {"data": {"refresh_token": "<redacted>"}}
+
+    def test_wrap_result_does_not_mutate_original_return_dict(self):
+        result = {"data": {"refresh_token": "xyz"}, "ok": True}
+
+        out = ec._wrap_result(result)
+
+        assert out == {"data": {"refresh_token": "<redacted>"}, "ok": True}
+        assert result == {"data": {"refresh_token": "xyz"}, "ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +196,83 @@ class TestFireObserve:
 
 
 class TestMiddleware:
+    @pytest.mark.parametrize("sensitive_name", sorted(ec._SENSITIVE_KEY_SUBSTRINGS))
+    async def test_sensitive_parameter_names_are_redacted_for_sinks(self, sensitive_name: str):
+        rec = _RecorderSink("r")
+        namespace: dict[str, object] = {}
+        exec(
+            f"async def tool({sensitive_name}: str) -> dict:\n"
+            f"    return {{'received': {sensitive_name}}}\n",
+            namespace,
+        )
+        tool = namespace["tool"]
+
+        wrapped = ec.wrap_tool_fn([rec.as_sink()], "tool", tool)
+        out = await wrapped(**{sensitive_name: "abc"})
+
+        assert out == {"received": "abc"}
+        await asyncio.sleep(0.05)
+        assert rec.calls[0]["payload"]["args"] == {sensitive_name: "<redacted>"}
+
+    async def test_sensitive_parameter_matching_is_case_insensitive(self):
+        rec = _RecorderSink("r")
+
+        async def tool(AccessToken: str, bearer: str, Authorization: str) -> dict:
+            return {
+                "AccessToken": AccessToken,
+                "bearer": bearer,
+                "Authorization": Authorization,
+            }
+
+        wrapped = ec.wrap_tool_fn([rec.as_sink()], "tool", tool)
+        out = await wrapped(AccessToken="abc", bearer="xyz", Authorization="Bearer secret")
+
+        assert out == {
+            "AccessToken": "abc",
+            "bearer": "xyz",
+            "Authorization": "Bearer secret",
+        }
+        await asyncio.sleep(0.05)
+        assert rec.calls[0]["payload"]["args"] == {
+            "AccessToken": "<redacted>",
+            "bearer": "<redacted>",
+            "Authorization": "<redacted>",
+        }
+
+    async def test_non_sensitive_parameters_pass_through_to_sinks(self):
+        rec = _RecorderSink("r")
+
+        async def send(chat_id: str, message: str) -> dict:
+            return {"chat_id": chat_id, "message": message}
+
+        wrapped = ec.wrap_tool_fn([rec.as_sink()], "send", send)
+        out = await wrapped(chat_id="19:abc", message="hello")
+
+        assert out == {"chat_id": "19:abc", "message": "hello"}
+        await asyncio.sleep(0.05)
+        assert rec.calls[0]["payload"]["args"] == {
+            "chat_id": "19:abc",
+            "message": "hello",
+        }
+
+    async def test_body_return_dict_is_unchanged_when_sink_result_is_redacted(self):
+        rec = _RecorderSink("r")
+        result = {"data": {"refresh_token": "xyz"}, "ok": True}
+
+        async def tool() -> dict:
+            return result
+
+        wrapped = ec.wrap_tool_fn([rec.as_sink()], "tool", tool)
+        out = await wrapped()
+
+        assert out is result
+        assert out == {"data": {"refresh_token": "xyz"}, "ok": True}
+        await asyncio.sleep(0.05)
+        assert rec.calls[1]["payload"]["result"] == {
+            "data": {"refresh_token": "<redacted>"},
+            "ok": True,
+        }
+
     async def test_pre_and_post_observe_fired(self):
         rec = _RecorderSink("r")
         sinks = [rec.as_sink()]
@@ -433,10 +525,108 @@ class TestSchemaCompat:
 
 
 class TestDiscoverSinks:
+    def _matching_peer_builder(self, names: list[str]) -> Callable[[dict], object]:
+        class _Tool:
+            name = "observe"
+            inputSchema = {
+                "type": "object",
+                "properties": {
+                    "tool_name": {"type": "string"},
+                    "args": {"type": "object"},
+                },
+            }
+
+        class _ListResult:
+            tools = [_Tool()]
+
+        class _StubSession:
+            async def list_tools(self_inner):
+                return _ListResult()
+
+        def _build(peer: dict):
+            names.append(peer["name"])
+
+            @contextlib.asynccontextmanager
+            async def _ctx():
+                yield _StubSession()
+
+            return lambda: _ctx()
+
+        return _build
+
     async def test_missing_mcp_json_returns_empty(self, tmp_path: Path):
         # No .mcp.json → zero sinks, no crash.
         sinks = await ec.discover_sinks(tmp_path / "nope.json")
         assert sinks == []
+
+    async def test_sink_allowlist_filters_schema_matched_peers(self, tmp_path: Path, monkeypatch):
+        cfg = tmp_path / ".mcp.json"
+        cfg.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "peer-a": {"type": "sse", "url": "http://unused/a"},
+                        "peer-b": {"type": "sse", "url": "http://unused/b"},
+                        "peer-c": {"type": "sse", "url": "http://unused/c"},
+                    }
+                }
+            )
+        )
+        monkeypatch.delenv(ec.DISABLE_ENV, raising=False)
+        monkeypatch.setenv(ec.ENABLE_ENV, "1")
+        monkeypatch.setenv(ec.SINKS_ENV, "peer-a, peer-b")
+        contacted: list[str] = []
+        monkeypatch.setattr(ec, "_build_sink_factory", self._matching_peer_builder(contacted))
+
+        sinks = await ec.discover_sinks(cfg)
+
+        assert [sink.name for sink in sinks] == ["peer-a", "peer-b"]
+        assert contacted == ["peer-a", "peer-b"]
+
+    async def test_without_sink_allowlist_all_schema_matched_peers_are_discovered(
+        self, tmp_path: Path, monkeypatch
+    ):
+        cfg = tmp_path / ".mcp.json"
+        cfg.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "peer-a": {"type": "sse", "url": "http://unused/a"},
+                        "peer-b": {"type": "sse", "url": "http://unused/b"},
+                        "peer-c": {"type": "sse", "url": "http://unused/c"},
+                    }
+                }
+            )
+        )
+        monkeypatch.delenv(ec.DISABLE_ENV, raising=False)
+        monkeypatch.delenv(ec.SINKS_ENV, raising=False)
+        monkeypatch.setenv(ec.ENABLE_ENV, "1")
+        monkeypatch.setattr(ec, "_build_sink_factory", self._matching_peer_builder([]))
+
+        sinks = await ec.discover_sinks(cfg)
+
+        assert [sink.name for sink in sinks] == ["peer-a", "peer-b", "peer-c"]
+
+    async def test_blank_sink_allowlist_behaves_like_unset(self, tmp_path: Path, monkeypatch):
+        cfg = tmp_path / ".mcp.json"
+        cfg.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "peer-a": {"type": "sse", "url": "http://unused/a"},
+                        "peer-b": {"type": "sse", "url": "http://unused/b"},
+                    }
+                }
+            )
+        )
+        monkeypatch.delenv(ec.DISABLE_ENV, raising=False)
+        monkeypatch.setenv(ec.ENABLE_ENV, "1")
+        monkeypatch.setenv(ec.SINKS_ENV, "  ,  ")
+        monkeypatch.setattr(ec, "_build_sink_factory", self._matching_peer_builder([]))
+
+        sinks = await ec.discover_sinks(cfg)
+
+        assert [sink.name for sink in sinks] == ["peer-a", "peer-b"]
 
     async def test_default_disabled_does_not_contact_peers(self, tmp_path: Path, monkeypatch):
         """Efferent copy is opt-in so routine tool calls are not mirrored.
@@ -713,6 +903,28 @@ class TestDiscoverSinks:
 
 
 class TestInstall:
+    async def test_install_warns_with_schema_matched_peer_names_when_allowlist_unset(
+        self, caplog, monkeypatch
+    ):
+        from mcp.server.fastmcp import FastMCP
+
+        monkeypatch.delenv(ec.SINKS_ENV, raising=False)
+        mcp = FastMCP("t")
+
+        @mcp.tool()
+        async def echo(x: int) -> int:
+            return x
+
+        sinks = [_RecorderSink("peer-a").as_sink(), _RecorderSink("peer-b").as_sink()]
+
+        with caplog.at_level(logging.WARNING, logger=ec.__name__):
+            ec.install_into_fastmcp(mcp, sinks)
+
+        warnings_text = "\n".join(record.getMessage() for record in caplog.records)
+        assert "peer-a" in warnings_text
+        assert "peer-b" in warnings_text
+        assert ec.SINKS_ENV in warnings_text
+
     async def test_installs_wraps_every_tool_except_observe(self):
         from mcp.server.fastmcp import FastMCP
 

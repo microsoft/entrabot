@@ -5,17 +5,32 @@ generates a copy routed to sensory-prediction circuits so they can
 anticipate the consequences of the command. This module is the
 infrastructure version — when explicitly enabled, every @mcp.tool()
 call on entrabot fires a side-channel ``observe(tool_name, args[,
-result])`` to any MCP peer that advertises a compatibly-typed
-``observe`` tool.
+result])`` to MCP peers that advertise a compatibly-typed ``observe``
+tool. Sinks receive tool argument names/values before execution and
+tool results after execution, so treat every sink as part of the
+trusted observability boundary.
+
+Known sensitive names are redacted before payloads leave the body. The
+denylist is case-insensitive and substring-based:
+``token``, ``secret``, ``password``, ``passwd``, ``authorization``,
+``client_secret``, ``refresh_token``, ``access_token``, ``api_key``,
+``apikey``, ``bearer``, ``credential``, and ``private_key``. Matching
+tool parameter names and recursive dict result keys are replaced with
+the literal ``"<redacted>"``. This is name/key-substring redaction, not
+semantic content inspection: sensitive values hidden behind non-obvious
+names such as ``auth_blob`` may slip through unless the name is added
+to the denylist.
 
 The body is authoritative. Sinks are passive observers. Whether zero,
 one, or many sinks are registered, tool semantics are identical and
 return values are byte-for-byte unchanged.
 
-Discovery is purely schema-based: any peer in ``.mcp.json`` that
-exposes a tool named ``observe`` accepting ``{tool_name: string,
-args: object}`` is eligible. No peer-specific names or URLs live in
-this module.
+Discovery is schema-based: any peer in ``.mcp.json`` that exposes a
+tool named ``observe`` accepting ``{tool_name: string, args: object}``
+is eligible. Operators can restrict this further with
+``EFFERENT_COPY_SINKS=name1,name2`` where names are the peer names from
+``.mcp.json``. When no allowlist is set, installation logs a warning
+naming every schema-compatible sink that will receive observe data.
 
 Opt-in: set ``EFFERENT_COPY_ENABLE=1`` to register sinks. Set
 ``EFFERENT_COPY_DISABLE=1`` to force registration off.
@@ -44,6 +59,25 @@ DISCOVERY_TIMEOUT_S = 5.0
 WARN_THROTTLE_S = 60.0
 DISABLE_ENV = "EFFERENT_COPY_DISABLE"
 ENABLE_ENV = "EFFERENT_COPY_ENABLE"
+SINKS_ENV = "EFFERENT_COPY_SINKS"
+REDACTED = "<redacted>"
+_SENSITIVE_KEY_SUBSTRINGS = frozenset(
+    {
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "authorization",
+        "client_secret",
+        "refresh_token",
+        "access_token",
+        "api_key",
+        "apikey",
+        "bearer",
+        "credential",
+        "private_key",
+    }
+)
 _MAIN_LOOP_UNSET = object()
 
 
@@ -97,15 +131,36 @@ def _json_safe(value: Any) -> Any:
     return repr(value)
 
 
+def _is_sensitive_name(name: str) -> bool:
+    lowered = name.lower()
+    return any(substring in lowered for substring in _SENSITIVE_KEY_SUBSTRINGS)
+
+
+def _redact_sensitive(value: Any) -> Any:
+    """Return a redacted copy of ``value`` without mutating the original."""
+    if isinstance(value, dict):
+        return {
+            key: REDACTED if _is_sensitive_name(str(key)) else _redact_sensitive(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redact_sensitive(item) for item in value]
+    return value
+
+
+def _safe_for_sink(value: Any) -> Any:
+    return _redact_sensitive(_json_safe(value))
+
+
 def _wrap_result(result: Any) -> dict:
     """Return ``result`` as a dict payload for observe's ``result`` arg.
 
-    Dict results pass through untouched so sinks see tool return values
-    verbatim. Everything else becomes ``{"value": <json-safe>}``.
+    Dict results are recursively redacted for sinks. Everything else
+    becomes ``{"value": <json-safe-and-redacted>}``.
     """
     if isinstance(result, dict):
-        return result
-    return {"value": _json_safe(result)}
+        return _redact_sensitive(result)
+    return {"value": _safe_for_sink(result)}
 
 
 # ---------------------------------------------------------------------------
@@ -165,12 +220,17 @@ def _collect_kwargs(fn: Callable, args: tuple, kwargs: dict) -> dict:
     """Best-effort bind of (args, kwargs) back to a named-argument dict."""
     try:
         bound = inspect.signature(fn).bind_partial(*args, **kwargs)
-        return {k: _json_safe(v) for k, v in bound.arguments.items()}
-    except (TypeError, ValueError):
         return {
-            "args": [_json_safe(a) for a in args],
-            "kwargs": {k: _json_safe(v) for k, v in kwargs.items()},
+            k: REDACTED if _is_sensitive_name(k) else _safe_for_sink(v)
+            for k, v in bound.arguments.items()
         }
+    except (TypeError, ValueError):
+        return _redact_sensitive(
+            {
+                "args": [_json_safe(a) for a in args],
+                "kwargs": {k: _json_safe(v) for k, v in kwargs.items()},
+            }
+        )
 
 
 def _running_loop_or_none() -> asyncio.AbstractEventLoop | None:
@@ -417,6 +477,14 @@ def _is_object_schema(schema: Any) -> bool:
     return t is None and "properties" not in schema and not schema.get("anyOf")
 
 
+def _sink_allowlist_from_env() -> set[str] | None:
+    raw = os.environ.get(SINKS_ENV)
+    if raw is None:
+        return None
+    names = {name.strip() for name in raw.split(",") if name.strip()}
+    return names or None
+
+
 async def _has_compatible_observe(session: Any) -> bool:
     """Check via tools/list whether a session's peer advertises observe.
 
@@ -575,10 +643,18 @@ async def discover_sinks(config_path: Path | None = None) -> list[Sink]:
 
     path = config_path or Path.cwd() / ".mcp.json"
     peers = _load_peers_from_config(path)
+    allowed_sinks = _sink_allowlist_from_env()
     sinks: list[Sink] = []
 
     for peer in peers:
         name = peer["name"]
+        if allowed_sinks is not None and name not in allowed_sinks:
+            log.debug(
+                "efferent-copy: peer %s not listed in %s; skipping",
+                name,
+                SINKS_ENV,
+            )
+            continue
         if _is_self_referential_peer(peer):
             log.debug(
                 "efferent-copy: peer %s points at our own entry point; "
@@ -633,6 +709,14 @@ def install_into_fastmcp(
     """
     if not sinks:
         return
+    if os.environ.get(SINKS_ENV) is None:
+        sink_names = ", ".join(sorted(sink.name for sink in sinks))
+        log.warning(
+            "efferent-copy: observe data will be sent to schema-compatible sinks: %s; "
+            "set %s=name1,name2 to restrict sinks by .mcp.json peer name",
+            sink_names,
+            SINKS_ENV,
+        )
     if main_loop is None:
         main_loop = _running_loop_or_none()
 
