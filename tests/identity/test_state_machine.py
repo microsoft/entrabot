@@ -15,6 +15,7 @@ Covers:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -183,6 +184,108 @@ class TestCallbackAndRollback:
         assert exc_info.value.from_state == "unauthenticated"
         assert exc_info.value.to_state == "delegated"
         assert exc_info.value.cause is original_error
+
+    @pytest.mark.asyncio
+    async def test_callback_exception_restores_entire_session(self) -> None:
+        """Rollback restores all IdentitySession fields mutated by the callback."""
+        sm = IdentityStateMachine()
+
+        async def set_old_identity() -> None:
+            sm.update_session(
+                token="old-token",
+                token_acquired_at=100.0,
+                user_id="old-user",
+                display_name="Old User",
+                attribution_type="none",
+                auth_mode="delegated",
+                account_id="old-account",
+                tenant_id="old-tenant",
+                provisioning_state="old-provisioning",
+            )
+
+        await sm.transition(IdentityState.DELEGATED, callback=set_old_identity)
+        before = replace(sm.session)
+        original_error = RuntimeError("callback failed after mutating identity")
+
+        async def bad_cb() -> None:
+            sm.update_session(
+                token="new-token",
+                token_acquired_at=200.0,
+                user_id="new-user",
+                display_name="New User",
+                attribution_type="agent",
+                auth_mode="agent_user",
+                account_id="new-account",
+                tenant_id="new-tenant",
+                provisioning_state="new-provisioning",
+            )
+            raise original_error
+
+        with pytest.raises(TransitionError):
+            await sm.transition(IdentityState.PROVISIONING, callback=bad_cb)
+
+        assert sm.session == before
+
+    @pytest.mark.asyncio
+    async def test_callback_success_persists_session_mutations(self) -> None:
+        """Successful callbacks commit session field mutations and state change."""
+        sm = IdentityStateMachine()
+
+        async def cb() -> None:
+            sm.update_session(
+                token="new-token",
+                token_acquired_at=200.0,
+                user_id="new-user",
+                display_name="New User",
+                auth_mode="delegated",
+                account_id="new-account",
+                tenant_id="new-tenant",
+                provisioning_state="new-provisioning",
+            )
+
+        await sm.transition(IdentityState.DELEGATED, callback=cb)
+
+        assert sm.session.state == IdentityState.DELEGATED
+        assert sm.session.token == "new-token"
+        assert sm.session.token_acquired_at == 200.0
+        assert sm.session.user_id == "new-user"
+        assert sm.session.display_name == "New User"
+        assert sm.session.auth_mode == "delegated"
+        assert sm.session.account_id == "new-account"
+        assert sm.session.tenant_id == "new-tenant"
+        assert sm.session.provisioning_state == "new-provisioning"
+
+    @pytest.mark.asyncio
+    async def test_invalid_transition_after_session_update_rolls_back_update(self) -> None:
+        """MCP-server style update_session + invalid transition restores old identity."""
+        sm = IdentityStateMachine()
+
+        async def set_old_identity() -> None:
+            sm.update_session(
+                token="old-token",
+                user_id="old-user",
+                display_name="Old User",
+                auth_mode="delegated",
+                account_id="old-account",
+                tenant_id="old-tenant",
+            )
+
+        await sm.transition(IdentityState.DELEGATED, callback=set_old_identity)
+        before = replace(sm.session)
+
+        sm.update_session(
+            token="new-token",
+            user_id="new-agent-user",
+            display_name="EntraBot Agent",
+            auth_mode="agent_user",
+            account_id="new-account",
+            tenant_id="new-tenant",
+        )
+
+        with pytest.raises(InvalidTransitionError):
+            await sm.transition(IdentityState.AGENT_USER)
+
+        assert sm.session == before
 
     @pytest.mark.asyncio
     async def test_callback_none_succeeds(self) -> None:

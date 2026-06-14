@@ -5,6 +5,11 @@ All MSAL interactions are mocked — no real auth endpoints are called.
 
 from __future__ import annotations
 
+import logging
+import os
+import shutil
+import stat
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import msal
@@ -226,6 +231,52 @@ class TestMsalDelegatedAuth:
 class TestTokenCache:
     """Tests for the _build_token_cache helper."""
 
+    def test_cache_location_uses_stable_user_cache_dir(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cache path comes from platformdirs and does not depend on cwd."""
+        from entrabot.auth import delegated
+
+        scratch = Path.cwd() / ".pytest-scratch" / "delegated-cache-stable"
+        cwd_one = scratch / "cwd-one"
+        cwd_two = scratch / "cwd-two"
+        cwd_one.mkdir(parents=True)
+        cwd_two.mkdir(parents=True)
+
+        try:
+            monkeypatch.chdir(cwd_one)
+            first = delegated.CACHE_LOCATION
+            monkeypatch.chdir(cwd_two)
+            second = delegated.CACHE_LOCATION
+
+            assert first == second
+            assert first.parent == Path(delegated.platformdirs.user_cache_dir("entrabot"))
+            assert first.name == "entrabot_msal_cache"
+            assert not os.fspath(first).startswith("entrabot_msal_cache")
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def test_cache_location_parent_created_when_missing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Resolving the cache path creates the per-user cache parent."""
+        from entrabot.auth import delegated
+
+        scratch = Path.cwd() / ".pytest-scratch" / "delegated-cache-parent"
+        cache_location = scratch / "missing-cache-root" / "entrabot" / "entrabot_msal_cache"
+        monkeypatch.setattr(delegated, "CACHE_LOCATION", cache_location)
+
+        try:
+            resolved = delegated._resolve_cache_location()
+
+            assert resolved == cache_location
+            assert resolved.parent.is_dir()
+            if os.name != "nt":
+                assert stat.S_IMODE(resolved.parent.stat().st_mode) == 0o700
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
     @patch("entrabot.auth.delegated.build_encrypted_persistence")
     @patch("entrabot.auth.delegated.PersistedTokenCache")
     def test_build_token_cache_success(
@@ -240,10 +291,12 @@ class TestTokenCache:
         mock_build_persistence.return_value = mock_persistence
         mock_cache = MagicMock(spec=msal.SerializableTokenCache)
         mock_persisted.return_value = mock_cache
+        resolved_path = Path("/stable/user/cache/entrabot/entrabot_msal_cache")
 
-        result = _build_token_cache()
+        with patch("entrabot.auth.delegated._resolve_cache_location", return_value=resolved_path):
+            result = _build_token_cache()
 
-        mock_build_persistence.assert_called_once_with("entrabot_msal_cache")
+        mock_build_persistence.assert_called_once_with(str(resolved_path))
         mock_persisted.assert_called_once_with(mock_persistence)
         assert result is mock_cache
 
@@ -251,18 +304,32 @@ class TestTokenCache:
     def test_build_token_cache_corruption_fallback(
         self,
         mock_build_persistence: MagicMock,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Corrupted cache falls back to an in-memory SerializableTokenCache."""
         from entrabot.auth.delegated import _build_token_cache
 
         mock_build_persistence.side_effect = Exception("Corrupt cache file")
+        resolved_path = Path("/stable/user/cache/entrabot/entrabot_msal_cache")
 
-        result = _build_token_cache()
+        with (
+            patch("entrabot.auth.delegated._resolve_cache_location", return_value=resolved_path),
+            caplog.at_level(logging.WARNING, logger="entrabot.auth.delegated"),
+        ):
+            result = _build_token_cache()
 
         assert isinstance(result, msal.SerializableTokenCache)
+        record = next(
+            record
+            for record in caplog.records
+            if "Failed to build persistent MSAL token cache" in record.message
+        )
+        assert record.levelno == logging.WARNING
+        assert record.exc_info is not None
 
-    def test_cache_location_constant(self) -> None:
-        """CACHE_LOCATION is set to expected value."""
+    def test_cache_location_constant_uses_resolved_path(self) -> None:
+        """CACHE_LOCATION is an absolute, per-user cache path."""
         from entrabot.auth.delegated import CACHE_LOCATION
 
-        assert CACHE_LOCATION == "entrabot_msal_cache"
+        assert CACHE_LOCATION.is_absolute()
+        assert CACHE_LOCATION.name == "entrabot_msal_cache"

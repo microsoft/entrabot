@@ -8,9 +8,12 @@ via msal-extensions.
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 from typing import Any
 
 import msal
+import platformdirs
 from msal_extensions import PersistedTokenCache, build_encrypted_persistence
 
 from entrabot.errors import AuthCancelledError, AuthTimeoutError, MsalAuthError
@@ -20,7 +23,22 @@ logger = logging.getLogger("entrabot.auth.delegated")
 DEFAULT_SCOPES = ["Chat.ReadWrite", "User.Read"]
 LOCALHOST_PORT = 8400
 LOCALHOST_TIMEOUT = 120  # seconds — browser sign-in needs time
-CACHE_LOCATION = "entrabot_msal_cache"
+CACHE_FILENAME = "entrabot_msal_cache"
+# Path only — use _resolve_cache_location() for production access so the
+# parent directory is created and permission-hardened before use.
+CACHE_LOCATION = Path(platformdirs.user_cache_dir("entrabot")) / CACHE_FILENAME
+
+
+def _resolve_cache_location() -> Path:
+    """Resolve the persistent MSAL token cache path under a stable per-user directory.
+
+    Creates the parent directory with 0o700 permissions on Unix.
+    """
+    cache_location = CACHE_LOCATION
+    cache_location.parent.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":
+        os.chmod(cache_location.parent, 0o700)
+    return cache_location
 
 
 def _build_token_cache() -> msal.SerializableTokenCache:
@@ -29,14 +47,17 @@ def _build_token_cache() -> msal.SerializableTokenCache:
     Uses msal-extensions PersistedTokenCache with build_encrypted_persistence()
     for cross-platform OS keystore encryption (Keychain/DPAPI/Secret Service).
 
-    If the cache is corrupted, clears it silently and returns a fresh cache.
+    If persistent cache setup fails, logs the failure and returns an in-memory cache.
     """
     try:
-        persistence = build_encrypted_persistence(CACHE_LOCATION)
+        persistence = build_encrypted_persistence(str(_resolve_cache_location()))
         cache = PersistedTokenCache(persistence)
         return cache
-    except Exception as exc:
-        logger.warning("Token cache corrupted, creating fresh cache: %s", exc)
+    except Exception:
+        logger.warning(
+            "Failed to build persistent MSAL token cache; falling back to in-memory cache",
+            exc_info=True,
+        )
         return msal.SerializableTokenCache()
 
 
