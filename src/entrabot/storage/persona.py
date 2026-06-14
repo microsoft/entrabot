@@ -14,12 +14,14 @@ have — ``pull_all``, ``push_all``, ``push_one``.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from entrabot.storage.backend import MemoryBackend
 
 PERSONA_PREFIX = "claude_memory"
+logger = logging.getLogger(__name__)
 
 
 def claude_code_memory_dir(project_root: Path, *, home: Path | None = None) -> Path:
@@ -54,6 +56,7 @@ class PersonaReport:
     pulled: int = 0
     errors: list[tuple[str, str]] = field(default_factory=list)
     keys: list[str] = field(default_factory=list)
+    skipped_keys: list[str] = field(default_factory=list)
 
 
 class PersonaBackend:
@@ -126,10 +129,19 @@ class PersonaBackend:
             if not key.startswith(self.prefix):
                 continue
             rel = key[len(self.prefix) :]
+            dst = self._root / rel
+            try:
+                if not Path(rel).parts:
+                    raise ValueError
+                dst.resolve().relative_to(self._root.resolve())
+            except ValueError:
+                logger.warning("Skipping blob with traversal-shaped key: %r", key)
+                report.skipped += 1
+                report.skipped_keys.append(key)
+                continue
             content = self._backend.read_text(key)
             if content is None:
                 continue
-            dst = self._root / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_text(content)
             report.pulled += 1
