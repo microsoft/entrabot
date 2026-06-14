@@ -14,9 +14,15 @@ from entrabot.a365.tokens import WorkIqTokenRequest
 class FakeMcpClient:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.events: list[str] | None = None
+        self.exception: Exception | None = None
 
     async def call_tool(self, **kwargs: Any) -> dict[str, Any]:
+        if self.events is not None:
+            self.events.append("mcp")
         self.calls.append(kwargs)
+        if self.exception is not None:
+            raise self.exception
         return {"ok": True}
 
 
@@ -49,10 +55,28 @@ def _manifest(path: Path) -> Path:
     return path
 
 
+def _provider(
+    manifest_path: Path,
+    mcp_client: FakeMcpClient,
+) -> WorkIqProvider:
+    return WorkIqProvider(
+        manifest_path=manifest_path,
+        token_provider=RecordingA365TokenProvider("token-123"),
+        mcp_client=mcp_client,
+    )
+
+
 @pytest.mark.asyncio
-async def test_provider_uses_manifest_audience_scope_and_endpoint(tmp_path: Path) -> None:
+async def test_provider_uses_manifest_audience_scope_and_endpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     mcp_client = FakeMcpClient()
     token_provider = RecordingA365TokenProvider("token-123")
+    monkeypatch.setattr(
+        "entrabot.a365.provider.log_event",
+        lambda **kwargs: kwargs,
+    )
     provider = WorkIqProvider(
         manifest_path=_manifest(tmp_path / "ToolingManifest.json"),
         token_provider=token_provider,
@@ -83,3 +107,140 @@ async def test_provider_uses_manifest_audience_scope_and_endpoint(tmp_path: Path
             "scope": "Tools.ListInvoke.All",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_call_tool_audits_pending_before_mcp_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    audit_events: list[dict[str, Any]] = []
+    mcp_client = FakeMcpClient()
+    mcp_client.events = events
+
+    def record_audit(**kwargs: Any) -> dict[str, Any]:
+        events.append(f"audit:{kwargs['outcome']}")
+        audit_events.append(kwargs)
+        return kwargs
+
+    monkeypatch.setattr("entrabot.a365.provider.log_event", record_audit, raising=False)
+
+    await _provider(_manifest(tmp_path / "ToolingManifest.json"), mcp_client).call_tool(
+        server_name="mcp_WordServer",
+        tool_name="WordReplyToComment",
+        arguments={"commentId": "c1"},
+    )
+
+    assert events[:2] == ["audit:pending", "mcp"]
+    assert audit_events[0]["action"] == "a365.mcp_WordServer.WordReplyToComment"
+    assert audit_events[0]["resource"] == "commentId=c1"
+    assert audit_events[0]["attribution_type"] == "agent"
+
+
+@pytest.mark.asyncio
+async def test_call_tool_audits_success_outcome(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit_events: list[dict[str, Any]] = []
+
+    def record_audit(**kwargs: Any) -> dict[str, Any]:
+        audit_events.append(kwargs)
+        return kwargs
+
+    monkeypatch.setattr("entrabot.a365.provider.log_event", record_audit, raising=False)
+
+    result = await _provider(
+        _manifest(tmp_path / "ToolingManifest.json"),
+        FakeMcpClient(),
+    ).call_tool(
+        server_name="mcp_WordServer",
+        tool_name="WordReplyToComment",
+        arguments={"commentId": "c1"},
+    )
+
+    assert result == {"ok": True}
+    assert [event["outcome"] for event in audit_events] == ["pending", "success"]
+
+
+@pytest.mark.asyncio
+async def test_call_tool_audits_failure_and_propagates_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit_events: list[dict[str, Any]] = []
+    mcp_client = FakeMcpClient()
+    mcp_client.exception = RuntimeError("work iq failed")
+
+    def record_audit(**kwargs: Any) -> dict[str, Any]:
+        audit_events.append(kwargs)
+        return kwargs
+
+    monkeypatch.setattr("entrabot.a365.provider.log_event", record_audit, raising=False)
+
+    with pytest.raises(RuntimeError, match="work iq failed"):
+        await _provider(_manifest(tmp_path / "ToolingManifest.json"), mcp_client).call_tool(
+            server_name="mcp_WordServer",
+            tool_name="WordReplyToComment",
+            arguments={"commentId": "c1"},
+        )
+
+    assert [event["outcome"] for event in audit_events] == ["pending", "failure"]
+
+
+@pytest.mark.asyncio
+async def test_call_tool_audit_metadata_records_argument_keys_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_sentinel = "SECRET-SENTINEL-VALUE"
+    audit_events: list[dict[str, Any]] = []
+
+    def record_audit(**kwargs: Any) -> dict[str, Any]:
+        audit_events.append(kwargs)
+        return kwargs
+
+    monkeypatch.setattr("entrabot.a365.provider.log_event", record_audit, raising=False)
+
+    await _provider(_manifest(tmp_path / "ToolingManifest.json"), FakeMcpClient()).call_tool(
+        server_name="mcp_WordServer",
+        tool_name="CreateDocument",
+        arguments={"fileName": "plan.docx", "contentInHtml": secret_sentinel},
+    )
+
+    assert [event["outcome"] for event in audit_events] == ["pending", "success"]
+    for event in audit_events:
+        assert event["metadata"] == {
+            "server": "mcp_WordServer",
+            "tool": "CreateDocument",
+            "args_keys": ["fileName", "contentInHtml"],
+        }
+        assert secret_sentinel not in repr(event)
+
+
+@pytest.mark.asyncio
+async def test_call_tool_fails_closed_when_audit_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from entrabot.errors import InsecureKeyringBackendError
+
+    mcp_client = FakeMcpClient()
+
+    def raise_insecure(**_kwargs: Any) -> None:
+        raise InsecureKeyringBackendError(
+            "keyrings.alt.file.PlaintextKeyring",
+            ("keyring.backends.macOS.Keyring",),
+        )
+
+    monkeypatch.setattr("entrabot.a365.provider.log_event", raise_insecure, raising=False)
+
+    with pytest.raises(InsecureKeyringBackendError):
+        await _provider(_manifest(tmp_path / "ToolingManifest.json"), mcp_client).call_tool(
+            server_name="mcp_WordServer",
+            tool_name="CreateDocument",
+            arguments={"fileName": "plan.docx"},
+        )
+
+    assert mcp_client.calls == []
