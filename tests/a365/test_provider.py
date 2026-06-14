@@ -229,7 +229,7 @@ async def test_call_tool_audits_failure_when_token_acquisition_fails(
 
 
 @pytest.mark.asyncio
-async def test_call_tool_audit_metadata_records_argument_keys_only(
+async def test_call_tool_audit_metadata_omits_argument_keys_and_values(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
