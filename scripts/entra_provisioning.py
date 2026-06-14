@@ -86,10 +86,29 @@ def _keyring_module():
         ) from exc
 
 
+def _assert_secure_keyring_backend() -> None:
+    """Fail closed if the active ``keyring`` backend is not OS-native.
+
+    Without this guard, the Provisioner cert + private key would be written
+    in cleartext on Linux hosts that have ``keyrings.alt`` installed and no
+    D-Bus session (containers, headless CI, sudo'd shells). The runtime
+    CredentialStore already enforces this for the agent body; mirroring the
+    check here closes the provisioning-time gap.
+    """
+    if sys.platform == "win32":
+        # Windows uses _windows_file_store_cert with explicit ACLs, not the
+        # keyring backend, so the assertion does not apply here.
+        return
+    from entrabot.platform.keyring_backend import assert_allowed_keyring_backend
+
+    assert_allowed_keyring_backend()
+
+
 def _keychain_get_cert(account: str) -> str | None:
     """Return the PEM (cert+key) bundle from Keychain/file, or None if absent."""
     if sys.platform == "win32":
         return _windows_file_get_cert(account)
+    _assert_secure_keyring_backend()
     kr = _keyring_module()
     return kr.get_password(_KEYCHAIN_SERVICE_CERT, account)
 
@@ -103,6 +122,7 @@ def _keychain_store_cert(account: str, pem_bundle: str) -> None:
     if sys.platform == "win32":
         _windows_file_store_cert(account, pem_bundle)
         return
+    _assert_secure_keyring_backend()
     kr = _keyring_module()
     kr.set_password(_KEYCHAIN_SERVICE_CERT, account, pem_bundle)
 
@@ -140,6 +160,7 @@ def _keychain_delete_cert(account: str) -> None:
         )
         cert_path.unlink(missing_ok=True)
         return
+    _assert_secure_keyring_backend()
     kr = _keyring_module()
     with contextlib.suppress(kr.errors.PasswordDeleteError):
         kr.delete_password(_KEYCHAIN_SERVICE_CERT, account)

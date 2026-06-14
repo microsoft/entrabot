@@ -963,6 +963,16 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from datetime import datetime, timedelta, timezone
 import keyring, requests, pathlib
+from entrabot.platform.keyring_backend import assert_allowed_keyring_backend
+
+# Fail closed BEFORE generating or storing the private key — if the active
+# keyring backend isn't OS-native, keyring.set_password() would otherwise
+# silently write the Blueprint private key to ~/.local/share/python_keyring/
+# keyring_pass.cfg in cleartext (most common on Linux containers / headless
+# CI without D-Bus). The runtime CredentialStore already enforces this for
+# the agent body; doing it here closes the provisioning-time gap so we never
+# write a secret to disk in the first place.
+assert_allowed_keyring_backend()
 
 # Hostname tag so Entra-side cert listing identifies which machine owns
 # each registered key (useful when rotating or revoking one device).

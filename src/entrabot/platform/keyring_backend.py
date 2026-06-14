@@ -16,6 +16,11 @@ _ALLOWED_BACKENDS: dict[str, tuple[str, ...]] = {
     "Linux": (
         "keyring.backends.SecretService.Keyring",
         "keyring.backends.kwallet.DBusKeyring",
+        # libsecret is shipped by `keyring` itself (not keyrings.alt) and is
+        # the recommended default on Fedora / openSUSE. It talks to the same
+        # Secret Service collection as the SecretService backend via the
+        # libsecret C library through GI, just with a different Python path.
+        "keyring.backends.libsecret.Keyring",
     ),
     "Windows": ("keyring.backends.Windows.WinVaultKeyring",),
 }

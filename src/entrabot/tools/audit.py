@@ -44,12 +44,22 @@ def log_event(
     - ``"none"`` — unauthenticated / unknown identity
     """
     if agent_id is None:
+        # InsecureKeyringBackendError must NOT be silently swallowed — that
+        # would convert the load-bearing fail-closed signal into a no-op
+        # "unknown" agent attribution on every audit call.
+        from entrabot.errors import InsecureKeyringBackendError
+
         try:
             from entrabot.platform import get_credential_store
 
             store = get_credential_store()
             agent_id = store.retrieve("entrabot", "active_client_id") or "unknown"
+        except InsecureKeyringBackendError:
+            raise
         except Exception:
+            # Other failures (no entry, transport hiccup, no agent provisioned
+            # yet) fall back to "unknown" — preserves the audit record so the
+            # action is at least observable.
             agent_id = "unknown"
 
     event = {

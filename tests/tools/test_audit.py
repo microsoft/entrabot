@@ -85,3 +85,57 @@ class TestAuditLogEvent:
         ):
             event = log_event(action="x", resource="r")
         assert event["agent_id"] == "unknown"
+
+    def test_insecure_keyring_backend_error_propagates(self, audit_dir: Path) -> None:
+        """If the active backend is insecure, log_event MUST surface that —
+        not silently swallow it into agent_id='unknown' and continue.
+
+        Regression test for the audit fail-open path. Defense in depth: the
+        very first place a misconfigured backend should be reported is the
+        first audit call.
+        """
+        from entrabot.errors import InsecureKeyringBackendError
+
+        def raise_insecure() -> None:
+            raise InsecureKeyringBackendError(
+                "keyrings.alt.file.PlaintextKeyring",
+                ("keyring.backends.macOS.Keyring",),
+            )
+
+        with (
+            patch("entrabot.tools.audit._audit_dir", return_value=audit_dir),
+            patch("entrabot.platform.get_credential_store", side_effect=raise_insecure),
+            pytest.raises(InsecureKeyringBackendError),
+        ):
+            log_event(action="x", resource="r")
+
+        # And the audit file must NOT have been written
+        assert not list(audit_dir.glob("*.jsonl"))
+
+    def test_unrelated_credential_store_error_falls_back_to_unknown(
+        self, audit_dir: Path
+    ) -> None:
+        """Non-security errors during credential lookup still fall back to
+        'unknown' so the audit record is preserved.
+
+        Example: no agent has been provisioned yet (KeyringError on retrieve).
+        """
+        import keyring.errors
+
+        def raise_unrelated() -> object:
+            class _Store:
+                @staticmethod
+                def retrieve(*_a: object) -> None:
+                    raise keyring.errors.KeyringError("no entry")
+
+            return _Store()
+
+        with (
+            patch("entrabot.tools.audit._audit_dir", return_value=audit_dir),
+            patch(
+                "entrabot.platform.get_credential_store",
+                side_effect=raise_unrelated,
+            ),
+        ):
+            event = log_event(action="x", resource="r")
+        assert event["agent_id"] == "unknown"

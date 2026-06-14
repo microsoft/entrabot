@@ -37,6 +37,7 @@ def _backend_validator() -> object:
         ("Darwin", "keyring.backends.macOS.Keyring"),
         ("Linux", "keyring.backends.SecretService.Keyring"),
         ("Linux", "keyring.backends.kwallet.DBusKeyring"),
+        ("Linux", "keyring.backends.libsecret.Keyring"),
         ("Windows", "keyring.backends.Windows.WinVaultKeyring"),
     ],
 )
@@ -54,8 +55,10 @@ def test_backend_validation_accepts_allowed_os_backend(
     ("system", "backend"),
     [
         ("Darwin", _fake_backend("keyrings.alt.file", "PlaintextKeyring")),
+        ("Darwin", _fake_backend("keyring.backends.fail", "Keyring")),
         ("Linux", _fake_backend("keyrings.alt.file", "PlaintextKeyring")),
         ("Windows", _fake_backend("keyrings.alt.file", "PlaintextKeyring")),
+        ("Windows", _fake_backend("keyring.backends.fail", "Keyring")),
         ("Linux", _fake_backend("keyring.backends.fail", "Keyring")),
     ],
 )
