@@ -13,6 +13,7 @@ Tests cover:
 
 from __future__ import annotations
 
+import json
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -717,6 +718,32 @@ class TestTokenRefreshDispatch:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
             mcp_server._identity = old_identity
+
+
+# ---------------------------------------------------------------------------
+# view_image URL safety
+# ---------------------------------------------------------------------------
+class TestViewImageUrlSafety:
+    @pytest.mark.asyncio
+    async def test_rejects_substring_bypass_before_fetching(self) -> None:
+        from entrabot import mcp_server
+
+        attacker_url = "https://attacker.com/?x=graph.microsoft.com"
+        with (
+            patch("entrabot.mcp_server._initialize", new_callable=AsyncMock) as init,
+            patch("entrabot.mcp_server._ensure_valid_token", new_callable=AsyncMock) as ensure,
+            patch(
+                "entrabot.mcp_server._with_token_retry",
+                new_callable=AsyncMock,
+                side_effect=AssertionError("view_image must not fetch attacker URLs"),
+            ) as retry,
+        ):
+            result = await mcp_server.view_image(attacker_url)
+
+        assert init.await_count == 1
+        ensure.assert_not_awaited()
+        retry.assert_not_awaited()
+        assert json.loads(result) == {"error": "Not a Graph API URL — refusing to send token"}
 
 
 # ---------------------------------------------------------------------------

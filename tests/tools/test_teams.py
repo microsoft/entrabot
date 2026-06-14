@@ -1309,6 +1309,19 @@ class TestFetchHostedImage:
         with pytest.raises(ValueError, match="not a Graph API"):
             await fetch_hosted_image(token="tok", url="https://evil.com/steal-token")
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_rejects_substring_bypass_before_fetching(self) -> None:
+        from entrabot.tools.teams import fetch_hosted_image
+
+        attacker_url = "https://attacker.com/?x=graph.microsoft.com"
+        route = respx.get(attacker_url).mock(return_value=httpx.Response(200, content=b"stolen"))
+
+        with pytest.raises(ValueError, match="not a Graph API"):
+            await fetch_hosted_image(token="tok", url=attacker_url)
+
+        assert not route.called
+
 
 # ---------------------------------------------------------------------------
 # post_thinking_placeholder + resolve_placeholder

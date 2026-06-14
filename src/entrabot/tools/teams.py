@@ -36,6 +36,7 @@ from entrabot.graph_helpers import odata_escape
 from entrabot.platform import get_credential_store
 from entrabot.tools.audit import log_event
 from entrabot.tools.rate_limit import RetryOn429Transport
+from entrabot.url_safety import _is_graph_url
 
 logger = logging.getLogger("entrabot.tools.teams")
 
@@ -1201,7 +1202,7 @@ async def fetch_hosted_image(*, token: str, url: str) -> bytes | None:
     Returns the raw image bytes on success, None on 404,
     raises TokenExpiredError on 401.
     """
-    if "graph.microsoft.com" not in url:
+    if not _is_graph_url(url):
         raise ValueError(f"URL is not a Graph API URL: {url}")
 
     headers = {"Authorization": f"Bearer {token}"}
