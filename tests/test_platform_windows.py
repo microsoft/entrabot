@@ -9,8 +9,18 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+from keyring.backends.Windows import WinVaultKeyring
 
 from entrabot.platform import windows
+
+
+@pytest.fixture(autouse=True)
+def _allow_windows_keyring(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        windows.keyring,
+        "get_keyring",
+        lambda: object.__new__(WinVaultKeyring),
+    )
 
 
 class TestKeyringPassthrough:

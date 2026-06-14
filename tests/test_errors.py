@@ -10,6 +10,7 @@ from entrabot.errors import (
     ChatNotFound,
     EntraBotError,
     GraphApiError,
+    InsecureKeyringBackendError,
     InvalidTransitionError,
     MessageTooLong,
     MsalAuthError,
@@ -80,6 +81,9 @@ class TestErrorHierarchy:
     def test_graph_api_error_inherits_teams(self) -> None:
         assert issubclass(GraphApiError, TeamsError)
 
+    def test_insecure_keyring_backend_inherits_entrabot(self) -> None:
+        assert issubclass(InsecureKeyringBackendError, EntraBotError)
+
 
 class TestErrorMessages:
     def test_token_exchange_error_message(self) -> None:
@@ -117,6 +121,7 @@ class TestErrorMessages:
             TransitionError(from_state="a", to_state="b", cause=ValueError("x")),
             ProvisioningError(),
             GraphApiError(status_code=403, message="Forbidden"),
+            InsecureKeyringBackendError("keyrings.alt.file.PlaintextKeyring"),
         ]
         for err in errors:
             with pytest.raises(EntraBotError):
