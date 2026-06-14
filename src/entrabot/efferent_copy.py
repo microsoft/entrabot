@@ -44,6 +44,7 @@ DISCOVERY_TIMEOUT_S = 5.0
 WARN_THROTTLE_S = 60.0
 DISABLE_ENV = "EFFERENT_COPY_DISABLE"
 ENABLE_ENV = "EFFERENT_COPY_ENABLE"
+_MAIN_LOOP_UNSET = object()
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +173,37 @@ def _collect_kwargs(fn: Callable, args: tuple, kwargs: dict) -> dict:
         }
 
 
-def wrap_tool_fn(sinks: list[Sink], tool_name: str, fn: Callable) -> Callable:
+def _running_loop_or_none() -> asyncio.AbstractEventLoop | None:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+
+def _schedule_sync_observe(
+    sinks: list[Sink],
+    tool_name: str,
+    args: dict,
+    main_loop: asyncio.AbstractEventLoop | None,
+    result: Any = None,
+) -> None:
+    if main_loop is None or main_loop.is_closed() or not main_loop.is_running():
+        return
+
+    coro = fire_observe(sinks, tool_name, args, result=result)
+    try:
+        asyncio.run_coroutine_threadsafe(coro, main_loop)
+    except RuntimeError:
+        coro.close()
+
+
+def wrap_tool_fn(
+    sinks: list[Sink],
+    tool_name: str,
+    fn: Callable,
+    *,
+    main_loop: asyncio.AbstractEventLoop | None | object = _MAIN_LOOP_UNSET,
+) -> Callable:
     """Wrap ``fn`` with pre/post observe firing.
 
     The wrapped function:
@@ -195,6 +226,9 @@ def wrap_tool_fn(sinks: list[Sink], tool_name: str, fn: Callable) -> Callable:
         return fn
 
     is_async = asyncio.iscoroutinefunction(fn)
+    if not is_async and main_loop is _MAIN_LOOP_UNSET:
+        main_loop = _running_loop_or_none()
+    sync_main_loop = main_loop if isinstance(main_loop, asyncio.AbstractEventLoop) else None
 
     if is_async:
 
@@ -223,24 +257,22 @@ def wrap_tool_fn(sinks: list[Sink], tool_name: str, fn: Callable) -> Callable:
     @functools.wraps(fn)
     def sync_wrapper(*args, **kwargs):
         args_dict = _collect_kwargs(fn, args, kwargs)
-        loop = asyncio.get_event_loop()
-        loop.create_task(fire_observe(sinks, tool_name, args_dict))
+        _schedule_sync_observe(sinks, tool_name, args_dict, sync_main_loop)
         try:
             result = fn(*args, **kwargs)
         except Exception as exc:  # noqa: BLE001
-            loop.create_task(
-                fire_observe(
-                    sinks,
-                    tool_name,
-                    args_dict,
-                    result={
-                        "error": str(exc),
-                        "error_type": type(exc).__name__,
-                    },
-                )
+            _schedule_sync_observe(
+                sinks,
+                tool_name,
+                args_dict,
+                sync_main_loop,
+                result={
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                },
             )
             raise
-        loop.create_task(fire_observe(sinks, tool_name, args_dict, result=result))
+        _schedule_sync_observe(sinks, tool_name, args_dict, sync_main_loop, result=result)
         return result
 
     return sync_wrapper
@@ -582,7 +614,12 @@ async def discover_sinks(config_path: Path | None = None) -> list[Sink]:
 # ---------------------------------------------------------------------------
 
 
-def install_into_fastmcp(mcp: Any, sinks: list[Sink]) -> None:
+def install_into_fastmcp(
+    mcp: Any,
+    sinks: list[Sink],
+    *,
+    main_loop: asyncio.AbstractEventLoop | None = None,
+) -> None:
     """Wrap every @mcp.tool() registration on ``mcp`` with the middleware.
 
     Called at boot, after all @mcp.tool() decorators have run. Iterates
@@ -596,6 +633,8 @@ def install_into_fastmcp(mcp: Any, sinks: list[Sink]) -> None:
     """
     if not sinks:
         return
+    if main_loop is None:
+        main_loop = _running_loop_or_none()
 
     tool_manager = getattr(mcp, "_tool_manager", None)
     if tool_manager is None or not hasattr(tool_manager, "_tools"):
@@ -606,4 +645,4 @@ def install_into_fastmcp(mcp: Any, sinks: list[Sink]) -> None:
         if name == OBSERVE_TOOL:
             continue
         original_fn = tool.fn
-        tool.fn = wrap_tool_fn(sinks, name, original_fn)
+        tool.fn = wrap_tool_fn(sinks, name, original_fn, main_loop=main_loop)

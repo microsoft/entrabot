@@ -3654,8 +3654,9 @@ async def _run_stdio_with_write_stream() -> None:
         # no wrapping and body behavior unchanged. Any discovery failure is
         # swallowed: the body MUST keep working without sinks.
         try:
+            main_loop = asyncio.get_running_loop()
             sinks = await efferent_copy.discover_sinks()
-            efferent_copy.install_into_fastmcp(mcp, sinks)
+            efferent_copy.install_into_fastmcp(mcp, sinks, main_loop=main_loop)
         except Exception as exc:  # noqa: BLE001
             if logger:
                 logger.warning(
