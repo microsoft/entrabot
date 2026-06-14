@@ -37,8 +37,8 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, Literal
-from urllib.parse import urlparse
+from typing import Any, Literal, cast
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -76,6 +76,8 @@ DriveKind = Literal["onedrive_personal", "onedrive_business", "sharepoint"]
 ReadFormat = Literal["raw", "auto"]
 ConflictBehavior = Literal["rename", "replace", "fail"]
 ShareRole = Literal["read", "write"]
+
+_ALLOWED_CONFLICT_BEHAVIORS = {"rename", "replace", "fail"}
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -262,6 +264,78 @@ def _extension(name: str) -> str:
     if idx < 0:
         return ""
     return name[idx:].lower()
+
+
+def _contains_control_char(value: str) -> bool:
+    return any(ord(char) < 0x20 for char in value)
+
+
+def _validate_upload_path_part(value: str, *, label: str, allow_slash: bool) -> None:
+    if _contains_control_char(value):
+        raise ValueError(f"{label} contains a control character")
+    if "\n" in value or "\r" in value:
+        raise ValueError(f"{label} contains a newline")
+    if ":" in value:
+        raise ValueError(f"{label} contains ':'")
+    if "\\" in value:
+        raise ValueError(f"{label} contains '\\'")
+    if ".." in value:
+        raise ValueError(f"{label} contains '..'")
+    if "#" in value:
+        raise ValueError(f"{label} contains '#'")
+    if "?" in value:
+        raise ValueError(f"{label} contains '?'")
+    if not allow_slash and "/" in value:
+        raise ValueError(f"{label} contains '/'")
+
+
+def _validate_conflict_behavior(conflict_behavior: str) -> ConflictBehavior:
+    if conflict_behavior not in _ALLOWED_CONFLICT_BEHAVIORS:
+        raise ValueError("conflict_behavior must be one of: fail, rename, replace")
+    return cast(ConflictBehavior, conflict_behavior)
+
+
+def _encoded_upload_path(folder_path: str, file_name: str) -> str:
+    if not file_name:
+        raise ValueError("file_name is required")
+    if file_name.startswith("/"):
+        raise ValueError("file_name must not start with '/'")
+
+    _validate_upload_path_part(file_name, label="file_name", allow_slash=False)
+    _validate_upload_path_part(folder_path, label="folder_path", allow_slash=True)
+
+    folder = folder_path.strip("/")
+    if folder:
+        segments = folder.split("/")
+        if any(segment == "" for segment in segments):
+            raise ValueError("folder_path contains an empty segment")
+        encoded_segments = [quote(segment, safe="") for segment in segments]
+    else:
+        encoded_segments = []
+
+    encoded_file_name = quote(file_name, safe="")
+    return "/" + "/".join([*encoded_segments, encoded_file_name])
+
+
+def _build_upload_url(
+    target: OneDriveTarget | SharePointTarget,
+    file_name: str,
+    *,
+    conflict_behavior: ConflictBehavior,
+    endpoint: Literal["content", "createUploadSession"] = "content",
+) -> str:
+    """Build a Graph upload URL after fail-closed validation and encoding."""
+    conflict_behavior = _validate_conflict_behavior(conflict_behavior)
+    drive_prefix = (
+        f"/drives/{quote(target.drive_id, safe='')}"
+        if isinstance(target, SharePointTarget)
+        else "/me/drive"
+    )
+    path_spec = _encoded_upload_path(target.folder_path, file_name)
+    url = f"{GRAPH_V1_HOST}{drive_prefix}/root:{path_spec}:/{endpoint}"
+    if endpoint == "content":
+        url = f"{url}?@microsoft.graph.conflictBehavior={conflict_behavior}"
+    return url
 
 
 def _make_transport(*, allow_5xx_retry: bool = False) -> httpx.AsyncBaseTransport:
@@ -831,22 +905,7 @@ async def write_text_file(
     # Resource identifier for audit
     resource = f"{drive_id or 'me/drive'}:{target.folder_path}/{file_name}"
 
-    # Build Graph URL
-    # For OneDrive: PUT /me/drive/root:/{folder_path}/{file_name}:/content
-    # For SharePoint: PUT /drives/{drive_id}/root:/{folder_path}/{file_name}:/content
-    if isinstance(target, SharePointTarget):
-        drive_prefix = f"/drives/{target.drive_id}"
-    else:
-        drive_prefix = "/me/drive"
-
-    # Clean up folder path
-    folder = target.folder_path.rstrip("/") or "/"
-    path_spec = f"{folder}/{file_name}" if folder != "/" else f"/{file_name}"
-
-    url = (
-        f"{GRAPH_V1_HOST}{drive_prefix}/root:{path_spec}:/content"
-        f"?@microsoft.graph.conflictBehavior={conflict_behavior}"
-    )
+    url = _build_upload_url(target, file_name, conflict_behavior=conflict_behavior)
 
     async with _audit_graph_call(
         "write_text_file",
@@ -925,19 +984,7 @@ async def upload_file(
     use_chunked = len(content_bytes) >= CHUNK_SIZE
 
     if not use_chunked:
-        # Small file: single PUT to /content endpoint
-        if isinstance(target, SharePointTarget):
-            drive_prefix = f"/drives/{target.drive_id}"
-        else:
-            drive_prefix = "/me/drive"
-
-        folder = target.folder_path.rstrip("/") or "/"
-        path_spec = f"{folder}/{file_name}" if folder != "/" else f"/{file_name}"
-
-        url = (
-            f"{GRAPH_V1_HOST}{drive_prefix}/root:{path_spec}:/content"
-            f"?@microsoft.graph.conflictBehavior={conflict_behavior}"
-        )
+        url = _build_upload_url(target, file_name, conflict_behavior=conflict_behavior)
 
         async with _audit_graph_call(
             "upload_file",
@@ -995,16 +1042,12 @@ async def _upload_chunked_session(
     site_id: str | None,
 ) -> FileRef:
     """Chunked upload via createUploadSession + resumable PUT."""
-    # Build createUploadSession request
-    if isinstance(target, SharePointTarget):
-        drive_prefix = f"/drives/{target.drive_id}"
-    else:
-        drive_prefix = "/me/drive"
-
-    folder = target.folder_path.rstrip("/") or "/"
-    path_spec = f"{folder}/{file_name}" if folder != "/" else f"/{file_name}"
-
-    create_url = f"{GRAPH_V1_HOST}{drive_prefix}/root:{path_spec}:/createUploadSession"
+    create_url = _build_upload_url(
+        target,
+        file_name,
+        conflict_behavior=conflict_behavior,
+        endpoint="createUploadSession",
+    )
 
     payload = {
         "item": {
