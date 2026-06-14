@@ -15,6 +15,8 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -185,6 +187,112 @@ class TestCallbackAndRollback:
         assert exc_info.value.cause is original_error
 
     @pytest.mark.asyncio
+    async def test_callback_exception_restores_entire_session(self) -> None:
+        """Rollback restores all IdentitySession fields mutated by the callback."""
+        sm = IdentityStateMachine()
+
+        async def set_old_identity() -> None:
+            sm.update_session(
+                token="old-token",
+                token_acquired_at=100.0,
+                user_id="old-user",
+                display_name="Old User",
+                attribution_type="none",
+                auth_mode="delegated",
+                account_id="old-account",
+                tenant_id="old-tenant",
+                provisioning_state="old-provisioning",
+            )
+
+        await sm.transition(IdentityState.DELEGATED, callback=set_old_identity)
+        before = replace(sm.session)
+        original_error = RuntimeError("callback failed after mutating identity")
+
+        async def bad_cb() -> None:
+            sm.update_session(
+                token="new-token",
+                token_acquired_at=200.0,
+                user_id="new-user",
+                display_name="New User",
+                attribution_type="agent",
+                auth_mode="agent_user",
+                account_id="new-account",
+                tenant_id="new-tenant",
+                provisioning_state="new-provisioning",
+            )
+            raise original_error
+
+        with pytest.raises(TransitionError):
+            await sm.transition(IdentityState.PROVISIONING, callback=bad_cb)
+
+        assert sm.session == before
+
+    @pytest.mark.asyncio
+    async def test_callback_success_persists_session_mutations(self) -> None:
+        """Successful callbacks commit session field mutations and state change."""
+        sm = IdentityStateMachine()
+
+        async def cb() -> None:
+            sm.update_session(
+                token="new-token",
+                token_acquired_at=200.0,
+                user_id="new-user",
+                display_name="New User",
+                auth_mode="delegated",
+                account_id="new-account",
+                tenant_id="new-tenant",
+                provisioning_state="new-provisioning",
+            )
+
+        await sm.transition(IdentityState.DELEGATED, callback=cb)
+
+        assert sm.session.state == IdentityState.DELEGATED
+        assert sm.session.token == "new-token"
+        assert sm.session.token_acquired_at == 200.0
+        assert sm.session.user_id == "new-user"
+        assert sm.session.display_name == "New User"
+        assert sm.session.auth_mode == "delegated"
+        assert sm.session.account_id == "new-account"
+        assert sm.session.tenant_id == "new-tenant"
+        assert sm.session.provisioning_state == "new-provisioning"
+
+    @pytest.mark.asyncio
+    async def test_refresh_pattern_survives_later_failed_transition(self) -> None:
+        """Token refresh update_session calls are not rolled back by later failures."""
+        sm = IdentityStateMachine()
+
+        sm.update_session(token="initial", user_id="agent")
+        await sm.transition(IdentityState.AGENT_USER)
+
+        sm.update_session(token="refreshed", token_acquired_at=12345.0)
+
+        with pytest.raises(InvalidTransitionError):
+            await sm.transition(IdentityState.DELEGATED)
+
+        assert sm.session.state == IdentityState.AGENT_USER
+        assert sm.session.token == "refreshed"
+        assert sm.session.token_acquired_at == 12345.0
+        assert sm.session.user_id == "agent"
+
+    @pytest.mark.asyncio
+    async def test_sequential_callback_failure_rolls_back_to_lock_snapshot(self) -> None:
+        """Callback failure restores the session snapshot captured by transition()."""
+        sm = IdentityStateMachine()
+        sm.update_session(token="prepared", user_id="prepared-user")
+        before = replace(sm.session)
+        original_error = RuntimeError("callback failed")
+
+        async def bad_cb() -> None:
+            sm.update_session(token="callback-token", user_id="callback-user")
+            raise original_error
+
+        with pytest.raises(TransitionError) as exc_info:
+            await sm.transition(IdentityState.DELEGATED, callback=bad_cb)
+
+        assert sm.session == before
+        assert exc_info.value.cause is original_error
+
+    @pytest.mark.asyncio
     async def test_callback_none_succeeds(self) -> None:
         sm = IdentityStateMachine()
         await sm.transition(IdentityState.DELEGATED, callback=None)
@@ -214,10 +322,39 @@ class TestLockTimeout:
 
 
 class TestRecheckAfterLock:
-    """If state changes while waiting for lock, InvalidTransitionError is raised."""
+    """Transition validity is checked against the state after lock acquisition."""
 
     @pytest.mark.asyncio
-    async def test_state_changed_while_waiting_for_lock(self) -> None:
+    async def test_concurrent_transition_does_not_wipe_successful_commit(self) -> None:
+        sm = IdentityStateMachine()
+        cb_started = asyncio.Event()
+        cb_release = asyncio.Event()
+
+        async def slow_cb() -> None:
+            cb_started.set()
+            await cb_release.wait()
+
+        sm.update_session(token="A", user_id="u1")
+        t1 = asyncio.create_task(
+            sm.transition(IdentityState.DELEGATED, callback=slow_cb)
+        )
+        await cb_started.wait()
+
+        sm.update_session(token="B", user_id="u2")
+        t2 = asyncio.create_task(sm.transition(IdentityState.AGENT_USER))
+        await asyncio.sleep(0)
+
+        cb_release.set()
+        results = await asyncio.gather(t1, t2, return_exceptions=True)
+
+        assert results[0] is None
+        assert isinstance(results[1], InvalidTransitionError)
+        assert sm.session.state == IdentityState.DELEGATED
+        assert sm.session.token == "B"
+        assert sm.session.user_id == "u2"
+
+    @pytest.mark.asyncio
+    async def test_target_invalid_after_waiting_for_lock(self) -> None:
         sm = IdentityStateMachine()
 
         # Simulate: while waiting, another task transitions state
@@ -226,7 +363,7 @@ class TestRecheckAfterLock:
         async def mutating_acquire() -> bool:
             result = await original_acquire()
             # Directly mutate state to simulate race
-            sm._session.state = IdentityState.ERROR
+            sm._session.state = IdentityState.AGENT_USER
             return result
 
         sm._lock.acquire = mutating_acquire  # type: ignore[assignment]

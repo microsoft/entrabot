@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from typing import Any
 
 from entrabot.errors import (
@@ -80,19 +81,19 @@ class IdentityStateMachine:
         For I/O operations, do them before calling transition and pass
         results via the callback closure.
 
+        Rollback restores the entire IdentitySession, not only the state, when
+        the callback fails. The rollback point is the session snapshot captured
+        after the lock is acquired and the transition is validated.
+
         Raises:
             InvalidTransitionError: If the transition is not valid
             TransitionTimeoutError: If lock acquisition times out (30s)
             TransitionError: If the callback raises (auto-rollback)
         """
-        from_state = self._session.state
-
-        # Validate transition
-        valid = VALID_TRANSITIONS.get(from_state, set())
-        if to_state not in valid:
+        if not isinstance(to_state, IdentityState):
             raise InvalidTransitionError(
-                from_state=from_state.value,
-                to_state=to_state.value,
+                from_state="unknown",
+                to_state=str(to_state),
             )
 
         # Acquire lock with timeout
@@ -102,25 +103,29 @@ class IdentityStateMachine:
                 timeout=LOCK_TIMEOUT,
             )
         except TimeoutError:
+            current_state = self._session.state
             raise TransitionTimeoutError(
                 f"Lock acquisition timed out after {LOCK_TIMEOUT}s "
-                f"(from={from_state.value}, to={to_state.value})"
+                f"(from={current_state.value}, to={to_state.value})"
             ) from None
 
         try:
-            # Re-check state hasn't changed while waiting for lock
-            if self._session.state != from_state:
+            from_state = self._session.state
+            valid = VALID_TRANSITIONS.get(from_state, set())
+            if to_state not in valid:
                 raise InvalidTransitionError(
-                    from_state=self._session.state.value,
+                    from_state=from_state.value,
                     to_state=to_state.value,
                 )
+
+            session_snapshot = replace(self._session)
 
             # Execute callback if provided
             if callback:
                 try:
                     await callback()
                 except Exception as exc:
-                    # Rollback — state stays at from_state
+                    self._session = replace(session_snapshot)
                     logger.error(
                         "Transition callback failed, rolling back: %s → %s, error: %s",
                         from_state.value,
@@ -132,7 +137,6 @@ class IdentityStateMachine:
                         to_state=to_state.value,
                         cause=exc,
                     ) from exc
-
             # Commit transition
             self._session.state = to_state
 
@@ -168,8 +172,12 @@ class IdentityStateMachine:
     def update_session(self, **kwargs: Any) -> None:
         """Update session fields without a state transition.
 
-        Use this for token updates, user_id changes, etc. that don't
-        change the identity state.
+        Use this for token updates, user_id changes, etc. that don't change the
+        identity state. Callers may invoke update_session() before transition()
+        to set up the new identity. transition() snapshots whatever the session
+        looks like when it acquires the lock; on callback failure, the session is
+        restored to that lock-acquisition snapshot, including update_session()
+        mutations made before the transition acquired the lock.
         """
         for key, value in kwargs.items():
             if hasattr(self._session, key) and key != "state":
