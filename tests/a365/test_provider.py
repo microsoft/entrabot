@@ -140,7 +140,10 @@ async def test_call_tool_audits_pending_before_mcp_call(
 
     assert events[:2] == ["audit:pending", "mcp"]
     assert audit_events[0]["action"] == "a365.mcp_WordServer.WordReplyToComment"
-    assert audit_events[0]["resource"] == "commentId=c1"
+    # Resource is always action-shaped — never derived from arguments —
+    # so CodeQL can't trace LLM-controlled args into the audit sink and
+    # operators see a stable handle they can grep on.
+    assert audit_events[0]["resource"] == "a365.mcp_WordServer.WordReplyToComment"
     assert audit_events[0]["attribution_type"] == "agent"
 
 
@@ -338,13 +341,17 @@ async def test_url_and_path_args_never_leak_into_audit(
 
 
 @pytest.mark.asyncio
-async def test_id_shape_args_surface_in_audit_resource(
+async def test_id_shape_args_do_not_surface_in_audit_resource(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ID-shape values (UUIDs, opaque handles) are safe to surface in the
-    audit resource because they are not user-controlled free-form text and
-    are the canonical reference operators need to correlate events.
+    """Even ID-shape values (driveId, itemId, commentId) are NOT surfaced
+    in the audit resource. CodeQL's taint analysis treats every entry in
+    `arguments` (an MCP tool args dict) as potentially-sensitive, so any
+    flow from `arguments` into log_event re-triggers the alert. The
+    correct fix is to never let `arguments` data reach log_event at all —
+    operators correlate audit entries by action + timestamp; deeper
+    detail lives in the Graph API server-side logs.
     """
     audit_events: list[dict[str, Any]] = []
 
@@ -365,6 +372,7 @@ async def test_id_shape_args_surface_in_audit_resource(
     )
 
     resource = audit_events[0]["resource"]
-    assert "driveId=b!1234" in resource
-    assert "itemId=01ABCDEF" in resource
-    assert "commentId=c1" in resource
+    # Resource is action-shaped only — no argument values leak in.
+    assert resource == "a365.mcp_WordServer.WordReplyToComment"
+    for leak in ("b!1234", "01ABCDEF", "c1"):
+        assert leak not in repr(audit_events[0])

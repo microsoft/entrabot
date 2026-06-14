@@ -15,61 +15,6 @@ from entrabot.a365.tokens import (
 )
 from entrabot.tools.audit import log_event
 
-_SENSITIVE_RESOURCE_KEYS = frozenset(
-    {
-        "content",
-        "contentInHtml",
-        "newComment",
-        "password",
-        "secret",
-        "token",
-    }
-)
-
-# Only ID-shape values (opaque handles, UUIDs) are eligible for the audit
-# resource string. URL / path / file-name keys are excluded by design — they
-# are LLM-controlled free-form text whose values can contain customer data
-# (tenant URLs, internal site paths, document titles). CodeQL flags surfacing
-# them as clear-text logging of sensitive information. When none of these
-# ID-shape keys are present we fall back to "{server}.{tool}" — matches the
-# existing Teams/Graph audit pattern in mcp_server.py:2402-2422 which only
-# uses ID handles like f"{chat_id}:{placeholder_id}".
-_RESOURCE_KEY_PRIORITY = (
-    "driveId",
-    "documentLibraryId",
-    "documentId",
-    "fileId",
-    "itemId",
-    "commentId",
-)
-
-
-def _safe_resource_parts(arguments: dict[str, Any]) -> list[str]:
-    parts: list[str] = []
-    for key in _RESOURCE_KEY_PRIORITY:
-        # Defense in depth for future priority-list edits: never log sensitive values.
-        if key in _SENSITIVE_RESOURCE_KEYS:
-            continue
-        value = arguments.get(key)
-        if isinstance(value, str) and value:
-            parts.append(f"{key}={value}")
-    return parts
-
-
-def _audit_resource(
-    *,
-    server_name: str,
-    tool_name: str,
-    arguments: dict[str, Any],
-) -> str:
-    parts = _safe_resource_parts(arguments)
-    if parts:
-        return " ".join(parts)
-    # Fall back to a stable, self-identifying handle when no ID-shape arg is
-    # present. Mirrors `action` so audit consumers can correlate resource
-    # back to provider scope without ambiguity.
-    return f"a365.{server_name}.{tool_name}"
-
 
 class WorkIqProvider:
     """High-level boundary for Work IQ MCP calls."""
@@ -100,12 +45,19 @@ class WorkIqProvider:
         """Call one Work IQ tool by server and tool name."""
         catalog_server = get_server(server_name)
         manifest_server = self._manifest.require_server(server_name)
+        # The audit resource is intentionally derived ONLY from server_name +
+        # tool_name (both come from the manifest, not user input). We do not
+        # surface anything from `arguments` into the audit record: tool args
+        # may contain customer data (URLs, document titles, message bodies)
+        # that has no business in an audit handle, and CodeQL flags any flow
+        # from arguments → audit as clear-text logging of sensitive
+        # information. Operators correlate audit entries by action +
+        # timestamp; deeper resource detail (which document, which comment)
+        # lives in the Graph API server-side logs.
         action = f"a365.{server_name}.{tool_name}"
-        resource = _audit_resource(
-            server_name=server_name,
-            tool_name=tool_name,
-            arguments=arguments,
-        )
+        resource = action
+        # Only log the argument KEYS (never values) so operators can see
+        # which fields were exercised without recording any user content.
         metadata = {
             "server": server_name,
             "tool": tool_name,
