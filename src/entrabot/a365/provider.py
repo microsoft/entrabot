@@ -13,6 +13,7 @@ from entrabot.a365.tokens import (
     EntrabotA365TokenProvider,
     WorkIqTokenRequest,
 )
+from entrabot.tools.audit import log_event
 
 
 class WorkIqProvider:
@@ -44,18 +45,65 @@ class WorkIqProvider:
         """Call one Work IQ tool by server and tool name."""
         catalog_server = get_server(server_name)
         manifest_server = self._manifest.require_server(server_name)
-        token = await self._token_provider.get_token(
-            WorkIqTokenRequest(
+        # The audit resource is intentionally derived ONLY from server_name +
+        # tool_name (both come from the manifest, not user input). We do not
+        # surface anything from `arguments` into the audit record: tool args
+        # may contain customer data (URLs, document titles, message bodies)
+        # that has no business in an audit handle, and CodeQL flags any flow
+        # from arguments → audit as clear-text logging of sensitive
+        # information. Operators correlate audit entries by action +
+        # timestamp; deeper resource detail (which document, which comment)
+        # lives in the Graph API server-side logs.
+        action = f"a365.{server_name}.{tool_name}"
+        resource = action
+        # Metadata is intentionally minimal: server_name and tool_name only.
+        # Both come from the A365 catalog / manifest (not user input), so
+        # CodeQL's clear-text-logging analysis does not taint them. We do
+        # NOT include `list(arguments.keys())` here — the keys come from
+        # an MCP tool args dict that CodeQL classifies as sensitive, and
+        # any projection from that dict (.keys(), .values(), .items())
+        # re-triggers the audit-sink alert.
+        metadata = {
+            "server": server_name,
+            "tool": tool_name,
+        }
+        log_event(
+            action=action,
+            resource=resource,
+            outcome="pending",
+            attribution_type="agent",
+            metadata=metadata,
+        )
+        try:
+            token = await self._token_provider.get_token(
+                WorkIqTokenRequest(
+                    server_name=server_name,
+                    audience=manifest_server.audience,
+                    scope=manifest_server.scope,
+                )
+            )
+            result = await self._mcp_client.call_tool(
+                endpoint=manifest_server.url or catalog_server.default_endpoint,
                 server_name=server_name,
-                audience=manifest_server.audience,
+                tool_name=tool_name,
+                arguments=arguments,
+                token=token,
                 scope=manifest_server.scope,
             )
+        except Exception:
+            log_event(
+                action=action,
+                resource=resource,
+                outcome="failure",
+                attribution_type="agent",
+                metadata=metadata,
+            )
+            raise
+        log_event(
+            action=action,
+            resource=resource,
+            outcome="success",
+            attribution_type="agent",
+            metadata=metadata,
         )
-        return await self._mcp_client.call_tool(
-            endpoint=manifest_server.url or catalog_server.default_endpoint,
-            server_name=server_name,
-            tool_name=tool_name,
-            arguments=arguments,
-            token=token,
-            scope=manifest_server.scope,
-        )
+        return result
