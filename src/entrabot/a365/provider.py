@@ -45,6 +45,7 @@ _RESOURCE_KEY_PRIORITY = (
 def _safe_resource_parts(arguments: dict[str, Any]) -> list[str]:
     parts: list[str] = []
     for key in _RESOURCE_KEY_PRIORITY:
+        # Defense in depth for future priority-list edits: never log sensitive values.
         if key in _SENSITIVE_RESOURCE_KEYS:
             continue
         value = arguments.get(key)
@@ -112,14 +113,14 @@ class WorkIqProvider:
             attribution_type="agent",
             metadata=metadata,
         )
-        token = await self._token_provider.get_token(
-            WorkIqTokenRequest(
-                server_name=server_name,
-                audience=manifest_server.audience,
-                scope=manifest_server.scope,
-            )
-        )
         try:
+            token = await self._token_provider.get_token(
+                WorkIqTokenRequest(
+                    server_name=server_name,
+                    audience=manifest_server.audience,
+                    scope=manifest_server.scope,
+                )
+            )
             result = await self._mcp_client.call_tool(
                 endpoint=manifest_server.url or catalog_server.default_endpoint,
                 server_name=server_name,

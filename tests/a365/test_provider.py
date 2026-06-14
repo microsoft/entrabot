@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from entrabot.a365.errors import A365TokenError
 from entrabot.a365.provider import WorkIqProvider
 from entrabot.a365.tokens import WorkIqTokenRequest
 
@@ -34,6 +35,11 @@ class RecordingA365TokenProvider:
     async def get_token(self, request: WorkIqTokenRequest) -> str:
         self.requests.append(request)
         return self.token
+
+
+class FailingA365TokenProvider:
+    async def get_token(self, request: WorkIqTokenRequest) -> str:
+        raise A365TokenError(request.audience, "no token")
 
 
 def _manifest(path: Path) -> Path:
@@ -190,6 +196,36 @@ async def test_call_tool_audits_failure_and_propagates_exception(
 
 
 @pytest.mark.asyncio
+async def test_call_tool_audits_failure_when_token_acquisition_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit_events: list[dict[str, Any]] = []
+    mcp_client = FakeMcpClient()
+
+    def record_audit(**kwargs: Any) -> dict[str, Any]:
+        audit_events.append(kwargs)
+        return kwargs
+
+    monkeypatch.setattr("entrabot.a365.provider.log_event", record_audit, raising=False)
+    provider = WorkIqProvider(
+        manifest_path=_manifest(tmp_path / "ToolingManifest.json"),
+        token_provider=FailingA365TokenProvider(),
+        mcp_client=mcp_client,
+    )
+
+    with pytest.raises(A365TokenError, match="no token"):
+        await provider.call_tool(
+            server_name="mcp_WordServer",
+            tool_name="WordReplyToComment",
+            arguments={"commentId": "c1"},
+        )
+
+    assert [event["outcome"] for event in audit_events] == ["pending", "failure"]
+    assert mcp_client.calls == []
+
+
+@pytest.mark.asyncio
 async def test_call_tool_audit_metadata_records_argument_keys_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -210,6 +246,7 @@ async def test_call_tool_audit_metadata_records_argument_keys_only(
     )
 
     assert [event["outcome"] for event in audit_events] == ["pending", "success"]
+    assert audit_events[0]["resource"] == "fileName=plan.docx"
     for event in audit_events:
         assert event["metadata"] == {
             "server": "mcp_WordServer",
