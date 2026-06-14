@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -186,7 +187,7 @@ class MsalDelegatedAuth:
                 ),
             )
 
-        print(flow.get("message", ""))  # noqa: T201
+        print(flow.get("message", ""), file=sys.stderr, flush=True)  # noqa: T201
 
         result = self._app.acquire_token_by_device_flow(flow)
         return self._check_result(result, method="device_code")

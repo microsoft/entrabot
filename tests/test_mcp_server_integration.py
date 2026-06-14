@@ -669,28 +669,12 @@ class TestTokenRefreshDispatch:
             mcp_server._identity = old_identity
 
     @pytest.mark.asyncio
-    async def test_unauthenticated_is_noop(self) -> None:
-        """UNAUTHENTICATED state should not attempt any refresh."""
+    async def test_delegated_silent_miss_transitions_to_unauthenticated_and_raises(
+        self,
+    ) -> None:
+        """Background delegated refresh must fail closed without interactive auth."""
         from entrabot import mcp_server
-        from entrabot.identity.state_machine import IdentityStateMachine
-        from entrabot.models import IdentityState
-
-        old_identity = mcp_server._identity
-        try:
-            sm = IdentityStateMachine()
-            # stays UNAUTHENTICATED
-            mcp_server._identity = sm
-
-            # Should not raise, should not call any refresh
-            await mcp_server._ensure_valid_token()
-            assert sm.state == IdentityState.UNAUTHENTICATED
-        finally:
-            mcp_server._identity = old_identity
-
-    @pytest.mark.asyncio
-    async def test_msal_failure_transitions_to_unauthenticated(self) -> None:
-        """If MSAL refresh completely fails, transition to UNAUTHENTICATED."""
-        from entrabot import mcp_server
+        from entrabot.errors import AuthRefreshRequiredError
         from entrabot.identity.state_machine import IdentityStateMachine
         from entrabot.models import IdentityState
 
@@ -707,9 +691,178 @@ class TestTokenRefreshDispatch:
             mcp_server._identity = sm
             mcp_server._state["config"] = mock_config
 
-            with patch(
-                "entrabot.auth.delegated.MsalDelegatedAuth",
-                side_effect=RuntimeError("MSAL unavailable"),
+            mock_auth_instance = MagicMock()
+            mock_auth_instance.try_silent.return_value = None
+            mock_auth_instance.authenticate.side_effect = AssertionError(
+                "background refresh must not call interactive authenticate"
+            )
+
+            with (
+                patch(
+                    "entrabot.auth.delegated.MsalDelegatedAuth",
+                    return_value=mock_auth_instance,
+                ),
+                pytest.raises(AuthRefreshRequiredError),
+            ):
+                await mcp_server._ensure_valid_token()
+
+            assert sm.state == IdentityState.UNAUTHENTICATED
+            assert sm.session.token is None
+            assert sm.session.token_acquired_at is None
+            assert "token" not in mcp_server._state
+            mock_auth_instance.authenticate.assert_not_called()
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+            mcp_server._identity = old_identity
+
+    @pytest.mark.asyncio
+    async def test_delegated_silent_error_transitions_to_unauthenticated_and_raises(
+        self,
+    ) -> None:
+        """MSAL error dictionaries from silent refresh must fail closed."""
+        from entrabot import mcp_server
+        from entrabot.errors import AuthRefreshRequiredError
+        from entrabot.identity.state_machine import IdentityStateMachine
+        from entrabot.models import IdentityState
+
+        mock_config = MagicMock()
+        mock_config.client_id = "test-client-id"
+        mock_config.tenant_id = "common"
+
+        old_state = mcp_server._state.copy()
+        old_identity = mcp_server._identity
+        try:
+            sm = IdentityStateMachine()
+            await sm.transition(IdentityState.DELEGATED)
+            sm.update_session(token="expired", token_acquired_at=time.monotonic() - 4000)
+            mcp_server._identity = sm
+            mcp_server._state["config"] = mock_config
+
+            mock_auth_instance = MagicMock()
+            mock_auth_instance.try_silent.return_value = {
+                "error": "invalid_grant",
+                "error_description": "refresh token expired",
+            }
+
+            with (
+                patch(
+                    "entrabot.auth.delegated.MsalDelegatedAuth",
+                    return_value=mock_auth_instance,
+                ),
+                pytest.raises(AuthRefreshRequiredError) as exc_info,
+            ):
+                await mcp_server._ensure_valid_token()
+
+            assert sm.state == IdentityState.UNAUTHENTICATED
+            assert sm.session.token is None
+            assert sm.session.token_acquired_at is None
+            assert "token" not in mcp_server._state
+            assert exc_info.value.error == "invalid_grant"
+            assert "refresh token expired" in exc_info.value.error_description
+            mock_auth_instance.authenticate.assert_not_called()
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+            mcp_server._identity = old_identity
+
+    @pytest.mark.asyncio
+    async def test_init_auth_startup_still_calls_interactive_authenticate(self) -> None:
+        """The explicit boot auth path may still dispatch interactive MSAL auth."""
+        from entrabot import mcp_server
+        from entrabot.config import EntraBotConfig
+        from entrabot.models import IdentityState
+
+        cfg = EntraBotConfig(
+            client_id="test-client-id",
+            tenant_id="common",
+            skip_provisioning=True,
+        )
+        mock_auth_instance = MagicMock()
+        mock_auth_instance.authenticate.return_value = {
+            "access_token": "boot-token",
+            "id_token_claims": {
+                "oid": "human-oid",
+                "name": "Human Sponsor",
+                "sub": "account-sub",
+                "tid": "tenant-id",
+                "preferred_username": "human@example.com",
+            },
+        }
+
+        old_state = mcp_server._state.copy()
+        old_identity = mcp_server._identity
+        try:
+            mcp_server._state.clear()
+            mcp_server._identity = None
+
+            with (
+                patch("entrabot.mcp_server.get_config", return_value=cfg),
+                patch(
+                    "entrabot.auth.delegated.MsalDelegatedAuth",
+                    return_value=mock_auth_instance,
+                ),
+            ):
+                await mcp_server._init_auth()
+
+            assert mcp_server._identity is not None
+            assert mcp_server._identity.state == IdentityState.DELEGATED
+            assert mcp_server._state["token"] == "boot-token"
+            mock_auth_instance.authenticate.assert_called_once_with()
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+            mcp_server._identity = old_identity
+
+    @pytest.mark.asyncio
+    async def test_unauthenticated_is_noop(self) -> None:
+        """UNAUTHENTICATED state should not attempt any refresh."""
+        from entrabot import mcp_server
+        from entrabot.identity.state_machine import IdentityStateMachine
+        from entrabot.models import IdentityState
+
+        old_identity = mcp_server._identity
+        try:
+            sm = IdentityStateMachine()
+            # stays UNAUTHENTICATED
+            mcp_server._identity = sm
+
+            # Should not raise, should not call any refresh
+            await mcp_server._ensure_valid_token()
+            assert sm.state == IdentityState.UNAUTHENTICATED
+            assert sm.session.token is None
+            assert sm.session.token_acquired_at is None
+            assert "token" not in mcp_server._state
+        finally:
+            mcp_server._identity = old_identity
+
+    @pytest.mark.asyncio
+    async def test_msal_failure_transitions_to_unauthenticated(self) -> None:
+        """If MSAL refresh completely fails, transition and surface tool error."""
+        from entrabot import mcp_server
+        from entrabot.errors import AuthRefreshRequiredError
+        from entrabot.identity.state_machine import IdentityStateMachine
+        from entrabot.models import IdentityState
+
+        mock_config = MagicMock()
+        mock_config.client_id = "test-client-id"
+        mock_config.tenant_id = "common"
+
+        old_state = mcp_server._state.copy()
+        old_identity = mcp_server._identity
+        try:
+            sm = IdentityStateMachine()
+            await sm.transition(IdentityState.DELEGATED)
+            sm.update_session(token="expired", token_acquired_at=time.monotonic() - 4000)
+            mcp_server._identity = sm
+            mcp_server._state["config"] = mock_config
+
+            with (
+                patch(
+                    "entrabot.auth.delegated.MsalDelegatedAuth",
+                    side_effect=RuntimeError("MSAL unavailable"),
+                ),
+                pytest.raises(AuthRefreshRequiredError),
             ):
                 await mcp_server._ensure_valid_token()
 

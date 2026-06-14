@@ -28,7 +28,12 @@ from mcp.types import JSONRPCMessage, JSONRPCNotification
 
 from entrabot import efferent_copy
 from entrabot.config import get_config
-from entrabot.errors import EntraBotError, MissingPlaceholderError, TokenExchangeError
+from entrabot.errors import (
+    AuthRefreshRequiredError,
+    EntraBotError,
+    MissingPlaceholderError,
+    TokenExchangeError,
+)
 from entrabot.identity.state_machine import IdentityStateMachine
 from entrabot.logging_config import setup_logging
 from entrabot.models import IdentityState
@@ -523,14 +528,37 @@ async def _ensure_valid_token() -> None:
                     )
                     _state["token"] = token
                 else:
-                    # Silent failed — try interactive
-                    result = auth.authenticate()
-                    token = result["access_token"]
-                    _identity.update_session(
-                        token=token,
-                        token_acquired_at=time.monotonic(),
+                    error = "interaction_required"
+                    description = (
+                        "MSAL silent refresh returned no access token; "
+                        "interactive auth must be initiated from the startup path"
                     )
-                    _state["token"] = token
+                    if result and "error" in result:
+                        error = str(result.get("error") or error)
+                        description = str(result.get("error_description") or description)
+                    if logger:
+                        logger.warning(
+                            "MSAL silent refresh failed without interactive fallback: %s",
+                            error,
+                        )
+                    import contextlib
+
+                    with contextlib.suppress(Exception):
+                        await _identity.transition(IdentityState.UNAUTHENTICATED)
+                    _identity.update_session(
+                        token=None,
+                        token_acquired_at=None,
+                        auth_mode=None,
+                        account_id=None,
+                        tenant_id=None,
+                    )
+                    _state.pop("token", None)
+                    raise AuthRefreshRequiredError(
+                        error=error,
+                        error_description=description,
+                    )
+            except AuthRefreshRequiredError:
+                raise
             except Exception as exc:
                 if logger:
                     logger.warning("MSAL refresh failed: %s", exc)
@@ -539,6 +567,21 @@ async def _ensure_valid_token() -> None:
 
                 with contextlib.suppress(Exception):
                     await _identity.transition(IdentityState.UNAUTHENTICATED)
+                _identity.update_session(
+                    token=None,
+                    token_acquired_at=None,
+                    auth_mode=None,
+                    account_id=None,
+                    tenant_id=None,
+                )
+                _state.pop("token", None)
+                raise AuthRefreshRequiredError(
+                    error="silent_refresh_failed",
+                    error_description=(
+                        f"MSAL silent refresh failed in background context: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                ) from exc
 
         elif current_state == IdentityState.UNAUTHENTICATED:
             pass  # No token to refresh — auth needed first
@@ -3467,12 +3510,17 @@ async def wait_for_sponsor_dm(
                 fetch_chat_type,
             )
 
-            cfg = config.load_config()
-            tok = acquire_agent_user_token(cfg)
+            tok = acquire_agent_user_token(config)
             chat_type = await fetch_chat_type(chat_id=chat_id_str, token=tok)
             if chat_type:
                 chat_type_cache[chat_id_str] = chat_type
-        except Exception:  # noqa: BLE001 - fail-open: chat_type is best-effort
+        except Exception as exc:  # noqa: BLE001 - chat_type is best-effort
+            if logger:
+                logger.warning(
+                    "Failed to detect chat_type for chat %s: %r",
+                    chat_id_str,
+                    exc,
+                )
             chat_type = ""
 
     result = WaitForSponsorDmResult(

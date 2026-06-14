@@ -154,6 +154,23 @@ class TestMsalDelegatedAuth:
         mock_app.initiate_device_flow.assert_called_once_with(auth.scopes)
         mock_app.acquire_token_by_device_flow.assert_called_once_with(flow)
 
+    def test_device_code_prompt_uses_stderr_not_stdout(
+        self,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Device-code instructions must not corrupt MCP's stdout JSON-RPC stream."""
+        auth, mock_app = self._make_auth()
+        flow = {"message": "Go to https://microsoft.com/devicelogin", "user_code": "ABCD"}
+        mock_app.initiate_device_flow.return_value = flow
+        mock_app.acquire_token_by_device_flow.return_value = _token_result()
+
+        result = auth._try_device_code()
+
+        captured = capsys.readouterr()
+        assert result["access_token"] == "test-access-token"
+        assert captured.out == ""
+        assert "Go to https://microsoft.com/devicelogin" in captured.err
+
     def test_device_code_initiate_error(self) -> None:
         """initiate_device_flow returns error dict → MsalAuthError."""
         auth, mock_app = self._make_auth()
