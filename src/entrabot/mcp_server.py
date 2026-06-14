@@ -34,6 +34,7 @@ from entrabot.logging_config import setup_logging
 from entrabot.models import IdentityState
 from entrabot.tools.interaction_log import detect_channel, log_interaction
 from entrabot.tools.teams import acquire_agent_user_token
+from entrabot.url_safety import _is_graph_url
 
 logger: logging.Logger | None = None
 
@@ -3575,7 +3576,7 @@ async def view_image(url: str) -> str:
     await _initialize()
     from entrabot.tools.teams import fetch_hosted_image
 
-    if "graph.microsoft.com" not in url:
+    if not _is_graph_url(url):
         return json.dumps({"error": "Not a Graph API URL — refusing to send token"})
 
     await _ensure_valid_token()
