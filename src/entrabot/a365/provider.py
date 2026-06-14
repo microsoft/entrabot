@@ -56,12 +56,16 @@ class WorkIqProvider:
         # lives in the Graph API server-side logs.
         action = f"a365.{server_name}.{tool_name}"
         resource = action
-        # Only log the argument KEYS (never values) so operators can see
-        # which fields were exercised without recording any user content.
+        # Metadata is intentionally minimal: server_name and tool_name only.
+        # Both come from the A365 catalog / manifest (not user input), so
+        # CodeQL's clear-text-logging analysis does not taint them. We do
+        # NOT include `list(arguments.keys())` here — the keys come from
+        # an MCP tool args dict that CodeQL classifies as sensitive, and
+        # any projection from that dict (.keys(), .values(), .items())
+        # re-triggers the audit-sink alert.
         metadata = {
             "server": server_name,
             "tool": tool_name,
-            "args_keys": list(arguments.keys()),
         }
         log_event(
             action=action,

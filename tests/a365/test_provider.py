@@ -256,15 +256,20 @@ async def test_call_tool_audit_metadata_records_argument_keys_only(
     # "{server}.{tool}" handle.
     assert audit_events[0]["resource"] == "a365.mcp_WordServer.CreateDocument"
     for event in audit_events:
+        # Metadata is minimal — server + tool only. We deliberately do NOT
+        # surface argument keys because CodeQL classifies any projection
+        # from an MCP `arguments` dict (including .keys()) as sensitive,
+        # which re-fires the clear-text-logging alert at the audit sink.
         assert event["metadata"] == {
             "server": "mcp_WordServer",
             "tool": "CreateDocument",
-            "args_keys": ["fileName", "contentInHtml"],
         }
         assert secret_sentinel not in repr(event)
         # Defence in depth: assert the file name itself is also absent
         # from the entire event (it can leak via resource OR metadata).
         assert "plan.docx" not in repr(event)
+        assert "fileName" not in repr(event)
+        assert "contentInHtml" not in repr(event)
 
 
 @pytest.mark.asyncio
