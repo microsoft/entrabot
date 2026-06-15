@@ -39,6 +39,7 @@ BCRYPT_PAD_PKCS1 = 0x2
 NTE_BUFFER_TOO_SMALL = 0x80090028
 
 _THUMBPRINT_RE = re.compile(r"^[0-9A-Fa-f]{40}$")
+_SHA256_ALG_ID = ctypes.create_unicode_buffer("SHA256")
 
 
 class SigningError(RuntimeError):
@@ -58,7 +59,7 @@ class _CryptIntegerBlob(ctypes.Structure):
 
 
 def _build_pkcs1_padding_info() -> _BcryptPkcs1PaddingInfo:
-    return _BcryptPkcs1PaddingInfo(pszAlgId=ctypes.c_wchar_p("SHA256"))
+    return _BcryptPkcs1PaddingInfo(pszAlgId=ctypes.cast(_SHA256_ALG_ID, ctypes.c_wchar_p))
 
 
 def _load_dlls() -> tuple[Any, Any]:

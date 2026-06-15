@@ -16,6 +16,9 @@ DLL lookup. We assert:
 
 from __future__ import annotations
 
+import ctypes
+import gc
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,6 +26,10 @@ import pytest
 from entrabot.auth import cncrypt_signer
 
 NTE_BUFFER_TOO_SMALL = 0x80090028
+
+
+def _padding_alg_address(info: cncrypt_signer._BcryptPkcs1PaddingInfo) -> int:
+    return ctypes.c_void_p.from_address(ctypes.addressof(info)).value or 0
 
 
 def _make_mock_dlls(
@@ -80,10 +87,42 @@ class TestSignPkcs1Sha256:
     def test_padding_info_carries_sha256(self) -> None:
         info = cncrypt_signer._build_pkcs1_padding_info()
         # pszAlgId is a wide-string pointer; resolve it back to the literal.
-        import ctypes
-
         alg_id = ctypes.wstring_at(info.pszAlgId)
         assert alg_id == "SHA256"
+
+    def test_sha256_alg_id_is_module_level_unicode_buffer(self) -> None:
+        alg_id = cncrypt_signer._SHA256_ALG_ID
+
+        first = cncrypt_signer._build_pkcs1_padding_info()
+        second = cncrypt_signer._build_pkcs1_padding_info()
+
+        assert isinstance(alg_id, ctypes.Array)
+        assert alg_id.value == "SHA256"
+        assert id(cncrypt_signer._SHA256_ALG_ID) == id(alg_id)
+        assert _padding_alg_address(first) == ctypes.addressof(alg_id)
+        assert _padding_alg_address(second) == ctypes.addressof(alg_id)
+
+    def test_padding_info_alg_id_survives_gc_after_struct_scope(self) -> None:
+        info = cncrypt_signer._build_pkcs1_padding_info()
+        alg_address = _padding_alg_address(info)
+
+        del info
+        gc.collect()
+
+        assert alg_address == ctypes.addressof(cncrypt_signer._SHA256_ALG_ID)
+        assert ctypes.wstring_at(alg_address) == "SHA256"
+
+    def test_padding_info_alg_id_is_shared_across_threads(self) -> None:
+        def build_and_read() -> tuple[int, str]:
+            info = cncrypt_signer._build_pkcs1_padding_info()
+            alg_address = _padding_alg_address(info)
+            return alg_address, ctypes.wstring_at(alg_address)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: build_and_read(), range(2)))
+
+        expected_address = ctypes.addressof(cncrypt_signer._SHA256_ALG_ID)
+        assert results == [(expected_address, "SHA256"), (expected_address, "SHA256")]
 
     def test_nonzero_ntstatus_other_than_buffer_too_small_raises(self) -> None:
         crypt32, ncrypt = _make_mock_dlls(sign_first_status=0xC000_0001)
