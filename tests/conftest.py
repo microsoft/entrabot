@@ -3,23 +3,29 @@
 from __future__ import annotations
 
 import logging
+import os
+from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
 
 @pytest.fixture(autouse=True)
-def audit_active_agent_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Give audited agent actions a deterministic test Agent ID by default."""
+def audit_identity_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Give tests a real config-resolved audit identity and isolated audit dir."""
+    monkeypatch.setenv("ENTRABOT_AGENT_ID", os.environ.get("ENTRABOT_AGENT_ID", "test-agent-id"))
+    if "ENTRABOT_AUDIT_DIR" not in os.environ:
+        monkeypatch.setenv("ENTRABOT_AUDIT_DIR", str(tmp_path / "audit"))
 
-    # Tests for attribution failures must override this fixture's store with
-    # one that returns None or raises. The default keeps unrelated tool tests
-    # focused on their behavior while production code still fails closed.
-    class Store:
-        @staticmethod
-        def retrieve(*_args: object) -> str:
-            return "test-agent-id"
 
-    monkeypatch.setattr("entrabot.platform.get_credential_store", lambda: Store())
+@pytest.fixture(autouse=True)
+def reset_active_identity_state() -> Iterator[None]:
+    """Keep the process-wide identity accessor isolated between tests."""
+    from entrabot.identity import set_active_identity_state
+
+    set_active_identity_state(None)
+    yield
+    set_active_identity_state(None)
 
 
 @pytest.fixture(autouse=True)

@@ -34,7 +34,7 @@ from entrabot.errors import (
     MissingPlaceholderError,
     TokenExchangeError,
 )
-from entrabot.identity.state_machine import IdentityStateMachine
+from entrabot.identity import IdentityStateMachine, set_active_identity_state
 from entrabot.logging_config import setup_logging
 from entrabot.models import IdentityState
 from entrabot.tools.interaction_log import detect_channel, log_interaction
@@ -539,6 +539,7 @@ async def _ensure_valid_token() -> None:
                     _identity.update_session(
                         token=None,
                         token_acquired_at=None,
+                        user_id=None,
                         auth_mode=None,
                         account_id=None,
                         tenant_id=None,
@@ -574,6 +575,7 @@ async def _ensure_valid_token() -> None:
                     _identity.update_session(
                         token=None,
                         token_acquired_at=None,
+                        user_id=None,
                         auth_mode=None,
                         account_id=None,
                         tenant_id=None,
@@ -596,6 +598,7 @@ async def _ensure_valid_token() -> None:
                 _identity.update_session(
                     token=None,
                     token_acquired_at=None,
+                    user_id=None,
                     auth_mode=None,
                     account_id=None,
                     tenant_id=None,
@@ -844,6 +847,7 @@ async def _init_auth() -> None:
     """
     global _identity
     _identity = IdentityStateMachine()
+    set_active_identity_state(_identity)
 
     config = get_config()
     _state["config"] = config

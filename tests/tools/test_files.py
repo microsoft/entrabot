@@ -37,6 +37,7 @@ from entrabot.tools.files import (
     GRAPH_V1_HOST,
     OneDriveTarget,
     SharePointTarget,
+    _audit_graph_call,
     _build_upload_url,
     add_file_comment,
     list_recent_files,
@@ -47,6 +48,37 @@ from entrabot.tools.files import (
 )
 
 TOKEN = "test-token"
+
+
+class TestAuditGraphCall:
+    @pytest.mark.asyncio
+    async def test_uses_config_agent_id_when_credential_store_has_no_active_client(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Upstream Files audit calls must not depend on active_client_id keyring state."""
+
+        class Store:
+            @staticmethod
+            def retrieve(*_args: object) -> None:
+                return None
+
+        audit_dir = tmp_path / "audit"
+        monkeypatch.setenv("ENTRABOT_AUDIT_DIR", str(audit_dir))
+        monkeypatch.setenv("ENTRABOT_AGENT_ID", "config-agent-id")
+        monkeypatch.delenv("ENTRABOT_BLUEPRINT_APP_ID", raising=False)
+        monkeypatch.setattr("entrabot.platform.get_credential_store", lambda: Store())
+
+        async with _audit_graph_call(
+            "read_file",
+            "drive-id:item-id",
+            metadata={"scope": "files.read"},
+        ):
+            pass
+
+        lines = list(audit_dir.glob("*.jsonl"))[0].read_text().strip().splitlines()
+        events = [json.loads(line) for line in lines]
+        assert [event["outcome"] for event in events] == ["pending", "success"]
+        assert {event["agent_id"] for event in events} == {"config-agent-id"}
 
 
 # ───────────────────────────────────────────────────────────────────────

@@ -723,6 +723,10 @@ class TestTokenRefreshDispatch:
         """MSAL error dictionaries from silent refresh must fail closed."""
         from entrabot import mcp_server
         from entrabot.errors import TokenExchangeError
+        from entrabot.identity import (
+            get_active_identity_state,
+            set_active_identity_state,
+        )
         from entrabot.identity.state_machine import IdentityStateMachine
         from entrabot.models import IdentityState
 
@@ -732,11 +736,17 @@ class TestTokenRefreshDispatch:
 
         old_state = mcp_server._state.copy()
         old_identity = mcp_server._identity
+        old_active_identity = get_active_identity_state()
         try:
             sm = IdentityStateMachine()
             await sm.transition(IdentityState.DELEGATED)
-            sm.update_session(token="expired", token_acquired_at=time.monotonic() - 4000)
+            sm.update_session(
+                token="expired",
+                token_acquired_at=time.monotonic() - 4000,
+                user_id="human-user-oid",
+            )
             mcp_server._identity = sm
+            set_active_identity_state(sm)
             mcp_server._state["config"] = mock_config
 
             mock_auth_instance = MagicMock()
@@ -756,11 +766,17 @@ class TestTokenRefreshDispatch:
 
             assert "interaction_required" in str(exc_info.value)
             assert "user interaction is required" in str(exc_info.value)
+            assert sm.state == IdentityState.UNAUTHENTICATED
+            assert sm.session.token is None
+            assert sm.session.token_acquired_at is None
+            assert sm.session.user_id is None
+            assert "token" not in mcp_server._state
             mock_auth_instance.authenticate.assert_not_called()
         finally:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
             mcp_server._identity = old_identity
+            set_active_identity_state(old_active_identity)
 
     @pytest.mark.asyncio
     async def test_init_auth_startup_still_calls_interactive_authenticate(self) -> None:
