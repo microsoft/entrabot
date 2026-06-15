@@ -8,6 +8,21 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def audit_active_agent_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give audited agent actions a deterministic test Agent ID by default."""
+
+    # Tests for attribution failures must override this fixture's store with
+    # one that returns None or raises. The default keeps unrelated tool tests
+    # focused on their behavior while production code still fails closed.
+    class Store:
+        @staticmethod
+        def retrieve(*_args: object) -> str:
+            return "test-agent-id"
+
+    monkeypatch.setattr("entrabot.platform.get_credential_store", lambda: Store())
+
+
+@pytest.fixture(autouse=True)
 def _attach_caplog_to_entrabot(caplog: pytest.LogCaptureFixture) -> None:
     """Let pytest's caplog capture records from the entrabot logger.
 

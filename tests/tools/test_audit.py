@@ -70,8 +70,52 @@ class TestAuditLogEvent:
             )
         assert event["metadata"] == {"key": "value"}
 
-    def test_fallback_agent_id(self, audit_dir: Path) -> None:
-        """When no agent_id provided and no cached identity, falls back to 'unknown'."""
+    def test_missing_agent_id_from_store_raises_for_default_agent_attribution(
+        self, audit_dir: Path
+    ) -> None:
+        """Agent-attributed events must not silently degrade to unknown."""
+        from entrabot.errors import AuditAttributionError
+
+        mock_store = type(
+            "S",
+            (),
+            {
+                "retrieve": staticmethod(lambda *_a: None),
+            },
+        )()
+        with (
+            patch("entrabot.tools.audit._audit_dir", return_value=audit_dir),
+            patch("entrabot.platform.get_credential_store", return_value=mock_store),
+            pytest.raises(AuditAttributionError),
+        ):
+            log_event(action="x", resource="r")
+
+        assert not list(audit_dir.glob("*.jsonl"))
+
+    def test_missing_agent_id_from_store_raises_for_explicit_agent_attribution(
+        self, audit_dir: Path
+    ) -> None:
+        """Explicit attribution_type='agent' has the same fail-closed behavior."""
+        from entrabot.errors import AuditAttributionError
+
+        mock_store = type(
+            "S",
+            (),
+            {
+                "retrieve": staticmethod(lambda *_a: None),
+            },
+        )()
+        with (
+            patch("entrabot.tools.audit._audit_dir", return_value=audit_dir),
+            patch("entrabot.platform.get_credential_store", return_value=mock_store),
+            pytest.raises(AuditAttributionError),
+        ):
+            log_event(action="x", resource="r", attribution_type="agent")
+
+        assert not list(audit_dir.glob("*.jsonl"))
+
+    def test_none_attribution_allows_unknown_agent_id(self, audit_dir: Path) -> None:
+        """Bootstrap/preflight callers must opt in to unknown attribution."""
         mock_store = type(
             "S",
             (),
@@ -83,8 +127,27 @@ class TestAuditLogEvent:
             patch("entrabot.tools.audit._audit_dir", return_value=audit_dir),
             patch("entrabot.platform.get_credential_store", return_value=mock_store),
         ):
-            event = log_event(action="x", resource="r")
+            event = log_event(action="x", resource="r", attribution_type="none")
+
         assert event["agent_id"] == "unknown"
+        assert event["attribution_type"] == "none"
+
+    def test_uses_agent_id_from_credential_store(self, audit_dir: Path) -> None:
+        """Existing happy path: a real active_client_id is recorded."""
+        mock_store = type(
+            "S",
+            (),
+            {
+                "retrieve": staticmethod(lambda *_a: "agent-123"),
+            },
+        )()
+        with (
+            patch("entrabot.tools.audit._audit_dir", return_value=audit_dir),
+            patch("entrabot.platform.get_credential_store", return_value=mock_store),
+        ):
+            event = log_event(action="x", resource="r")
+
+        assert event["agent_id"] == "agent-123"
 
     def test_insecure_keyring_backend_error_propagates(self, audit_dir: Path) -> None:
         """If the active backend is insecure, log_event MUST surface that —
@@ -112,15 +175,13 @@ class TestAuditLogEvent:
         # And the audit file must NOT have been written
         assert not list(audit_dir.glob("*.jsonl"))
 
-    def test_unrelated_credential_store_error_falls_back_to_unknown(
+    def test_unrelated_credential_store_error_raises_for_agent_attribution(
         self, audit_dir: Path
     ) -> None:
-        """Non-security errors during credential lookup still fall back to
-        'unknown' so the audit record is preserved.
-
-        Example: no agent has been provisioned yet (KeyringError on retrieve).
-        """
+        """Even non-security lookup misses must not hide agent attribution loss."""
         import keyring.errors
+
+        from entrabot.errors import AuditAttributionError
 
         def raise_unrelated() -> object:
             class _Store:
@@ -136,6 +197,8 @@ class TestAuditLogEvent:
                 "entrabot.platform.get_credential_store",
                 side_effect=raise_unrelated,
             ),
+            pytest.raises(AuditAttributionError),
         ):
-            event = log_event(action="x", resource="r")
-        assert event["agent_id"] == "unknown"
+            log_event(action="x", resource="r")
+
+        assert not list(audit_dir.glob("*.jsonl"))
