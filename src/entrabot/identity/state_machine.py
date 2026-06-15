@@ -48,8 +48,8 @@ VALID_TRANSITIONS: dict[IdentityState, set[IdentityState]] = {
 class IdentityStateMachine:
     """Manages identity state transitions with asyncio.Lock protection.
 
-    The lock covers only the state mutation (microsecond hold time).
-    Auth and provisioning operations run OUTSIDE the lock.
+    The lock covers state transitions and session updates. Auth and
+    provisioning operations should run OUTSIDE the lock.
     """
 
     def __init__(self) -> None:
@@ -169,8 +169,8 @@ class IdentityStateMachine:
                     to_state.value,
                 )
 
-    def update_session(self, **kwargs: Any) -> None:
-        """Update session fields without a state transition.
+    async def update_session(self, **kwargs: Any) -> None:
+        """Update session fields without a state transition under the lock.
 
         Use this for token updates, user_id changes, etc. that don't change the
         identity state. Callers may invoke update_session() before transition()
@@ -178,9 +178,20 @@ class IdentityStateMachine:
         looks like when it acquires the lock; on callback failure, the session is
         restored to that lock-acquisition snapshot, including update_session()
         mutations made before the transition acquired the lock.
+
+        Do not call update_session() from inside a transition() callback. The
+        callback already runs while transition() holds the non-reentrant
+        asyncio.Lock, so awaiting update_session() there will deadlock. Mutate
+        self._session directly in the callback, or introduce a future typed
+        helper for callback-scoped mutations.
         """
-        for key, value in kwargs.items():
-            if hasattr(self._session, key) and key != "state":
-                setattr(self._session, key, value)
-            else:
+        if not kwargs:
+            return
+
+        for key in kwargs:
+            if not hasattr(self._session, key) or key == "state":
                 raise AttributeError(f"IdentitySession has no field '{key}'")
+
+        async with self._lock:
+            for key, value in kwargs.items():
+                setattr(self._session, key, value)

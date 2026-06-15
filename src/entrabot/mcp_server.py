@@ -505,7 +505,7 @@ async def _ensure_valid_token() -> None:
                 logger.info("Token near expiry — refreshing via three-hop flow")
             config = _state.get("config")
             token = acquire_agent_user_token(config)
-            _identity.update_session(token=token, token_acquired_at=time.monotonic())
+            await _identity.update_session(token=token, token_acquired_at=time.monotonic())
             _state["token"] = token
 
         elif current_state == IdentityState.DELEGATED:
@@ -536,7 +536,7 @@ async def _ensure_valid_token() -> None:
 
                     with contextlib.suppress(Exception):
                         await _identity.transition(IdentityState.UNAUTHENTICATED)
-                    _identity.update_session(
+                    await _identity.update_session(
                         token=None,
                         token_acquired_at=None,
                         user_id=None,
@@ -552,7 +552,7 @@ async def _ensure_valid_token() -> None:
                     )
                 if result and "access_token" in result:
                     token = result["access_token"]
-                    _identity.update_session(
+                    await _identity.update_session(
                         token=token,
                         token_acquired_at=time.monotonic(),
                     )
@@ -572,7 +572,7 @@ async def _ensure_valid_token() -> None:
 
                     with contextlib.suppress(Exception):
                         await _identity.transition(IdentityState.UNAUTHENTICATED)
-                    _identity.update_session(
+                    await _identity.update_session(
                         token=None,
                         token_acquired_at=None,
                         user_id=None,
@@ -595,7 +595,7 @@ async def _ensure_valid_token() -> None:
 
                 with contextlib.suppress(Exception):
                     await _identity.transition(IdentityState.UNAUTHENTICATED)
-                _identity.update_session(
+                await _identity.update_session(
                     token=None,
                     token_acquired_at=None,
                     user_id=None,
@@ -632,7 +632,7 @@ async def _with_token_retry(fn, **kwargs):
             logger.warning("Token expired mid-call — refreshing and retrying")
         # Force refresh by clearing token_acquired_at (token may be fresh but revoked)
         if _identity is not None:
-            _identity.update_session(token_acquired_at=None)
+            await _identity.update_session(token_acquired_at=None)
         await _ensure_valid_token()
         token = _state.get("token") or (_identity.session.token if _identity else None)
         return await fn(token=str(token), **kwargs)
@@ -856,7 +856,7 @@ async def _init_auth() -> None:
     if not config.skip_provisioning and config.blueprint_app_id and config.tenant_id:
         try:
             token = acquire_agent_user_token(config)
-            _identity.update_session(
+            await _identity.update_session(
                 token=token,
                 token_acquired_at=time.monotonic(),
                 auth_mode="agent_user",
@@ -900,7 +900,7 @@ async def _init_auth() -> None:
             token = result["access_token"]
             account = result.get("id_token_claims", {})
 
-            _identity.update_session(
+            await _identity.update_session(
                 token=token,
                 token_acquired_at=time.monotonic(),
                 auth_mode="delegated",

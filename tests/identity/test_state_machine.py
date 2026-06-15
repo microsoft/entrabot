@@ -192,34 +192,30 @@ class TestCallbackAndRollback:
         sm = IdentityStateMachine()
 
         async def set_old_identity() -> None:
-            sm.update_session(
-                token="old-token",
-                token_acquired_at=100.0,
-                user_id="old-user",
-                display_name="Old User",
-                attribution_type="none",
-                auth_mode="delegated",
-                account_id="old-account",
-                tenant_id="old-tenant",
-                provisioning_state="old-provisioning",
-            )
+            sm._session.token = "old-token"
+            sm._session.token_acquired_at = 100.0
+            sm._session.user_id = "old-user"
+            sm._session.display_name = "Old User"
+            sm._session.attribution_type = "none"
+            sm._session.auth_mode = "delegated"
+            sm._session.account_id = "old-account"
+            sm._session.tenant_id = "old-tenant"
+            sm._session.provisioning_state = "old-provisioning"
 
         await sm.transition(IdentityState.DELEGATED, callback=set_old_identity)
         before = replace(sm.session)
         original_error = RuntimeError("callback failed after mutating identity")
 
         async def bad_cb() -> None:
-            sm.update_session(
-                token="new-token",
-                token_acquired_at=200.0,
-                user_id="new-user",
-                display_name="New User",
-                attribution_type="agent",
-                auth_mode="agent_user",
-                account_id="new-account",
-                tenant_id="new-tenant",
-                provisioning_state="new-provisioning",
-            )
+            sm._session.token = "new-token"
+            sm._session.token_acquired_at = 200.0
+            sm._session.user_id = "new-user"
+            sm._session.display_name = "New User"
+            sm._session.attribution_type = "agent"
+            sm._session.auth_mode = "agent_user"
+            sm._session.account_id = "new-account"
+            sm._session.tenant_id = "new-tenant"
+            sm._session.provisioning_state = "new-provisioning"
             raise original_error
 
         with pytest.raises(TransitionError):
@@ -233,16 +229,14 @@ class TestCallbackAndRollback:
         sm = IdentityStateMachine()
 
         async def cb() -> None:
-            sm.update_session(
-                token="new-token",
-                token_acquired_at=200.0,
-                user_id="new-user",
-                display_name="New User",
-                auth_mode="delegated",
-                account_id="new-account",
-                tenant_id="new-tenant",
-                provisioning_state="new-provisioning",
-            )
+            sm._session.token = "new-token"
+            sm._session.token_acquired_at = 200.0
+            sm._session.user_id = "new-user"
+            sm._session.display_name = "New User"
+            sm._session.auth_mode = "delegated"
+            sm._session.account_id = "new-account"
+            sm._session.tenant_id = "new-tenant"
+            sm._session.provisioning_state = "new-provisioning"
 
         await sm.transition(IdentityState.DELEGATED, callback=cb)
 
@@ -261,10 +255,10 @@ class TestCallbackAndRollback:
         """Token refresh update_session calls are not rolled back by later failures."""
         sm = IdentityStateMachine()
 
-        sm.update_session(token="initial", user_id="agent")
+        await sm.update_session(token="initial", user_id="agent")
         await sm.transition(IdentityState.AGENT_USER)
 
-        sm.update_session(token="refreshed", token_acquired_at=12345.0)
+        await sm.update_session(token="refreshed", token_acquired_at=12345.0)
 
         with pytest.raises(InvalidTransitionError):
             await sm.transition(IdentityState.DELEGATED)
@@ -278,12 +272,13 @@ class TestCallbackAndRollback:
     async def test_sequential_callback_failure_rolls_back_to_lock_snapshot(self) -> None:
         """Callback failure restores the session snapshot captured by transition()."""
         sm = IdentityStateMachine()
-        sm.update_session(token="prepared", user_id="prepared-user")
+        await sm.update_session(token="prepared", user_id="prepared-user")
         before = replace(sm.session)
         original_error = RuntimeError("callback failed")
 
         async def bad_cb() -> None:
-            sm.update_session(token="callback-token", user_id="callback-user")
+            sm._session.token = "callback-token"
+            sm._session.user_id = "callback-user"
             raise original_error
 
         with pytest.raises(TransitionError) as exc_info:
@@ -334,21 +329,23 @@ class TestRecheckAfterLock:
             cb_started.set()
             await cb_release.wait()
 
-        sm.update_session(token="A", user_id="u1")
+        await sm.update_session(token="A", user_id="u1")
         t1 = asyncio.create_task(
             sm.transition(IdentityState.DELEGATED, callback=slow_cb)
         )
         await cb_started.wait()
 
-        sm.update_session(token="B", user_id="u2")
+        update_task = asyncio.create_task(sm.update_session(token="B", user_id="u2"))
+        await asyncio.sleep(0)
         t2 = asyncio.create_task(sm.transition(IdentityState.AGENT_USER))
         await asyncio.sleep(0)
 
         cb_release.set()
-        results = await asyncio.gather(t1, t2, return_exceptions=True)
+        results = await asyncio.gather(t1, update_task, t2, return_exceptions=True)
 
         assert results[0] is None
-        assert isinstance(results[1], InvalidTransitionError)
+        assert results[1] is None
+        assert isinstance(results[2], InvalidTransitionError)
         assert sm.session.state == IdentityState.DELEGATED
         assert sm.session.token == "B"
         assert sm.session.user_id == "u2"
@@ -407,21 +404,103 @@ class TestAttributionType:
 class TestUpdateSession:
     """update_session modifies fields without state transition."""
 
-    def test_update_token(self) -> None:
+    @pytest.mark.asyncio
+    async def test_update_token(self) -> None:
         sm = IdentityStateMachine()
-        sm.update_session(token="new-token", user_id="u123")
+        await sm.update_session(token="new-token", user_id="u123")
         assert sm.session.token == "new-token"
         assert sm.session.user_id == "u123"
 
-    def test_update_rejects_state(self) -> None:
+    @pytest.mark.asyncio
+    async def test_update_rejects_state(self) -> None:
         sm = IdentityStateMachine()
         with pytest.raises(AttributeError, match="state"):
-            sm.update_session(state=IdentityState.DELEGATED)
+            await sm.update_session(state=IdentityState.DELEGATED)
 
-    def test_update_rejects_unknown_field(self) -> None:
+    @pytest.mark.asyncio
+    async def test_update_rejects_unknown_field(self) -> None:
         sm = IdentityStateMachine()
         with pytest.raises(AttributeError):
-            sm.update_session(nonexistent_field="value")
+            await sm.update_session(nonexistent_field="value")
+
+    @pytest.mark.asyncio
+    async def test_update_with_no_fields_does_not_wait_for_transition_lock(self) -> None:
+        sm = IdentityStateMachine()
+        cb_started = asyncio.Event()
+        cb_release = asyncio.Event()
+
+        async def cb() -> None:
+            cb_started.set()
+            await cb_release.wait()
+
+        transition_task = asyncio.create_task(
+            sm.transition(IdentityState.DELEGATED, callback=cb)
+        )
+        await cb_started.wait()
+
+        await asyncio.wait_for(sm.update_session(), timeout=0.05)
+
+        cb_release.set()
+        await transition_task
+
+    @pytest.mark.asyncio
+    async def test_concurrent_update_waits_for_transition_callback(self) -> None:
+        sm = IdentityStateMachine()
+        await sm.update_session(token="OLD", user_id="old-user")
+        token_read = asyncio.Event()
+        callback_can_finish = asyncio.Event()
+        observed: list[tuple[str | None, str | None]] = []
+
+        async def cb() -> None:
+            token = sm.session.token
+            token_read.set()
+            await callback_can_finish.wait()
+            observed.append((token, sm.session.user_id))
+
+        transition_task = asyncio.create_task(
+            sm.transition(IdentityState.DELEGATED, callback=cb)
+        )
+        await token_read.wait()
+
+        update_task = asyncio.create_task(
+            sm.update_session(token="NEW", user_id="new-user")
+        )
+        await asyncio.sleep(0)
+        callback_can_finish.set()
+
+        await transition_task
+        await update_task
+
+        assert observed == [("OLD", "old-user")]
+        assert sm.session.token == "NEW"
+        assert sm.session.user_id == "new-user"
+
+    @pytest.mark.asyncio
+    async def test_update_session_inside_transition_callback_deadlocks(self) -> None:
+        sm = IdentityStateMachine()
+
+        async def cb() -> None:
+            await sm.update_session(token="callback-token")
+
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(
+                sm.transition(IdentityState.DELEGATED, callback=cb),
+                timeout=0.2,
+            )
+
+    @pytest.mark.asyncio
+    async def test_concurrent_updates_leave_consistent_token_user_pair(self) -> None:
+        sm = IdentityStateMachine()
+        pairs = [(f"token-{idx}", f"user-{idx}") for idx in range(10)]
+
+        async def set_pair(token: str, user_id: str) -> None:
+            await sm.update_session(token=token, user_id=user_id)
+
+        await asyncio.gather(
+            *(set_pair(token, user_id) for token, user_id in pairs)
+        )
+
+        assert (sm.session.token, sm.session.user_id) in pairs
 
 
 class TestListeners:

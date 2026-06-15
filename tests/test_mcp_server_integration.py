@@ -619,7 +619,7 @@ class TestTokenRefreshDispatch:
         try:
             sm = IdentityStateMachine()
             await sm.transition(IdentityState.AGENT_USER)
-            sm.update_session(token="expired", token_acquired_at=time.monotonic() - 4000)
+            await sm.update_session(token="expired", token_acquired_at=time.monotonic() - 4000)
             mcp_server._identity = sm
             mcp_server._state["config"] = mock_config
 
@@ -649,7 +649,7 @@ class TestTokenRefreshDispatch:
         try:
             sm = IdentityStateMachine()
             await sm.transition(IdentityState.DELEGATED)
-            sm.update_session(token="expired", token_acquired_at=time.monotonic() - 4000)
+            await sm.update_session(token="expired", token_acquired_at=time.monotonic() - 4000)
             mcp_server._identity = sm
             mcp_server._state["config"] = mock_config
 
@@ -687,7 +687,7 @@ class TestTokenRefreshDispatch:
         try:
             sm = IdentityStateMachine()
             await sm.transition(IdentityState.DELEGATED)
-            sm.update_session(token="expired", token_acquired_at=time.monotonic() - 4000)
+            await sm.update_session(token="expired", token_acquired_at=time.monotonic() - 4000)
             mcp_server._identity = sm
             mcp_server._state["config"] = mock_config
 
@@ -740,7 +740,7 @@ class TestTokenRefreshDispatch:
         try:
             sm = IdentityStateMachine()
             await sm.transition(IdentityState.DELEGATED)
-            sm.update_session(
+            await sm.update_session(
                 token="expired",
                 token_acquired_at=time.monotonic() - 4000,
                 user_id="human-user-oid",
@@ -907,7 +907,7 @@ class TestTokenRefreshDispatch:
         try:
             sm = IdentityStateMachine()
             await sm.transition(IdentityState.DELEGATED)
-            sm.update_session(token="expired", token_acquired_at=time.monotonic() - 4000)
+            await sm.update_session(token="expired", token_acquired_at=time.monotonic() - 4000)
             mcp_server._identity = sm
             mcp_server._state["config"] = mock_config
 
