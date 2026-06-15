@@ -122,7 +122,7 @@ class TestEagerTokenRefresh:
             # Set up identity state machine in AGENT_USER state
             sm = IdentityStateMachine()
             await sm.transition(IdentityState.AGENT_USER)
-            sm.update_session(
+            await sm.update_session(
                 token="old-token",
                 token_acquired_at=time.monotonic() - 3400,
             )
@@ -156,7 +156,7 @@ class TestEagerTokenRefresh:
         try:
             sm = IdentityStateMachine()
             await sm.transition(IdentityState.AGENT_USER)
-            sm.update_session(
+            await sm.update_session(
                 token="fresh-token",
                 token_acquired_at=time.monotonic() - 100,
             )
@@ -201,7 +201,7 @@ class TestLazyTokenRetry:
         try:
             sm = IdentityStateMachine()
             await sm.transition(IdentityState.AGENT_USER)
-            sm.update_session(
+            await sm.update_session(
                 token="old-token",
                 token_acquired_at=time.monotonic(),
             )
@@ -239,7 +239,7 @@ class TestLazyTokenRetry:
         try:
             sm = IdentityStateMachine()
             await sm.transition(IdentityState.AGENT_USER)
-            sm.update_session(
+            await sm.update_session(
                 token="old-token",
                 token_acquired_at=time.monotonic(),
             )
@@ -288,7 +288,7 @@ class TestExistingToolsRetrofitted:
         try:
             sm = IdentityStateMachine()
             await sm.transition(IdentityState.AGENT_USER)
-            sm.update_session(
+            await sm.update_session(
                 token="old-token",
                 token_acquired_at=time.monotonic(),
             )
@@ -341,7 +341,7 @@ class TestExistingToolsRetrofitted:
         try:
             sm = IdentityStateMachine()
             await sm.transition(IdentityState.DELEGATED)
-            sm.update_session(
+            await sm.update_session(
                 token="deleg-token",
                 token_acquired_at=time.monotonic(),
                 auth_mode="delegated",
@@ -397,7 +397,7 @@ class TestExistingToolsRetrofitted:
         try:
             sm = IdentityStateMachine()
             await sm.transition(IdentityState.AGENT_USER)
-            sm.update_session(
+            await sm.update_session(
                 token="agent-token",
                 token_acquired_at=time.monotonic(),
                 auth_mode="agent_user",
@@ -466,7 +466,7 @@ class TestExistingToolsRetrofitted:
         try:
             sm = IdentityStateMachine()
             await sm.transition(IdentityState.AGENT_USER)
-            sm.update_session(
+            await sm.update_session(
                 token="old-token",
                 token_acquired_at=time.monotonic(),
             )
