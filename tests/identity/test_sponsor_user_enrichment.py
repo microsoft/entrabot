@@ -24,8 +24,11 @@ from typing import Any
 
 import httpx
 import pytest
+import respx
 
+from entrabot.errors import GraphApiError
 from entrabot.identity.sponsors import (
+    AGENT_IDENTITY_GRAPH_BASE,
     AgentIdentitySponsor,
     fetch_agent_identity_sponsors,
 )
@@ -71,6 +74,63 @@ def _full_user_response(sponsor_id: str) -> dict[str, Any]:
 
 class TestUserEnrichmentTokenSeparation:
     """The user-details hop must accept an independent token provider."""
+
+    def test_sponsors_collection_raises_graph_error_for_200_non_json_response(self) -> None:
+        config = _make_config()
+        url = (
+            f"{AGENT_IDENTITY_GRAPH_BASE}/servicePrincipals/{config.agent_object_id}"
+            "/microsoft.graph.agentIdentity/sponsors?"
+            "$select=id,userPrincipalName,mail,otherMails,proxyAddresses,identities"
+        )
+
+        with respx.mock(assert_all_called=True) as router:
+            router.get(url).mock(
+                return_value=httpx.Response(
+                    200,
+                    text="<html>edge proxy error</html>",
+                    headers={"content-type": "text/html"},
+                )
+            )
+
+            with pytest.raises(GraphApiError) as exc_info:
+                fetch_agent_identity_sponsors(
+                    config,
+                    token_provider=lambda _cfg: "agent-identity-token",
+                )
+
+        assert exc_info.value.status_code == 200
+        assert "invalid JSON" in exc_info.value.message
+        assert "<html>edge proxy error</html>" in exc_info.value.message
+
+    def test_sponsors_collection_valid_json_still_works_with_respx(self) -> None:
+        sponsor_id = "33333333-3333-3333-3333-333333333333"
+        config = _make_config()
+        sponsors_url = (
+            f"{AGENT_IDENTITY_GRAPH_BASE}/servicePrincipals/{config.agent_object_id}"
+            "/microsoft.graph.agentIdentity/sponsors?"
+            "$select=id,userPrincipalName,mail,otherMails,proxyAddresses,identities"
+        )
+        user_url = (
+            f"{AGENT_IDENTITY_GRAPH_BASE}/users/{sponsor_id}"
+            "?$select=id,userPrincipalName,mail,otherMails,proxyAddresses,identities"
+        )
+
+        with respx.mock(assert_all_called=True) as router:
+            router.get(sponsors_url).mock(
+                return_value=httpx.Response(200, json=_sponsors_response_with_id_only(sponsor_id))
+            )
+            router.get(user_url).mock(
+                return_value=httpx.Response(200, json=_full_user_response(sponsor_id))
+            )
+
+            sponsors = fetch_agent_identity_sponsors(
+                config,
+                token_provider=lambda _cfg: "agent-identity-token",
+                user_token_provider=lambda _cfg: "agent-user-token",
+            )
+
+        assert len(sponsors) == 1
+        assert sponsors[0].mail == "alice@contoso.com"
 
     def test_user_enrichment_uses_separate_user_token_when_provided(self) -> None:
         sponsor_id = "33333333-3333-3333-3333-333333333333"
@@ -339,3 +399,108 @@ class TestGetSponsorAllowlistChatMembersFallback:
             allowlist = await _get_sponsor_allowlist()
 
             assert allowlist == {"alice@contoso.com", "bob@contoso.com"}
+
+
+class TestSiblingJsonParseHardening:
+    """Two sibling .json() call sites in sponsors.py share the same exposure
+    as the previously-hardened sponsors-collection parse: an edge proxy / WAF
+    returning HTTP 200 with HTML body raises json.JSONDecodeError before any
+    typed Graph error can surface. The agent's docstring and the existing
+    test above only covered the sponsors-collection site at L369; the sibling
+    sites at L402 (_fetch_sponsor_user_details) and L480 (fetch_chat_members)
+    are covered here.
+
+    Semantics: both sibling sites already degrade gracefully on non-200
+    responses (return None / continue with warning). A bad-JSON 200 must
+    follow the same degradation path, not raise — otherwise a single
+    misbehaving Graph response would crash unrelated per-chat / per-sponsor
+    iteration.
+    """
+
+    def test_sponsor_user_details_returns_none_and_warns_on_non_json_200(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from entrabot.identity.sponsors import _fetch_sponsor_user_details
+
+        sponsor_id = "33333333-3333-3333-3333-333333333333"
+        user_url = (
+            f"{AGENT_IDENTITY_GRAPH_BASE}/users/{sponsor_id}"
+            "?$select=id,userPrincipalName,mail,otherMails,proxyAddresses,identities"
+        )
+
+        with respx.mock(assert_all_called=True) as router:
+            router.get(user_url).mock(
+                return_value=httpx.Response(
+                    200,
+                    text="<html>captive portal</html>",
+                    headers={"content-type": "text/html"},
+                )
+            )
+
+            with httpx.Client() as client, caplog.at_level("WARNING"):
+                result = _fetch_sponsor_user_details(
+                    token="user-token",
+                    user_id=sponsor_id,
+                    client=client,
+                )
+
+        assert result is None, "expected None on bad-JSON 200, not a raised exception"
+        assert any(sponsor_id in r.message for r in caplog.records), (
+            "expected a WARNING naming the sponsor user_id so operators can correlate"
+        )
+
+    def test_fetch_chat_members_skips_bad_json_chat_and_continues(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """One chat returns 200 + HTML, another returns valid JSON. The
+        first chat's members are skipped (with WARNING), the second chat's
+        members are returned. This mirrors the existing non-200 behavior
+        at sponsors.py L472-478.
+        """
+        from entrabot.identity.sponsors import fetch_chat_members
+
+        chat_a = "19:badjson@thread.v2"
+        chat_b = "19:goodjson@thread.v2"
+        members_url_template = (
+            "https://graph.microsoft.com/v1.0/chats/{chat_id}/members"
+        )
+
+        with respx.mock(assert_all_called=True) as router:
+            router.get(members_url_template.format(chat_id=chat_a)).mock(
+                return_value=httpx.Response(
+                    200,
+                    text="<html>WAF returned an error page</html>",
+                    headers={"content-type": "text/html"},
+                )
+            )
+            router.get(members_url_template.format(chat_id=chat_b)).mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "value": [
+                            {
+                                "userId": "user-b",
+                                "displayName": "Bob",
+                                "email": "bob@contoso.com",
+                                "roles": ["member"],
+                            }
+                        ]
+                    },
+                )
+            )
+
+            with caplog.at_level("WARNING"):
+                members = fetch_chat_members(
+                    _make_config(),
+                    [chat_a, chat_b],
+                    token_provider=lambda _cfg: "agent-user-token",
+                )
+
+        # Chat A skipped — its members are NOT in the result
+        assert all(m["user_id"] != "user-a" for m in members)
+        # Chat B's members ARE in the result
+        assert any(m["user_id"] == "user-b" for m in members)
+        # Warning logged for chat A
+        assert any(chat_a in r.message for r in caplog.records), (
+            "expected a WARNING naming the bad-JSON chat_id so operators can correlate"
+        )

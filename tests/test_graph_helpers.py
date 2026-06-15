@@ -186,6 +186,84 @@ class TestGraphCollectionValues:
         assert result == [{"id": "a"}, {"id": "b"}]
         assert mock_requests.request.call_count == 2
 
+    @pytest.mark.parametrize(
+        "next_link",
+        [
+            "https://attacker.com/beta/users?$skip=1",
+            "https://graph.microsoft.com.attacker.com/beta/users?$skip=1",
+            "http://graph.microsoft.com/beta/users?$skip=1",
+            # Userinfo smuggling — these "look" like a Graph host to humans
+            # scanning logs but route to the userinfo's authority. _is_graph_url
+            # already rejects these (PR #67), but explicit coverage locks in the
+            # contract so a future caller can't accidentally relax it.
+            "https://attacker.com@graph.microsoft.com/beta/users?$skip=1",
+            "https://user:pwd@graph.microsoft.com/beta/users?$skip=1",
+        ],
+    )
+    def test_rejects_untrusted_next_link_before_sending_token(self, next_link, caplog):
+        from entrabot.graph_helpers import UnsafeGraphNextLinkError, graph_collection_values
+
+        page1 = _resp(
+            200,
+            {
+                "value": [{"id": "a"}],
+                "@odata.nextLink": next_link,
+            },
+        )
+        with (
+            patch("entrabot.graph_helpers.requests") as mock_requests,
+            pytest.raises(UnsafeGraphNextLinkError, match="unsafe @odata.nextLink"),
+            caplog.at_level("WARNING", logger="entrabot.graph_helpers"),
+        ):
+            mock_requests.request.return_value = page1
+            graph_collection_values("/users", "tok")
+
+        assert mock_requests.request.call_count == 1
+        assert "unsafe @odata.nextLink" in caplog.text
+        assert next_link not in caplog.text
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "graph.microsoft.us",
+            "dod-graph.microsoft.us",
+            "microsoftgraph.chinacloudapi.cn",
+        ],
+    )
+    def test_accepts_sovereign_cloud_next_links(self, host):
+        from entrabot.graph_helpers import graph_collection_values
+
+        page1 = _resp(
+            200,
+            {
+                "value": [{"id": "a"}],
+                "@odata.nextLink": f"https://{host}/v1.0/users?$skiptoken=abc",
+            },
+        )
+        page2 = _resp(200, {"value": [{"id": host}]})
+        with patch("entrabot.graph_helpers.requests") as mock_requests:
+            mock_requests.request.side_effect = [page1, page2]
+            result = graph_collection_values("/users", "tok")
+
+        assert result == [{"id": "a"}, {"id": host}]
+        assert mock_requests.request.call_count == 2
+
+    def test_accepts_commercial_graph_next_link_and_fetches_second_page(self):
+        from entrabot.graph_helpers import graph_collection_values
+
+        next_link = "https://graph.microsoft.com/v1.0/users?$skiptoken=abc"
+        page1 = _resp(200, {"value": [{"id": "a"}], "@odata.nextLink": next_link})
+        page2 = _resp(200, {"value": [{"id": "b"}]})
+        with patch("entrabot.graph_helpers.requests") as mock_requests:
+            mock_requests.request.side_effect = [page1, page2]
+            result = graph_collection_values("/users", "tok")
+
+        assert result == [{"id": "a"}, {"id": "b"}]
+        assert mock_requests.request.call_args_list[1].args == ("GET", next_link)
+        assert mock_requests.request.call_args_list[1].kwargs["headers"][
+            "Authorization"
+        ] == "Bearer tok"
+
     def test_error_raises(self):
         from entrabot.graph_helpers import graph_collection_values
 
