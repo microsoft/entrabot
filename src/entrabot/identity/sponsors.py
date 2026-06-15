@@ -399,7 +399,19 @@ def _fetch_sponsor_user_details(
     )
     resp = client.get(url, headers={"Authorization": f"Bearer {token}"})
     if resp.status_code == 200:
-        return AgentIdentitySponsor.from_graph_user(resp.json())
+        try:
+            payload = resp.json()
+        except json.JSONDecodeError:
+            # Edge proxy / WAF returned HTTP 200 with HTML body. Degrade
+            # gracefully — caller treats this like a non-200: sponsor is
+            # used without enrichment. Log so operators can correlate.
+            logger.warning(
+                "failed to parse sponsor user details for %s: invalid JSON on 200 (body=%r)",
+                user_id,
+                resp.text[:200],
+            )
+            return None
+        return AgentIdentitySponsor.from_graph_user(payload)
     if resp.status_code == 401:
         raise TokenExpiredError("Agent Identity token expired while reading sponsor user details")
     return None
@@ -477,7 +489,20 @@ def fetch_chat_members(
                     resp.text[:200],
                 )
                 continue
-            for member in resp.json().get("value", []):
+            try:
+                payload = resp.json()
+            except json.JSONDecodeError:
+                # Edge proxy / WAF returned HTTP 200 with HTML body. Mirror
+                # the non-200 fallback: log + continue to the next chat so
+                # one misbehaving Graph response doesn't poison the whole
+                # per-chat iteration.
+                logger.warning(
+                    "failed to parse chat members for %s: invalid JSON on 200 (body=%r)",
+                    chat_id,
+                    resp.text[:200],
+                )
+                continue
+            for member in payload.get("value", []):
                 if isinstance(member, dict):
                     members.append(
                         {

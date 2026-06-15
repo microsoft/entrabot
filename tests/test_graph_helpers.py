@@ -192,6 +192,12 @@ class TestGraphCollectionValues:
             "https://attacker.com/beta/users?$skip=1",
             "https://graph.microsoft.com.attacker.com/beta/users?$skip=1",
             "http://graph.microsoft.com/beta/users?$skip=1",
+            # Userinfo smuggling — these "look" like a Graph host to humans
+            # scanning logs but route to the userinfo's authority. _is_graph_url
+            # already rejects these (PR #67), but explicit coverage locks in the
+            # contract so a future caller can't accidentally relax it.
+            "https://attacker.com@graph.microsoft.com/beta/users?$skip=1",
+            "https://user:pwd@graph.microsoft.com/beta/users?$skip=1",
         ],
     )
     def test_rejects_untrusted_next_link_before_sending_token(self, next_link, caplog):
