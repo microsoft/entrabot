@@ -13,6 +13,7 @@ PTY-supervisor path. Background poll uses the same gate when present.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -364,9 +365,17 @@ def fetch_agent_identity_sponsors(
     if resp.status_code != 200:
         raise GraphApiError(resp.status_code, resp.text or "failed to read Agent Identity sponsors")
 
+    try:
+        sponsors_payload = resp.json()
+    except json.JSONDecodeError as exc:
+        raise GraphApiError(
+            resp.status_code,
+            f"failed to read Agent Identity sponsors: invalid JSON response: {resp.text[:500]}",
+        ) from exc
+
     sponsors: list[AgentIdentitySponsor] = []
     with httpx.Client(**client_kwargs) as client:
-        for item in resp.json().get("value", []):
+        for item in sponsors_payload.get("value", []):
             if not isinstance(item, dict):
                 continue
             sponsor = AgentIdentitySponsor.from_graph_user(item)

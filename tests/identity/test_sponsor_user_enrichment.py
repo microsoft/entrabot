@@ -24,8 +24,11 @@ from typing import Any
 
 import httpx
 import pytest
+import respx
 
+from entrabot.errors import GraphApiError
 from entrabot.identity.sponsors import (
+    AGENT_IDENTITY_GRAPH_BASE,
     AgentIdentitySponsor,
     fetch_agent_identity_sponsors,
 )
@@ -71,6 +74,63 @@ def _full_user_response(sponsor_id: str) -> dict[str, Any]:
 
 class TestUserEnrichmentTokenSeparation:
     """The user-details hop must accept an independent token provider."""
+
+    def test_sponsors_collection_raises_graph_error_for_200_non_json_response(self) -> None:
+        config = _make_config()
+        url = (
+            f"{AGENT_IDENTITY_GRAPH_BASE}/servicePrincipals/{config.agent_object_id}"
+            "/microsoft.graph.agentIdentity/sponsors?"
+            "$select=id,userPrincipalName,mail,otherMails,proxyAddresses,identities"
+        )
+
+        with respx.mock(assert_all_called=True) as router:
+            router.get(url).mock(
+                return_value=httpx.Response(
+                    200,
+                    text="<html>edge proxy error</html>",
+                    headers={"content-type": "text/html"},
+                )
+            )
+
+            with pytest.raises(GraphApiError) as exc_info:
+                fetch_agent_identity_sponsors(
+                    config,
+                    token_provider=lambda _cfg: "agent-identity-token",
+                )
+
+        assert exc_info.value.status_code == 200
+        assert "invalid JSON" in exc_info.value.message
+        assert "<html>edge proxy error</html>" in exc_info.value.message
+
+    def test_sponsors_collection_valid_json_still_works_with_respx(self) -> None:
+        sponsor_id = "33333333-3333-3333-3333-333333333333"
+        config = _make_config()
+        sponsors_url = (
+            f"{AGENT_IDENTITY_GRAPH_BASE}/servicePrincipals/{config.agent_object_id}"
+            "/microsoft.graph.agentIdentity/sponsors?"
+            "$select=id,userPrincipalName,mail,otherMails,proxyAddresses,identities"
+        )
+        user_url = (
+            f"{AGENT_IDENTITY_GRAPH_BASE}/users/{sponsor_id}"
+            "?$select=id,userPrincipalName,mail,otherMails,proxyAddresses,identities"
+        )
+
+        with respx.mock(assert_all_called=True) as router:
+            router.get(sponsors_url).mock(
+                return_value=httpx.Response(200, json=_sponsors_response_with_id_only(sponsor_id))
+            )
+            router.get(user_url).mock(
+                return_value=httpx.Response(200, json=_full_user_response(sponsor_id))
+            )
+
+            sponsors = fetch_agent_identity_sponsors(
+                config,
+                token_provider=lambda _cfg: "agent-identity-token",
+                user_token_provider=lambda _cfg: "agent-user-token",
+            )
+
+        assert len(sponsors) == 1
+        assert sponsors[0].mail == "alice@contoso.com"
 
     def test_user_enrichment_uses_separate_user_token_when_provided(self) -> None:
         sponsor_id = "33333333-3333-3333-3333-333333333333"

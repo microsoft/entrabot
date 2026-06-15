@@ -7,14 +7,37 @@ five or more provisioning scripts.
 
 from __future__ import annotations
 
+import logging
 import time
+from urllib.parse import urlparse
 
 import requests
+
+from entrabot.url_safety import _is_graph_url
 
 GRAPH_BETA = "https://graph.microsoft.com/beta"
 GRAPH_V1 = "https://graph.microsoft.com/v1.0"
 
 _RETRYABLE = frozenset({429, 500, 502, 503, 504})
+logger = logging.getLogger(__name__)
+
+
+class GraphPaginationError(RuntimeError):
+    """Graph collection pagination failed."""
+
+
+class UnsafeGraphNextLinkError(GraphPaginationError):
+    """Graph returned an unsafe ``@odata.nextLink`` URL."""
+
+
+def _next_link_origin(next_link: str) -> str:
+    try:
+        parsed = urlparse(next_link)
+    except Exception:
+        return "<unparseable>"
+    scheme = parsed.scheme or "<missing>"
+    host = parsed.hostname or "<missing>"
+    return f"{scheme}://{host}"
 
 
 def odata_escape(value: str) -> str:
@@ -92,6 +115,12 @@ def graph_collection_values(
     values.extend(data.get("value", []))
     next_link = data.get("@odata.nextLink")
     while isinstance(next_link, str):
+        if not _is_graph_url(next_link):
+            logger.warning(
+                "Graph returned unsafe @odata.nextLink origin: %s",
+                _next_link_origin(next_link),
+            )
+            raise UnsafeGraphNextLinkError(f"{action} failed: unsafe @odata.nextLink")
         resp = requests.request(
             "GET",
             next_link,
