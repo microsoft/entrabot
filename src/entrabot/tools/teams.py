@@ -10,9 +10,12 @@ Supports two identity modes:
 
 from __future__ import annotations
 
+import html
+import json
 import logging
 import re
 import sys
+from typing import Any
 
 import httpx
 
@@ -91,7 +94,18 @@ def _build_blueprint_assertion(config: EntraBotConfig, token_endpoint: str) -> s
     )
 
 
-def _check_token_response(hop: str, data: dict) -> str:
+def _parse_token_response(resp: httpx.Response, hop: str) -> dict[str, Any]:
+    try:
+        return resp.json()
+    except json.JSONDecodeError as exc:
+        raise TokenExchangeError(
+            hop=hop,
+            error="non_json_response",
+            description=f"HTTP {resp.status_code}: {resp.text[:200]}",
+        ) from exc
+
+
+def _check_token_response(hop: str, data: dict[str, Any]) -> str:
     """Extract access_token from a token response, raising on error."""
     if "error" in data:
         raise TokenExchangeError(
@@ -163,7 +177,8 @@ def acquire_agent_user_token(
                 "client_assertion": jwt_assertion,
             },
         )
-    t1_token = _check_token_response("hop1:blueprint", hop1_resp.json())
+    hop1 = "hop1:blueprint"
+    t1_token = _check_token_response(hop1, _parse_token_response(hop1_resp, hop1))
 
     # Hop 2: Agent Identity exchange token (T2)
     # The Agent Identity presents T1 as its client assertion.
@@ -179,7 +194,8 @@ def acquire_agent_user_token(
                 "client_assertion": t1_token,
             },
         )
-    t2_token = _check_token_response("hop2:agent_identity", hop2_resp.json())
+    hop2 = "hop2:agent_identity"
+    t2_token = _check_token_response(hop2, _parse_token_response(hop2_resp, hop2))
 
     # Hop 3: Agent User resource token via user_fic grant
     # Presents both T1 (client_assertion) and T2 (user_federated_identity_credential).
@@ -199,7 +215,8 @@ def acquire_agent_user_token(
                 "requested_token_use": "on_behalf_of",
             },
         )
-    resource_token = _check_token_response("hop3:agent_user", hop3_resp.json())
+    hop3 = "hop3:agent_user"
+    resource_token = _check_token_response(hop3, _parse_token_response(hop3_resp, hop3))
 
     return resource_token
 
@@ -255,7 +272,8 @@ def acquire_agent_identity_token(
                 "client_assertion": jwt_assertion,
             },
         )
-    t1_token = _check_token_response("hop1:blueprint", hop1_resp.json())
+    hop1 = "hop1:blueprint"
+    t1_token = _check_token_response(hop1, _parse_token_response(hop1_resp, hop1))
 
     with httpx.Client(timeout=timeout) as client:
         hop2_resp = client.post(
@@ -268,7 +286,8 @@ def acquire_agent_identity_token(
                 "client_assertion": t1_token,
             },
         )
-    return _check_token_response("hop2:agent_identity", hop2_resp.json())
+    hop2 = "hop2:agent_identity"
+    return _check_token_response(hop2, _parse_token_response(hop2_resp, hop2))
 
 
 async def create_one_on_one_chat(
@@ -946,7 +965,7 @@ async def post_thinking_placeholder(
     payload = {
         "body": {
             "contentType": "html",
-            "content": f"<i>{text}</i>",
+            "content": f"<i>{html.escape(text, quote=False)}</i>",
         },
     }
     headers = {
@@ -1002,7 +1021,7 @@ async def update_placeholder(
     payload = {
         "body": {
             "contentType": "html",
-            "content": f"<i>{progress_text}</i>",
+            "content": f"<i>{html.escape(progress_text, quote=False)}</i>",
         },
     }
     headers = {
