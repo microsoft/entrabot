@@ -284,7 +284,7 @@ class TestRender:
 # ---------------------------------------------------------------------------
 class TestSendSummary:
     @pytest.mark.asyncio
-    async def test_sends_to_graph_sendmail(self) -> None:
+    async def test_sends_to_graph_sendmail(self, monkeypatch) -> None:
         captured: dict = {}
 
         def handler(request):
@@ -292,6 +292,8 @@ class TestSendSummary:
             captured["json"] = request.read()
             captured["headers"] = dict(request.headers)
             return httpx.Response(202)
+
+        monkeypatch.setattr("entrabot.tools.audit.log_event", lambda **_kwargs: {})
 
         with respx.mock:
             respx.post(GRAPH_SENDMAIL_URL).mock(side_effect=handler)
@@ -310,8 +312,10 @@ class TestSendSummary:
         assert "&lt;p&gt;hi&lt;/p&gt;" in body or "<p>hi</p>" in body
 
     @pytest.mark.asyncio
-    async def test_401_raises_token_expired(self) -> None:
+    async def test_401_raises_token_expired(self, monkeypatch) -> None:
         from entrabot.errors import TokenExpiredError
+
+        monkeypatch.setattr("entrabot.tools.audit.log_event", lambda **_kwargs: {})
 
         with respx.mock:
             respx.post(GRAPH_SENDMAIL_URL).mock(return_value=httpx.Response(401))
@@ -322,6 +326,117 @@ class TestSendSummary:
                     subject="s",
                     to=["alice@example.com"],
                 )
+
+    @pytest.mark.asyncio
+    async def test_audits_pending_before_send(self, monkeypatch) -> None:
+        calls: list[tuple[str, dict]] = []
+
+        def fake_log_event(**kwargs):
+            calls.append(("audit", kwargs))
+            return {"event_id": "evt-1", **kwargs}
+
+        async def fake_send_email(**kwargs):
+            assert calls, "audit must happen before email dispatch"
+            calls.append(("send", kwargs))
+
+        monkeypatch.setattr("entrabot.tools.audit.log_event", fake_log_event)
+        monkeypatch.setattr("entrabot.tools.email.send_email", fake_send_email)
+
+        await send_summary_email(
+            token="tok",
+            html="<p>secret body content</p>",
+            subject="Daily summary",
+            to=["alice@example.com", "bob@example.com"],
+        )
+
+        assert calls[0][0] == "audit"
+        assert calls[0][1]["action"] == "send_daily_summary"
+        assert calls[0][1]["outcome"] == "pending"
+        assert calls[0][1]["resource"] == "alice@example.com,bob@example.com"
+        assert "secret body content" not in repr(calls[0][1])
+        assert calls[1][0] == "send"
+
+    @pytest.mark.asyncio
+    async def test_audits_success_after_send(self, monkeypatch) -> None:
+        audit_events: list[dict] = []
+
+        def fake_log_event(**kwargs):
+            audit_events.append(kwargs)
+            return {"event_id": f"evt-{len(audit_events)}", **kwargs}
+
+        async def fake_send_email(**_kwargs):
+            return None
+
+        monkeypatch.setattr("entrabot.tools.audit.log_event", fake_log_event)
+        monkeypatch.setattr("entrabot.tools.email.send_email", fake_send_email)
+
+        await send_summary_email(
+            token="tok",
+            html="<p>summary body</p>",
+            subject="Daily summary",
+            to=["alice@example.com"],
+        )
+
+        assert [event["outcome"] for event in audit_events] == ["pending", "success"]
+        assert all(event["resource"] == "alice@example.com" for event in audit_events)
+        assert all("summary body" not in repr(event) for event in audit_events)
+
+    @pytest.mark.asyncio
+    async def test_audits_failure_and_reraises_send_error(self, monkeypatch) -> None:
+        audit_events: list[dict] = []
+
+        def fake_log_event(**kwargs):
+            audit_events.append(kwargs)
+            return {"event_id": f"evt-{len(audit_events)}", **kwargs}
+
+        async def fake_send_email(**_kwargs):
+            raise RuntimeError("graph send failed")
+
+        monkeypatch.setattr("entrabot.tools.audit.log_event", fake_log_event)
+        monkeypatch.setattr("entrabot.tools.email.send_email", fake_send_email)
+
+        with pytest.raises(RuntimeError, match="graph send failed"):
+            await send_summary_email(
+                token="tok",
+                html="<p>private summary body</p>",
+                subject="Daily summary",
+                to=["alice@example.com"],
+            )
+
+        assert [event["outcome"] for event in audit_events] == ["pending", "failure"]
+        assert audit_events[-1]["action"] == "send_daily_summary"
+        assert audit_events[-1]["resource"] == "alice@example.com"
+        assert "private summary body" not in repr(audit_events)
+
+    @pytest.mark.asyncio
+    async def test_audit_failure_prevents_email_dispatch(self, monkeypatch) -> None:
+        from entrabot.errors import AuditAttributionError
+
+        send_called = False
+
+        def fake_log_event(**kwargs):
+            assert kwargs["outcome"] == "pending"
+            raise AuditAttributionError(
+                action=kwargs["action"],
+                resource=kwargs["resource"],
+            )
+
+        async def fake_send_email(**_kwargs):
+            nonlocal send_called
+            send_called = True
+
+        monkeypatch.setattr("entrabot.tools.audit.log_event", fake_log_event)
+        monkeypatch.setattr("entrabot.tools.email.send_email", fake_send_email)
+
+        with pytest.raises(AuditAttributionError):
+            await send_summary_email(
+                token="tok",
+                html="<p>private summary body</p>",
+                subject="Daily summary",
+                to=["alice@example.com"],
+            )
+
+        assert not send_called
 
 
 # ---------------------------------------------------------------------------

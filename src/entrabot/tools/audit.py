@@ -35,8 +35,11 @@ def log_event(
 ) -> dict:
     """Write an audit event and return it as a dict.
 
-    If *agent_id* is not provided the active agent from the credential store
-    is used (best-effort; falls back to ``"unknown"``).
+    If *agent_id* is not provided, the active identity state, configured Agent
+    ID, configured Blueprint app ID, and finally the legacy credential-store
+    key are tried in that order. Agent-attributed events fail closed when no
+    active identity can be resolved; bootstrap/preflight callers that genuinely
+    have no identity must pass ``attribution_type="none"``.
 
     *attribution_type* distinguishes agent actions from delegated-human actions:
     - ``"agent"`` — action performed as the Agent User identity
@@ -47,19 +50,50 @@ def log_event(
         # InsecureKeyringBackendError must NOT be silently swallowed — that
         # would convert the load-bearing fail-closed signal into a no-op
         # "unknown" agent attribution on every audit call.
-        from entrabot.errors import InsecureKeyringBackendError
+        from entrabot.errors import AuditAttributionError, InsecureKeyringBackendError
 
         try:
+            from entrabot.identity import get_active_identity_state
+            from entrabot.models import IdentityState
+
+            identity = get_active_identity_state()
+            agent_id = (
+                identity.session.user_id
+                if identity and identity.session and identity.state == IdentityState.AGENT_USER
+                else None
+            )
+        except Exception:
+            agent_id = None
+
+        if not agent_id:
+            try:
+                cfg = get_config()
+                agent_id = cfg.agent_id or cfg.blueprint_app_id
+            except Exception:
+                agent_id = None
+
+        try_credential_store = not agent_id
+        if try_credential_store:
             from entrabot.platform import get_credential_store
 
-            store = get_credential_store()
-            agent_id = store.retrieve("entrabot", "active_client_id") or "unknown"
-        except InsecureKeyringBackendError:
-            raise
-        except Exception:
-            # Other failures (no entry, transport hiccup, no agent provisioned
-            # yet) fall back to "unknown" — preserves the audit record so the
-            # action is at least observable.
+            try:
+                store = get_credential_store()
+                agent_id = store.retrieve("entrabot", "active_client_id")
+            except InsecureKeyringBackendError:
+                raise
+            except Exception:
+                # Other failures (no entry, transport hiccup, no agent provisioned
+                # yet) still mean attribution was not resolved. Agent-attributed
+                # actions must fail closed rather than writing "unknown".
+                agent_id = None
+
+        if not agent_id:
+            if attribution_type == "agent":
+                raise AuditAttributionError(
+                    action=action,
+                    resource=resource,
+                    reason="no agent identity resolvable from session, config, or credential store",
+                )
             agent_id = "unknown"
 
     event = {

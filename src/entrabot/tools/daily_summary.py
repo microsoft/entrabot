@@ -174,14 +174,44 @@ async def send_summary_email(
     ``html``/``subject``/``to`` and the scheduler-specific semantics
     (always HTML, always new thread) live here.
     """
+    from entrabot.tools.audit import log_event
     from entrabot.tools.email import send_email
 
-    await send_email(
-        to=to,
-        subject=subject,
-        body=html,
-        content_type="HTML",
-        token=token,
+    recipients = ",".join(to)
+    log_event(
+        action="send_daily_summary",
+        resource=recipients,
+        outcome="pending",
+        metadata={"recipient_count": len(to)},
+        attribution_type="agent",
+    )
+    try:
+        await send_email(
+            to=to,
+            subject=subject,
+            body=html,
+            content_type="HTML",
+            token=token,
+        )
+    except Exception as exc:
+        log_event(
+            action="send_daily_summary",
+            resource=recipients,
+            outcome="failure",
+            metadata={
+                "recipient_count": len(to),
+                "error_type": type(exc).__name__,
+            },
+            attribution_type="agent",
+        )
+        raise
+
+    log_event(
+        action="send_daily_summary",
+        resource=recipients,
+        outcome="success",
+        metadata={"recipient_count": len(to)},
+        attribution_type="agent",
     )
 
 

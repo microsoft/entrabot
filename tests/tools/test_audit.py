@@ -11,6 +11,11 @@ import pytest
 from entrabot.tools.audit import log_event
 
 
+def _clear_identity_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ENTRABOT_AGENT_ID", raising=False)
+    monkeypatch.delenv("ENTRABOT_BLUEPRINT_APP_ID", raising=False)
+
+
 @pytest.fixture
 def audit_dir(tmp_path: Path) -> Path:
     """Override the audit directory to a temp location."""
@@ -70,8 +75,57 @@ class TestAuditLogEvent:
             )
         assert event["metadata"] == {"key": "value"}
 
-    def test_fallback_agent_id(self, audit_dir: Path) -> None:
-        """When no agent_id provided and no cached identity, falls back to 'unknown'."""
+    def test_missing_agent_id_from_store_raises_for_default_agent_attribution(
+        self, audit_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Agent-attributed events must not silently degrade to unknown."""
+        from entrabot.errors import AuditAttributionError
+
+        _clear_identity_config(monkeypatch)
+        mock_store = type(
+            "S",
+            (),
+            {
+                "retrieve": staticmethod(lambda *_a: None),
+            },
+        )()
+        with (
+            patch("entrabot.tools.audit._audit_dir", return_value=audit_dir),
+            patch("entrabot.platform.get_credential_store", return_value=mock_store),
+            pytest.raises(AuditAttributionError),
+        ):
+            log_event(action="x", resource="r")
+
+        assert not list(audit_dir.glob("*.jsonl"))
+
+    def test_missing_agent_id_from_store_raises_for_explicit_agent_attribution(
+        self, audit_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Explicit attribution_type='agent' has the same fail-closed behavior."""
+        from entrabot.errors import AuditAttributionError
+
+        _clear_identity_config(monkeypatch)
+        mock_store = type(
+            "S",
+            (),
+            {
+                "retrieve": staticmethod(lambda *_a: None),
+            },
+        )()
+        with (
+            patch("entrabot.tools.audit._audit_dir", return_value=audit_dir),
+            patch("entrabot.platform.get_credential_store", return_value=mock_store),
+            pytest.raises(AuditAttributionError),
+        ):
+            log_event(action="x", resource="r", attribution_type="agent")
+
+        assert not list(audit_dir.glob("*.jsonl"))
+
+    def test_none_attribution_allows_unknown_agent_id(
+        self, audit_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Bootstrap/preflight callers must opt in to unknown attribution."""
+        _clear_identity_config(monkeypatch)
         mock_store = type(
             "S",
             (),
@@ -83,10 +137,85 @@ class TestAuditLogEvent:
             patch("entrabot.tools.audit._audit_dir", return_value=audit_dir),
             patch("entrabot.platform.get_credential_store", return_value=mock_store),
         ):
-            event = log_event(action="x", resource="r")
-        assert event["agent_id"] == "unknown"
+            event = log_event(action="x", resource="r", attribution_type="none")
 
-    def test_insecure_keyring_backend_error_propagates(self, audit_dir: Path) -> None:
+        assert event["agent_id"] == "unknown"
+        assert event["attribution_type"] == "none"
+
+    def test_uses_agent_id_from_credential_store(
+        self, audit_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Existing happy path: a real active_client_id is recorded."""
+        _clear_identity_config(monkeypatch)
+        mock_store = type(
+            "S",
+            (),
+            {
+                "retrieve": staticmethod(lambda *_a: "agent-123"),
+            },
+        )()
+        with (
+            patch("entrabot.tools.audit._audit_dir", return_value=audit_dir),
+            patch("entrabot.platform.get_credential_store", return_value=mock_store),
+        ):
+            event = log_event(action="x", resource="r")
+
+        assert event["agent_id"] == "agent-123"
+
+    @pytest.mark.asyncio
+    async def test_delegated_identity_user_id_does_not_override_agent_config(
+        self, audit_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Delegated user_id is a human OID; agent audit rows must use config."""
+        from entrabot.identity import set_active_identity_state
+        from entrabot.identity.state_machine import IdentityStateMachine
+        from entrabot.models import IdentityState
+
+        class Store:
+            @staticmethod
+            def retrieve(*_args: object) -> None:
+                return None
+
+        monkeypatch.setenv("ENTRABOT_AGENT_ID", "config-agent-id")
+        monkeypatch.delenv("ENTRABOT_BLUEPRINT_APP_ID", raising=False)
+        monkeypatch.setattr("entrabot.platform.get_credential_store", lambda: Store())
+        identity = IdentityStateMachine()
+        identity.update_session(user_id="human-user-oid")
+        await identity.transition(IdentityState.DELEGATED)
+        set_active_identity_state(identity)
+
+        with patch("entrabot.tools.audit._audit_dir", return_value=audit_dir):
+            event = log_event(action="x", resource="r", attribution_type="agent")
+
+        assert event["agent_id"] == "config-agent-id"
+
+    def test_unauthenticated_stale_user_id_does_not_override_agent_config(
+        self, audit_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Unauthenticated sessions can carry stale user_id; do not attribute to it."""
+        from entrabot.identity import set_active_identity_state
+        from entrabot.identity.state_machine import IdentityStateMachine
+
+        class Store:
+            @staticmethod
+            def retrieve(*_args: object) -> None:
+                return None
+
+        monkeypatch.setenv("ENTRABOT_AGENT_ID", "config-agent-id")
+        monkeypatch.delenv("ENTRABOT_BLUEPRINT_APP_ID", raising=False)
+        monkeypatch.setattr("entrabot.platform.get_credential_store", lambda: Store())
+        identity = IdentityStateMachine()
+        identity.update_session(user_id="stale-human-user-oid")
+        set_active_identity_state(identity)
+
+        with patch("entrabot.tools.audit._audit_dir", return_value=audit_dir):
+            event = log_event(action="x", resource="r", attribution_type="agent")
+
+        assert event["agent_id"] == "config-agent-id"
+
+    def test_insecure_keyring_backend_error_propagates(
+        self, audit_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """If the active backend is insecure, log_event MUST surface that —
         not silently swallow it into agent_id='unknown' and continue.
 
@@ -95,6 +224,8 @@ class TestAuditLogEvent:
         first audit call.
         """
         from entrabot.errors import InsecureKeyringBackendError
+
+        _clear_identity_config(monkeypatch)
 
         def raise_insecure() -> None:
             raise InsecureKeyringBackendError(
@@ -112,15 +243,15 @@ class TestAuditLogEvent:
         # And the audit file must NOT have been written
         assert not list(audit_dir.glob("*.jsonl"))
 
-    def test_unrelated_credential_store_error_falls_back_to_unknown(
-        self, audit_dir: Path
+    def test_unrelated_credential_store_error_raises_for_agent_attribution(
+        self, audit_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Non-security errors during credential lookup still fall back to
-        'unknown' so the audit record is preserved.
-
-        Example: no agent has been provisioned yet (KeyringError on retrieve).
-        """
+        """Even non-security lookup misses must not hide agent attribution loss."""
         import keyring.errors
+
+        from entrabot.errors import AuditAttributionError
+
+        _clear_identity_config(monkeypatch)
 
         def raise_unrelated() -> object:
             class _Store:
@@ -136,6 +267,8 @@ class TestAuditLogEvent:
                 "entrabot.platform.get_credential_store",
                 side_effect=raise_unrelated,
             ),
+            pytest.raises(AuditAttributionError),
         ):
-            event = log_event(action="x", resource="r")
-        assert event["agent_id"] == "unknown"
+            log_event(action="x", resource="r")
+
+        assert not list(audit_dir.glob("*.jsonl"))

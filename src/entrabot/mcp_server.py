@@ -34,7 +34,7 @@ from entrabot.errors import (
     MissingPlaceholderError,
     TokenExchangeError,
 )
-from entrabot.identity.state_machine import IdentityStateMachine
+from entrabot.identity import IdentityStateMachine, set_active_identity_state
 from entrabot.logging_config import setup_logging
 from entrabot.models import IdentityState
 from entrabot.tools.interaction_log import detect_channel, log_interaction
@@ -520,6 +520,36 @@ async def _ensure_valid_token() -> None:
                     tenant_id=config.tenant_id or "common",
                 )
                 result = auth.try_silent()
+                if result and "error" in result:
+                    error = str(result.get("error") or "msal_error")
+                    description = str(
+                        result.get("error_description")
+                        or "MSAL silent refresh returned an error response"
+                    )
+                    if logger:
+                        logger.warning(
+                            "MSAL silent refresh failed: %s: %s",
+                            error,
+                            description,
+                        )
+                    import contextlib
+
+                    with contextlib.suppress(Exception):
+                        await _identity.transition(IdentityState.UNAUTHENTICATED)
+                    _identity.update_session(
+                        token=None,
+                        token_acquired_at=None,
+                        user_id=None,
+                        auth_mode=None,
+                        account_id=None,
+                        tenant_id=None,
+                    )
+                    _state.pop("token", None)
+                    raise TokenExchangeError(
+                        "msal_silent_refresh",
+                        error,
+                        description,
+                    )
                 if result and "access_token" in result:
                     token = result["access_token"]
                     _identity.update_session(
@@ -533,9 +563,6 @@ async def _ensure_valid_token() -> None:
                         "MSAL silent refresh returned no access token; "
                         "interactive auth must be initiated from the startup path"
                     )
-                    if result and "error" in result:
-                        error = str(result.get("error") or error)
-                        description = str(result.get("error_description") or description)
                     if logger:
                         logger.warning(
                             "MSAL silent refresh failed without interactive fallback: %s",
@@ -548,6 +575,7 @@ async def _ensure_valid_token() -> None:
                     _identity.update_session(
                         token=None,
                         token_acquired_at=None,
+                        user_id=None,
                         auth_mode=None,
                         account_id=None,
                         tenant_id=None,
@@ -557,7 +585,7 @@ async def _ensure_valid_token() -> None:
                         error=error,
                         error_description=description,
                     )
-            except AuthRefreshRequiredError:
+            except (AuthRefreshRequiredError, TokenExchangeError):
                 raise
             except Exception as exc:
                 if logger:
@@ -570,6 +598,7 @@ async def _ensure_valid_token() -> None:
                 _identity.update_session(
                     token=None,
                     token_acquired_at=None,
+                    user_id=None,
                     auth_mode=None,
                     account_id=None,
                     tenant_id=None,
@@ -818,6 +847,7 @@ async def _init_auth() -> None:
     """
     global _identity
     _identity = IdentityStateMachine()
+    set_active_identity_state(_identity)
 
     config = get_config()
     _state["config"] = config
@@ -858,6 +888,15 @@ async def _init_auth() -> None:
                 tenant_id=config.tenant_id or "common",
             )
             result = auth.authenticate()
+            if result and "error" in result:
+                error = str(result.get("error") or "msal_error")
+                description = str(
+                    result.get("error_description")
+                    or "MSAL delegated auth returned an error response"
+                )
+                if logger:
+                    logger.warning("MSAL delegated auth failed: %s: %s", error, description)
+                raise TokenExchangeError("msal_delegated_auth", error, description)
             token = result["access_token"]
             account = result.get("id_token_claims", {})
 
@@ -878,6 +917,10 @@ async def _init_auth() -> None:
                     account.get("preferred_username", "unknown"),
                 )
             return
+        except TokenExchangeError as exc:
+            if logger:
+                logger.warning("MSAL delegated auth failed: %s", exc)
+            raise
         except Exception as exc:
             if logger:
                 logger.warning("MSAL delegated auth failed: %s", exc)
@@ -2449,12 +2492,10 @@ async def resolve_placeholder(
 
     config = get_config()
     if _identity:
-        agent_id = (
-            _identity.session.user_id or config.agent_id or config.blueprint_app_id or "unknown"
-        )
+        agent_id = _identity.session.user_id or config.agent_id or config.blueprint_app_id
         attribution = _identity.session.attribution_type
     else:
-        agent_id = config.agent_id or config.blueprint_app_id or "unknown"
+        agent_id = config.agent_id or config.blueprint_app_id
         attribution = "agent"
     log_event(
         action="resolve_placeholder",
@@ -2546,12 +2587,10 @@ async def delete_teams_message(
 
     config = get_config()
     if _identity:
-        agent_id = (
-            _identity.session.user_id or config.agent_id or config.blueprint_app_id or "unknown"
-        )
+        agent_id = _identity.session.user_id or config.agent_id or config.blueprint_app_id
         attribution = _identity.session.attribution_type
     else:
-        agent_id = config.agent_id or config.blueprint_app_id or "unknown"
+        agent_id = config.agent_id or config.blueprint_app_id
         attribution = "agent"
     log_event(
         action="delete_teams_message",
@@ -2663,12 +2702,10 @@ async def send_email(
 
     config = get_config()
     if _identity:
-        agent_id = (
-            _identity.session.user_id or config.agent_id or config.blueprint_app_id or "unknown"
-        )
+        agent_id = _identity.session.user_id or config.agent_id or config.blueprint_app_id
         attribution = _identity.session.attribution_type
     else:
-        agent_id = config.agent_id or config.blueprint_app_id or "unknown"
+        agent_id = config.agent_id or config.blueprint_app_id
         attribution = "agent"
     log_event(
         action="send_email",
@@ -3381,7 +3418,6 @@ async def wait_for_sponsor_dm(
         (_identity.session.user_id if _identity else None)
         or config.agent_id
         or config.blueprint_app_id
-        or "unknown"
     )
     attribution = _identity.session.attribution_type if _identity else "agent"
 
@@ -3581,13 +3617,11 @@ def audit_log(
 
     # Identity-aware attribution (eng review Tension 1)
     if _identity:
-        agent_id = (
-            _identity.session.user_id or config.agent_id or config.blueprint_app_id or "unknown"
-        )
+        agent_id = _identity.session.user_id or config.agent_id or config.blueprint_app_id
         attribution = _identity.session.attribution_type
     else:
-        agent_id = config.agent_id or config.blueprint_app_id or "unknown"
-        attribution = "agent"
+        agent_id = config.agent_id or config.blueprint_app_id
+        attribution = "agent" if agent_id else "none"
 
     result = log_event(
         action=action,
@@ -3794,12 +3828,10 @@ def _promise_audit_ids() -> tuple[str, str]:
     """Resolve (agent_id, attribution_type) for audit rows."""
     config = get_config()
     if _identity:
-        agent_id = (
-            _identity.session.user_id or config.agent_id or config.blueprint_app_id or "unknown"
-        )
+        agent_id = _identity.session.user_id or config.agent_id or config.blueprint_app_id
         attribution = _identity.session.attribution_type
     else:
-        agent_id = config.agent_id or config.blueprint_app_id or "unknown"
+        agent_id = config.agent_id or config.blueprint_app_id
         attribution = "agent"
     return agent_id, attribution
 

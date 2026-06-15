@@ -11,6 +11,24 @@ class EntraBotError(Exception):
     """Base class for all EntraBot errors."""
 
 
+class AuditAttributionError(EntraBotError):
+    """Audit event could not be attributed to a concrete identity."""
+
+    def __init__(
+        self,
+        action: str,
+        resource: str,
+        reason: str = "active agent identity is unavailable",
+    ) -> None:
+        self.action = action
+        self.resource = resource
+        self.reason = reason
+        super().__init__(
+            f"Audit attribution failed for agent action {action!r} on {resource!r}: "
+            f"{reason}"
+        )
+
+
 class ConfigError(EntraBotError):
     """Configuration errors (invalid or removed settings)."""
 

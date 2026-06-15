@@ -722,7 +722,11 @@ class TestTokenRefreshDispatch:
     ) -> None:
         """MSAL error dictionaries from silent refresh must fail closed."""
         from entrabot import mcp_server
-        from entrabot.errors import AuthRefreshRequiredError
+        from entrabot.errors import TokenExchangeError
+        from entrabot.identity import (
+            get_active_identity_state,
+            set_active_identity_state,
+        )
         from entrabot.identity.state_machine import IdentityStateMachine
         from entrabot.models import IdentityState
 
@@ -732,17 +736,23 @@ class TestTokenRefreshDispatch:
 
         old_state = mcp_server._state.copy()
         old_identity = mcp_server._identity
+        old_active_identity = get_active_identity_state()
         try:
             sm = IdentityStateMachine()
             await sm.transition(IdentityState.DELEGATED)
-            sm.update_session(token="expired", token_acquired_at=time.monotonic() - 4000)
+            sm.update_session(
+                token="expired",
+                token_acquired_at=time.monotonic() - 4000,
+                user_id="human-user-oid",
+            )
             mcp_server._identity = sm
+            set_active_identity_state(sm)
             mcp_server._state["config"] = mock_config
 
             mock_auth_instance = MagicMock()
             mock_auth_instance.try_silent.return_value = {
-                "error": "invalid_grant",
-                "error_description": "refresh token expired",
+                "error": "interaction_required",
+                "error_description": "user interaction is required",
             }
 
             with (
@@ -750,21 +760,23 @@ class TestTokenRefreshDispatch:
                     "entrabot.auth.delegated.MsalDelegatedAuth",
                     return_value=mock_auth_instance,
                 ),
-                pytest.raises(AuthRefreshRequiredError) as exc_info,
+                pytest.raises(TokenExchangeError) as exc_info,
             ):
                 await mcp_server._ensure_valid_token()
 
+            assert "interaction_required" in str(exc_info.value)
+            assert "user interaction is required" in str(exc_info.value)
             assert sm.state == IdentityState.UNAUTHENTICATED
             assert sm.session.token is None
             assert sm.session.token_acquired_at is None
+            assert sm.session.user_id is None
             assert "token" not in mcp_server._state
-            assert exc_info.value.error == "invalid_grant"
-            assert "refresh token expired" in exc_info.value.error_description
             mock_auth_instance.authenticate.assert_not_called()
         finally:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
             mcp_server._identity = old_identity
+            set_active_identity_state(old_active_identity)
 
     @pytest.mark.asyncio
     async def test_init_auth_startup_still_calls_interactive_authenticate(self) -> None:
@@ -809,6 +821,48 @@ class TestTokenRefreshDispatch:
             assert mcp_server._identity.state == IdentityState.DELEGATED
             assert mcp_server._state["token"] == "boot-token"
             mock_auth_instance.authenticate.assert_called_once_with()
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+            mcp_server._identity = old_identity
+
+    @pytest.mark.asyncio
+    async def test_init_auth_msal_error_raises_token_exchange_error(self) -> None:
+        """The boot delegated path must surface MSAL error dictionaries."""
+        from entrabot import mcp_server
+        from entrabot.config import EntraBotConfig
+        from entrabot.errors import TokenExchangeError
+
+        cfg = EntraBotConfig(
+            client_id="test-client-id",
+            tenant_id="common",
+            skip_provisioning=True,
+        )
+        mock_auth_instance = MagicMock()
+        mock_auth_instance.authenticate.return_value = {
+            "error": "consent_required",
+            "error_description": "admin consent is required",
+        }
+
+        old_state = mcp_server._state.copy()
+        old_identity = mcp_server._identity
+        try:
+            mcp_server._state.clear()
+            mcp_server._identity = None
+
+            with (
+                patch("entrabot.mcp_server.get_config", return_value=cfg),
+                patch(
+                    "entrabot.auth.delegated.MsalDelegatedAuth",
+                    return_value=mock_auth_instance,
+                ),
+                pytest.raises(TokenExchangeError) as exc_info,
+            ):
+                await mcp_server._init_auth()
+
+            assert "consent_required" in str(exc_info.value)
+            assert "admin consent is required" in str(exc_info.value)
+            assert "token" not in mcp_server._state
         finally:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)
