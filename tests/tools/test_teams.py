@@ -28,6 +28,7 @@ from entrabot.tools.teams import (
     GRAPH_BASE,
     MAX_MESSAGE_LENGTH,
     TOKEN_ENDPOINT,
+    acquire_agent_identity_token,
     acquire_agent_user_token,
     create_or_find_chat,
     read,
@@ -173,6 +174,93 @@ class TestAcquireAgentUserToken:
             token = acquire_agent_user_token(get_config())
         assert token == "agent-user-token-123"
 
+    @pytest.mark.parametrize(
+        ("hop", "responses"),
+        [
+            (
+                "hop1:blueprint",
+                [httpx.Response(200, text="<html>captive portal</html>")],
+            ),
+            (
+                "hop2:agent_identity",
+                [
+                    httpx.Response(200, json={"access_token": "bp-token"}),
+                    httpx.Response(200, text="<html>captive portal</html>"),
+                ],
+            ),
+            (
+                "hop3:agent_user",
+                [
+                    httpx.Response(200, json={"access_token": "bp-token"}),
+                    httpx.Response(200, json={"access_token": "agent-id-token"}),
+                    httpx.Response(200, text="<html>captive portal</html>"),
+                ],
+            ),
+        ],
+    )
+    @respx.mock
+    def test_non_json_token_response_raises_token_exchange_error(
+        self,
+        hop: str,
+        responses: list[httpx.Response],
+    ) -> None:
+        respx.post(TOKEN_URL).mock(side_effect=responses)
+        with (
+            patch.dict(os.environ, FULL_ENV, clear=False),
+            patch(_P_STORE, return_value=_mock_credential_store()),
+            patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
+            pytest.raises(TokenExchangeError) as exc_info,
+        ):
+            from entrabot.config import get_config
+
+            acquire_agent_user_token(get_config())
+
+        assert exc_info.value.hop == hop
+        assert exc_info.value.error == "non_json_response"
+        assert "HTTP 200: <html>captive portal</html>" in exc_info.value.description
+
+    @pytest.mark.parametrize(
+        ("hop", "responses"),
+        [
+            ("hop1:blueprint", [httpx.Response(502)]),
+            (
+                "hop2:agent_identity",
+                [
+                    httpx.Response(200, json={"access_token": "bp-token"}),
+                    httpx.Response(502),
+                ],
+            ),
+            (
+                "hop3:agent_user",
+                [
+                    httpx.Response(200, json={"access_token": "bp-token"}),
+                    httpx.Response(200, json={"access_token": "agent-id-token"}),
+                    httpx.Response(502),
+                ],
+            ),
+        ],
+    )
+    @respx.mock
+    def test_empty_502_token_response_raises_token_exchange_error(
+        self,
+        hop: str,
+        responses: list[httpx.Response],
+    ) -> None:
+        respx.post(TOKEN_URL).mock(side_effect=responses)
+        with (
+            patch.dict(os.environ, FULL_ENV, clear=False),
+            patch(_P_STORE, return_value=_mock_credential_store()),
+            patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
+            pytest.raises(TokenExchangeError) as exc_info,
+        ):
+            from entrabot.config import get_config
+
+            acquire_agent_user_token(get_config())
+
+        assert exc_info.value.hop == hop
+        assert exc_info.value.error == "non_json_response"
+        assert exc_info.value.description == "HTTP 502: "
+
     @respx.mock
     def test_correct_hop_payloads(self) -> None:
         """Verify each hop sends the right grant_type and parameters."""
@@ -294,6 +382,98 @@ class TestAcquireAgentUserStorageToken:
         assert token == "storage-tok"
         hop3_body = parse_qs(route.calls[2].request.content.decode())
         assert hop3_body["scope"] == ["https://storage.azure.com/.default"]
+
+
+class TestAcquireAgentIdentityToken:
+    @respx.mock
+    def test_success(self) -> None:
+        respx.post(TOKEN_URL).mock(
+            side_effect=[
+                httpx.Response(200, json={"access_token": "bp-token"}),
+                httpx.Response(200, json={"access_token": "agent-identity-token"}),
+            ]
+        )
+        with (
+            patch.dict(os.environ, FULL_ENV, clear=False),
+            patch(_P_STORE, return_value=_mock_credential_store()),
+            patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
+        ):
+            from entrabot.config import get_config
+
+            token = acquire_agent_identity_token(get_config())
+
+        assert token == "agent-identity-token"
+
+    @pytest.mark.parametrize(
+        ("hop", "responses"),
+        [
+            (
+                "hop1:blueprint",
+                [httpx.Response(200, text="<html>captive portal</html>")],
+            ),
+            (
+                "hop2:agent_identity",
+                [
+                    httpx.Response(200, json={"access_token": "bp-token"}),
+                    httpx.Response(200, text="<html>captive portal</html>"),
+                ],
+            ),
+        ],
+    )
+    @respx.mock
+    def test_non_json_token_response_raises_token_exchange_error(
+        self,
+        hop: str,
+        responses: list[httpx.Response],
+    ) -> None:
+        respx.post(TOKEN_URL).mock(side_effect=responses)
+        with (
+            patch.dict(os.environ, FULL_ENV, clear=False),
+            patch(_P_STORE, return_value=_mock_credential_store()),
+            patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
+            pytest.raises(TokenExchangeError) as exc_info,
+        ):
+            from entrabot.config import get_config
+
+            acquire_agent_identity_token(get_config())
+
+        assert exc_info.value.hop == hop
+        assert exc_info.value.error == "non_json_response"
+        assert "HTTP 200: <html>captive portal</html>" in exc_info.value.description
+
+    @pytest.mark.parametrize(
+        ("hop", "responses"),
+        [
+            ("hop1:blueprint", [httpx.Response(502)]),
+            (
+                "hop2:agent_identity",
+                [
+                    httpx.Response(200, json={"access_token": "bp-token"}),
+                    httpx.Response(502),
+                ],
+            ),
+        ],
+    )
+    @respx.mock
+    def test_empty_502_token_response_raises_token_exchange_error(
+        self,
+        hop: str,
+        responses: list[httpx.Response],
+    ) -> None:
+        respx.post(TOKEN_URL).mock(side_effect=responses)
+        with (
+            patch.dict(os.environ, FULL_ENV, clear=False),
+            patch(_P_STORE, return_value=_mock_credential_store()),
+            patch(_P_ASSERT, return_value="mocked-jwt-assertion"),
+            pytest.raises(TokenExchangeError) as exc_info,
+        ):
+            from entrabot.config import get_config
+
+            acquire_agent_identity_token(get_config())
+
+        assert exc_info.value.hop == hop
+        assert exc_info.value.error == "non_json_response"
+        assert exc_info.value.description == "HTTP 502: "
 
 
 # ---------------------------------------------------------------------------
@@ -1373,6 +1553,60 @@ class TestPostThinkingPlaceholder:
         body = _json.loads(route.calls.last.request.content)
         assert "researching" in body["body"]["content"]
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_escapes_html_in_custom_text(self) -> None:
+        import json as _json
+
+        from entrabot.tools.teams import post_thinking_placeholder
+
+        route = respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            return_value=httpx.Response(201, json={"id": "msg-p4", "createdDateTime": "2024-01-01"})
+        )
+        await post_thinking_placeholder(
+            chat_id="c1",
+            token="tok",
+            text='</i><a href="https://attacker.com">click</a><i>',
+        )
+
+        body = _json.loads(route.calls.last.request.content)
+        content = body["body"]["content"]
+        assert (
+            content
+            == '<i>&lt;/i&gt;&lt;a href="https://attacker.com"&gt;click&lt;/a&gt;&lt;i&gt;</i>'
+        )
+        assert "</i><a" not in content
+        assert "<a href=" not in content
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_plain_text_round_trips_unchanged(self) -> None:
+        import json as _json
+
+        from entrabot.tools.teams import post_thinking_placeholder
+
+        route = respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            return_value=httpx.Response(201, json={"id": "msg-p5", "createdDateTime": "2024-01-01"})
+        )
+        await post_thinking_placeholder(chat_id="c1", token="tok", text="thinking...")
+        body = _json.loads(route.calls.last.request.content)
+        assert body["body"]["content"] == "<i>thinking...</i>"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_already_escaped_entities_are_double_escaped(self) -> None:
+        """Safe-by-default: caller input is always escaped, even entities."""
+        import json as _json
+
+        from entrabot.tools.teams import post_thinking_placeholder
+
+        route = respx.post(f"{GRAPH_BASE}/chats/c1/messages").mock(
+            return_value=httpx.Response(201, json={"id": "msg-p6", "createdDateTime": "2024-01-01"})
+        )
+        await post_thinking_placeholder(chat_id="c1", token="tok", text="already &amp; escaped")
+        body = _json.loads(route.calls.last.request.content)
+        assert body["body"]["content"] == "<i>already &amp;amp; escaped</i>"
+
 
 class TestResolvePlaceholder:
     @respx.mock
@@ -1564,6 +1798,76 @@ class TestUpdatePlaceholder:
         # Italic wrapping is applied around the progress text.
         assert "<i>" in content or "<em>" in content
         assert "reading the last three commits" in content
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_escapes_html_in_progress_text(self) -> None:
+        import json as _json
+
+        from entrabot.tools.teams import update_placeholder
+
+        route = respx.patch(f"{GRAPH_BASE}/chats/c1/messages/msg-p1").mock(
+            return_value=httpx.Response(200, json={"id": "msg-p1"})
+        )
+
+        await update_placeholder(
+            chat_id="c1",
+            placeholder_id="msg-p1",
+            progress_text='<a href="https://attacker.com">click</a><img src=x>& &amp;',
+            token="tok",
+        )
+
+        body = _json.loads(route.calls.last.request.content)
+        content = body["body"]["content"]
+        expected = (
+            '<i>&lt;a href="https://attacker.com"&gt;click&lt;/a&gt;'
+            "&lt;img src=x&gt;&amp; &amp;amp;</i>"
+        )
+        assert content == expected
+        assert "<a href=" not in content
+        assert "<img" not in content
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_plain_text_round_trips_unchanged(self) -> None:
+        import json as _json
+
+        from entrabot.tools.teams import update_placeholder
+
+        route = respx.patch(f"{GRAPH_BASE}/chats/c1/messages/msg-p1").mock(
+            return_value=httpx.Response(200, json={"id": "msg-p1"})
+        )
+
+        await update_placeholder(
+            chat_id="c1",
+            placeholder_id="msg-p1",
+            progress_text="reading files...",
+            token="tok",
+        )
+
+        body = _json.loads(route.calls.last.request.content)
+        assert body["body"]["content"] == "<i>reading files...</i>"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_already_escaped_entities_are_double_escaped(self) -> None:
+        import json as _json
+
+        from entrabot.tools.teams import update_placeholder
+
+        route = respx.patch(f"{GRAPH_BASE}/chats/c1/messages/msg-p1").mock(
+            return_value=httpx.Response(200, json={"id": "msg-p1"})
+        )
+
+        await update_placeholder(
+            chat_id="c1",
+            placeholder_id="msg-p1",
+            progress_text="step 1 &amp; 2",
+            token="tok",
+        )
+
+        body = _json.loads(route.calls.last.request.content)
+        assert body["body"]["content"] == "<i>step 1 &amp;amp; 2</i>"
 
     @respx.mock
     @pytest.mark.asyncio
