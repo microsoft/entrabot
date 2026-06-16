@@ -495,6 +495,44 @@ def _get_existing_permission_role_ids(client_id: str) -> set[str]:
     return {item for item in data if item}
 
 
+def _get_consented_graph_role_ids(client_id: str) -> set[str]:
+    """Return Microsoft Graph app-role IDs effectively admin-consented on the
+    provisioner's service principal.
+
+    Unlike :func:`_get_existing_permission_role_ids` (which reads
+    ``requiredResourceAccess`` — the *declared* permissions on the app),
+    this inspects the SP's ``appRoleAssignments`` — the *effective* grants
+    produced by admin consent. Consent drift (a permission requested but
+    never consented) is invisible to ``requiredResourceAccess``, so the only
+    way to detect it is to read the actual grants.
+
+    On a read failure we return an empty set, which makes the caller treat
+    everything as unconsented and re-run admin consent. ``admin-consent`` is
+    idempotent, so erring toward re-consent is safe.
+    """
+    rc, out, err = run_az(
+        [
+            "rest",
+            "--method",
+            "GET",
+            "--url",
+            f"https://graph.microsoft.com/v1.0/servicePrincipals(appId='{client_id}')"
+            "/appRoleAssignments",
+            "--query",
+            "value[?resourceDisplayName=='Microsoft Graph'].appRoleId",
+            "-o",
+            "json",
+        ]
+    )
+    if rc != 0 or not out:
+        return set()
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        return set()
+    return {item for item in data if item}
+
+
 def _print_admin_required(action: str, err: str = "") -> None:
     print(f"  ERROR: The signed-in operator could not {action}.")
     print("  This step requires an Entra administrator with permission to")
@@ -522,17 +560,34 @@ def _ensure_service_principal(client_id: str) -> None:
 def _ensure_permissions_and_consent(client_id: str, required_values: list[str]) -> bool:
     """Add Graph permissions and grant admin consent if permissions changed.
 
-    Returns ``True`` only when this invocation added missing app permissions.
-    Callers use that to decide whether a propagation wait is warranted.
+    "Changed" means either (a) a required permission was missing from the
+    app's ``requiredResourceAccess`` and had to be added, OR (b) a required
+    permission is declared but not effectively admin-consented on the SP
+    (consent drift). Either case warrants re-running admin consent; the
+    caller uses the ``True`` return to decide whether a propagation wait is
+    warranted.
+
+    Checking *consented* permissions (not just *declared* ones) is what lets
+    this self-heal consent drift: a permission added to the app's required
+    list after the last admin-consent stays unconsented forever if we only
+    compare the declared set.
     """
     _ensure_service_principal(client_id)
 
     permission_specs = _resolve_permission_specs(required_values)
-    existing_role_ids = _get_existing_permission_role_ids(client_id)
+    required_role_ids = {spec.split("=", 1)[0] for _, spec in permission_specs}
+    declared_role_ids = _get_existing_permission_role_ids(client_id)
+    consented_role_ids = _get_consented_graph_role_ids(client_id)
+
     missing_specs = [
-        spec for _, spec in permission_specs if spec.split("=", 1)[0] not in existing_role_ids
+        spec for _, spec in permission_specs if spec.split("=", 1)[0] not in declared_role_ids
     ]
+    unconsented_role_ids = sorted(required_role_ids - consented_role_ids)
     print(f"  Ensuring {len(permission_specs)} Graph application permissions on provisioner app...")
+
+    if not missing_specs and not unconsented_role_ids:
+        print("  Provisioner app already has the required Graph permissions (declared + consented)")
+        return False
 
     if missing_specs:
         cmd = [
@@ -555,13 +610,19 @@ def _ensure_permissions_and_consent(client_id: str, required_values: list[str]) 
                     "add the required Microsoft Graph application permissions", err
                 )
             raise ProvisionerBootstrapError(err or "permission add failed")
-    else:
-        print("  Provisioner app already has the required Graph permissions")
-        return False
+    elif unconsented_role_ids:
+        # Declared but not effectively consented — classic consent drift,
+        # usually because a permission was added to the required list after
+        # the last admin consent. Re-run consent so it becomes effective.
+        print(
+            f"  Consent drift: {len(unconsented_role_ids)} required permission(s) declared "
+            "but not admin-consented; re-running admin consent"
+        )
 
-    # Grant admin consent only after adding permissions in this invocation. If
-    # permissions were already present, the read/action script should not spend
-    # time re-consenting on every token acquisition.
+    # Grant admin consent. Runs when permissions were newly added in this
+    # invocation OR when declared permissions remain unconsented (drift). The
+    # read/action path uses load_existing_app_registration (no permission
+    # repair), so this does not re-consent on every token acquisition.
     print("  Granting admin consent for provisioner app...")
     consent_error = ""
     for attempt in range(4):
