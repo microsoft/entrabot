@@ -154,6 +154,12 @@ def test_permissions_and_consent_skips_admin_consent_when_permissions_present(
         "_get_existing_permission_role_ids",
         lambda client_id: {"role-id"},
     )
+    # Declared AND effectively consented -> no drift -> skip admin consent.
+    monkeypatch.setattr(
+        provisioning_module,
+        "_get_consented_graph_role_ids",
+        lambda client_id: {"role-id"},
+    )
 
     def fake_run_az(args, capture=True):
         del capture
@@ -169,6 +175,90 @@ def test_permissions_and_consent_skips_admin_consent_when_permissions_present(
 
     assert changed is False
     assert calls == []
+
+
+def test_permissions_and_consent_reconsents_on_consent_drift(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A permission declared in requiredResourceAccess but NOT effectively
+    admin-consented on the SP (consent drift) must trigger a fresh admin
+    consent — the old check only compared declared permissions and would
+    silently skip, leaving the permission unconsented forever.
+    """
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(provisioning_module, "_ensure_service_principal", lambda client_id: None)
+    monkeypatch.setattr(
+        provisioning_module,
+        "_resolve_permission_specs",
+        lambda required_values: [
+            ("Application.ReadWrite.All", "role-rw=Role"),
+            ("AppRoleAssignment.ReadWrite.All", "role-apra=Role"),
+        ],
+    )
+    # Both permissions are DECLARED on the app...
+    monkeypatch.setattr(
+        provisioning_module,
+        "_get_existing_permission_role_ids",
+        lambda client_id: {"role-rw", "role-apra"},
+    )
+    # ...but only one is effectively CONSENTED on the SP -> drift on role-apra.
+    monkeypatch.setattr(
+        provisioning_module,
+        "_get_consented_graph_role_ids",
+        lambda client_id: {"role-rw"},
+    )
+
+    def fake_run_az(args, capture=True):
+        del capture
+        calls.append(args)
+        return 0, "", ""
+
+    monkeypatch.setattr(provisioning_module, "run_az", fake_run_az)
+
+    changed = provisioning_module._ensure_permissions_and_consent(
+        "client-id",
+        ["Application.ReadWrite.All", "AppRoleAssignment.ReadWrite.All"],
+    )
+
+    assert changed is True, "consent drift must warrant a propagation wait"
+    # admin-consent MUST be run; no `permission add` is needed (already declared).
+    consent_calls = [c for c in calls if c[:4] == ["ad", "app", "permission", "admin-consent"]]
+    add_calls = [c for c in calls if c[:4] == ["ad", "app", "permission", "add"]]
+    assert consent_calls, "admin-consent must run when a declared permission is unconsented"
+    assert not add_calls, "no permission add needed when everything is already declared"
+
+
+def test_get_consented_graph_role_ids_parses_app_role_assignments(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_get_consented_graph_role_ids reads the SP's appRoleAssignments
+    (effective consent), not requiredResourceAccess (declared)."""
+    captured: dict[str, list[str]] = {}
+
+    def fake_run_az(args, capture=True):
+        del capture
+        captured["args"] = args
+        return 0, '["role-rw", "role-apra"]', ""
+
+    monkeypatch.setattr(provisioning_module, "run_az", fake_run_az)
+
+    role_ids = provisioning_module._get_consented_graph_role_ids("client-id")
+
+    assert role_ids == {"role-rw", "role-apra"}
+    # Must query appRoleAssignments (effective consent), filtered to Graph.
+    joined = " ".join(captured["args"])
+    assert "appRoleAssignments" in joined
+    assert "client-id" in joined
+
+
+def test_get_consented_graph_role_ids_returns_empty_on_read_failure(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If effective consent can't be read, return an empty set so the caller
+    re-runs admin-consent (idempotent) rather than silently assuming consent."""
+    monkeypatch.setattr(provisioning_module, "run_az", lambda args, capture=True: (1, "", "boom"))
+    assert provisioning_module._get_consented_graph_role_ids("client-id") == set()
 
 
 def test_required_permissions_include_app_role_assignment_write(
