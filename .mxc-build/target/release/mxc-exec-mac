@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+echo '{"error": "MXC binary is a placeholder. Build not yet implemented.", "help": "Install MXC when publicly available or build from source"}' >&2
+exit 1

@@ -42,6 +42,7 @@ WITH_A365_WORK_IQ=false
 CONFIGURE_A365_WORK_IQ=false
 A365_AGENT_NAME="EntraBot Code Agent"
 A365_WORK_IQ_MCP_SERVERS=(mcp_WordServer mcp_ODSPRemoteServer)
+ENABLE_SANDBOX=false
 
 SETUP_STATUS=false
 STATUS_ARGS=()
@@ -115,6 +116,9 @@ for arg in "$@"; do
             ;;
         --skip-smoke)
             SKIP_SMOKE=true
+            ;;
+        --enable-sandbox)
+            ENABLE_SANDBOX=true
             ;;
         --help|-h)
             SHOW_HELP=true
@@ -217,6 +221,8 @@ if [ "$SHOW_HELP" = true ]; then
     echo "                         Entrabot Blueprint, then manifest validation."
     echo "  --a365-agent-name=NAME Deprecated compatibility flag; Work IQ setup now"
     echo "                         uses the existing Entrabot Blueprint from state."
+    echo "  --enable-sandbox       Install and configure MXC sandbox for run_code tool."
+    echo "                         Creates placeholder binary until MXC is released."
     echo "  --help, -h             Show this help"
     echo ""
     echo "Diagnostics:"
@@ -1244,6 +1250,23 @@ if report.errors:
                 fi
             fi
         fi
+    fi
+fi
+
+# ── Optional: MXC Sandbox Setup ────────────────────────────────────────────
+
+if [ "$ENABLE_SANDBOX" = true ]; then
+    echo ""
+    echo -e "${BLUE}Setting up MXC sandbox (optional)...${NC}"
+    
+    if [ -x "$SCRIPT_DIR/setup_sandbox.sh" ]; then
+        "$SCRIPT_DIR/setup_sandbox.sh" || {
+            warn "Sandbox setup failed (non-fatal)"
+            warn "The run_code tool will be unavailable until MXC is installed"
+        }
+    else
+        warn "setup_sandbox.sh not found or not executable"
+        warn "Skipping sandbox setup"
     fi
 fi
 
