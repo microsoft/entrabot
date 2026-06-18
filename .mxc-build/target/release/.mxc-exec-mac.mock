@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Test MXC mock - executes commands for testing entrabot plumbing
+# Mimics MXC 0.6.0-alpha schema
+
+# Read MXC config from stdin (JSON)
+if [ -t 0 ]; then
+    CONFIG="{}"
+else
+    CONFIG=$(cat)
+fi
+
+# Extract command from MXC schema: process.commandLine
+COMMAND=$(echo "$CONFIG" | python3 -c "
+import json, sys
+try:
+    c = json.load(sys.stdin)
+    print(c.get('process', {}).get('commandLine', ''))
+except:
+    print('')
+" 2>/dev/null || echo "")
+
+if [ -z "$COMMAND" ]; then
+    echo '{"error": "No command specified in process.commandLine"}' >&2
+    exit 1
+fi
+
+# Execute with timeout (real MXC would apply sandboxing)
+timeout 30s bash -c "$COMMAND" 2>&1
+EXIT_CODE=$?
+
+exit $EXIT_CODE

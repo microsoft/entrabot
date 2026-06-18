@@ -180,7 +180,9 @@ SAFE:   run_code(argv=["sh", "-c", "echo pwned > ~/Desktop/hack.txt"],
 
 ⚠️ **MXC binary required** — Users must install/build MXC (setup.sh automates)  
 ⚠️ **macOS only (Phase 1)** — Windows/Linux deferred to later phases  
-⚠️ **Test mock binary** — Using test harness until real MXC release  
+⚠️ **Local stdin-compat patch on macOS** — Entrabot streams config on stdin, so the
+darwin build uses `scripts/mxc-mac-stdin-compat.patch` on top of upstream
+MXC v0.6.1 until upstream exposes a native stdin config path  
 ⚠️ **Phase 2 unvalidated** — Identity binding assumptions need verification when APIs GA  
 ⚠️ **Performance overhead** — Subprocess spawning + policy enforcement adds latency  
 
