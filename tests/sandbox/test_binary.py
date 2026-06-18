@@ -175,7 +175,7 @@ def test_resolve_and_verify_happy_path():
             binary_module.PINNED_HASHES["darwin-arm64"] = expected_hash
             
             try:
-                binary_path = resolve_and_verify(platform="darwin", arch="arm64")
+                binary_path = resolve_and_verify(platform_name="darwin", arch="arm64")
                 assert binary_path == str(fake_binary)
             finally:
                 binary_module.PINNED_HASHES = original_hashes
@@ -199,7 +199,7 @@ def test_resolve_and_verify_raises_on_hash_mismatch():
             patch.dict(os.environ, {"MXC_BIN_DIR": str(bin_dir)}),
             pytest.raises(SandboxUntrustedBinaryError),
         ):
-            resolve_and_verify(platform="darwin", arch="arm64")
+            resolve_and_verify(platform_name="darwin", arch="arm64")
 
 
 def test_resolve_and_verify_raises_unavailable_when_not_found():
@@ -212,4 +212,4 @@ def test_resolve_and_verify_raises_unavailable_when_not_found():
         mock_run.return_value.stdout = ""
         
         with pytest.raises(SandboxUnavailableError, match="not found"):
-            resolve_and_verify(platform="darwin", arch="arm64")
+            resolve_and_verify(platform_name="darwin", arch="arm64")

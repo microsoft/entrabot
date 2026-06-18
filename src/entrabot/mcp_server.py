@@ -5194,6 +5194,121 @@ if _ENABLE_RUN_CODE:
             }, indent=2)
 
 
+# ============================================================================
+# write_local_file — Demonstration Tool (DELIBERATELY UNSAFE)
+# ============================================================================
+# This tool exists to demonstrate WHY sandboxing is necessary.
+# It provides UNPROTECTED filesystem access that contrasts with the
+# sandboxed run_code tool.
+#
+# Security model: NONE (intentionally dangerous for demonstration purposes)
+#
+# Use cases:
+# - Show what happens without sandboxing (writes anywhere)
+# - Contrast with run_code (sandboxed to operator ceiling)
+# - Educational: demonstrate attack surface of unrestricted file access
+
+
+@mcp.tool()
+def write_local_file(path: str, content: str) -> str:
+    """Write content to local filesystem (UNPROTECTED - for demonstration only).
+    
+    ⚠️  **DANGER: This tool has NO security restrictions!**
+    
+    This tool exists to demonstrate WHY sandboxing is necessary. It can write
+    to ANY path on the local filesystem without validation or containment.
+    
+    **DO NOT USE in production.** This is an educational tool to show:
+    1. What unrestricted file access looks like (dangerous)
+    2. How run_code with sandboxing provides protection (safe)
+    
+    For SAFE file operations, use run_code with sandboxed filesystem access:
+      run_code(argv=["python", "-c", "open('/tmp/safe.txt', 'w').write('data')"])
+      → Clamped to operator ceiling (/tmp only)
+    
+    Args:
+        path: Absolute file path (NO VALIDATION - can be anywhere!)
+        content: Content to write
+    
+    Returns:
+        JSON with success status and path, or error dict
+    
+    Example (UNSAFE):
+        write_local_file(path="/Users/you/Desktop/hack.txt", content="pwned")
+        → ✅ Succeeds (DANGEROUS!)
+    
+    Example (SAFE alternative):
+        run_code(argv=["echo", "safe", ">", "/tmp/safe.txt"])
+        → ✅ Succeeds only if /tmp in operator ceiling
+    """
+    from entrabot.tools.audit import log_event as audit_event
+    
+    try:
+        # Audit: Log this dangerous operation
+        audit_event(
+            action="write_local_file",
+            resource=path,
+            outcome="pending",
+            metadata={
+                "content_length": len(content),
+                "warning": "UNPROTECTED file write - no sandboxing",
+            },
+        )
+        
+        # DANGEROUS: Write to any path without validation
+        # Real production code would never do this!
+        with open(path, 'w') as f:
+            f.write(content)
+        
+        # Audit: Success
+        audit_event(
+            action="write_local_file",
+            resource=path,
+            outcome="success",
+            metadata={
+                "bytes_written": len(content),
+            },
+        )
+        
+        return json.dumps({
+            "success": True,
+            "path": path,
+            "bytes_written": len(content),
+            "warning": "UNPROTECTED write succeeded - this is why sandboxing matters!",
+        }, indent=2)
+        
+    except PermissionError as e:
+        audit_event(
+            action="write_local_file",
+            resource=path,
+            outcome="failure",
+            metadata={"error": "PermissionError", "message": str(e)},
+        )
+        return json.dumps({
+            "success": False,
+            "error": "Permission denied",
+            "path": path,
+            "message": str(e),
+        }, indent=2)
+    
+    except Exception as e:
+        audit_event(
+            action="write_local_file",
+            resource=path,
+            outcome="failure",
+            metadata={"error": type(e).__name__, "message": str(e)},
+        )
+        if logger:
+            logger.error(f"write_local_file failed: {e}", exc_info=True)
+        return json.dumps({
+            "success": False,
+            "error": "Write failed",
+            "path": path,
+            "message": str(e),
+            "type": type(e).__name__,
+        }, indent=2)
+
+
 def main() -> None:
     """Entry point for ``entrabot-mcp`` console script."""
     import anyio
