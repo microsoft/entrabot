@@ -23,7 +23,7 @@ from entrabot.sandbox.base import (
 # These will be populated by setup_sandbox.sh after building/downloading
 # For now, stub with placeholders (real hashes added after binary acquisition)
 PINNED_HASHES: dict[str, str] = {
-    "darwin-arm64": "bc7b87aac7752b3e8a0f2beac46a2309f7a8900bfdb32d8ec7e5369ceab9e366",
+    "darwin-arm64": "26618f0f7f7d33a7f557a6b278a94b34b080f4a0b640c0bd2a5e0bde9d6a3d4b",
     "darwin-x86_64": "0000000000000000000000000000000000000000000000000000000000000000",
     "win32-x86_64": "0000000000000000000000000000000000000000000000000000000000000000",
     "win32-amd64": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -78,7 +78,13 @@ def resolve_binary(
     # 1. Check MXC_BIN_DIR
     mxc_bin_dir = os.environ.get("MXC_BIN_DIR")
     if mxc_bin_dir:
+        # Try with arch subdirectory first
         bin_path = Path(mxc_bin_dir) / arch / binary_name
+        if bin_path.exists():
+            return str(bin_path)
+        
+        # Fallback: try directly in MXC_BIN_DIR (for setup script compatibility)
+        bin_path = Path(mxc_bin_dir) / binary_name
         if bin_path.exists():
             return str(bin_path)
     
@@ -142,7 +148,7 @@ def verify_binary(binary_path: str, expected_hash: str) -> None:
 
 
 def resolve_and_verify(
-    platform: str | None = None,
+    platform_name: str | None = None,
     arch: str | None = None,
 ) -> str:
     """Resolve and verify MXC binary.
@@ -150,7 +156,7 @@ def resolve_and_verify(
     Combines resolve_binary() + verify_binary() with pinned hash lookup.
     
     Args:
-        platform: Platform name (defaults to sys.platform)
+        platform_name: Platform name (defaults to sys.platform)
         arch: Architecture (defaults to platform.machine())
     
     Returns:
@@ -160,23 +166,24 @@ def resolve_and_verify(
         SandboxUnavailableError: Binary not found
         SandboxUntrustedBinaryError: Binary hash mismatch
     """
-    if platform is None:
+    if platform_name is None:
         import sys
-        platform = sys.platform
+        platform_name = sys.platform
     
     if arch is None:
-        arch = platform.machine()
+        import platform as platform_module
+        arch = platform_module.machine()
     
     # Resolve binary
-    binary_path = resolve_binary(platform, arch)
+    binary_path = resolve_binary(platform_name, arch)
     if binary_path is None:
         raise SandboxUnavailableError(
-            f"MXC binary not found for {platform}-{arch}. "
+            f"MXC binary not found for {platform_name}-{arch}. "
             f"Set MXC_BIN_DIR or install @microsoft/mxc-sdk via npm."
         )
     
     # Get expected hash for platform-arch combo
-    hash_key = f"{platform}-{arch}"
+    hash_key = f"{platform_name}-{arch}"
     expected_hash = PINNED_HASHES.get(hash_key)
     
     if expected_hash is None:
