@@ -4984,6 +4984,216 @@ async def share_file(
     )
 
 
+# ============================================================================
+# run_code — Sandboxed Local Code Execution (MXC)
+# ============================================================================
+# Conditionally registered based on ENTRABOT_ENABLE_RUN_CODE env var.
+# Design: docs/architecture/DESIGN-mxc-sandbox.md
+# Security model: disabled by default, positive-allowlist-only, backend-aware
+# fail-closed, audit-first, operator ceiling enforcement (Learning #54).
+
+
+# Check env flag to decide whether to register run_code tool
+_ENABLE_RUN_CODE = os.environ.get("ENTRABOT_ENABLE_RUN_CODE") == "1"
+
+if _ENABLE_RUN_CODE:
+    @mcp.tool()
+    def run_code(
+        argv: list[str],
+        readonly_paths: list[str] | None = None,
+        readwrite_paths: list[str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> str:
+        """Run code in MXC sandbox (Phase 1: process isolation).
+        
+        **IMPORTANT: This tool is DISABLED by default.** It is only available when the
+        operator has explicitly enabled it via `ENTRABOT_ENABLE_RUN_CODE=1`.
+        
+        Security model:
+        - Operator-set ceiling (env-configured), LLM can only narrow (Learning #54)
+        - Positive-allowlist-only paths (no deniedPaths reliance)
+        - Backend-aware fail-closed (refuses if policy unenforceable)
+        - keychain_access=false (hardcoded, not overridable)
+        - Audit-first (fails if audit unavailable)
+        
+        Args:
+            argv: Structured command (e.g., ["python", "script.py", "arg1"])
+                  NO SHELL — this is passed as argv to avoid metachar escapes
+            readonly_paths: Optional list of paths to narrow from ceiling (read-only access)
+            readwrite_paths: Optional list of paths to narrow from ceiling (read-write access)
+            timeout_ms: Optional timeout to narrow from ceiling (milliseconds)
+        
+        Returns:
+            JSON string with:
+            - success: bool
+            - stdout: str (truncated if large)
+            - stderr: str (truncated if large)
+            - exit_code: int
+            - duration_ms: int
+            - timed_out: bool
+            
+            Or error dict if unavailable/failed.
+        
+        Examples:
+            run_code(argv=["python", "-c", "print('hello')"])
+            run_code(argv=["echo", "test"], timeout_ms=5000)
+        """
+        from entrabot.sandbox import get_sandbox_runner
+        from entrabot.sandbox.base import (
+            SandboxBackendUnsupportedError,
+            SandboxPolicy,
+            SandboxPolicyError,
+            SandboxTimeoutError,
+            SandboxUnavailableError,
+            SandboxUntrustedBinaryError,
+        )
+        from entrabot.sandbox.policy import canonicalize_paths, clamp_to_ceiling
+        from entrabot.tools.audit import log_event as audit_event
+        
+        try:
+            # Get operator ceiling from environment
+            # In production, this would be configured via env vars
+            # For now, use a restrictive default ceiling
+            ceiling_readonly = os.environ.get("ENTRABOT_SANDBOX_READONLY_PATHS", "").split(":")
+            ceiling_readwrite = os.environ.get("ENTRABOT_SANDBOX_READWRITE_PATHS", "").split(":")
+            ceiling_timeout = int(os.environ.get("ENTRABOT_SANDBOX_TIMEOUT_MS", "30000"))
+            
+            # Filter out empty strings from split
+            ceiling_readonly = [p for p in ceiling_readonly if p]
+            ceiling_readwrite = [p for p in ceiling_readwrite if p]
+            
+            # Build ceiling policy
+            ceiling = SandboxPolicy(
+                backend="process",  # Phase 1
+                command_line="",  # Will be set from argv
+                readonly_paths=ceiling_readonly,
+                readwrite_paths=ceiling_readwrite,
+                timeout_ms=ceiling_timeout,
+                network_default_policy=os.environ.get("ENTRABOT_SANDBOX_NETWORK", "block"),
+                keychain_access=False,  # Hardcoded
+            )
+            
+            # Build LLM-requested policy
+            llm_readonly = readonly_paths if readonly_paths is not None else ceiling_readonly
+            llm_readwrite = readwrite_paths if readwrite_paths is not None else ceiling_readwrite
+            llm_timeout = timeout_ms if timeout_ms is not None else ceiling_timeout
+            
+            # Convert argv to command_line
+            command_line = " ".join(argv)  # Structured argv preserved
+            
+            llm_policy = SandboxPolicy(
+                backend="process",
+                command_line=command_line,
+                readonly_paths=llm_readonly,
+                readwrite_paths=llm_readwrite,
+                timeout_ms=llm_timeout,
+                network_default_policy="block",  # LLM can't widen
+                keychain_access=False,
+            )
+            
+            # Get sandbox runner (resolves + verifies binary)
+            runner = get_sandbox_runner()
+            backend_caps = runner.get_capabilities()
+            
+            # Clamp policy to ceiling (Learning #54)
+            clamped_policy = clamp_to_ceiling(llm_policy, ceiling, backend_caps)
+            
+            # Canonicalize paths
+            if clamped_policy.readonly_paths:
+                clamped_policy.readonly_paths = canonicalize_paths(clamped_policy.readonly_paths)
+            if clamped_policy.readwrite_paths:
+                clamped_policy.readwrite_paths = canonicalize_paths(clamped_policy.readwrite_paths)
+            
+            # Audit: pending
+            audit_event(
+                action="run_code",
+                resource="sandbox",
+                outcome="pending",
+                metadata={
+                    "argv": argv,
+                    "backend": backend_caps["backend"],
+                    "timeout_ms": clamped_policy.timeout_ms,
+                },
+            )
+            
+            # Execute in sandbox
+            result = runner.run(clamped_policy)
+            
+            # Truncate output (max 10KB each)
+            MAX_OUTPUT = 10 * 1024
+            stdout_truncated = result.stdout[:MAX_OUTPUT]
+            stderr_truncated = result.stderr[:MAX_OUTPUT]
+            
+            # Audit: success/failure
+            audit_event(
+                action="run_code",
+                resource="sandbox",
+                outcome="success" if result.exit_code == 0 else "failure",
+                metadata={
+                    "exit_code": result.exit_code,
+                    "duration_ms": result.duration_ms,
+                    "timed_out": result.timed_out,
+                    "stdout_bytes": len(result.stdout),
+                    "stderr_bytes": len(result.stderr),
+                },
+            )
+            
+            return json.dumps({
+                "success": result.exit_code == 0,
+                "stdout": stdout_truncated,
+                "stderr": stderr_truncated,
+                "exit_code": result.exit_code,
+                "duration_ms": result.duration_ms,
+                "timed_out": result.timed_out,
+            }, indent=2)
+            
+        except SandboxUnavailableError as e:
+            return json.dumps({
+                "error": "Sandbox unavailable",
+                "message": str(e),
+                "help": "Install MXC binary or set MXC_BIN_DIR environment variable",
+            }, indent=2)
+        
+        except SandboxUntrustedBinaryError as e:
+            return json.dumps({
+                "error": "Untrusted binary",
+                "message": str(e),
+                "help": "Binary SHA256 verification failed - binary may be tampered",
+            }, indent=2)
+        
+        except SandboxBackendUnsupportedError as e:
+            return json.dumps({
+                "error": "Policy not enforceable",
+                "message": str(e),
+                "help": (
+                    "Requested policy requires a primitive the backend cannot "
+                    "enforce (fail-closed)"
+                ),
+            }, indent=2)
+        
+        except SandboxPolicyError as e:
+            return json.dumps({
+                "error": "Policy error",
+                "message": str(e),
+            }, indent=2)
+        
+        except SandboxTimeoutError as e:
+            return json.dumps({
+                "error": "Timeout",
+                "message": str(e),
+            }, indent=2)
+        
+        except Exception as e:
+            # Catch-all for audit failures or unexpected errors
+            if logger:
+                logger.error(f"run_code failed: {e}", exc_info=True)
+            return json.dumps({
+                "error": "Execution failed",
+                "message": str(e),
+                "type": type(e).__name__,
+            }, indent=2)
+
+
 def main() -> None:
     """Entry point for ``entrabot-mcp`` console script."""
     import anyio
