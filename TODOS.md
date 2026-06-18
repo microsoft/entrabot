@@ -98,11 +98,11 @@ Two bugs, both observed at 2026-04-17T17:00:00 PDT (= 00:00:01 UTC 2026-04-18):
 ### ~~Token auto-refresh in teams_send~~ ✅ DONE
 Implemented as `_with_token_retry()` in `mcp_server.py` and `_ensure_valid_token()` (proactive refresh at 55 min). All tools use it.
 
-### AppContainer sandbox production implementation
-Tonight's spike proves feasibility. Production version needs: filesystem allowlist, network filtering (Graph API only), process spawn restrictions, MCP server integration. May require Win32 C extension from Python.
-- **Effort:** L (CC: ~1-2 days)
-- **Depends on:** AppContainer spike results
+### ~~AppContainer sandbox production implementation~~ ✅ DONE (MXC sandbox integration)
+**Shipped as MXC sandbox integration (Issue #84, ADR-007).** Phase 1 complete: process-level containment via MXC 0.6.0-alpha (macOS Seatbelt). Positive-allowlist filesystem, network blocking, operator ceiling enforcement, binary SHA256 verification, opt-in `run_code` tool. Phase 2 stub (session-bound Entra identity attribution) ready for future APIs. Windows AppContainer + Linux seccomp-bpf deferred to T4/T10.
+- **Status:** Phase 1 shipped (1605 tests passing), Phase 2 stub in place
 - **Source:** CEO review, refined premise (sandbox co-equal with identity)
+- **See:** `docs/decisions/007-mxc-sandbox-integration.md`, `docs/architecture/DESIGN-mxc-sandbox.md`
 
 ## P2
 
