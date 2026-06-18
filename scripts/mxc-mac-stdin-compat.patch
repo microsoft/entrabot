@@ -1,0 +1,52 @@
+diff --git a/src/core/mxc_darwin/src/main.rs b/src/core/mxc_darwin/src/main.rs
+index b0dea97..ed77214 100644
+--- a/src/core/mxc_darwin/src/main.rs
++++ b/src/core/mxc_darwin/src/main.rs
+@@ -10,10 +10,12 @@
+ //! use still requires macOS.
+ 
+ use std::fmt::Write;
++use std::io::Read;
+ use std::process;
+ 
+ use clap::Parser;
+ use wxc_common::config_parser::load_request;
++use wxc_common::encoding::base64_encode;
+ use wxc_common::logger::{Logger, Mode};
+ use wxc_common::models::{ContainmentBackend, ExecutionRequest};
+ 
+@@ -57,6 +59,17 @@ struct Cli {
+     log_file: Option<String>,
+ }
+ 
++fn read_config_from_stdin() -> Result<Option<String>, std::io::Error> {
++    let mut stdin = std::io::stdin();
++    let mut buffer = String::new();
++    stdin.read_to_string(&mut buffer)?;
++    if buffer.trim().is_empty() {
++        Ok(None)
++    } else {
++        Ok(Some(buffer))
++    }
++}
++
+ fn log_request(request: &ExecutionRequest, logger: &mut Logger) {
+     let _ = writeln!(logger, "Script code length: {}", request.script_code.len());
+     let _ = writeln!(logger, "Working directory: {}", request.working_directory);
+@@ -83,8 +96,15 @@ fn main() {
+         (path.clone(), false)
+     } else if let Some(ref path) = cli.config_path {
+         (path.clone(), false)
++    } else if let Some(stdin_json) = read_config_from_stdin().unwrap_or_else(|e| {
++        eprintln!("Error: Failed to read config from stdin: {}", e);
++        process::exit(1);
++    }) {
++        (base64_encode(stdin_json.as_bytes()), true)
+     } else {
+-        eprintln!("Error: No config provided. Use a positional path, --config, or --config-base64");
++        eprintln!(
++            "Error: No config provided. Use a positional path, --config, --config-base64, or pipe JSON via stdin"
++        );
+         process::exit(1);
+     };
+ 

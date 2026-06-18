@@ -21,9 +21,10 @@ set -euo pipefail
 
 # ── Configuration ──────────────────────────────────────────────────────────
 
-# MXC source repository (placeholder - replace with actual repo when available)
-MXC_REPO="https://github.com/microsoft/mxc-execution-containers.git"
-MXC_PINNED_COMMIT="main"  # Pin to specific commit when stable
+# MXC source repository
+MXC_REPO="https://github.com/microsoft/mxc.git"
+MXC_VERSION_TAG="v0.6.1"
+MXC_PINNED_COMMIT="161598fd08a4fdd030f461de19af23ce4a310b41"
 MXC_SCHEMA_VERSION="0.6.0-alpha"
 
 # Binary names per platform
@@ -51,6 +52,8 @@ esac
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="$PROJECT_ROOT/.mxc-build"
+MXC_SOURCE_DIR="$BUILD_DIR/mxc-src"
+MXC_PATCH_FILE="$PROJECT_ROOT/scripts/mxc-mac-stdin-compat.patch"
 BINARY_HASHES_FILE="$PROJECT_ROOT/src/entrabot/sandbox/binary.py"
 ENV_FILE="$PROJECT_ROOT/.env"
 
@@ -161,29 +164,68 @@ fi
 
 if [ -z "$BINARY_PATH" ]; then
     info "Step 2/5: Building MXC from source..."
-    
-    # Note: MXC repo doesn't exist yet - this is a placeholder implementation
-    warn "MXC repository not yet public. Creating placeholder binary."
-    warn "When MXC is released, this will:"
-    warn "  1. Check for Rust 1.93+"
-    warn "  2. Clone from: $MXC_REPO @ $MXC_PINNED_COMMIT"
-    warn "  3. Build with: cargo build --release"
-    
-    # Create placeholder build directory structure
+
     mkdir -p "$BUILD_DIR/target/release"
-    
-    # For now, create a mock binary that returns an error
-    # This will be replaced with actual build when MXC is available
-    cat > "$BUILD_DIR/target/release/$BINARY_NAME" <<'PLACEHOLDER_BINARY'
-#!/usr/bin/env bash
-echo '{"error": "MXC binary is a placeholder. Build not yet implemented.", "help": "Install MXC when publicly available or build from source"}' >&2
-exit 1
-PLACEHOLDER_BINARY
+
+    if [ "$PLATFORM" != "macos" ]; then
+        error "Source build is only implemented for macOS right now"
+        exit 1
+    fi
+
+    if ! command -v cargo &> /dev/null; then
+        error "cargo not found. Install Rust via https://rustup.rs/ (toolchain 1.93+)"
+        exit 1
+    fi
+
+    if ! xcode-select -p &> /dev/null; then
+        error "Xcode Command Line Tools not installed. Run: xcode-select --install"
+        exit 1
+    fi
+
+    if [ ! -d "$MXC_SOURCE_DIR/.git" ]; then
+        info "Cloning $MXC_REPO into $MXC_SOURCE_DIR"
+        git clone --depth 1 --branch "$MXC_VERSION_TAG" "$MXC_REPO" "$MXC_SOURCE_DIR"
+    fi
+
+    info "Checking out pinned MXC commit $MXC_PINNED_COMMIT"
+    git -C "$MXC_SOURCE_DIR" fetch --depth 1 origin "$MXC_PINNED_COMMIT"
+    git -C "$MXC_SOURCE_DIR" checkout --force "$MXC_PINNED_COMMIT"
+
+    if [ -f "$MXC_PATCH_FILE" ]; then
+        if grep -q "pipe JSON via stdin" "$MXC_SOURCE_DIR/src/core/mxc_darwin/src/main.rs"; then
+            info "MXC stdin compatibility patch already applied"
+        else
+            info "Applying MXC stdin compatibility patch"
+            git -C "$MXC_SOURCE_DIR" apply "$MXC_PATCH_FILE"
+        fi
+    fi
+
+    case "$(uname -m)" in
+        arm64)
+            MXC_TARGET_TRIPLE="aarch64-apple-darwin"
+            ;;
+        x86_64)
+            MXC_TARGET_TRIPLE="x86_64-apple-darwin"
+            ;;
+        *)
+            error "Unsupported macOS architecture: $(uname -m)"
+            exit 1
+            ;;
+    esac
+
+    info "Building mxc-exec-mac from source"
+    (
+        cd "$MXC_SOURCE_DIR"
+        ./build-mac.sh --rust-only
+    )
+
+    cp \
+        "$MXC_SOURCE_DIR/src/target/$MXC_TARGET_TRIPLE/release/$BINARY_NAME" \
+        "$BUILD_DIR/target/release/$BINARY_NAME"
     chmod +x "$BUILD_DIR/target/release/$BINARY_NAME"
-    
+
     BINARY_PATH="$BUILD_DIR/target/release/$BINARY_NAME"
-    warn "Created placeholder binary: $BINARY_PATH"
-    warn "The run_code tool will return 'sandbox unavailable' until MXC is released"
+    success "Built MXC binary: $BINARY_PATH"
 else
     info "Step 2/5: Skipped (binary exists)"
 fi
@@ -354,11 +396,6 @@ echo "To test:"
 echo "  1. Start EntraBot MCP: claude server:entrabot"
 echo "  2. From Claude Code: run_code with argv=[\"echo\", \"hello\"]"
 echo ""
-
-if [[ "$BINARY_PATH" == *"placeholder"* ]] || grep -q "placeholder" "$BINARY_PATH" 2>/dev/null; then
-    warn "Note: Binary is a placeholder until MXC is publicly released"
-    warn "The run_code tool will return 'unavailable' until a real binary is built"
-fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 

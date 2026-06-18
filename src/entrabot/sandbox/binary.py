@@ -19,11 +19,12 @@ from entrabot.sandbox.base import (
     SandboxUntrustedBinaryError,
 )
 
-# Pinned SHA256 hashes for MXC binaries (commit-pinned, verified)
-# These will be populated by setup_sandbox.sh after building/downloading
-# For now, stub with placeholders (real hashes added after binary acquisition)
+# Pinned SHA256 hashes for MXC binaries (commit-pinned, verified).
+# darwin-arm64 is built from microsoft/mxc v0.6.1 (commit
+# 161598fd08a4fdd030f461de19af23ce4a310b41) with the local stdin-compat
+# patch in scripts/mxc-mac-stdin-compat.patch applied.
 PINNED_HASHES: dict[str, str] = {
-    "darwin-arm64": "26618f0f7f7d33a7f557a6b278a94b34b080f4a0b640c0bd2a5e0bde9d6a3d4b",
+    "darwin-arm64": "700e9e7120c78fe9ecdb8c99309ba6df0ea467ac5b581b803b73d655bbccff36",
     "darwin-x86_64": "0000000000000000000000000000000000000000000000000000000000000000",
     "win32-x86_64": "0000000000000000000000000000000000000000000000000000000000000000",
     "win32-amd64": "0000000000000000000000000000000000000000000000000000000000000000",
