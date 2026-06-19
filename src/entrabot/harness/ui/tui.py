@@ -38,11 +38,8 @@ _STYLE_MARKUP = {
 }
 
 _BANNER_MARKUP = {
-    "bright_blue": "bright_blue",
-    "blue": "blue",
-    "bright_magenta": "bright_magenta",
-    "magenta": "magenta",
-    "gray": "grey50",
+    "entra": "#0087ff",  # azure blue
+    "bot": "#ff5faf",  # hot pink
 }
 
 

@@ -1,8 +1,8 @@
 """The ENTRABOT splash wordmark (port of Cli/Banner.cs).
 
-Two-line block-font wordmark with a drop shadow: ``ENTRA`` in blue, ``BOT`` in pink.
-``render()`` returns UI-agnostic colored runs so both the console and TUI draw the same
-picture; ``print_banner()`` writes it to the terminal with ANSI codes.
+A single-line block-font wordmark: ``ENTRA`` in blue, ``BOT`` in pink — one clean color per
+section, no drop shadow. ``render()`` returns UI-agnostic colored runs so the console and TUI
+draw the same picture; ``print_banner()`` writes it with ANSI codes.
 """
 
 from __future__ import annotations
@@ -23,65 +23,44 @@ _FONT = {
 }
 
 _MARGIN = 2
-_SHADOW = "░"
+_WORD = "ENTRABOT"
+_ENTRA_LEN = 5  # first 5 letters ("ENTRA") are blue; the rest ("BOT") are pink
 
-# Color names map to ansi._CODES; the banner uses blue for ENTRA, magenta(=pink) for BOT.
-Run = Tuple[str, str]  # (text, color-name or "")
-
-
-def _blank_grid(h: int, w: int) -> Tuple[List[List[str]], List[List[str]]]:
-    chars = [[" "] * w for _ in range(h)]
-    colors = [[""] * w for _ in range(h)]
-    return chars, colors
-
-
-def _stamp(chars, colors, word: str, top: int, left: int, bright: str, body: str) -> None:
-    for i, ch in enumerate(word):
-        glyph = _FONT.get(ch)
-        if not glyph:
-            continue
-        base = left + i * 6
-        for r, row in enumerate(glyph):
-            color = bright if r < 2 else body
-            for c, cell in enumerate(row):
-                if cell != " ":
-                    chars[top + r][base + c] = cell
-                    colors[top + r][base + c] = color
-
-
-def _stamp_shadow(chars, colors) -> None:
-    h, w = len(chars), len(chars[0])
-    for r in range(h):
-        for c in range(w):
-            if chars[r][c] != " ":
-                tr, tc = r + 1, c + 1
-                if tr < h and tc < w and chars[tr][tc] == " ":
-                    chars[tr][tc] = _SHADOW
-                    colors[tr][tc] = "gray"
+Run = Tuple[str, str]  # (text, color-key in ansi._CODES / the TUI banner palette)
 
 
 def render() -> List[List[Run]]:
-    """Return the banner as rows of ``(text, color)`` runs."""
-    height = 1 + 5 + 1 + 5 + 1  # blank, ENTRA, gap, BOT, blank
-    width = _MARGIN + 5 * 6 + 2
-    chars, colors = _blank_grid(height, width)
+    """Return the banner as rows of ``(text, color-key)`` runs (one blank row top + bottom)."""
+    glyph_h = 5
+    height = glyph_h + 2  # a blank row above and below for breathing room
+    width = _MARGIN + len(_WORD) * 6
+    chars = [[" "] * width for _ in range(height)]
+    colors = [[""] * width for _ in range(height)]
 
-    _stamp(chars, colors, "ENTRA", top=1, left=_MARGIN, bright="bright_blue", body="blue")
-    _stamp(chars, colors, "BOT", top=7, left=_MARGIN, bright="bright_magenta", body="magenta")
-    _stamp_shadow(chars, colors)
+    for i, ch in enumerate(_WORD):
+        glyph = _FONT.get(ch)
+        if not glyph:
+            continue
+        key = "entra" if i < _ENTRA_LEN else "bot"
+        base = _MARGIN + i * 6
+        for r, line in enumerate(glyph):
+            for c, cell in enumerate(line):
+                if cell != " ":
+                    chars[r + 1][base + c] = cell  # +1 for the top blank row
+                    colors[r + 1][base + c] = key
 
     rows: List[List[Run]] = []
     for r in range(height):
         runs: List[Run] = []
-        cur_color = colors[r][0]
-        buf = []
+        cur = colors[r][0]
+        buf: List[str] = []
         for c in range(width):
-            if colors[r][c] != cur_color:
-                runs.append(("".join(buf), cur_color))
+            if colors[r][c] != cur:
+                runs.append(("".join(buf), cur))
                 buf = []
-                cur_color = colors[r][c]
+                cur = colors[r][c]
             buf.append(chars[r][c])
-        runs.append(("".join(buf), cur_color))
+        runs.append(("".join(buf), cur))
         rows.append(runs)
     return rows
 
@@ -93,8 +72,6 @@ def print_banner() -> None:
     for row in render():
         line = []
         for text, color in row:
-            if color and color in ansi._CODES:
-                line.append(f"\x1b[{ansi._CODES[color]}m{text}\x1b[0m")
-            else:
-                line.append(text)
+            code = ansi._CODES.get(color) if color else None
+            line.append(f"\x1b[{code}m{text}\x1b[0m" if code else text)
         print("".join(line))
