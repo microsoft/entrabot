@@ -19,6 +19,9 @@ dependencies = [
     "PyJWT>=2.8.0",
     "pypdf>=4.0",
     "click>=8.1.0",
+    # ENTRABOT harness: drives a Copilot agent session (sessions, streaming, tools,
+    # MCP, per-call permission hook). Sibling of the .NET GitHub.Copilot.SDK.
+    "github-copilot-sdk>=1.0.2",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +41,10 @@ provisioning = [
     # the public cert is registered on the app reg in Entra.
     "keyring>=24",
     "cryptography>=42",
+]
+# Full-screen TUI for the harness (optional; the console UI is the default).
+tui = [
+    "textual>=0.60",
 ]
 
 [tool.ruff]
@@ -79,3 +86,4 @@ where = ["src"]
 
 [project.scripts]
 entrabot-mcp = "entrabot.mcp_server:main"
+entrabot-harness = "entrabot.harness.cli:main"
