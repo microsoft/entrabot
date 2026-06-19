@@ -75,13 +75,22 @@ Closed in this branch:
    message and are bound to the turn it starts (promoted on the `USER_MESSAGE` echo, cleared
    on `SESSION_IDLE`). The permission policy resolves the caller of the *running* turn, not
    "latest message wins".
-4. ✅ **TUI: character streaming + autocomplete** — the Textual UI now streams the assistant
-   line character-by-character (live `#live` widget) and offers slash-command autocomplete
-   (Tab to complete).
+4. ✅ **TUI parity** — live character streaming (`#live`), slash-command autocomplete (Tab),
+   command history recall (↑/↓), and multi-line paste staging (`⎘`, sent with the next message).
+5. ✅ **Interrupt** — Esc (or Ctrl+C) aborts the running turn (`session.abort()`); the status
+   line shows "working — esc to interrupt". Console UI interrupts on Ctrl+C best-effort.
+6. ✅ **Live end-to-end (verified against the real runtime)** — `CopilotClient` connects +
+   authenticates, a streamed turn renders correctly, and the **per-caller gate works live**:
+   a deny-policy caller has the agent's gated tool call blocked, an allow-policy caller has the
+   same call permitted. (This surfaced a real bug — the SDK calls the permission handler with
+   `(request, context)`; fixed.) Run `entrabot-harness doctor` to check runtime + auth + token.
+7. ✅ **Windows UTF-8** — stdout/stderr are reconfigured to UTF-8 so the banner / `●` / em-dashes
+   don't crash cp1252 consoles.
+
+Tests: `pytest tests/harness` — 26 unit tests (config, scheduler, permissions incl. the
+two-arg handler + yolo/ask/deny semantics, MCP loader, banner).
 
 Still open:
 
-- **TUI paste-staging** — multi-line paste isn't staged like the .NET TUI (single-line Input).
-- **Live end-to-end** — exercised against the real SDK via smoke tests (imports, config,
-  scheduler, per-caller permissions, MCP, command API, tool construction, init flow); a live
-  round-trip against Teams + Copilot is the remaining milestone.
+- **Live Teams round-trip** — the Copilot/session/permission half is verified live; an actual
+  message in→out over Teams needs a tenant with the Agent-User creds (or `ENTRABOT_GRAPH_TOKEN`).

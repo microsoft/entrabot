@@ -79,9 +79,18 @@ class InteractiveSession:
     async def run(self) -> None:
         await self._start()
         try:
-            await self._ui.run(self._handle_input)
+            await self._ui.run(self._handle_input, self._interrupt)
         finally:
             await self._dispose()
+
+    async def _interrupt(self) -> None:
+        """Abort the running turn (Esc/Ctrl+C)."""
+        if self._session and not self._idle.is_set():
+            try:
+                await self._session.abort()
+            except Exception as e:
+                self._ui.append_line(f"interrupt failed: {e}", UiStyle.ERROR)
+            self._ui.append_line("⏹ interrupted", UiStyle.WARN)
 
     async def _start(self) -> None:
         self._ui.banner(banner.render())
@@ -168,11 +177,13 @@ class InteractiveSession:
 
     async def _send(self, prompt: str) -> None:
         self._idle.clear()
+        self._ui.set_working(True)
         try:
             await self._session.send(prompt, agent_mode=self._mode)
         except Exception as e:
             self._ui.append_line(f"send failed: {e}", UiStyle.ERROR)
             self._idle.set()
+            self._ui.set_working(False)
             return
         await self._idle.wait()
 
@@ -229,6 +240,7 @@ class InteractiveSession:
         elif t == _ET.SESSION_IDLE:
             self._ui.append_line("")
             self._ctx.caller = self._ctx.chat = None  # turn over; back to operator/no caller
+            self._ui.set_working(False)
             self._idle.set()
 
     # ---- slash commands --------------------------------------------------------------

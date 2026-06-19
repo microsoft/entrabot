@@ -31,6 +31,7 @@ _USAGE = """ENTRABOT — a Copilot harness that routes Microsoft Teams traffic p
 Usage:
   entrabot-harness                              start a session (config in the current dir)
   entrabot-harness init [name] [description…]   create a new ENTRABOT agent here
+  entrabot-harness doctor                       check the Copilot runtime + auth + Teams token
   entrabot-harness --version
   entrabot-harness --help
 
@@ -109,7 +110,51 @@ async def _cmd_run(flags: set) -> int:
     return 0
 
 
+async def _cmd_doctor() -> int:
+    import copilot
+
+    print("ENTRABOT harness — doctor\n")
+    tp = make_token_provider()
+    print(f"  Teams token: {'available' if tp else 'none → console-only (set ENTRABOT_GRAPH_TOKEN or three-hop creds)'}")
+
+    client = copilot.CopilotClient(working_directory=os.getcwd(), log_level="error")
+    try:
+        await asyncio.wait_for(client.start(), timeout=45)
+    except Exception as e:
+        print(f"  Copilot runtime: FAILED to start — {e}")
+        return 1
+    print("  Copilot runtime: started")
+    try:
+        st = await client.get_auth_status()
+        if getattr(st, "isAuthenticated", False):
+            print(f"  GitHub auth: authenticated as {getattr(st, 'login', '?')}")
+        else:
+            print(f"  GitHub auth: NOT authenticated — {getattr(st, 'statusMessage', 'run `copilot` to sign in')}")
+    except Exception as e:
+        print(f"  GitHub auth: check failed — {e}")
+    try:
+        models = await client.list_models()
+        sample = ", ".join(m.id for m in models[:4])
+        print(f"  Models: {len(models)} available (e.g. {sample})")
+    except Exception as e:
+        print(f"  Models: list failed — {e}")
+    await client.stop()
+    print("\n  done.")
+    return 0
+
+
+def _force_utf8() -> None:
+    # The banner + status lines use Unicode (block glyphs, ●, em-dashes); Windows consoles
+    # often default to cp1252 and would crash on print(). Reconfigure to UTF-8 best-effort.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
 def main(argv: List[str] | None = None) -> int:
+    _force_utf8()
     args = list(argv if argv is not None else sys.argv[1:])
     flags, positionals = _flags(args)
 
@@ -121,6 +166,8 @@ def main(argv: List[str] | None = None) -> int:
         return 0
     if positionals and positionals[0] == "init":
         return _cmd_init(positionals[1:])
+    if positionals and positionals[0] == "doctor":
+        return asyncio.run(_cmd_doctor())
 
     try:
         return asyncio.run(_cmd_run(flags))

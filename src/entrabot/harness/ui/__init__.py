@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import enum
-from typing import Awaitable, Callable, List, Protocol, Tuple, runtime_checkable
+from typing import Awaitable, Callable, List, Optional, Protocol, Tuple, runtime_checkable
 
 
 class UiStyle(enum.Enum):
@@ -37,5 +37,9 @@ class UI(Protocol):
     def set_commands(self, names: List[str]) -> None: ...
     def clear(self) -> None: ...
     async def confirm(self, title: str, message: str) -> bool: ...
-    async def run(self, on_submit: "Callable[[str], Awaitable[None]]") -> None: ...
+    async def run(
+        self,
+        on_submit: "Callable[[str], Awaitable[None]]",
+        on_interrupt: "Optional[Callable[[], Awaitable[None]]]" = None,
+    ) -> None: ...
     def request_stop(self) -> None: ...

@@ -105,7 +105,7 @@ class ConsoleUI(UI):
             return False
         return answer.strip().lower() in ("y", "yes")
 
-    async def run(self, on_submit: "Callable[[str], Awaitable[None]]") -> None:
+    async def run(self, on_submit, on_interrupt=None) -> None:
         while not self._stop.is_set():
             try:
                 line = await asyncio.to_thread(input, ansi.cyan("› "))
@@ -116,7 +116,11 @@ class ConsoleUI(UI):
             line = line.strip()
             if not line:
                 continue
-            await on_submit(line)
+            try:
+                await on_submit(line)
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                if on_interrupt:
+                    await on_interrupt()  # Ctrl+C during a turn -> abort, keep the session alive
 
     def request_stop(self) -> None:
         self._stop.set()
