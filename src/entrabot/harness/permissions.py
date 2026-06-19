@@ -128,7 +128,9 @@ def build_permission_handler(
     - otherwise (autonomous, no UI): an "ask" is denied (fail-closed).
     """
 
-    async def handler(request: Any):
+    # The SDK invokes the handler as handler(request, {"session_id": ...}); accept the
+    # context arg (optional so direct unit-test calls with one arg still work).
+    async def handler(request: Any, context: Any = None):
         kind, identifier, text = describe(request)
         caller = resolve_caller()
         decision = policy.for_caller(caller).decide(kind, identifier)
