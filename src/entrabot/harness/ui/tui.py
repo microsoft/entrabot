@@ -65,9 +65,10 @@ class TextualUI(UI):
         ui = self
 
         class _PermissionsScreen(ModalScreen):
-            """Sponsor-vs-Guest tool matrix on a (proven) OptionList: ↑/↓ pick a row, then
-            's' toggles Sponsor, 'g' toggles Guest, 'space' toggles both, 'y' toggles the YOLO
-            row (allow everything), esc saves & closes. Resolves {yolo, sponsor:set, guest:set}."""
+            """Per-tool Sponsor-vs-Guest matrix on an OptionList. Rows: a YOLO row (its Sponsor /
+            Guest cells grant ALL tools to that class) then every tool grouped by section. ↑/↓
+            pick a row, s toggles Sponsor, g toggles Guest, space both, esc saves. Resolves
+            {sponsor_all, guest_all, sponsor:set, guest:set}."""
 
             CSS = """
             _PermissionsScreen { background: #0d0d0d; }
@@ -76,19 +77,25 @@ class TextualUI(UI):
             #perm-footer { color: #808080; padding: 0 2 1 2; }
             """
 
-            def __init__(self, categories, state, fut):
+            def __init__(self, sections, state, fut):
                 super().__init__()
-                self._cats = list(categories)  # [(key, label)]
-                self._yolo = bool(state.get("yolo", False))
+                self._sponsor_all = bool(state.get("sponsor_all", True))
+                self._guest_all = bool(state.get("guest_all", False))
                 self._sponsor = set(state.get("sponsor", set()))
                 self._guest = set(state.get("guest", set()))
                 self._fut = fut
+                # flat row list: yolo, then per-section (header + tools)
+                self._rows = [{"kind": "yolo"}]
+                for section, items in sections:
+                    self._rows.append({"kind": "header", "label": section})
+                    for it in items:
+                        self._rows.append({"kind": "tool", "name": it["name"]})
 
             def compose(self):
-                yield Static("Tool permissions  —  who can the agent act for?", id="perm-title")
+                yield Static("Tool permissions  —  Sponsor vs Guest, per tool", id="perm-title")
                 yield OptionList(id="perm-list")
                 yield Static(
-                    "↑/↓ row   ·   s sponsor   ·   g guest   ·   space both   ·   y yolo   ·   esc save",
+                    "↑/↓ row   ·   s sponsor   ·   g guest   ·   space both   ·   esc save & close",
                     id="perm-footer",
                 )
 
@@ -96,31 +103,37 @@ class TextualUI(UI):
                 self._rebuild()
                 self.query_one(OptionList).focus()
 
-            def on_key(self, event):  # on_key fires for keys OptionList doesn't consume (up/down)
+            def on_key(self, event):
                 k = event.key
                 if k == "escape":
                     self.action_save_close(); event.stop()
                 elif k == "s":
-                    self.action_toggle_sponsor(); event.stop()
+                    self._toggle("sponsor"); event.stop()
                 elif k == "g":
-                    self.action_toggle_guest(); event.stop()
-                elif k == "y":
-                    self.action_toggle_yolo(); event.stop()
+                    self._toggle("guest"); event.stop()
                 elif k == "space":
-                    self.action_toggle_both(); event.stop()
+                    self._toggle("sponsor"); self._toggle("guest"); event.stop()
 
-            def on_option_list_option_selected(self, event):  # enter / mouse click toggles both
-                self.action_toggle_both()
+            def on_option_list_option_selected(self, event):
+                self._toggle("sponsor"); self._toggle("guest")
 
-            def _mark(self, on, color="green"):
-                return f"[{color}]✓[/]" if on else "[grey50]·[/]"
+            def _cell(self, on, all_on):
+                if all_on:
+                    return "[yellow]✓[/]"  # granted via the YOLO row
+                return "[green]✓[/]" if on else "[grey50]·[/]"
 
             def _row_markup(self, i):
-                if i == 0:
-                    state = "[bold yellow]✓ ON — everything allowed[/]" if self._yolo else "[grey50]· off[/]"
-                    return f"⚡ {'YOLO'.ljust(24)}  {state}"
-                key, label = self._cats[i - 1]
-                return f"{label.ljust(26)}  sponsor {self._mark(key in self._sponsor)}    guest {self._mark(key in self._guest)}"
+                row = self._rows[i]
+                if row["kind"] == "header":
+                    return f"[bold #569cd6]── {row['label']} ──[/]"
+                if row["kind"] == "yolo":
+                    s = "[bold yellow]✓ all[/]" if self._sponsor_all else "[grey50]·[/]"
+                    g = "[bold yellow]✓ all[/]" if self._guest_all else "[grey50]·[/]"
+                    return f"⚡ {'YOLO — allow ALL tools'.ljust(40)}  sponsor {s}    guest {g}"
+                name = row["name"]
+                s = self._cell(name in self._sponsor, self._sponsor_all)
+                g = self._cell(name in self._guest, self._guest_all)
+                return f"   {name.ljust(42)}  sponsor {s}    guest {g}"
 
             def _rebuild(self):
                 from rich.text import Text
@@ -128,42 +141,35 @@ class TextualUI(UI):
                 ol = self.query_one(OptionList)
                 hl = ol.highlighted
                 ol.clear_options()
-                for i in range(1 + len(self._cats)):
+                for i in range(len(self._rows)):
                     ol.add_option(Text.from_markup(self._row_markup(i)))
                 ol.highlighted = hl if hl is not None else 0
 
-            def _cur(self):
-                return self.query_one(OptionList).highlighted or 0
-
-            def action_toggle_sponsor(self):
-                i = self._cur()
-                if i > 0:
-                    key = self._cats[i - 1][0]
-                    self._sponsor.discard(key) if key in self._sponsor else self._sponsor.add(key)
-                    self._rebuild()
-
-            def action_toggle_guest(self):
-                i = self._cur()
-                if i > 0:
-                    key = self._cats[i - 1][0]
-                    self._guest.discard(key) if key in self._guest else self._guest.add(key)
-                    self._rebuild()
-
-            def action_toggle_both(self):
-                i = self._cur()
-                if i == 0:
-                    self.action_toggle_yolo()
+            def _toggle(self, col):
+                i = self.query_one(OptionList).highlighted or 0
+                row = self._rows[i]
+                if row["kind"] == "yolo":
+                    if col == "sponsor":
+                        self._sponsor_all = not self._sponsor_all
+                    else:
+                        self._guest_all = not self._guest_all
+                elif row["kind"] == "tool":
+                    target = self._sponsor if col == "sponsor" else self._guest
+                    target.discard(row["name"]) if row["name"] in target else target.add(row["name"])
                 else:
-                    self.action_toggle_sponsor()
-                    self.action_toggle_guest()
-
-            def action_toggle_yolo(self):
-                self._yolo = not self._yolo
+                    return  # header
                 self._rebuild()
 
             def action_save_close(self):
                 if not self._fut.done():
-                    self._fut.set_result({"yolo": self._yolo, "sponsor": self._sponsor, "guest": self._guest})
+                    self._fut.set_result(
+                        {
+                            "sponsor_all": self._sponsor_all,
+                            "guest_all": self._guest_all,
+                            "sponsor": self._sponsor,
+                            "guest": self._guest,
+                        }
+                    )
                 self.app.pop_screen()
 
         self._PermissionsScreen = _PermissionsScreen

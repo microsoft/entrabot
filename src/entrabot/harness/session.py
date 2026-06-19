@@ -16,10 +16,11 @@ from pydantic import BaseModel, Field
 
 from . import agency
 from . import banner
+from . import toolcatalog
 from .config import HarnessConfig
 from . import config as cfgmod
 from . import mcp_loader
-from .permissions import TOOL_CATEGORIES, ToolPolicy, build_permission_handler
+from .permissions import ToolPolicy, build_tool_gate
 from .scheduler import SelfScheduler
 from .teams_comms import TeamsBridge, TokenProvider, TurnContext
 from .teams_tools import build_teams_tools
@@ -65,6 +66,7 @@ class InteractiveSession:
         self._scheduler: Optional[SelfScheduler] = None
         self._policy = ToolPolicy.from_config(config.permissions)
         self._sponsors = self._load_sponsors()  # Entra user ids treated as sponsors
+        self._catalog: list = []  # every tool/skill the session exposes (for /permissions)
 
         self._idle = asyncio.Event()
         self._idle.set()
@@ -119,14 +121,19 @@ class InteractiveSession:
 
         mcp = mcp_loader.load(self._root)
 
-        # the running turn's caller class (sponsor/guest) gates tools; local input -> sponsor
-        on_perm = build_permission_handler(self._policy, self._caller_class, force_yolo=self._yolo)
+        # the running turn's caller class (sponsor/guest) gates every tool; local input -> sponsor
+        gate = build_tool_gate(self._policy, self._caller_class, force_yolo=self._yolo)
 
         self._ui.update_spinner("starting session…")
-        self._session = await self._establish(tools or None, mcp, on_perm)
+        self._session = await self._establish(tools or None, mcp, gate)
         self._session.on(self._on_event)
         self._ui.update_spinner("loading commands…")
         await self._load_commands()
+        self._ui.update_spinner("enumerating tools…")
+        try:
+            self._catalog = await toolcatalog.enumerate_tools(self._session)
+        except Exception:
+            self._catalog = []
 
         self._scheduler = SelfScheduler(self._root, self._inject)
         self._scheduler.start()
@@ -148,9 +155,9 @@ class InteractiveSession:
         self._refresh_status()
         self._ui.append_line("● ready", UiStyle.SUCCESS)
 
-    async def _establish(self, tools, mcp, on_perm) -> copilot.CopilotSession:
+    async def _establish(self, tools, mcp, gate) -> copilot.CopilotSession:
         kwargs = dict(
-            on_permission_request=on_perm,
+            hooks=copilot.SessionHooks(on_pre_tool_use=gate),
             model=self._current_model,
             reasoning_effort=self._reasoning,
             context_tier=self._config.context_tier,
@@ -439,24 +446,33 @@ class InteractiveSession:
         self._ui.append_line(f"model → {model} ({effort or 'default'}{tier_note})", UiStyle.SUCCESS)
 
     async def _handle_permissions(self) -> None:
+        if not self._catalog:  # enumerate on demand if startup couldn't
+            self._ui.start_spinner("enumerating tools…")
+            try:
+                self._catalog = await toolcatalog.enumerate_tools(self._session)
+            except Exception:
+                pass
+            self._ui.stop_spinner()
+        sections = toolcatalog.group_sections(self._catalog)
         state = {
-            "yolo": self._policy.yolo,
+            "sponsor_all": self._policy.sponsor_all,
+            "guest_all": self._policy.guest_all,
             "sponsor": set(self._policy.sponsor),
             "guest": set(self._policy.guest),
         }
-        result = await self._ui.edit_permissions(TOOL_CATEGORIES, state)
+        result = await self._ui.edit_permissions(sections, state)
         if result is None:
             return
-        self._policy.yolo = bool(result.get("yolo"))
-        self._policy.sponsor = set(result.get("sponsor", set()))
-        self._policy.guest = set(result.get("guest", set()))
+        # mutate the SAME policy object so the live gate hook picks up the change immediately
+        self._policy.sponsor_all = bool(result["sponsor_all"])
+        self._policy.guest_all = bool(result["guest_all"])
+        self._policy.sponsor = set(result["sponsor"])
+        self._policy.guest = set(result["guest"])
         self._config.permissions = self._policy.to_config()
         cfgmod.save(self._root, self._config)
-        if self._policy.yolo:
-            note = "yolo — everything allowed for everyone"
-        else:
-            note = f"sponsor: {len(self._policy.sponsor)} tool(s), guest: {len(self._policy.guest)} tool(s)"
-        self._ui.append_line(f"permissions updated → {note}", UiStyle.SUCCESS)
+        s = "all" if self._policy.sponsor_all else f"{len(self._policy.sponsor)} tool(s)"
+        g = "all" if self._policy.guest_all else f"{len(self._policy.guest)} tool(s)"
+        self._ui.append_line(f"permissions updated → sponsor: {s}, guest: {g}", UiStyle.SUCCESS)
 
     def _print_schedules(self) -> None:
         tasks = self._scheduler.list() if self._scheduler else []
@@ -523,16 +539,20 @@ class InteractiveSession:
 
     async def _handle_reload(self) -> None:
         self._ui.append_line("reloading MCP + session…", UiStyle.DIM)
-        on_perm = build_permission_handler(self._policy, self._caller_class, force_yolo=self._yolo)
+        gate = build_tool_gate(self._policy, self._caller_class, force_yolo=self._yolo)
         tools: List[Any] = []
         if self._bridge:
             tools += build_teams_tools(self._bridge, self._ctx)
         tools += self._schedule_tools()
         mcp = mcp_loader.load(self._root)
         self._fresh = True
-        self._session = await self._establish(tools or None, mcp, on_perm)
+        self._session = await self._establish(tools or None, mcp, gate)
         self._session.on(self._on_event)
         await self._load_commands()
+        try:
+            self._catalog = await toolcatalog.enumerate_tools(self._session)
+        except Exception:
+            pass
         self._ui.append_line("reloaded.", UiStyle.SUCCESS)
 
     # ---- schedule tools --------------------------------------------------------------

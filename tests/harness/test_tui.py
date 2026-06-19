@@ -90,31 +90,28 @@ async def test_model_picker_via_submit_is_navigable_and_escapable():
     assert picked == [1]
 
 
-async def test_permissions_matrix_toggles_and_saves():
-    from entrabot.harness.permissions import TOOL_CATEGORIES
-
+async def test_permissions_matrix_per_tool_toggles_and_saves():
     ui = TextualUI()
     app = ui._App()
     ui.app = app
+    # rows: 0=YOLO, 1=header(Native), 2=view, 3=edit
+    sections = [("Native", [{"name": "view", "kind": "tool"}, {"name": "edit", "kind": "tool"}])]
     async with app.run_test() as pilot:
-        state = {"yolo": False, "sponsor": {"shell"}, "guest": set()}
-        task = asyncio.create_task(ui.edit_permissions(TOOL_CATEGORIES, state))
+        state = {"sponsor_all": True, "guest_all": False, "sponsor": set(), "guest": set()}
+        task = asyncio.create_task(ui.edit_permissions(sections, state))
         for _ in range(5):
             await pilot.pause()
-        await pilot.press("down")  # row 1 = shell
-        await pilot.press("s")  # sponsor off
-        await pilot.press("down")  # row 2 = write
-        await pilot.press("g")  # guest on
-        await pilot.press("up")
-        await pilot.press("up")  # row 0 = yolo
-        await pilot.press("y")  # yolo on
+        await pilot.press("s")  # YOLO row: sponsor_all -> False
+        await pilot.press("down")  # -> header
+        await pilot.press("down")  # -> view
+        await pilot.press("g")  # view guest on
         await pilot.press("escape")  # save
         for _ in range(4):
             await pilot.pause()
         r = await asyncio.wait_for(task, timeout=5)
-    assert r["yolo"] is True
-    assert "shell" not in r["sponsor"]
-    assert "write" in r["guest"]
+    assert r["sponsor_all"] is False
+    assert r["guest_all"] is False
+    assert "view" in r["guest"]
 
 
 async def test_form_edits_all_fields_and_submits():

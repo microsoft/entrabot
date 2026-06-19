@@ -131,40 +131,51 @@ class ConsoleUI(UI):
         except ValueError:
             return None
 
-    async def edit_permissions(self, categories, state):
-        yolo = bool(state.get("yolo"))
+    async def edit_permissions(self, sections, state):
+        sa = bool(state.get("sponsor_all", True))
+        ga = bool(state.get("guest_all", False))
         sponsor = set(state.get("sponsor", set()))
         guest = set(state.get("guest", set()))
-        labels = dict(categories)
+        tools = {it["name"] for _, items in sections for it in items}
         mark = lambda on: ansi.green("✓") if on else ansi.dim("·")
 
         def show():
-            print(ansi.bold("Tool permissions  (toggle: '<key> sponsor' / '<key> guest' / 'yolo'; 'done' to save)"))
-            print(f"  {'yolo':10} {mark(yolo)}")
-            for k, lbl in categories:
-                print(f"  {k:10} sponsor:{mark(k in sponsor)}  guest:{mark(k in guest)}   {ansi.dim(lbl)}")
+            print(ansi.bold("Tool permissions  (toggle: '<tool> sponsor' / '<tool> guest' / 'yolo sponsor'; 'done')"))
+            print(f"  {'YOLO':44} sponsor:{mark(sa)}  guest:{mark(ga)}")
+            for section, items in sections:
+                print(ansi.dim(f"  ── {section} ──"))
+                for it in items:
+                    n = it["name"]
+                    print(f"  {n:44} sponsor:{mark(sa or n in sponsor)}  guest:{mark(ga or n in guest)}")
 
         show()
         while True:
             try:
-                cmd = (await asyncio.to_thread(input, ansi.cyan("perm> "))).strip().lower()
+                cmd = (await asyncio.to_thread(input, ansi.cyan("perm> "))).strip()
             except (EOFError, KeyboardInterrupt):
                 break
-            if cmd in ("", "done", "save"):
+            if cmd.lower() in ("", "done", "save"):
                 break
-            if cmd in ("q", "quit", "cancel"):
+            if cmd.lower() in ("q", "quit", "cancel"):
                 return None
-            if cmd == "yolo":
-                yolo = not yolo
-            elif len(cmd.split()) == 2 and cmd.split()[0] in labels and cmd.split()[1] in ("sponsor", "guest"):
-                key, cls = cmd.split()
-                tgt = sponsor if cls == "sponsor" else guest
-                tgt.discard(key) if key in tgt else tgt.add(key)
+            parts = cmd.split()
+            if len(parts) == 2 and parts[1].lower() in ("sponsor", "guest"):
+                name, col = parts[0], parts[1].lower()
+                if name.lower() == "yolo":
+                    if col == "sponsor":
+                        sa = not sa
+                    else:
+                        ga = not ga
+                elif name in tools:
+                    tgt = sponsor if col == "sponsor" else guest
+                    tgt.discard(name) if name in tgt else tgt.add(name)
+                else:
+                    print(ansi.dim("  unknown tool"))
+                    continue
+                show()
             else:
-                print(ansi.dim("  e.g.  shell sponsor   |   read guest   |   yolo   |   done"))
-                continue
-            show()
-        return {"yolo": yolo, "sponsor": sponsor, "guest": guest}
+                print(ansi.dim("  e.g.  yolo guest   |   powershell sponsor   |   done"))
+        return {"sponsor_all": sa, "guest_all": ga, "sponsor": sponsor, "guest": guest}
 
     async def form(self, title, fields):
         print(ansi.bold(title))
