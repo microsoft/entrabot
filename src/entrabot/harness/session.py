@@ -106,7 +106,7 @@ class InteractiveSession:
                 self._config.watched_chats,
                 self._inject,
                 self_id=self._self_id,
-                on_note=lambda m: self._ui.append_line(m, UiStyle.INFO),
+                on_note=lambda m: self._ui.append_line("● " + m, UiStyle.INFO),
             )
 
         tools: List[Any] = []
@@ -133,18 +133,19 @@ class InteractiveSession:
         if self._bridge:
             self._bridge.start()
 
+        self._ui.append_line(
+            f"● {self._config.name} — {self._mode}{', yolo' if self._yolo else ''}", UiStyle.INFO
+        )
         if self._bridge:
-            self._ui.append_line("Teams: enabled — auto-discovering the chats you're in…", UiStyle.INFO)
+            self._ui.append_line("● Teams: enabled — auto-discovering the chats you're in…", UiStyle.INFO)
         else:
             self._ui.append_line(
-                "Teams: not configured — running console-only. Set ENTRABOT_GRAPH_TOKEN, or "
+                "● Teams: not configured — running console-only. Set ENTRABOT_GRAPH_TOKEN, or "
                 "complete entrabot auth (client_id / agent IDs are currently empty), to enable.",
                 UiStyle.WARN,
             )
         self._refresh_status()
-        self._ui.append_line(
-            f"ready — {self._config.name} ({self._mode}{', yolo' if self._yolo else ''})", UiStyle.SUCCESS
-        )
+        self._ui.append_line("● ready", UiStyle.SUCCESS)
 
     async def _establish(self, tools, mcp, on_perm) -> copilot.CopilotSession:
         kwargs = dict(
@@ -386,15 +387,32 @@ class InteractiveSession:
                 self._ui.append_line(f"  - {getattr(o, 'name', o)}", UiStyle.NORMAL)
 
     async def _handle_model(self, args: List[str]) -> None:
-        if not args:
+        try:
             models = await self._client.list_models()
-            self._ui.append_line("models:", UiStyle.INFO)
-            for m in models:
-                mark = "*" if m.id == self._current_model else " "
-                self._ui.append_line(f"  {mark} {m.id}  ({m.name})", UiStyle.NORMAL)
+        except Exception as e:
+            self._ui.append_line(f"could not list models: {e}", UiStyle.ERROR)
             return
-        model = args[0]
-        effort = args[1] if len(args) > 1 else self._reasoning
+
+        if args:  # /model <name> [effort] — direct switch, no picker
+            model = args[0]
+            effort = args[1] if len(args) > 1 else self._reasoning
+        else:  # arrow-key picker (model, then reasoning effort)
+            labels = [
+                f"{m.id}{'  ✓' if m.id == self._current_model else ''}   —   {m.name}" for m in models
+            ]
+            idx = await self._ui.select("Select a model", labels)
+            if idx is None:
+                return
+            chosen = models[idx]
+            model = chosen.id
+            efforts = list(getattr(chosen, "supported_reasoning_efforts", None) or [])
+            default_effort = getattr(chosen, "default_reasoning_effort", None) or self._reasoning
+            if efforts:
+                ei = await self._ui.select(f"Reasoning effort for {model}", efforts)
+                effort = efforts[ei] if ei is not None else default_effort
+            else:
+                effort = default_effort
+
         try:
             await self._session.set_model(model, reasoning_effort=effort, context_tier=self._config.context_tier)
         except Exception as e:
@@ -487,7 +505,11 @@ class InteractiveSession:
 
     # ---- misc ------------------------------------------------------------------------
     def _refresh_status(self) -> None:
-        self._ui.set_status(self._root, self._current_model or "default model")
+        if self._current_model:
+            model = f"{self._current_model} · {self._reasoning}" if self._reasoning else self._current_model
+        else:
+            model = "default model"
+        self._ui.set_status(self._root, model)
 
 
 def _short(args: Any) -> str:

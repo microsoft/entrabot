@@ -105,6 +105,21 @@ class ConsoleUI(UI):
             return False
         return answer.strip().lower() in ("y", "yes")
 
+    async def select(self, title, options):
+        self._end_line()
+        print(ansi.bold(title))
+        for i, o in enumerate(options, 1):
+            print(f"  {i}. {o}")
+        try:
+            ans = await asyncio.to_thread(input, ansi.cyan("select #: "))
+        except (EOFError, KeyboardInterrupt):
+            return None
+        try:
+            n = int(ans.strip()) - 1
+            return n if 0 <= n < len(options) else None
+        except ValueError:
+            return None
+
     async def run(self, on_submit, on_interrupt=None, on_start=None) -> None:
         if on_start is not None:
             await on_start()

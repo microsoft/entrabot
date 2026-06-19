@@ -52,9 +52,50 @@ class TextualUI(UI):
 
     def __init__(self) -> None:
         from textual.app import App, ComposeResult
-        from textual.widgets import Input, RichLog, Static
+        from textual.screen import ModalScreen
+        from textual.widgets import Input, OptionList, RichLog, Static
 
         ui = self
+
+        class _SelectScreen(ModalScreen):
+            """Centered arrow-key picker (model / effort), resolving a future like confirm()."""
+
+            CSS = """
+            _SelectScreen { align: center middle; background: #000000 60%; }
+            #sel-box { width: 70; max-width: 90%; height: auto; border: round #569cd6; background: #0d0d0d; padding: 1 2; }
+            #sel-title { color: #569cd6; text-style: bold; }
+            OptionList { background: #0d0d0d; height: auto; max-height: 18; }
+            """
+
+            def __init__(self, title, options, fut):
+                super().__init__()
+                self._title = title
+                self._options = options
+                self._fut = fut
+
+            def compose(self):
+                from textual.containers import Vertical
+
+                with Vertical(id="sel-box"):
+                    yield Static(self._title, id="sel-title")
+                    yield OptionList(*self._options, id="sel-list")
+
+            def on_mount(self):
+                self.query_one(OptionList).focus()
+
+            def on_option_list_option_selected(self, event):
+                if not self._fut.done():
+                    self._fut.set_result(event.option_index)
+                self.app.pop_screen()
+
+            def on_key(self, event):
+                if event.key == "escape":
+                    if not self._fut.done():
+                        self._fut.set_result(None)
+                    self.app.pop_screen()
+                    event.stop()
+
+        self._SelectScreen = _SelectScreen
 
         async def _boot() -> None:
             # Run the session's startup inside the mounted app so its banner/status/streaming
@@ -78,22 +119,38 @@ class TextualUI(UI):
                     self.insert_text_at_cursor(text)
 
         class _App(App):
+            # Uniform near-black background (no per-pane shade change) + a subtle input border
+            # (not the theme's orange accent), matching the C# teammate harness.
             CSS = """
-            RichLog { height: 1fr; }
-            #live { height: auto; }
-            #staged { height: auto; color: $warning; }
-            #suggest { height: auto; color: $text-muted; }
-            #status { height: 1; color: $text-muted; }
-            Input { border: round $accent; }
+            Screen { background: #0d0d0d; }
+            #log { height: 1fr; background: #0d0d0d; }
+            #live { height: auto; background: #0d0d0d; }
+            #staged { height: auto; background: #0d0d0d; color: #d7ba7d; }
+            #suggest { height: auto; background: #0d0d0d; color: #808080; }
+            #identity-bar { height: 1; background: #0d0d0d; }
+            #cwd { width: 1fr; background: #0d0d0d; color: #808080; }
+            #ident { width: auto; background: #0d0d0d; }
+            #hint-bar { height: 1; background: #0d0d0d; }
+            #hint { width: 1fr; background: #0d0d0d; color: #808080; }
+            #model { width: auto; background: #0d0d0d; color: #4ec9b0; }
+            Input { background: #0d0d0d; border: round #3a3d41; color: #d4d4d4; }
+            Input:focus { border: round #569cd6; }
             """
 
             def compose(self) -> ComposeResult:  # type: ignore[override]
+                from textual.containers import Horizontal
+
                 yield RichLog(highlight=False, markup=True, wrap=True, id="log")
                 yield Static("", id="live")
                 yield Static("", id="staged")
                 yield Static("", id="suggest")
-                yield Static("", id="status")
+                with Horizontal(id="identity-bar"):
+                    yield Static("", id="cwd")
+                    yield Static("", id="ident")
                 yield _Input(placeholder="message  ·  / for commands", id="prompt")
+                with Horizontal(id="hint-bar"):
+                    yield Static("/ commands   ↑↓ history   esc cancel", id="hint")
+                    yield Static("", id="model")
 
             def on_mount(self) -> None:
                 self.query_one("#prompt", Input).focus()
@@ -258,20 +315,39 @@ class TextualUI(UI):
 
     def set_identity(self, name: str) -> None:
         self._name = name
+        ident = self._w("#ident")
+        if ident is not None:
+            ident.update(f"entrabot: [bright_magenta]{_escape(name)}[/]")
 
     def set_status(self, left: str, right: str) -> None:
+        # left = working directory (cwd strip), right = model (hint-bar right)
         self._left, self._right = left, right
-        self._render_status()
+        cwd = self._w("#cwd")
+        if cwd is not None:
+            cwd.update(_escape(self._abbrev(left)))
+        model = self._w("#model")
+        if model is not None:
+            model.update(_escape(right))
 
-    def _render_status(self) -> None:
-        st = self._w("#status")
-        if st is not None:
-            work = "  ·  [bright_green]working — esc to interrupt[/]" if self._working else ""
-            st.update(f"entrabot: {self._name}   ·   {self._left}   ·   {self._right}{work}")
+    @staticmethod
+    def _abbrev(path: str) -> str:
+        import os
+
+        home = os.path.expanduser("~")
+        return "~" + path[len(home):] if path.startswith(home) else path
+
+    def _render_hint(self) -> None:
+        hint = self._w("#hint")
+        if hint is not None:
+            hint.update(
+                "[bright_green]● working[/]   esc interrupt   ↵ steer"
+                if self._working
+                else "/ commands   ↑↓ history   esc cancel"
+            )
 
     def set_working(self, working: bool) -> None:
         self._working = working
-        self._render_status()
+        self._render_hint()
 
     def set_commands(self, names: List[str]) -> None:
         self._commands = list(names)
@@ -310,6 +386,13 @@ class TextualUI(UI):
         loop = asyncio.get_event_loop()
         self._pending_confirm = loop.create_future()
         return await self._pending_confirm
+
+    async def select(self, title, options):
+        if not self.app:
+            return None
+        fut = asyncio.get_event_loop().create_future()
+        self.app.push_screen(self._SelectScreen(title, list(options), fut))
+        return await fut
 
     async def run(self, on_submit, on_interrupt=None, on_start=None) -> None:
         self._on_submit = on_submit

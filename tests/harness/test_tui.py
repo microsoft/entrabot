@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 pytest.importorskip("textual")  # the TUI is the default UI but tests skip if textual is absent
@@ -32,7 +34,7 @@ async def test_tui_mounts_renders_autocompletes_and_submits():
         ui.set_working(True)
         ui.set_working(False)
 
-        for sel in ("#log", "#live", "#suggest", "#status", "#prompt"):
+        for sel in ("#log", "#live", "#suggest", "#cwd", "#ident", "#prompt", "#hint", "#model"):
             assert app.query_one(sel) is not None
 
         # slash autocomplete populates on "/"
@@ -46,3 +48,18 @@ async def test_tui_mounts_renders_autocompletes_and_submits():
         await pilot.pause()
 
     assert submitted == ["hello there"]
+
+
+async def test_tui_select_picker_returns_index():
+    ui = TextualUI()
+    app = ui._App()
+    ui.app = app
+    async with app.run_test() as pilot:
+        task = asyncio.create_task(ui.select("Pick a model", ["alpha", "beta", "gamma"]))
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.press("down")  # highlight index 1
+        await pilot.press("enter")  # select it
+        await pilot.pause()
+        result = await asyncio.wait_for(task, timeout=5)
+    assert result == 1
