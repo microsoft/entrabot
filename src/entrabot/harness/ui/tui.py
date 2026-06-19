@@ -241,7 +241,10 @@ class TextualUI(UI):
                     return
                 ui._record_history(typed)
                 if ui._on_submit is not None:
-                    await ui._on_submit(text)
+                    # Run in a worker — NOT awaited here. Awaiting on_submit inline blocks
+                    # Textual's message pump, so a modal it opens (e.g. the /model picker) — and
+                    # even Esc — would never receive key events, trapping the terminal.
+                    self.run_worker(ui._on_submit(text), exclusive=False)
 
         self._App = _App
         self.app: Optional[App] = None

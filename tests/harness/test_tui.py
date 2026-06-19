@@ -63,3 +63,28 @@ async def test_tui_select_picker_returns_index():
         await pilot.pause()
         result = await asyncio.wait_for(task, timeout=5)
     assert result == 1
+
+
+async def test_model_picker_via_submit_is_navigable_and_escapable():
+    """Regression: submitting a command runs in a worker, so a modal it opens (the /model
+    picker) stays responsive. Awaiting on_submit inline blocked Textual's message pump and
+    trapped the terminal (arrows/esc dead). This drives the real submit -> modal path."""
+    ui = TextualUI()
+    app = ui._App()
+    ui.app = app
+    picked = []
+
+    async def on_submit(text):
+        picked.append(await ui.select("Pick a model", ["alpha", "beta", "gamma"]))
+
+    ui._on_submit = on_submit
+    async with app.run_test() as pilot:
+        app.query_one("#prompt").value = "/model"
+        await pilot.press("enter")  # submit -> worker -> push modal
+        for _ in range(6):
+            await pilot.pause()
+        await pilot.press("down")  # arrow nav must work while the worker awaits
+        await pilot.press("enter")  # select
+        for _ in range(6):
+            await pilot.pause()
+    assert picked == [1]
