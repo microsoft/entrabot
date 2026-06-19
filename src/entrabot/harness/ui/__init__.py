@@ -41,5 +41,6 @@ class UI(Protocol):
         self,
         on_submit: "Callable[[str], Awaitable[None]]",
         on_interrupt: "Optional[Callable[[], Awaitable[None]]]" = None,
+        on_start: "Optional[Callable[[], Awaitable[None]]]" = None,
     ) -> None: ...
     def request_stop(self) -> None: ...

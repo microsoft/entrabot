@@ -105,7 +105,9 @@ class ConsoleUI(UI):
             return False
         return answer.strip().lower() in ("y", "yes")
 
-    async def run(self, on_submit, on_interrupt=None) -> None:
+    async def run(self, on_submit, on_interrupt=None, on_start=None) -> None:
+        if on_start is not None:
+            await on_start()
         while not self._stop.is_set():
             try:
                 line = await asyncio.to_thread(input, ansi.cyan("› "))

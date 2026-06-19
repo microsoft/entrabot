@@ -56,6 +56,15 @@ class TextualUI(UI):
 
         ui = self
 
+        async def _boot() -> None:
+            # Run the session's startup inside the mounted app so its banner/status/streaming
+            # output lands in the live UI instead of a not-yet-built one.
+            try:
+                if ui._on_start is not None:
+                    await ui._on_start()
+            except Exception as e:  # surface startup failures instead of a silent blank screen
+                ui.append_line(f"startup failed: {e}", UiStyle.ERROR)
+
         class _Input(Input):
             """Intercept paste so multi-line pastes are *staged* (single-line Input)."""
 
@@ -88,6 +97,8 @@ class TextualUI(UI):
 
             def on_mount(self) -> None:
                 self.query_one("#prompt", Input).focus()
+                if ui._on_start is not None:
+                    self.run_worker(_boot(), exclusive=False)
 
             def on_input_changed(self, event) -> None:  # type: ignore[no-untyped-def]
                 ui._update_suggest(event.value)
@@ -143,6 +154,7 @@ class TextualUI(UI):
         self.app: Optional[App] = None
         self._on_submit: Optional[Callable[[str], Awaitable[None]]] = None
         self._on_interrupt: Optional[Callable[[], Awaitable[None]]] = None
+        self._on_start: Optional[Callable[[], Awaitable[None]]] = None
         self._cur: str = ""  # raw text of the in-progress assistant line
         self._assist = False
         self._working = False
@@ -299,9 +311,10 @@ class TextualUI(UI):
         self._pending_confirm = loop.create_future()
         return await self._pending_confirm
 
-    async def run(self, on_submit, on_interrupt=None) -> None:
+    async def run(self, on_submit, on_interrupt=None, on_start=None) -> None:
         self._on_submit = on_submit
         self._on_interrupt = on_interrupt
+        self._on_start = on_start
         self.app = self._App()
         await self.app.run_async()
 

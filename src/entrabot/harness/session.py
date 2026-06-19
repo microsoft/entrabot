@@ -77,9 +77,10 @@ class InteractiveSession:
 
     # ---- lifecycle -------------------------------------------------------------------
     async def run(self) -> None:
-        await self._start()
+        # Start the UI first, then run _start() inside the mounted UI (via on_start) so the
+        # banner/status/streaming output actually lands instead of writing to a not-yet-built app.
         try:
-            await self._ui.run(self._handle_input, self._interrupt)
+            await self._ui.run(self._handle_input, self._interrupt, self._start)
         finally:
             await self._dispose()
 
