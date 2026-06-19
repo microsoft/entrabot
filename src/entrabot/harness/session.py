@@ -397,10 +397,11 @@ class InteractiveSession:
             self._ui.append_line(f"could not list models: {e}", UiStyle.ERROR)
             return
 
+        tier = self._config.context_tier
         if args:  # /model <name> [effort] — direct switch, no picker
             model = args[0]
             effort = args[1] if len(args) > 1 else self._reasoning
-        else:  # arrow-key picker (model, then reasoning effort)
+        else:  # arrow-key picker (model → reasoning effort → context window)
             labels = [
                 f"{m.id}{'  ✓' if m.id == self._current_model else ''}   —   {m.name}" for m in models
             ]
@@ -409,6 +410,7 @@ class InteractiveSession:
                 return
             chosen = models[idx]
             model = chosen.id
+
             efforts = list(getattr(chosen, "supported_reasoning_efforts", None) or [])
             default_effort = getattr(chosen, "default_reasoning_effort", None) or self._reasoning
             if efforts:
@@ -417,16 +419,24 @@ class InteractiveSession:
             else:
                 effort = default_effort
 
+            # Context window — only when the model exposes a larger long-context tier.
+            tiers = _context_tiers(chosen)
+            if tiers:
+                ti = await self._ui.select(f"Context window for {model}", [lbl for _, lbl in tiers])
+                if ti is not None:
+                    tier = tiers[ti][0]
+
         try:
-            await self._session.set_model(model, reasoning_effort=effort, context_tier=self._config.context_tier)
+            await self._session.set_model(model, reasoning_effort=effort, context_tier=tier)
         except Exception as e:
             self._ui.append_line(f"could not switch model: {e}", UiStyle.ERROR)
             return
         self._current_model, self._reasoning = model, effort
-        self._config.model, self._config.reasoning_effort = model, effort
+        self._config.model, self._config.reasoning_effort, self._config.context_tier = model, effort, tier
         cfgmod.save(self._root, self._config)
         self._refresh_status()
-        self._ui.append_line(f"model → {model} ({effort or 'default'})", UiStyle.SUCCESS)
+        tier_note = f", {tier}" if tier and tier != "default" else ""
+        self._ui.append_line(f"model → {model} ({effort or 'default'}{tier_note})", UiStyle.SUCCESS)
 
     def _print_schedules(self) -> None:
         tasks = self._scheduler.list() if self._scheduler else []
@@ -519,3 +529,26 @@ class InteractiveSession:
 def _short(args: Any) -> str:
     s = str(args) if args is not None else ""
     return (s[:60] + "…") if len(s) > 60 else s
+
+
+def _fmt_tokens(n: int) -> str:
+    return f"{n / 1_000_000:g}M" if n >= 1_000_000 else f"{n // 1000}K"
+
+
+def _context_tiers(model: Any):
+    """Return [(tier, label), …] when the model exposes a larger long-context window, else [].
+
+    A model has a context-window choice when its billing carries a ``context_max`` (the default
+    tier's cap) below the model's ``max_context_window_tokens`` (the long-context cap).
+    """
+    billing = getattr(model, "billing", None)
+    tp = getattr(billing, "token_prices", None) if billing else None
+    ctx_max = getattr(tp, "context_max", None) if tp else None
+    limits = getattr(getattr(model, "capabilities", None), "limits", None)
+    max_window = getattr(limits, "max_context_window_tokens", None) if limits else None
+    if not ctx_max or not max_window or max_window <= ctx_max:
+        return []
+    return [
+        ("default", f"default   (up to {_fmt_tokens(ctx_max)} tokens)"),
+        ("long_context", f"long_context   (up to {_fmt_tokens(max_window)} tokens)"),
+    ]

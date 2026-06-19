@@ -2,6 +2,8 @@
   "name": "entrabot-agent",
   "description": "An ENTRABOT agent working in entrabot.",
   "version": 1,
+  "model": "claude-opus-4.8",
+  "reasoningEffort": "medium",
   "agentId": "c2913e1b1aa84e95ac05af69fe04b131",
   "createdUtc": "2026-06-19T19:20:29.598402+00:00"
 }
