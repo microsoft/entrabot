@@ -24,6 +24,7 @@ smoke-tests the three-hop token.
 from __future__ import annotations
 
 import base64
+import os
 import subprocess
 import sys
 
@@ -33,11 +34,15 @@ from entrabot.config import get_config
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 
+# On Windows `az` is az.cmd (not an .exe), so it must be invoked via cmd /c — a bare
+# subprocess(["az", ...]) FileNotFounds.
+_AZ = ["cmd", "/c", "az"] if os.name == "nt" else ["az"]
+
 
 def _az_graph_token() -> str:
     out = subprocess.run(
-        ["az", "account", "get-access-token", "--resource",
-         "https://graph.microsoft.com", "--query", "accessToken", "-o", "tsv"],
+        _AZ + ["account", "get-access-token", "--resource",
+               "https://graph.microsoft.com", "--query", "accessToken", "-o", "tsv"],
         capture_output=True, text=True,
     )
     if out.returncode != 0 or not out.stdout.strip():
