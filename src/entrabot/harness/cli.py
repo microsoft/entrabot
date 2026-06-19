@@ -90,9 +90,19 @@ async def _cmd_run(flags: set) -> int:
     root = os.getcwd()
     cfg = cfgmod.try_load(root)
     if cfg is None:
-        print("no ENTRABOT agent here. create one with: entrabot-harness init <name>", file=sys.stderr)
-        return 1
-    if cfg.ensure_identity():
+        # Just-run-it UX (like Claude Code): scaffold a sensible default config in this dir
+        # instead of erroring. `init` is still there for a fuller setup (AGENT.md etc.).
+        name = (os.path.basename(root.rstrip("/\\")) or "entrabot") + "-agent"
+        cfg = HarnessConfig(
+            name=name,
+            description=f"An ENTRABOT agent working in {os.path.basename(root) or root}.",
+            created_utc=datetime.now(timezone.utc).isoformat(),
+        )
+        cfg.ensure_identity()
+        cfgmod.save(root, cfg)
+        print(f"(no config here — created a default agent '{name}' at "
+              f"{os.path.relpath(cfgmod.config_path(root), root)}; edit it or run `init` to customize)")
+    elif cfg.ensure_identity():
         cfgmod.save(root, cfg)
 
     ui = _pick_ui()

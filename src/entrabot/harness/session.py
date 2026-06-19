@@ -145,11 +145,18 @@ class InteractiveSession:
             enable_config_discovery=True,
         )
         sid = self._config.agent_id
+        # Only attempt resume if a prior session actually exists, so a fresh start doesn't
+        # log a noisy "Session not found" from the SDK before falling back to create.
         if not self._fresh and sid:
             try:
-                return await self._client.resume_session(sid, **kwargs)
+                meta = await self._client.get_session_metadata(sid)
             except Exception:
-                pass
+                meta = None
+            if meta is not None:
+                try:
+                    return await self._client.resume_session(sid, **kwargs)
+                except Exception:
+                    pass
         return await self._client.create_session(session_id=sid, **kwargs)
 
     async def _dispose(self) -> None:
