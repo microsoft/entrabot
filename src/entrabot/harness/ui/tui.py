@@ -55,8 +55,9 @@ class TextualUI(UI):
 
     def __init__(self) -> None:
         from textual.app import App, ComposeResult
+        from textual.containers import Horizontal, VerticalScroll
         from textual.screen import ModalScreen
-        from textual.widgets import Input, OptionList, RichLog, Static
+        from textual.widgets import Button, Checkbox, Input, OptionList, RichLog, Static
 
         ui = self
 
@@ -163,6 +164,70 @@ class TextualUI(UI):
                 self.app.pop_screen()
 
         self._PermissionsScreen = _PermissionsScreen
+
+        class _FormScreen(ModalScreen):
+            """All-on-one-page editable form (agency MCP params). Tab between fields, edit each,
+            then Submit (or esc to cancel). Resolves a future with {key: value} or None."""
+
+            CSS = """
+            _FormScreen { background: #0d0d0d; }
+            #form-title { color: #569cd6; text-style: bold; padding: 1 2 0 2; }
+            #form-body { height: 1fr; padding: 0 2; }
+            .form-label { padding: 1 0 0 0; }
+            #form-body Input { border: round #3a3d41; background: #0d0d0d; }
+            #form-body Input:focus { border: round #569cd6; }
+            #form-actions { height: auto; padding: 1 2; }
+            #form-actions Button { margin: 0 2 0 0; }
+            #form-footer { color: #808080; padding: 0 2 1 2; }
+            """
+
+            def __init__(self, title, fields, fut):
+                super().__init__()
+                self._title = title
+                self._fields = list(fields)
+                self._fut = fut
+
+            def compose(self):
+                yield Static(self._title, id="form-title")
+                with VerticalScroll(id="form-body"):
+                    for i, f in enumerate(self._fields):
+                        req = "  [red]*required[/]" if f.get("required") else ""
+                        desc = f.get("description", "")
+                        label = f"[bold]{f['label']}[/]{req}" + (f"\n[grey50]{_escape(desc)}[/]" if desc else "")
+                        yield Static(label, classes="form-label")
+                        if f.get("type") == "bool":
+                            yield Checkbox(value=bool(f.get("default")), id=f"field-{i}")
+                        else:
+                            yield Input(value=str(f.get("default") or ""), placeholder=f.get("placeholder", ""), id=f"field-{i}")
+                with Horizontal(id="form-actions"):
+                    yield Button("Submit", variant="primary", id="form-submit")
+                    yield Button("Cancel", id="form-cancel")
+                yield Static("tab between fields   ·   enter on Submit   ·   esc cancel", id="form-footer")
+
+            def on_mount(self):
+                try:
+                    self.query_one("#field-0").focus()
+                except Exception:
+                    self.query_one("#form-submit", Button).focus()
+
+            def on_button_pressed(self, event):
+                if event.button.id == "form-submit":
+                    vals = {f["key"]: self.query_one(f"#field-{i}").value for i, f in enumerate(self._fields)}
+                    self._resolve(vals)
+                else:
+                    self._resolve(None)
+
+            def on_key(self, event):
+                if event.key == "escape":
+                    self._resolve(None)
+                    event.stop()
+
+            def _resolve(self, val):
+                if not self._fut.done():
+                    self._fut.set_result(val)
+                self.app.pop_screen()
+
+        self._FormScreen = _FormScreen
 
         class _SelectScreen(ModalScreen):
             """Full-screen picker (model / effort) like the C# harness's selector: the list is
@@ -578,6 +643,13 @@ class TextualUI(UI):
             return None
         fut = asyncio.get_event_loop().create_future()
         self.app.push_screen(self._PermissionsScreen(categories, state, fut))
+        return await fut
+
+    async def form(self, title, fields):
+        if not self.app:
+            return None
+        fut = asyncio.get_event_loop().create_future()
+        self.app.push_screen(self._FormScreen(title, fields, fut))
         return await fut
 
     async def run(self, on_submit, on_interrupt=None, on_start=None) -> None:

@@ -14,6 +14,7 @@ import copilot
 from copilot.rpc import CommandsInvokeRequest, CommandsListRequest
 from pydantic import BaseModel, Field
 
+from . import agency
 from . import banner
 from .config import HarnessConfig
 from . import config as cfgmod
@@ -297,8 +298,8 @@ class InteractiveSession:
             await self._handle_model(args)
         elif cmd in ("schedules", "schedule"):
             self._print_schedules()
-        elif cmd == "mcp":
-            self._print_mcp()
+        elif cmd in ("mcp", "agency-mcp", "agency"):
+            await self._handle_mcp()
         elif cmd in ("permissions", "perms"):
             await self._handle_permissions()
         elif cmd == "watch":
@@ -317,7 +318,7 @@ class InteractiveSession:
             ("/permissions", "edit per-caller-class tool permissions (sponsor vs guest)"),
             ("/schedules", "list scheduled prompts"),
             ("/watch <chat-id>", "add a Teams chat to listen to"),
-            ("/mcp", "list configured MCP servers"),
+            ("/mcp", "manage MCP servers + browse/install agency MCPs"),
             ("/reload", "re-read .mcp.json and rebuild the session"),
             ("/clear", "clear the screen"),
             ("/exit", "quit"),
@@ -465,13 +466,48 @@ class InteractiveSession:
         for t in tasks:
             self._ui.append_line(f"  {t.id}  {t.spec.raw}  → {t.next_due:%Y-%m-%d %H:%M}  {t.prompt[:50]}", UiStyle.INFO)
 
-    def _print_mcp(self) -> None:
-        mcp = mcp_loader.load(self._root) or {}
-        if not mcp:
-            self._ui.append_line("(no MCP servers configured)", UiStyle.DIM)
-            return
-        for name, conf in mcp.items():
-            self._ui.append_line(f"  {name}  ({conf.get('type', '?')})", UiStyle.INFO)
+    async def _handle_mcp(self) -> None:
+        """Unified MCP UX: installed servers + an 'Agency MCPs available' section. Selecting an
+        agency MCP installs it (with a params form) or uninstalls it."""
+        while True:
+            mcp = mcp_loader.load(self._root) or {}
+            ag = agency.available()
+            catalog = agency.catalog(self._root) if ag else []
+
+            rows: List[tuple] = [("header", None, "── Installed MCP servers ──")]
+            if mcp:
+                for name, conf in mcp.items():
+                    is_ag = isinstance(conf, dict) and conf.get("command") == "agency"
+                    t = "agency" if is_ag else (conf.get("type", "stdio") if isinstance(conf, dict) else "?")
+                    rows.append(("installed", name, f"   {name}   [{t}]"))
+            else:
+                rows.append(("header", None, "   (none)"))
+            if ag:
+                rows.append(("header", None, "── Agency MCPs available ──"))
+                for s in catalog:
+                    mark = "  ✓ installed" if s["installed"] else ""
+                    rows.append(("agency", s["name"], f"   {s['name']}{mark}   {s['description'][:46]}"))
+
+            idx = await self._ui.select(
+                "MCP servers   (enter an agency MCP to install/remove · esc when done)",
+                [r[2] for r in rows],
+            )
+            if idx is None:
+                return
+            kind, name, _ = rows[idx]
+            if kind != "agency":
+                continue
+            if name in agency.installed(self._root):
+                if await self._ui.confirm("Uninstall", f"Remove agency MCP '{name}'?"):
+                    agency.uninstall(self._root, name)
+                    self._ui.append_line(f"removed agency MCP '{name}' — /reload to apply", UiStyle.SUCCESS)
+            else:
+                fields = agency.discover_params(name)
+                vals = await self._ui.form(f"Install agency MCP: {name}", fields) if fields else {}
+                if vals is None:
+                    continue
+                agency.install(self._root, name, agency.build_args(fields, vals))
+                self._ui.append_line(f"installed agency MCP '{name}' — /reload to apply", UiStyle.SUCCESS)
 
     def _handle_watch(self, args: List[str]) -> None:
         if not args:

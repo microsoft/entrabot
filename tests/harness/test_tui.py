@@ -115,3 +115,26 @@ async def test_permissions_matrix_toggles_and_saves():
     assert r["yolo"] is True
     assert "shell" not in r["sponsor"]
     assert "write" in r["guest"]
+
+
+async def test_form_edits_all_fields_and_submits():
+    ui = TextualUI()
+    app = ui._App()
+    ui.app = app
+    fields = [
+        {"key": "--org", "label": "--org", "type": "text", "default": "", "placeholder": "ORG"},
+        {"key": "--legacy", "label": "--legacy", "type": "bool", "default": False},
+    ]
+    async with app.run_test() as pilot:
+        task = asyncio.create_task(ui.form("Install", fields))
+        for _ in range(6):
+            await pilot.pause()
+        await pilot.press("t", "e", "s", "t")  # first input
+        await pilot.press("tab")  # -> checkbox
+        await pilot.press("space")  # toggle on
+        await pilot.press("tab")  # -> Submit
+        await pilot.press("enter")
+        for _ in range(4):
+            await pilot.pause()
+        r = await asyncio.wait_for(task, timeout=5)
+    assert r == {"--org": "test", "--legacy": True}

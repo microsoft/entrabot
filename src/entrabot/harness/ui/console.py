@@ -166,6 +166,29 @@ class ConsoleUI(UI):
             show()
         return {"yolo": yolo, "sponsor": sponsor, "guest": guest}
 
+    async def form(self, title, fields):
+        print(ansi.bold(title))
+        values = {}
+        for f in fields:
+            req = ansi.red(" *") if f.get("required") else ""
+            desc = f"  ({f['description']})" if f.get("description") else ""
+            if f.get("type") == "bool":
+                try:
+                    ans = await asyncio.to_thread(input, f"  {f['label']}{req} [y/N]{ansi.dim(desc)}: ")
+                except (EOFError, KeyboardInterrupt):
+                    return None
+                values[f["key"]] = ans.strip().lower() in ("y", "yes")
+            else:
+                default = f.get("default") or ""
+                try:
+                    ans = await asyncio.to_thread(
+                        input, f"  {f['label']}{req}{ansi.dim(desc)} [{default}]: "
+                    )
+                except (EOFError, KeyboardInterrupt):
+                    return None
+                values[f["key"]] = ans.strip() or default
+        return values
+
     async def run(self, on_submit, on_interrupt=None, on_start=None) -> None:
         if on_start is not None:
             await on_start()
