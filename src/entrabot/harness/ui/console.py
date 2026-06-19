@@ -90,6 +90,17 @@ class ConsoleUI(UI):
     def set_commands(self, names) -> None:
         pass  # the plain console UI has no autocomplete
 
+    # The console UI prints spinner stages as plain lines (no animation in a redirected loop).
+    def start_spinner(self, label: str) -> None:
+        self._end_line()
+        print(ansi.cyan("⠋ ") + label)
+
+    def update_spinner(self, label: str) -> None:
+        print(ansi.cyan("⠋ ") + label)
+
+    def stop_spinner(self) -> None:
+        pass
+
     def clear(self) -> None:
         try:
             print("\x1b[2J\x1b[H", end="")

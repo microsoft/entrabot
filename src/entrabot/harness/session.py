@@ -97,6 +97,7 @@ class InteractiveSession:
         self._ui.banner(banner.render())
         self._ui.set_identity(self._config.name)
 
+        self._ui.start_spinner("connecting to Copilot…")
         self._client = copilot.CopilotClient(working_directory=self._root, log_level="error")
         await self._client.start()
 
@@ -124,8 +125,10 @@ class InteractiveSession:
             confirm=self._ui.confirm if not self._yolo else None,
         )
 
+        self._ui.update_spinner("starting session…")
         self._session = await self._establish(tools or None, mcp, on_perm)
         self._session.on(self._on_event)
+        self._ui.update_spinner("loading commands…")
         await self._load_commands()
 
         self._scheduler = SelfScheduler(self._root, self._inject)
@@ -133,6 +136,7 @@ class InteractiveSession:
         if self._bridge:
             self._bridge.start()
 
+        self._ui.stop_spinner()
         self._ui.append_line(
             f"● {self._config.name} — {self._mode}{', yolo' if self._yolo else ''}", UiStyle.INFO
         )

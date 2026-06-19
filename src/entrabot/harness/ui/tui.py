@@ -47,6 +47,9 @@ def _escape(text: str) -> str:
     return text.replace("[", "\\[")
 
 
+_SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"  # braille spinner frames (matches the C# BootProgress)
+
+
 class TextualUI(UI):
     """Built lazily so importing this module never requires textual."""
 
@@ -58,42 +61,73 @@ class TextualUI(UI):
         ui = self
 
         class _SelectScreen(ModalScreen):
-            """Centered arrow-key picker (model / effort), resolving a future like confirm()."""
+            """Full-screen picker (model / effort) like the C# harness's selector: the list is
+            focused so ↑/↓/PgUp/PgDn/enter work natively, printable keys type-to-filter, and esc
+            always cancels (so it can never trap you). Resolves a future."""
 
             CSS = """
-            _SelectScreen { align: center middle; background: #000000 60%; }
-            #sel-box { width: 70; max-width: 90%; height: auto; border: round #569cd6; background: #0d0d0d; padding: 1 2; }
-            #sel-title { color: #569cd6; text-style: bold; }
-            OptionList { background: #0d0d0d; height: auto; max-height: 18; }
+            _SelectScreen { background: #0d0d0d; }
+            #sel-title { color: #569cd6; text-style: bold; padding: 1 2 0 2; }
+            #sel-list { height: 1fr; background: #0d0d0d; margin: 0 2; border: round #3a3d41; }
+            #sel-footer { color: #808080; padding: 0 2 1 2; }
             """
 
             def __init__(self, title, options, fut):
                 super().__init__()
                 self._title = title
-                self._options = options
+                self._all = list(options)
                 self._fut = fut
+                self._filter = ""
+                self._filtered = list(range(len(self._all)))  # original indices shown
 
             def compose(self):
-                from textual.containers import Vertical
-
-                with Vertical(id="sel-box"):
-                    yield Static(self._title, id="sel-title")
-                    yield OptionList(*self._options, id="sel-list")
+                yield Static(self._title, id="sel-title")
+                yield OptionList(*self._all, id="sel-list")
+                yield Static(self._footer(), id="sel-footer")
 
             def on_mount(self):
-                self.query_one(OptionList).focus()
+                self.query_one(OptionList).focus()  # native ↑/↓/enter navigation
 
-            def on_option_list_option_selected(self, event):
-                if not self._fut.done():
-                    self._fut.set_result(event.option_index)
-                self.app.pop_screen()
+            def on_option_list_option_selected(self, event):  # native enter or mouse click
+                if self._filtered:
+                    self._resolve(self._filtered[event.option_index])
 
             def on_key(self, event):
-                if event.key == "escape":
-                    if not self._fut.done():
-                        self._fut.set_result(None)
-                    self.app.pop_screen()
+                k = event.key
+                if k == "escape":
+                    self._resolve(None)
                     event.stop()
+                elif k in ("up", "down", "enter", "pageup", "pagedown", "home", "end"):
+                    return  # let the focused OptionList handle navigation + selection
+                elif k == "backspace":
+                    if self._filter:
+                        self._filter = self._filter[:-1]
+                        self._refilter()
+                    event.stop()
+                elif event.character and event.character.isprintable() and len(event.character) == 1:
+                    self._filter += event.character
+                    self._refilter()
+                    event.stop()
+
+            def _refilter(self):
+                q = self._filter.lower()
+                ol = self.query_one(OptionList)
+                ol.clear_options()
+                self._filtered = [i for i, o in enumerate(self._all) if q in str(o).lower()]
+                for i in self._filtered:
+                    ol.add_option(self._all[i])
+                if self._filtered:
+                    ol.highlighted = 0
+                self.query_one("#sel-footer", Static).update(self._footer())
+
+            def _footer(self):
+                f = f"   filter: {self._filter}" if self._filter else ""
+                return f"↑/↓ navigate   ·   enter select   ·   esc cancel{f}"
+
+            def _resolve(self, idx):
+                if not self._fut.done():
+                    self._fut.set_result(idx)
+                self.app.pop_screen()
 
         self._SelectScreen = _SelectScreen
 
@@ -124,6 +158,7 @@ class TextualUI(UI):
             CSS = """
             Screen { background: #0d0d0d; }
             #log { height: 1fr; background: #0d0d0d; }
+            #spinner { height: auto; background: #0d0d0d; }
             #live { height: auto; background: #0d0d0d; }
             #staged { height: auto; background: #0d0d0d; color: #d7ba7d; }
             #suggest { height: auto; background: #0d0d0d; color: #808080; }
@@ -141,6 +176,7 @@ class TextualUI(UI):
                 from textual.containers import Horizontal
 
                 yield RichLog(highlight=False, markup=True, wrap=True, id="log")
+                yield Static("", id="spinner")
                 yield Static("", id="live")
                 yield Static("", id="staged")
                 yield Static("", id="suggest")
@@ -225,6 +261,9 @@ class TextualUI(UI):
         self._draft = ""
         self._staged: Optional[str] = None
         self._pending_confirm: Optional[asyncio.Future] = None
+        self._spin_label: Optional[str] = None
+        self._spin_i = 0
+        self._spin_timer = None
 
     # ---- widgets ---------------------------------------------------------------------
     def _w(self, sel: str):
@@ -351,6 +390,36 @@ class TextualUI(UI):
 
     def set_commands(self, names: List[str]) -> None:
         self._commands = list(names)
+
+    # ---- boot spinner ----------------------------------------------------------------
+    def start_spinner(self, label: str) -> None:
+        self._spin_label = label
+        self._spin_i = 0
+        self._render_spin()
+        if self._spin_timer is None and self.app is not None:
+            self._spin_timer = self.app.set_interval(0.08, self._spin_tick)
+
+    def update_spinner(self, label: str) -> None:
+        self._spin_label = label
+        self._render_spin()
+
+    def stop_spinner(self) -> None:
+        self._spin_label = None
+        if self._spin_timer is not None:
+            self._spin_timer.stop()
+            self._spin_timer = None
+        sp = self._w("#spinner")
+        if sp is not None:
+            sp.update("")
+
+    def _spin_tick(self) -> None:
+        self._spin_i = (self._spin_i + 1) % len(_SPIN)
+        self._render_spin()
+
+    def _render_spin(self) -> None:
+        sp = self._w("#spinner")
+        if sp is not None and self._spin_label:
+            sp.update(f"[bright_cyan]{_SPIN[self._spin_i]}[/] [grey50]{_escape(self._spin_label)}[/]")
 
     def begin_assistant(self) -> None:
         self._flush()
