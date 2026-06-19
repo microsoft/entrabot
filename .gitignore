@@ -51,3 +51,6 @@ pip.ini
 docs/runbooks/session-*.md
 docs/superpowers/
 .entraclaw-state.json
+
+# ENTRABOT harness per-directory config (local)
+.entrabot/
