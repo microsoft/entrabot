@@ -88,3 +88,30 @@ async def test_model_picker_via_submit_is_navigable_and_escapable():
         for _ in range(6):
             await pilot.pause()
     assert picked == [1]
+
+
+async def test_permissions_matrix_toggles_and_saves():
+    from entrabot.harness.permissions import TOOL_CATEGORIES
+
+    ui = TextualUI()
+    app = ui._App()
+    ui.app = app
+    async with app.run_test() as pilot:
+        state = {"yolo": False, "sponsor": {"shell"}, "guest": set()}
+        task = asyncio.create_task(ui.edit_permissions(TOOL_CATEGORIES, state))
+        for _ in range(5):
+            await pilot.pause()
+        await pilot.press("down")  # row 1 = shell
+        await pilot.press("s")  # sponsor off
+        await pilot.press("down")  # row 2 = write
+        await pilot.press("g")  # guest on
+        await pilot.press("up")
+        await pilot.press("up")  # row 0 = yolo
+        await pilot.press("y")  # yolo on
+        await pilot.press("escape")  # save
+        for _ in range(4):
+            await pilot.pause()
+        r = await asyncio.wait_for(task, timeout=5)
+    assert r["yolo"] is True
+    assert "shell" not in r["sponsor"]
+    assert "write" in r["guest"]

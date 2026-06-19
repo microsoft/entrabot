@@ -131,6 +131,41 @@ class ConsoleUI(UI):
         except ValueError:
             return None
 
+    async def edit_permissions(self, categories, state):
+        yolo = bool(state.get("yolo"))
+        sponsor = set(state.get("sponsor", set()))
+        guest = set(state.get("guest", set()))
+        labels = dict(categories)
+        mark = lambda on: ansi.green("✓") if on else ansi.dim("·")
+
+        def show():
+            print(ansi.bold("Tool permissions  (toggle: '<key> sponsor' / '<key> guest' / 'yolo'; 'done' to save)"))
+            print(f"  {'yolo':10} {mark(yolo)}")
+            for k, lbl in categories:
+                print(f"  {k:10} sponsor:{mark(k in sponsor)}  guest:{mark(k in guest)}   {ansi.dim(lbl)}")
+
+        show()
+        while True:
+            try:
+                cmd = (await asyncio.to_thread(input, ansi.cyan("perm> "))).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                break
+            if cmd in ("", "done", "save"):
+                break
+            if cmd in ("q", "quit", "cancel"):
+                return None
+            if cmd == "yolo":
+                yolo = not yolo
+            elif len(cmd.split()) == 2 and cmd.split()[0] in labels and cmd.split()[1] in ("sponsor", "guest"):
+                key, cls = cmd.split()
+                tgt = sponsor if cls == "sponsor" else guest
+                tgt.discard(key) if key in tgt else tgt.add(key)
+            else:
+                print(ansi.dim("  e.g.  shell sponsor   |   read guest   |   yolo   |   done"))
+                continue
+            show()
+        return {"yolo": yolo, "sponsor": sponsor, "guest": guest}
+
     async def run(self, on_submit, on_interrupt=None, on_start=None) -> None:
         if on_start is not None:
             await on_start()

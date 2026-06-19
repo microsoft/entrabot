@@ -11,51 +11,58 @@ def test_describe_kinds():
     assert permissions.describe(ns(kind="shell", full_command_text="rm -rf /"))[0] == "shell"
     assert permissions.describe(ns(kind="write", file_name="/x"))[0] == "write"
     assert permissions.describe(ns(kind="mcp", server_name="s", tool_name="t"))[0] == "mcp"
+    assert permissions.describe(ns(kind="read", path="/x"))[0] == "read"
 
 
-def test_policy_kind_and_glob():
-    p = permissions.PermissionPolicy.from_config({"default": {"mode": "allow", "deny": ["shell:rm*", "write"]}})
-    pol = p.for_caller(None)
-    assert pol.decide("shell", "rm file") == "deny"
-    assert pol.decide("shell", "ls") == "allow"
-    assert pol.decide("write", "/etc/x") == "deny"
+def test_toolpolicy_defaults():
+    p = permissions.ToolPolicy()
+    assert p.sponsor == {k for k, _ in permissions.TOOL_CATEGORIES}  # sponsors: all on
+    assert p.guest == set()  # guests: nothing
+    assert p.yolo is False
 
 
-def test_per_caller_override_case_insensitive():
-    p = permissions.PermissionPolicy.from_config(
-        {"default": {"mode": "deny"}, "callers": {"Boss@Contoso.com": {"mode": "allow"}}}
-    )
-    assert p.for_caller("boss@contoso.com").decide("shell", "anything") == "allow"
-    assert p.for_caller("guest@x.com").decide("read", "/x") == "deny"
+def test_toolpolicy_config_roundtrip():
+    p = permissions.ToolPolicy(yolo=False, sponsor={"shell", "read"}, guest={"read"})
+    cfg = p.to_config()
+    assert cfg == {"yolo": False, "sponsor": ["read", "shell"], "guest": ["read"]}
+    p2 = permissions.ToolPolicy.from_config(cfg)
+    assert p2.sponsor == {"shell", "read"} and p2.guest == {"read"} and p2.yolo is False
 
 
-async def test_handler_accepts_sdk_two_arg_call():
+def test_allowed_per_class():
+    p = permissions.ToolPolicy(sponsor={"shell", "read"}, guest={"read"})
+    assert p.allowed("sponsor", "shell") is True
+    assert p.allowed("sponsor", "write") is False
+    assert p.allowed("guest", "read") is True
+    assert p.allowed("guest", "shell") is False
+
+
+def test_allowed_yolo_overrides():
+    p = permissions.ToolPolicy(yolo=True, sponsor=set(), guest=set())
+    assert p.allowed("guest", "shell") is True
+    assert p.allowed("sponsor", "write") is True
+
+
+async def test_handler_two_arg_and_per_class():
     req = ns(kind="shell", full_command_text="ls")
-    pol = permissions.PermissionPolicy.from_config({"default": {"mode": "deny"}})
-    h = permissions.build_permission_handler(pol, lambda: None, yolo=False)
-    # the SDK calls handler(request, {"session_id": ...})
-    dec = await h(req, {"session_id": "s1"})
-    assert type(dec).__name__ == "PermissionDecisionReject"
-    # and the one-arg form still works
-    assert type(await h(req)).__name__ == "PermissionDecisionReject"
+    p = permissions.ToolPolicy(sponsor={"shell"}, guest=set())
+    hs = permissions.build_permission_handler(p, lambda: "sponsor")
+    # SDK calls handler(request, context); one-arg form also works
+    assert type(await hs(req, {"session_id": "s"})).__name__ == "PermissionDecisionApproveOnce"
+    assert type(await hs(req)).__name__ == "PermissionDecisionApproveOnce"
+    hg = permissions.build_permission_handler(p, lambda: "guest")
+    assert type(await hg(req)).__name__ == "PermissionDecisionReject"
 
 
-async def test_yolo_does_not_override_explicit_deny():
+async def test_handler_force_yolo():
     req = ns(kind="shell", full_command_text="ls")
-    pol = permissions.PermissionPolicy.from_config({"default": {"mode": "deny"}})
-    h = permissions.build_permission_handler(pol, lambda: None, yolo=True)
-    assert type(await h(req)).__name__ == "PermissionDecisionReject"
-
-
-async def test_yolo_approves_ask():
-    req = ns(kind="shell", full_command_text="ls")
-    pol = permissions.PermissionPolicy.from_config({"default": {"mode": "ask"}})
-    h = permissions.build_permission_handler(pol, lambda: None, yolo=True)
+    p = permissions.ToolPolicy(sponsor=set(), guest=set())
+    h = permissions.build_permission_handler(p, lambda: "guest", force_yolo=True)
     assert type(await h(req)).__name__ == "PermissionDecisionApproveOnce"
 
 
-async def test_ask_fail_closed_without_ui():
-    req = ns(kind="shell", full_command_text="ls")
-    pol = permissions.PermissionPolicy.from_config({"default": {"mode": "ask"}})
-    h = permissions.build_permission_handler(pol, lambda: None, yolo=False)  # no confirm
-    assert type(await h(req)).__name__ == "PermissionDecisionReject"
+async def test_handler_local_operator_is_sponsor():
+    req = ns(kind="read", path="/x")
+    p = permissions.ToolPolicy(sponsor={"read"}, guest=set())
+    h = permissions.build_permission_handler(p, lambda: None)  # local operator -> sponsor
+    assert type(await h(req)).__name__ == "PermissionDecisionApproveOnce"

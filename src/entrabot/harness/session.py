@@ -18,7 +18,7 @@ from . import banner
 from .config import HarnessConfig
 from . import config as cfgmod
 from . import mcp_loader
-from .permissions import PermissionPolicy, build_permission_handler
+from .permissions import TOOL_CATEGORIES, ToolPolicy, build_permission_handler
 from .scheduler import SelfScheduler
 from .teams_comms import TeamsBridge, TokenProvider, TurnContext
 from .teams_tools import build_teams_tools
@@ -62,7 +62,8 @@ class InteractiveSession:
         self._session: Optional[copilot.CopilotSession] = None
         self._bridge: Optional[TeamsBridge] = None
         self._scheduler: Optional[SelfScheduler] = None
-        self._policy = PermissionPolicy.from_config(config.permissions)
+        self._policy = ToolPolicy.from_config(config.permissions)
+        self._sponsors = self._load_sponsors()  # Entra user ids treated as sponsors
 
         self._idle = asyncio.Event()
         self._idle.set()
@@ -117,13 +118,8 @@ class InteractiveSession:
 
         mcp = mcp_loader.load(self._root)
 
-        # caller is bound to the running turn (see _on_event); operator-typed input -> None
-        on_perm = build_permission_handler(
-            self._policy,
-            lambda: self._ctx.caller,
-            yolo=self._yolo,
-            confirm=self._ui.confirm if not self._yolo else None,
-        )
+        # the running turn's caller class (sponsor/guest) gates tools; local input -> sponsor
+        on_perm = build_permission_handler(self._policy, self._caller_class, force_yolo=self._yolo)
 
         self._ui.update_spinner("starting session…")
         self._session = await self._establish(tools or None, mcp, on_perm)
@@ -303,6 +299,8 @@ class InteractiveSession:
             self._print_schedules()
         elif cmd == "mcp":
             self._print_mcp()
+        elif cmd in ("permissions", "perms"):
+            await self._handle_permissions()
         elif cmd == "watch":
             self._handle_watch(args)
         elif cmd == "reload":
@@ -310,12 +308,13 @@ class InteractiveSession:
         else:
             await self._forward_command(cmd, args)
 
-    _BUILTINS = ["help", "model", "schedules", "watch", "mcp", "reload", "clear", "exit", "quit"]
+    _BUILTINS = ["help", "model", "permissions", "schedules", "watch", "mcp", "reload", "clear", "exit", "quit"]
 
     def _print_help(self) -> None:
         for c, desc in [
             ("/help", "show this help"),
             ("/model [name]", "show or switch the model + reasoning effort"),
+            ("/permissions", "edit per-caller-class tool permissions (sponsor vs guest)"),
             ("/schedules", "list scheduled prompts"),
             ("/watch <chat-id>", "add a Teams chat to listen to"),
             ("/mcp", "list configured MCP servers"),
@@ -438,6 +437,26 @@ class InteractiveSession:
         tier_note = f", {tier}" if tier and tier != "default" else ""
         self._ui.append_line(f"model → {model} ({effort or 'default'}{tier_note})", UiStyle.SUCCESS)
 
+    async def _handle_permissions(self) -> None:
+        state = {
+            "yolo": self._policy.yolo,
+            "sponsor": set(self._policy.sponsor),
+            "guest": set(self._policy.guest),
+        }
+        result = await self._ui.edit_permissions(TOOL_CATEGORIES, state)
+        if result is None:
+            return
+        self._policy.yolo = bool(result.get("yolo"))
+        self._policy.sponsor = set(result.get("sponsor", set()))
+        self._policy.guest = set(result.get("guest", set()))
+        self._config.permissions = self._policy.to_config()
+        cfgmod.save(self._root, self._config)
+        if self._policy.yolo:
+            note = "yolo — everything allowed for everyone"
+        else:
+            note = f"sponsor: {len(self._policy.sponsor)} tool(s), guest: {len(self._policy.guest)} tool(s)"
+        self._ui.append_line(f"permissions updated → {note}", UiStyle.SUCCESS)
+
     def _print_schedules(self) -> None:
         tasks = self._scheduler.list() if self._scheduler else []
         if not tasks:
@@ -468,10 +487,7 @@ class InteractiveSession:
 
     async def _handle_reload(self) -> None:
         self._ui.append_line("reloading MCP + session…", UiStyle.DIM)
-        confirm = self._ui.confirm if not self._yolo else None
-        on_perm = build_permission_handler(
-            self._policy, lambda: self._ctx.caller, yolo=self._yolo, confirm=confirm
-        )
+        on_perm = build_permission_handler(self._policy, self._caller_class, force_yolo=self._yolo)
         tools: List[Any] = []
         if self._bridge:
             tools += build_teams_tools(self._bridge, self._ctx)
@@ -516,6 +532,27 @@ class InteractiveSession:
                 skip_permission=True,
             ),
         ]
+
+    # ---- caller class (sponsor vs guest) ---------------------------------------------
+    def _load_sponsors(self) -> set:
+        """Entra user ids that count as sponsors (from entrabot's HUMAN_USER_* config)."""
+        try:
+            from entrabot.config import get_config
+
+            c = get_config()
+            ids = set(getattr(c, "human_user_ids", None) or [])
+            single = getattr(c, "human_user_id", None)
+            if single:
+                ids.add(single)
+            return ids
+        except Exception:
+            return set()
+
+    def _caller_class(self) -> Optional[str]:
+        caller = self._ctx.caller
+        if caller is None:
+            return "sponsor"  # local operator typing in the terminal is trusted
+        return "sponsor" if caller in self._sponsors else "guest"
 
     # ---- misc ------------------------------------------------------------------------
     def _refresh_status(self) -> None:

@@ -1,31 +1,38 @@
-"""Per-caller permission gating (port + extension of the .NET permission model).
+"""Per-caller-class permission gating — the headline feature.
 
-The .NET harness had a single session-wide yolo/interactive switch. Here the gate is
-*caller-aware*: the active Teams caller (resolved from the message being handled) is
-matched against a policy that can allow/deny specific tool kinds, shell commands, MCP
-tools, etc. This is the whole point of the ENTRABOT harness — deterministically route
-Teams traffic and fine-tune what each caller is allowed to trigger.
+Every Teams caller is one of two classes: **sponsor** (a configured human who directs the
+agent) or **guest** (everyone else). Each tool *category* can be independently enabled for
+sponsors and for guests; guests default to nothing. A **yolo** flag (the matrix's top row, or
+``--yolo``) allows everything for everyone. Local operator input (no Teams caller) is treated
+as sponsor.
 
-Wired into the SDK via ``create_session(on_permission_request=...)``. The handler returns
-``PermissionDecisionApproveOnce`` / ``PermissionDecisionReject``.
+Wired into the SDK via ``create_session(on_permission_request=...)``: the handler resolves the
+running turn's caller class and returns ApproveOnce / Reject deterministically (no prompts).
 """
 
 from __future__ import annotations
 
-import fnmatch
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from copilot.generated import rpc as _rpc
 
-# (kind, identifier, human-readable description) for a permission request.
+# The gateable capabilities, in display order. Keys match the kinds describe() emits.
+TOOL_CATEGORIES: List[Tuple[str, str]] = [
+    ("shell", "Run shell commands"),
+    ("write", "Create / edit files"),
+    ("read", "Read files"),
+    ("url", "Fetch web URLs"),
+    ("mcp", "Use MCP server tools"),
+    ("custom", "Use custom tools"),
+    ("memory", "Store memories"),
+]
+_KEYS = [k for k, _ in TOOL_CATEGORIES]
+
+# (kind, identifier, human description) for a permission request.
 Described = Tuple[str, str, str]
-
-# Returns the id/UPN of the caller whose message is currently driving the turn (or None).
-CallerResolver = Callable[[], Optional[str]]
-
-# Optional UI confirm hook: (title, message) -> approved?
-ConfirmFn = Callable[[str, str], Awaitable[bool]]
+# Returns the active turn's caller class: "sponsor" | "guest" (or None for local operator).
+ClassResolver = Callable[[], Optional[str]]
 
 
 def describe(request: Any) -> Described:
@@ -37,15 +44,17 @@ def describe(request: Any) -> Described:
     if kind == "write" or hasattr(request, "file_name"):
         path = getattr(request, "file_name", "")
         return ("write", path, f"write file: {path}")
-    if kind == "read" or (hasattr(request, "path") and not hasattr(request, "url")):
-        path = getattr(request, "path", "")
-        return ("read", path, f"read file: {path}")
-    if kind == "url" or hasattr(request, "url"):
-        url = getattr(request, "url", "")
-        return ("url", url, f"fetch url: {url}")
+    if kind == "memory" or hasattr(request, "fact"):
+        return ("memory", getattr(request, "fact", ""), "store a memory")
     if kind == "mcp" or (hasattr(request, "server_name") and hasattr(request, "tool_name")):
         ident = f"{getattr(request, 'server_name', '')}.{getattr(request, 'tool_name', '')}"
         return ("mcp", ident, f"call MCP tool: {ident}")
+    if kind == "url" or hasattr(request, "url"):
+        url = getattr(request, "url", "")
+        return ("url", url, f"fetch url: {url}")
+    if kind == "read" or (hasattr(request, "path") and not hasattr(request, "url")):
+        path = getattr(request, "path", "")
+        return ("read", path, f"read file: {path}")
     if kind in ("customTool", "custom") or hasattr(request, "tool_name"):
         name = getattr(request, "tool_name", "")
         return ("custom", name, f"call tool: {name}")
@@ -53,103 +62,49 @@ def describe(request: Any) -> Described:
 
 
 @dataclass
-class CallerPolicy:
-    # mode is the default when no allow/deny token matches.
-    mode: str = "ask"  # "allow" | "deny" | "ask"
-    allow: List[str] = field(default_factory=list)
-    deny: List[str] = field(default_factory=list)
+class ToolPolicy:
+    """yolo + the set of enabled capability keys for each caller class."""
 
-    def decide(self, kind: str, identifier: str) -> str:
-        """Return "allow" | "deny" | "ask" for this (kind, identifier)."""
-        if _matches_any(self.deny, kind, identifier):
-            return "deny"
-        if _matches_any(self.allow, kind, identifier):
-            return "allow"
-        return self.mode
-
-
-def _matches_any(tokens: List[str], kind: str, identifier: str) -> bool:
-    for tok in tokens:
-        if tok == kind or tok == "*":
-            return True
-        if ":" in tok:
-            tkind, _, glob = tok.partition(":")
-            if tkind in (kind, "*") and fnmatch.fnmatch(identifier, glob):
-                return True
-    return False
-
-
-class PermissionPolicy:
-    """Holds the default policy plus per-caller overrides (keyed by caller id/UPN)."""
-
-    def __init__(self, default: CallerPolicy, callers: Dict[str, CallerPolicy]):
-        self.default = default
-        self.callers = callers
+    yolo: bool = False
+    sponsor: Set[str] = field(default_factory=lambda: set(_KEYS))  # sponsors: all on by default
+    guest: Set[str] = field(default_factory=set)  # guests: nothing by default
 
     @classmethod
-    def from_config(cls, raw: Dict[str, Any]) -> "PermissionPolicy":
-        def policy(d: Dict[str, Any]) -> CallerPolicy:
-            return CallerPolicy(
-                mode=d.get("mode", "ask"),
-                allow=list(d.get("allow", [])),
-                deny=list(d.get("deny", [])),
-            )
+    def from_config(cls, raw: Optional[Dict[str, Any]]) -> "ToolPolicy":
+        if not raw:
+            return cls()
+        return cls(
+            yolo=bool(raw.get("yolo", False)),
+            sponsor=set(raw.get("sponsor", _KEYS)),
+            guest=set(raw.get("guest", [])),
+        )
 
-        default = policy(raw.get("default", {"mode": "ask"}))
-        callers = {k: policy(v) for k, v in (raw.get("callers") or {}).items()}
-        return cls(default, callers)
+    def to_config(self) -> Dict[str, Any]:
+        return {"yolo": self.yolo, "sponsor": sorted(self.sponsor), "guest": sorted(self.guest)}
 
-    def for_caller(self, caller: Optional[str]) -> CallerPolicy:
-        if caller and caller in self.callers:
-            return self.callers[caller]
-        # case-insensitive UPN match
-        if caller:
-            low = caller.lower()
-            for k, v in self.callers.items():
-                if k.lower() == low:
-                    return v
-        return self.default
+    def enabled_for(self, caller_class: str) -> Set[str]:
+        return self.sponsor if caller_class == "sponsor" else self.guest
+
+    def allowed(self, caller_class: str, kind: str) -> bool:
+        return self.yolo or kind in self.enabled_for(caller_class)
 
 
 def build_permission_handler(
-    policy: PermissionPolicy,
-    resolve_caller: CallerResolver,
+    policy: ToolPolicy,
+    resolve_class: ClassResolver,
     *,
-    yolo: bool = False,
-    confirm: Optional[ConfirmFn] = None,
+    force_yolo: bool = False,
 ):
-    """Return an async ``on_permission_request`` handler that consults the policy.
+    """Return an async ``on_permission_request`` handler. Deterministic: allow if yolo (policy
+    or ``--yolo``) or the caller class has the capability enabled; otherwise reject."""
 
-    Only the *undecided* ("ask") case is affected by yolo/confirm; an explicit policy
-    ``allow``/``deny`` is always authoritative (so ``--yolo`` skips prompts but can never
-    blow past a caller the policy explicitly denies):
-    - yolo: an "ask" resolves to allow (no prompt).
-    - confirm provided: an "ask" prompts the human via the UI.
-    - otherwise (autonomous, no UI): an "ask" is denied (fail-closed).
-    """
-
-    # The SDK invokes the handler as handler(request, {"session_id": ...}); accept the
-    # context arg (optional so direct unit-test calls with one arg still work).
     async def handler(request: Any, context: Any = None):
         kind, identifier, text = describe(request)
-        caller = resolve_caller()
-        decision = policy.for_caller(caller).decide(kind, identifier)
-
-        if decision == "ask":
-            if yolo:
-                decision = "allow"
-            elif confirm is not None:
-                who = f" (requested while handling {caller})" if caller else ""
-                approved = await confirm("Permission", f"Allow the agent to {text}?{who}")
-                decision = "allow" if approved else "deny"
-            else:
-                decision = "deny"
-
-        if decision == "allow":
+        caller_class = resolve_class() or "sponsor"  # local operator is trusted
+        if force_yolo or policy.allowed(caller_class, kind):
             return _rpc.PermissionDecisionApproveOnce()
-        who = caller or "this caller"
         return _rpc.PermissionDecisionReject(
-            feedback=f"Denied by ENTRABOT permission policy: {who} may not {text}."
+            feedback=f"Denied by ENTRABOT policy: a {caller_class} may not {text}."
         )
 
     return handler

@@ -60,6 +60,110 @@ class TextualUI(UI):
 
         ui = self
 
+        class _PermissionsScreen(ModalScreen):
+            """Sponsor-vs-Guest tool matrix on a (proven) OptionList: ↑/↓ pick a row, then
+            's' toggles Sponsor, 'g' toggles Guest, 'space' toggles both, 'y' toggles the YOLO
+            row (allow everything), esc saves & closes. Resolves {yolo, sponsor:set, guest:set}."""
+
+            CSS = """
+            _PermissionsScreen { background: #0d0d0d; }
+            #perm-title { color: #569cd6; text-style: bold; padding: 1 2 0 2; }
+            #perm-list { height: 1fr; background: #0d0d0d; margin: 0 2; border: round #3a3d41; }
+            #perm-footer { color: #808080; padding: 0 2 1 2; }
+            """
+
+            def __init__(self, categories, state, fut):
+                super().__init__()
+                self._cats = list(categories)  # [(key, label)]
+                self._yolo = bool(state.get("yolo", False))
+                self._sponsor = set(state.get("sponsor", set()))
+                self._guest = set(state.get("guest", set()))
+                self._fut = fut
+
+            def compose(self):
+                yield Static("Tool permissions  —  who can the agent act for?", id="perm-title")
+                yield OptionList(id="perm-list")
+                yield Static(
+                    "↑/↓ row   ·   s sponsor   ·   g guest   ·   space both   ·   y yolo   ·   esc save",
+                    id="perm-footer",
+                )
+
+            def on_mount(self):
+                self._rebuild()
+                self.query_one(OptionList).focus()
+
+            def on_key(self, event):  # on_key fires for keys OptionList doesn't consume (up/down)
+                k = event.key
+                if k == "escape":
+                    self.action_save_close(); event.stop()
+                elif k == "s":
+                    self.action_toggle_sponsor(); event.stop()
+                elif k == "g":
+                    self.action_toggle_guest(); event.stop()
+                elif k == "y":
+                    self.action_toggle_yolo(); event.stop()
+                elif k == "space":
+                    self.action_toggle_both(); event.stop()
+
+            def on_option_list_option_selected(self, event):  # enter / mouse click toggles both
+                self.action_toggle_both()
+
+            def _mark(self, on, color="green"):
+                return f"[{color}]✓[/]" if on else "[grey50]·[/]"
+
+            def _row_markup(self, i):
+                if i == 0:
+                    state = "[bold yellow]✓ ON — everything allowed[/]" if self._yolo else "[grey50]· off[/]"
+                    return f"⚡ {'YOLO'.ljust(24)}  {state}"
+                key, label = self._cats[i - 1]
+                return f"{label.ljust(26)}  sponsor {self._mark(key in self._sponsor)}    guest {self._mark(key in self._guest)}"
+
+            def _rebuild(self):
+                from rich.text import Text
+
+                ol = self.query_one(OptionList)
+                hl = ol.highlighted
+                ol.clear_options()
+                for i in range(1 + len(self._cats)):
+                    ol.add_option(Text.from_markup(self._row_markup(i)))
+                ol.highlighted = hl if hl is not None else 0
+
+            def _cur(self):
+                return self.query_one(OptionList).highlighted or 0
+
+            def action_toggle_sponsor(self):
+                i = self._cur()
+                if i > 0:
+                    key = self._cats[i - 1][0]
+                    self._sponsor.discard(key) if key in self._sponsor else self._sponsor.add(key)
+                    self._rebuild()
+
+            def action_toggle_guest(self):
+                i = self._cur()
+                if i > 0:
+                    key = self._cats[i - 1][0]
+                    self._guest.discard(key) if key in self._guest else self._guest.add(key)
+                    self._rebuild()
+
+            def action_toggle_both(self):
+                i = self._cur()
+                if i == 0:
+                    self.action_toggle_yolo()
+                else:
+                    self.action_toggle_sponsor()
+                    self.action_toggle_guest()
+
+            def action_toggle_yolo(self):
+                self._yolo = not self._yolo
+                self._rebuild()
+
+            def action_save_close(self):
+                if not self._fut.done():
+                    self._fut.set_result({"yolo": self._yolo, "sponsor": self._sponsor, "guest": self._guest})
+                self.app.pop_screen()
+
+        self._PermissionsScreen = _PermissionsScreen
+
         class _SelectScreen(ModalScreen):
             """Full-screen picker (model / effort) like the C# harness's selector: the list is
             focused so ↑/↓/PgUp/PgDn/enter work natively, printable keys type-to-filter, and esc
@@ -139,6 +243,9 @@ class TextualUI(UI):
                     await ui._on_start()
             except Exception as e:  # surface startup failures instead of a silent blank screen
                 ui.append_line(f"startup failed: {e}", UiStyle.ERROR)
+
+        class _FocusableStatic(Static):
+            can_focus = True  # so a screen that uses it isn't forced to focus itself
 
         class _Input(Input):
             """Intercept paste so multi-line pastes are *staged* (single-line Input)."""
@@ -464,6 +571,13 @@ class TextualUI(UI):
             return None
         fut = asyncio.get_event_loop().create_future()
         self.app.push_screen(self._SelectScreen(title, list(options), fut))
+        return await fut
+
+    async def edit_permissions(self, categories, state):
+        if not self.app:
+            return None
+        fut = asyncio.get_event_loop().create_future()
+        self.app.push_screen(self._PermissionsScreen(categories, state, fut))
         return await fut
 
     async def run(self, on_submit, on_interrupt=None, on_start=None) -> None:
