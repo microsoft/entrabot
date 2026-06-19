@@ -172,6 +172,27 @@ class TestSendEmailStatusCodes:
             assert exc_info.value.retry_after == 15
 
     @pytest.mark.asyncio
+    async def test_429_http_date_retry_after_raises_rate_limit(self) -> None:
+        from entrabot.errors import RateLimitError
+        from entrabot.tools.email import send_email
+
+        with respx.mock:
+            respx.post(GRAPH_SENDMAIL_URL).mock(
+                return_value=httpx.Response(
+                    429,
+                    headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"},
+                )
+            )
+            with pytest.raises(RateLimitError) as exc_info:
+                await send_email(
+                    to=["a@example.com"],
+                    subject="s",
+                    body="b",
+                    token="tok",
+                )
+            assert exc_info.value.retry_after >= 0
+
+    @pytest.mark.asyncio
     async def test_400_raises_email_send_error_with_graph_body(self) -> None:
         from entrabot.tools.email import EmailSendError, send_email
 

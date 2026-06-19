@@ -46,6 +46,22 @@ class TestRetryOn429Transport:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_retries_on_http_date_retry_after_then_succeeds(self) -> None:
+        """HTTP-date Retry-After headers are accepted, not treated as invalid."""
+        respx.get("https://graph.microsoft.com/v1.0/me").mock(
+            side_effect=[
+                httpx.Response(429, headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}),
+                httpx.Response(200, json={"id": "user-1"}),
+            ]
+        )
+        transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport(), max_wait=0)
+        async with httpx.AsyncClient(transport=transport) as client:
+            resp = await client.get("https://graph.microsoft.com/v1.0/me")
+        assert resp.status_code == 200
+        assert resp.json()["id"] == "user-1"
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_gives_up_after_max_retries(self) -> None:
         """If all retries hit 429, the last 429 response is returned."""
         respx.get("https://graph.microsoft.com/v1.0/me").mock(
