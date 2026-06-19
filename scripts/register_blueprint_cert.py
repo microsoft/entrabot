@@ -1,4 +1,4 @@
-"""Register THIS machine's Blueprint cert on the Blueprint app registration, using the
+r"""Register THIS machine's Blueprint cert on the Blueprint app registration, using the
 Azure-CLI token (Application.ReadWrite.All).
 
 Why this exists: ``setup-windows.ps1`` only publishes the Blueprint cert when it *creates*
