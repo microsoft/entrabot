@@ -61,16 +61,27 @@ policy in `permissions.py`, which feeds the SDK's `on_permission_request` hook. 
 | `ui/console.py` | Ui/ConsoleUi.cs | complete |
 | `ui/tui.py` | Ui/TuiUi.cs (Terminal.Gui → Textual) | functional; line-buffered (not char-streamed) |
 
-## Known gaps / next steps (first cut)
+## Status
 
-1. **Token provider** — `auth.py` honors `ENTRABOT_GRAPH_TOKEN`; wire entrabot's three-hop
-   for production.
-2. **TUI parity** — the Textual UI covers log + input + status + inline confirm, but not yet
-   the .NET TUI's slash-autocomplete popup, paste-staging, or true character streaming.
-3. **Runtime slash commands** — built-ins are implemented; forwarding unknown `/cmd` to the
-   SDK's command registry (the .NET `Rpc.Commands` path) is not wired yet.
-4. **Active-caller scoping** — the bridge tracks a single "active caller" (latest message);
-   concurrent multi-chat turns would want per-turn caller binding.
-5. **Smoke-tested, not battle-tested** — imports/config/scheduler/permissions/MCP/CLI are
-   unit-smoke-tested against the real SDK; a live end-to-end run against Teams + Copilot is
-   the next milestone.
+Closed in this branch:
+
+1. ✅ **Token provider** — `auth.py` honors `ENTRABOT_GRAPH_TOKEN`, else wires entrabot's
+   three-hop (`acquire_agent_user_token`) with JWT-`exp` caching + pre-expiry refresh.
+   Returns `None` (console-only) if neither is available.
+2. ✅ **Runtime slash commands** — unknown `/cmd` is forwarded to the SDK command registry
+   (`session.rpc.commands.list` / `.invoke`); results render as text / agent-prompt-turn /
+   message / subcommand list. Runtime commands also show in `/help` and TUI autocomplete.
+3. ✅ **Per-turn caller binding** — the caller + chat travel with each injected Teams
+   message and are bound to the turn it starts (promoted on the `USER_MESSAGE` echo, cleared
+   on `SESSION_IDLE`). The permission policy resolves the caller of the *running* turn, not
+   "latest message wins".
+4. ✅ **TUI: character streaming + autocomplete** — the Textual UI now streams the assistant
+   line character-by-character (live `#live` widget) and offers slash-command autocomplete
+   (Tab to complete).
+
+Still open:
+
+- **TUI paste-staging** — multi-line paste isn't staged like the .NET TUI (single-line Input).
+- **Live end-to-end** — exercised against the real SDK via smoke tests (imports, config,
+  scheduler, per-caller permissions, MCP, command API, tool construction, init flow); a live
+  round-trip against Teams + Copilot is the remaining milestone.

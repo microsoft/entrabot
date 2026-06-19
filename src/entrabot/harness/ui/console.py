@@ -87,6 +87,9 @@ class ConsoleUI(UI):
             sys.stdout.flush()
             self._open_line = False
 
+    def set_commands(self, names) -> None:
+        pass  # the plain console UI has no autocomplete
+
     def clear(self) -> None:
         try:
             print("\x1b[2J\x1b[H", end="")

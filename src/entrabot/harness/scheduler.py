@@ -22,7 +22,8 @@ _TICK_SECONDS = 5
 _MIN_INTERVAL = timedelta(seconds=10)
 _SCHEDULES_FILE = os.path.join(".entrabot", "harness.schedules.json")
 
-InjectFn = Callable[[str], Awaitable[None]]
+# (prompt, caller_id, chat_id) — scheduled prompts have no caller/chat (operator/system).
+InjectFn = Callable[[str, Optional[str], Optional[str]], Awaitable[None]]
 
 
 def _parse_duration(text: str) -> Optional[timedelta]:
@@ -224,7 +225,7 @@ class SelfScheduler:
                             task.next_due = nxt
                     self._persist()
                     try:
-                        await self._inject(_frame(task))
+                        await self._inject(_frame(task), None, None)
                     except Exception:
                         pass
 

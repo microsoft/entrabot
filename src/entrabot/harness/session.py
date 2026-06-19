@@ -11,6 +11,7 @@ import asyncio
 from typing import Any, Awaitable, Callable, List, Optional
 
 import copilot
+from copilot.rpc import CommandsInvokeRequest, CommandsListRequest
 from pydantic import BaseModel, Field
 
 from . import banner
@@ -19,7 +20,7 @@ from . import config as cfgmod
 from . import mcp_loader
 from .permissions import PermissionPolicy, build_permission_handler
 from .scheduler import SelfScheduler
-from .teams_comms import TeamsBridge, TokenProvider
+from .teams_comms import TeamsBridge, TokenProvider, TurnContext
 from .teams_tools import build_teams_tools
 from .ui import UI, UiStyle
 
@@ -66,7 +67,10 @@ class InteractiveSession:
         self._idle = asyncio.Event()
         self._idle.set()
         self._inject_lock = asyncio.Lock()
-        self._injected: set[str] = set()
+        # framed steering prompt -> (caller_id, chat_id), promoted to the active turn on echo
+        self._injected: dict[str, tuple] = {}
+        self._ctx = TurnContext()  # caller + chat bound to the currently-running turn
+        self._runtime_cmds: list = []  # SlashCommandInfo from the SDK (for /help + forwarding)
         self._streamed = False
         self._current_model = config.model
         self._reasoning = config.reasoning_effort
@@ -93,19 +97,22 @@ class InteractiveSession:
 
         tools: List[Any] = []
         if self._bridge:
-            tools += build_teams_tools(self._bridge)
+            tools += build_teams_tools(self._bridge, self._ctx)
         tools += self._schedule_tools()
 
         mcp = mcp_loader.load(self._root)
 
-        resolve_caller = self._bridge.active_caller if self._bridge else (lambda: None)
-        confirm = self._ui.confirm if not self._yolo else None
+        # caller is bound to the running turn (see _on_event); operator-typed input -> None
         on_perm = build_permission_handler(
-            self._policy, resolve_caller, yolo=self._yolo, confirm=confirm
+            self._policy,
+            lambda: self._ctx.caller,
+            yolo=self._yolo,
+            confirm=self._ui.confirm if not self._yolo else None,
         )
 
         self._session = await self._establish(tools or None, mcp, on_perm)
         self._session.on(self._on_event)
+        await self._load_commands()
 
         self._scheduler = SelfScheduler(self._root, self._inject)
         self._scheduler.start()
@@ -169,12 +176,16 @@ class InteractiveSession:
             return
         await self._idle.wait()
 
-    async def _inject(self, prompt: str) -> None:
-        """Inject steering (Teams message or scheduled prompt) into the session."""
+    async def _inject(self, prompt: str, caller=None, chat=None) -> None:
+        """Inject steering (a Teams message or scheduled prompt) into the session.
+
+        The caller + chat travel with the prompt so the session can bind them to the turn
+        that the message kicks off (see USER_MESSAGE handling in _on_event).
+        """
         if not self._session:
             return
         async with self._inject_lock:
-            self._injected.add(prompt)
+            self._injected[prompt] = (caller, chat)
             try:
                 await self._session.send(prompt, agent_mode=self._mode)
             except Exception as e:
@@ -212,9 +223,12 @@ class InteractiveSession:
         elif t == _ET.USER_MESSAGE:
             content = getattr(d, "content", "") or ""
             if content in self._injected:
-                self._injected.discard(content)  # swallow our own injected steering echo
+                # our own injected steering echo: bind its caller/chat to this turn + swallow
+                caller, chat = self._injected.pop(content)
+                self._ctx.caller, self._ctx.chat = caller, chat
         elif t == _ET.SESSION_IDLE:
             self._ui.append_line("")
+            self._ctx.caller = self._ctx.chat = None  # turn over; back to operator/no caller
             self._idle.set()
 
     # ---- slash commands --------------------------------------------------------------
@@ -239,7 +253,9 @@ class InteractiveSession:
         elif cmd == "reload":
             await self._handle_reload()
         else:
-            self._ui.append_line(f"unknown command: /{cmd}  (try /help)", UiStyle.WARN)
+            await self._forward_command(cmd, args)
+
+    _BUILTINS = ["help", "model", "schedules", "watch", "mcp", "reload", "clear", "exit", "quit"]
 
     def _print_help(self) -> None:
         for c, desc in [
@@ -253,6 +269,71 @@ class InteractiveSession:
             ("/exit", "quit"),
         ]:
             self._ui.append_line(f"  {c:<20} {desc}", UiStyle.INFO)
+        if self._runtime_cmds:
+            self._ui.append_line("runtime commands:", UiStyle.DIM)
+            for c in sorted(self._runtime_cmds, key=lambda x: getattr(x, "name", "")):
+                name = getattr(c, "name", "")
+                desc = getattr(c, "description", "") or ""
+                exp = " (experimental)" if getattr(c, "experimental", False) else ""
+                self._ui.append_line(f"  /{name:<18} {desc}{exp}", UiStyle.INFO)
+
+    # ---- runtime command registry (forward unknown /cmd to the SDK) -------------------
+    async def _load_commands(self) -> None:
+        try:
+            result = await self._session.rpc.commands.list(
+                CommandsListRequest(include_builtins=True, include_client_commands=True, include_skills=True)
+            )
+            self._runtime_cmds = list(getattr(result, "commands", []) or [])
+        except Exception:
+            self._runtime_cmds = []
+        names = {"/" + b for b in self._BUILTINS}
+        for c in self._runtime_cmds:
+            names.add("/" + getattr(c, "name", ""))
+            for a in getattr(c, "aliases", None) or []:
+                names.add("/" + a)
+        try:
+            self._ui.set_commands(sorted(n for n in names if n != "/"))
+        except Exception:
+            pass
+
+    async def _forward_command(self, cmd: str, args: List[str]) -> None:
+        known = {getattr(c, "name", "").lower() for c in self._runtime_cmds}
+        for c in self._runtime_cmds:
+            known.update(a.lower() for a in (getattr(c, "aliases", None) or []))
+        if cmd not in known:
+            self._ui.append_line(f"unknown command: /{cmd}  (try /help)", UiStyle.WARN)
+            return
+        try:
+            result = await self._session.rpc.commands.invoke(
+                CommandsInvokeRequest(name=cmd, input=" ".join(args) or None)
+            )
+        except Exception as e:
+            self._ui.append_line(f"/{cmd} failed: {e}", UiStyle.ERROR)
+            return
+        await self._render_command_result(result)
+
+    async def _render_command_result(self, result: Any) -> None:
+        # SlashCommandTextResult
+        text = getattr(result, "text", None)
+        if text is not None:
+            self._ui.append_line(text, UiStyle.INFO)
+            return
+        # SlashCommandAgentPromptResult -> run it as a turn
+        prompt = getattr(result, "prompt", None)
+        if prompt:
+            await self._send(prompt)
+            return
+        # SlashCommandCompletedResult
+        msg = getattr(result, "message", None)
+        if msg:
+            self._ui.append_line(msg, UiStyle.INFO)
+            return
+        # SlashCommandSelectSubcommandResult
+        options = getattr(result, "options", None)
+        if options:
+            self._ui.append_line(getattr(result, "title", "choose a subcommand:"), UiStyle.INFO)
+            for o in options:
+                self._ui.append_line(f"  - {getattr(o, 'name', o)}", UiStyle.NORMAL)
 
     async def _handle_model(self, args: List[str]) -> None:
         if not args:
@@ -305,17 +386,19 @@ class InteractiveSession:
 
     async def _handle_reload(self) -> None:
         self._ui.append_line("reloading MCP + session…", UiStyle.DIM)
-        resolve_caller = self._bridge.active_caller if self._bridge else (lambda: None)
         confirm = self._ui.confirm if not self._yolo else None
-        on_perm = build_permission_handler(self._policy, resolve_caller, yolo=self._yolo, confirm=confirm)
+        on_perm = build_permission_handler(
+            self._policy, lambda: self._ctx.caller, yolo=self._yolo, confirm=confirm
+        )
         tools: List[Any] = []
         if self._bridge:
-            tools += build_teams_tools(self._bridge)
+            tools += build_teams_tools(self._bridge, self._ctx)
         tools += self._schedule_tools()
         mcp = mcp_loader.load(self._root)
         self._fresh = True
         self._session = await self._establish(tools or None, mcp, on_perm)
         self._session.on(self._on_event)
+        await self._load_commands()
         self._ui.append_line("reloaded.", UiStyle.SUCCESS)
 
     # ---- schedule tools --------------------------------------------------------------

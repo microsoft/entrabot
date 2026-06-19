@@ -12,14 +12,27 @@ from __future__ import annotations
 
 import asyncio
 import html
+from dataclasses import dataclass
 from typing import Awaitable, Callable, Dict, List, Optional, Set
 
 # Token provider: returns a valid Agent-User Graph token (entrabot's three-hop auth).
 TokenProvider = Callable[[], Awaitable[str]]
-# Inject a steering prompt into the session.
-InjectFn = Callable[[str], Awaitable[None]]
+# Inject a steering prompt into the session: (prompt, caller_id, chat_id).
+InjectFn = Callable[[str, Optional[str], Optional[str]], Awaitable[None]]
 
 _POLL_SECONDS = 5
+
+
+@dataclass
+class TurnContext:
+    """The caller + chat bound to the turn currently running.
+
+    Owned by the session and read by the permission policy (who is this turn for?) and the
+    reply tools (which chat do I answer in?). ``None`` for operator-typed/local input.
+    """
+
+    caller: Optional[str] = None
+    chat: Optional[str] = None
 
 
 def _field(msg: dict, *names: str, default: str = "") -> str:
@@ -46,18 +59,10 @@ class TeamsBridge:
         self._self_id = self_id
         self._poll_seconds = poll_seconds
         self._seen: Dict[str, Set[str]] = {c: set() for c in self._watched}
-        self._active_caller: Optional[str] = None
-        self._active_chat: Optional[str] = None
         self._task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
 
-    # ---- caller / chat context (read by the permission layer + reply tools) ----------
-    def active_caller(self) -> Optional[str]:
-        return self._active_caller
-
-    def active_chat(self) -> Optional[str]:
-        return self._active_chat
-
+    # ---- watched chats ---------------------------------------------------------------
     def watched_chats(self) -> List[str]:
         return list(self._watched)
 
@@ -122,12 +127,10 @@ class TeamsBridge:
         sender = _field(msg, "from", "sender_name", "senderName", default="someone")
         sender_id = _field(msg, "sender_id", "from_id", "fromId", default=sender)
         body = _field(msg, "content", "body")
-        # set the active caller BEFORE injecting so the permission layer sees the right one
-        self._active_caller = sender_id
-        self._active_chat = chat
         framed = (
             "[teams] New message (this is a steering update — fold it into your work; "
             "reply in Teams with the entrabot_send tool, don't echo it here).\n"
             f"chat: {chat}\nfrom: {sender} ({sender_id})\nmessage: {html.unescape(body)}"
         )
-        await self._inject(framed)
+        # carry the caller + chat so the session can bind them to this turn
+        await self._inject(framed, sender_id, chat)

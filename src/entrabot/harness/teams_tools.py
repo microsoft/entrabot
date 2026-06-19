@@ -11,7 +11,7 @@ from typing import Any, List
 import copilot
 from pydantic import BaseModel, Field
 
-from .teams_comms import TeamsBridge
+from .teams_comms import TeamsBridge, TurnContext
 
 
 class SendArgs(BaseModel):
@@ -31,10 +31,10 @@ def _arg(args: Any, key: str, default: Any = None) -> Any:
     return getattr(args, key, default)
 
 
-def build_teams_tools(bridge: TeamsBridge) -> List[Any]:
+def build_teams_tools(bridge: TeamsBridge, ctx: TurnContext) -> List[Any]:
     async def _send(_ctx: Any, inv: copilot.ToolInvocation) -> str:
         a = inv.arguments
-        chat = _arg(a, "chat_id") or bridge.active_chat()
+        chat = _arg(a, "chat_id") or ctx.chat
         if not chat:
             return "error: no chat_id given and no active chat to reply to."
         message = _arg(a, "message", "")
@@ -45,7 +45,7 @@ def build_teams_tools(bridge: TeamsBridge) -> List[Any]:
 
     async def _read(_ctx: Any, inv: copilot.ToolInvocation) -> str:
         a = inv.arguments
-        chat = _arg(a, "chat_id") or bridge.active_chat()
+        chat = _arg(a, "chat_id") or ctx.chat
         if not chat:
             return "error: no chat_id given and no active chat."
         msgs = await bridge.read(chat, count=int(_arg(a, "count", 5)))
