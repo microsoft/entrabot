@@ -79,11 +79,13 @@ Closed in this branch:
    command history recall (↑/↓), and multi-line paste staging (`⎘`, sent with the next message).
 5. ✅ **Interrupt** — Esc (or Ctrl+C) aborts the running turn (`session.abort()`); the status
    line shows "working — esc to interrupt". Console UI interrupts on Ctrl+C best-effort.
-6. ✅ **Live end-to-end (verified against the real runtime)** — `CopilotClient` connects +
-   authenticates, a streamed turn renders correctly, and the **per-caller gate works live**:
-   a deny-policy caller has the agent's gated tool call blocked, an allow-policy caller has the
-   same call permitted. (This surfaced a real bug — the SDK calls the permission handler with
-   `(request, context)`; fixed.) Run `entrabot-harness doctor` to check runtime + auth + token.
+6. ✅ **Live end-to-end (verified against the real runtime)** — everything except the literal
+   Teams transport is exercised live: `CopilotClient` connect+auth, a streamed turn, the
+   **per-caller gate** (deny-caller → gated tool blocked; allow-caller → permitted; this
+   surfaced + fixed a real bug — the SDK calls the handler with `(request, context)`), runtime
+   **command forwarding** (`rpc.commands.list`/`invoke` → text result rendering), and the
+   **steering echo-binding** (the injected prompt matches the `USER_MESSAGE` echo, so caller/chat
+   bind to the turn). Run `entrabot-harness doctor` to check runtime + auth + token.
 7. ✅ **Windows UTF-8** — stdout/stderr are reconfigured to UTF-8 so the banner / `●` / em-dashes
    don't crash cp1252 consoles.
 
