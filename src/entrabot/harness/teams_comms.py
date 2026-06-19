@@ -53,12 +53,15 @@ class TeamsBridge:
         *,
         self_id: Optional[str] = None,
         poll_seconds: int = _POLL_SECONDS,
+        on_note: Optional[Callable[[str], None]] = None,
     ):
         self._token = token_provider
         self._watched: List[str] = list(watched_chats)
         self._inject = inject
         self._self_id = self_id
         self._poll_seconds = poll_seconds
+        self._on_note = on_note
+        self._noted: Set[str] = set()  # de-dupe repeated status notes
         self._seen: Dict[str, Set[str]] = {c: set() for c in self._watched}
         self._task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
@@ -106,7 +109,8 @@ class TeamsBridge:
 
         try:
             token = await self._token()
-        except Exception:
+        except Exception as e:
+            self._note("teams-token", f"Teams: could not acquire a token — {type(e).__name__}: {e}")
             return 0
         new: List[str] = []
         try:
@@ -117,6 +121,12 @@ class TeamsBridge:
                     params={"$top": "50"},
                 )
             if r.status_code != 200:
+                hint = ""
+                if r.status_code == 403:
+                    hint = " — the token is missing Chat.Read/Chat.ReadWrite. Complete the entrabot agent provisioning (it issues a token with Teams scopes)."
+                elif r.status_code == 401:
+                    hint = " — token expired/invalid."
+                self._note(f"discover-{r.status_code}", f"Teams: GET /me/chats returned {r.status_code}{hint}")
                 return 0
             for ch in r.json().get("value", []):
                 cid = ch.get("id")
@@ -124,7 +134,8 @@ class TeamsBridge:
                     self._watched.append(cid)
                     self._seen.setdefault(cid, set())
                     new.append(cid)
-        except Exception:
+        except Exception as e:
+            self._note("discover-err", f"Teams: chat discovery failed — {type(e).__name__}: {e}")
             return 0
         for cid in new:
             try:
@@ -132,7 +143,14 @@ class TeamsBridge:
                     self._seen[cid].add(_field(m, "message_id", "id"))
             except Exception:
                 pass
+        if self._watched:
+            self._note("watching", f"Teams: watching {len(self._watched)} chat(s)")
         return len(new)
+
+    def _note(self, key: str, msg: str) -> None:
+        if self._on_note and key not in self._noted:
+            self._noted.add(key)
+            self._on_note(msg)
 
     async def _prime(self) -> None:
         """Mark existing messages as seen so we only inject genuinely new ones."""

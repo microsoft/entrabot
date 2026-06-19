@@ -102,7 +102,11 @@ class InteractiveSession:
 
         if self._token_provider:
             self._bridge = TeamsBridge(
-                self._token_provider, self._config.watched_chats, self._inject, self_id=self._self_id
+                self._token_provider,
+                self._config.watched_chats,
+                self._inject,
+                self_id=self._self_id,
+                on_note=lambda m: self._ui.append_line(m, UiStyle.INFO),
             )
 
         tools: List[Any] = []
