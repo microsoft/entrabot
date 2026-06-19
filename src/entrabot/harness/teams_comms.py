@@ -21,6 +21,7 @@ TokenProvider = Callable[[], Awaitable[str]]
 InjectFn = Callable[[str, Optional[str], Optional[str]], Awaitable[None]]
 
 _POLL_SECONDS = 5
+_DISCOVER_SECONDS = 120  # re-sweep GET /me/chats this often to pick up new chats
 
 
 @dataclass
@@ -94,6 +95,45 @@ class TeamsBridge:
         if self._task:
             self._task.cancel()
 
+    async def discover_chats(self) -> int:
+        """Register the agent's Teams chats via GET /me/chats (mirrors entrabot).
+
+        Without this, the agent would never see messages in chats it didn't explicitly
+        /watch — including ones a human starts by adding the agent. Newly found chats are
+        primed (existing messages marked seen) so they don't flood with history.
+        """
+        import httpx
+
+        try:
+            token = await self._token()
+        except Exception:
+            return 0
+        new: List[str] = []
+        try:
+            async with httpx.AsyncClient() as c:
+                r = await c.get(
+                    "https://graph.microsoft.com/v1.0/me/chats",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={"$top": "50"},
+                )
+            if r.status_code != 200:
+                return 0
+            for ch in r.json().get("value", []):
+                cid = ch.get("id")
+                if cid and cid not in self._watched:
+                    self._watched.append(cid)
+                    self._seen.setdefault(cid, set())
+                    new.append(cid)
+        except Exception:
+            return 0
+        for cid in new:
+            try:
+                for m in await self.read(cid, count=20):
+                    self._seen[cid].add(_field(m, "message_id", "id"))
+            except Exception:
+                pass
+        return len(new)
+
     async def _prime(self) -> None:
         """Mark existing messages as seen so we only inject genuinely new ones."""
         for chat in self._watched:
@@ -104,9 +144,15 @@ class TeamsBridge:
                 pass
 
     async def _poll(self) -> None:
+        await self.discover_chats()  # find chats the agent is in before priming
         await self._prime()
+        elapsed = 0
         while not self._stop.is_set():
             await asyncio.sleep(self._poll_seconds)
+            elapsed += self._poll_seconds
+            if elapsed >= _DISCOVER_SECONDS:  # periodically pick up newly-created chats
+                elapsed = 0
+                await self.discover_chats()
             for chat in list(self._watched):
                 try:
                     msgs = await self.read(chat, count=10)

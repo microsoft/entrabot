@@ -22,6 +22,8 @@ dependencies = [
     # ENTRABOT harness: drives a Copilot agent session (sessions, streaming, tools,
     # MCP, per-call permission hook). Sibling of the .NET GitHub.Copilot.SDK.
     "github-copilot-sdk>=1.0.2",
+    # Full-screen TUI for the harness (the default UI; ENTRABOT_CONSOLE=1 falls back to plain).
+    "textual>=0.60",
 ]
 
 [project.optional-dependencies]
@@ -41,10 +43,6 @@ provisioning = [
     # the public cert is registered on the app reg in Entra.
     "keyring>=24",
     "cryptography>=42",
-]
-# Full-screen TUI for the harness (optional; the console UI is the default).
-tui = [
-    "textual>=0.60",
 ]
 
 [tool.ruff]

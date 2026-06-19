@@ -128,6 +128,14 @@ class InteractiveSession:
         if self._bridge:
             self._bridge.start()
 
+        if self._bridge:
+            self._ui.append_line("Teams: enabled — auto-discovering the chats you're in…", UiStyle.INFO)
+        else:
+            self._ui.append_line(
+                "Teams: not configured — running console-only. Set ENTRABOT_GRAPH_TOKEN, or "
+                "complete entrabot auth (client_id / agent IDs are currently empty), to enable.",
+                UiStyle.WARN,
+            )
         self._refresh_status()
         self._ui.append_line(
             f"ready — {self._config.name} ({self._mode}{', yolo' if self._yolo else ''})", UiStyle.SUCCESS
@@ -141,6 +149,7 @@ class InteractiveSession:
             context_tier=self._config.context_tier,
             tools=tools,
             mcp_servers=mcp,
+            system_message=self._system_message(),
             streaming=True,
             enable_config_discovery=True,
         )
@@ -158,6 +167,23 @@ class InteractiveSession:
                 except Exception:
                     pass
         return await self._client.create_session(session_id=sid, **kwargs)
+
+    def _system_message(self) -> dict:
+        teams = (
+            "New Microsoft Teams messages are delivered to you as steering updates prefixed with "
+            "'[teams]'. Reply to people using the entrabot_send tool — the active chat is the one the "
+            "current message came from. "
+            if self._bridge
+            else "Teams is not configured this run, so you are talking to your operator locally. "
+        )
+        return {
+            "mode": "append",
+            "content": (
+                f"You are {self._config.name}, an agent running in the ENTRABOT harness. You are NOT "
+                f"operating as an MCP server and do not need one connected. {teams}"
+                "Be concise and helpful."
+            ),
+        }
 
     async def _dispose(self) -> None:
         if self._bridge:

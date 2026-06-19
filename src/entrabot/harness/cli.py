@@ -41,19 +41,23 @@ Options:
   --interactive   interactive mode instead of autopilot (autonomous is the default)
 
 Config + context (.entrabot/harness.json, AGENT.md) live in the current directory.
-Set ENTRABOT_TUI=1 for the full-screen Textual UI; ENTRABOT_GRAPH_TOKEN to enable Teams.
+Full-screen TUI by default; set ENTRABOT_CONSOLE=1 for the plain UI. ENTRABOT_GRAPH_TOKEN
+(or completed entrabot auth) enables Teams.
 """
 
 
 def _pick_ui() -> UI:
-    if os.environ.get("ENTRABOT_TUI") == "1" and sys.stdout.isatty():
-        try:
-            from .ui.tui import TextualUI, available
+    # Full-screen Textual TUI by default in a terminal; ENTRABOT_CONSOLE=1 forces the plain UI
+    # (and we fall back to it automatically if textual isn't installed or stdout is redirected).
+    if os.environ.get("ENTRABOT_CONSOLE") == "1" or not sys.stdout.isatty():
+        return ConsoleUI()
+    try:
+        from .ui.tui import TextualUI, available
 
-            if available():
-                return TextualUI()
-        except Exception:
-            pass
+        if available():
+            return TextualUI()
+    except Exception:
+        pass
     return ConsoleUI()
 
 

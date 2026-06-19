@@ -82,5 +82,38 @@ def _three_hop_provider() -> Optional[TokenProvider]:
     return _provider
 
 
+def _delegated_provider() -> Optional[TokenProvider]:
+    """MSAL-delegated fallback (the human's token), mirroring entrabot's _init_auth.
+
+    Uses the shared MSAL token cache: ``try_silent`` returns a cached token with no prompt;
+    if there's no cached login it does one interactive sign-in (browser/device code), same as
+    entrabot's first run.
+    """
+    try:
+        from entrabot.auth.delegated import MsalDelegatedAuth
+        from entrabot.config import get_config
+    except Exception:
+        return None
+    try:
+        cfg = get_config()
+    except Exception:
+        return None
+    client_id = getattr(cfg, "client_id", None)
+    if not client_id:
+        return None
+
+    auth = MsalDelegatedAuth(client_id=client_id, tenant_id=getattr(cfg, "tenant_id", None) or "common")
+
+    async def _provider() -> str:
+        res = await asyncio.to_thread(auth.try_silent)
+        if not (res and "access_token" in res):
+            res = await asyncio.to_thread(auth.authenticate)  # interactive sign-in (first time only)
+        if not res or "access_token" not in res:
+            raise RuntimeError("MSAL delegated auth did not return a token")
+        return res["access_token"]
+
+    return _provider
+
+
 def make_token_provider() -> Optional[TokenProvider]:
-    return _env_provider() or _three_hop_provider()
+    return _env_provider() or _three_hop_provider() or _delegated_provider()
