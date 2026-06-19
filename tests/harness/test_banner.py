@@ -9,8 +9,8 @@ def test_render_single_line_block_glyphs():
     assert "█" in text  # block-font glyphs are present
 
 
-def test_two_section_colors():
+def test_shaded_two_section_colors_with_shadow():
     rows = banner.render()
     colors = {color for row in rows for _, color in row if color}
-    # ENTRA section is blue, BOT section is pink — one key each, on the same line
-    assert colors == {"entra", "bot"}
+    # ENTRA blue (body + bright top), BOT pink (body + bright top), plus a drop shadow
+    assert {"entra", "entra_hi", "bot", "bot_hi", "shadow"} <= colors

@@ -1,8 +1,9 @@
 """The ENTRABOT splash wordmark (port of Cli/Banner.cs).
 
-A single-line block-font wordmark: ``ENTRA`` in blue, ``BOT`` in pink — one clean color per
-section, no drop shadow. ``render()`` returns UI-agnostic colored runs so the console and TUI
-draw the same picture; ``print_banner()`` writes it with ANSI codes.
+A single-line block-font wordmark with shading + a drop shadow, like the C# COPILOT TEAMMATE
+logo: each letter is bright across its top two rows and a deeper tone in the body, with a
+dark offset shadow behind it. ``ENTRA`` is blue, ``BOT`` is pink. ``render()`` returns
+UI-agnostic colored runs; ``print_banner()`` writes it with ANSI codes.
 """
 
 from __future__ import annotations
@@ -25,15 +26,15 @@ _FONT = {
 _MARGIN = 2
 _WORD = "ENTRABOT"
 _ENTRA_LEN = 5  # first 5 letters ("ENTRA") are blue; the rest ("BOT") are pink
+_SHADOW = "░"
 
 Run = Tuple[str, str]  # (text, color-key in ansi._CODES / the TUI banner palette)
 
 
 def render() -> List[List[Run]]:
-    """Return the banner as rows of ``(text, color-key)`` runs (one blank row top + bottom)."""
-    glyph_h = 5
-    height = glyph_h + 2  # a blank row above and below for breathing room
-    width = _MARGIN + len(_WORD) * 6
+    """Return the banner as rows of ``(text, color-key)`` runs (shaded + drop-shadowed)."""
+    height = 5 + 2  # blank top row, 5 glyph rows, 1 bottom row for the shadow
+    width = _MARGIN + len(_WORD) * 6 + 1  # +1 for the shadow's right offset
     chars = [[" "] * width for _ in range(height)]
     colors = [[""] * width for _ in range(height)]
 
@@ -41,13 +42,22 @@ def render() -> List[List[Run]]:
         glyph = _FONT.get(ch)
         if not glyph:
             continue
-        key = "entra" if i < _ENTRA_LEN else "bot"
+        section = "entra" if i < _ENTRA_LEN else "bot"
         base = _MARGIN + i * 6
         for r, line in enumerate(glyph):
+            color = f"{section}_hi" if r < 2 else section  # bright top two rows, deeper body
             for c, cell in enumerate(line):
                 if cell != " ":
                     chars[r + 1][base + c] = cell  # +1 for the top blank row
-                    colors[r + 1][base + c] = key
+                    colors[r + 1][base + c] = color
+
+    # Drop shadow: a dark offset copy down-and-right, only where no glyph cell lands.
+    solid = [(r, c) for r in range(height) for c in range(width) if chars[r][c] != " "]
+    for r, c in solid:
+        tr, tc = r + 1, c + 1
+        if tr < height and tc < width and chars[tr][tc] == " ":
+            chars[tr][tc] = _SHADOW
+            colors[tr][tc] = "shadow"
 
     rows: List[List[Run]] = []
     for r in range(height):

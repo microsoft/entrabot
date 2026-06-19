@@ -26,9 +26,12 @@ _CODES = {
     "bright_magenta": "95",
     "bright_cyan": "96",
     "gray": "90",
-    # ENTRABOT wordmark sections (256-color for a truer azure blue + hot pink)
+    # ENTRABOT wordmark: bright top rows ("_hi"), deeper body, and a dark drop shadow.
+    "entra_hi": "38;5;75",
     "entra": "38;5;33",
+    "bot_hi": "38;5;213",
     "bot": "38;5;205",
+    "shadow": "38;5;238",
 }
 
 
