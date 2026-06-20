@@ -35,6 +35,38 @@ pip install dist/entrabot-<ver>.whl      # or: pipx install dist/entrabot-<ver>.
 *and* provisioned creds from `~/.entrabot` (override with `$ENTRABOT_HOME`; a single `.env`
 there is enough). `entrabot` runs from any directory.
 
+## Multiple agents, one tenant + blueprint
+
+The identity chain has a shared root and a per-agent leaf, and config mirrors that split:
+
+```
+~/.entrabot/global.env       ← shared: TENANT_ID + BLUEPRINT_* + cert  (provision once)
+<dir>/.entrabot/.env         ← per-agent: AGENT_ID + AGENT_USER_* identity
+<dir>/.entrabot/harness.json ← per-agent: name + description
+```
+
+The loader layers `global.env` (base) under each agent's `.env`, so a **second agent that just
+goes by a different name reuses the tenant + blueprint + cert** — no re-init.
+
+```bash
+cd ~/projects/sales-bot && entrabot init   # asks to use this dir + a name
+```
+
+`entrabot init` works **in the current directory** (it confirms, or lets you pick another). It
+**detects an existing `global.env`**: if present it skips tenant / `az login` / prerequisites and
+provisions *only* a new Agent User under the existing blueprint (`-UseBlueprint`), writing just
+`<dir>/.entrabot/.env`. The first run (no global yet) does the full chain and **splits** the
+result into `global.env` + the per-agent `.env`. Single-tenant by design.
+
+**Coming from the original repo flow?** `entrabot migrate` lifts your existing combined `.env`
+(repo root, or pass a path) into `~/.entrabot/global.env` + the existing agent as the home
+default — no re-provisioning:
+
+```bash
+entrabot migrate                 # uses the repo-root .env
+entrabot migrate path/to/.env    # or an explicit file   (--force to overwrite)
+```
+
 **Provisioning still wants a checkout.** The platform setup scripts write a venv/`.env` into a
 project dir, so they ship only in the **sdist** (a clone-equivalent), not the lean wheel. On a
 wheel install `entrabot init` detects this and points you at a clone for the one-time

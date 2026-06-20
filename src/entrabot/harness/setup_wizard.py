@@ -1,8 +1,18 @@
 """`entrabot init` — an interactive, cross-platform setup walkthrough.
 
-Orchestrates the existing platform scripts: confirm a tenant → ``az login`` → prereqs → setup
-(provisioning) → connection test → scaffold the harness config. Gives doc links whenever a step
-needs manual attention. Designed to be run from a cloned repo (the scripts live in ``scripts/``).
+Sets up an agent **in a chosen directory**. The identity chain has a shared root and a per-agent
+leaf, so the wizard does only as much as needed:
+
+* **First time** (no global config yet): confirm a tenant → ``az login`` → prereqs → provision a
+  *new chain* (Blueprint + cert + Agent) → split the result into a shared ``~/.entrabot/global.env``
+  (tenant + blueprint) and this directory's per-agent ``.env``.
+* **Adding an agent** (global config exists): skip tenant/az/prereqs entirely and provision just a
+  new Agent User **under the existing Blueprint** (reusing tenant + cert), writing only this
+  directory's per-agent ``.env``.
+
+So a second agent that "goes by a different name" is seconds, not the full walkthrough. Provisioning
+runs the platform scripts under ``scripts/`` (a clone / unpacked sdist); a lean wheel degrades to
+"clone to provision" with links, while the runtime stays repo-independent.
 """
 
 from __future__ import annotations
@@ -10,12 +20,14 @@ from __future__ import annotations
 import getpass
 import os
 import platform
+import re
 import subprocess
 import sys
 from typing import List, Optional
 
 from . import ansi
 from . import config as cfgmod
+from . import globalcfg
 from . import resources
 from . import scaffold
 from .config import HarnessConfig
@@ -39,13 +51,27 @@ def _scripts_dir() -> Optional[str]:
     return resources.scripts_dir()
 
 
+def _clone_root() -> str:
+    """Where the setup scripts write their combined ``.env`` (the scripts' parent dir)."""
+    sd = _scripts_dir()
+    return os.path.dirname(sd) if sd else repo_root()
+
+
 def _say(msg: str) -> None:
     print(msg)
 
 
-def _step(n: int, total: int, title: str) -> None:
-    print()
-    print(ansi.cyan(ansi.bold(f"═══ Step {n}/{total} — {title}")))
+class _Stepper:
+    """Numbers steps as we go, since the reuse path has fewer of them."""
+
+    def __init__(self, total: int) -> None:
+        self.n = 0
+        self.total = total
+
+    def __call__(self, title: str) -> None:
+        self.n += 1
+        print()
+        print(ansi.cyan(ansi.bold(f"═══ Step {self.n}/{self.total} — {title}")))
 
 
 def _ask(prompt: str, default: str = "") -> str:
@@ -93,13 +119,27 @@ def _provisioning_available() -> bool:
     return _scripts_dir() is not None
 
 
-# ---- the steps ---------------------------------------------------------------------------
 def _platform() -> str:
     if os.name == "nt":
         return "windows"
     if sys.platform == "darwin":
         return "macos"
     return "linux"
+
+
+def _derive_suffix(name: str) -> str:
+    """A UPN-safe suffix from the agent name (lowercase alnum, e.g. 'Sales Bot' → 'salesbot')."""
+    s = re.sub(r"[^a-z0-9]", "", name.lower())
+    return s[:20] or "agent"
+
+
+# ---- steps -------------------------------------------------------------------------------
+def _choose_directory(default_root: str) -> str:
+    _say("  An agent's config (its identity + name) lives in a .entrabot/ folder in a directory.")
+    if _yes(f"Set up this agent in {default_root}?", default=True):
+        return default_root
+    p = _ask("Directory for this agent", default=default_root)
+    return os.path.abspath(os.path.expanduser(p))
 
 
 def _az_login() -> bool:
@@ -145,19 +185,63 @@ def _run_prereqs(plat: str) -> bool:
     return _yes("Prerequisites installed?", default=True)
 
 
-def _run_setup(plat: str, upn_suffix: str) -> bool:
-    _say("  provisions the Entra Agent Identity, certificate, license, Graph grants, and .env.")
-    if plat == "windows":
-        rc = _run(_ps("setup-windows.ps1", "-NewChain", "-UpnSuffix", upn_suffix))
+def _run_setup(plat: str, suffix: str, reuse: bool) -> bool:
+    if reuse:
+        appid = globalcfg.blueprint_app_id()
+        _say(f"  provisioning a new Agent User under the existing Blueprint ({appid}).")
+        if plat == "windows":
+            cmd = _ps("setup-windows.ps1", "-UseBlueprint", appid, "-UpnSuffix", suffix)
+        else:
+            cmd = _sh("setup.sh", f"--use-blueprint={appid}", f"--with-upn-suffix={suffix}")
     else:
-        rc = _run(_sh("setup.sh", "--new", f"--with-upn-suffix={upn_suffix}"))
+        _say("  provisioning a new chain: Blueprint, certificate, Agent Identity + User, grants, license.")
+        if plat == "windows":
+            cmd = _ps("setup-windows.ps1", "-NewChain", "-UpnSuffix", suffix)
+        else:
+            cmd = _sh("setup.sh", "--new", f"--with-upn-suffix={suffix}")
+    rc = _run(cmd)
     if rc != 0:
         _say(ansi.red(f"  setup failed (exit {rc}). See {LINKS['troubleshoot']}"))
     return rc == 0
 
 
-def _connection_test() -> bool:
-    _say("  acquiring an Agent-User token via the three-hop flow…")
+def _persist_split(root: str, name: str) -> bool:
+    """Read the combined ``.env`` the setup script just wrote, split it into the shared global
+    config (written once) and this directory's per-agent ``.env``, and apply both to the current
+    process for the connection test. Returns True if an agent identity was captured."""
+    generated = globalcfg.read_env(os.path.join(_clone_root(), ".env"))
+    glob, agent = globalcfg.split(generated)
+    if not agent.get("ENTRABOT_AGENT_USER_UPN"):
+        _say(ansi.red("  couldn't read the provisioned agent identity from the generated .env."))
+        return False
+
+    if not globalcfg.global_exists() and glob:
+        globalcfg.write_env(
+            globalcfg.global_env_path(),
+            glob,
+            header="ENTRABOT global config — shared tenant + Blueprint (provision once).\n"
+            "All agents on this device reuse these. Do not commit.",
+        )
+        _say(ansi.green(f"  ✓ wrote shared global config → {globalcfg.global_env_path()}"))
+    else:
+        _say(ansi.dim(f"  reusing existing global config at {globalcfg.global_env_path()}"))
+
+    agent_path = globalcfg.agent_env_path(root)
+    globalcfg.write_env(
+        agent_path,
+        agent,
+        header=f"ENTRABOT agent identity for '{name}'. Reuses the global Blueprint. Do not commit.",
+    )
+    _say(ansi.green(f"  ✓ wrote agent identity → {agent_path}"))
+
+    # apply to the current process so the connection test sees the new agent
+    for k, v in {**glob, **agent}.items():
+        os.environ[k] = v
+    return True
+
+
+def _connection_test(upn: str) -> bool:
+    _say(f"  acquiring an Agent-User token for {upn} via the three-hop flow…")
     try:
         from entrabot.config import get_config
         from entrabot.tools.teams import acquire_agent_user_token
@@ -171,61 +255,75 @@ def _connection_test() -> bool:
         return False
 
 
-def _scaffold_config(root: str) -> None:
+def _scaffold_config(root: str, name: str) -> None:
     if cfgmod.exists(root):
-        _say(ansi.dim(f"  config already present at {cfgmod.config_path(root)}"))
+        _say(ansi.dim(f"  harness config already present at {cfgmod.config_path(root)}"))
         return
-    name = _ask("Name this ENTRABOT agent", default="entrabot")
     cfg = HarnessConfig(name=name, description=f"{name}, an ENTRABOT agent reachable on Microsoft Teams.")
     scaffold.bootstrap(root, cfg)
     _say(ansi.green(f"  ✓ wrote {cfgmod.config_path(root)}"))
 
 
 def run_init(root: str) -> bool:
-    """Run the full walkthrough. Returns True if everything is set up + verified."""
+    """Run the walkthrough for an agent rooted at ``root``. Returns True if set up + verified."""
     plat = _platform()
-    print(ansi.bold(ansi.cyan("\nENTRABOT setup")) + ansi.dim(f"  ({plat}; config → {os.path.join(root, '.entrabot')})"))
+    print(ansi.bold(ansi.cyan("\nENTRABOT setup")) + ansi.dim(f"  ({plat})"))
 
-    _step(1, 6, "Tenant")
-    _say("  You need an Entra tenant where you can create app registrations (a test tenant is ideal).")
-    if not _yes("Do you have a tenant to use?", default=True):
-        _say(ansi.yellow(f"  Get a free test tenant: {LINKS['tenant']}"))
-        _say("  Re-run `entrabot init` once you have one.")
-        return False
+    # Directory + name (always asked).
+    root = _choose_directory(root)
+    default_name = os.path.basename(root.rstrip("/\\")) or "entrabot"
+    name = _ask("Name this agent (its Teams display name)", default=default_name)
+
+    reuse = globalcfg.global_exists()
+    step = _Stepper(total=3 if reuse else 6)
+
+    if reuse:
+        g = globalcfg.read_global()
+        _say(ansi.green(
+            f"\n  Found global config: tenant {g.get('ENTRABOT_TENANT_ID')} · "
+            f"Blueprint {g.get('ENTRABOT_BLUEPRINT_APP_ID')}"))
+        _say(ansi.dim("  Reusing it — skipping tenant, sign-in, and prerequisites."))
+    else:
+        _say(ansi.dim("\n  No global config yet — setting up the shared tenant + Blueprint first."))
+        step("Tenant")
+        _say("  You need an Entra tenant where you can create app registrations (a test tenant is ideal).")
+        if not _yes("Do you have a tenant to use?", default=True):
+            _say(ansi.yellow(f"  Get a free test tenant: {LINKS['tenant']}"))
+            _say("  Re-run `entrabot init` once you have one.")
+            return False
+        step("Azure sign-in")
+        if not _az_login():
+            return False
+        step("Prerequisites")
+        if not _run_prereqs(plat):
+            return False
 
     if not _provisioning_available():
-        # Installed from a wheel without a checkout: the provisioning scripts (which write a
-        # venv/.env into a project dir) aren't present. The runtime is repo-independent, but
-        # one-time provisioning is done from a clone.
+        # Wheel install (no scripts). The runtime is repo-independent; provisioning is one-time
+        # from a clone.
         _say(ansi.yellow("\n  Provisioning scripts aren't bundled in this install."))
         _say("  Provisioning (Entra identity, cert, .env) is a one-time step run from a clone:")
         _say(ansi.bold(f"    {LINKS['clone']}"))
-        _say(f"    cd entrabot && python -m entrabot.harness init")
-        _say(ansi.dim("  Once provisioned, copy the generated .env to "
-                      f"{os.path.join(os.path.expanduser('~'), '.entrabot', '.env')} and run `entrabot` anywhere."))
+        _say("    cd entrabot && python -m entrabot.harness init")
+        _say(ansi.dim(f"  Once provisioned, the agent config lands under {os.path.join(root, '.entrabot')}."))
         _say(f"  {LINKS['install']}")
         return False
 
-    _step(2, 6, "Azure sign-in")
-    if not _az_login():
+    step(f"Provisioning agent '{name}'")
+    suffix = _derive_suffix(name)
+    if not _run_setup(plat, suffix, reuse):
+        return False
+    if not _persist_split(root, name):
         return False
 
-    _step(3, 6, "Prerequisites")
-    if not _run_prereqs(plat):
+    step("Connection test")
+    if not _connection_test(os.environ.get("ENTRABOT_AGENT_USER_UPN", name)):
         return False
 
-    _step(4, 6, "Provisioning")
-    upn = _ask("UPN suffix for the agent user", default=getpass.getuser())
-    if not _run_setup(plat, upn):
-        return False
-
-    _step(5, 6, "Connection test")
-    if not _connection_test():
-        return False
-
-    _step(6, 6, "Harness config")
-    _scaffold_config(root)
+    step("Harness config")
+    _scaffold_config(root, name)
 
     print()
-    _say(ansi.green(ansi.bold("✓ ENTRABOT is set up and verified.")))
+    _say(ansi.green(ansi.bold(f"✓ ENTRABOT agent '{name}' is set up and verified.")))
+    _say(ansi.dim(f"  Launch it with:  cd {root} && entrabot"))
     return True

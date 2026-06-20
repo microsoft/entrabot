@@ -2,13 +2,18 @@
 
   entrabot                 start the harness (config: ./.entrabot if present, else ~/.entrabot)
   entrabot <path>          start the harness with config under <path>/.entrabot
-  entrabot init [path]     guided cross-platform setup (tenant → az login → provision → test)
+  entrabot init [path]     guided setup for an agent in this directory (asks first). Reuses the
+                           shared tenant/Blueprint if already set up; only mints a new agent.
+  entrabot migrate [.env]  lift an existing combined .env into ~/.entrabot/global.env + default agent
   entrabot doctor          check the Copilot runtime + auth + Teams token
   entrabot --version | --help
 
-Flags: --yolo/-y (allow all tools), --new/--fresh (don't resume), --interactive (not autopilot).
-Config is stored under ~/.entrabot by default; pass a path or run inside a dir with ./.entrabot
-to use that instead. ENTRABOT_CONSOLE=1 forces the plain UI.
+Flags: --yolo/-y (allow all tools), --new/--fresh (don't resume), --interactive (not autopilot),
+--force (migrate: overwrite existing global config).
+
+Config layers: ~/.entrabot/global.env (shared tenant + Blueprint) + <dir>/.entrabot/.env (per-agent
+identity). Bare `entrabot` uses ./.entrabot if present, else ~/.entrabot. ENTRABOT_CONSOLE=1 forces
+the plain UI.
 """
 
 from __future__ import annotations
@@ -73,20 +78,74 @@ def _confirm(prompt: str, default: bool = True) -> bool:
 def _cmd_init(positionals: List[str], flags: set) -> int:
     from .setup_wizard import run_init
 
-    root = _resolve_root(positionals[0] if positionals else None)
-    ok = run_init(root)
+    # init works in the current directory by default (the wizard confirms / lets you change it).
+    default_root = os.path.abspath(positionals[0]) if positionals else os.getcwd()
+    ok = run_init(default_root)
     if not ok:
         return 1
     if _confirm("Launch the harness now?", default=True):
         try:
-            return asyncio.run(_cmd_run(flags, root))
+            return asyncio.run(_cmd_run(flags, default_root))
         except KeyboardInterrupt:
             return 0
-    print(f"\nLater, run `entrabot` to launch (config under {os.path.join(root, cfgmod.CONFIG_DIR)}).")
+    print(f"\nLater, run `entrabot` from that directory to launch it.")
+    return 0
+
+
+def _cmd_migrate(positionals: List[str], flags: set) -> int:
+    """Lift an existing combined .env (the original repo flow) into the layered layout:
+    ~/.entrabot/global.env (shared tenant + Blueprint) + ~/.entrabot/.env (the existing agent
+    as the home default)."""
+    from . import globalcfg, setup_wizard
+
+    src = positionals[0] if positionals else os.path.join(setup_wizard._clone_root(), ".env")
+    env = globalcfg.read_env(src)
+    if not env:
+        print(f"No .env found at {src}. Pass the path: entrabot migrate <path-to-.env>")
+        return 1
+    glob, agent = globalcfg.split(env)
+    if not glob.get("ENTRABOT_BLUEPRINT_APP_ID") or not glob.get("ENTRABOT_TENANT_ID"):
+        print(f"{src} has no tenant/Blueprint to migrate (not a provisioned .env).")
+        return 1
+
+    gpath = globalcfg.global_env_path()
+    force = "force" in flags
+    print(f"ENTRABOT — migrate {src}\n")
+    if os.path.exists(gpath) and not force:
+        print(f"  global config already exists: {gpath}")
+        print("  (use --force to overwrite). Leaving it untouched.")
+    else:
+        globalcfg.write_env(
+            gpath, glob,
+            header="ENTRABOT global config — shared tenant + Blueprint (migrated). Do not commit.",
+        )
+        print(f"  ✓ tenant + Blueprint → {gpath}")
+
+    if agent.get("ENTRABOT_AGENT_USER_UPN"):
+        apath = globalcfg.home_agent_env_path()
+        if os.path.exists(apath) and not force:
+            print(f"  default agent already exists: {apath} (use --force to overwrite).")
+        else:
+            globalcfg.write_env(
+                apath, agent,
+                header="ENTRABOT default agent identity (migrated). Do not commit.",
+            )
+            print(f"  ✓ existing agent ({agent['ENTRABOT_AGENT_USER_UPN']}) → {apath}")
+    print("\n  Done. `entrabot` (from home) runs the migrated agent; `entrabot init` in any other")
+    print("  directory adds a new agent reusing this tenant + Blueprint.")
     return 0
 
 
 async def _cmd_run(flags: set, root: str) -> int:
+    # Layer this agent's identity (root/.entrabot/.env) over the global tenant/blueprint base
+    # before anything reads creds (token provider, self_id).
+    try:
+        from entrabot import config as entracfg
+
+        entracfg.apply_agent_env(root)
+    except Exception:
+        pass
+
     cfg = cfgmod.try_load(root)
     if cfg is None:
         # Just-run-it: scaffold a sensible default config rather than erroring.
@@ -173,6 +232,8 @@ def main(argv: List[str] | None = None) -> int:
     cmd = positionals[0] if positionals else None
     if cmd == "init":
         return _cmd_init(positionals[1:], flags)
+    if cmd == "migrate":
+        return _cmd_migrate(positionals[1:], flags)
     if cmd == "doctor":
         return asyncio.run(_cmd_doctor(_resolve_root(positionals[1] if len(positionals) > 1 else None)))
 

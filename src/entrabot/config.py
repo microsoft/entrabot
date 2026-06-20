@@ -119,44 +119,62 @@ def check_legacy_data_dir(*, home: Path | None = None) -> None:
         )
 
 
-def _dotenv_candidates() -> "list[Path]":
-    """`.env` locations in precedence order (first found wins, env vars never overwritten).
+def _entrabot_home() -> Path:
+    home = os.environ.get("ENTRABOT_HOME") or os.path.join(os.path.expanduser("~"), ".entrabot")
+    return Path(home)
 
-    Repo-independent: a wheel-installed bot keeps its provisioned creds under ``~/.entrabot``
-    (or ``$ENTRABOT_HOME``), so the runtime works with no clone. A cloned repo still uses its
-    own root ``.env``. ``$ENTRABOT_ENV_FILE`` overrides everything."""
+
+def _dotenv_candidates() -> "list[Path]":
+    """Per-agent ``.env`` locations in precedence order (first found wins).
+
+    Repo-independent: a wheel-installed bot keeps its creds under ``~/.entrabot`` (or
+    ``$ENTRABOT_HOME``), so the runtime works with no clone. A cloned repo still uses its own
+    root ``.env`` (a combined file — fine, it just supplies global keys too).
+    ``$ENTRABOT_ENV_FILE`` overrides everything."""
     out = []
     explicit = os.environ.get("ENTRABOT_ENV_FILE")
     if explicit:
         out.append(Path(explicit).expanduser())
     out.append(Path(__file__).resolve().parents[2] / ".env")  # cloned repo root
-    home = os.environ.get("ENTRABOT_HOME") or os.path.join(os.path.expanduser("~"), ".entrabot")
-    out.append(Path(home) / ".env")  # home config dir (wheel install)
+    out.append(_entrabot_home() / ".env")  # home config dir (default agent / wheel install)
     out.append(Path.cwd() / ".entrabot" / ".env")  # per-project config dir
     return out
 
 
-def _load_dotenv() -> None:
-    """Best-effort load of the first ``.env`` found across the candidate locations."""
-    for env_path in _dotenv_candidates():
-        try:
-            if not env_path.is_file():
-                continue
-        except OSError:
+def _overlay(env_path: Path, *, force: bool = False) -> bool:
+    """Load KEY=VALUE pairs from ``env_path`` into ``os.environ``. ``force`` overwrites existing
+    values; otherwise pre-existing env vars win. Returns True if the file was read."""
+    try:
+        if not env_path.is_file():
+            return False
+        text = env_path.read_text()
+    except OSError:
+        return False
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
             continue
-        for line in env_path.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key = key.strip()
-            value = value.strip()
-            # Don't overwrite values already in the environment
-            if key not in os.environ:
-                os.environ[key] = value
-        return  # first file wins
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if force or key not in os.environ:
+            os.environ[key] = value
+    return True
+
+
+def _load_dotenv() -> None:
+    """Layer config: the shared global base (tenant + blueprint), then the first per-agent
+    ``.env`` found. The two are disjoint, so order only matters when a legacy combined file is
+    present — in which case the global base loads first and the combined file fills the rest."""
+    _overlay(_entrabot_home() / "global.env")  # shared tenant/blueprint root (if established)
+    for env_path in _dotenv_candidates():
+        if _overlay(env_path):
+            break  # first per-agent file wins
+
+
+def apply_agent_env(root: str) -> bool:
+    """Overlay ``<root>/.entrabot/.env`` for an explicitly chosen agent, overriding any ambient
+    agent identity already loaded. Called by the harness once it has resolved its root."""
+    return _overlay(Path(root) / ".entrabot" / ".env", force=True)
 
 
 # Load .env on first import so all downstream code sees the values.
