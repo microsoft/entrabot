@@ -35,6 +35,8 @@ NEW_CHAIN=false
 USE_BLUEPRINT=""
 UPN_SUFFIX=""
 AGENT_USER_UPN=""
+STATE_FILE_PATH=".entrabot-state.json"
+ENV_FILE_PATH=".env"
 WITH_STORAGE_ACCOUNT=""
 WITH_CONTAINER=""
 CREATE_NEW_STORAGE=false
@@ -88,6 +90,12 @@ for arg in "$@"; do
             ;;
         --agent-user-upn=*)
             AGENT_USER_UPN="${arg#--agent-user-upn=}"
+            ;;
+        --state-file=*)
+            STATE_FILE_PATH="${arg#--state-file=}"
+            ;;
+        --env-file=*)
+            ENV_FILE_PATH="${arg#--env-file=}"
             ;;
         --with-storage-account=*)
             WITH_STORAGE_ACCOUNT="${arg#--with-storage-account=}"
@@ -148,14 +156,16 @@ if [ "$SHOW_HELP" = true ]; then
     echo "Options:"
     echo ""
     echo "Identity mode (one required):"
-    echo "  --new                  Create a completely new Agent Identity chain."
-    echo "                         Provisions fresh Blueprint, Agent Identity, Agent User."
-    echo "                         The existing chain is NOT affected."
+    echo "  --new                  Create a fresh Agent Identity + Agent User."
+    echo "                         By default this also provisions a fresh Blueprint."
+    echo "                         Pair with --use-blueprint=APP_ID to create a fresh"
+    echo "                         Agent Identity/User under an existing Blueprint."
     echo "  --use-blueprint=ID     Attach to an existing Blueprint by App ID."
-    echo "                         Generates a new cert for this machine and adds it"
-    echo "                         to the Blueprint. Reuses existing Agent Identity"
-    echo "                         and Agent User. Use when switching machines, OR"
-    echo "                         when switching this machine to a different Blueprint"
+    echo "                         With --new: create a fresh Agent Identity/User"
+    echo "                         under that existing Blueprint."
+    echo "                         Without --new: reuse the existing Agent Identity"
+    echo "                         and Agent User under that Blueprint. Also handles"
+    echo "                         switching this machine to a different Blueprint"
     echo "                         (the stale Agent Identity / User / cert thumbprint"
     echo "                         are wiped from local state so create_entra_agent_ids.py"
     echo "                         rediscovers everything under the new Blueprint)."
@@ -170,6 +180,11 @@ if [ "$SHOW_HELP" = true ]; then
     echo "                         selects an existing Agent User to reuse; with"
     echo "                         --new, creates exactly that UPN, e.g."
     echo "                         entrabot-agent-sati-agent@yourtenant.onmicrosoft.com."
+    echo "  --state-file=PATH      Write provisioning state to PATH instead of"
+    echo "                         ./.entrabot-state.json. Useful for keeping a"
+    echo "                         test Agent Identity separate from production."
+    echo "  --env-file=PATH        Write environment config to PATH instead of"
+    echo "                         ./.env. Useful for parallel prod/test setups."
     echo "  --switch-user          Sign in as a different user before setup."
     echo "                         The new user becomes the agent's owner and sponsor."
     echo "  --teams-user=EMAIL     Set a different user as the Teams chat recipient."
@@ -262,6 +277,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
+STATE_FILE="$STATE_FILE_PATH"
+ENV_FILE="$ENV_FILE_PATH"
+if [[ "$STATE_FILE" != /* ]]; then
+    STATE_FILE="$PROJECT_ROOT/$STATE_FILE"
+fi
+if [[ "$ENV_FILE" != /* ]]; then
+    ENV_FILE="$PROJECT_ROOT/$ENV_FILE"
+fi
+export ENTRABOT_STATE_FILE="$STATE_FILE"
+export ENTRABOT_ENV_FILE="$ENV_FILE"
+
 echo -e "${GREEN}╔══════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║   EntraBot Identity Research — Setup         ║${NC}"
 echo -e "${GREEN}║   (Agent User — no OBO, no device-code flow) ║${NC}"
@@ -278,8 +304,8 @@ if [ "$DIAGNOSE" = true ]; then
     fi
     set +e
     # shellcheck disable=SC1091
-    if [ -f "$PROJECT_ROOT/.env" ]; then
-        set -a; . "$PROJECT_ROOT/.env"; set +a
+    if [ -f "$ENV_FILE" ]; then
+        set -a; . "$ENV_FILE"; set +a
     fi
     "$PROJECT_ROOT/.venv/bin/python" - <<PY
 import sys
@@ -289,12 +315,11 @@ from entrabot.config import EntraBotConfig
 from entrabot.preflight import format_report, overall_exit_code, run_diagnostics
 
 config = EntraBotConfig.from_env()
-project_root = Path("$PROJECT_ROOT")
 checks = run_diagnostics(
     config,
-    state_path=project_root / ".entrabot-state.json",
-    expected_binary=project_root / ".venv" / "bin" / "entrabot-mcp",
-    claude_mcp_path=project_root / ".mcp.json",
+    state_path=Path(r"$STATE_FILE"),
+    expected_binary=Path(r"$PROJECT_ROOT") / ".venv" / "bin" / "entrabot-mcp",
+    claude_mcp_path=Path(r"$PROJECT_ROOT") / ".mcp.json",
     copilot_mcp_path=Path.home() / ".copilot" / "mcp-config.json",
 )
 print(format_report(checks, color=sys.stdout.isatty()))
@@ -311,13 +336,13 @@ PY
     exit "$DIAG_EXIT"
 fi
 
-# ── Helper: read value from .entrabot-state.json ───────────────────────────
+# ── Helper: read value from state file ─────────────────────────────────────
 
 read_state() {
     local key="$1"
     "$PYTHON" -c "
 import json, pathlib, sys
-state_file = pathlib.Path('$PROJECT_ROOT/.entrabot-state.json')
+state_file = pathlib.Path(r'$STATE_FILE')
 if not state_file.is_file():
     sys.exit(0)
 data = json.loads(state_file.read_text())
@@ -694,20 +719,13 @@ fi
 success "azure-identity and requests available"
 
 # ── Validate identity mode ────────────────────────────────────────────────
-if [ "$NEW_CHAIN" = true ] && [ -n "$USE_BLUEPRINT" ]; then
-    echo "ERROR: --new and --use-blueprint are mutually exclusive." >&2
-    echo "  --new creates a fresh identity chain." >&2
-    echo "  --use-blueprint attaches to an existing one." >&2
-    exit 1
-fi
-
 if [ "$NEW_CHAIN" = false ] && [ -z "$USE_BLUEPRINT" ]; then
     echo ""
     echo "ERROR: No identity mode specified." >&2
     echo "" >&2
     echo "  Choose one:" >&2
-    echo "    --new --with-upn-suffix=NAME    Create a fresh identity chain" >&2
-    echo "    --use-blueprint=APP_ID          Attach to an existing Blueprint" >&2
+    echo "    --new [--use-blueprint=APP_ID]  Create a fresh Agent Identity/User" >&2
+    echo "    --use-blueprint=APP_ID          Reuse an existing Blueprint chain" >&2
     echo "" >&2
     exit 1
 fi
@@ -725,7 +743,6 @@ fi
 #       fresh discovery against the new Blueprint. Keep PROVISIONER_* (the
 #       helper app is machine-scoped, unaffected by the switch).
 if [ -n "$USE_BLUEPRINT" ] && [ "$NEW_CHAIN" = false ]; then
-    STATE_FILE="$PROJECT_ROOT/.entrabot-state.json"
     CURRENT_BP=$(read_state "BLUEPRINT_APP_ID")
 
     if [ -n "$CURRENT_BP" ] && [ "$CURRENT_BP" != "$USE_BLUEPRINT" ]; then
@@ -738,7 +755,7 @@ if [ -n "$USE_BLUEPRINT" ] && [ "$NEW_CHAIN" = false ]; then
         echo -e "        'az ad app credential delete' if you want a clean break.${NC}"
         "$SCRIPT_PYTHON" -c "
 import json, pathlib
-sf = pathlib.Path('$STATE_FILE')
+sf = pathlib.Path(r'$STATE_FILE')
 data = json.loads(sf.read_text()) if sf.is_file() else {}
 # Keep provisioner app + tenant; drop everything tied to the old chain
 keep = {
@@ -754,7 +771,7 @@ print('  Cleared stale Blueprint/Agent/User state (kept Provisioner + tenant)')
         # Fresh machine or re-run with the same ID — just record it.
         "$SCRIPT_PYTHON" -c "
 import json, pathlib
-sf = pathlib.Path('$STATE_FILE')
+sf = pathlib.Path(r'$STATE_FILE')
 data = json.loads(sf.read_text()) if sf.is_file() else {}
 data['BLUEPRINT_APP_ID'] = '$USE_BLUEPRINT'
 sf.write_text(json.dumps(data, indent=2))
@@ -768,13 +785,13 @@ sf.write_text(json.dumps(data, indent=2))
         export _ENTRABOT_UPN_SUFFIX="$UPN_SUFFIX"
         echo -e "  ${GREEN}Using existing Agent User suffix: ${UPN_SUFFIX}${NC}"
     fi
+    export ENTRABOT_PIN_BLUEPRINT_APP_ID="$USE_BLUEPRINT"
     # From here create_entra_agent_ids.py discovers Agent Identity + Agent User
     # under the chosen Blueprint. Step 6 generates/reuses a cert as appropriate.
 fi
 
 # ── Handle --new: back up state, force fresh identity chain ───────────────
 if [ "$NEW_CHAIN" = true ]; then
-    STATE_FILE="$PROJECT_ROOT/.entrabot-state.json"
     if [ -f "$STATE_FILE" ]; then
         BACKUP="$STATE_FILE.bak.$(date +%Y%m%d-%H%M%S)"
         cp "$STATE_FILE" "$BACKUP"
@@ -782,13 +799,20 @@ if [ "$NEW_CHAIN" = true ]; then
         # Clear identity keys but keep the provisioner app (it can be reused)
         "$SCRIPT_PYTHON" -c "
 import json, pathlib
-sf = pathlib.Path('$STATE_FILE')
+sf = pathlib.Path(r'$STATE_FILE')
 data = json.loads(sf.read_text()) if sf.is_file() else {}
 # Keep provisioner app — it's a helper, not part of the agent identity
-keep = {k: v for k, v in data.items() if k.startswith('PROVISIONER')}
+keep = {k: v for k, v in data.items() if k.startswith('PROVISIONER') or k == 'TENANT_ID'}
+if '$USE_BLUEPRINT':
+    keep['BLUEPRINT_APP_ID'] = '$USE_BLUEPRINT'
 sf.write_text(json.dumps(keep, indent=2))
 print('  Cleared identity state (kept provisioner app)')
 "
+    fi
+    if [ -n "$USE_BLUEPRINT" ]; then
+        export ENTRABOT_REUSE_BLUEPRINT=1
+        export ENTRABOT_PIN_BLUEPRINT_APP_ID="$USE_BLUEPRINT"
+        echo -e "  ${YELLOW}--new: will create a fresh Agent Identity/User under Blueprint '${USE_BLUEPRINT}'${NC}"
     fi
     # Resolve UPN — explicit UPN wins; otherwise suffix comes from flag or prompt.
     # Example: ./scripts/setup.sh --new --agent-user-upn=entrabot-agent@yourtenant.onmicrosoft.com
@@ -913,7 +937,7 @@ if [ -z "$CERT_THUMBPRINT" ]; then
         CERT_THUMBPRINT="$RECOVERED_THUMBPRINT"
         "$PYTHON" -c "
 import json, pathlib
-state_file = pathlib.Path('$PROJECT_ROOT/.entrabot-state.json')
+state_file = pathlib.Path(r'$STATE_FILE')
 data = json.loads(state_file.read_text()) if state_file.is_file() else {}
 data['BLUEPRINT_CERT_THUMBPRINT'] = '$CERT_THUMBPRINT'
 data.pop('BLUEPRINT_SECRET', None)
@@ -1048,7 +1072,7 @@ if resp.status_code >= 400:
     sys.exit(1)
 
 # --- Persist thumbprint in state file ---
-state_file = pathlib.Path('$PROJECT_ROOT/.entrabot-state.json')
+state_file = pathlib.Path(r'$STATE_FILE')
 data = json.loads(state_file.read_text()) if state_file.is_file() else {}
 data['BLUEPRINT_CERT_THUMBPRINT'] = thumbprint
 data.pop('BLUEPRINT_SECRET', None)  # clean up old secret if present
@@ -1092,7 +1116,8 @@ pip install --quiet --upgrade pip setuptools wheel
 pip install --quiet -e ".[dev]"
 success "Installed dependencies (including dev)"
 
-cat > .env << EOF
+mkdir -p "$(dirname "$ENV_FILE")"
+cat > "$ENV_FILE" << EOF
 # EntraBot Identity Research — generated by scripts/setup.sh
 # Uses Agent User (three-hop flow) with certificate auth — no secrets on disk
 # Private key stored in OS credential store (Keychain/TPM/Keyring)
@@ -1117,16 +1142,16 @@ ENTRABOT_PROVISIONER_APP_ID=$PROV_CLIENT_ID
 ENTRABOT_LOG_LEVEL=INFO
 EOF
 
-chmod 600 .env
-success ".env file created (chmod 600)"
+chmod 600 "$ENV_FILE"
+success "Env file created: $ENV_FILE (chmod 600)"
 
 # ════════════════════════════════════════════════════════════════════════════
 # Step 7b: Azure Blob Storage provisioning (ADR-005)
 # ════════════════════════════════════════════════════════════════════════════
 if [ "$KEEP_MEMORY_LOCAL" = true ]; then
-    echo "" >> .env
-    echo "# ADR-005: keep agent memory local (skip cloud sync)" >> .env
-    echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> .env
+    echo "" >> "$ENV_FILE"
+    echo "# ADR-005: keep agent memory local (skip cloud sync)" >> "$ENV_FILE"
+    echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> "$ENV_FILE"
     success "Memory mode: LOCAL (--keep-memory-local set)"
 elif [ -z "${AGENT_USER_ID:-}" ]; then
     warn "Skipping blob storage — no Agent User to scope RBAC against"
@@ -1159,21 +1184,21 @@ else
 
     if [ $PROVISION_RC -ne 0 ]; then
         warn "Blob storage provisioning failed — falling back to local-only memory"
-        echo "" >> .env
-        echo "# ADR-005: provisioning failed, using local-only memory" >> .env
-        echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> .env
+        echo "" >> "$ENV_FILE"
+        echo "# ADR-005: provisioning failed, using local-only memory" >> "$ENV_FILE"
+        echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> "$ENV_FILE"
     else
         BLOB_ENDPOINT=$(echo "$PROVISION_STDOUT" | grep '^BLOB_ENDPOINT=' | cut -d= -f2-)
         BLOB_CONTAINER=$(echo "$PROVISION_STDOUT" | grep '^BLOB_CONTAINER=' | cut -d= -f2-)
         if [ -z "$BLOB_ENDPOINT" ] || [ -z "$BLOB_CONTAINER" ]; then
             warn "Provisioner returned no endpoint/container — using local-only memory"
-            echo "" >> .env
-            echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> .env
+            echo "" >> "$ENV_FILE"
+            echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> "$ENV_FILE"
         else
-            echo "" >> .env
-            echo "# ADR-005: cloud-hosted agent memory (Azure Blob Storage)" >> .env
-            echo "ENTRABOT_BLOB_ENDPOINT=$BLOB_ENDPOINT" >> .env
-            echo "ENTRABOT_BLOB_CONTAINER=$BLOB_CONTAINER" >> .env
+            echo "" >> "$ENV_FILE"
+            echo "# ADR-005: cloud-hosted agent memory (Azure Blob Storage)" >> "$ENV_FILE"
+            echo "ENTRABOT_BLOB_ENDPOINT=$BLOB_ENDPOINT" >> "$ENV_FILE"
+            echo "ENTRABOT_BLOB_CONTAINER=$BLOB_CONTAINER" >> "$ENV_FILE"
             success "Blob storage ready: $BLOB_ENDPOINT/$BLOB_CONTAINER"
 
             # Migration prompt — upload existing local data + Claude Code
@@ -1283,11 +1308,11 @@ step 8 "Setup complete — summary"
 SMOKE_FAILED=false
 if [ "$SKIP_SMOKE" = true ]; then
     warn "Smoke test skipped (--skip-smoke)"
-elif [ -d "$PROJECT_ROOT/.venv" ] && [ -f "$PROJECT_ROOT/.env" ]; then
+elif [ -d "$PROJECT_ROOT/.venv" ] && [ -f "$ENV_FILE" ]; then
     echo ""
     echo -e "  ${BLUE}Running smoke test (token + Graph identity + Teams scope)...${NC}"
     set +e
-    set -a; . "$PROJECT_ROOT/.env"; set +a
+    set -a; . "$ENV_FILE"; set +a
     "$PROJECT_ROOT/.venv/bin/python" - <<'PY'
 import sys
 from entrabot.config import EntraBotConfig

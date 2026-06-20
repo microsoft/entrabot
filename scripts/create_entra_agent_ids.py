@@ -29,6 +29,8 @@ import requests
 # When ENTRABOT_NEW_CHAIN=1, skip all find_existing_* lookups and create fresh.
 # Set by setup.sh --new to force a new identity chain.
 _FORCE_NEW = os.environ.get("ENTRABOT_NEW_CHAIN") == "1"
+_REUSE_BLUEPRINT = os.environ.get("ENTRABOT_REUSE_BLUEPRINT") == "1"
+_PINNED_BLUEPRINT_APP_ID = os.environ.get("ENTRABOT_PIN_BLUEPRINT_APP_ID", "").strip()
 _ASSIGN_TEAMS_LICENSE = os.environ.get("ENTRABOT_ASSIGN_TEAMS_LICENSE", "1") == "1"
 _ASSIGN_WORK_IQ_LICENSE = os.environ.get("ENTRABOT_ASSIGN_WORK_IQ_LICENSE") == "1"
 
@@ -95,6 +97,21 @@ def find_existing_blueprint(token: str) -> dict | None:
     return None
 
 
+def find_blueprint_by_app_id(token: str, app_id: str) -> dict | None:
+    """Find a Blueprint by exact appId, without any display-name fallback."""
+    resp = graph_request(
+        "GET",
+        f"/applications?$filter=appId eq '{odata_escape(app_id)}'",
+        token,
+    )
+    if resp.status_code != 200:
+        return None
+    values = resp.json().get("value", [])
+    if values:
+        return values[0]
+    return None
+
+
 def ensure_blueprint_principal(token: str, app_id: str) -> None:
     """Ensure the BlueprintPrincipal (SP) exists — it is NOT auto-created."""
     resp = graph_request(
@@ -133,6 +150,27 @@ def ensure_blueprint_principal(token: str, app_id: str) -> None:
 def create_blueprint(token: str) -> tuple[str, str]:
     """Create or find the Agent Identity Blueprint. Returns (app_id, object_id)."""
     print("\n--- Creating Agent Identity Blueprint ---\n")
+
+    if _PINNED_BLUEPRINT_APP_ID:
+        existing = find_blueprint_by_app_id(token, _PINNED_BLUEPRINT_APP_ID)
+        if not existing:
+            print(
+                "  ERROR: Requested Blueprint was not found: "
+                f"{_PINNED_BLUEPRINT_APP_ID}"
+            )
+            print("  Re-run setup with the correct --use-blueprint value.")
+            sys.exit(1)
+
+        app_id = existing["appId"]
+        obj_id = existing["id"]
+        mode = "[--new --use-blueprint]" if _FORCE_NEW and _REUSE_BLUEPRINT else "[use-blueprint]"
+        print(f"  {mode} Reusing Blueprint: {existing.get('displayName', BLUEPRINT_DISPLAY_NAME)}")
+        print(f"         App ID:    {app_id}")
+        print(f"         Object ID: {obj_id}")
+        set_state("BLUEPRINT_APP_ID", app_id)
+        set_state("BLUEPRINT_OBJECT_ID", obj_id)
+        ensure_blueprint_principal(token, app_id)
+        return app_id, obj_id
 
     if _FORCE_NEW:
         print("  [--new] Skipping existing Blueprint lookup — creating fresh")
