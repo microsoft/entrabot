@@ -119,9 +119,23 @@ def check_legacy_data_dir(*, home: Path | None = None) -> None:
         )
 
 
+def entrabot_home() -> Path:
+    """Home config dir for the harness (global.env + the default agent's .env).
+
+    Aligns with the platform data root so it never collides with the legacy ``~/.entrabot``
+    migration: on Windows that's ``%LOCALAPPDATA%\\entrabot`` (``~/.entrabot`` there is a *legacy*
+    location ``migrate_legacy_data_dir`` wants empty); on mac/Linux it's ``~/.entrabot``.
+    ``$ENTRABOT_HOME`` overrides."""
+    override = os.environ.get("ENTRABOT_HOME")
+    if override:
+        return Path(override)
+    if sys.platform == "win32":
+        return _windows_root()
+    return Path.home() / ".entrabot"
+
+
 def _entrabot_home() -> Path:
-    home = os.environ.get("ENTRABOT_HOME") or os.path.join(os.path.expanduser("~"), ".entrabot")
-    return Path(home)
+    return entrabot_home()
 
 
 def _dotenv_candidates() -> "list[Path]":

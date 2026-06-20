@@ -309,8 +309,22 @@ def run_init(root: str) -> bool:
         _say(f"  {LINKS['install']}")
         return False
 
-    step(f"Provisioning agent '{name}'")
     suffix = _derive_suffix(name)
+    if reuse:
+        # The underlying provisioning scripts converge to ONE Agent User per device:
+        # create_agent_user() reuses the first user under the host's Agent Identity, so they
+        # can't yet mint a distinct second Teams identity. Don't run the full setup-windows.ps1
+        # here — it would rebuild the venv (locking the running entrabot.exe) and rewrite the
+        # repo .env. Stop honestly until a focused "add Agent User under existing Blueprint"
+        # provisioning step exists.
+        _say(ansi.yellow(f"\n  Adding a distinct second agent ('{name}') isn't wired up yet."))
+        _say("  Reusing the Blueprint to mint a NEW Agent User needs a dedicated provisioning")
+        _say("  step — the current scripts converge to a single Agent User per device, so they'd")
+        _say(ansi.dim("  just re-point at the existing agent. The global-config split is in place;"))
+        _say(ansi.dim(f"  the provisioning piece for '{name}' ({suffix}@…) is the remaining work."))
+        return False
+
+    step(f"Provisioning agent '{name}'")
     if not _run_setup(plat, suffix, reuse):
         return False
     if not _persist_split(root, name):

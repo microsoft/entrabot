@@ -41,8 +41,12 @@ AGENT_ENV_FILENAME = ".env"
 
 
 def global_dir() -> str:
-    """Directory holding the shared global config (`$ENTRABOT_HOME` or `~/.entrabot`)."""
-    return os.environ.get("ENTRABOT_HOME") or os.path.join(os.path.expanduser("~"), ".entrabot")
+    """Directory holding the shared global config. Delegates to the core `entrabot_home()` so it
+    matches the platform data root (`%LOCALAPPDATA%\\entrabot` on Windows, `~/.entrabot` else,
+    `$ENTRABOT_HOME` override) and never collides with the legacy `~/.entrabot` migration."""
+    from entrabot import config as _config
+
+    return str(_config.entrabot_home())
 
 
 def global_env_path() -> str:
