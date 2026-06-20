@@ -170,6 +170,32 @@ function Step($n, $msg) {
 }
 function Success($msg) { Write-Host "  ✓ $msg" -ForegroundColor Green }
 function Fail($msg)    { Write-Host "  ✗ $msg" -ForegroundColor Red; exit 1 }
+
+# Idempotent .env writer: upsert each key (replace in place, append if absent) and de-duplicate
+# ANY repeated keys (keeping the first), so re-runs never accumulate stale duplicates the way
+# Out-File/Add-Content -Append did. A $null value removes the key (e.g. switching memory modes).
+# Comments and blank lines are preserved.
+function Update-EnvFile {
+    param([string]$Path, [hashtable]$Values)
+    $existing = if (Test-Path $Path) { @(Get-Content -Path $Path) } else { @() }
+    $seen = @{}
+    $out = foreach ($line in $existing) {
+        $m = [regex]::Match($line, '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=')
+        if (-not $m.Success) { $line; continue }   # comments / blanks pass through
+        $key = $m.Groups[1].Value
+        if ($seen.ContainsKey($key)) { continue }   # drop any duplicate of an already-emitted key
+        $seen[$key] = $true
+        if ($Values.ContainsKey($key)) {
+            if ($null -ne $Values[$key]) { "$key=$($Values[$key])" }  # replace (or drop if null)
+        } else {
+            $line                                    # keep unrelated keys as-is
+        }
+    }
+    foreach ($k in $Values.Keys) {                   # append keys not already in the file
+        if (-not $seen.ContainsKey($k) -and $null -ne $Values[$k]) { $out += "$k=$($Values[$k])" }
+    }
+    Set-Content -Path $Path -Value $out -Encoding utf8
+}
 function Ensure-A365ToolingManifest {
     $manifestPath = Join-Path $ProjectRoot 'ToolingManifest.json'
     if (-not (Test-Path $manifestPath)) {
@@ -401,12 +427,12 @@ Success "Cert generated — thumbprint=$thumbprint ksp=$ksp"
 Step 7 "Writing .env"
 
 $envPath = Join-Path $ProjectRoot '.env'
-@(
-    "ENTRABOT_TENANT_ID=$($account.tenantId)",
-    "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=$x5tS256",
-    "ENTRABOT_BLUEPRINT_CERT_SHA1=$thumbprint",
-    "ENTRABOT_BLUEPRINT_KSP=$ksp"
-) | Out-File -FilePath $envPath -Encoding utf8 -Append
+Update-EnvFile $envPath @{
+    ENTRABOT_TENANT_ID                 = $account.tenantId
+    ENTRABOT_BLUEPRINT_CERT_THUMBPRINT = $x5tS256
+    ENTRABOT_BLUEPRINT_CERT_SHA1       = $thumbprint
+    ENTRABOT_BLUEPRINT_KSP             = $ksp
+}
 
 # icacls :M (modify) — NOT :R (read-only). :R would self-brick: setup
 # re-runs and rotation both need to update .env.
@@ -420,14 +446,14 @@ Success ".env locked to $user (modify, per D10)"
 Step 8 "Cloud memory (Azure Blob Storage)"
 
 if (-not $UseCloudMemory) {
-    Add-Content -Path $envPath -Value ""
-    Add-Content -Path $envPath -Value "# ADR-005: keep agent memory local (skip cloud sync)"
-    Add-Content -Path $envPath -Value "ENTRABOT_KEEP_MEMORY_LOCAL=true"
+    # local memory: set the flag, clear any stale cloud keys (idempotent across mode switches)
+    Update-EnvFile $envPath @{
+        ENTRABOT_KEEP_MEMORY_LOCAL = 'true'; ENTRABOT_BLOB_ENDPOINT = $null; ENTRABOT_BLOB_CONTAINER = $null
+    }
     Success "Memory mode: LOCAL (pass -UseCloudMemory to opt in)"
 } elseif (-not $AgentUserId) {
     Write-Host "  ⚠ Skipping blob storage — no Agent User ID found in state" -ForegroundColor Yellow
-    Add-Content -Path $envPath -Value ""
-    Add-Content -Path $envPath -Value "ENTRABOT_KEEP_MEMORY_LOCAL=true"
+    Update-EnvFile $envPath @{ ENTRABOT_KEEP_MEMORY_LOCAL = 'true' }
 } else {
     $provArgs = @(
         '--tenant-id', $account.tenantId,
@@ -445,21 +471,19 @@ if (-not $UseCloudMemory) {
 
     if ($provRc -ne 0) {
         Write-Host "  ⚠ Blob storage provisioning failed — falling back to local-only memory" -ForegroundColor Yellow
-        Add-Content -Path $envPath -Value ""
-        Add-Content -Path $envPath -Value "# ADR-005: provisioning failed, using local-only memory"
-        Add-Content -Path $envPath -Value "ENTRABOT_KEEP_MEMORY_LOCAL=true"
+        Update-EnvFile $envPath @{ ENTRABOT_KEEP_MEMORY_LOCAL = 'true' }
     } else {
         $blobEndpoint  = ($provStdout | Select-String '^BLOB_ENDPOINT=(.+)$').Matches[0].Groups[1].Value
         $blobContainer = ($provStdout | Select-String '^BLOB_CONTAINER=(.+)$').Matches[0].Groups[1].Value
         if (-not $blobEndpoint -or -not $blobContainer) {
             Write-Host "  ⚠ Provisioner returned no endpoint/container — using local-only memory" -ForegroundColor Yellow
-            Add-Content -Path $envPath -Value ""
-            Add-Content -Path $envPath -Value "ENTRABOT_KEEP_MEMORY_LOCAL=true"
+            Update-EnvFile $envPath @{ ENTRABOT_KEEP_MEMORY_LOCAL = 'true' }
         } else {
-            Add-Content -Path $envPath -Value ""
-            Add-Content -Path $envPath -Value "# ADR-005: cloud-hosted agent memory (Azure Blob Storage)"
-            Add-Content -Path $envPath -Value "ENTRABOT_BLOB_ENDPOINT=$blobEndpoint"
-            Add-Content -Path $envPath -Value "ENTRABOT_BLOB_CONTAINER=$blobContainer"
+            # cloud memory: set blob keys, clear the local-only flag
+            Update-EnvFile $envPath @{
+                ENTRABOT_BLOB_ENDPOINT = $blobEndpoint; ENTRABOT_BLOB_CONTAINER = $blobContainer
+                ENTRABOT_KEEP_MEMORY_LOCAL = $null
+            }
             Success "Blob storage ready: $blobEndpoint/$blobContainer"
         }
     }
