@@ -119,23 +119,44 @@ def check_legacy_data_dir(*, home: Path | None = None) -> None:
         )
 
 
+def _dotenv_candidates() -> "list[Path]":
+    """`.env` locations in precedence order (first found wins, env vars never overwritten).
+
+    Repo-independent: a wheel-installed bot keeps its provisioned creds under ``~/.entrabot``
+    (or ``$ENTRABOT_HOME``), so the runtime works with no clone. A cloned repo still uses its
+    own root ``.env``. ``$ENTRABOT_ENV_FILE`` overrides everything."""
+    out = []
+    explicit = os.environ.get("ENTRABOT_ENV_FILE")
+    if explicit:
+        out.append(Path(explicit).expanduser())
+    out.append(Path(__file__).resolve().parents[2] / ".env")  # cloned repo root
+    home = os.environ.get("ENTRABOT_HOME") or os.path.join(os.path.expanduser("~"), ".entrabot")
+    out.append(Path(home) / ".env")  # home config dir (wheel install)
+    out.append(Path.cwd() / ".entrabot" / ".env")  # per-project config dir
+    return out
+
+
 def _load_dotenv() -> None:
-    """Best-effort load of ``.env`` file from the project root."""
-    env_path = Path(__file__).resolve().parents[2] / ".env"
-    if not env_path.is_file():
-        return
-    for line in env_path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
+    """Best-effort load of the first ``.env`` found across the candidate locations."""
+    for env_path in _dotenv_candidates():
+        try:
+            if not env_path.is_file():
+                continue
+        except OSError:
             continue
-        if "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip()
-        # Don't overwrite values already in the environment
-        if key not in os.environ:
-            os.environ[key] = value
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip()
+            # Don't overwrite values already in the environment
+            if key not in os.environ:
+                os.environ[key] = value
+        return  # first file wins
 
 
 # Load .env on first import so all downstream code sees the values.

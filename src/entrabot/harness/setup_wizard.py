@@ -16,15 +16,17 @@ from typing import List, Optional
 
 from . import ansi
 from . import config as cfgmod
+from . import resources
 from . import scaffold
 from .config import HarnessConfig
 
 # Doc links surfaced when a step needs manual setup.
 LINKS = {
     "tenant": "Microsoft 365 Developer Program — https://aka.ms/m365devprogram (free test tenant)",
-    "install": "Full setup instructions: INSTALL.md (in the repo root)",
+    "install": f"Full setup instructions: {resources.doc_url()}",
     "az": "Install Azure CLI: https://aka.ms/installazure",
-    "troubleshoot": "Troubleshooting: INSTALL.md § Troubleshooting",
+    "troubleshoot": f"Troubleshooting: {resources.doc_url('Troubleshooting')}",
+    "clone": f"Clone the repo to provision: git clone {resources.REPO_URL}",
 }
 
 
@@ -33,8 +35,8 @@ def repo_root() -> str:
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 
-def _scripts_dir() -> str:
-    return os.path.join(repo_root(), "scripts")
+def _scripts_dir() -> Optional[str]:
+    return resources.scripts_dir()
 
 
 def _say(msg: str) -> None:
@@ -84,6 +86,11 @@ def _ps(script: str, *args: str) -> List[str]:
 
 def _sh(script: str, *args: str) -> List[str]:
     return ["bash", os.path.join(_scripts_dir(), script), *args]
+
+
+def _provisioning_available() -> bool:
+    """The setup scripts only ship in a clone, not in a wheel install."""
+    return _scripts_dir() is not None
 
 
 # ---- the steps ---------------------------------------------------------------------------
@@ -184,6 +191,19 @@ def run_init(root: str) -> bool:
     if not _yes("Do you have a tenant to use?", default=True):
         _say(ansi.yellow(f"  Get a free test tenant: {LINKS['tenant']}"))
         _say("  Re-run `entrabot init` once you have one.")
+        return False
+
+    if not _provisioning_available():
+        # Installed from a wheel without a checkout: the provisioning scripts (which write a
+        # venv/.env into a project dir) aren't present. The runtime is repo-independent, but
+        # one-time provisioning is done from a clone.
+        _say(ansi.yellow("\n  Provisioning scripts aren't bundled in this install."))
+        _say("  Provisioning (Entra identity, cert, .env) is a one-time step run from a clone:")
+        _say(ansi.bold(f"    {LINKS['clone']}"))
+        _say(f"    cd entrabot && python -m entrabot.harness init")
+        _say(ansi.dim("  Once provisioned, copy the generated .env to "
+                      f"{os.path.join(os.path.expanduser('~'), '.entrabot', '.env')} and run `entrabot` anywhere."))
+        _say(f"  {LINKS['install']}")
         return False
 
     _step(2, 6, "Azure sign-in")

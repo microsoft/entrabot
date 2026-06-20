@@ -24,6 +24,24 @@ test), surfaces doc links when a step needs manual attention, and offers to laun
 
 (`python -m entrabot.harness …` works identically if the `entrabot` script isn't on PATH.)
 
+## Build & install the package
+
+```bash
+python -m build                          # → dist/entrabot-<ver>.whl + .tar.gz
+pip install dist/entrabot-<ver>.whl      # or: pipx install dist/entrabot-<ver>.whl
+```
+
+**The runtime is repo-independent.** A wheel install carries no clone, so it reads its config
+*and* provisioned creds from `~/.entrabot` (override with `$ENTRABOT_HOME`; a single `.env`
+there is enough). `entrabot` runs from any directory.
+
+**Provisioning still wants a checkout.** The platform setup scripts write a venv/`.env` into a
+project dir, so they ship only in the **sdist** (a clone-equivalent), not the lean wheel. On a
+wheel install `entrabot init` detects this and points you at a clone for the one-time
+provisioning, then "copy the generated `.env` to `~/.entrabot/.env`". `.env` lookup order:
+`$ENTRABOT_ENV_FILE` → cloned-repo root → `~/.entrabot/.env` (or `$ENTRABOT_HOME`) →
+`./.entrabot/.env`.
+
 - `ENTRABOT_GRAPH_TOKEN` — set to enable the Teams bridge (ingress polling + outbound).
   Without it the harness runs **console-only** (you can chat with the agent; it just won't
   listen to / post on Teams). Production should wire entrabot's three-hop token in
