@@ -83,5 +83,6 @@ exclude_lines = [
 where = ["src"]
 
 [project.scripts]
+entrabot = "entrabot.harness.cli:main"
 entrabot-mcp = "entrabot.mcp_server:main"
-entrabot-harness = "entrabot.harness.cli:main"
+entrabot-harness = "entrabot.harness.cli:main"  # alias (back-compat)

@@ -9,10 +9,20 @@ the channel/steering transport is the Teams layer that already lives in
 ## Run it
 
 ```bash
-pip install -e .            # installs the github-copilot-sdk dependency + the entry point
-entrabot-harness init my-bot "What this agent does"
-entrabot-harness            # start a session in that directory
+pip install -e .      # installs deps + the `entrabot` command
+entrabot init         # guided setup: tenant → az login → prereqs → provision → test
+entrabot              # launch the harness
 ```
+
+`entrabot init` walks through the cross-platform setup (running `scripts/prereqs-*` and
+`scripts/setup*` for your OS, `az login --allow-no-subscription`, then a three-hop connection
+test), surfaces doc links when a step needs manual attention, and offers to launch when done.
+
+**Config location:** `~/.entrabot/` by default. Pass a path (`entrabot init myagent` /
+`entrabot myagent`) to use `myagent/.entrabot/`, or run inside a directory that already has a
+`./.entrabot/` to use that one. Bare `entrabot` from anywhere uses the home config.
+
+(`python -m entrabot.harness …` works identically if the `entrabot` script isn't on PATH.)
 
 - `ENTRABOT_GRAPH_TOKEN` — set to enable the Teams bridge (ingress polling + outbound).
   Without it the harness runs **console-only** (you can chat with the agent; it just won't
