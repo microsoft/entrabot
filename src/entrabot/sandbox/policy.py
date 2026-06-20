@@ -9,6 +9,7 @@ Security model:
 """
 
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -53,6 +54,36 @@ def build_policy(policy: SandboxPolicy) -> str:
     return json.dumps(config, indent=2)
 
 
+def _normalize_for_match(path: str) -> str:
+    """Canonicalize a path for ceiling comparison (no existence requirement).
+
+    Expands ``~``, resolves symlinks where components exist, and normalizes
+    ``.``/``..`` and trailing slashes via ``os.path.realpath``. Unlike
+    ``canonicalize_paths``, this never raises on nonexistent paths — it is used
+    only for set-membership comparison, not filesystem validation.
+    """
+    return os.path.realpath(os.path.expanduser(path))
+
+
+def _path_within_ceiling(requested: str, ceiling_paths: list[str]) -> bool:
+    """Return True if ``requested`` is equal to, or a descendant of, a ceiling dir.
+
+    Comparison is on canonicalized real paths so that symlinks are resolved
+    before the containment check (preventing symlink-escape widening), and
+    differing spellings (``~``, trailing slashes, ``..``) of the same location
+    match correctly.
+    """
+    req = _normalize_for_match(requested)
+    for ceiling in ceiling_paths:
+        ceil = _normalize_for_match(ceiling)
+        if req == ceil:
+            return True
+        prefix = ceil.rstrip(os.sep) + os.sep
+        if req.startswith(prefix):
+            return True
+    return False
+
+
 def clamp_to_ceiling(
     llm_policy: SandboxPolicy,
     ceiling: SandboxPolicy,
@@ -87,12 +118,31 @@ def clamp_to_ceiling(
                 f"allowedHosts filtering not supported on {backend} backend"
             )
     
-    # Clamp paths to ceiling (only keep paths that are in ceiling)
-    ceiling_readonly = set(ceiling.readonly_paths)
-    ceiling_readwrite = set(ceiling.readwrite_paths)
-    
-    clamped_readonly = [p for p in llm_policy.readonly_paths if p in ceiling_readonly]
-    clamped_readwrite = [p for p in llm_policy.readwrite_paths if p in ceiling_readwrite]
+    # Clamp paths to ceiling.
+    #
+    # Matching is done on *canonicalized* paths (expanduser + realpath, which
+    # resolves symlinks and normalizes ``.``/``..`` and trailing slashes), and a
+    # request is admitted if it is equal to, or a descendant of, a ceiling entry.
+    #
+    # Order is load-bearing for security: canonicalization happens BEFORE the
+    # containment check, so a symlink located inside a granted directory cannot
+    # smuggle access to a target outside the ceiling (the realpath resolves the
+    # symlink to its true target, which then fails containment). Doing a naive
+    # string-prefix check on un-resolved paths would reintroduce that escape.
+    #
+    # The original request strings are returned (not the canonical forms) so the
+    # downstream ``canonicalize_paths`` step can validate existence and resolve
+    # them for the backend exactly as before.
+    clamped_readonly = [
+        p
+        for p in llm_policy.readonly_paths
+        if _path_within_ceiling(p, ceiling.readonly_paths)
+    ]
+    clamped_readwrite = [
+        p
+        for p in llm_policy.readwrite_paths
+        if _path_within_ceiling(p, ceiling.readwrite_paths)
+    ]
     
     # Clamp timeout to ceiling (take minimum)
     clamped_timeout = min(llm_policy.timeout_ms, ceiling.timeout_ms)
@@ -123,6 +173,7 @@ def clamp_to_ceiling(
 def canonicalize_paths(paths: list[str]) -> list[str]:
     """Canonicalize paths to prevent symlink escapes.
     
+    - Expand ``~`` to the user's home directory
     - Resolve symlinks to real paths
     - Convert to absolute paths
     - Reject nonexistent paths
@@ -132,7 +183,7 @@ def canonicalize_paths(paths: list[str]) -> list[str]:
     """
     canonicalized = []
     for path in paths:
-        p = Path(path)
+        p = Path(path).expanduser()
         if not p.exists():
             raise SandboxPolicyError(f"Path does not exist: {path}")
         

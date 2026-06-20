@@ -1,6 +1,7 @@
 """Tests for sandbox/policy.py — policy building, clamping, discovery."""
 
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -204,6 +205,114 @@ def test_clamp_to_ceiling_backend_aware_fail_closed():
         })
 
 
+# RED: clamp path matching must canonicalize then check containment.
+# These guard against the exact-string-match brittleness (Problem 1a/1b)
+# while preserving the symlink-escape fail-closed property.
+def _clamp_policy(readonly=None, readwrite=None):
+    """Build a minimal SandboxPolicy for clamp matching tests."""
+    from entrabot.sandbox.base import SandboxPolicy
+
+    return SandboxPolicy(
+        backend="process",
+        command_line="cmd",
+        readonly_paths=readonly or [],
+        readwrite_paths=readwrite or [],
+        timeout_ms=30000,
+        network_default_policy="block",
+    )
+
+
+def test_clamp_admits_subpath_of_ceiling_dir():
+    """A request to narrow into a subdirectory of a granted dir is admitted (Problem 1b)."""
+    from entrabot.sandbox.policy import clamp_to_ceiling
+
+    with tempfile.TemporaryDirectory() as d:
+        d = os.path.realpath(d)
+        sub = os.path.join(d, "out")
+        os.mkdir(sub)
+
+        ceiling = _clamp_policy(readwrite=[d])
+        llm = _clamp_policy(readwrite=[sub])
+
+        clamped = clamp_to_ceiling(llm, ceiling)
+
+        assert clamped.readwrite_paths == [sub]
+
+
+def test_clamp_admits_trailing_slash_variant():
+    """A trailing-slash spelling of a granted dir is admitted (Problem 1a)."""
+    from entrabot.sandbox.policy import clamp_to_ceiling
+
+    with tempfile.TemporaryDirectory() as d:
+        d = os.path.realpath(d)
+
+        ceiling = _clamp_policy(readwrite=[d])
+        llm = _clamp_policy(readwrite=[d + "/"])
+
+        clamped = clamp_to_ceiling(llm, ceiling)
+
+        assert clamped.readwrite_paths == [d + "/"]
+
+
+def test_clamp_expands_tilde_against_absolute_ceiling():
+    """A ``~`` request matches an absolute-home ceiling entry (Problem 1a)."""
+    from entrabot.sandbox.policy import clamp_to_ceiling
+
+    home_abs = os.path.realpath(os.path.expanduser("~"))
+
+    ceiling = _clamp_policy(readonly=[home_abs])
+    llm = _clamp_policy(readonly=["~"])
+
+    clamped = clamp_to_ceiling(llm, ceiling)
+
+    assert clamped.readonly_paths == ["~"]
+
+
+def test_clamp_rejects_path_outside_ceiling_dir():
+    """A sibling that merely shares a string prefix is rejected (no prefix-collision widening)."""
+    from entrabot.sandbox.policy import clamp_to_ceiling
+
+    with tempfile.TemporaryDirectory() as d:
+        d = os.path.realpath(d)
+        granted = os.path.join(d, "tmp")
+        sibling = os.path.join(d, "tmpsecret")  # shares "tmp" prefix, NOT a child
+        os.mkdir(granted)
+        os.mkdir(sibling)
+
+        ceiling = _clamp_policy(readwrite=[granted])
+        llm = _clamp_policy(readwrite=[sibling])
+
+        clamped = clamp_to_ceiling(llm, ceiling)
+
+        assert clamped.readwrite_paths == []
+
+
+def test_clamp_blocks_symlink_escape_from_ceiling_dir():
+    """A symlink inside a granted dir that points outside it is rejected (security).
+
+    This is the load-bearing property: containment must be checked AFTER
+    canonicalization, so a symlink under a granted directory cannot smuggle
+    write access to a target outside the ceiling.
+    """
+    from entrabot.sandbox.policy import clamp_to_ceiling
+
+    with tempfile.TemporaryDirectory() as d:
+        d = os.path.realpath(d)
+        granted = os.path.join(d, "granted")
+        secret = os.path.join(d, "secret")
+        os.mkdir(granted)
+        os.mkdir(secret)
+        evil = os.path.join(granted, "evil")
+        os.symlink(secret, evil)  # granted/evil -> ../secret (escapes ceiling)
+
+        ceiling = _clamp_policy(readwrite=[granted])
+        llm = _clamp_policy(readwrite=[evil])
+
+        clamped = clamp_to_ceiling(llm, ceiling)
+
+        assert clamped.readwrite_paths == []
+
+
 # RED: Test path canonicalization
 def test_canonicalize_paths_resolves_symlinks():
     """Paths are canonicalized to prevent symlink escapes."""
@@ -229,9 +338,24 @@ def test_canonicalize_paths_rejects_nonexistent():
     """canonicalize_paths() rejects nonexistent paths."""
     from entrabot.sandbox.base import SandboxPolicyError
     from entrabot.sandbox.policy import canonicalize_paths
-    
+
     with pytest.raises(SandboxPolicyError, match="does not exist"):
         canonicalize_paths(["/nonexistent/path/12345"])
+
+
+def test_canonicalize_paths_expands_tilde():
+    """canonicalize_paths() expands ``~`` to the user's home directory.
+
+    The hardened clamp admits ``~``-spelled requests, so the downstream
+    canonicalizer must expand them rather than treating ``~/x`` as a literal
+    (nonexistent) relative path.
+    """
+    from entrabot.sandbox.policy import canonicalize_paths
+
+    home = os.path.realpath(os.path.expanduser("~"))
+    result = canonicalize_paths(["~"])
+
+    assert result == [home]
 
 
 # RED: Test discovery helpers
