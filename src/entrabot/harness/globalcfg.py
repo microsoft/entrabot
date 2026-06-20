@@ -75,7 +75,13 @@ def read_env(path: str) -> Dict[str, str]:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        out[key.strip()] = value.strip()
+        key = key.strip()
+        # First occurrence wins — matches the dotenv loader (config._overlay), which never
+        # overwrites an already-set key. A combined .env that accumulated duplicate keys across
+        # setup runs (e.g. rotated cert thumbprints) must resolve to the SAME value the runtime
+        # uses, or migrate would capture a stale/unregistered one.
+        if key not in out:
+            out[key] = value.strip()
     return out
 
 
