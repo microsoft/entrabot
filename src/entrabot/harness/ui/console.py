@@ -137,6 +137,7 @@ class ConsoleUI(UI):
         sponsor = set(state.get("sponsor", set()))
         guest = set(state.get("guest", set()))
         tools = {it["name"] for _, items in sections for it in items}
+        locked = {it["name"] for _, items in sections for it in items if it.get("locked")}
         mark = lambda on: ansi.green("✓") if on else ansi.dim("·")
 
         def show():
@@ -146,7 +147,10 @@ class ConsoleUI(UI):
                 print(ansi.dim(f"  ── {section} ──"))
                 for it in items:
                     n = it["name"]
-                    print(f"  {n:44} sponsor:{mark(sa or n in sponsor)}  guest:{mark(ga or n in guest)}")
+                    if n in locked:
+                        print(f"  {('🔒 ' + n):44} sponsor:{ansi.green('✓')}  guest:{ansi.green('✓')}  {ansi.dim('(required)')}")
+                    else:
+                        print(f"  {n:44} sponsor:{mark(sa or n in sponsor)}  guest:{mark(ga or n in guest)}")
 
         show()
         while True:
@@ -166,6 +170,9 @@ class ConsoleUI(UI):
                         sa = not sa
                     else:
                         ga = not ga
+                elif name in locked:
+                    print(ansi.dim("  (required — always enabled, can't be changed)"))
+                    continue
                 elif name in tools:
                     tgt = sponsor if col == "sponsor" else guest
                     tgt.discard(name) if name in tgt else tgt.add(name)

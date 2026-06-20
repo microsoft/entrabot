@@ -114,6 +114,33 @@ async def test_permissions_matrix_per_tool_toggles_and_saves():
     assert "view" in r["guest"]
 
 
+async def test_permissions_matrix_locked_tool_is_not_toggleable():
+    ui = TextualUI()
+    app = ui._App()
+    ui.app = app
+    # rows: 0=YOLO, 1=header, 2=entrabot_send (locked), 3=view
+    sections = [("Native", [
+        {"name": "entrabot_send", "kind": "tool", "locked": True},
+        {"name": "view", "kind": "tool"},
+    ])]
+    async with app.run_test() as pilot:
+        state = {"sponsor_all": False, "guest_all": False, "sponsor": set(), "guest": set()}
+        task = asyncio.create_task(ui.edit_permissions(sections, state))
+        for _ in range(5):
+            await pilot.pause()
+        await pilot.press("down")  # -> header
+        await pilot.press("down")  # -> entrabot_send (locked)
+        await pilot.press("s")  # try to toggle sponsor — should be ignored
+        await pilot.press("g")  # try to toggle guest — should be ignored
+        await pilot.press("escape")
+        for _ in range(4):
+            await pilot.pause()
+        r = await asyncio.wait_for(task, timeout=5)
+    # locked tool never enters the policy sets (it's always-allowed by the gate, not the policy)
+    assert "entrabot_send" not in r["sponsor"]
+    assert "entrabot_send" not in r["guest"]
+
+
 async def test_form_edits_all_fields_and_submits():
     ui = TextualUI()
     app = ui._App()

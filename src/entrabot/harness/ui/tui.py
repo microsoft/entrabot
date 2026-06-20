@@ -89,7 +89,9 @@ class TextualUI(UI):
                 for section, items in sections:
                     self._rows.append({"kind": "header", "label": section})
                     for it in items:
-                        self._rows.append({"kind": "tool", "name": it["name"]})
+                        self._rows.append(
+                            {"kind": "tool", "name": it["name"], "locked": bool(it.get("locked"))}
+                        )
 
             def compose(self):
                 yield Static("Tool permissions  —  Sponsor vs Guest, per tool", id="perm-title")
@@ -131,6 +133,9 @@ class TextualUI(UI):
                     g = "[bold yellow]✓ all[/]" if self._guest_all else "[grey50]·[/]"
                     return f"⚡ {'YOLO — allow ALL tools'.ljust(40)}  sponsor {s}    guest {g}"
                 name = row["name"]
+                if row.get("locked"):  # harness reply path — locked ON, not toggleable
+                    cell = "[bold green]✓[/]"
+                    return f"   🔒 {(name + ' (required)').ljust(39)}  sponsor {cell}    guest {cell}"
                 s = self._cell(name in self._sponsor, self._sponsor_all)
                 g = self._cell(name in self._guest, self._guest_all)
                 return f"   {name.ljust(42)}  sponsor {s}    guest {g}"
@@ -154,6 +159,8 @@ class TextualUI(UI):
                     else:
                         self._guest_all = not self._guest_all
                 elif row["kind"] == "tool":
+                    if row.get("locked"):
+                        return  # locked ON for all callers — can't be toggled
                     target = self._sponsor if col == "sponsor" else self._guest
                     target.discard(row["name"]) if row["name"] in target else target.add(row["name"])
                 else:

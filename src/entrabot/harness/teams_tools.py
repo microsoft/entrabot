@@ -13,6 +13,11 @@ from pydantic import BaseModel, Field
 
 from .teams_comms import TeamsBridge, TurnContext
 
+# The agent's voice on Teams — the reply path. The agent can't respond to ANY caller without
+# these, so they're locked ON for sponsors and guests alike (never gated by the per-caller
+# policy). build_tool_gate always-allows them; the /permissions matrix shows them locked.
+TEAMS_TOOL_NAMES = ("entrabot_send", "entrabot_read", "entrabot_list_chats")
+
 
 class SendArgs(BaseModel):
     message: str = Field(description="The message to send (HTML by default).")

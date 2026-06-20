@@ -50,6 +50,20 @@ async def test_gate_allows_and_denies_per_class():
     assert (await gate_local(_shell_input("edit"), {"session_id": "s"}))["permissionDecision"] == "allow"
 
 
+async def test_gate_always_allow_locks_reply_path_for_every_caller():
+    # guests get NOTHING by policy, but the reply-path tools must still work or the agent can't
+    # respond to a guest at all.
+    p = permissions.ToolPolicy(sponsor_all=False, guest_all=False, sponsor=set(), guest=set())
+    locked = {"entrabot_send", "entrabot_read", "entrabot_list_chats"}
+    gate_g = permissions.build_tool_gate(p, lambda: "guest", always_allow=locked)
+    gate_s = permissions.build_tool_gate(p, lambda: "sponsor", always_allow=locked)
+    for tool in locked:
+        assert (await gate_g(_shell_input(tool)))["permissionDecision"] == "allow"
+        assert (await gate_s(_shell_input(tool)))["permissionDecision"] == "allow"
+    # a non-locked tool is still denied to the guest
+    assert (await gate_g(_shell_input("powershell")))["permissionDecision"] == "deny"
+
+
 async def test_gate_force_yolo_allows_everything():
     p = permissions.ToolPolicy(sponsor_all=False, guest_all=False, sponsor=set(), guest=set())
     gate = permissions.build_tool_gate(p, lambda: "guest", force_yolo=True)

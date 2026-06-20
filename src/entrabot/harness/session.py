@@ -23,8 +23,11 @@ from . import mcp_loader
 from .permissions import ToolPolicy, build_tool_gate
 from .scheduler import SelfScheduler
 from .teams_comms import TeamsBridge, TokenProvider, TurnContext
-from .teams_tools import build_teams_tools
+from .teams_tools import TEAMS_TOOL_NAMES, build_teams_tools
 from .ui import UI, UiStyle
+
+# Harness reply-path tools — locked ON for every caller (the agent's own voice; never gated).
+LOCKED_TOOLS = set(TEAMS_TOOL_NAMES)
 
 _ET = copilot.SessionEventType
 
@@ -122,7 +125,7 @@ class InteractiveSession:
         mcp = mcp_loader.load(self._root)
 
         # the running turn's caller class (sponsor/guest) gates every tool; local input -> sponsor
-        gate = build_tool_gate(self._policy, self._caller_class, force_yolo=self._yolo)
+        gate = build_tool_gate(self._policy, self._caller_class, force_yolo=self._yolo, always_allow=LOCKED_TOOLS)
 
         self._ui.update_spinner("starting session…")
         self._session = await self._establish(tools or None, mcp, gate)
@@ -453,6 +456,8 @@ class InteractiveSession:
             except Exception:
                 pass
             self._ui.stop_spinner()
+        for item in self._catalog:  # mark the harness reply-path tools as locked ON
+            item["locked"] = item["name"] in LOCKED_TOOLS
         sections = toolcatalog.group_sections(self._catalog)
         state = {
             "sponsor_all": self._policy.sponsor_all,
@@ -539,7 +544,7 @@ class InteractiveSession:
 
     async def _handle_reload(self) -> None:
         self._ui.append_line("reloading MCP + session…", UiStyle.DIM)
-        gate = build_tool_gate(self._policy, self._caller_class, force_yolo=self._yolo)
+        gate = build_tool_gate(self._policy, self._caller_class, force_yolo=self._yolo, always_allow=LOCKED_TOOLS)
         tools: List[Any] = []
         if self._bridge:
             tools += build_teams_tools(self._bridge, self._ctx)

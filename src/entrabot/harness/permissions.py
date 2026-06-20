@@ -60,16 +60,27 @@ def _tool_name(inp: Any) -> Optional[str]:
     return getattr(inp, "toolName", None) or getattr(inp, "tool_name", None)
 
 
-def build_tool_gate(policy: ToolPolicy, resolve_class: ClassResolver, *, force_yolo: bool = False):
+def build_tool_gate(
+    policy: ToolPolicy,
+    resolve_class: ClassResolver,
+    *,
+    force_yolo: bool = False,
+    always_allow: Optional[Set[str]] = None,
+):
     """Return an ``on_pre_tool_use`` hook that allows/denies each tool by the running turn's
-    caller class. Reads ``policy`` live, so /permissions edits apply without a reload."""
+    caller class. Reads ``policy`` live, so /permissions edits apply without a reload.
+
+    ``always_allow`` names are locked ON for every caller class — the harness's own reply-path
+    tools (Teams send/read/list), which the agent needs to respond at all. They bypass the policy
+    entirely (you can't deny the agent its own voice)."""
+    locked = always_allow or set()
 
     async def hook(inp: Any, context: Any = None):
         name = _tool_name(inp)
         if not name:
             return None
         caller_class = resolve_class() or "sponsor"
-        if force_yolo or policy.allowed(caller_class, name):
+        if name in locked or force_yolo or policy.allowed(caller_class, name):
             return copilot.PreToolUseHookOutput(permissionDecision="allow")
         return copilot.PreToolUseHookOutput(
             permissionDecision="deny",
