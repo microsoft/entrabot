@@ -49,6 +49,30 @@ def test_unix_setup_can_create_new_chain_with_explicit_agent_user_upn() -> None:
     assert 'elif [ -z "$UPN_SUFFIX" ]; then' in new_branch
 
 
+def test_unix_setup_can_target_custom_state_and_env_files() -> None:
+    script = read_script("scripts/setup.sh")
+
+    assert 'STATE_FILE_PATH=".entrabot-state.json"' in script
+    assert 'ENV_FILE_PATH=".env"' in script
+    assert "--state-file=*" in script
+    assert "--env-file=*" in script
+    assert 'export ENTRABOT_STATE_FILE="$STATE_FILE"' in script
+    assert 'export ENTRABOT_ENV_FILE="$ENV_FILE"' in script
+    assert 'cat > "$ENV_FILE" << EOF' in script
+
+
+def test_unix_setup_can_create_fresh_identity_under_existing_blueprint() -> None:
+    script = read_script("scripts/setup.sh")
+    ids_script = read_script("scripts/create_entra_agent_ids.py")
+
+    assert 'export ENTRABOT_REUSE_BLUEPRINT=1' in script
+    assert 'export ENTRABOT_PIN_BLUEPRINT_APP_ID="$USE_BLUEPRINT"' in script
+    assert "--new: will create a fresh Agent Identity/User under Blueprint" in script
+    assert '_REUSE_BLUEPRINT = os.environ.get("ENTRABOT_REUSE_BLUEPRINT") == "1"' in ids_script
+    assert '_PINNED_BLUEPRINT_APP_ID = os.environ.get("ENTRABOT_PIN_BLUEPRINT_APP_ID", "").strip()' in ids_script
+    assert 'mode = "[--new --use-blueprint]" if _FORCE_NEW and _REUSE_BLUEPRINT else "[use-blueprint]"' in ids_script
+
+
 def test_unix_teardown_supports_targeted_upn_and_preserves_cloud_storage() -> None:
     script = read_script("scripts/teardown.sh")
 

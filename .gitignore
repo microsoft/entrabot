@@ -19,8 +19,8 @@ venv/
 .mypy_cache/
 .pyright/
 .openclaw-state.json
-.entrabot-state.json
-.entrabot-state.json.bak.*
+.entrabot-state*.json
+.entrabot-state*.json.bak.*
 .mcp.json
 a365.config.json
 a365.generated.config.json

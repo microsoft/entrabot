@@ -325,21 +325,33 @@ def _remove_legacy_password_credentials(app_id: str) -> int:
 # State persistence
 # ---------------------------------------------------------------------------
 
-_STATE_FILE = Path(__file__).resolve().parent.parent / ".entrabot-state.json"
+_DEFAULT_STATE_FILE = Path(__file__).resolve().parent.parent / ".entrabot-state.json"
+
+
+def _state_file() -> Path:
+    override = os.environ.get("ENTRABOT_STATE_FILE", "").strip()
+    if not override:
+        return _DEFAULT_STATE_FILE
+    path = Path(override).expanduser()
+    if not path.is_absolute():
+        path = _DEFAULT_STATE_FILE.parent / path
+    return path
 
 
 def _load_state() -> dict:
-    if _STATE_FILE.is_file():
+    state_file = _state_file()
+    if state_file.is_file():
         try:
-            return json.loads(_STATE_FILE.read_text())
+            return json.loads(state_file.read_text())
         except (json.JSONDecodeError, OSError):
             return {}
     return {}
 
 
 def _save_state(state: dict) -> None:
-    _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _STATE_FILE.write_text(json.dumps(state, indent=2) + "\n")
+    state_file = _state_file()
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps(state, indent=2) + "\n")
 
 
 def get_state(key: str) -> str | None:
