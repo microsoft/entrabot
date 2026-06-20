@@ -194,12 +194,19 @@ def create_blueprint(token: str) -> tuple[str, str]:
 
 
 def _agent_display_name() -> str:
-    """Generate a display name for the agent identity based on hostname."""
+    """Generate a display name for the agent identity based on hostname.
+
+    When ``_ENTRABOT_UPN_SUFFIX`` is set, the suffix is appended so each named agent gets a
+    DISTINCT Agent Identity (the find-existing lookup keys off this name). Without a suffix the
+    name is unchanged — the single per-host agent — so existing flows are unaffected.
+    """
     try:
         hostname = socket.gethostname().split(".")[0]
     except Exception:
         hostname = platform.node() or "unknown"
-    return f"EntraBot Agent - {hostname}"
+    base = f"EntraBot Agent - {hostname}"
+    suffix = os.environ.get("_ENTRABOT_UPN_SUFFIX", "").strip()
+    return f"{base} - {suffix}" if suffix else base
 
 
 def find_existing_agent_identity(
@@ -234,12 +241,19 @@ def find_existing_agent_identity(
         )
         if resp.status_code == 200:
             for sp in resp.json().get("value", []):
-                if sp.get("agentIdentityBlueprintId") == blueprint_app_id:
+                # Require BOTH the Blueprint AND the display name to match. Without the name
+                # check, the stored id (the single per-host agent) is returned for *any* requested
+                # name — so an additional, distinctly-named agent (suffix in the display name)
+                # would wrongly reuse the original instead of getting its own identity.
+                if (
+                    sp.get("agentIdentityBlueprintId") == blueprint_app_id
+                    and sp.get("displayName") == display_name
+                ):
                     return sp
             if resp.json().get("value"):
                 print(
-                    f"  [warn] stored AGENT_ID={stored_app_id} is parented by a "
-                    f"different Blueprint; ignoring and re-discovering."
+                    f"  [warn] stored AGENT_ID={stored_app_id} doesn't match the requested "
+                    f"identity ({display_name}); ignoring and re-discovering."
                 )
 
     resp = graph_request(
@@ -504,7 +518,11 @@ def create_agent_user(
     upn = _agent_user_upn(token)
     upn_suffix = os.environ.get("_ENTRABOT_UPN_SUFFIX", "")
     mail_nick = f"entrabot-agent-{upn_suffix}" if upn_suffix else "entrabot-agent"
-    display = f"EntraBot Agent ({upn_suffix})" if upn_suffix else "EntraBot Agent"
+    # Prefer an explicit friendly name (e.g. "Nemo") for the Teams display name; fall back to the
+    # suffix-derived default.
+    display = os.environ.get("ENTRABOT_AGENT_DISPLAY_NAME", "").strip() or (
+        f"EntraBot Agent ({upn_suffix})" if upn_suffix else "EntraBot Agent"
+    )
     body = {
         "@odata.type": "microsoft.graph.agentUser",
         "displayName": display,

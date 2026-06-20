@@ -18,12 +18,13 @@ runs the platform scripts under ``scripts/`` (a clone / unpacked sdist); a lean 
 from __future__ import annotations
 
 import getpass
+import json
 import os
 import platform
 import re
 import subprocess
 import sys
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from . import ansi
 from . import config as cfgmod
@@ -185,6 +186,59 @@ def _run_prereqs(plat: str) -> bool:
     return _yes("Prerequisites installed?", default=True)
 
 
+def _venv_python() -> str:
+    """The clone's venv python (has the provisioning deps: azure-identity, requests)."""
+    if os.name == "nt":
+        cand = os.path.join(_clone_root(), ".venv", "Scripts", "python.exe")
+    else:
+        cand = os.path.join(_clone_root(), ".venv", "bin", "python")
+    return cand if os.path.isfile(cand) else sys.executable
+
+
+def _run_add_agent(name: str, suffix: str) -> Optional[Dict[str, str]]:
+    """Mint a distinct new agent (own Identity + User) under the existing Blueprint via
+    add_agent.py. Returns the agent identity dict, or None on failure."""
+    script = os.path.join(_scripts_dir(), "add_agent.py")
+    env = dict(os.environ)
+    env["_ENTRABOT_UPN_SUFFIX"] = suffix
+    env["ENTRABOT_AGENT_DISPLAY_NAME"] = name
+    env.pop("ENTRABOT_NEW_CHAIN", None)  # must reuse the Blueprint, not fork a new chain
+    _say(ansi.dim(f"  $ python {os.path.basename(script)}  (suffix={suffix})"))
+    try:
+        proc = subprocess.run([_venv_python(), script], env=env, capture_output=True, text=True)
+    except (FileNotFoundError, KeyboardInterrupt) as e:
+        _say(ansi.red(f"  could not run add_agent.py: {e}"))
+        return None
+    if proc.stdout:
+        sys.stdout.write(proc.stdout if proc.stdout.endswith("\n") else proc.stdout + "\n")
+    ids: Optional[Dict[str, str]] = None
+    for line in proc.stdout.splitlines():
+        if line.startswith("AGENT_JSON="):
+            try:
+                ids = json.loads(line[len("AGENT_JSON="):])
+            except json.JSONDecodeError:
+                ids = None
+    if proc.returncode != 0 or not ids or not ids.get("ENTRABOT_AGENT_USER_UPN"):
+        if proc.stderr.strip():
+            _say(ansi.red("  " + proc.stderr.strip().splitlines()[-1]))
+        _say(ansi.red(f"  agent provisioning failed. See {LINKS['troubleshoot']}"))
+        return None
+    return ids
+
+
+def _write_agent_env(root: str, name: str, ids: Dict[str, str]) -> None:
+    """Write the per-agent .env (identity only; global supplies tenant/Blueprint) and apply it to
+    the current process for the connection test."""
+    agent_path = globalcfg.agent_env_path(root)
+    globalcfg.write_env(
+        agent_path, ids,
+        header=f"ENTRABOT agent identity for '{name}'. Reuses the global Blueprint. Do not commit.",
+    )
+    _say(ansi.green(f"  ✓ wrote agent identity → {agent_path}"))
+    for k, v in ids.items():
+        os.environ[k] = v
+
+
 def _run_setup(plat: str, suffix: str, reuse: bool) -> bool:
     if reuse:
         appid = globalcfg.blueprint_app_id()
@@ -310,34 +364,33 @@ def run_init(root: str) -> bool:
         return False
 
     suffix = _derive_suffix(name)
-    if reuse:
-        # The underlying provisioning scripts converge to ONE Agent User per device:
-        # create_agent_user() reuses the first user under the host's Agent Identity, so they
-        # can't yet mint a distinct second Teams identity. Don't run the full setup-windows.ps1
-        # here — it would rebuild the venv (locking the running entrabot.exe) and rewrite the
-        # repo .env. Stop honestly until a focused "add Agent User under existing Blueprint"
-        # provisioning step exists.
-        _say(ansi.yellow(f"\n  Adding a distinct second agent ('{name}') isn't wired up yet."))
-        _say("  Reusing the Blueprint to mint a NEW Agent User needs a dedicated provisioning")
-        _say("  step — the current scripts converge to a single Agent User per device, so they'd")
-        _say(ansi.dim("  just re-point at the existing agent. The global-config split is in place;"))
-        _say(ansi.dim(f"  the provisioning piece for '{name}' ({suffix}@…) is the remaining work."))
-        return False
-
     step(f"Provisioning agent '{name}'")
-    if not _run_setup(plat, suffix, reuse):
-        return False
-    if not _persist_split(root, name):
-        return False
+    if reuse:
+        # Mint a DISTINCT new agent (own Agent Identity + User) under the existing Blueprint —
+        # add_agent.py, run in the existing venv. No venv rebuild, no touching the repo .env.
+        ids = _run_add_agent(name, suffix)
+        if not ids:
+            return False
+        _write_agent_env(root, name, ids)
+    else:
+        if not _run_setup(plat, suffix, reuse):
+            return False
+        if not _persist_split(root, name):
+            return False
 
     step("Connection test")
-    if not _connection_test(os.environ.get("ENTRABOT_AGENT_USER_UPN", name)):
-        return False
+    verified = _connection_test(os.environ.get("ENTRABOT_AGENT_USER_UPN", name))
+    if not verified:
+        _say(ansi.yellow("  A new agent's Teams/mailbox can take 10-15 min to provision. The"))
+        _say(ansi.yellow("  identity is created and saved — re-check later with `entrabot doctor`."))
 
     step("Harness config")
     _scaffold_config(root, name)
 
     print()
-    _say(ansi.green(ansi.bold(f"✓ ENTRABOT agent '{name}' is set up and verified.")))
+    if verified:
+        _say(ansi.green(ansi.bold(f"✓ ENTRABOT agent '{name}' is set up and verified.")))
+    else:
+        _say(ansi.green(ansi.bold(f"✓ ENTRABOT agent '{name}' is set up (token not live yet).")))
     _say(ansi.dim(f"  Launch it with:  cd {root} && entrabot"))
     return True
