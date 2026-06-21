@@ -27,6 +27,72 @@ def _fake_tenant(mapping):
     return lambda domain: mapping.get(domain, "")
 
 
+# ── _az_user_show fallback (B2B guests aren't found by --id <home-email>) ──────
+def _az_runner(responses):
+    """Build a fake `run` for _az_user_show. responses: list of (predicate, result) — the first
+    whose predicate matches the az args wins; default None (miss)."""
+
+    def run(args):
+        for pred, result in responses:
+            if pred(args):
+                return result
+        return None
+
+    return run
+
+
+def test_az_user_show_direct_hit_for_member():
+    run = _az_runner([(lambda a: a[2] == "show", {"id": "m1", "userType": "Member",
+                                                  "mail": "bob@corp.com", "upn": "bob@corp.com"})])
+    assert sw._az_user_show("bob@corp.com", run=run)["id"] == "m1"
+
+
+def test_az_user_show_falls_back_to_mail_filter_for_guest():
+    # direct `--id` misses (guest UPN is mangled); the `mail eq` list filter finds them.
+    guest = {"id": "g1", "userType": None, "mail": "jaly@microsoft.com",
+             "upn": "jaly_microsoft.com#EXT#@sdnnm.onmicrosoft.com"}
+    run = _az_runner([
+        (lambda a: a[2] == "show", None),
+        (lambda a: a[2] == "list" and "mail eq" in a[4], guest),
+    ])
+    got = sw._az_user_show("jaly@microsoft.com", run=run)
+    assert got["upn"].endswith("#EXT#@sdnnm.onmicrosoft.com")
+    assert got["mail"] == "jaly@microsoft.com"
+
+
+def test_az_user_show_falls_back_to_upn_prefix():
+    guest = {"id": "g2", "userType": None, "mail": None,
+             "upn": "alice_example.com#EXT#@sdnnm.onmicrosoft.com"}
+    run = _az_runner([
+        (lambda a: a[2] == "show", None),
+        (lambda a: a[2] == "list" and "mail eq" in a[4], None),  # no mail on this guest
+        (lambda a: a[2] == "list" and "startsWith" in a[4], guest),
+    ])
+    assert sw._az_user_show("alice@example.com", run=run)["id"] == "g2"
+
+
+def test_az_user_show_none_when_all_miss():
+    assert sw._az_user_show("ghost@nowhere.com", run=_az_runner([])) is None
+
+
+def test_az_user_show_guest_resolves_end_to_end():
+    """The mail-filter fallback feeds resolve_teams_user, which classifies the null-userType guest
+    via its #EXT# UPN and resolves the home tenant — the exact path that was failing live."""
+    guest = {"id": "g1", "userType": None, "mail": "jaly@microsoft.com",
+             "upn": "jaly_microsoft.com#EXT#@sdnnm.onmicrosoft.com"}
+
+    def az(email):
+        return sw._az_user_show(email, run=_az_runner([
+            (lambda a: a[2] == "show", None),
+            (lambda a: a[2] == "list" and "mail eq" in a[4], guest),
+        ]))
+
+    out = sw.resolve_teams_user("jaly@microsoft.com", az_show=az,
+                                tenant_lookup=_fake_tenant({"microsoft.com": "72f988bf"}))
+    assert out["ENTRABOT_HUMAN_USER_TYPES"] == "Guest"
+    assert out["ENTRABOT_HUMAN_USER_TENANT_IDS"] == "72f988bf"
+
+
 # ── resolve_teams_user ────────────────────────────────────────────────────────
 def test_resolve_member_has_no_tenant_id():
     az = _fake_az(

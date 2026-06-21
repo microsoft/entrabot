@@ -151,23 +151,50 @@ class TeamsUserNotFound(Exception):
         super().__init__("not found in tenant: " + ", ".join(emails))
 
 
-def _az_user_show(email: str) -> dict[str, str | None] | None:
-    """Look up a user in the signed-in tenant. Returns {id,userType,mail,upn} or None if absent."""
+_AZ_USER_QUERY = "{id:id, userType:userType, mail:mail, upn:userPrincipalName}"
+
+
+def _run_az(args: list[str]) -> tuple[int, str]:
+    """Run an ``az`` command, returning (returncode, stdout). 127 if az isn't on PATH."""
     az = (["cmd", "/c", "az"] if os.name == "nt" else ["az"])
     try:
-        proc = subprocess.run(
-            az + ["ad", "user", "show", "--id", email, "--query",
-                  "{id:id, userType:userType, mail:mail, upn:userPrincipalName}", "-o", "json"],
-            capture_output=True, text=True,
-        )
+        proc = subprocess.run(az + args, capture_output=True, text=True)
     except (FileNotFoundError, KeyboardInterrupt):
-        return None
-    if proc.returncode != 0 or not proc.stdout.strip():
+        return 127, ""
+    return proc.returncode, proc.stdout
+
+
+def _az_first(args: list[str]) -> dict[str, str | None] | None:
+    """Run an az query expected to yield a single JSON object, or None on miss/empty/null."""
+    rc, out = _run_az(args)
+    out = out.strip()
+    if rc != 0 or not out or out == "null":
         return None
     try:
-        return json.loads(proc.stdout)
+        obj = json.loads(out)
     except json.JSONDecodeError:
         return None
+    return obj or None
+
+
+def _az_user_show(email: str, *, run=_az_first) -> dict[str, str | None] | None:
+    """Look up a user in the signed-in tenant. Returns {id,userType,mail,upn} or None if absent.
+
+    A B2B guest can't be found by ``--id <home-email>``: their UPN in this tenant is the mangled
+    ``user_home.com#EXT#@thistenant.onmicrosoft.com`` and the home email lives only in ``mail`` /
+    the UPN prefix. So we try, in order: direct (members / objectId / UPN), then a ``mail``
+    filter, then the ``#EXT#`` UPN prefix the invite encodes."""
+    direct = run(["ad", "user", "show", "--id", email, "--query", _AZ_USER_QUERY, "-o", "json"])
+    if direct:
+        return direct
+    esc = email.replace("'", "''")  # OData string-literal escaping
+    by_mail = run(["ad", "user", "list", "--filter", f"mail eq '{esc}'",
+                   "--query", f"[0].{_AZ_USER_QUERY}", "-o", "json"])
+    if by_mail:
+        return by_mail
+    prefix = email.replace("@", "_").replace("'", "''") + "#EXT#"
+    return run(["ad", "user", "list", "--filter", f"startsWith(userPrincipalName, '{prefix}')",
+                "--query", f"[0].{_AZ_USER_QUERY}", "-o", "json"])
 
 
 def _home_tenant_guid(domain: str) -> str:
