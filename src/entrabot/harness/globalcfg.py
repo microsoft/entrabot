@@ -116,5 +116,11 @@ def global_exists() -> bool:
     return bool(g.get("ENTRABOT_TENANT_ID") and g.get("ENTRABOT_BLUEPRINT_APP_ID"))
 
 
+def agent_exists(root: str) -> bool:
+    """True once an agent identity is provisioned in ``root`` (its .env carries an Agent User
+    UPN). Idempotent ``init`` keys off this to resume instead of minting another agent."""
+    return bool(read_env(agent_env_path(root)).get("ENTRABOT_AGENT_USER_UPN"))
+
+
 def blueprint_app_id() -> str:
     return read_global().get("ENTRABOT_BLUEPRINT_APP_ID", "")

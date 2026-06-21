@@ -93,6 +93,18 @@ def test_migrate_writes_under_entrabot_home(tmp_path, monkeypatch):
     assert "ENTRABOT_AGENT_ID" not in globalcfg.read_env(str(home / "global.env"))
 
 
+def test_agent_exists_detects_provisioned_dir(tmp_path):
+    """Idempotent init keys off this: a dir whose .env carries an Agent User UPN is provisioned."""
+    assert globalcfg.agent_exists(str(tmp_path)) is False
+    globalcfg.write_env(globalcfg.agent_env_path(str(tmp_path)), {"ENTRABOT_AGENT_ID": "ag"})
+    assert globalcfg.agent_exists(str(tmp_path)) is False  # identity row without a User UPN
+    globalcfg.write_env(
+        globalcfg.agent_env_path(str(tmp_path)),
+        {"ENTRABOT_AGENT_ID": "ag", "ENTRABOT_AGENT_USER_UPN": "bot@x.onmicrosoft.com"},
+    )
+    assert globalcfg.agent_exists(str(tmp_path)) is True
+
+
 def test_apply_agent_env_overrides_ambient(tmp_path, monkeypatch):
     import entrabot.config as c
 

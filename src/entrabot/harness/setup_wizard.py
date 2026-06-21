@@ -134,6 +134,134 @@ def _derive_suffix(name: str) -> str:
     return s[:20] or "agent"
 
 
+# ---- Teams recipient resolution ----------------------------------------------------------
+# Who the agent talks to (the ENTRABOT_HUMAN_* block). B2B guests (external/Microsoft-tenant users
+# invited into this tenant) must be addressed by email + their HOME tenant GUID so federated chat
+# reaches their real identity — the local guest object id silently never receives messages
+# (hard-won learning #28). This is the Python port of the bash resolution in scripts/setup.sh, so
+# `init` wires recipients uniformly on every platform (setup-windows.ps1 has no such flag).
+
+
+class TeamsUserNotFound(Exception):
+    """One or more recipient emails were not found in the signed-in tenant (invite as a guest
+    first). Carries the unresolved addresses for the wizard to surface."""
+
+    def __init__(self, emails: list[str]) -> None:
+        self.emails = emails
+        super().__init__("not found in tenant: " + ", ".join(emails))
+
+
+def _az_user_show(email: str) -> dict[str, str | None] | None:
+    """Look up a user in the signed-in tenant. Returns {id,userType,mail,upn} or None if absent."""
+    az = (["cmd", "/c", "az"] if os.name == "nt" else ["az"])
+    try:
+        proc = subprocess.run(
+            az + ["ad", "user", "show", "--id", email, "--query",
+                  "{id:id, userType:userType, mail:mail, upn:userPrincipalName}", "-o", "json"],
+            capture_output=True, text=True,
+        )
+    except (FileNotFoundError, KeyboardInterrupt):
+        return None
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+
+
+def _home_tenant_guid(domain: str) -> str:
+    """Resolve a verified domain to its Entra tenant GUID via OpenID discovery ('' on failure)."""
+    import urllib.request
+
+    url = f"https://login.microsoftonline.com/{domain}/.well-known/openid-configuration"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:  # noqa: S310 (fixed MS endpoint)
+            issuer = json.loads(resp.read().decode("utf-8")).get("issuer", "")
+    except Exception:
+        return ""
+    parts = issuer.rstrip("/").split("/")
+    return parts[-1] if len(parts) > 3 else ""
+
+
+def _home_domain_from_guest_upn(upn: str) -> str:
+    """Extract the home domain from a guest UPN, e.g.
+    'jaly_microsoft.com#EXT#@sdnnm.onmicrosoft.com' → 'microsoft.com'."""
+    if "#EXT#" not in upn:
+        return ""
+    local = upn.split("#EXT#")[0]  # jaly_microsoft.com
+    bits = local.rsplit("_", 1)  # domain is after the LAST underscore
+    return bits[1] if len(bits) > 1 else ""
+
+
+def resolve_teams_user(
+    emails: str,
+    *,
+    az_show=_az_user_show,
+    tenant_lookup=_home_tenant_guid,
+) -> dict[str, str]:
+    """Resolve recipient email(s) (comma-separated for a group chat) into the ENTRABOT_HUMAN_*
+    block. Guests (userType == 'Guest', or a '#EXT#' UPN when az reports userType: null) get their
+    home tenant GUID resolved so federated chat addresses their real identity. Lists stay
+    positionally aligned — a member's empty tenant slot is preserved, not dropped — so the
+    runtime's position-sensitive ENTRABOT_HUMAN_USER_TENANT_IDS / _TYPES parse stays in sync.
+    Raises TeamsUserNotFound if any address is missing from the tenant. '' input → {}."""
+    ids: list[str] = []
+    upns: list[str] = []
+    tids: list[str] = []
+    mails: list[str] = []
+    types: list[str] = []
+    unresolved: list[str] = []
+
+    for raw in emails.split(","):
+        email = raw.strip()
+        if not email:
+            continue
+        info = az_show(email)
+        if not info:
+            unresolved.append(email)
+            continue
+        upn = info.get("upn") or email
+        utype = (info.get("userType") or "").strip()
+        if not utype:  # az returns null for some guests → fall back to the #EXT# pattern
+            utype = "Guest" if "#EXT#" in upn else "Member"
+        tid = ""
+        if utype == "Guest":
+            home_domain = _home_domain_from_guest_upn(upn)
+            if home_domain:
+                tid = tenant_lookup(home_domain)
+        ids.append(info.get("id") or "")
+        upns.append(email)  # the input address is the federated bind target (mirrors setup.sh)
+        mails.append(info.get("mail") or "")
+        types.append(utype)
+        tids.append(tid)
+
+    if unresolved:
+        raise TeamsUserNotFound(unresolved)
+    if not ids:
+        return {}
+    return {
+        "ENTRABOT_HUMAN_USER_IDS": ",".join(ids),
+        "ENTRABOT_HUMAN_UPNS": ",".join(upns),
+        "ENTRABOT_HUMAN_USER_TENANT_IDS": ",".join(tids),
+        "ENTRABOT_HUMAN_USER_MAILS": ",".join(mails),
+        "ENTRABOT_HUMAN_USER_TYPES": ",".join(types),
+        # backward-compat singulars track the primary (first) recipient
+        "ENTRABOT_HUMAN_USER_ID": ids[0],
+        "ENTRABOT_HUMAN_UPN": upns[0],
+    }
+
+
+def _apply_existing_env(root: str) -> None:
+    """Load this dir's already-provisioned identity into the process for an idempotent re-run:
+    the shared global (tenant/blueprint/cert) as the base, then this agent's .env overlaid, so
+    the connection re-test and recipient edits operate on the real agent."""
+    for k, v in globalcfg.read_global().items():
+        os.environ[k] = v
+    for k, v in globalcfg.read_env(globalcfg.agent_env_path(root)).items():
+        os.environ[k] = v
+
+
 # ---- steps -------------------------------------------------------------------------------
 def _choose_directory(default_root: str) -> str:
     _say("  An agent's config (its identity + name) lives in a .entrabot/ folder in a directory.")
@@ -309,6 +437,47 @@ def _connection_test(upn: str) -> bool:
         return False
 
 
+def _setup_teams_user() -> None:
+    """Ask who this agent should talk to on Teams and merge them into the ENTRABOT_HUMAN_* list.
+    Additive (idempotent re-runs add, never wipe) and skippable. External/Microsoft-tenant users
+    must already be invited as B2B guests here; the lookup then resolves their home tenant for
+    federated chat. Manage the list later with `entrabot users` or `/users` in the harness."""
+    from . import recipients
+
+    existing = recipients.load_global()
+    if existing:
+        _say(ansi.dim("  current recipients: "
+                      + ", ".join(f"{r.upn} ({r.user_type})" for r in existing)))
+    _say("  Who should this agent talk to on Teams? External users (e.g. a Microsoft-tenant")
+    _say("  address) must already be invited as a B2B guest here; they're auto-detected and wired")
+    _say("  up for federated chat. Comma-separate addresses for a group chat. Blank to skip.")
+    while True:
+        emails = _ask("Teams recipient email(s) to add", default="")
+        if not emails.strip():
+            _say(ansi.dim("  skipped — add recipients later with `entrabot users add <email>`."))
+            return
+        try:
+            resolved = recipients.parse(resolve_teams_user(emails))
+        except TeamsUserNotFound as e:
+            _say(ansi.red(f"  not found in this tenant: {', '.join(e.emails)}"))
+            _say(ansi.yellow("  Invite them as a guest first (Entra → External Identities), then "
+                             "retry."))
+            if _yes("Try a different address?", default=True):
+                continue
+            return
+        except Exception as e:  # az missing, network, etc. — non-fatal, recipient is optional
+            _say(ansi.red(f"  couldn't resolve recipient: {type(e).__name__}: {e}"))
+            _say(ansi.yellow(f"    {LINKS['troubleshoot']}"))
+            return
+        if not resolved:
+            return
+        recipients.save_global(recipients.upsert(existing, resolved))
+        for r in resolved:
+            tail = "  (Guest → federated chat via home tenant, learning #28)" if r.is_guest else ""
+            _say(ansi.green(f"  ✓ recipient: {r.upn} ({r.user_type}){tail}"))
+        return
+
+
 def _scaffold_config(root: str, name: str) -> None:
     if cfgmod.exists(root):
         _say(ansi.dim(f"  harness config already present at {cfgmod.config_path(root)}"))
@@ -318,19 +487,20 @@ def _scaffold_config(root: str, name: str) -> None:
     _say(ansi.green(f"  ✓ wrote {cfgmod.config_path(root)}"))
 
 
-def run_init(root: str) -> bool:
-    """Run the walkthrough for an agent rooted at ``root``. Returns True if set up + verified."""
-    plat = _platform()
-    print(ansi.bold(ansi.cyan("\nENTRABOT setup")) + ansi.dim(f"  ({plat})"))
+def _existing_name(root: str) -> str:
+    """The agent's name from its harness config, if one was scaffolded ('' if none)."""
+    try:
+        cfg = cfgmod.try_load(root)
+        return cfg.name if cfg else ""
+    except Exception:
+        return ""
 
-    # Directory + name (always asked).
-    root = _choose_directory(root)
-    default_name = os.path.basename(root.rstrip("/\\")) or "entrabot"
-    name = _ask("Name this agent (its Teams display name)", default=default_name)
 
+def _provision_identity(plat: str, root: str, name: str, step) -> bool:
+    """First-time setup (tenant + Blueprint + cert + Agent) or, when the global config already
+    exists, a new Agent User under the existing Blueprint. Writes this dir's per-agent .env and
+    applies it to the process. ``step`` numbers the progress. Returns True on success."""
     reuse = globalcfg.global_exists()
-    step = _Stepper(total=3 if reuse else 6)
-
     if reuse:
         g = globalcfg.read_global()
         _say(ansi.green(
@@ -377,6 +547,36 @@ def run_init(root: str) -> bool:
             return False
         if not _persist_split(root, name):
             return False
+    return True
+
+
+def run_init(root: str) -> bool:
+    """Run the walkthrough for an agent rooted at ``root``. Returns True if set up + verified."""
+    plat = _platform()
+    print(ansi.bold(ansi.cyan("\nENTRABOT setup")) + ansi.dim(f"  ({plat})"))
+
+    # Directory (always asked). An already-provisioned dir resumes instead of re-minting.
+    root = _choose_directory(root)
+    resume = globalcfg.agent_exists(root)
+
+    if resume:
+        # Idempotent re-run: this dir already has an agent. Skip provisioning; load its identity
+        # and continue with the remaining (and re-runnable) setup — recipients + connection test.
+        existing = globalcfg.read_env(globalcfg.agent_env_path(root))
+        name = _existing_name(root) or _derive_suffix(os.path.basename(root.rstrip("/\\")))
+        _say(ansi.green(f"\n  Found an existing agent here: {existing['ENTRABOT_AGENT_USER_UPN']}"))
+        _say(ansi.dim("  Re-running to continue setup — identity already provisioned, skipping it."))
+        _apply_existing_env(root)
+        step = _Stepper(total=3)
+    else:
+        default_name = os.path.basename(root.rstrip("/\\")) or "entrabot"
+        name = _ask("Name this agent (its Teams display name)", default=default_name)
+        step = _Stepper(total=4 if globalcfg.global_exists() else 7)
+        if not _provision_identity(plat, root, name, step):
+            return False
+
+    step("Teams recipient")
+    _setup_teams_user()
 
     step("Connection test")
     verified = _connection_test(os.environ.get("ENTRABOT_AGENT_USER_UPN", name))

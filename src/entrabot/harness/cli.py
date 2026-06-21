@@ -4,6 +4,11 @@
   entrabot <path>          start the harness with config under <path>/.entrabot
   entrabot init [path]     guided setup for an agent in this directory (asks first). Reuses the
                            shared tenant/Blueprint if already set up; only mints a new agent.
+                           Idempotent — re-run to continue setup of an existing agent.
+  entrabot users [...]     manage the federated Teams recipient list:
+                             entrabot users                list configured recipients
+                             entrabot users add EMAIL...   resolve + add (B2B guests federated)
+                             entrabot users remove EMAIL   remove a recipient
   entrabot migrate [.env]  lift an existing combined .env into ~/.entrabot/global.env + default agent
   entrabot doctor          check the Copilot runtime + auth + Teams token
   entrabot --version | --help
@@ -136,6 +141,64 @@ def _cmd_migrate(positionals: List[str], flags: set) -> int:
     return 0
 
 
+def _cmd_users(args: list[str], flags: set) -> int:
+    """Manage the federated recipient list (the people the agent talks to on Teams). Stored in the
+    shared global config; B2B guests are resolved to their home tenant for federated chat."""
+    from . import globalcfg, recipients, setup_wizard
+
+    if not globalcfg.global_exists():
+        print("No ENTRABOT config yet. Run `entrabot init` first.")
+        return 1
+
+    sub = args[0] if args else "list"
+    rest = args[1:]
+
+    if sub == "list":
+        recs = recipients.load_global()
+        if not recs:
+            print("No recipients configured. Add one: entrabot users add <email>")
+            return 0
+        print(f"Federated recipients ({len(recs)}):")
+        for r in recs:
+            tid = f" · home tenant {r.tenant_id}" if r.tenant_id else ""
+            print(f"  • {r.upn}  [{r.user_type}]{tid}")
+        return 0
+
+    if sub == "add":
+        if not rest:
+            print("Usage: entrabot users add <email> [<email> ...]")
+            return 1
+        try:
+            resolved = recipients.parse(setup_wizard.resolve_teams_user(",".join(rest)))
+        except setup_wizard.TeamsUserNotFound as e:
+            print(f"Not found in this tenant (invite as a guest first): {', '.join(e.emails)}")
+            return 1
+        except Exception as e:
+            print(f"Could not resolve recipient(s): {type(e).__name__}: {e}")
+            return 1
+        merged = recipients.upsert(recipients.load_global(), resolved)
+        recipients.save_global(merged)
+        for r in resolved:
+            tail = " — federated (guest)" if r.is_guest else ""
+            print(f"  ✓ added {r.upn} [{r.user_type}]{tail}")
+        return 0
+
+    if sub == "remove":
+        if not rest:
+            print("Usage: entrabot users remove <email>")
+            return 1
+        kept, changed = recipients.remove(recipients.load_global(), rest[0])
+        if not changed:
+            print(f"  {rest[0]} is not in the recipient list.")
+            return 1
+        recipients.save_global(kept)
+        print(f"  ✓ removed {rest[0]}")
+        return 0
+
+    print(f"Unknown users subcommand: {sub}. Try: list | add | remove")
+    return 1
+
+
 async def _cmd_run(flags: set, root: str) -> int:
     # Layer this agent's identity (root/.entrabot/.env) over the global tenant/blueprint base
     # before anything reads creds (token provider, self_id).
@@ -232,6 +295,8 @@ def main(argv: List[str] | None = None) -> int:
     cmd = positionals[0] if positionals else None
     if cmd == "init":
         return _cmd_init(positionals[1:], flags)
+    if cmd == "users":
+        return _cmd_users(positionals[1:], flags)
     if cmd == "migrate":
         return _cmd_migrate(positionals[1:], flags)
     if cmd == "doctor":

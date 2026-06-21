@@ -314,12 +314,15 @@ class InteractiveSession:
             await self._handle_permissions()
         elif cmd == "watch":
             self._handle_watch(args)
+        elif cmd == "users":
+            await self._handle_users(args)
         elif cmd == "reload":
             await self._handle_reload()
         else:
             await self._forward_command(cmd, args)
 
-    _BUILTINS = ["help", "model", "permissions", "schedules", "watch", "mcp", "reload", "clear", "exit", "quit"]
+    _BUILTINS = ["help", "model", "permissions", "schedules", "watch", "users", "mcp", "reload",
+                 "clear", "exit", "quit"]
 
     def _print_help(self) -> None:
         for c, desc in [
@@ -328,6 +331,7 @@ class InteractiveSession:
             ("/permissions", "edit per-caller-class tool permissions (sponsor vs guest)"),
             ("/schedules", "list scheduled prompts"),
             ("/watch <chat-id>", "add a Teams chat to listen to"),
+            ("/users [add|remove]", "list/manage the federated Teams recipient list"),
             ("/mcp", "manage MCP servers + browse/install agency MCPs"),
             ("/reload", "re-read .mcp.json and rebuild the session"),
             ("/clear", "clear the screen"),
@@ -541,6 +545,65 @@ class InteractiveSession:
             self._config.watched_chats.append(chat)
             cfgmod.save(self._root, self._config)
         self._ui.append_line(f"now watching {chat}", UiStyle.SUCCESS)
+
+    async def _handle_users(self, args: list[str]) -> None:
+        """Manage the federated Teams recipient list from inside the session (mirror of the
+        `entrabot users` CLI). Persists to the shared global config; `/reload` to apply new
+        recipients to the live caller-class gating."""
+        from . import globalcfg, recipients, setup_wizard
+
+        if not globalcfg.global_exists():
+            self._ui.append_line("no ENTRABOT config — run `entrabot init` first", UiStyle.WARN)
+            return
+        sub = args[0].lower() if args else "list"
+        rest = args[1:]
+
+        if sub == "list":
+            recs = recipients.load_global()
+            if not recs:
+                self._ui.append_line("no recipients — /users add <email>", UiStyle.INFO)
+                return
+            self._ui.append_line(f"federated recipients ({len(recs)}):", UiStyle.INFO)
+            for r in recs:
+                tid = f" · home tenant {r.tenant_id}" if r.tenant_id else ""
+                self._ui.append_line(f"  • {r.upn}  [{r.user_type}]{tid}", UiStyle.INFO)
+            return
+
+        if sub == "add":
+            if not rest:
+                self._ui.append_line("usage: /users add <email> [<email> ...]", UiStyle.WARN)
+                return
+            try:
+                # az lookup is blocking — keep the event loop responsive
+                env = await asyncio.to_thread(setup_wizard.resolve_teams_user, ",".join(rest))
+                resolved = recipients.parse(env)
+            except setup_wizard.TeamsUserNotFound as e:
+                self._ui.append_line(
+                    f"not found (invite as a guest first): {', '.join(e.emails)}", UiStyle.WARN)
+                return
+            except Exception as e:
+                self._ui.append_line(f"could not resolve: {type(e).__name__}: {e}", UiStyle.WARN)
+                return
+            recipients.save_global(recipients.upsert(recipients.load_global(), resolved))
+            for r in resolved:
+                self._ui.append_line(f"added {r.upn} [{r.user_type}]", UiStyle.SUCCESS)
+            self._ui.append_line("run /reload to apply to live tool-gating", UiStyle.DIM)
+            return
+
+        if sub == "remove":
+            if not rest:
+                self._ui.append_line("usage: /users remove <email>", UiStyle.WARN)
+                return
+            kept, changed = recipients.remove(recipients.load_global(), rest[0])
+            if not changed:
+                self._ui.append_line(f"{rest[0]} not in recipient list", UiStyle.WARN)
+                return
+            recipients.save_global(kept)
+            self._ui.append_line(f"removed {rest[0]}", UiStyle.SUCCESS)
+            self._ui.append_line("run /reload to apply to live tool-gating", UiStyle.DIM)
+            return
+
+        self._ui.append_line(f"unknown: /users {sub}  (list | add | remove)", UiStyle.WARN)
 
     async def _handle_reload(self) -> None:
         self._ui.append_line("reloading MCP + session…", UiStyle.DIM)
