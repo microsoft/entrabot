@@ -22,6 +22,8 @@ venv/
 .entrabot-state*.json
 .entrabot-state*.json.bak.*
 .mcp.json
+.mcp.json.bak.*
+.mcp.*.json
 a365.config.json
 a365.generated.config.json
 ToolingManifest.json
