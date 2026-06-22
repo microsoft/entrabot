@@ -22,18 +22,21 @@ Requires:
 
 from __future__ import annotations
 
+# ruff: noqa: I001 — import order is deliberate (sys.path insert + .env side-effect
+# load must precede the entrabot.sandbox imports); do not let isort reorder it.
+
+import contextlib
 import os
 import sys
 from pathlib import Path
 
 # Make the entrabot package importable and load .env (handles spaces in paths).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-import entrabot.config  # noqa: E402  (import side-effect: loads .env)
+import entrabot.config  # noqa: E402, F401  (import side-effect: loads .env)
 
 from entrabot.sandbox import get_sandbox_runner  # noqa: E402
 from entrabot.sandbox.base import SandboxPolicy  # noqa: E402
 from entrabot.sandbox.policy import (  # noqa: E402
-    build_policy,
     canonicalize_paths,
     clamp_to_ceiling,
 )
@@ -49,6 +52,7 @@ CYAN = "\033[36m"
 NC = "\033[0m"
 
 PAUSE = "--no-pause" not in sys.argv
+CONFIG_ONLY = "--config-only" in sys.argv
 HOME = os.path.expanduser("~")
 
 
@@ -185,6 +189,21 @@ def main() -> int:
     caps = runner.get_capabilities()
     print(f"\n{BOLD}Backend:{NC} {caps['backend']} {DIM}(real binary, SHA256-verified){NC}")
 
+    # Agent identity (who is constrained, and on whose behalf).
+    agent_upn = os.environ.get("ENTRABOT_AGENT_USER_UPN", "(unset)")
+    run_code_on = os.environ.get("ENTRABOT_ENABLE_RUN_CODE") == "1"
+    net = os.environ.get("ENTRABOT_SANDBOX_NETWORK", "block")
+    print(f"\n{BOLD}Agent identity:{NC} {agent_upn} {DIM}(its own Entra Agent User){NC}")
+    print(f"{BOLD}run_code tool:{NC} {'enabled' if run_code_on else 'DISABLED'}  "
+          f"{DIM}· network: {net} · keychain: disabled{NC}")
+
+    if CONFIG_ONLY:
+        print(
+            f"\n  {DIM}This is the operator-set configuration. The agent can only "
+            f"narrow it.\n  Run without --config-only to see it enforced.{NC}\n"
+        )
+        return 0
+
     # Fixture: a "confidential" file in Documents the agent may READ but not WRITE.
     secret = Path(HOME) / "Documents" / "entrabot-secret.txt"
     secret.parent.mkdir(parents=True, exist_ok=True)
@@ -241,7 +260,10 @@ def main() -> int:
     results.append(run_scenario(
         runner, caps, ceiling_ro, ceiling_rw,
         title="“Drop the export in my Downloads folder.”",
-        cmd=f"echo 'export' > {HOME}/Downloads/entrabot-export.txt && cat {HOME}/Downloads/entrabot-export.txt",
+        cmd=(
+            f"echo 'export' > {HOME}/Downloads/entrabot-export.txt "
+            f"&& cat {HOME}/Downloads/entrabot-export.txt"
+        ),
         req_ro=[], req_rw=[f"{HOME}/Downloads"],
         expect_allow=True,
     ))
@@ -277,10 +299,8 @@ def main() -> int:
         Path("/tmp/entrabot-report.txt"),
         Path(HOME, "Downloads", "entrabot-export.txt"),
     ):
-        try:
+        with contextlib.suppress(FileNotFoundError):
             p.unlink()
-        except FileNotFoundError:
-            pass
 
     # ── Curtain ──────────────────────────────────────────────────────────
     banner("Recap")
