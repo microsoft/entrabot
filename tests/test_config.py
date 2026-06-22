@@ -233,3 +233,38 @@ class TestBlobStorageConfig:
             with patch.dict(os.environ, {"ENTRABOT_KEEP_MEMORY_LOCAL": val}, clear=False):
                 cfg = EntraBotConfig.from_env()
             assert cfg.keep_memory_local is False, f"Expected False for '{val}'"
+
+
+class TestLoadDotenv:
+    """_load_dotenv honors an ENTRABOT_ENV_FILE override so a test identity
+    can run from its own env file (e.g. .env.mxc-test) without disturbing
+    the production .env."""
+
+    def test_honors_env_file_override(self, tmp_path: Path) -> None:
+        from entrabot.config import _load_dotenv
+
+        env_file = tmp_path / ".env.custom"
+        env_file.write_text("ENTRABOT_DOTENV_PROBE=from-custom-file\n")
+
+        override = {"ENTRABOT_ENV_FILE": str(env_file)}
+        with patch.dict(os.environ, override, clear=False):
+            os.environ.pop("ENTRABOT_DOTENV_PROBE", None)
+            _load_dotenv()
+            try:
+                assert os.environ.get("ENTRABOT_DOTENV_PROBE") == "from-custom-file"
+            finally:
+                os.environ.pop("ENTRABOT_DOTENV_PROBE", None)
+
+    def test_override_does_not_clobber_existing_env(self, tmp_path: Path) -> None:
+        from entrabot.config import _load_dotenv
+
+        env_file = tmp_path / ".env.custom"
+        env_file.write_text("ENTRABOT_DOTENV_PROBE=from-file\n")
+
+        override = {
+            "ENTRABOT_ENV_FILE": str(env_file),
+            "ENTRABOT_DOTENV_PROBE": "already-set",
+        }
+        with patch.dict(os.environ, override, clear=False):
+            _load_dotenv()
+            assert os.environ.get("ENTRABOT_DOTENV_PROBE") == "already-set"
