@@ -120,8 +120,18 @@ def check_legacy_data_dir(*, home: Path | None = None) -> None:
 
 
 def _load_dotenv() -> None:
-    """Best-effort load of ``.env`` file from the project root."""
-    env_path = Path(__file__).resolve().parents[2] / ".env"
+    """Best-effort load of a ``.env`` file from the project root.
+
+    Honors an ``ENTRABOT_ENV_FILE`` override so an alternate identity (e.g. a
+    throwaway test agent) can run from its own env file (``.env.mxc-test``)
+    without disturbing the production ``.env``. Values already present in the
+    environment are never overwritten.
+    """
+    override = os.environ.get("ENTRABOT_ENV_FILE", "").strip()
+    if override:
+        env_path = Path(override).expanduser()
+    else:
+        env_path = Path(__file__).resolve().parents[2] / ".env"
     if not env_path.is_file():
         return
     for line in env_path.read_text().splitlines():
