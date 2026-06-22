@@ -22,13 +22,22 @@ Requires:
 
 from __future__ import annotations
 
-# ruff: noqa: I001 — import order is deliberate (sys.path insert + .env side-effect
-# load must precede the entrabot.sandbox imports); do not let isort reorder it.
+# ruff: noqa: I001 — import order is deliberate (venv re-exec + sys.path insert +
+# .env side-effect load must precede the entrabot.sandbox imports).
 
-import contextlib
 import os
 import sys
 from pathlib import Path
+
+# Re-exec under the repo's venv interpreter if we're not already running it.
+# The entrabot package needs Python 3.12+; running ``./scripts/demo_sandbox.py``
+# directly would otherwise pick up the system python3 (often 3.9) and crash on
+# modern type syntax. Uses only stdlib so it's safe on any Python 3.x.
+_VENV_PY = Path(__file__).resolve().parent.parent / ".venv" / "bin" / "python3"
+if _VENV_PY.exists() and os.path.realpath(sys.executable) != os.path.realpath(_VENV_PY):
+    os.execv(str(_VENV_PY), [str(_VENV_PY), *sys.argv])
+
+import contextlib  # noqa: E402
 
 # Make the entrabot package importable and load .env (handles spaces in paths).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
