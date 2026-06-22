@@ -2,16 +2,55 @@
 
 This tool exists to demonstrate WHY sandboxing is necessary by providing
 an UNPROTECTED file-write capability that contrasts with sandboxed run_code.
+It is gated OFF by default — registering it would give the agent an
+unsandboxed write path that bypasses run_code containment.
 """
 
+import asyncio
+import importlib
 import os
 import tempfile
 from unittest.mock import patch
 
 
-# RED: Test tool registration
+def _registered_tool_names() -> list[str]:
+    import entrabot.mcp_server as server
+
+    return [t.name for t in asyncio.run(server.mcp.list_tools())]
+
+
+# RED: the unsafe tool must NOT be exposed to the agent by default.
+def test_write_local_file_not_registered_as_tool_by_default():
+    """write_local_file is NOT an MCP tool unless explicitly enabled.
+
+    It writes anywhere with no containment, so exposing it by default would
+    defeat the whole point of the sandbox (the agent could bypass run_code).
+    """
+    import entrabot.mcp_server as server
+
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("ENTRABOT_ENABLE_UNSAFE_WRITE", None)
+        importlib.reload(server)
+        names = _registered_tool_names()
+    importlib.reload(server)  # restore real env
+    assert "write_local_file" not in names
+
+
+def test_write_local_file_registered_when_explicitly_enabled():
+    """write_local_file IS exposed when ENTRABOT_ENABLE_UNSAFE_WRITE=1."""
+    import entrabot.mcp_server as server
+
+    with patch.dict(os.environ, {"ENTRABOT_ENABLE_UNSAFE_WRITE": "1"}, clear=False):
+        importlib.reload(server)
+        names = _registered_tool_names()
+    importlib.reload(server)  # restore real env
+    assert "write_local_file" in names
+
+
+# The function itself remains importable/callable for unit tests regardless of
+# whether it's registered as an MCP tool.
 def test_write_local_file_exists():
-    """write_local_file tool should be registered in MCP server."""
+    """write_local_file function is defined and callable."""
     from entrabot.mcp_server import write_local_file
     
     assert write_local_file is not None
@@ -125,8 +164,11 @@ def test_demo_scenario_unsafe_vs_safe():
 
 # RED: Test that tool is always registered (not gated by flag)
 def test_write_local_file_always_available():
-    """write_local_file should be available regardless of ENTRABOT_ENABLE_RUN_CODE."""
-    # Unlike run_code, this tool is always available (to demonstrate the danger)
+    """The write_local_file *function* is always defined (importable for tests),
+    independent of ENTRABOT_ENABLE_RUN_CODE. Whether it's exposed to the agent as
+    an MCP tool is governed separately by ENTRABOT_ENABLE_UNSAFE_WRITE (see the
+    registration tests above) — by default it is NOT registered.
+    """
     with patch.dict(os.environ, {"ENTRABOT_ENABLE_RUN_CODE": "0"}):
         import importlib
 

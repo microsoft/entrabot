@@ -5072,7 +5072,12 @@ if _ENABLE_RUN_CODE:
 # - Educational: demonstrate attack surface of unrestricted file access
 
 
-@mcp.tool()
+# NOTE: write_local_file is the DELIBERATELY-UNSAFE contrast tool. It bypasses
+# the sandbox and writes anywhere, so it is registered as an MCP tool ONLY when
+# the operator explicitly opts in via ENTRABOT_ENABLE_UNSAFE_WRITE=1. Registering
+# it by default would hand the agent an unsandboxed write path that defeats
+# run_code containment. The function stays defined (importable for tests) but is
+# not exposed to the model unless enabled.
 def write_local_file(path: str, content: str) -> str:
     """Write content to local filesystem (UNPROTECTED - for demonstration only).
     
@@ -5170,6 +5175,12 @@ def write_local_file(path: str, content: str) -> str:
             "message": str(e),
             "type": type(e).__name__,
         }, indent=2)
+
+
+# Expose the unsafe demonstration tool ONLY when explicitly enabled.
+_ENABLE_UNSAFE_WRITE = os.environ.get("ENTRABOT_ENABLE_UNSAFE_WRITE") == "1"
+if _ENABLE_UNSAFE_WRITE:
+    write_local_file = mcp.tool()(write_local_file)
 
 
 def main() -> None:
