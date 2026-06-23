@@ -5228,29 +5228,193 @@ if _ENABLE_RUN_CODE:
                 "type": type(e).__name__,
             }, indent=2)
 
+    @mcp.tool()
+    def read_local_file(path: str) -> str:
+        """Read a file on the user's LOCAL computer (their actual disk).
+
+        Use this whenever the user asks you to read/open/show a file "on my
+        machine", "in my Documents/Downloads folder", or at any local path like
+        ``/Users/.../notes.txt`` or ``~/Documents/notes.txt``. This is for the
+        user's REAL local disk — it is NOT the same as the OneDrive/SharePoint
+        Files tools (``read_file`` et al.), which read Microsoft cloud storage.
+        Default to THIS tool for local/on-disk file requests.
+
+        The read happens inside an OS-enforced sandbox (Apple Seatbelt): the
+        operator pre-authorized which directories may be read. If the path is
+        inside an allowed directory you get the real file's contents; if it's
+        outside, the kernel blocks it. **Just attempt the read and report what
+        happened** — if it's blocked, tell the user the path is outside the
+        sandbox's allowed read paths (the operator's ceiling), not that the file
+        doesn't exist.
+
+        Args:
+            path: Absolute or ``~``-relative path to the local file to read.
+
+        Returns:
+            JSON with: success (bool), and on success ``content`` (str); on
+            failure ``error`` plus ``stderr``/``exit_code`` describing why
+            (e.g. blocked by the sandbox ceiling, or file not found).
+        """
+        from entrabot.sandbox import get_sandbox_runner
+        from entrabot.sandbox.base import (
+            SandboxPolicyError,
+            SandboxUnavailableError,
+            SandboxUntrustedBinaryError,
+        )
+        from entrabot.sandbox.local_files import ceiling_from_env, sandboxed_read
+        from entrabot.tools.audit import log_event as audit_event
+
+        try:
+            runner = get_sandbox_runner()
+            ceiling = ceiling_from_env()
+            audit_event(
+                action="read_local_file", resource=path, outcome="pending",
+                metadata={"backend": runner.get_capabilities()["backend"]},
+            )
+            result = sandboxed_read(path, ceiling=ceiling, runner=runner)
+            ok = result.exit_code == 0
+            audit_event(
+                action="read_local_file", resource=path,
+                outcome="success" if ok else "failure",
+                metadata={"exit_code": result.exit_code, "bytes": len(result.stdout)},
+            )
+            if ok:
+                return json.dumps(
+                    {"success": True, "path": path,
+                     "content": result.stdout[:10 * 1024]}, indent=2
+                )
+            return json.dumps({
+                "success": False, "path": path,
+                "error": "Read blocked or failed",
+                "stderr": result.stderr.strip()[:1024],
+                "exit_code": result.exit_code,
+                "help": (
+                    "The path is likely outside the sandbox's allowed read "
+                    "paths (the operator's ceiling), or the file does not exist."
+                ),
+            }, indent=2)
+        except SandboxPolicyError as e:
+            return json.dumps({"success": False, "path": path,
+                               "error": "Path not accessible", "message": str(e)}, indent=2)
+        except SandboxUnavailableError as e:
+            return json.dumps({"success": False, "error": "Sandbox unavailable",
+                               "message": str(e)}, indent=2)
+        except SandboxUntrustedBinaryError as e:
+            return json.dumps({"success": False, "error": "Untrusted binary",
+                               "message": str(e)}, indent=2)
+        except Exception as e:
+            if logger:
+                logger.error(f"read_local_file failed: {e}", exc_info=True)
+            return json.dumps({"success": False, "error": "Read failed",
+                               "message": str(e), "type": type(e).__name__}, indent=2)
+
+    @mcp.tool()
+    def write_local_file(path: str, content: str) -> str:
+        """Write/save a file on the user's LOCAL computer (their actual disk).
+
+        Use this whenever the user asks you to write/save/create/append a file
+        "on my machine", "in my Documents/Downloads folder", or at any local path
+        like ``/Users/.../note.txt`` or ``~/Downloads/report.txt``. This writes to
+        the user's REAL local disk — it is NOT the OneDrive/SharePoint Files tools
+        (``write_text_file``, ``upload_file``), which write to Microsoft cloud
+        storage. For local/on-disk save requests, default to THIS tool; do not
+        substitute a OneDrive write and report it as if it were local.
+
+        The write happens inside an OS-enforced sandbox (Apple Seatbelt): the
+        operator pre-authorized which directories may be written. It is
+        permission-based on the user's REAL filesystem — a successful write
+        persists on their actual disk (they see it in Finder); it is NOT an
+        isolated/throwaway container. If the target directory is outside the
+        operator's allowed write paths, the kernel blocks it. **Just attempt the
+        write and report what happened** — if it's blocked, tell the user the path
+        is outside the sandbox's allowed write paths (the operator's ceiling),
+        not that you have no way to write locally.
+
+        Args:
+            path: Absolute or ``~``-relative path of the local file to write.
+            content: Text content to write (overwrites the file).
+
+        Returns:
+            JSON with: success (bool); on failure ``error`` plus
+            ``stderr``/``exit_code`` describing why (e.g. blocked by the sandbox).
+        """
+        from entrabot.sandbox import get_sandbox_runner
+        from entrabot.sandbox.base import (
+            SandboxPolicyError,
+            SandboxUnavailableError,
+            SandboxUntrustedBinaryError,
+        )
+        from entrabot.sandbox.local_files import ceiling_from_env, sandboxed_write
+        from entrabot.tools.audit import log_event as audit_event
+
+        try:
+            runner = get_sandbox_runner()
+            ceiling = ceiling_from_env()
+            audit_event(
+                action="write_local_file", resource=path, outcome="pending",
+                metadata={"backend": runner.get_capabilities()["backend"],
+                          "content_length": len(content)},
+            )
+            result = sandboxed_write(path, content, ceiling=ceiling, runner=runner)
+            ok = result.exit_code == 0
+            audit_event(
+                action="write_local_file", resource=path,
+                outcome="success" if ok else "failure",
+                metadata={"exit_code": result.exit_code},
+            )
+            if ok:
+                return json.dumps(
+                    {"success": True, "path": path, "bytes_written": len(content)},
+                    indent=2,
+                )
+            return json.dumps({
+                "success": False, "path": path,
+                "error": "Write blocked or failed",
+                "stderr": result.stderr.strip()[:1024],
+                "exit_code": result.exit_code,
+                "help": (
+                    "The target directory is likely outside the sandbox's allowed "
+                    "write paths (the operator's ceiling)."
+                ),
+            }, indent=2)
+        except SandboxPolicyError as e:
+            return json.dumps({"success": False, "path": path,
+                               "error": "Path not accessible", "message": str(e)}, indent=2)
+        except SandboxUnavailableError as e:
+            return json.dumps({"success": False, "error": "Sandbox unavailable",
+                               "message": str(e)}, indent=2)
+        except SandboxUntrustedBinaryError as e:
+            return json.dumps({"success": False, "error": "Untrusted binary",
+                               "message": str(e)}, indent=2)
+        except Exception as e:
+            if logger:
+                logger.error(f"write_local_file failed: {e}", exc_info=True)
+            return json.dumps({"success": False, "error": "Write failed",
+                               "message": str(e), "type": type(e).__name__}, indent=2)
+
 
 # ============================================================================
-# write_local_file — Demonstration Tool (DELIBERATELY UNSAFE)
+# unsafe_write_local_file — Demonstration Tool (DELIBERATELY UNSAFE)
 # ============================================================================
 # This tool exists to demonstrate WHY sandboxing is necessary.
 # It provides UNPROTECTED filesystem access that contrasts with the
-# sandboxed run_code tool.
+# sandboxed read_local_file / write_local_file tools.
 #
 # Security model: NONE (intentionally dangerous for demonstration purposes)
 #
 # Use cases:
 # - Show what happens without sandboxing (writes anywhere)
-# - Contrast with run_code (sandboxed to operator ceiling)
+# - Contrast with the sandboxed local-file tools (clamped to operator ceiling)
 # - Educational: demonstrate attack surface of unrestricted file access
 
 
-# NOTE: write_local_file is the DELIBERATELY-UNSAFE contrast tool. It bypasses
-# the sandbox and writes anywhere, so it is registered as an MCP tool ONLY when
-# the operator explicitly opts in via ENTRABOT_ENABLE_UNSAFE_WRITE=1. Registering
-# it by default would hand the agent an unsandboxed write path that defeats
-# run_code containment. The function stays defined (importable for tests) but is
+# NOTE: unsafe_write_local_file is the DELIBERATELY-UNSAFE contrast tool. It
+# bypasses the sandbox and writes anywhere, so it is registered as an MCP tool
+# ONLY when the operator explicitly opts in via ENTRABOT_ENABLE_UNSAFE_WRITE=1.
+# Registering it by default would hand the agent an unsandboxed write path that
+# defeats the sandbox. The function stays defined (importable for tests) but is
 # not exposed to the model unless enabled.
-def write_local_file(path: str, content: str) -> str:
+def unsafe_write_local_file(path: str, content: str) -> str:
     """Write content to local filesystem (UNPROTECTED - for demonstration only).
     
     ⚠️  **DANGER: This tool has NO security restrictions!**
@@ -5260,33 +5424,32 @@ def write_local_file(path: str, content: str) -> str:
     
     **DO NOT USE in production.** This is an educational tool to show:
     1. What unrestricted file access looks like (dangerous)
-    2. How run_code with sandboxing provides protection (safe)
-    
-    For SAFE file operations, use run_code with sandboxed filesystem access:
-      run_code(argv=["python", "-c", "open('/tmp/safe.txt', 'w').write('data')"])
-      → Clamped to operator ceiling (/tmp only)
-    
+    2. How the sandboxed read_local_file / write_local_file tools protect (safe)
+
+    For SAFE local file operations, use the sandboxed ``write_local_file`` /
+    ``read_local_file`` tools, which clamp every access to the operator ceiling.
+
     Args:
         path: Absolute file path (NO VALIDATION - can be anywhere!)
         content: Content to write
-    
+
     Returns:
         JSON with success status and path, or error dict
-    
+
     Example (UNSAFE):
-        write_local_file(path="/Users/you/Desktop/hack.txt", content="pwned")
+        unsafe_write_local_file(path="/Users/you/Desktop/hack.txt", content="pwned")
         → ✅ Succeeds (DANGEROUS!)
-    
+
     Example (SAFE alternative):
-        run_code(argv=["echo", "safe", ">", "/tmp/safe.txt"])
-        → ✅ Succeeds only if /tmp in operator ceiling
+        write_local_file(path="/tmp/safe.txt", content="data")
+        → ✅ Succeeds only if /tmp is in the operator's read-write ceiling
     """
     from entrabot.tools.audit import log_event as audit_event
     
     try:
         # Audit: Log this dangerous operation
         audit_event(
-            action="write_local_file",
+            action="unsafe_write_local_file",
             resource=path,
             outcome="pending",
             metadata={
@@ -5302,7 +5465,7 @@ def write_local_file(path: str, content: str) -> str:
         
         # Audit: Success
         audit_event(
-            action="write_local_file",
+            action="unsafe_write_local_file",
             resource=path,
             outcome="success",
             metadata={
@@ -5319,7 +5482,7 @@ def write_local_file(path: str, content: str) -> str:
         
     except PermissionError as e:
         audit_event(
-            action="write_local_file",
+            action="unsafe_write_local_file",
             resource=path,
             outcome="failure",
             metadata={"error": "PermissionError", "message": str(e)},
@@ -5333,13 +5496,13 @@ def write_local_file(path: str, content: str) -> str:
     
     except Exception as e:
         audit_event(
-            action="write_local_file",
+            action="unsafe_write_local_file",
             resource=path,
             outcome="failure",
             metadata={"error": type(e).__name__, "message": str(e)},
         )
         if logger:
-            logger.error(f"write_local_file failed: {e}", exc_info=True)
+            logger.error(f"unsafe_write_local_file failed: {e}", exc_info=True)
         return json.dumps({
             "success": False,
             "error": "Write failed",
@@ -5352,7 +5515,7 @@ def write_local_file(path: str, content: str) -> str:
 # Expose the unsafe demonstration tool ONLY when explicitly enabled.
 _ENABLE_UNSAFE_WRITE = os.environ.get("ENTRABOT_ENABLE_UNSAFE_WRITE") == "1"
 if _ENABLE_UNSAFE_WRITE:
-    write_local_file = mcp.tool()(write_local_file)
+    unsafe_write_local_file = mcp.tool()(unsafe_write_local_file)
 
 
 def main() -> None:

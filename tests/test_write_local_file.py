@@ -1,4 +1,4 @@
-"""Tests for write_local_file demonstration tool in mcp_server.py.
+"""Tests for unsafe_write_local_file demonstration tool in mcp_server.py.
 
 This tool exists to demonstrate WHY sandboxing is necessary by providing
 an UNPROTECTED file-write capability that contrasts with sandboxed run_code.
@@ -20,8 +20,8 @@ def _registered_tool_names() -> list[str]:
 
 
 # RED: the unsafe tool must NOT be exposed to the agent by default.
-def test_write_local_file_not_registered_as_tool_by_default():
-    """write_local_file is NOT an MCP tool unless explicitly enabled.
+def test_unsafe_write_local_file_not_registered_as_tool_by_default():
+    """unsafe_write_local_file is NOT an MCP tool unless explicitly enabled.
 
     It writes anywhere with no containment, so exposing it by default would
     defeat the whole point of the sandbox (the agent could bypass run_code).
@@ -33,40 +33,40 @@ def test_write_local_file_not_registered_as_tool_by_default():
         importlib.reload(server)
         names = _registered_tool_names()
     importlib.reload(server)  # restore real env
-    assert "write_local_file" not in names
+    assert "unsafe_write_local_file" not in names
 
 
-def test_write_local_file_registered_when_explicitly_enabled():
-    """write_local_file IS exposed when ENTRABOT_ENABLE_UNSAFE_WRITE=1."""
+def test_unsafe_write_local_file_registered_when_explicitly_enabled():
+    """unsafe_write_local_file IS exposed when ENTRABOT_ENABLE_UNSAFE_WRITE=1."""
     import entrabot.mcp_server as server
 
     with patch.dict(os.environ, {"ENTRABOT_ENABLE_UNSAFE_WRITE": "1"}, clear=False):
         importlib.reload(server)
         names = _registered_tool_names()
     importlib.reload(server)  # restore real env
-    assert "write_local_file" in names
+    assert "unsafe_write_local_file" in names
 
 
 # The function itself remains importable/callable for unit tests regardless of
 # whether it's registered as an MCP tool.
-def test_write_local_file_exists():
-    """write_local_file function is defined and callable."""
-    from entrabot.mcp_server import write_local_file
+def test_unsafe_write_local_file_exists():
+    """unsafe_write_local_file function is defined and callable."""
+    from entrabot.mcp_server import unsafe_write_local_file
     
-    assert write_local_file is not None
-    assert callable(write_local_file)
+    assert unsafe_write_local_file is not None
+    assert callable(unsafe_write_local_file)
 
 
 # RED: Test basic file write
-def test_write_local_file_creates_file():
-    """write_local_file() should create file with content."""
+def test_unsafe_write_local_file_creates_file():
+    """unsafe_write_local_file() should create file with content."""
     import json
 
-    from entrabot.mcp_server import write_local_file
+    from entrabot.mcp_server import unsafe_write_local_file
     
     with tempfile.TemporaryDirectory() as tmpdir:
         test_path = os.path.join(tmpdir, "test.txt")
-        result_json = write_local_file(path=test_path, content="Hello, world!")
+        result_json = unsafe_write_local_file(path=test_path, content="Hello, world!")
         result = json.loads(result_json)
         
         assert result["success"] is True
@@ -78,18 +78,18 @@ def test_write_local_file_creates_file():
 
 
 # RED: Test dangerous path (no validation - intentional!)
-def test_write_local_file_accepts_any_path():
-    """write_local_file() should accept ANY path (demonstrates danger)."""
+def test_unsafe_write_local_file_accepts_any_path():
+    """unsafe_write_local_file() should accept ANY path (demonstrates danger)."""
     import json
 
-    from entrabot.mcp_server import write_local_file
+    from entrabot.mcp_server import unsafe_write_local_file
     
     with tempfile.TemporaryDirectory() as tmpdir:
         # Try to write to a "sensitive" location (mocked as tmpdir)
         sensitive_path = os.path.join(tmpdir, "sensitive", "system.conf")
         os.makedirs(os.path.dirname(sensitive_path), exist_ok=True)
         
-        result_json = write_local_file(path=sensitive_path, content="hacked")
+        result_json = unsafe_write_local_file(path=sensitive_path, content="hacked")
         result = json.loads(result_json)
         
         # Should succeed (this is the danger we're demonstrating!)
@@ -98,16 +98,16 @@ def test_write_local_file_accepts_any_path():
 
 
 # RED: Test error handling
-def test_write_local_file_handles_permission_error():
-    """write_local_file() should return error dict on permission failure."""
+def test_unsafe_write_local_file_handles_permission_error():
+    """unsafe_write_local_file() should return error dict on permission failure."""
     import json
 
-    from entrabot.mcp_server import write_local_file
+    from entrabot.mcp_server import unsafe_write_local_file
     
     # Try to write to a path that will fail (permission denied)
     bad_path = "/root/protected.txt"  # Assuming we don't have root
     
-    result_json = write_local_file(path=bad_path, content="fail")
+    result_json = unsafe_write_local_file(path=bad_path, content="fail")
     result = json.loads(result_json)
     
     # Should fail gracefully
@@ -116,27 +116,27 @@ def test_write_local_file_handles_permission_error():
 
 # RED: Test audit logging
 @patch("entrabot.tools.audit.log_event")
-def test_write_local_file_audits_actions(mock_audit):
-    """write_local_file() should emit audit events."""
-    from entrabot.mcp_server import write_local_file
+def test_unsafe_write_local_file_audits_actions(mock_audit):
+    """unsafe_write_local_file() should emit audit events."""
+    from entrabot.mcp_server import unsafe_write_local_file
     
     with tempfile.TemporaryDirectory() as tmpdir:
         test_path = os.path.join(tmpdir, "audit_test.txt")
-        write_local_file(path=test_path, content="test")
+        unsafe_write_local_file(path=test_path, content="test")
         
         # Verify audit was called
         assert mock_audit.called
         # Check it logged the dangerous file write
         calls = mock_audit.call_args_list
-        assert any("write_local_file" in str(call) for call in calls)
+        assert any("unsafe_write_local_file" in str(call) for call in calls)
 
 
 # RED: Test warning message in docstring
-def test_write_local_file_has_warning_docstring():
-    """write_local_file() docstring should include WARNING about danger."""
-    from entrabot.mcp_server import write_local_file
+def test_unsafe_write_local_file_has_warning_docstring():
+    """unsafe_write_local_file() docstring should include WARNING about danger."""
+    from entrabot.mcp_server import unsafe_write_local_file
     
-    docstring = write_local_file.__doc__
+    docstring = unsafe_write_local_file.__doc__
     assert docstring is not None
     assert "WARNING" in docstring or "DANGER" in docstring or "UNPROTECTED" in docstring
     assert "sandboxing" in docstring.lower() or "sandbox" in docstring.lower()
@@ -144,15 +144,15 @@ def test_write_local_file_has_warning_docstring():
 
 # RED: Test comparison with sandboxed alternative
 def test_demo_scenario_unsafe_vs_safe():
-    """Demonstrate unsafe write_local_file vs safe run_code."""
+    """Demonstrate unsafe unsafe_write_local_file vs safe run_code."""
     import json
 
-    from entrabot.mcp_server import write_local_file
+    from entrabot.mcp_server import unsafe_write_local_file
     
     with tempfile.TemporaryDirectory() as tmpdir:
         # UNSAFE: Direct file write (no protection)
         unsafe_path = os.path.join(tmpdir, "unsafe.txt")
-        unsafe_result = json.loads(write_local_file(path=unsafe_path, content="no sandbox"))
+        unsafe_result = json.loads(unsafe_write_local_file(path=unsafe_path, content="no sandbox"))
         assert unsafe_result["success"] is True
         assert os.path.exists(unsafe_path)
         
@@ -163,8 +163,8 @@ def test_demo_scenario_unsafe_vs_safe():
 
 
 # RED: Test that tool is always registered (not gated by flag)
-def test_write_local_file_always_available():
-    """The write_local_file *function* is always defined (importable for tests),
+def test_unsafe_write_local_file_always_available():
+    """The unsafe_write_local_file *function* is always defined (importable for tests),
     independent of ENTRABOT_ENABLE_RUN_CODE. Whether it's exposed to the agent as
     an MCP tool is governed separately by ENTRABOT_ENABLE_UNSAFE_WRITE (see the
     registration tests above) — by default it is NOT registered.
@@ -175,4 +175,4 @@ def test_write_local_file_always_available():
         import entrabot.mcp_server
         importlib.reload(entrabot.mcp_server)
         
-        assert hasattr(entrabot.mcp_server, "write_local_file")
+        assert hasattr(entrabot.mcp_server, "unsafe_write_local_file")
