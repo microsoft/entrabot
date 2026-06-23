@@ -196,19 +196,37 @@ kernel (Sandbox)  Sandbox: bash(NNNNN) deny(1) file-write-create  /Users/you/Doc
 
 ## Using it
 
-Once enabled, the agent has a `run_code` tool. In practice you just ask it, e.g. in
-Teams:
+Enabling the sandbox registers three tools, all gated behind
+`ENTRABOT_ENABLE_RUN_CODE` and all enforced by the same operator ceiling:
 
-- *"Read `~/Documents/report.md` and summarize it."* → allowed if `~/Documents` is in
-  `READONLY_PATHS`.
-- *"Save the summary to `~/Documents/summary.md`."* → **blocked** unless `~/Documents`
-  is in `READWRITE_PATHS`; the agent gets `Operation not permitted`.
-- *"Write it to `~/Downloads/summary.md` instead."* → allowed if `~/Downloads` is in
-  `READWRITE_PATHS`.
+- **`read_local_file(path)`** — read a file on the user's local disk.
+- **`write_local_file(path, content)`** — write/save a file on the local disk.
+- **`run_code(argv, …)`** — run an arbitrary command/script in the sandbox.
 
-The tool takes a structured `argv` (no shell string), optional `readonly_paths` /
-`readwrite_paths` (used to *narrow* the ceiling), and an optional `timeout_ms`. See
-the [MCP tool reference](../reference/mcp-tools.md).
+The two purpose-named file tools exist because models select tools by intent:
+they reliably reach for `read_local_file` / `write_local_file` when asked to
+"read" or "save" a local file, whereas a single generic `run_code` got skipped
+for writes (the model routed "save a file" to the cloud OneDrive tools). All
+three share the identical clamp → realpath → Seatbelt machinery.
+
+In practice you just ask the agent, e.g. in Teams:
+
+- *"Read `~/Documents/report.md` and summarize it."* → `read_local_file`; allowed
+  if `~/Documents` is in `READONLY_PATHS`.
+- *"Save the summary to `~/Documents/summary.md`."* → `write_local_file`;
+  **blocked** unless `~/Documents` is in `READWRITE_PATHS` (the kernel returns
+  `Operation not permitted` and nothing is written).
+- *"Write it to `~/Downloads/summary.md` instead."* → `write_local_file`; allowed
+  if `~/Downloads` is in `READWRITE_PATHS`.
+
+`run_code` takes a structured `argv` (no shell string) plus optional
+`readonly_paths` / `readwrite_paths` (to *narrow* the ceiling) and `timeout_ms`.
+The file tools just take a `path` (and `content` for writes). See the
+[MCP tool reference](../reference/mcp-tools.md).
+
+> A deliberately-**unsafe** contrast tool, `unsafe_write_local_file`, bypasses the
+> sandbox and writes anywhere. It is off by default and only registered when
+> `ENTRABOT_ENABLE_UNSAFE_WRITE=1`; leave it unset outside teaching demos.
 
 ---
 
