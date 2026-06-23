@@ -4867,39 +4867,74 @@ if _ENABLE_RUN_CODE:
         readwrite_paths: list[str] | None = None,
         timeout_ms: int | None = None,
     ) -> str:
-        """Run code in MXC sandbox (Phase 1: process isolation).
-        
-        **IMPORTANT: This tool is DISABLED by default.** It is only available when the
-        operator has explicitly enabled it via `ENTRABOT_ENABLE_RUN_CODE=1`.
-        
+        """Run a command on the LOCAL machine inside the MXC security sandbox.
+
+        **This is your only way to read OR write files on the user's LOCAL
+        computer** (their actual disk — e.g. ``~/Documents``, ``~/Downloads``,
+        ``/tmp``). It is separate from the Teams/Files/OneDrive tools (e.g.
+        ``write_text_file``, ``upload_file``), which act on cloud/Graph resources.
+        When the user refers to a file "on my machine", "in my Documents/Downloads
+        folder", a local path, or anything on their disk — for BOTH reading and
+        writing — use THIS tool. Do not route local file requests to the OneDrive
+        tools, and do not conclude you "have no way to write locally": writing a
+        local file IS done through this tool (e.g. ``bash -lc 'echo ... > path'``).
+
+        The command runs in an OS-enforced sandbox (Apple Seatbelt on macOS): the
+        operator has pre-authorized a set of readable and writable directories (the
+        "ceiling"). Reads succeed from allowed read paths; writes succeed in allowed
+        read-write paths; anything outside is blocked by the kernel and returns a
+        nonzero exit with "Operation not permitted".
+
+        **The sandbox is permission-based on the user's REAL filesystem — it is NOT
+        a separate/virtual/throwaway container.** A file you read from an allowed
+        path is the user's actual file; a file you write to an allowed path persists
+        on the user's actual disk (you can read it back, the user sees it in Finder).
+        The sandbox only restricts WHICH paths you may touch — it does not redirect
+        them to some isolated location. So writing to an allowed path is a real,
+        durable write you can honestly report as done.
+
+        **Do not pre-judge whether a path is allowed — attempt the operation and
+        report what actually happened.** If the kernel blocks it, tell the user the
+        path is outside the sandbox's allowed write/read paths (the operator's
+        ceiling) — NOT that the file is missing, that you have no local-file tool,
+        or that the write went to an isolated container. Trying and being denied by
+        the sandbox is the expected, correct behavior.
+
+        **IMPORTANT: Disabled unless the operator set ``ENTRABOT_ENABLE_RUN_CODE=1``.**
+
         Security model:
-        - Operator-set ceiling (env-configured), LLM can only narrow (Learning #54)
-        - Positive-allowlist-only paths (no deniedPaths reliance)
-        - Backend-aware fail-closed (refuses if policy unenforceable)
-        - keychain_access=false (hardcoded, not overridable)
-        - Audit-first (fails if audit unavailable)
-        
+        - Operator-set ceiling (env-configured); you can only NARROW it, never widen.
+        - Positive-allowlist-only paths (no deniedPaths reliance).
+        - Backend-aware fail-closed (refuses if policy unenforceable).
+        - keychain_access=false (hardcoded) — never reads the user's Keychain.
+        - Audit-first (every call is logged before it runs).
+
         Args:
-            argv: Structured command (e.g., ["python", "script.py", "arg1"])
-                  NO SHELL — this is passed as argv to avoid metachar escapes
-            readonly_paths: Optional list of paths to narrow from ceiling (read-only access)
-            readwrite_paths: Optional list of paths to narrow from ceiling (read-write access)
-            timeout_ms: Optional timeout to narrow from ceiling (milliseconds)
-        
+            argv: Structured command as a list (e.g. ["cat", "/Users/me/Documents/notes.txt"]).
+                  NO SHELL by default — passed directly as argv. For redirection or
+                  pipes (e.g. writing a file), invoke a shell explicitly, e.g.
+                  ["bash", "-lc", "echo hi > /tmp/out.txt"].
+            readonly_paths: Optional paths to request read access to (narrows the
+                  ceiling). Pass the directory or file you intend to read.
+            readwrite_paths: Optional paths to request write access to (narrows the
+                  ceiling). Pass the directory you intend to write into.
+            timeout_ms: Optional timeout (narrows the ceiling), milliseconds.
+
         Returns:
-            JSON string with:
-            - success: bool
-            - stdout: str (truncated if large)
-            - stderr: str (truncated if large)
-            - exit_code: int
-            - duration_ms: int
-            - timed_out: bool
-            
-            Or error dict if unavailable/failed.
-        
+            JSON string with: success (bool), stdout (str), stderr (str),
+            exit_code (int), duration_ms (int), timed_out (bool). Or an error dict.
+
         Examples:
-            run_code(argv=["python", "-c", "print('hello')"])
-            run_code(argv=["echo", "test"], timeout_ms=5000)
+            # READ a local file in the user's Documents folder
+            run_code(argv=["cat", "/Users/me/Documents/notes.txt"],
+                     readonly_paths=["/Users/me/Documents"])
+
+            # WRITE a local file into the user's Downloads folder (use a shell for >)
+            run_code(argv=["bash", "-lc", "echo 'summary' > /Users/me/Downloads/report.txt"],
+                     readwrite_paths=["/Users/me/Downloads"])
+
+            # Run a quick computation
+            run_code(argv=["python", "-c", "print(2 + 2)"])
         """
         from entrabot.sandbox import get_sandbox_runner
         from entrabot.sandbox.base import (
