@@ -326,7 +326,7 @@ class SponsorGate:
         base_user_ids = frozenset(self.user_ids)
         user_ids = set(self.user_ids)
         for chat_id, members in chat_members_by_id.items():
-            if not chat_id or "@unq.gbl.spaces" not in chat_id:
+            if not chat_id or not chat_id.endswith("@unq.gbl.spaces"):
                 continue
             if not self._chat_contains_sponsor(members, base_user_ids):
                 continue
@@ -492,33 +492,34 @@ def fetch_watched_chat_members(
     )
 
 
-def fetch_chat_members(
+def _fetch_chat_members_grouped(
     config: EntraBotConfig,
-    chat_ids: str | list[str],
+    chat_ids: list[str],
     *,
     token_provider: Callable[[EntraBotConfig], str] = acquire_agent_user_token,
     transport: httpx.BaseTransport | None = None,
-) -> list[dict[str, Any]]:
-    """Return Graph chat members for one or more chat IDs.
+) -> dict[str, list[dict[str, Any]]]:
+    """Fetch Graph members for each chat_id, reusing one token + one client.
 
-    Each member dict has keys ``user_id``, ``name``, ``email``, ``roles``.
-
-    Used by ``share_file`` to verify the requester is actually a member
-    of the chat they claim is the active context (Learning #59 design).
+    Returns ``{chat_id: [member, ...]}`` with an entry for every requested
+    chat_id (empty list when that chat's members could not be read). A single
+    Agent User token is acquired and a single ``httpx.Client`` is used for the
+    whole batch. A ``401`` raises ``TokenExpiredError``; other per-chat
+    failures log and yield an empty member list for that chat so one bad
+    response does not poison the batch.
     """
-    if isinstance(chat_ids, str):
-        chat_ids = [chat_ids]
+    grouped: dict[str, list[dict[str, Any]]] = {}
     if not chat_ids:
-        return []
+        return grouped
 
     token = token_provider(config)
     client_kwargs: dict[str, Any] = {"timeout": httpx.Timeout(15.0)}
     if transport is not None:
         client_kwargs["transport"] = transport
 
-    members: list[dict[str, Any]] = []
     with httpx.Client(**client_kwargs) as client:
         for chat_id in chat_ids:
+            grouped[chat_id] = []
             try:
                 resp = client.get(
                     f"{AGENT_IDENTITY_GRAPH_BASE}/chats/{chat_id}/members",
@@ -554,7 +555,7 @@ def fetch_chat_members(
                 continue
             for member in payload.get("value", []):
                 if isinstance(member, dict):
-                    members.append(
+                    grouped[chat_id].append(
                         {
                             "user_id": member.get("userId", ""),
                             "name": member.get("displayName", ""),
@@ -562,7 +563,33 @@ def fetch_chat_members(
                             "roles": member.get("roles", []),
                         }
                     )
-    return members
+    return grouped
+
+
+def fetch_chat_members(
+    config: EntraBotConfig,
+    chat_ids: str | list[str],
+    *,
+    token_provider: Callable[[EntraBotConfig], str] = acquire_agent_user_token,
+    transport: httpx.BaseTransport | None = None,
+) -> list[dict[str, Any]]:
+    """Return Graph chat members for one or more chat IDs (flattened).
+
+    Each member dict has keys ``user_id``, ``name``, ``email``, ``roles``.
+
+    Used by ``share_file`` to verify the requester is actually a member
+    of the chat they claim is the active context (Learning #59 design).
+    A single token + client is used for the whole batch.
+    """
+    if isinstance(chat_ids, str):
+        chat_ids = [chat_ids]
+    grouped = _fetch_chat_members_grouped(
+        config,
+        chat_ids,
+        token_provider=token_provider,
+        transport=transport,
+    )
+    return [member for members in grouped.values() for member in members]
 
 
 def fetch_watched_chat_members_by_id(
@@ -576,18 +603,14 @@ def fetch_watched_chat_members_by_id(
     Unlike ``fetch_watched_chat_members`` (which flattens members across all
     chats), this preserves the per-chat association required to verify that a
     specific watched chat actually contains a sponsor before trusting the
-    counterparty encoded in its chat_id.
+    counterparty encoded in its chat_id. One token + one client for the batch.
     """
-    chat_ids = _watched_chat_ids(config.data_dir)
-    members_by_id: dict[str, list[dict[str, Any]]] = {}
-    for chat_id in chat_ids:
-        members_by_id[chat_id] = fetch_chat_members(
-            config,
-            chat_id,
-            token_provider=token_provider,
-            transport=transport,
-        )
-    return members_by_id
+    return _fetch_chat_members_grouped(
+        config,
+        _watched_chat_ids(config.data_dir),
+        token_provider=token_provider,
+        transport=transport,
+    )
 
 
 def load_agent_identity_sponsor_gate(config: EntraBotConfig) -> SponsorGate:

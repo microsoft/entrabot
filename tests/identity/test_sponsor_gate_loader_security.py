@@ -58,8 +58,10 @@ def test_loader_promotes_only_verified_sponsor_chat(tmp_path) -> None:
             return_value=[SPONSOR_CHAT, ATTACKER_CHAT],
         ),
         patch(
-            "entrabot.identity.sponsors.fetch_chat_members",
-            side_effect=lambda config, chat_id, **kw: members_by_chat[chat_id],
+            "entrabot.identity.sponsors._fetch_chat_members_grouped",
+            side_effect=lambda config, chat_ids, **kw: {
+                cid: members_by_chat[cid] for cid in chat_ids
+            },
         ),
     ):
         gate = load_agent_identity_sponsor_gate(_config(tmp_path))

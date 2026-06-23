@@ -273,3 +273,16 @@ class TestWatchedChatSponsorVerification:
         gate = self._gate().with_watched_chat_ids(members_by_id, self.AGENT_USER_ID)
         assert sponsor_home in gate.user_ids
         assert self.ATTACKER_HOME_OID not in gate.user_ids
+
+    def test_lookalike_spaces_suffix_not_treated_as_1to1(self) -> None:
+        """A chat_id with a lookalike suffix (``...@unq.gbl.spaces.evil``) must
+        NOT be treated as a 1:1 DM, even if a sponsor is a member. Matching on a
+        bare substring rather than the exact suffix would misclassify it."""
+        sponsor_home = "00112233-4455-6677-8899-aabbccddeeff"
+        chat_id = f"19:{sponsor_home}_{self.AGENT_USER_ID}@unq.gbl.spaces.evil"
+        members = [
+            {"user_id": "agent-user-oid", "email": "entrabot-agent@fabrikam.onmicrosoft.com"},
+            {"user_id": self.SPONSOR_GUEST_OID, "email": "alice@example.com"},
+        ]
+        gate = self._gate().with_watched_chat_ids({chat_id: members}, self.AGENT_USER_ID)
+        assert sponsor_home not in gate.user_ids
