@@ -124,6 +124,43 @@ the `entrabot` MCP server picks up the new `.env`. Confirm the tool is registere
 claude mcp list        # entrabot server should show ✓ Connected
 ```
 
+> ### ⚠️ Critical: the sandbox contains `run_code`, not "the agent"
+>
+> MXC sandboxes code executed **through the `run_code` tool**. It does **not**
+> contain your *host* (Claude Code, Copilot CLI, Codex, …), which ships its own
+> built-in `Bash`/`Edit`/`Write`/`Read` tools with full, unsandboxed disk access.
+> If those remain enabled, the agent will simply use them and bypass the sandbox
+> entirely — `run_code` is then just *one* door in an open house.
+>
+> **For the containment to be real, make `run_code` the agent's only path to the
+> filesystem** by disabling the host's built-in file/shell tools.
+>
+> **Claude Code** (verified): deny the built-ins — do **not** use `--tools ""`,
+> which removes the *MCP* tools (including `run_code`) and leaves the built-ins:
+>
+> ```bash
+> claude --dangerously-load-development-channels server:entrabot \
+>   --disallowedTools "Bash Write Edit NotebookEdit Read Glob Grep WebFetch WebSearch Task"
+> ```
+>
+> With this, `run_code` still works but a direct `Write` returns
+> *"No such tool available"* and the file is never created.
+>
+> **Copilot CLI**: use `--available-tools` (allow-list) or `--deny-tool` to the
+> same effect.
+>
+> **This is a real trade-off, not a tweak.** Stripping the built-ins makes the
+> agent MCP-only — it keeps every entrabot tool (Teams, email, Files-via-Graph,
+> `run_code`) but loses general local coding (arbitrary file edits, shell). Run
+> the *contained* configuration in a **dedicated session**; keep your everyday
+> agent fully tooled. Whole-agent containment that *keeps* the powerful tools is a
+> separate model (a dedicated OS user / VM the agent runs as) — see
+> [ADR-007](../decisions/007-mxc-sandbox-integration.md) Phase 2.
+>
+> As a defense-in-depth backstop, entrabot's own deliberately-unsafe
+> `write_local_file` tool is **off by default** and only registered when
+> `ENTRABOT_ENABLE_UNSAFE_WRITE=1`. Leave it unset.
+
 ### Step 4 — Verify it works
 
 Show the active configuration (operator's view):
@@ -247,6 +284,8 @@ dir:
 | Symptom | Cause / Fix |
 |---------|-------------|
 | `run_code` tool missing | `ENTRABOT_ENABLE_RUN_CODE` isn't `1`, or the server wasn't restarted after editing `.env`. |
+| Agent ignored the sandbox / wrote anyway | The host's built-in `Edit`/`Bash`/`Write` tools were enabled and the agent used those instead of `run_code`. Disable them (see *Critical: the sandbox contains run_code, not "the agent"* above). |
+| `run_code` disappeared after adding `--tools ""` | `--tools ""` disables **MCP** tools (incl. `run_code`) and is the wrong flag. Use `--disallowedTools "Bash Write Edit NotebookEdit Read Glob Grep WebFetch WebSearch Task"` instead. |
 | `Sandbox unavailable` / binary not found | `MXC_BIN_DIR` is unset/wrong, or the binary wasn't built. Re-run `./scripts/setup_sandbox.sh`. |
 | `Untrusted binary` (SHA mismatch) | The binary changed but `PINNED_HASHES` wasn't updated. Re-run `setup_sandbox.sh` (it re-pins), or rebuild from the pinned commit. |
 | A write to `/tmp` is denied in raw policy JSON | macOS `/tmp`→`/private/tmp` symlink. The `run_code` chain canonicalizes paths, so this only bites hand-written policy JSON. See the [upstream note](../platform-learnings/mxc-upstream-feedback-macos-symlinks.md). |
