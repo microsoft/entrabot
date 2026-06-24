@@ -193,11 +193,16 @@ class InteractiveSession:
             if self._bridge
             else "Teams is not configured this run, so you are talking to your operator locally. "
         )
+        cli = (
+            "Local terminal input from your operator is prefixed with '[cli]'. Answer it in the "
+            "terminal as a normal reply — do NOT call entrabot_send or post to Teams for a '[cli]' "
+            "turn. "
+        )
         return {
             "mode": "append",
             "content": (
                 f"You are {self._config.name}, an agent running in the ENTRABOT harness. You are NOT "
-                f"operating as an MCP server and do not need one connected. {teams}"
+                f"operating as an MCP server and do not need one connected. {teams}{cli}"
                 "Be concise and helpful."
             ),
         }
@@ -228,8 +233,17 @@ class InteractiveSession:
     async def _send(self, prompt: str) -> None:
         self._idle.clear()
         self._ui.set_working(True)
+        self._ui.append_line(prompt, UiStyle.USER)  # echo the operator's line into the transcript
+        # Frame local input as a [cli] turn so the agent replies in the terminal, not Teams; track
+        # it as injected with no caller/chat so its echo is swallowed and the turn binds to "cli".
+        framed = (
+            "[cli] Terminal input from your operator (reply here in the terminal; do NOT use "
+            f"entrabot_send or post to Teams for this turn).\nmessage: {prompt}"
+        )
+        async with self._inject_lock:
+            self._injected[framed] = (None, None)
         try:
-            await self._session.send(prompt, agent_mode=self._mode)
+            await self._session.send(framed, agent_mode=self._mode)
         except Exception as e:
             self._ui.append_line(f"send failed: {e}", UiStyle.ERROR)
             self._idle.set()
@@ -331,7 +345,7 @@ class InteractiveSession:
             ("/permissions", "edit per-caller-class tool permissions (sponsor vs guest)"),
             ("/schedules", "list scheduled prompts"),
             ("/watch <chat-id>", "add a Teams chat to listen to"),
-            ("/users [add|remove]", "list/manage the federated Teams recipient list"),
+            ("/users", "recipients & roles matrix (elevate/demote sponsors); add|remove|list too"),
             ("/mcp", "manage MCP servers + browse/install agency MCPs"),
             ("/reload", "re-read .mcp.json and rebuild the session"),
             ("/clear", "clear the screen"),
@@ -464,8 +478,10 @@ class InteractiveSession:
             item["locked"] = item["name"] in LOCKED_TOOLS
         sections = toolcatalog.group_sections(self._catalog)
         state = {
+            "cli_all": self._policy.cli_all,
             "sponsor_all": self._policy.sponsor_all,
             "guest_all": self._policy.guest_all,
+            "cli": set(self._policy.cli),
             "sponsor": set(self._policy.sponsor),
             "guest": set(self._policy.guest),
         }
@@ -473,15 +489,24 @@ class InteractiveSession:
         if result is None:
             return
         # mutate the SAME policy object so the live gate hook picks up the change immediately
+        self._policy.cli_all = bool(result["cli_all"])
         self._policy.sponsor_all = bool(result["sponsor_all"])
         self._policy.guest_all = bool(result["guest_all"])
+        self._policy.cli = set(result["cli"])
         self._policy.sponsor = set(result["sponsor"])
         self._policy.guest = set(result["guest"])
         self._config.permissions = self._policy.to_config()
         cfgmod.save(self._root, self._config)
-        s = "all" if self._policy.sponsor_all else f"{len(self._policy.sponsor)} tool(s)"
-        g = "all" if self._policy.guest_all else f"{len(self._policy.guest)} tool(s)"
-        self._ui.append_line(f"permissions updated → sponsor: {s}, guest: {g}", UiStyle.SUCCESS)
+
+        def _summary(all_on: bool, tools: set) -> str:
+            return "all" if all_on else f"{len(tools)} tool(s)"
+
+        self._ui.append_line(
+            f"permissions updated → cli: {_summary(self._policy.cli_all, self._policy.cli)}, "
+            f"sponsor: {_summary(self._policy.sponsor_all, self._policy.sponsor)}, "
+            f"guest: {_summary(self._policy.guest_all, self._policy.guest)}",
+            UiStyle.SUCCESS,
+        )
 
     def _print_schedules(self) -> None:
         tasks = self._scheduler.list() if self._scheduler else []
@@ -555,8 +580,12 @@ class InteractiveSession:
         if not globalcfg.global_exists():
             self._ui.append_line("no ENTRABOT config — run `entrabot init` first", UiStyle.WARN)
             return
-        sub = args[0].lower() if args else "list"
+        sub = args[0].lower() if args else "matrix"  # bare /users opens the role matrix
         rest = args[1:]
+
+        if sub == "matrix":
+            await self._users_matrix(recipients)
+            return
 
         if sub == "list":
             recs = recipients.load_global()
@@ -565,8 +594,23 @@ class InteractiveSession:
                 return
             self._ui.append_line(f"federated recipients ({len(recs)}):", UiStyle.INFO)
             for r in recs:
+                role = "Sponsor" if r.sponsor else "Guest"
                 tid = f" · home tenant {r.tenant_id}" if r.tenant_id else ""
-                self._ui.append_line(f"  • {r.upn}  [{r.user_type}]{tid}", UiStyle.INFO)
+                self._ui.append_line(f"  • {r.upn}  [{r.user_type}] {role}{tid}", UiStyle.INFO)
+            return
+
+        if sub in ("sponsor", "guest"):
+            if not rest:
+                self._ui.append_line(f"usage: /users {sub} <email>", UiStyle.WARN)
+                return
+            recs, changed = recipients.set_role(
+                recipients.load_global(), rest[0], sponsor=(sub == "sponsor"))
+            if not changed:
+                self._ui.append_line(f"{rest[0]} not a recipient, or already {sub}", UiStyle.WARN)
+                return
+            recipients.save_global(recs)
+            self._sponsors = self._load_sponsors()  # live — the gate reads this per tool call
+            self._ui.append_line(f"{rest[0]} is now a {sub}", UiStyle.SUCCESS)
             return
 
         if sub == "add":
@@ -603,7 +647,31 @@ class InteractiveSession:
             self._ui.append_line("run /reload to apply to live tool-gating", UiStyle.DIM)
             return
 
-        self._ui.append_line(f"unknown: /users {sub}  (list | add | remove)", UiStyle.WARN)
+        self._ui.append_line(
+            f"unknown: /users {sub}  (·matrix· | list | add | remove | sponsor | guest)",
+            UiStyle.WARN)
+
+    async def _users_matrix(self, recipients) -> None:
+        """Open the recipients-&-roles matrix: view every user with their Entra Type + Role, toggle
+        Role (Sponsor/Guest) to elevate/demote. Persists changes and hints /reload."""
+        recs = recipients.load_global()
+        rows = [{"upn": r.upn, "type": r.user_type, "role": r.sponsor} for r in recs]
+        result = await self._ui.edit_users(rows)
+        if result is None:
+            return
+        new_roles = result.get("roles", {})
+        changed = False
+        for r in recs:
+            want = bool(new_roles.get(r.upn, r.sponsor))
+            if r.sponsor != want:
+                r.sponsor = want
+                changed = True
+        if not changed:
+            return
+        recipients.save_global(recs)
+        self._sponsors = self._load_sponsors()  # live — the gate reads this per tool call
+        n = sum(1 for r in recs if r.sponsor)
+        self._ui.append_line(f"roles saved — {n} sponsor(s), applied live", UiStyle.SUCCESS)
 
     async def _handle_reload(self) -> None:
         self._ui.append_line("reloading MCP + session…", UiStyle.DIM)
@@ -659,23 +727,20 @@ class InteractiveSession:
 
     # ---- caller class (sponsor vs guest) ---------------------------------------------
     def _load_sponsors(self) -> set:
-        """Entra user ids that count as sponsors (from entrabot's HUMAN_USER_* config)."""
+        """Entra user ids elevated to the harness "sponsor" Role (recipients flagged sponsor=True
+        in the ENTRABOT_HUMAN_* list). The local operator is the "cli" class, not this set. Manage
+        with `/users` or `entrabot users sponsor/guest`."""
         try:
-            from entrabot.config import get_config
+            from . import recipients
 
-            c = get_config()
-            ids = set(getattr(c, "human_user_ids", None) or [])
-            single = getattr(c, "human_user_id", None)
-            if single:
-                ids.add(single)
-            return ids
+            return {r.user_id for r in recipients.load_global() if r.sponsor and r.user_id}
         except Exception:
             return set()
 
     def _caller_class(self) -> Optional[str]:
         caller = self._ctx.caller
         if caller is None:
-            return "sponsor"  # local operator typing in the terminal is trusted
+            return "cli"  # local operator typing in the terminal — its own caller class
         return "sponsor" if caller in self._sponsors else "guest"
 
     # ---- misc ------------------------------------------------------------------------

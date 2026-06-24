@@ -24,7 +24,10 @@ _RESOLVED_GUEST = {
 def _fake_session():
     lines: list[str] = []
     ui = SimpleNamespace(append_line=lambda text, style=None: lines.append(text))
-    return SimpleNamespace(_ui=ui), lines
+    sess = SimpleNamespace(_ui=ui, _sponsors=set())
+    # role edits refresh the live sponsor set via the real loader bound to this fake self
+    sess._load_sponsors = lambda: InteractiveSession._load_sponsors(sess)
+    return sess, lines
 
 
 def _seed_global(monkeypatch, tmp_path):
@@ -68,3 +71,46 @@ async def test_users_list_and_remove(tmp_path, monkeypatch):
     sess2, _ = _fake_session()
     await InteractiveSession._handle_users(sess2, ["remove", "bob@corp.com"])
     assert [r.upn for r in rc.load_global()] == ["jaly@microsoft.com"]
+
+
+async def test_users_sponsor_guest_shortcuts(tmp_path, monkeypatch):
+    _seed_global(monkeypatch, tmp_path)
+    rc.save_global([rc.Recipient(upn="jaly@microsoft.com", user_id="g1", user_type="Guest")])
+    sess, _ = _fake_session()
+    await InteractiveSession._handle_users(sess, ["sponsor", "jaly@microsoft.com"])
+    assert rc.load_global()[0].sponsor is True
+    await InteractiveSession._handle_users(sess, ["guest", "jaly@microsoft.com"])
+    assert rc.load_global()[0].sponsor is False
+
+
+async def test_users_matrix_applies_role_toggles(tmp_path, monkeypatch):
+    _seed_global(monkeypatch, tmp_path)
+    rc.save_global([rc.Recipient(upn="jaly@microsoft.com", user_id="g1", user_type="Guest"),
+                    rc.Recipient(upn="bob@corp.com", user_id="m1", user_type="Member")])
+
+    # fake UI whose edit_users returns the matrix result (jaly elevated)
+    seen_rows = {}
+
+    async def fake_edit_users(rows):
+        seen_rows["rows"] = rows
+        return {"roles": {"jaly@microsoft.com": True, "bob@corp.com": False}}
+
+    sess, lines = _fake_session()
+    sess._ui.edit_users = fake_edit_users
+    await InteractiveSession._users_matrix(sess, rc)  # what bare /users dispatches to
+
+    # the matrix was handed the current users with their Type + Role
+    assert {r["upn"] for r in seen_rows["rows"]} == {"jaly@microsoft.com", "bob@corp.com"}
+    recs = {r.upn: r for r in rc.load_global()}
+    assert recs["jaly@microsoft.com"].sponsor is True
+    assert recs["bob@corp.com"].sponsor is False
+    assert any("applied live" in ln for ln in lines)
+    assert sess._sponsors == {"g1"}  # refreshed live from the new roles
+
+
+def test_load_sponsors_only_returns_flagged(tmp_path, monkeypatch):
+    _seed_global(monkeypatch, tmp_path)
+    rc.save_global([rc.Recipient(upn="jaly@microsoft.com", user_id="g1", sponsor=True),
+                    rc.Recipient(upn="bob@corp.com", user_id="m1", sponsor=False)])
+    s = SimpleNamespace()
+    assert InteractiveSession._load_sponsors(s) == {"g1"}  # only the elevated user

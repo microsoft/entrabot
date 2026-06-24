@@ -132,25 +132,29 @@ class ConsoleUI(UI):
             return None
 
     async def edit_permissions(self, sections, state):
-        sa = bool(state.get("sponsor_all", True))
-        ga = bool(state.get("guest_all", False))
-        sponsor = set(state.get("sponsor", set()))
-        guest = set(state.get("guest", set()))
+        # Data-driven columns so the matrix isn't hardwired to two classes (cli · sponsor · guest).
+        cols = ["cli", "sponsor", "guest"]
+        all_on = {c: bool(state.get(f"{c}_all", c != "guest")) for c in cols}
+        sets = {c: set(state.get(c, set())) for c in cols}
         tools = {it["name"] for _, items in sections for it in items}
         locked = {it["name"] for _, items in sections for it in items if it.get("locked")}
         mark = lambda on: ansi.green("✓") if on else ansi.dim("·")
 
+        def cells(on_for):
+            return "  ".join(f"{c}:{on_for(c)}" for c in cols)
+
         def show():
-            print(ansi.bold("Tool permissions  (toggle: '<tool> sponsor' / '<tool> guest' / 'yolo sponsor'; 'done')"))
-            print(f"  {'YOLO':44} sponsor:{mark(sa)}  guest:{mark(ga)}")
+            print(ansi.bold("Tool permissions  (toggle: '<tool> <cli|sponsor|guest>' / "
+                            "'yolo <class>'; 'done')"))
+            print(f"  {'YOLO':40} {cells(lambda c: mark(all_on[c]))}")
             for section, items in sections:
                 print(ansi.dim(f"  ── {section} ──"))
                 for it in items:
                     n = it["name"]
                     if n in locked:
-                        print(f"  {('🔒 ' + n):44} sponsor:{ansi.green('✓')}  guest:{ansi.green('✓')}  {ansi.dim('(required)')}")
+                        print(f"  {('🔒 ' + n):40} {cells(lambda c: ansi.green('✓'))}  {ansi.dim('(required)')}")
                     else:
-                        print(f"  {n:44} sponsor:{mark(sa or n in sponsor)}  guest:{mark(ga or n in guest)}")
+                        print(f"  {n:40} {cells(lambda c, n=n: mark(all_on[c] or n in sets[c]))}")
 
         show()
         while True:
@@ -163,18 +167,15 @@ class ConsoleUI(UI):
             if cmd.lower() in ("q", "quit", "cancel"):
                 return None
             parts = cmd.split()
-            if len(parts) == 2 and parts[1].lower() in ("sponsor", "guest"):
+            if len(parts) == 2 and parts[1].lower() in cols:
                 name, col = parts[0], parts[1].lower()
                 if name.lower() == "yolo":
-                    if col == "sponsor":
-                        sa = not sa
-                    else:
-                        ga = not ga
+                    all_on[col] = not all_on[col]
                 elif name in locked:
                     print(ansi.dim("  (required — always enabled, can't be changed)"))
                     continue
                 elif name in tools:
-                    tgt = sponsor if col == "sponsor" else guest
+                    tgt = sets[col]
                     tgt.discard(name) if name in tgt else tgt.add(name)
                 else:
                     print(ansi.dim("  unknown tool"))
@@ -182,7 +183,48 @@ class ConsoleUI(UI):
                 show()
             else:
                 print(ansi.dim("  e.g.  yolo guest   |   powershell sponsor   |   done"))
-        return {"sponsor_all": sa, "guest_all": ga, "sponsor": sponsor, "guest": guest}
+        return {
+            **{f"{c}_all": all_on[c] for c in cols},
+            **{c: sets[c] for c in cols},
+        }
+
+    async def edit_users(self, rows):
+        # rows: [{"upn","type","role": bool}]. Toggle Role per user; returns {"roles": {upn: bool}}.
+        roles = {r["upn"]: bool(r.get("role")) for r in rows}
+
+        def mark(on):
+            return ansi.green("Sponsor") if on else ansi.dim("Guest")
+
+        def show():
+            print(ansi.bold("Recipients & roles  (toggle: '<email> sponsor' / '<email> guest'; "
+                            "'done')"))
+            if not rows:
+                print(ansi.dim("  (no recipients — add with `entrabot users add <email>`)"))
+            for r in rows:
+                print(f"  {r['upn']:40} {r.get('type', 'Member'):8} {mark(roles[r['upn']])}")
+
+        by_lower = {r["upn"].lower(): r["upn"] for r in rows}
+        show()
+        while True:
+            try:
+                cmd = (await asyncio.to_thread(input, ansi.cyan("users> "))).strip()
+            except (EOFError, KeyboardInterrupt):
+                break
+            if cmd.lower() in ("", "done", "save"):
+                break
+            if cmd.lower() in ("q", "quit", "cancel"):
+                return None
+            parts = cmd.split()
+            if len(parts) == 2 and parts[1].lower() in ("sponsor", "guest"):
+                upn = by_lower.get(parts[0].lower())
+                if not upn:
+                    print(ansi.dim("  unknown recipient"))
+                    continue
+                roles[upn] = parts[1].lower() == "sponsor"
+                show()
+            else:
+                print(ansi.dim("  e.g.  jaly@microsoft.com sponsor   |   done"))
+        return {"roles": roles}
 
     async def form(self, title, fields):
         print(ansi.bold(title))

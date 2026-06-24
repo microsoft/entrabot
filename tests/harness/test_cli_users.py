@@ -72,3 +72,24 @@ def test_users_remove_unknown_is_nonzero(tmp_path, monkeypatch):
     _seed_global(monkeypatch, tmp_path)
     rc.save_global([rc.Recipient(upn="jaly@microsoft.com")])
     assert cli._cmd_users(["remove", "ghost@x.com"], set()) == 1
+
+
+def test_users_elevate_and_demote(tmp_path, monkeypatch, capsys):
+    _seed_global(monkeypatch, tmp_path)
+    rc.save_global([rc.Recipient(upn="jaly@microsoft.com", user_id="g1", user_type="Guest")])
+
+    assert cli._cmd_users(["sponsor", "jaly@microsoft.com"], set()) == 0
+    assert rc.load_global()[0].sponsor is True
+
+    capsys.readouterr()
+    assert cli._cmd_users(["list"], set()) == 0
+    assert "Sponsor" in capsys.readouterr().out
+
+    assert cli._cmd_users(["guest", "jaly@microsoft.com"], set()) == 0
+    assert rc.load_global()[0].sponsor is False
+
+
+def test_users_elevate_unknown_is_nonzero(tmp_path, monkeypatch):
+    _seed_global(monkeypatch, tmp_path)
+    rc.save_global([rc.Recipient(upn="jaly@microsoft.com")])
+    assert cli._cmd_users(["sponsor", "ghost@x.com"], set()) == 1

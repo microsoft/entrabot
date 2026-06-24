@@ -65,10 +65,12 @@ class TextualUI(UI):
         ui = self
 
         class _PermissionsScreen(ModalScreen):
-            """Per-tool Sponsor-vs-Guest matrix on an OptionList. Rows: a YOLO row (its Sponsor /
-            Guest cells grant ALL tools to that class) then every tool grouped by section. ↑/↓
-            pick a row, s toggles Sponsor, g toggles Guest, space both, esc saves. Resolves
-            {sponsor_all, guest_all, sponsor:set, guest:set}."""
+            """Per-tool caller-class matrix on an OptionList. Columns: cli · sponsor · guest. Rows:
+            a YOLO row (each cell grants ALL tools to that class) then every tool grouped by
+            section. ↑/↓ pick a row, c/s/g toggle the cli/sponsor/guest cell, space toggles all,
+            esc saves. Resolves {cli_all, sponsor_all, guest_all, cli:set, sponsor:set, guest:set}."""
+
+            _COLS = ("cli", "sponsor", "guest")
 
             CSS = """
             _PermissionsScreen { background: #0d0d0d; }
@@ -79,10 +81,8 @@ class TextualUI(UI):
 
             def __init__(self, sections, state, fut):
                 super().__init__()
-                self._sponsor_all = bool(state.get("sponsor_all", True))
-                self._guest_all = bool(state.get("guest_all", False))
-                self._sponsor = set(state.get("sponsor", set()))
-                self._guest = set(state.get("guest", set()))
+                self._all = {c: bool(state.get(f"{c}_all", c != "guest")) for c in self._COLS}
+                self._sets = {c: set(state.get(c, set())) for c in self._COLS}
                 self._fut = fut
                 # flat row list: yolo, then per-section (header + tools)
                 self._rows = [{"kind": "yolo"}]
@@ -94,10 +94,11 @@ class TextualUI(UI):
                         )
 
             def compose(self):
-                yield Static("Tool permissions  —  Sponsor vs Guest, per tool", id="perm-title")
+                yield Static("Tool permissions  —  cli · sponsor · guest, per tool", id="perm-title")
                 yield OptionList(id="perm-list")
                 yield Static(
-                    "↑/↓ row   ·   s sponsor   ·   g guest   ·   space both   ·   esc save & close",
+                    "↑/↓ row   ·   c cli   ·   s sponsor   ·   g guest   ·   space all   ·   "
+                    "esc save & close",
                     id="perm-footer",
                 )
 
@@ -108,37 +109,48 @@ class TextualUI(UI):
             def on_key(self, event):
                 k = event.key
                 if k == "escape":
-                    self.action_save_close(); event.stop()
+                    self.action_save_close()
+                elif k == "c":
+                    self._toggle("cli")
                 elif k == "s":
-                    self._toggle("sponsor"); event.stop()
+                    self._toggle("sponsor")
                 elif k == "g":
-                    self._toggle("guest"); event.stop()
+                    self._toggle("guest")
                 elif k == "space":
-                    self._toggle("sponsor"); self._toggle("guest"); event.stop()
+                    for c in self._COLS:
+                        self._toggle(c, rebuild=False)
+                    self._rebuild()
+                else:
+                    return
+                event.stop()
 
             def on_option_list_option_selected(self, event):
-                self._toggle("sponsor"); self._toggle("guest")
+                for c in self._COLS:
+                    self._toggle(c, rebuild=False)
+                self._rebuild()
 
             def _cell(self, on, all_on):
                 if all_on:
                     return "[yellow]✓[/]"  # granted via the YOLO row
                 return "[green]✓[/]" if on else "[grey50]·[/]"
 
+            def _cells(self, fn):
+                return "  ".join(f"{c} {fn(c)}" for c in self._COLS)
+
             def _row_markup(self, i):
                 row = self._rows[i]
                 if row["kind"] == "header":
                     return f"[bold #569cd6]── {row['label']} ──[/]"
                 if row["kind"] == "yolo":
-                    s = "[bold yellow]✓ all[/]" if self._sponsor_all else "[grey50]·[/]"
-                    g = "[bold yellow]✓ all[/]" if self._guest_all else "[grey50]·[/]"
-                    return f"⚡ {'YOLO — allow ALL tools'.ljust(40)}  sponsor {s}    guest {g}"
+                    cells = self._cells(
+                        lambda c: "[bold yellow]✓ all[/]" if self._all[c] else "[grey50]·[/]")
+                    return f"⚡ {'YOLO — allow ALL tools'.ljust(34)}  {cells}"
                 name = row["name"]
                 if row.get("locked"):  # harness reply path — locked ON, not toggleable
-                    cell = "[bold green]✓[/]"
-                    return f"   🔒 {(name + ' (required)').ljust(39)}  sponsor {cell}    guest {cell}"
-                s = self._cell(name in self._sponsor, self._sponsor_all)
-                g = self._cell(name in self._guest, self._guest_all)
-                return f"   {name.ljust(42)}  sponsor {s}    guest {g}"
+                    cells = self._cells(lambda c: "[bold green]✓[/]")
+                    return f"   🔒 {(name + ' (required)').ljust(33)}  {cells}"
+                cells = self._cells(lambda c: self._cell(name in self._sets[c], self._all[c]))
+                return f"   {name.ljust(36)}  {cells}"
 
             def _rebuild(self):
                 from rich.text import Text
@@ -150,36 +162,110 @@ class TextualUI(UI):
                     ol.add_option(Text.from_markup(self._row_markup(i)))
                 ol.highlighted = hl if hl is not None else 0
 
-            def _toggle(self, col):
+            def _toggle(self, col, rebuild=True):
                 i = self.query_one(OptionList).highlighted or 0
                 row = self._rows[i]
                 if row["kind"] == "yolo":
-                    if col == "sponsor":
-                        self._sponsor_all = not self._sponsor_all
-                    else:
-                        self._guest_all = not self._guest_all
+                    self._all[col] = not self._all[col]
                 elif row["kind"] == "tool":
                     if row.get("locked"):
                         return  # locked ON for all callers — can't be toggled
-                    target = self._sponsor if col == "sponsor" else self._guest
+                    target = self._sets[col]
                     target.discard(row["name"]) if row["name"] in target else target.add(row["name"])
                 else:
                     return  # header
+                if rebuild:
+                    self._rebuild()
+
+            def action_save_close(self):
+                if not self._fut.done():
+                    self._fut.set_result({
+                        **{f"{c}_all": self._all[c] for c in self._COLS},
+                        **{c: self._sets[c] for c in self._COLS},
+                    })
+                self.app.pop_screen()
+
+        self._PermissionsScreen = _PermissionsScreen
+
+        class _UsersScreen(ModalScreen):
+            """Recipients-&-roles matrix on an OptionList. Each row is a recipient with a read-only
+            Type (Entra Guest/Member) and a toggleable Role (Sponsor/Guest). ↑/↓ pick, space (or
+            s/g) toggles the Role, esc saves. Resolves {"roles": {upn: bool}}."""
+
+            CSS = """
+            _UsersScreen { background: #0d0d0d; }
+            #users-title { color: #569cd6; text-style: bold; padding: 1 2 0 2; }
+            #users-list { height: 1fr; background: #0d0d0d; margin: 0 2; border: round #3a3d41; }
+            #users-footer { color: #808080; padding: 0 2 1 2; }
+            """
+
+            def __init__(self, rows, fut):
+                super().__init__()
+                self._rows = [
+                    {"upn": r["upn"], "type": r.get("type", "Member"), "role": bool(r.get("role"))}
+                    for r in rows
+                ]
+                self._fut = fut
+
+            def compose(self):
+                yield Static("Recipients & roles  —  Type (Entra) · Role (toggle)", id="users-title")
+                yield OptionList(id="users-list")
+                yield Static(
+                    "↑/↓ row   ·   space / s sponsor / g guest toggles Role   ·   esc save & close",
+                    id="users-footer",
+                )
+
+            def on_mount(self):
+                self._rebuild()
+                self.query_one(OptionList).focus()
+
+            def on_key(self, event):
+                k = event.key
+                if k == "escape":
+                    self.action_save_close()
+                elif k in ("space", "s"):
+                    self._set(True)
+                elif k == "g":
+                    self._set(False)
+                else:
+                    return
+                event.stop()
+
+            def on_option_list_option_selected(self, event):
+                i = self.query_one(OptionList).highlighted or 0
+                self._set(not self._rows[i]["role"])  # click flips the Role
+
+            def _row_markup(self, i):
+                r = self._rows[i]
+                role = "[bold green]Sponsor[/]" if r["role"] else "[grey50]Guest[/]"
+                return f"   {r['upn'].ljust(40)}  [grey62]{r['type'].ljust(8)}[/]  {role}"
+
+            def _rebuild(self):
+                from rich.text import Text
+
+                ol = self.query_one(OptionList)
+                hl = ol.highlighted
+                ol.clear_options()
+                if not self._rows:
+                    ol.add_option(Text.from_markup("[grey50]   (no recipients)[/]"))
+                else:
+                    for i in range(len(self._rows)):
+                        ol.add_option(Text.from_markup(self._row_markup(i)))
+                ol.highlighted = hl if hl is not None else 0
+
+            def _set(self, sponsor):
+                if not self._rows:
+                    return
+                i = self.query_one(OptionList).highlighted or 0
+                self._rows[i]["role"] = sponsor
                 self._rebuild()
 
             def action_save_close(self):
                 if not self._fut.done():
-                    self._fut.set_result(
-                        {
-                            "sponsor_all": self._sponsor_all,
-                            "guest_all": self._guest_all,
-                            "sponsor": self._sponsor,
-                            "guest": self._guest,
-                        }
-                    )
+                    self._fut.set_result({"roles": {r["upn"]: r["role"] for r in self._rows}})
                 self.app.pop_screen()
 
-        self._PermissionsScreen = _PermissionsScreen
+        self._UsersScreen = _UsersScreen
 
         class _FormScreen(ModalScreen):
             """All-on-one-page editable form (agency MCP params). Tab between fields, edit each,
@@ -659,6 +745,13 @@ class TextualUI(UI):
             return None
         fut = asyncio.get_event_loop().create_future()
         self.app.push_screen(self._PermissionsScreen(categories, state, fut))
+        return await fut
+
+    async def edit_users(self, rows):
+        if not self.app:
+            return None
+        fut = asyncio.get_event_loop().create_future()
+        self.app.push_screen(self._UsersScreen(rows, fut))
         return await fut
 
     async def form(self, title, fields):

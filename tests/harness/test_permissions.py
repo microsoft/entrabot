@@ -3,25 +3,50 @@ from entrabot.harness import permissions
 
 def test_toolpolicy_defaults():
     p = permissions.ToolPolicy()
+    assert p.cli_all is True  # the local operator is fully trusted by default
     assert p.sponsor_all is True  # sponsors get everything by default
     assert p.guest_all is False
     assert p.guest == set()  # guests get nothing
 
 
 def test_toolpolicy_config_roundtrip():
-    p = permissions.ToolPolicy(sponsor_all=False, guest_all=False, sponsor={"edit", "view"}, guest={"view"})
+    p = permissions.ToolPolicy(
+        cli_all=True, sponsor_all=False, guest_all=False,
+        cli={"powershell"}, sponsor={"edit", "view"}, guest={"view"},
+    )
     cfg = p.to_config()
-    assert cfg == {"sponsor_all": False, "guest_all": False, "sponsor": ["edit", "view"], "guest": ["view"]}
+    assert cfg == {
+        "cli_all": True, "sponsor_all": False, "guest_all": False,
+        "cli": ["powershell"], "sponsor": ["edit", "view"], "guest": ["view"],
+    }
     p2 = permissions.ToolPolicy.from_config(cfg)
-    assert p2.sponsor == {"edit", "view"} and p2.guest == {"view"} and p2.sponsor_all is False
+    assert p2.cli == {"powershell"} and p2.sponsor == {"edit", "view"} and p2.guest == {"view"}
+    assert p2.sponsor_all is False and p2.cli_all is True
+
+
+def test_from_config_defaults_cli_all_true_for_legacy_config():
+    # a config written before the cli column existed → operator stays fully trusted
+    p = permissions.ToolPolicy.from_config({"sponsor_all": True, "guest_all": False})
+    assert p.cli_all is True and p.cli == set()
 
 
 def test_allowed_per_tool_and_class():
-    p = permissions.ToolPolicy(sponsor_all=False, guest_all=False, sponsor={"powershell", "view"}, guest={"view"})
+    p = permissions.ToolPolicy(
+        cli_all=False, sponsor_all=False, guest_all=False,
+        cli={"powershell"}, sponsor={"powershell", "view"}, guest={"view"},
+    )
+    assert p.allowed("cli", "powershell") is True
+    assert p.allowed("cli", "view") is False
     assert p.allowed("sponsor", "powershell") is True
     assert p.allowed("sponsor", "edit") is False
     assert p.allowed("guest", "view") is True
     assert p.allowed("guest", "powershell") is False
+
+
+def test_allowed_cli_all():
+    p = permissions.ToolPolicy(cli_all=True, sponsor_all=False, guest_all=False)
+    assert p.allowed("cli", "anything") is True  # cli_all
+    assert p.allowed("sponsor", "anything") is False
 
 
 def test_allowed_all_overrides():
@@ -45,7 +70,7 @@ async def test_gate_allows_and_denies_per_class():
     assert (await gate_s(_shell_input("view")))["permissionDecision"] == "deny"
     # guest: nothing allowed
     assert (await gate_g(_shell_input("edit")))["permissionDecision"] == "deny"
-    # two-arg call (SDK passes context) + local operator (None -> sponsor)
+    # two-arg call (SDK passes context) + local operator (None -> cli, fully trusted by default)
     gate_local = permissions.build_tool_gate(p, lambda: None)
     assert (await gate_local(_shell_input("edit"), {"session_id": "s"}))["permissionDecision"] == "allow"
 

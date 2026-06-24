@@ -22,13 +22,19 @@ from . import globalcfg
 
 @dataclass
 class Recipient:
-    """One person the agent may talk to on Teams."""
+    """One person the agent may talk to on Teams.
+
+    ``user_type`` is the Entra account *type* (Guest = B2B / Member = internal) — informational,
+    auto-detected, used for federated chat addressing. ``sponsor`` is the *role*: True grants the
+    harness caller-class "sponsor" (the gate ``/permissions`` governs). The two are independent.
+    """
 
     upn: str
     user_id: str = ""
     tenant_id: str = ""
     mail: str = ""
     user_type: str = "Member"
+    sponsor: bool = False  # Role: elevated to the harness "sponsor" caller-class
 
     @property
     def is_guest(self) -> bool:
@@ -60,9 +66,10 @@ def parse(env: dict) -> list[Recipient]:
     tids = _cells(env.get("ENTRABOT_HUMAN_USER_TENANT_IDS"), n)
     mails = _cells(env.get("ENTRABOT_HUMAN_USER_MAILS"), n)
     types = _cells(env.get("ENTRABOT_HUMAN_USER_TYPES"), n)
+    flags = _cells(env.get("ENTRABOT_HUMAN_SPONSOR_FLAGS"), n)  # absent → all "" → all Guest
     return [
         Recipient(upn=upns[i], user_id=ids[i], tenant_id=tids[i], mail=mails[i],
-                  user_type=types[i] or "Member")
+                  user_type=types[i] or "Member", sponsor=flags[i].strip() in ("1", "true", "True"))
         for i in range(n)
     ]
 
@@ -77,6 +84,7 @@ def to_env(recips: list[Recipient]) -> dict:
         "ENTRABOT_HUMAN_USER_TENANT_IDS": ",".join(r.tenant_id for r in recips),
         "ENTRABOT_HUMAN_USER_MAILS": ",".join(r.mail for r in recips),
         "ENTRABOT_HUMAN_USER_TYPES": ",".join(r.user_type for r in recips),
+        "ENTRABOT_HUMAN_SPONSOR_FLAGS": ",".join("1" if r.sponsor else "0" for r in recips),
         # backward-compat singulars track the primary (first) recipient
         "ENTRABOT_HUMAN_USER_ID": recips[0].user_id,
         "ENTRABOT_HUMAN_UPN": recips[0].upn,
@@ -84,11 +92,29 @@ def to_env(recips: list[Recipient]) -> dict:
 
 
 def upsert(recips: list[Recipient], new: list[Recipient]) -> list[Recipient]:
-    """Merge ``new`` into ``recips``, replacing any with a matching key (case-insensitive)."""
+    """Merge ``new`` into ``recips``, replacing any with a matching key (case-insensitive). The
+    incoming record's freshly-resolved data wins, but an existing **Role** (``sponsor``) is
+    preserved — re-adding someone (e.g. ``users add`` again) must not silently demote them, since a
+    freshly-resolved record always carries the default ``sponsor=False``."""
     by_key: dict[str, Recipient] = {r.key: r for r in recips}
     for r in new:
+        prior = by_key.get(r.key)
+        if prior is not None and prior.sponsor and not r.sponsor:
+            r.sponsor = True
         by_key[r.key] = r
     return list(by_key.values())
+
+
+def set_role(recips: list[Recipient], email: str, *, sponsor: bool) -> tuple[list[Recipient], bool]:
+    """Elevate/demote the recipient matching ``email`` (by UPN or home SMTP alias). Returns
+    (recips, changed); ``changed`` is False if no match or the role was already set."""
+    k = email.strip().lower()
+    changed = False
+    for r in recips:
+        if k in (r.upn.strip().lower(), r.mail.strip().lower()) and r.sponsor != sponsor:
+            r.sponsor = sponsor
+            changed = True
+    return recips, changed
 
 
 def remove(recips: list[Recipient], email: str) -> tuple[list[Recipient], bool]:

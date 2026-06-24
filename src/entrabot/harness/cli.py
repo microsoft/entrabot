@@ -6,9 +6,11 @@
                            shared tenant/Blueprint if already set up; only mints a new agent.
                            Idempotent — re-run to continue setup of an existing agent.
   entrabot users [...]     manage the federated Teams recipient list:
-                             entrabot users                list configured recipients
-                             entrabot users add EMAIL...   resolve + add (B2B guests federated)
-                             entrabot users remove EMAIL   remove a recipient
+                             entrabot users                 list recipients (Type + Role)
+                             entrabot users add EMAIL...    resolve + add (B2B guests federated)
+                             entrabot users remove EMAIL    remove a recipient
+                             entrabot users sponsor EMAIL   elevate to the sponsor Role
+                             entrabot users guest EMAIL     demote to the guest Role
   entrabot migrate [.env]  lift an existing combined .env into ~/.entrabot/global.env + default agent
   entrabot doctor          check the Copilot runtime + auth + Teams token
   entrabot --version | --help
@@ -159,9 +161,25 @@ def _cmd_users(args: list[str], flags: set) -> int:
             print("No recipients configured. Add one: entrabot users add <email>")
             return 0
         print(f"Federated recipients ({len(recs)}):")
+        print(f"  {'User':40} {'Type':8} Role")
+        print(f"  {'-' * 40} {'-' * 8} {'-' * 7}")
         for r in recs:
-            tid = f" · home tenant {r.tenant_id}" if r.tenant_id else ""
-            print(f"  • {r.upn}  [{r.user_type}]{tid}")
+            role = "Sponsor" if r.sponsor else "Guest"
+            print(f"  {r.upn:40} {r.user_type:8} {role}")
+        print("\n  Elevate/demote: entrabot users sponsor|guest <email>")
+        return 0
+
+    if sub in ("sponsor", "guest"):
+        if not rest:
+            print(f"Usage: entrabot users {sub} <email>")
+            return 1
+        recs, changed = recipients.set_role(
+            recipients.load_global(), rest[0], sponsor=(sub == "sponsor"))
+        if not changed:
+            print(f"  {rest[0]} is not a recipient, or is already {sub}.")
+            return 1
+        recipients.save_global(recs)
+        print(f"  ✓ {rest[0]} is now a {sub}")
         return 0
 
     if sub == "add":
@@ -195,7 +213,7 @@ def _cmd_users(args: list[str], flags: set) -> int:
         print(f"  ✓ removed {rest[0]}")
         return 0
 
-    print(f"Unknown users subcommand: {sub}. Try: list | add | remove")
+    print(f"Unknown users subcommand: {sub}. Try: list | add | remove | sponsor | guest")
     return 1
 
 
