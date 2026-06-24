@@ -9,53 +9,6 @@ from entrabot.harness import globalcfg
 from entrabot.harness import recipients as rc
 
 
-# ── Role (sponsor flag) ───────────────────────────────────────────────────────
-def test_role_defaults_to_guest_when_flags_absent():
-    # legacy block with no SPONSOR_FLAGS column → everyone defaults Guest (decided behavior)
-    [r] = rc.parse({"ENTRABOT_HUMAN_UPNS": "jaly@microsoft.com"})
-    assert r.sponsor is False
-
-
-def test_role_parses_and_round_trips_flags():
-    env = {
-        "ENTRABOT_HUMAN_USER_IDS": "g1,m1",
-        "ENTRABOT_HUMAN_UPNS": "jaly@microsoft.com,bob@corp.com",
-        "ENTRABOT_HUMAN_USER_TENANT_IDS": "ms-tid,",
-        "ENTRABOT_HUMAN_USER_MAILS": "jaly@microsoft.com,bob@corp.com",
-        "ENTRABOT_HUMAN_USER_TYPES": "Guest,Member",
-        "ENTRABOT_HUMAN_SPONSOR_FLAGS": "1,0",  # jaly elevated, bob not
-        "ENTRABOT_HUMAN_USER_ID": "g1",
-        "ENTRABOT_HUMAN_UPN": "jaly@microsoft.com",
-    }
-    recs = rc.parse(env)
-    assert [r.sponsor for r in recs] == [True, False]
-    assert rc.to_env(recs) == env  # round-trips, flags column included
-
-
-def test_set_role_elevates_and_demotes():
-    recs = [rc.Recipient(upn="jaly@microsoft.com", mail="jaly@microsoft.com"),
-            rc.Recipient(upn="bob@corp.com")]
-    recs, changed = rc.set_role(recs, "jaly@microsoft.com", sponsor=True)
-    assert changed is True
-    assert next(r for r in recs if r.upn == "jaly@microsoft.com").sponsor is True
-    # idempotent: setting the same role reports no change
-    recs, changed = rc.set_role(recs, "jaly@microsoft.com", sponsor=True)
-    assert changed is False
-    # unknown user
-    _, changed = rc.set_role(recs, "ghost@x.com", sponsor=True)
-    assert changed is False
-
-
-def test_upsert_preserves_existing_role():
-    existing = [rc.Recipient(upn="jaly@microsoft.com", user_type="Guest", sponsor=True)]
-    # re-resolving jaly (e.g. `users add` again) yields a fresh record with sponsor=False default
-    fresh = [rc.Recipient(upn="JALY@microsoft.com", user_type="Guest", tenant_id="ms")]
-    merged = rc.upsert(existing, fresh)
-    [r] = merged
-    assert r.sponsor is True  # role preserved, not silently demoted
-    assert r.tenant_id == "ms"  # but the freshly-resolved data is taken
-
-
 # ── parse / to_env ────────────────────────────────────────────────────────────
 def test_parse_empty_is_empty_list():
     assert rc.parse({}) == []
@@ -103,7 +56,6 @@ def test_to_env_round_trips_through_parse():
         "ENTRABOT_HUMAN_USER_TENANT_IDS": "ms-tid,",
         "ENTRABOT_HUMAN_USER_MAILS": "jaly@microsoft.com,bob@corp.com",
         "ENTRABOT_HUMAN_USER_TYPES": "Guest,Member",
-        "ENTRABOT_HUMAN_SPONSOR_FLAGS": "1,0",
         "ENTRABOT_HUMAN_USER_ID": "g1",
         "ENTRABOT_HUMAN_UPN": "jaly@microsoft.com",
     }

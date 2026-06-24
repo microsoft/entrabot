@@ -13,8 +13,8 @@ from entrabot.harness import setup_wizard as sw
 
 
 # ── fake lookups ──────────────────────────────────────────────────────────────
-def _fake_az(directory):
-    """directory: email -> az-style user dict (or absent → not found)."""
+def _fake_show(directory):
+    """directory: email -> {id,userType,mail,upn} (or absent → not found)."""
 
     def show(email):
         return directory.get(email)
@@ -27,79 +27,59 @@ def _fake_tenant(mapping):
     return lambda domain: mapping.get(domain, "")
 
 
-# ── _az_user_show fallback (B2B guests aren't found by --id <home-email>) ──────
-def _az_runner(responses):
-    """Build a fake `run` for _az_user_show. responses: list of (predicate, result) — the first
-    whose predicate matches the az args wins; default None (miss)."""
+# ── _graph_user_show (built on core resolve_user_by_email + a /users projection) ──
+def test_graph_user_show_resolves_via_core_and_projects_fields():
+    import httpx
 
-    def run(args):
-        for pred, result in responses:
-            if pred(args):
-                return result
-        return None
+    def fake_resolve(token, email):
+        assert token == "user-token"  # the Agent User token (User.Read.All)
+        return ("g1", "Jaly")  # core resolver handles UPN / mail / proxyAddresses
 
-    return run
+    def handler(req):
+        assert req.url.path.endswith("/users/g1")
+        return httpx.Response(200, json={
+            "id": "g1", "userType": "Guest", "mail": "jaly@microsoft.com",
+            "userPrincipalName": "jaly_microsoft.com#EXT#@sdnnm.onmicrosoft.com"})
+
+    got = sw._graph_user_show("jaly@microsoft.com", "user-token",
+                              resolve=fake_resolve, transport=httpx.MockTransport(handler))
+    assert got == {"id": "g1", "userType": "Guest", "mail": "jaly@microsoft.com",
+                   "upn": "jaly_microsoft.com#EXT#@sdnnm.onmicrosoft.com"}
 
 
-def test_az_user_show_direct_hit_for_member():
-    run = _az_runner([(lambda a: a[2] == "show", {"id": "m1", "userType": "Member",
-                                                  "mail": "bob@corp.com", "upn": "bob@corp.com"})])
-    assert sw._az_user_show("bob@corp.com", run=run)["id"] == "m1"
+def test_graph_user_show_none_when_core_resolver_misses():
+    def fake_resolve(token, email):
+        raise LookupError(email)
+
+    assert sw._graph_user_show("ghost@x.com", "t", resolve=fake_resolve) is None
 
 
-def test_az_user_show_falls_back_to_mail_filter_for_guest():
-    # direct `--id` misses (guest UPN is mangled); the `mail eq` list filter finds them.
+def test_home_domain_from_guest_upn_delegates_to_core_decoder():
+    assert sw._home_domain_from_guest_upn(
+        "jaly_microsoft.com#EXT#@sdnnm.onmicrosoft.com") == "microsoft.com"
+    assert sw._home_domain_from_guest_upn("bob@corp.com") == ""  # not a guest UPN
+
+
+def test_resolve_guest_end_to_end_via_core_resolution():
+    """A null-userType guest is classified via its #EXT# UPN and its home tenant resolved — the
+    path that was failing live, now through the core Graph resolver."""
     guest = {"id": "g1", "userType": None, "mail": "jaly@microsoft.com",
              "upn": "jaly_microsoft.com#EXT#@sdnnm.onmicrosoft.com"}
-    run = _az_runner([
-        (lambda a: a[2] == "show", None),
-        (lambda a: a[2] == "list" and "mail eq" in a[4], guest),
-    ])
-    got = sw._az_user_show("jaly@microsoft.com", run=run)
-    assert got["upn"].endswith("#EXT#@sdnnm.onmicrosoft.com")
-    assert got["mail"] == "jaly@microsoft.com"
-
-
-def test_az_user_show_falls_back_to_upn_prefix():
-    guest = {"id": "g2", "userType": None, "mail": None,
-             "upn": "alice_example.com#EXT#@sdnnm.onmicrosoft.com"}
-    run = _az_runner([
-        (lambda a: a[2] == "show", None),
-        (lambda a: a[2] == "list" and "mail eq" in a[4], None),  # no mail on this guest
-        (lambda a: a[2] == "list" and "startsWith" in a[4], guest),
-    ])
-    assert sw._az_user_show("alice@example.com", run=run)["id"] == "g2"
-
-
-def test_az_user_show_none_when_all_miss():
-    assert sw._az_user_show("ghost@nowhere.com", run=_az_runner([])) is None
-
-
-def test_az_user_show_guest_resolves_end_to_end():
-    """The mail-filter fallback feeds resolve_teams_user, which classifies the null-userType guest
-    via its #EXT# UPN and resolves the home tenant — the exact path that was failing live."""
-    guest = {"id": "g1", "userType": None, "mail": "jaly@microsoft.com",
-             "upn": "jaly_microsoft.com#EXT#@sdnnm.onmicrosoft.com"}
-
-    def az(email):
-        return sw._az_user_show(email, run=_az_runner([
-            (lambda a: a[2] == "show", None),
-            (lambda a: a[2] == "list" and "mail eq" in a[4], guest),
-        ]))
-
-    out = sw.resolve_teams_user("jaly@microsoft.com", az_show=az,
-                                tenant_lookup=_fake_tenant({"microsoft.com": "72f988bf"}))
+    out = sw.resolve_teams_user(
+        "jaly@microsoft.com",
+        user_show=_fake_show({"jaly@microsoft.com": guest}),
+        tenant_lookup=_fake_tenant({"microsoft.com": "72f988bf"}))
     assert out["ENTRABOT_HUMAN_USER_TYPES"] == "Guest"
     assert out["ENTRABOT_HUMAN_USER_TENANT_IDS"] == "72f988bf"
 
 
 # ── resolve_teams_user ────────────────────────────────────────────────────────
 def test_resolve_member_has_no_tenant_id():
-    az = _fake_az(
+    az = _fake_show(
         {"bob@corp.com": {"id": "bob-id", "userType": "Member", "mail": "bob@corp.com",
                           "upn": "bob@corp.com"}}
     )
-    out = sw.resolve_teams_user("bob@corp.com", az_show=az, tenant_lookup=_fake_tenant({}))
+    out = sw.resolve_teams_user("bob@corp.com", user_show=az, tenant_lookup=_fake_tenant({}))
     assert out["ENTRABOT_HUMAN_USER_IDS"] == "bob-id"
     assert out["ENTRABOT_HUMAN_UPNS"] == "bob@corp.com"
     assert out["ENTRABOT_HUMAN_USER_TYPES"] == "Member"
@@ -110,13 +90,13 @@ def test_resolve_member_has_no_tenant_id():
 
 
 def test_resolve_guest_by_usertype_resolves_home_tenant():
-    az = _fake_az(
+    az = _fake_show(
         {"jaly@microsoft.com": {
             "id": "guest-shadow-id", "userType": "Guest", "mail": "jaly@microsoft.com",
             "upn": "jaly_microsoft.com#EXT#@sdnnm.onmicrosoft.com"}}
     )
     out = sw.resolve_teams_user(
-        "jaly@microsoft.com", az_show=az,
+        "jaly@microsoft.com", user_show=az,
         tenant_lookup=_fake_tenant({"microsoft.com": "72f988bf-tenant"}),
     )
     assert out["ENTRABOT_HUMAN_USER_TYPES"] == "Guest"
@@ -128,13 +108,13 @@ def test_resolve_guest_by_usertype_resolves_home_tenant():
 
 def test_resolve_guest_inferred_from_ext_upn_when_usertype_null():
     # az returns userType: null for some guests → infer from the #EXT# UPN pattern.
-    az = _fake_az(
+    az = _fake_show(
         {"alice@example.com": {
             "id": "ax", "userType": None, "mail": "alice@example.com",
             "upn": "alice_example.com#EXT#@sdnnm.onmicrosoft.com"}}
     )
     out = sw.resolve_teams_user(
-        "alice@example.com", az_show=az,
+        "alice@example.com", user_show=az,
         tenant_lookup=_fake_tenant({"example.com": "ex-tenant-guid"}),
     )
     assert out["ENTRABOT_HUMAN_USER_TYPES"] == "Guest"
@@ -142,7 +122,7 @@ def test_resolve_guest_inferred_from_ext_upn_when_usertype_null():
 
 
 def test_resolve_group_preserves_positional_alignment():
-    az = _fake_az({
+    az = _fake_show({
         "jaly@microsoft.com": {
             "id": "g1", "userType": "Guest", "mail": "jaly@microsoft.com",
             "upn": "jaly_microsoft.com#EXT#@sdnnm.onmicrosoft.com"},
@@ -150,7 +130,7 @@ def test_resolve_group_preserves_positional_alignment():
             "id": "m1", "userType": "Member", "mail": "bob@corp.com", "upn": "bob@corp.com"},
     })
     out = sw.resolve_teams_user(
-        "jaly@microsoft.com, bob@corp.com", az_show=az,
+        "jaly@microsoft.com, bob@corp.com", user_show=az,
         tenant_lookup=_fake_tenant({"microsoft.com": "ms-tid"}),
     )
     # every list has 2 comma-separated positions, aligned by index; the member's tenant slot is
@@ -162,14 +142,14 @@ def test_resolve_group_preserves_positional_alignment():
 
 
 def test_resolve_blank_returns_empty():
-    out = sw.resolve_teams_user("  ", az_show=_fake_az({}), tenant_lookup=_fake_tenant({}))
+    out = sw.resolve_teams_user("  ", user_show=_fake_show({}), tenant_lookup=_fake_tenant({}))
     assert out == {}
 
 
 def test_resolve_unknown_user_raises():
     with pytest.raises(sw.TeamsUserNotFound) as ei:
         sw.resolve_teams_user(
-            "ghost@nowhere.com", az_show=_fake_az({}), tenant_lookup=_fake_tenant({})
+            "ghost@nowhere.com", user_show=_fake_show({}), tenant_lookup=_fake_tenant({})
         )
     assert "ghost@nowhere.com" in ei.value.emails
 

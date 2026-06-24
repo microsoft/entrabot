@@ -1,4 +1,6 @@
-"""Tests for the `entrabot users` management subcommand (list / add / remove)."""
+"""Tests for the `entrabot users` management subcommand (list / add / remove / sponsor / guest)."""
+
+from types import SimpleNamespace
 
 from entrabot.harness import cli, globalcfg
 from entrabot.harness import recipients as rc
@@ -77,19 +79,41 @@ def test_users_remove_unknown_is_nonzero(tmp_path, monkeypatch):
 def test_users_elevate_and_demote(tmp_path, monkeypatch, capsys):
     _seed_global(monkeypatch, tmp_path)
     rc.save_global([rc.Recipient(upn="jaly@microsoft.com", user_id="g1", user_type="Guest")])
+    state = {"ids": set()}
+    from entrabot.identity import sponsors as cs
+
+    def add(cfg, email, **k):
+        state["ids"].add("g1")
+        return ("g1", "Jaly")
+
+    def remove(cfg, email, **k):
+        existed = "g1" in state["ids"]
+        state["ids"].discard("g1")
+        return ("Jaly", existed)
+
+    monkeypatch.setattr(cs, "add_sponsor_by_email", add)
+    monkeypatch.setattr(cs, "remove_sponsor_by_email", remove)
+    monkeypatch.setattr(cs, "load_agent_identity_sponsor_gate",
+                        lambda cfg: SimpleNamespace(user_ids=frozenset(state["ids"])))
 
     assert cli._cmd_users(["sponsor", "jaly@microsoft.com"], set()) == 0
-    assert rc.load_global()[0].sponsor is True
+    assert state["ids"] == {"g1"}  # wrote the Entra sponsor relationship
 
     capsys.readouterr()
     assert cli._cmd_users(["list"], set()) == 0
-    assert "Sponsor" in capsys.readouterr().out
+    assert "Sponsor" in capsys.readouterr().out  # Role column reads the gate
 
     assert cli._cmd_users(["guest", "jaly@microsoft.com"], set()) == 0
-    assert rc.load_global()[0].sponsor is False
+    assert state["ids"] == set()
 
 
 def test_users_elevate_unknown_is_nonzero(tmp_path, monkeypatch):
     _seed_global(monkeypatch, tmp_path)
     rc.save_global([rc.Recipient(upn="jaly@microsoft.com")])
+    from entrabot.identity import sponsors as cs
+
+    def add(cfg, email, **k):
+        raise LookupError(email)
+
+    monkeypatch.setattr(cs, "add_sponsor_by_email", add)
     assert cli._cmd_users(["sponsor", "ghost@x.com"], set()) == 1

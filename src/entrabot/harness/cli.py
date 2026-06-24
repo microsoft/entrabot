@@ -143,14 +143,34 @@ def _cmd_migrate(positionals: List[str], flags: set) -> int:
     return 0
 
 
+def _load_sponsor_ids() -> tuple[set, str]:
+    """Best-effort: the Agent Identity's sponsor user ids (Entra) for the Role column. Returns
+    (ids, note); note is non-empty when the gate couldn't be loaded (e.g. no token/agent)."""
+    try:
+        from entrabot.config import get_config
+        from entrabot.identity.sponsors import load_agent_identity_sponsor_gate
+
+        return set(load_agent_identity_sponsor_gate(get_config()).user_ids), ""
+    except Exception:
+        return set(), "(sponsor status unavailable — could not read the Agent Identity sponsors)"
+
+
 def _cmd_users(args: list[str], flags: set) -> int:
-    """Manage the federated recipient list (the people the agent talks to on Teams). Stored in the
-    shared global config; B2B guests are resolved to their home tenant for federated chat."""
+    """Manage the federated recipient (talk-to) list and the agent's sponsors. Recipients live in
+    the shared global config; sponsors are the Entra Agent-Identity relationship (core
+    identity.sponsors), elevated/demoted here as a convenience."""
     from . import globalcfg, recipients, setup_wizard
 
     if not globalcfg.global_exists():
         print("No ENTRABOT config yet. Run `entrabot init` first.")
         return 1
+    # Layer this agent's identity over the global base so get_config()/token-minting work.
+    try:
+        from entrabot import config as entracfg
+
+        entracfg.apply_agent_env(_resolve_root(None))
+    except Exception:
+        pass
 
     sub = args[0] if args else "list"
     rest = args[1:]
@@ -160,26 +180,41 @@ def _cmd_users(args: list[str], flags: set) -> int:
         if not recs:
             print("No recipients configured. Add one: entrabot users add <email>")
             return 0
+        sponsor_ids, note = _load_sponsor_ids()
         print(f"Federated recipients ({len(recs)}):")
         print(f"  {'User':40} {'Type':8} Role")
         print(f"  {'-' * 40} {'-' * 8} {'-' * 7}")
         for r in recs:
-            role = "Sponsor" if r.sponsor else "Guest"
+            role = "Sponsor" if r.user_id and r.user_id in sponsor_ids else "Guest"
             print(f"  {r.upn:40} {r.user_type:8} {role}")
-        print("\n  Elevate/demote: entrabot users sponsor|guest <email>")
+        if note:
+            print(f"\n  {note}")
+        print("  Elevate/demote: entrabot users sponsor|guest <email>")
         return 0
 
     if sub in ("sponsor", "guest"):
         if not rest:
             print(f"Usage: entrabot users {sub} <email>")
             return 1
-        recs, changed = recipients.set_role(
-            recipients.load_global(), rest[0], sponsor=(sub == "sponsor"))
-        if not changed:
-            print(f"  {rest[0]} is not a recipient, or is already {sub}.")
+        from entrabot.config import get_config
+        from entrabot.identity import sponsors as core_sponsors
+
+        try:
+            if sub == "sponsor":
+                _id, name = core_sponsors.add_sponsor_by_email(get_config(), rest[0])
+                print(f"  ✓ {name or rest[0]} is now a sponsor of this agent")
+            else:
+                name, removed = core_sponsors.remove_sponsor_by_email(get_config(), rest[0])
+                if not removed:
+                    print(f"  {rest[0]} was not a sponsor.")
+                    return 1
+                print(f"  ✓ {name or rest[0]} is no longer a sponsor")
+        except LookupError:
+            print(f"  {rest[0]} not found in the tenant (invite as a guest first).")
             return 1
-        recipients.save_global(recs)
-        print(f"  ✓ {rest[0]} is now a {sub}")
+        except Exception as e:
+            print(f"  Could not update sponsor: {type(e).__name__}: {e}")
+            return 1
         return 0
 
     if sub == "add":

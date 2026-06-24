@@ -26,6 +26,8 @@ import subprocess
 import sys
 from typing import Dict, List, Optional
 
+import httpx
+
 from . import ansi
 from . import config as cfgmod
 from . import globalcfg
@@ -138,8 +140,8 @@ def _derive_suffix(name: str) -> str:
 # Who the agent talks to (the ENTRABOT_HUMAN_* block). B2B guests (external/Microsoft-tenant users
 # invited into this tenant) must be addressed by email + their HOME tenant GUID so federated chat
 # reaches their real identity — the local guest object id silently never receives messages
-# (hard-won learning #28). This is the Python port of the bash resolution in scripts/setup.sh, so
-# `init` wires recipients uniformly on every platform (setup-windows.ps1 has no such flag).
+# (hard-won learning #28). Resolution builds on the core Graph helpers (resolve_user_by_email,
+# _decode_b2b_ext_upn) rather than the az CLI, using the Agent User token at runtime.
 
 
 class TeamsUserNotFound(Exception):
@@ -151,50 +153,49 @@ class TeamsUserNotFound(Exception):
         super().__init__("not found in tenant: " + ", ".join(emails))
 
 
-_AZ_USER_QUERY = "{id:id, userType:userType, mail:mail, upn:userPrincipalName}"
+def _graph_user_show(
+    email: str,
+    token: str,
+    *,
+    resolve=None,
+    transport=None,
+) -> dict[str, str | None] | None:
+    """Resolve an email to ``{id,userType,mail,upn}`` via Graph. Reuses the core resolver
+    (``graph_helpers.resolve_user_by_email`` — already tries UPN / mail / otherMails /
+    proxyAddresses, so B2B guests resolve from any of their addresses) and then a ``/users``
+    projection for the guest-detection + addressing fields. None if the user isn't found."""
+    from entrabot.graph_helpers import GRAPH_V1, resolve_user_by_email
 
-
-def _run_az(args: list[str]) -> tuple[int, str]:
-    """Run an ``az`` command, returning (returncode, stdout). 127 if az isn't on PATH."""
-    az = (["cmd", "/c", "az"] if os.name == "nt" else ["az"])
+    resolve = resolve or resolve_user_by_email
     try:
-        proc = subprocess.run(az + args, capture_output=True, text=True)
-    except (FileNotFoundError, KeyboardInterrupt):
-        return 127, ""
-    return proc.returncode, proc.stdout
-
-
-def _az_first(args: list[str]) -> dict[str, str | None] | None:
-    """Run an az query expected to yield a single JSON object, or None on miss/empty/null."""
-    rc, out = _run_az(args)
-    out = out.strip()
-    if rc != 0 or not out or out == "null":
+        user_id, _name = resolve(token, email)
+    except LookupError:
         return None
+    url = f"{GRAPH_V1}/users/{user_id}?$select=id,userType,userPrincipalName,mail"
+    client_kwargs: dict = {"timeout": httpx.Timeout(15.0)}
+    if transport is not None:
+        client_kwargs["transport"] = transport
     try:
-        obj = json.loads(out)
-    except json.JSONDecodeError:
-        return None
-    return obj or None
+        with httpx.Client(**client_kwargs) as client:
+            resp = client.get(url, headers={"Authorization": f"Bearer {token}"})
+        data = resp.json() if resp.status_code == 200 else {}
+    except Exception:
+        data = {}
+    return {
+        "id": data.get("id") or user_id,
+        "userType": data.get("userType"),
+        "mail": data.get("mail"),
+        "upn": data.get("userPrincipalName") or email,
+    }
 
 
-def _az_user_show(email: str, *, run=_az_first) -> dict[str, str | None] | None:
-    """Look up a user in the signed-in tenant. Returns {id,userType,mail,upn} or None if absent.
+def _default_user_show(email: str) -> dict[str, str | None] | None:
+    """Default resolver: mint the Agent User token (delegated, holds ``User.Read.All``) and look
+    the user up via Graph. The agent is provisioned by the time recipients are resolved."""
+    from entrabot.config import get_config
+    from entrabot.tools.teams import acquire_agent_user_token
 
-    A B2B guest can't be found by ``--id <home-email>``: their UPN in this tenant is the mangled
-    ``user_home.com#EXT#@thistenant.onmicrosoft.com`` and the home email lives only in ``mail`` /
-    the UPN prefix. So we try, in order: direct (members / objectId / UPN), then a ``mail``
-    filter, then the ``#EXT#`` UPN prefix the invite encodes."""
-    direct = run(["ad", "user", "show", "--id", email, "--query", _AZ_USER_QUERY, "-o", "json"])
-    if direct:
-        return direct
-    esc = email.replace("'", "''")  # OData string-literal escaping
-    by_mail = run(["ad", "user", "list", "--filter", f"mail eq '{esc}'",
-                   "--query", f"[0].{_AZ_USER_QUERY}", "-o", "json"])
-    if by_mail:
-        return by_mail
-    prefix = email.replace("@", "_").replace("'", "''") + "#EXT#"
-    return run(["ad", "user", "list", "--filter", f"startsWith(userPrincipalName, '{prefix}')",
-                "--query", f"[0].{_AZ_USER_QUERY}", "-o", "json"])
+    return _graph_user_show(email, acquire_agent_user_token(get_config()))
 
 
 def _home_tenant_guid(domain: str) -> str:
@@ -212,27 +213,29 @@ def _home_tenant_guid(domain: str) -> str:
 
 
 def _home_domain_from_guest_upn(upn: str) -> str:
-    """Extract the home domain from a guest UPN, e.g.
-    'jaly_microsoft.com#EXT#@sdnnm.onmicrosoft.com' → 'microsoft.com'."""
-    if "#EXT#" not in upn:
-        return ""
-    local = upn.split("#EXT#")[0]  # jaly_microsoft.com
-    bits = local.rsplit("_", 1)  # domain is after the LAST underscore
-    return bits[1] if len(bits) > 1 else ""
+    """Home domain from a guest UPN, e.g. 'jaly_microsoft.com#EXT#@sdnnm.onmicrosoft.com' →
+    'microsoft.com'. Reuses the core B2B decoder (identity.sponsors._decode_b2b_ext_upn), which
+    returns the home address (jaly@microsoft.com); we take the domain for the tenant lookup."""
+    from entrabot.identity.sponsors import _decode_b2b_ext_upn
+
+    home_email = _decode_b2b_ext_upn(upn) or ""
+    return home_email.split("@", 1)[1] if "@" in home_email else ""
 
 
 def resolve_teams_user(
     emails: str,
     *,
-    az_show=_az_user_show,
+    user_show=_default_user_show,
     tenant_lookup=_home_tenant_guid,
 ) -> dict[str, str]:
     """Resolve recipient email(s) (comma-separated for a group chat) into the ENTRABOT_HUMAN_*
-    block. Guests (userType == 'Guest', or a '#EXT#' UPN when az reports userType: null) get their
-    home tenant GUID resolved so federated chat addresses their real identity. Lists stay
-    positionally aligned — a member's empty tenant slot is preserved, not dropped — so the
-    runtime's position-sensitive ENTRABOT_HUMAN_USER_TENANT_IDS / _TYPES parse stays in sync.
-    Raises TeamsUserNotFound if any address is missing from the tenant. '' input → {}."""
+    block. Resolution goes through core Graph helpers (``graph_helpers.resolve_user_by_email`` +
+    ``identity.sponsors._decode_b2b_ext_upn``), not the az CLI. Guests (userType == 'Guest', or a
+    '#EXT#' UPN when Graph reports userType: null) get their home tenant GUID resolved so federated
+    chat addresses their real identity. Lists stay positionally aligned — a member's empty tenant
+    slot is preserved, not dropped — so the runtime's position-sensitive
+    ENTRABOT_HUMAN_USER_TENANT_IDS / _TYPES parse stays in sync. Raises TeamsUserNotFound if any
+    address is missing from the tenant. '' input → {}."""
     ids: list[str] = []
     upns: list[str] = []
     tids: list[str] = []
@@ -244,13 +247,13 @@ def resolve_teams_user(
         email = raw.strip()
         if not email:
             continue
-        info = az_show(email)
+        info = user_show(email)
         if not info:
             unresolved.append(email)
             continue
         upn = info.get("upn") or email
         utype = (info.get("userType") or "").strip()
-        if not utype:  # az returns null for some guests → fall back to the #EXT# pattern
+        if not utype:  # Graph returns null for some guests → fall back to the #EXT# pattern
             utype = "Guest" if "#EXT#" in upn else "Member"
         tid = ""
         if utype == "Guest":
