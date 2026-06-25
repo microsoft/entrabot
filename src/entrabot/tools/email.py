@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 import httpx
 
 from entrabot.errors import EntraBotError, RateLimitError, TokenExpiredError
+from entrabot.tools.rate_limit import parse_retry_after
 
 logger = logging.getLogger("entrabot.tools.email")
 
@@ -146,7 +147,7 @@ async def send_email(
     if resp.status_code == 401:
         raise TokenExpiredError("Agent User token expired — re-acquire via three-hop flow")
     if resp.status_code == 429:
-        retry_after = int(resp.headers.get("Retry-After", "60"))
+        retry_after = parse_retry_after(resp.headers.get("Retry-After"), default=60)
         raise RateLimitError(retry_after)
 
     # Other failure — lift the Graph error body into the exception so

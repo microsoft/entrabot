@@ -22,6 +22,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+from math import ceil
 
 import httpx
 
@@ -35,6 +38,28 @@ DEFAULT_MAX_WAIT = 120  # cap on Retry-After to avoid absurd waits
 # Three attempts, exponential backoff. Jitter adds 0-30% per attempt.
 RETRY_5XX_BASE_DELAYS_S = (0.2, 0.8, 2.4)
 RETRY_5XX_STATUS_CODES = (502, 503, 504)
+
+
+def parse_retry_after(value: str | None, default: int = DEFAULT_RETRY_AFTER) -> int:
+    """Parse Retry-After delta-seconds or HTTP-date values."""
+    if value is None:
+        return default
+
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        retry_at = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return default
+
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=UTC)
+
+    retry_after = ceil((retry_at - datetime.now(UTC)).total_seconds())
+    return max(0, retry_after)
 
 
 class RetryOn429Transport(httpx.AsyncBaseTransport):
@@ -67,7 +92,7 @@ class RetryOn429Transport(httpx.AsyncBaseTransport):
         while retries < self._max_retries:
             if response.status_code == 429:
                 retries += 1
-                retry_after = int(response.headers.get("Retry-After", str(DEFAULT_RETRY_AFTER)))
+                retry_after = parse_retry_after(response.headers.get("Retry-After"))
                 retry_after = min(retry_after, self._max_wait)
 
                 logger.warning(
