@@ -13,7 +13,6 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
-      id-token: write
     steps:
       - name: Check out PR head commit
         uses: actions/checkout@v4
@@ -22,7 +21,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run Claude on the review feedback
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
