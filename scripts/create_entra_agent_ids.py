@@ -240,7 +240,8 @@ def find_existing_agent_identity(
             token,
         )
         if resp.status_code == 200:
-            for sp in resp.json().get("value", []):
+            stored_sps = resp.json().get("value", [])
+            for sp in stored_sps:
                 # Require BOTH the Blueprint AND the display name to match. Without the name
                 # check, the stored id (the single per-host agent) is returned for *any* requested
                 # name — so an additional, distinctly-named agent (suffix in the display name)
@@ -250,11 +251,19 @@ def find_existing_agent_identity(
                     and sp.get("displayName") == display_name
                 ):
                     return sp
-            if resp.json().get("value"):
-                print(
-                    f"  [warn] stored AGENT_ID={stored_app_id} doesn't match the requested "
-                    f"identity ({display_name}); ignoring and re-discovering."
-                )
+            if stored_sps:
+                # Keep the original wrong-Blueprint warning (the 2026-04-19 cross-contamination
+                # case) distinct from a mere name mismatch (an additional, distinctly-named agent).
+                if all(sp.get("agentIdentityBlueprintId") != blueprint_app_id for sp in stored_sps):
+                    print(
+                        f"  [warn] stored AGENT_ID={stored_app_id} is parented by a "
+                        f"different Blueprint; ignoring and re-discovering."
+                    )
+                else:
+                    print(
+                        f"  [warn] stored AGENT_ID={stored_app_id} doesn't match the requested "
+                        f"identity ({display_name}); ignoring and re-discovering."
+                    )
 
     resp = graph_request(
         "GET",

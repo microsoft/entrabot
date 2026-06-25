@@ -54,3 +54,6 @@ docs/superpowers/
 
 # ENTRABOT harness per-directory config (local)
 .entrabot/
+# Provisioning state + any local backups (never commit — carry tenant/cert identifiers)
+.entrabot-state.json
+*.bak

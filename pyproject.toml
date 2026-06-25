@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "entrabot"
-version = "0.1.0"
-description = "ENTRABOT — a Copilot harness that routes Microsoft Teams through a Copilot session with per-caller tool permissions, on Entra Agent Identity"
+name = "entrabot-identity-research"
+version = "0.1"
+description = "Research: securing agentic workflows on devices with Agent IDs and OBO flows"
 requires-python = ">=3.12"
 dependencies = [
     "msal>=1.28.0",
