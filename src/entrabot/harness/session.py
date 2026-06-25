@@ -172,12 +172,15 @@ class InteractiveSession:
         ~/.copilot config + project .mcp.json + builtins), as (name, source, status). [] if the
         session can't report them. This is what the SDK has configured — the discovery the harness
         keeps on; it's a superset of this dir's .mcp.json (e.g. the user's github MCP)."""
+        def _val(x):  # enum -> "builtin"/"connected"; str passthrough
+            return str(getattr(x, "value", x) or "?")
+
         try:
             res = await self._session.rpc.mcp.list()
             out = []
             for s in getattr(res, "servers", None) or []:
-                out.append((getattr(s, "name", "?"), getattr(s, "source", "?"),
-                            getattr(s, "status", "?")))
+                out.append((getattr(s, "name", "?"), _val(getattr(s, "source", None)),
+                            _val(getattr(s, "status", None))))
             return out
         except Exception:
             return []
@@ -293,6 +296,11 @@ class InteractiveSession:
     async def _inject(self, prompt: str, caller=None, chat=None) -> None:
         """Inject steering (a Teams message or scheduled prompt) into the session.
 
+        Delivered with ``mode="immediate"`` — the SDK *interjects* it into an in-progress turn at
+        the next step boundary (e.g. between tool calls) without aborting in-flight work, rather
+        than ``enqueue`` (the default), which would make it wait for the whole turn to finish. So a
+        Teams DM that lands mid-turn is handled as soon as the agent is free, not after everything.
+
         The caller + chat travel with the prompt so the session can bind them to the turn
         that the message kicks off (see USER_MESSAGE handling in _on_event).
         """
@@ -301,7 +309,7 @@ class InteractiveSession:
         async with self._inject_lock:
             self._injected[prompt] = (caller, chat)
             try:
-                await self._session.send(prompt, agent_mode=self._mode)
+                await self._session.send(prompt, mode="immediate", agent_mode=self._mode)
             except Exception as e:
                 self._ui.append_line(f"[inject failed] {e}", UiStyle.ERROR)
 
@@ -555,36 +563,52 @@ class InteractiveSession:
         for t in tasks:
             self._ui.append_line(f"  {t.id}  {t.spec.raw}  → {t.next_due:%Y-%m-%d %H:%M}  {t.prompt[:50]}", UiStyle.INFO)
 
+    @staticmethod
+    def _mcp_rows(mcp: dict, live: list, catalog: list, ag: bool) -> list[tuple]:
+        """Build the /mcp display rows: Installed (this dir) · Discovered (live, SDK) · Available
+        (Agency subsection). Each row is (kind, name, text); only ``kind == "agency"`` is selectable."""
+        rows: list[tuple] = []
+
+        def header(text: str) -> None:
+            rows.append(("header", None, text))
+
+        def item(kind: str, name: str, detail: str, *, indent: int = 3) -> None:
+            rows.append((kind, name, f"{' ' * indent}{name:<22}{detail}"))
+
+        header("── Installed (this dir's .mcp.json) ──")
+        if mcp:
+            for name, conf in mcp.items():
+                is_ag = isinstance(conf, dict) and conf.get("command") == "agency"
+                t = "agency" if is_ag else (conf.get("type", "stdio") if isinstance(conf, dict) else "?")
+                item("installed", name, f"[{t}]")
+        else:
+            header("   (none)")
+
+        # What the Copilot SDK actually discovered + connected (user ~/.copilot config, project
+        # .mcp.json, builtins). entrabot is discovered but its tools are excluded.
+        if live:
+            header("── Discovered by the CLI (live) ──")
+            for name, source, status in live:
+                blocked = "  · tools blocked by harness" if name == "entrabot" else ""
+                item("header", name, f"{source}/{status}{blocked}")
+
+        if ag:
+            header("── Available ──")
+            header("   ── Agency MCPs ──")
+            for s in catalog:
+                mark = "✓ " if s["installed"] else ""
+                item("agency", s["name"], f"{mark}{s['description'][:52]}", indent=6)
+        return rows
+
     async def _handle_mcp(self) -> None:
-        """Unified MCP UX: installed servers + an 'Agency MCPs available' section. Selecting an
-        agency MCP installs it (with a params form) or uninstalls it."""
+        """Unified MCP UX: installed + discovered servers, and an Available → Agency MCPs
+        subsection. Selecting an agency MCP installs it (with a params form) or uninstalls it."""
         while True:
             mcp = mcp_loader.load(self._root) or {}
             ag = agency.available()
             catalog = agency.catalog(self._root) if ag else []
-
-            rows: List[tuple] = [("header", None, "── Installed (this dir's .mcp.json) ──")]
-            if mcp:
-                for name, conf in mcp.items():
-                    is_ag = isinstance(conf, dict) and conf.get("command") == "agency"
-                    t = "agency" if is_ag else (conf.get("type", "stdio") if isinstance(conf, dict) else "?")
-                    rows.append(("installed", name, f"   {name}   [{t}]"))
-            else:
-                rows.append(("header", None, "   (none)"))
-
-            # What the Copilot SDK actually discovered + connected (user ~/.copilot config, project
-            # .mcp.json, builtins). entrabot is discovered but its tools are excluded.
             live = await self._live_mcp_servers()
-            if live:
-                rows.append(("header", None, "── Discovered by the CLI (live) ──"))
-                for name, source, status in live:
-                    blocked = " · tools blocked by harness" if name == "entrabot" else ""
-                    rows.append(("header", None, f"   {name}   [{source}/{status}]{blocked}"))
-            if ag:
-                rows.append(("header", None, "── Agency MCPs available ──"))
-                for s in catalog:
-                    mark = "  ✓ installed" if s["installed"] else ""
-                    rows.append(("agency", s["name"], f"   {s['name']}{mark}   {s['description'][:46]}"))
+            rows = self._mcp_rows(mcp, live, catalog, ag)
 
             idx = await self._ui.select(
                 "MCP servers   (enter an agency MCP to install/remove · esc when done)",
