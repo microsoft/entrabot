@@ -63,3 +63,13 @@ def test_only_entrabot_body_returns_none(tmp_path):
     (tmp_path / ".mcp.json").write_text(
         json.dumps({"mcpServers": {"entrabot": {"command": "entrabot-mcp"}}}))
     assert mcp_loader.load(str(tmp_path)) is None  # nothing left to load
+
+
+def test_entrabot_body_tool_names_parsed_from_source():
+    # The SDK auto-discovers the entrabot body from ~/.copilot config; the harness excludes its
+    # tools by name. They're derived from the body's @mcp.tool defs so the list can't drift.
+    names = mcp_loader.entrabot_body_tool_names()
+    assert "send_teams_message" in names  # a known body tool
+    assert "read_email" in names
+    assert len(names) > 20  # the body has ~37 tools
+    assert all(n.isidentifier() for n in names)  # clean tool names, no decorator noise

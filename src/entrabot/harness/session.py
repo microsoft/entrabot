@@ -167,6 +167,30 @@ class InteractiveSession:
         self._refresh_status()
         self._ui.append_line("● ready", UiStyle.SUCCESS)
 
+    async def _live_mcp_servers(self):
+        """The MCP servers the Copilot SDK actually discovered + connected this session (user
+        ~/.copilot config + project .mcp.json + builtins), as (name, source, status). [] if the
+        session can't report them. This is what the SDK has configured — the discovery the harness
+        keeps on; it's a superset of this dir's .mcp.json (e.g. the user's github MCP)."""
+        try:
+            res = await self._session.rpc.mcp.list()
+            out = []
+            for s in getattr(res, "servers", None) or []:
+                out.append((getattr(s, "name", "?"), getattr(s, "source", "?"),
+                            getattr(s, "status", "?")))
+            return out
+        except Exception:
+            return []
+
+    def _body_excluded_tools(self):
+        """A ToolSet excluding the entrabot MCP body's tools (named ``entrabot-<tool>`` once the
+        SDK loads the discovered server), so the harness's own ``entrabot_send``/``read``/
+        ``list_chats`` natives (underscore, not MCP-classified) are the only Teams reply path."""
+        excluded = copilot.ToolSet()
+        for name in mcp_loader.entrabot_body_tool_names():
+            excluded.add_mcp(f"entrabot-{name}")
+        return excluded if len(excluded) else None
+
     async def _establish(self, tools, mcp, gate) -> copilot.CopilotSession:
         kwargs = dict(
             hooks=copilot.SessionHooks(on_pre_tool_use=gate),
@@ -177,7 +201,13 @@ class InteractiveSession:
             mcp_servers=mcp,
             system_message=self._system_message(),
             streaming=True,
+            # Keep the SDK's MCP/skill auto-discovery on (it finds the user's github MCP, skills,
+            # etc.), but block the entrabot MCP *body* — the SDK discovers it from the user's
+            # ~/.copilot/mcp-config.json, which our mcp_servers filter can't reach, and it would
+            # duplicate the harness's own Teams reply path. Excluded by tool name (the SDK has no
+            # per-server disable); source-derived so it can't drift.
             enable_config_discovery=True,
+            excluded_tools=self._body_excluded_tools(),
         )
         sid = self._config.agent_id
         # Only attempt resume if a prior session actually exists, so a fresh start doesn't
@@ -533,7 +563,7 @@ class InteractiveSession:
             ag = agency.available()
             catalog = agency.catalog(self._root) if ag else []
 
-            rows: List[tuple] = [("header", None, "── Installed MCP servers ──")]
+            rows: List[tuple] = [("header", None, "── Installed (this dir's .mcp.json) ──")]
             if mcp:
                 for name, conf in mcp.items():
                     is_ag = isinstance(conf, dict) and conf.get("command") == "agency"
@@ -541,6 +571,15 @@ class InteractiveSession:
                     rows.append(("installed", name, f"   {name}   [{t}]"))
             else:
                 rows.append(("header", None, "   (none)"))
+
+            # What the Copilot SDK actually discovered + connected (user ~/.copilot config, project
+            # .mcp.json, builtins). entrabot is discovered but its tools are excluded.
+            live = await self._live_mcp_servers()
+            if live:
+                rows.append(("header", None, "── Discovered by the CLI (live) ──"))
+                for name, source, status in live:
+                    blocked = " · tools blocked by harness" if name == "entrabot" else ""
+                    rows.append(("header", None, f"   {name}   [{source}/{status}]{blocked}"))
             if ag:
                 rows.append(("header", None, "── Agency MCPs available ──"))
                 for s in catalog:

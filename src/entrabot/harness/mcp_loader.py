@@ -9,10 +9,35 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Callable
 from typing import Any, Dict, Optional
 
 _CANDIDATES = [".mcp.json", os.path.join(".vscode", "mcp.json")]
+
+_BODY_TOOLS_CACHE: list[str] | None = None
+
+
+def entrabot_body_tool_names() -> list[str]:
+    """The entrabot MCP body's tool names, parsed from its source (the ``@mcp.tool()`` defs in
+    ``entrabot/mcp_server.py``). The Copilot SDK auto-discovers the entrabot body from the user's
+    ``~/.copilot/mcp-config.json`` (and any project ``.mcp.json``) regardless of what the harness
+    passes as ``mcp_servers`` — so the harness excludes those tools by name to avoid duplicating
+    its own Teams reply path. Source-derived so the list never drifts; [] if it can't be read."""
+    global _BODY_TOOLS_CACHE
+    if _BODY_TOOLS_CACHE is not None:
+        return _BODY_TOOLS_CACHE
+    try:
+        import entrabot
+
+        src = os.path.join(os.path.dirname(entrabot.__file__), "mcp_server.py")
+        with open(src, encoding="utf-8") as fh:
+            text = fh.read()
+        _BODY_TOOLS_CACHE = re.findall(
+            r"@mcp\.tool\([^)]*\)\s*\n\s*(?:async\s+)?def\s+(\w+)", text)
+    except Exception:
+        _BODY_TOOLS_CACHE = []
+    return _BODY_TOOLS_CACHE
 
 
 def _is_entrabot_body(name: str, conf: dict[str, Any]) -> bool:
