@@ -16,6 +16,7 @@ using Claude Code's slug convention: absolute project path with every
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import pytest
@@ -145,6 +146,22 @@ class TestPersonaBackendPushAll:
         report = persona.push_all()
         assert report.copied == 0
         assert report.skipped == 0
+
+    @pytest.mark.skipif(os.name == "nt", reason="Windows symlink permissions vary by host")
+    def test_push_all_does_not_follow_symlinks_outside_local_root(self, tmp_path: Path) -> None:
+        backend = LocalBackend(tmp_path / "blob")
+        mem_dir = tmp_path / "memory"
+        mem_dir.mkdir()
+        secret = tmp_path / "secret.txt"
+        secret.write_text("do not upload")
+        (mem_dir / "loot.md").symlink_to(secret)
+
+        persona = PersonaBackend(backend, local_root=mem_dir)
+        report = persona.push_all()
+
+        assert report.copied == 0
+        assert backend.list("claude_memory/") == []
+        assert report.errors == [("claude_memory/loot.md", "symlinks are not allowed")]
 
 
 class TestPersonaBackendPullAll:
