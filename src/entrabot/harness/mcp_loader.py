@@ -9,13 +9,26 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from typing import Any, Dict, Optional
 
 _CANDIDATES = [".mcp.json", os.path.join(".vscode", "mcp.json")]
 
 
-def load(root: str) -> Optional[Dict[str, Any]]:
-    """Return ``{name: mcp_config_dict}`` or None if no config file is present."""
+def _is_entrabot_body(name: str, conf: dict[str, Any]) -> bool:
+    """The entrabot MCP body (``entrabot-mcp``) duplicates what the harness already provides — the
+    Teams reply tools and the background DM/email poll. Loading it inside the harness would double
+    those and run two pollers, so it's filtered out. Matched by server name or command, so a
+    renamed entry is still caught."""
+    if name.strip().lower() == "entrabot":
+        return True
+    command = conf.get("command")
+    return isinstance(command, str) and os.path.basename(command).lower().startswith("entrabot-mcp")
+
+
+def load(root: str, *, on_skip: Callable[[str], None] | None = None) -> Optional[Dict[str, Any]]:
+    """Return ``{name: mcp_config_dict}`` or None if no config file is present. The self-referential
+    entrabot MCP body is dropped (``on_skip`` is called with its name when so)."""
     raw = None
     for rel in _CANDIDATES:
         path = os.path.join(root, rel)
@@ -36,6 +49,10 @@ def load(root: str) -> Optional[Dict[str, Any]]:
     out: Dict[str, Any] = {}
     for name, conf in servers.items():
         if not isinstance(conf, dict):
+            continue
+        if _is_entrabot_body(name, conf):
+            if on_skip is not None:
+                on_skip(name)
             continue
         parsed = _parse_one(conf)
         if parsed is not None:

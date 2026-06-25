@@ -26,8 +26,6 @@ import subprocess
 import sys
 from typing import Dict, List, Optional
 
-import httpx
-
 from . import ansi
 from . import config as cfgmod
 from . import globalcfg
@@ -134,152 +132,6 @@ def _derive_suffix(name: str) -> str:
     """A UPN-safe suffix from the agent name (lowercase alnum, e.g. 'Sales Bot' → 'salesbot')."""
     s = re.sub(r"[^a-z0-9]", "", name.lower())
     return s[:20] or "agent"
-
-
-# ---- Teams recipient resolution ----------------------------------------------------------
-# Who the agent talks to (the ENTRABOT_HUMAN_* block). B2B guests (external/Microsoft-tenant users
-# invited into this tenant) must be addressed by email + their HOME tenant GUID so federated chat
-# reaches their real identity — the local guest object id silently never receives messages
-# (hard-won learning #28). Resolution builds on the core Graph helpers (resolve_user_by_email,
-# _decode_b2b_ext_upn) rather than the az CLI, using the Agent User token at runtime.
-
-
-class TeamsUserNotFound(Exception):
-    """One or more recipient emails were not found in the signed-in tenant (invite as a guest
-    first). Carries the unresolved addresses for the wizard to surface."""
-
-    def __init__(self, emails: list[str]) -> None:
-        self.emails = emails
-        super().__init__("not found in tenant: " + ", ".join(emails))
-
-
-def _graph_user_show(
-    email: str,
-    token: str,
-    *,
-    resolve=None,
-    transport=None,
-) -> dict[str, str | None] | None:
-    """Resolve an email to ``{id,userType,mail,upn}`` via Graph. Reuses the core resolver
-    (``graph_helpers.resolve_user_by_email`` — already tries UPN / mail / otherMails /
-    proxyAddresses, so B2B guests resolve from any of their addresses) and then a ``/users``
-    projection for the guest-detection + addressing fields. None if the user isn't found."""
-    from entrabot.graph_helpers import GRAPH_V1, resolve_user_by_email
-
-    resolve = resolve or resolve_user_by_email
-    try:
-        user_id, _name = resolve(token, email)
-    except LookupError:
-        return None
-    url = f"{GRAPH_V1}/users/{user_id}?$select=id,userType,userPrincipalName,mail"
-    client_kwargs: dict = {"timeout": httpx.Timeout(15.0)}
-    if transport is not None:
-        client_kwargs["transport"] = transport
-    try:
-        with httpx.Client(**client_kwargs) as client:
-            resp = client.get(url, headers={"Authorization": f"Bearer {token}"})
-        data = resp.json() if resp.status_code == 200 else {}
-    except Exception:
-        data = {}
-    return {
-        "id": data.get("id") or user_id,
-        "userType": data.get("userType"),
-        "mail": data.get("mail"),
-        "upn": data.get("userPrincipalName") or email,
-    }
-
-
-def _default_user_show(email: str) -> dict[str, str | None] | None:
-    """Default resolver: mint the Agent User token (delegated, holds ``User.Read.All``) and look
-    the user up via Graph. The agent is provisioned by the time recipients are resolved."""
-    from entrabot.config import get_config
-    from entrabot.tools.teams import acquire_agent_user_token
-
-    return _graph_user_show(email, acquire_agent_user_token(get_config()))
-
-
-def _home_tenant_guid(domain: str) -> str:
-    """Resolve a verified domain to its Entra tenant GUID via OpenID discovery ('' on failure)."""
-    import urllib.request
-
-    url = f"https://login.microsoftonline.com/{domain}/.well-known/openid-configuration"
-    try:
-        with urllib.request.urlopen(url, timeout=10) as resp:  # noqa: S310 (fixed MS endpoint)
-            issuer = json.loads(resp.read().decode("utf-8")).get("issuer", "")
-    except Exception:
-        return ""
-    parts = issuer.rstrip("/").split("/")
-    return parts[-1] if len(parts) > 3 else ""
-
-
-def _home_domain_from_guest_upn(upn: str) -> str:
-    """Home domain from a guest UPN, e.g. 'jaly_microsoft.com#EXT#@sdnnm.onmicrosoft.com' →
-    'microsoft.com'. Reuses the core B2B decoder (identity.sponsors._decode_b2b_ext_upn), which
-    returns the home address (jaly@microsoft.com); we take the domain for the tenant lookup."""
-    from entrabot.identity.sponsors import _decode_b2b_ext_upn
-
-    home_email = _decode_b2b_ext_upn(upn) or ""
-    return home_email.split("@", 1)[1] if "@" in home_email else ""
-
-
-def resolve_teams_user(
-    emails: str,
-    *,
-    user_show=_default_user_show,
-    tenant_lookup=_home_tenant_guid,
-) -> dict[str, str]:
-    """Resolve recipient email(s) (comma-separated for a group chat) into the ENTRABOT_HUMAN_*
-    block. Resolution goes through core Graph helpers (``graph_helpers.resolve_user_by_email`` +
-    ``identity.sponsors._decode_b2b_ext_upn``), not the az CLI. Guests (userType == 'Guest', or a
-    '#EXT#' UPN when Graph reports userType: null) get their home tenant GUID resolved so federated
-    chat addresses their real identity. Lists stay positionally aligned — a member's empty tenant
-    slot is preserved, not dropped — so the runtime's position-sensitive
-    ENTRABOT_HUMAN_USER_TENANT_IDS / _TYPES parse stays in sync. Raises TeamsUserNotFound if any
-    address is missing from the tenant. '' input → {}."""
-    ids: list[str] = []
-    upns: list[str] = []
-    tids: list[str] = []
-    mails: list[str] = []
-    types: list[str] = []
-    unresolved: list[str] = []
-
-    for raw in emails.split(","):
-        email = raw.strip()
-        if not email:
-            continue
-        info = user_show(email)
-        if not info:
-            unresolved.append(email)
-            continue
-        upn = info.get("upn") or email
-        utype = (info.get("userType") or "").strip()
-        if not utype:  # Graph returns null for some guests → fall back to the #EXT# pattern
-            utype = "Guest" if "#EXT#" in upn else "Member"
-        tid = ""
-        if utype == "Guest":
-            home_domain = _home_domain_from_guest_upn(upn)
-            if home_domain:
-                tid = tenant_lookup(home_domain)
-        ids.append(info.get("id") or "")
-        upns.append(email)  # the input address is the federated bind target (mirrors setup.sh)
-        mails.append(info.get("mail") or "")
-        types.append(utype)
-        tids.append(tid)
-
-    if unresolved:
-        raise TeamsUserNotFound(unresolved)
-    if not ids:
-        return {}
-    return {
-        "ENTRABOT_HUMAN_USER_IDS": ",".join(ids),
-        "ENTRABOT_HUMAN_UPNS": ",".join(upns),
-        "ENTRABOT_HUMAN_USER_TENANT_IDS": ",".join(tids),
-        "ENTRABOT_HUMAN_USER_MAILS": ",".join(mails),
-        "ENTRABOT_HUMAN_USER_TYPES": ",".join(types),
-        # backward-compat singulars track the primary (first) recipient
-        "ENTRABOT_HUMAN_USER_ID": ids[0],
-        "ENTRABOT_HUMAN_UPN": upns[0],
-    }
 
 
 def _apply_existing_env(root: str) -> None:
@@ -467,45 +319,32 @@ def _connection_test(upn: str) -> bool:
         return False
 
 
-def _setup_teams_user() -> None:
-    """Ask who this agent should talk to on Teams and merge them into the ENTRABOT_HUMAN_* list.
-    Additive (idempotent re-runs add, never wipe) and skippable. External/Microsoft-tenant users
-    must already be invited as B2B guests here; the lookup then resolves their home tenant for
-    federated chat. Manage the list later with `entrabot users` or `/users` in the harness."""
-    from . import recipients
+def _setup_sponsors() -> None:
+    """Ask who may sponsor this agent and add them on the Entra Agent-Identity sponsor
+    relationship (core identity.sponsors — the same source the body gates on). Skippable;
+    re-runnable. Sponsors are resolved via Graph (B2B guests by any of their addresses)."""
+    from entrabot.config import get_config
+    from entrabot.identity import sponsors as core_sponsors
 
-    existing = recipients.load_global()
-    if existing:
-        _say(ansi.dim("  current recipients: "
-                      + ", ".join(f"{r.upn} ({r.user_type})" for r in existing)))
-    _say("  Who should this agent talk to on Teams? External users (e.g. a Microsoft-tenant")
-    _say("  address) must already be invited as a B2B guest here; they're auto-detected and wired")
-    _say("  up for federated chat. Comma-separate addresses for a group chat. Blank to skip.")
-    while True:
-        emails = _ask("Teams recipient email(s) to add", default="")
-        if not emails.strip():
-            _say(ansi.dim("  skipped — add recipients later with `entrabot users add <email>`."))
-            return
-        try:
-            resolved = recipients.parse(resolve_teams_user(emails))
-        except TeamsUserNotFound as e:
-            _say(ansi.red(f"  not found in this tenant: {', '.join(e.emails)}"))
-            _say(ansi.yellow("  Invite them as a guest first (Entra → External Identities), then "
-                             "retry."))
-            if _yes("Try a different address?", default=True):
-                continue
-            return
-        except Exception as e:  # az missing, network, etc. — non-fatal, recipient is optional
-            _say(ansi.red(f"  couldn't resolve recipient: {type(e).__name__}: {e}"))
-            _say(ansi.yellow(f"    {LINKS['troubleshoot']}"))
-            return
-        if not resolved:
-            return
-        recipients.save_global(recipients.upsert(existing, resolved))
-        for r in resolved:
-            tail = "  (Guest → federated chat via home tenant, learning #28)" if r.is_guest else ""
-            _say(ansi.green(f"  ✓ recipient: {r.upn} ({r.user_type}){tail}"))
+    _say("  Who may authorize this agent (its sponsors)? External users must already be invited")
+    _say("  as guests in this tenant. Comma-separate to add several. Blank to skip.")
+    emails = _ask("Sponsor email(s) to add", default="")
+    if not emails.strip():
+        _say(ansi.dim("  skipped — add sponsors later with `entrabot users sponsor <email>`."))
         return
+    cfg = get_config()
+    for raw in emails.split(","):
+        email = raw.strip()
+        if not email:
+            continue
+        try:
+            _id, name = core_sponsors.add_sponsor_by_email(cfg, email)
+            _say(ansi.green(f"  ✓ sponsor: {name or email}"))
+        except LookupError:
+            _say(ansi.red(f"  not found in this tenant (invite as a guest first): {email}"))
+        except Exception as e:  # non-fatal — sponsors can be added later
+            _say(ansi.red(f"  couldn't add {email}: {type(e).__name__}: {e}"))
+            _say(ansi.yellow(f"    {LINKS['troubleshoot']}"))
 
 
 def _scaffold_config(root: str, name: str) -> None:
@@ -591,7 +430,7 @@ def run_init(root: str) -> bool:
 
     if resume:
         # Idempotent re-run: this dir already has an agent. Skip provisioning; load its identity
-        # and continue with the remaining (and re-runnable) setup — recipients + connection test.
+        # and continue with the remaining (and re-runnable) setup — sponsors + connection test.
         existing = globalcfg.read_env(globalcfg.agent_env_path(root))
         name = _existing_name(root) or _derive_suffix(os.path.basename(root.rstrip("/\\")))
         _say(ansi.green(f"\n  Found an existing agent here: {existing['ENTRABOT_AGENT_USER_UPN']}"))
@@ -605,8 +444,8 @@ def run_init(root: str) -> bool:
         if not _provision_identity(plat, root, name, step):
             return False
 
-    step("Teams recipient")
-    _setup_teams_user()
+    step("Sponsors")
+    _setup_sponsors()
 
     step("Connection test")
     verified = _connection_test(os.environ.get("ENTRABOT_AGENT_USER_UPN", name))

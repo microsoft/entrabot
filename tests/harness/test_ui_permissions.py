@@ -20,16 +20,3 @@ async def test_console_edit_permissions_three_columns(monkeypatch):
     assert result["cli"] == {"view"}  # cli is a real, independent column now
     assert result["guest_all"] is True
     assert result["cli_all"] is True
-
-
-async def test_console_edit_users_toggles_role(monkeypatch):
-    ui = ConsoleUI()
-    rows = [
-        {"upn": "jaly@microsoft.com", "type": "Guest", "role": False},
-        {"upn": "bob@corp.com", "type": "Member", "role": True},
-    ]
-    cmds = iter(["jaly@microsoft.com sponsor", "bob@corp.com guest", "done"])
-    monkeypatch.setattr("builtins.input", lambda *a, **k: next(cmds))
-
-    result = await ui.edit_users(rows)
-    assert result["roles"] == {"jaly@microsoft.com": True, "bob@corp.com": False}

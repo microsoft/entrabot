@@ -126,7 +126,12 @@ class InteractiveSession:
             tools += build_teams_tools(self._bridge, self._ctx)
         tools += self._schedule_tools()
 
-        mcp = mcp_loader.load(self._root)
+        mcp = mcp_loader.load(
+            self._root,
+            on_skip=lambda n: self._ui.append_line(
+                f"● skipped MCP '{n}' — the harness already provides Teams tools + polling",
+                UiStyle.INFO),
+        )
 
         # the running turn's caller class (sponsor/guest) gates every tool; local input -> sponsor
         gate = build_tool_gate(self._policy, self._caller_class, force_yolo=self._yolo, always_allow=LOCKED_TOOLS)
@@ -349,7 +354,7 @@ class InteractiveSession:
             ("/permissions", "edit per-caller-class tool permissions (sponsor vs guest)"),
             ("/schedules", "list scheduled prompts"),
             ("/watch <chat-id>", "add a Teams chat to listen to"),
-            ("/users", "recipients & roles matrix (elevate/demote sponsors); add|remove|list too"),
+            ("/users", "list/manage the agent's sponsors (sponsor|guest <email>)"),
             ("/mcp", "manage MCP servers + browse/install agency MCPs"),
             ("/reload", "re-read .mcp.json and rebuild the session"),
             ("/clear", "clear the screen"),
@@ -576,83 +581,49 @@ class InteractiveSession:
         self._ui.append_line(f"now watching {chat}", UiStyle.SUCCESS)
 
     async def _handle_users(self, args: list[str]) -> None:
-        """Manage the federated Teams recipient list from inside the session (mirror of the
-        `entrabot users` CLI). Persists to the shared global config; `/reload` to apply new
-        recipients to the live caller-class gating."""
-        from . import globalcfg, recipients, setup_wizard
-
-        if not globalcfg.global_exists():
-            self._ui.append_line("no ENTRABOT config — run `entrabot init` first", UiStyle.WARN)
-            return
-        sub = args[0].lower() if args else "matrix"  # bare /users opens the role matrix
+        """Manage the agent's sponsors — the Entra Agent-Identity sponsor relationship
+        (identity.sponsors), the same source the entrabot body gates on. Mirror of `entrabot
+        users`. Changes apply live (the caller-class gate reads self._sponsors per tool call)."""
+        sub = args[0].lower() if args else "list"
         rest = args[1:]
 
-        if sub == "matrix":
-            await self._users_matrix(recipients)
-            return
-
         if sub == "list":
-            recs = recipients.load_global()
+            recs = await asyncio.to_thread(self._sponsor_records)
             if not recs:
-                self._ui.append_line("no recipients — /users add <email>", UiStyle.INFO)
+                self._ui.append_line("no sponsors — /users sponsor <email>", UiStyle.INFO)
                 return
-            self._ui.append_line(f"federated recipients ({len(recs)}):", UiStyle.INFO)
+            self._ui.append_line(f"agent sponsors ({len(recs)}):", UiStyle.INFO)
             for r in recs:
-                role = "Sponsor" if r.user_id and r.user_id in self._sponsors else "Guest"
-                tid = f" · home tenant {r.tenant_id}" if r.tenant_id else ""
-                self._ui.append_line(f"  • {r.upn}  [{r.user_type}] {role}{tid}", UiStyle.INFO)
+                label = r.mail or r.user_principal_name or r.user_id
+                self._ui.append_line(f"  • {label}", UiStyle.INFO)
             return
 
-        if sub in ("sponsor", "guest"):
+        if sub in ("sponsor", "add", "guest", "remove"):
+            adding = sub in ("sponsor", "add")
             if not rest:
                 self._ui.append_line(f"usage: /users {sub} <email>", UiStyle.WARN)
                 return
-            await self._set_sponsor(rest[0], sponsor=(sub == "sponsor"))
-            return
-
-        if sub == "add":
-            if not rest:
-                self._ui.append_line("usage: /users add <email> [<email> ...]", UiStyle.WARN)
-                return
-            try:
-                # az lookup is blocking — keep the event loop responsive
-                env = await asyncio.to_thread(setup_wizard.resolve_teams_user, ",".join(rest))
-                resolved = recipients.parse(env)
-            except setup_wizard.TeamsUserNotFound as e:
-                self._ui.append_line(
-                    f"not found (invite as a guest first): {', '.join(e.emails)}", UiStyle.WARN)
-                return
-            except Exception as e:
-                self._ui.append_line(f"could not resolve: {type(e).__name__}: {e}", UiStyle.WARN)
-                return
-            recipients.save_global(recipients.upsert(recipients.load_global(), resolved))
-            for r in resolved:
-                self._ui.append_line(f"added {r.upn} [{r.user_type}]", UiStyle.SUCCESS)
-            self._ui.append_line(
-                "added to the talk-to list. To grant sponsor authority: /users sponsor <email>",
-                UiStyle.DIM)
-            return
-
-        if sub == "remove":
-            if not rest:
-                self._ui.append_line("usage: /users remove <email>", UiStyle.WARN)
-                return
-            kept, changed = recipients.remove(recipients.load_global(), rest[0])
-            if not changed:
-                self._ui.append_line(f"{rest[0]} not in recipient list", UiStyle.WARN)
-                return
-            recipients.save_global(kept)
-            self._ui.append_line(f"removed {rest[0]} from the talk-to list", UiStyle.SUCCESS)
+            await self._set_sponsor(rest[0], sponsor=adding)
             return
 
         self._ui.append_line(
-            f"unknown: /users {sub}  (·matrix· | list | add | remove | sponsor | guest)",
-            UiStyle.WARN)
+            f"unknown: /users {sub}  (list | sponsor <email> | guest <email>)", UiStyle.WARN)
+
+    def _sponsor_records(self):
+        """The Agent Identity's current sponsors (enriched with emails for display). Blocking
+        Graph call — invoke off-thread. [] on any failure."""
+        try:
+            from entrabot.config import get_config
+            from entrabot.identity.sponsors import list_agent_identity_sponsors
+
+            return list_agent_identity_sponsors(get_config())
+        except Exception:
+            return []
 
     async def _set_sponsor(self, email: str, *, sponsor: bool) -> None:
-        """Add/remove a recipient on the Agent Identity's sponsor relationship (the Entra source of
-        truth — identity.sponsors), then refresh the live caller-class set. Blocking Graph work
-        runs off-thread."""
+        """Add/remove a user on the Agent Identity's sponsor relationship (the Entra source of
+        truth — core identity.sponsors), then refresh the live caller-class set. Blocking Graph
+        work runs off-thread."""
         from entrabot.config import get_config
         from entrabot.identity import sponsors as core_sponsors
 
@@ -678,31 +649,6 @@ class InteractiveSession:
             return
         await self._refresh_sponsors()  # live — the gate reads self._sponsors per tool call
         self._ui.append_line(msg, UiStyle.SUCCESS)
-
-    async def _users_matrix(self, recipients) -> None:
-        """Recipients-&-roles matrix: each recipient with its Entra Type + sponsor Role (read from
-        the Agent-Identity sponsor relationship). Toggling elevates/demotes by writing that Entra
-        relationship via core identity.sponsors — no harness-local sponsor list."""
-        recs = recipients.load_global()
-        rows = [
-            {"upn": r.upn, "type": r.user_type,
-             "role": bool(r.user_id and r.user_id in self._sponsors), "email": r.mail or r.upn}
-            for r in recs
-        ]
-        result = await self._ui.edit_users(rows)
-        if result is None:
-            return
-        new_roles = result.get("roles", {})
-        by_upn = {r["upn"]: r for r in rows}
-        changes = [(by_upn[upn]["email"], want)
-                   for upn, want in new_roles.items()
-                   if upn in by_upn and want != by_upn[upn]["role"]]
-        if not changes:
-            return
-        self._ui.append_line(f"applying {len(changes)} role change(s) to the Agent Identity…",
-                             UiStyle.DIM)
-        for email, want in changes:
-            await self._set_sponsor(email, sponsor=want)
 
     async def _handle_reload(self) -> None:
         self._ui.append_line("reloading MCP + session…", UiStyle.DIM)

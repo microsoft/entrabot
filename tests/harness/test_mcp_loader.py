@@ -35,3 +35,31 @@ def test_none_when_absent(tmp_path):
 def test_malformed_returns_none(tmp_path):
     (tmp_path / ".mcp.json").write_text("{ not json")
     assert mcp_loader.load(str(tmp_path)) is None
+
+
+def test_skips_entrabot_body_mcp_by_name(tmp_path):
+    # The harness IS entrabot — loading the entrabot MCP body would double the Teams tools and
+    # spawn a second background poller. Drop it; keep the others.
+    (tmp_path / ".mcp.json").write_text(json.dumps({"mcpServers": {
+        "entrabot": {"command": "/x/.venv/bin/entrabot-mcp"},
+        "ado": {"command": "agency", "args": ["mcp", "ado"]},
+    }}))
+    skipped = []
+    res = mcp_loader.load(str(tmp_path), on_skip=skipped.append)
+    assert res is not None and "entrabot" not in res and "ado" in res
+    assert skipped == ["entrabot"]
+
+
+def test_skips_entrabot_body_mcp_by_command_even_if_renamed(tmp_path):
+    (tmp_path / ".mcp.json").write_text(json.dumps({"mcpServers": {
+        "myagent": {"command": "C:\\x\\entrabot-mcp.exe"},
+        "foo": {"command": "node"},
+    }}))
+    res = mcp_loader.load(str(tmp_path))
+    assert res is not None and "myagent" not in res and "foo" in res
+
+
+def test_only_entrabot_body_returns_none(tmp_path):
+    (tmp_path / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"entrabot": {"command": "entrabot-mcp"}}}))
+    assert mcp_loader.load(str(tmp_path)) is None  # nothing left to load

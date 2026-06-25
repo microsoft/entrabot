@@ -115,6 +115,31 @@ def test_add_sponsor_by_email_resolves_then_adds():
     assert "/users/resolved-id" in calls["body"]  # the resolved id was written
 
 
+def test_list_sponsors_returns_empty_when_none(monkeypatch):
+    from entrabot.identity import sponsors
+
+    def boom(cfg, **k):
+        raise ValueError("Agent Identity has no user sponsors")
+
+    monkeypatch.setattr(sponsors, "fetch_agent_identity_sponsors", boom)
+    assert sponsors.list_agent_identity_sponsors(_cfg(), user_token_provider=lambda c: "t") == []
+
+
+def test_list_sponsors_passes_user_token_for_email_enrichment(monkeypatch):
+    from entrabot.identity import sponsors
+
+    captured = {}
+
+    def fake_fetch(cfg, *, user_token_provider=None, **k):
+        captured["has_user_token"] = user_token_provider is not None
+        return ["sponsor-record"]
+
+    monkeypatch.setattr(sponsors, "fetch_agent_identity_sponsors", fake_fetch)
+    out = sponsors.list_agent_identity_sponsors(_cfg(), user_token_provider=lambda c: "user-tok")
+    assert out == ["sponsor-record"]
+    assert captured["has_user_token"] is True  # enriches emails for display
+
+
 def test_remove_sponsor_by_email_resolves_then_removes():
     def fake_resolve(token, email):
         return ("resolved-id", "Alice")

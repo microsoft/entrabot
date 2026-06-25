@@ -533,6 +533,21 @@ def load_agent_identity_sponsor_gate(config: EntraBotConfig) -> SponsorGate:
 # core API instead of each owning the Graph calls.
 
 
+def list_agent_identity_sponsors(
+    config: EntraBotConfig,
+    *,
+    user_token_provider: Callable[[EntraBotConfig], str] = acquire_agent_user_token,
+    **kwargs: Any,
+) -> list[AgentIdentitySponsor]:
+    """The Agent Identity's current sponsors, enriched with email-shaped fields for display.
+    Returns [] when there are none (the underlying fetch raises on an empty list)."""
+    try:
+        return fetch_agent_identity_sponsors(
+            config, user_token_provider=user_token_provider, **kwargs)
+    except ValueError:
+        return []
+
+
 def _sponsor_ref_base(config: EntraBotConfig) -> str:
     if not config.agent_object_id:
         raise ValueError("Agent Identity object id is not configured")

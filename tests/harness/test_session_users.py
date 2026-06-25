@@ -1,32 +1,20 @@
-"""The `/users` slash command mirrors `entrabot users` from inside the running harness session.
+"""The `/users` slash command — sponsor management over the Entra Agent-Identity relationship.
 
-`_handle_users` only touches `self._ui`, so we drive it with a lightweight stand-in rather than a
-full session (which would need a live Copilot runtime).
+`_handle_users` / `_set_sponsor` only touch `self._ui` + core identity.sponsors (mocked), so we
+drive them with a lightweight stand-in rather than a full session.
 """
 
 from types import SimpleNamespace
 
-from entrabot.harness import globalcfg
-from entrabot.harness import recipients as rc
 from entrabot.harness.session import InteractiveSession
-
-_RESOLVED_GUEST = {
-    "ENTRABOT_HUMAN_USER_IDS": "g1",
-    "ENTRABOT_HUMAN_UPNS": "jaly@microsoft.com",
-    "ENTRABOT_HUMAN_USER_TENANT_IDS": "ms-tid",
-    "ENTRABOT_HUMAN_USER_MAILS": "jaly@microsoft.com",
-    "ENTRABOT_HUMAN_USER_TYPES": "Guest",
-    "ENTRABOT_HUMAN_USER_ID": "g1",
-    "ENTRABOT_HUMAN_UPN": "jaly@microsoft.com",
-}
 
 
 def _fake_session():
     lines: list[str] = []
     ui = SimpleNamespace(append_line=lambda text, style=None: lines.append(text))
     sess = SimpleNamespace(_ui=ui, _sponsors=set())
-    # bind the real sponsor methods to this fake self so /users dispatch + matrix work
     sess._load_sponsors = lambda: InteractiveSession._load_sponsors(sess)
+    sess._sponsor_records = lambda: InteractiveSession._sponsor_records(sess)
 
     async def _refresh():
         await InteractiveSession._refresh_sponsors(sess)
@@ -39,105 +27,65 @@ def _fake_session():
     return sess, lines
 
 
-def _seed_global(monkeypatch, tmp_path):
-    monkeypatch.setenv("ENTRABOT_HOME", str(tmp_path))
-    import os
-    for k in list(os.environ):
-        if k.startswith(globalcfg.HUMAN_PREFIX):
-            monkeypatch.delenv(k, raising=False)
-    globalcfg.write_env(globalcfg.global_env_path(),
-                        {"ENTRABOT_TENANT_ID": "t", "ENTRABOT_BLUEPRINT_APP_ID": "bp"})
+def _mock_core(monkeypatch, state):
+    """Patch core identity.sponsors. state['ids'] is the live Agent-ID sponsor set."""
+    from entrabot.identity import sponsors as cs
+
+    def add(cfg, email, **k):
+        state["ids"].add(email)
+        return ("id-" + email, email)
+
+    def remove(cfg, email, **k):
+        existed = email in state["ids"]
+        state["ids"].discard(email)
+        return (email, existed)
+
+    def gate(cfg):
+        return SimpleNamespace(user_ids=frozenset("id-" + e for e in state["ids"]))
+
+    def lst(cfg, **k):
+        return [SimpleNamespace(mail=e, user_principal_name=e, user_id="id-" + e)
+                for e in state["ids"]]
+
+    monkeypatch.setattr(cs, "add_sponsor_by_email", add)
+    monkeypatch.setattr(cs, "remove_sponsor_by_email", remove)
+    monkeypatch.setattr(cs, "load_agent_identity_sponsor_gate", gate)
+    monkeypatch.setattr(cs, "list_agent_identity_sponsors", lst)
 
 
-async def test_users_requires_config(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENTRABOT_HOME", str(tmp_path))  # no global
+async def test_users_list_empty(monkeypatch):
+    _mock_core(monkeypatch, {"ids": set()})
     sess, lines = _fake_session()
     await InteractiveSession._handle_users(sess, ["list"])
-    assert any("entrabot init" in ln for ln in lines)
+    assert any("no sponsors" in ln.lower() for ln in lines)
 
 
-async def test_users_add_persists_and_reports(tmp_path, monkeypatch):
-    _seed_global(monkeypatch, tmp_path)
-    from entrabot.harness import setup_wizard
-    monkeypatch.setattr(setup_wizard, "resolve_teams_user", lambda emails, **k: _RESOLVED_GUEST)
+async def test_users_sponsor_then_guest(monkeypatch):
+    state = {"ids": set()}
+    _mock_core(monkeypatch, state)
+    sess, _ = _fake_session()
 
-    sess, lines = _fake_session()
-    await InteractiveSession._handle_users(sess, ["add", "jaly@microsoft.com"])
-    assert [r.upn for r in rc.load_global()] == ["jaly@microsoft.com"]
-    assert any("added jaly@microsoft.com" in ln for ln in lines)
-    # adding a recipient is the talk-to list; sponsor authority is a separate step
-    assert any("sponsor" in ln.lower() for ln in lines)
+    await InteractiveSession._handle_users(sess, ["sponsor", "jaly@microsoft.com"])
+    assert state["ids"] == {"jaly@microsoft.com"}  # wrote the Entra relationship
+    assert sess._sponsors == {"id-jaly@microsoft.com"}  # refreshed live from the gate
+
+    await InteractiveSession._handle_users(sess, ["guest", "jaly@microsoft.com"])
+    assert state["ids"] == set()
+    assert sess._sponsors == set()
 
 
-async def test_users_list_and_remove(tmp_path, monkeypatch):
-    _seed_global(monkeypatch, tmp_path)
-    rc.save_global([rc.Recipient(upn="jaly@microsoft.com", user_type="Guest", tenant_id="ms"),
-                    rc.Recipient(upn="bob@corp.com", user_type="Member")])
-
+async def test_users_list_shows_sponsors(monkeypatch):
+    _mock_core(monkeypatch, {"ids": {"jaly@microsoft.com"}})
     sess, lines = _fake_session()
     await InteractiveSession._handle_users(sess, ["list"])
     assert any("jaly@microsoft.com" in ln for ln in lines)
 
-    sess2, _ = _fake_session()
-    await InteractiveSession._handle_users(sess2, ["remove", "bob@corp.com"])
-    assert [r.upn for r in rc.load_global()] == ["jaly@microsoft.com"]
 
-
-def _mock_core_sponsors(monkeypatch, state):
-    """Patch core identity.sponsors so /users sponsor management hits no network. `state["ids"]`
-    is the live Agent-ID sponsor set the gate reports; add/remove mutate it."""
-    from entrabot.identity import sponsors as cs
-
-    def add(cfg, email, **k):
-        state["ids"].add("g1")
-        return ("g1", "Jaly")
-
-    def remove(cfg, email, **k):
-        existed = "g1" in state["ids"]
-        state["ids"].discard("g1")
-        return ("Jaly", existed)
-
-    monkeypatch.setattr(cs, "add_sponsor_by_email", add)
-    monkeypatch.setattr(cs, "remove_sponsor_by_email", remove)
-    monkeypatch.setattr(cs, "load_agent_identity_sponsor_gate",
-                        lambda cfg: SimpleNamespace(user_ids=frozenset(state["ids"])))
-
-
-async def test_users_sponsor_guest_shortcuts(tmp_path, monkeypatch):
-    _seed_global(monkeypatch, tmp_path)
-    rc.save_global([rc.Recipient(upn="jaly@microsoft.com", user_id="g1", user_type="Guest")])
-    state = {"ids": set()}
-    _mock_core_sponsors(monkeypatch, state)
-
-    sess, _ = _fake_session()
-    await InteractiveSession._handle_users(sess, ["sponsor", "jaly@microsoft.com"])
-    assert sess._sponsors == {"g1"}  # wrote to Entra, refreshed live from the gate
-    await InteractiveSession._handle_users(sess, ["guest", "jaly@microsoft.com"])
-    assert sess._sponsors == set()
-
-
-async def test_users_matrix_writes_entra_sponsors(tmp_path, monkeypatch):
-    _seed_global(monkeypatch, tmp_path)
-    rc.save_global([rc.Recipient(upn="jaly@microsoft.com", user_id="g1", user_type="Guest"),
-                    rc.Recipient(upn="bob@corp.com", user_id="m1", user_type="Member")])
-    state = {"ids": set()}
-    _mock_core_sponsors(monkeypatch, state)
-
-    seen_rows = {}
-
-    async def fake_edit_users(rows):
-        seen_rows["rows"] = rows
-        return {"roles": {"jaly@microsoft.com": True, "bob@corp.com": False}}
-
-    sess, _ = _fake_session()
-    sess._ui.edit_users = fake_edit_users
-    await InteractiveSession._users_matrix(sess, rc)
-
-    # the matrix gets recipients with Type + Role (read from the gate; none are sponsors yet)
-    assert {r["upn"] for r in seen_rows["rows"]} == {"jaly@microsoft.com", "bob@corp.com"}
-    assert all(r["role"] is False for r in seen_rows["rows"])
-    # toggling jaly on wrote the Entra relationship and refreshed the live set
-    assert sess._sponsors == {"g1"}
+async def test_users_guest_unknown_warns(monkeypatch):
+    _mock_core(monkeypatch, {"ids": set()})
+    sess, lines = _fake_session()
+    await InteractiveSession._handle_users(sess, ["guest", "ghost@x.com"])
+    assert any("was not a sponsor" in ln for ln in lines)
 
 
 def test_load_sponsors_reads_core_gate(monkeypatch):

@@ -5,12 +5,10 @@
   entrabot init [path]     guided setup for an agent in this directory (asks first). Reuses the
                            shared tenant/Blueprint if already set up; only mints a new agent.
                            Idempotent — re-run to continue setup of an existing agent.
-  entrabot users [...]     manage the federated Teams recipient list:
-                             entrabot users                 list recipients (Type + Role)
-                             entrabot users add EMAIL...    resolve + add (B2B guests federated)
-                             entrabot users remove EMAIL    remove a recipient
-                             entrabot users sponsor EMAIL   elevate to the sponsor Role
-                             entrabot users guest EMAIL     demote to the guest Role
+  entrabot users [...]     manage the agent's sponsors (Entra Agent-Identity relationship):
+                             entrabot users                 list current sponsors
+                             entrabot users sponsor EMAIL   add a sponsor
+                             entrabot users guest EMAIL     remove a sponsor
   entrabot migrate [.env]  lift an existing combined .env into ~/.entrabot/global.env + default agent
   entrabot doctor          check the Copilot runtime + auth + Teams token
   entrabot --version | --help
@@ -143,23 +141,10 @@ def _cmd_migrate(positionals: List[str], flags: set) -> int:
     return 0
 
 
-def _load_sponsor_ids() -> tuple[set, str]:
-    """Best-effort: the Agent Identity's sponsor user ids (Entra) for the Role column. Returns
-    (ids, note); note is non-empty when the gate couldn't be loaded (e.g. no token/agent)."""
-    try:
-        from entrabot.config import get_config
-        from entrabot.identity.sponsors import load_agent_identity_sponsor_gate
-
-        return set(load_agent_identity_sponsor_gate(get_config()).user_ids), ""
-    except Exception:
-        return set(), "(sponsor status unavailable — could not read the Agent Identity sponsors)"
-
-
 def _cmd_users(args: list[str], flags: set) -> int:
-    """Manage the federated recipient (talk-to) list and the agent's sponsors. Recipients live in
-    the shared global config; sponsors are the Entra Agent-Identity relationship (core
-    identity.sponsors), elevated/demoted here as a convenience."""
-    from . import globalcfg, recipients, setup_wizard
+    """Manage the agent's sponsors — the Entra Agent-Identity sponsor relationship (core
+    identity.sponsors), the same source the entrabot body gates on."""
+    from . import globalcfg
 
     if not globalcfg.global_exists():
         print("No ENTRABOT config yet. Run `entrabot init` first.")
@@ -172,35 +157,34 @@ def _cmd_users(args: list[str], flags: set) -> int:
     except Exception:
         pass
 
+    from entrabot.config import get_config
+    from entrabot.identity import sponsors as core_sponsors
+
     sub = args[0] if args else "list"
     rest = args[1:]
 
     if sub == "list":
-        recs = recipients.load_global()
+        try:
+            recs = core_sponsors.list_agent_identity_sponsors(get_config())
+        except Exception as e:
+            print(f"Could not read sponsors: {type(e).__name__}: {e}")
+            return 1
         if not recs:
-            print("No recipients configured. Add one: entrabot users add <email>")
+            print("No sponsors. Add one: entrabot users sponsor <email>")
             return 0
-        sponsor_ids, note = _load_sponsor_ids()
-        print(f"Federated recipients ({len(recs)}):")
-        print(f"  {'User':40} {'Type':8} Role")
-        print(f"  {'-' * 40} {'-' * 8} {'-' * 7}")
+        print(f"Agent sponsors ({len(recs)}):")
         for r in recs:
-            role = "Sponsor" if r.user_id and r.user_id in sponsor_ids else "Guest"
-            print(f"  {r.upn:40} {r.user_type:8} {role}")
-        if note:
-            print(f"\n  {note}")
-        print("  Elevate/demote: entrabot users sponsor|guest <email>")
+            print(f"  • {r.mail or r.user_principal_name or r.user_id}")
+        print("\n  Add/remove: entrabot users sponsor|guest <email>")
         return 0
 
-    if sub in ("sponsor", "guest"):
+    if sub in ("sponsor", "add", "guest", "remove"):
+        adding = sub in ("sponsor", "add")
         if not rest:
             print(f"Usage: entrabot users {sub} <email>")
             return 1
-        from entrabot.config import get_config
-        from entrabot.identity import sponsors as core_sponsors
-
         try:
-            if sub == "sponsor":
+            if adding:
                 _id, name = core_sponsors.add_sponsor_by_email(get_config(), rest[0])
                 print(f"  ✓ {name or rest[0]} is now a sponsor of this agent")
             else:
@@ -217,38 +201,7 @@ def _cmd_users(args: list[str], flags: set) -> int:
             return 1
         return 0
 
-    if sub == "add":
-        if not rest:
-            print("Usage: entrabot users add <email> [<email> ...]")
-            return 1
-        try:
-            resolved = recipients.parse(setup_wizard.resolve_teams_user(",".join(rest)))
-        except setup_wizard.TeamsUserNotFound as e:
-            print(f"Not found in this tenant (invite as a guest first): {', '.join(e.emails)}")
-            return 1
-        except Exception as e:
-            print(f"Could not resolve recipient(s): {type(e).__name__}: {e}")
-            return 1
-        merged = recipients.upsert(recipients.load_global(), resolved)
-        recipients.save_global(merged)
-        for r in resolved:
-            tail = " — federated (guest)" if r.is_guest else ""
-            print(f"  ✓ added {r.upn} [{r.user_type}]{tail}")
-        return 0
-
-    if sub == "remove":
-        if not rest:
-            print("Usage: entrabot users remove <email>")
-            return 1
-        kept, changed = recipients.remove(recipients.load_global(), rest[0])
-        if not changed:
-            print(f"  {rest[0]} is not in the recipient list.")
-            return 1
-        recipients.save_global(kept)
-        print(f"  ✓ removed {rest[0]}")
-        return 0
-
-    print(f"Unknown users subcommand: {sub}. Try: list | add | remove | sponsor | guest")
+    print(f"Unknown users subcommand: {sub}. Try: list | sponsor <email> | guest <email>")
     return 1
 
 

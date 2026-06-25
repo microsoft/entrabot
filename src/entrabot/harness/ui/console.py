@@ -188,44 +188,6 @@ class ConsoleUI(UI):
             **{c: sets[c] for c in cols},
         }
 
-    async def edit_users(self, rows):
-        # rows: [{"upn","type","role": bool}]. Toggle Role per user; returns {"roles": {upn: bool}}.
-        roles = {r["upn"]: bool(r.get("role")) for r in rows}
-
-        def mark(on):
-            return ansi.green("Sponsor") if on else ansi.dim("Guest")
-
-        def show():
-            print(ansi.bold("Recipients & roles  (toggle: '<email> sponsor' / '<email> guest'; "
-                            "'done')"))
-            if not rows:
-                print(ansi.dim("  (no recipients — add with `entrabot users add <email>`)"))
-            for r in rows:
-                print(f"  {r['upn']:40} {r.get('type', 'Member'):8} {mark(roles[r['upn']])}")
-
-        by_lower = {r["upn"].lower(): r["upn"] for r in rows}
-        show()
-        while True:
-            try:
-                cmd = (await asyncio.to_thread(input, ansi.cyan("users> "))).strip()
-            except (EOFError, KeyboardInterrupt):
-                break
-            if cmd.lower() in ("", "done", "save"):
-                break
-            if cmd.lower() in ("q", "quit", "cancel"):
-                return None
-            parts = cmd.split()
-            if len(parts) == 2 and parts[1].lower() in ("sponsor", "guest"):
-                upn = by_lower.get(parts[0].lower())
-                if not upn:
-                    print(ansi.dim("  unknown recipient"))
-                    continue
-                roles[upn] = parts[1].lower() == "sponsor"
-                show()
-            else:
-                print(ansi.dim("  e.g.  jaly@microsoft.com sponsor   |   done"))
-        return {"roles": roles}
-
     async def form(self, title, fields):
         print(ansi.bold(title))
         values = {}
