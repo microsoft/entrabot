@@ -5,10 +5,7 @@
   entrabot init [path]     guided setup for an agent in this directory (asks first). Reuses the
                            shared tenant/Blueprint if already set up; only mints a new agent.
                            Idempotent — re-run to continue setup of an existing agent.
-  entrabot users [...]     manage the agent's sponsors (Entra Agent-Identity relationship):
-                             entrabot users                 list current sponsors
-                             entrabot users sponsor EMAIL   add a sponsor
-                             entrabot users guest EMAIL     remove a sponsor
+  entrabot users           list the agent's sponsors (Entra Agent-Identity relationship; read-only)
   entrabot migrate [.env]  lift an existing combined .env into ~/.entrabot/global.env + default agent
   entrabot doctor          check the Copilot runtime + auth + Teams token
   entrabot --version | --help
@@ -142,8 +139,9 @@ def _cmd_migrate(positionals: List[str], flags: set) -> int:
 
 
 def _cmd_users(args: list[str], flags: set) -> int:
-    """Manage the agent's sponsors — the Entra Agent-Identity sponsor relationship (core
-    identity.sponsors), the same source the entrabot body gates on."""
+    """List the agent's sponsors — the Entra Agent-Identity sponsor relationship (core
+    identity.sponsors), the same source the entrabot body gates on. Read-only: add/remove sponsors
+    in Entra directly (or via scripts/add_agent_sponsor.py / remove_agent_sponsor.py)."""
     from . import globalcfg
 
     if not globalcfg.global_exists():
@@ -158,51 +156,24 @@ def _cmd_users(args: list[str], flags: set) -> int:
         pass
 
     from entrabot.config import get_config
-    from entrabot.identity import sponsors as core_sponsors
+    from entrabot.identity.sponsors import fetch_agent_identity_sponsors
+    from entrabot.tools.teams import acquire_agent_user_token
 
-    sub = args[0] if args else "list"
-    rest = args[1:]
-
-    if sub == "list":
-        try:
-            recs = core_sponsors.list_agent_identity_sponsors(get_config())
-        except Exception as e:
-            print(f"Could not read sponsors: {type(e).__name__}: {e}")
-            return 1
-        if not recs:
-            print("No sponsors. Add one: entrabot users sponsor <email>")
-            return 0
-        print(f"Agent sponsors ({len(recs)}):")
-        for r in recs:
-            print(f"  • {r.mail or r.user_principal_name or r.user_id}")
-        print("\n  Add/remove: entrabot users sponsor|guest <email>")
+    try:
+        recs = fetch_agent_identity_sponsors(
+            get_config(), user_token_provider=acquire_agent_user_token)
+    except ValueError:
+        recs = []  # no sponsors
+    except Exception as e:
+        print(f"Could not read sponsors: {type(e).__name__}: {e}")
+        return 1
+    if not recs:
+        print("No sponsors (manage in Entra → the agent's sponsor relationship).")
         return 0
-
-    if sub in ("sponsor", "add", "guest", "remove"):
-        adding = sub in ("sponsor", "add")
-        if not rest:
-            print(f"Usage: entrabot users {sub} <email>")
-            return 1
-        try:
-            if adding:
-                _id, name = core_sponsors.add_sponsor_by_email(get_config(), rest[0])
-                print(f"  ✓ {name or rest[0]} is now a sponsor of this agent")
-            else:
-                name, removed = core_sponsors.remove_sponsor_by_email(get_config(), rest[0])
-                if not removed:
-                    print(f"  {rest[0]} was not a sponsor.")
-                    return 1
-                print(f"  ✓ {name or rest[0]} is no longer a sponsor")
-        except LookupError:
-            print(f"  {rest[0]} not found in the tenant (invite as a guest first).")
-            return 1
-        except Exception as e:
-            print(f"  Could not update sponsor: {type(e).__name__}: {e}")
-            return 1
-        return 0
-
-    print(f"Unknown users subcommand: {sub}. Try: list | sponsor <email> | guest <email>")
-    return 1
+    print(f"Agent sponsors ({len(recs)}):")
+    for r in recs:
+        print(f"  • {r.mail or r.user_principal_name or r.user_id}")
+    return 0
 
 
 async def _cmd_run(flags: set, root: str) -> int:

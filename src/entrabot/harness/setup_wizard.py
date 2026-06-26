@@ -319,34 +319,6 @@ def _connection_test(upn: str) -> bool:
         return False
 
 
-def _setup_sponsors() -> None:
-    """Ask who may sponsor this agent and add them on the Entra Agent-Identity sponsor
-    relationship (core identity.sponsors — the same source the body gates on). Skippable;
-    re-runnable. Sponsors are resolved via Graph (B2B guests by any of their addresses)."""
-    from entrabot.config import get_config
-    from entrabot.identity import sponsors as core_sponsors
-
-    _say("  Who may authorize this agent (its sponsors)? External users must already be invited")
-    _say("  as guests in this tenant. Comma-separate to add several. Blank to skip.")
-    emails = _ask("Sponsor email(s) to add", default="")
-    if not emails.strip():
-        _say(ansi.dim("  skipped — add sponsors later with `entrabot users sponsor <email>`."))
-        return
-    cfg = get_config()
-    for raw in emails.split(","):
-        email = raw.strip()
-        if not email:
-            continue
-        try:
-            _id, name = core_sponsors.add_sponsor_by_email(cfg, email)
-            _say(ansi.green(f"  ✓ sponsor: {name or email}"))
-        except LookupError:
-            _say(ansi.red(f"  not found in this tenant (invite as a guest first): {email}"))
-        except Exception as e:  # non-fatal — sponsors can be added later
-            _say(ansi.red(f"  couldn't add {email}: {type(e).__name__}: {e}"))
-            _say(ansi.yellow(f"    {LINKS['troubleshoot']}"))
-
-
 def _scaffold_config(root: str, name: str) -> None:
     if cfgmod.exists(root):
         _say(ansi.dim(f"  harness config already present at {cfgmod.config_path(root)}"))
@@ -430,22 +402,19 @@ def run_init(root: str) -> bool:
 
     if resume:
         # Idempotent re-run: this dir already has an agent. Skip provisioning; load its identity
-        # and continue with the remaining (and re-runnable) setup — sponsors + connection test.
+        # and continue with the remaining (and re-runnable) setup — connection test + config.
         existing = globalcfg.read_env(globalcfg.agent_env_path(root))
         name = _existing_name(root) or _derive_suffix(os.path.basename(root.rstrip("/\\")))
         _say(ansi.green(f"\n  Found an existing agent here: {existing['ENTRABOT_AGENT_USER_UPN']}"))
         _say(ansi.dim("  Re-running to continue setup — identity already provisioned, skipping it."))
         _apply_existing_env(root)
-        step = _Stepper(total=3)
+        step = _Stepper(total=2)
     else:
         default_name = os.path.basename(root.rstrip("/\\")) or "entrabot"
         name = _ask("Name this agent (its Teams display name)", default=default_name)
-        step = _Stepper(total=4 if globalcfg.global_exists() else 7)
+        step = _Stepper(total=3 if globalcfg.global_exists() else 6)
         if not _provision_identity(plat, root, name, step):
             return False
-
-    step("Sponsors")
-    _setup_sponsors()
 
     step("Connection test")
     verified = _connection_test(os.environ.get("ENTRABOT_AGENT_USER_UPN", name))

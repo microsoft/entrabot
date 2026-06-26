@@ -392,7 +392,7 @@ class InteractiveSession:
             ("/permissions", "edit per-caller-class tool permissions (sponsor vs guest)"),
             ("/schedules", "list scheduled prompts"),
             ("/watch <chat-id>", "add a Teams chat to listen to"),
-            ("/users", "list/manage the agent's sponsors (sponsor|guest <email>)"),
+            ("/users", "list the agent's sponsors (read-only; manage in Entra)"),
             ("/mcp", "manage MCP servers + browse/install agency MCPs"),
             ("/reload", "re-read .mcp.json and rebuild the session"),
             ("/clear", "clear the screen"),
@@ -644,74 +644,31 @@ class InteractiveSession:
         self._ui.append_line(f"now watching {chat}", UiStyle.SUCCESS)
 
     async def _handle_users(self, args: list[str]) -> None:
-        """Manage the agent's sponsors — the Entra Agent-Identity sponsor relationship
-        (identity.sponsors), the same source the entrabot body gates on. Mirror of `entrabot
-        users`. Changes apply live (the caller-class gate reads self._sponsors per tool call)."""
-        sub = args[0].lower() if args else "list"
-        rest = args[1:]
-
-        if sub == "list":
-            recs = await asyncio.to_thread(self._sponsor_records)
-            if not recs:
-                self._ui.append_line("no sponsors — /users sponsor <email>", UiStyle.INFO)
-                return
-            self._ui.append_line(f"agent sponsors ({len(recs)}):", UiStyle.INFO)
-            for r in recs:
-                label = r.mail or r.user_principal_name or r.user_id
-                self._ui.append_line(f"  • {label}", UiStyle.INFO)
+        """List the agent's sponsors — the Entra Agent-Identity sponsor relationship
+        (identity.sponsors), the same source the entrabot body gates on. Read-only: add/remove
+        sponsors directly in Entra (or via scripts/add_agent_sponsor.py)."""
+        recs = await asyncio.to_thread(self._sponsor_records)
+        if not recs:
+            self._ui.append_line(
+                "no sponsors (manage in Entra → the agent's sponsor relationship)", UiStyle.INFO)
             return
-
-        if sub in ("sponsor", "add", "guest", "remove"):
-            adding = sub in ("sponsor", "add")
-            if not rest:
-                self._ui.append_line(f"usage: /users {sub} <email>", UiStyle.WARN)
-                return
-            await self._set_sponsor(rest[0], sponsor=adding)
-            return
-
-        self._ui.append_line(
-            f"unknown: /users {sub}  (list | sponsor <email> | guest <email>)", UiStyle.WARN)
+        self._ui.append_line(f"agent sponsors ({len(recs)}):", UiStyle.INFO)
+        for r in recs:
+            label = r.mail or r.user_principal_name or r.user_id
+            self._ui.append_line(f"  • {label}", UiStyle.INFO)
 
     def _sponsor_records(self):
-        """The Agent Identity's current sponsors (enriched with emails for display). Blocking
-        Graph call — invoke off-thread. [] on any failure."""
+        """The Agent Identity's current sponsors (enriched with emails for display) via the core
+        read helper. Blocking Graph call — invoke off-thread. [] on any failure (incl. none)."""
         try:
             from entrabot.config import get_config
-            from entrabot.identity.sponsors import list_agent_identity_sponsors
+            from entrabot.identity.sponsors import fetch_agent_identity_sponsors
+            from entrabot.tools.teams import acquire_agent_user_token
 
-            return list_agent_identity_sponsors(get_config())
+            return fetch_agent_identity_sponsors(
+                get_config(), user_token_provider=acquire_agent_user_token)
         except Exception:
             return []
-
-    async def _set_sponsor(self, email: str, *, sponsor: bool) -> None:
-        """Add/remove a user on the Agent Identity's sponsor relationship (the Entra source of
-        truth — core identity.sponsors), then refresh the live caller-class set. Blocking Graph
-        work runs off-thread."""
-        from entrabot.config import get_config
-        from entrabot.identity import sponsors as core_sponsors
-
-        verb = "sponsor" if sponsor else "guest"
-        try:
-            if sponsor:
-                _id, name = await asyncio.to_thread(
-                    core_sponsors.add_sponsor_by_email, get_config(), email)
-                msg = f"{name or email} is now a sponsor of this agent"
-            else:
-                name, removed = await asyncio.to_thread(
-                    core_sponsors.remove_sponsor_by_email, get_config(), email)
-                if not removed:
-                    self._ui.append_line(f"{email} was not a sponsor", UiStyle.WARN)
-                    return
-                msg = f"{name or email} is no longer a sponsor"
-        except LookupError:
-            self._ui.append_line(
-                f"{email} not found in the tenant (invite as a guest first)", UiStyle.WARN)
-            return
-        except Exception as e:
-            self._ui.append_line(f"could not {verb} {email}: {type(e).__name__}: {e}", UiStyle.WARN)
-            return
-        await self._refresh_sponsors()  # live — the gate reads self._sponsors per tool call
-        self._ui.append_line(msg, UiStyle.SUCCESS)
 
     async def _handle_reload(self) -> None:
         self._ui.append_line("reloading MCP + session…", UiStyle.DIM)

@@ -1,5 +1,5 @@
-"""Tests for `entrabot users` — sponsor management (list / sponsor / guest) over the Entra
-Agent-Identity relationship. Core identity.sponsors is mocked so no Graph/token is needed."""
+"""Tests for `entrabot users` — read-only listing of the agent's Entra sponsors.
+(Sponsor add/remove is done in Entra directly, not in the harness.)"""
 
 from types import SimpleNamespace
 
@@ -12,73 +12,34 @@ def _seed_global(monkeypatch, tmp_path):
                         {"ENTRABOT_TENANT_ID": "t", "ENTRABOT_BLUEPRINT_APP_ID": "bp"})
 
 
-def _mock_core(monkeypatch, state):
+def _mock_fetch(monkeypatch, emails):
+    """Patch the core read function — raises (no sponsors) when empty, else returns records."""
     from entrabot.identity import sponsors as cs
 
-    def add(cfg, email, **k):
-        state["ids"].append(email)
-        return ("id-" + email, email)
+    def fetch(cfg, **k):
+        if not emails:
+            raise ValueError("Agent Identity has no user sponsors")
+        return [SimpleNamespace(mail=e, user_principal_name=e, user_id="id-" + e) for e in emails]
 
-    def remove(cfg, email, **k):
-        existed = email in state["ids"]
-        if existed:
-            state["ids"].remove(email)
-        return (email, existed)
-
-    def lst(cfg, **k):
-        return [SimpleNamespace(mail=e, user_principal_name=e, user_id=e) for e in state["ids"]]
-
-    monkeypatch.setattr(cs, "add_sponsor_by_email", add)
-    monkeypatch.setattr(cs, "remove_sponsor_by_email", remove)
-    monkeypatch.setattr(cs, "list_agent_identity_sponsors", lst)
+    monkeypatch.setattr(cs, "fetch_agent_identity_sponsors", fetch)
 
 
 def test_users_requires_config(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("ENTRABOT_HOME", str(tmp_path))  # no global
-    assert cli._cmd_users(["list"], set()) == 1
+    assert cli._cmd_users([], set()) == 1
     assert "init" in capsys.readouterr().out.lower()
 
 
 def test_users_list_empty(tmp_path, monkeypatch, capsys):
     _seed_global(monkeypatch, tmp_path)
-    _mock_core(monkeypatch, {"ids": []})
-    assert cli._cmd_users(["list"], set()) == 0
+    _mock_fetch(monkeypatch, [])
+    assert cli._cmd_users([], set()) == 0
     assert "No sponsors" in capsys.readouterr().out
 
 
-def test_users_add_then_list(tmp_path, monkeypatch, capsys):
+def test_users_list_shows_sponsors(tmp_path, monkeypatch, capsys):
     _seed_global(monkeypatch, tmp_path)
-    state = {"ids": []}
-    _mock_core(monkeypatch, state)
-
-    assert cli._cmd_users(["sponsor", "jaly@microsoft.com"], set()) == 0
-    assert state["ids"] == ["jaly@microsoft.com"]  # wrote the Entra sponsor relationship
-
-    capsys.readouterr()
-    assert cli._cmd_users(["list"], set()) == 0
-    assert "jaly@microsoft.com" in capsys.readouterr().out  # list reads the gate
-
-
-def test_users_remove(tmp_path, monkeypatch):
-    _seed_global(monkeypatch, tmp_path)
-    state = {"ids": ["jaly@microsoft.com"]}
-    _mock_core(monkeypatch, state)
-    assert cli._cmd_users(["guest", "jaly@microsoft.com"], set()) == 0
-    assert state["ids"] == []
-
-
-def test_users_remove_unknown_is_nonzero(tmp_path, monkeypatch):
-    _seed_global(monkeypatch, tmp_path)
-    _mock_core(monkeypatch, {"ids": []})
-    assert cli._cmd_users(["guest", "ghost@x.com"], set()) == 1  # wasn't a sponsor
-
-
-def test_users_add_unknown_is_nonzero(tmp_path, monkeypatch):
-    _seed_global(monkeypatch, tmp_path)
-    from entrabot.identity import sponsors as cs
-
-    def add(cfg, email, **k):
-        raise LookupError(email)
-
-    monkeypatch.setattr(cs, "add_sponsor_by_email", add)
-    assert cli._cmd_users(["sponsor", "ghost@x.com"], set()) == 1
+    _mock_fetch(monkeypatch, ["jaly@microsoft.com", "bob@corp.com"])
+    assert cli._cmd_users([], set()) == 0
+    out = capsys.readouterr().out
+    assert "jaly@microsoft.com" in out and "bob@corp.com" in out
