@@ -1,8 +1,0 @@
-# The sdist is a complete source bundle (clone-equivalent): it carries the platform
-# provisioning scripts and setup docs so `entrabot init` can provision from an unpacked sdist,
-# not only a git checkout. Wheels stay lean — they're the repo-independent runtime.
-include INSTALL.md README.md CHANGELOG.md SECURITY.md
-recursive-include scripts *.ps1 *.sh *.py *.cmd *.md *.psm1
-recursive-exclude scripts __pycache__ *.pyc
-graft docs
-prune docs/reference
