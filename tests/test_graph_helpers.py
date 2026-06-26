@@ -98,6 +98,22 @@ class TestGraphRequest:
         assert mock_requests.request.call_count == 2
         mock_time.sleep.assert_called_once_with(1)
 
+    def test_retry_on_429_with_http_date_retry_after(self):
+        from entrabot.graph_helpers import graph_request
+
+        throttled = _resp(429, headers={"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"})
+        ok = _resp(200, {"value": []})
+        with (
+            patch("entrabot.graph_helpers.requests") as mock_requests,
+            patch("entrabot.graph_helpers.time") as mock_time,
+        ):
+            mock_requests.request.side_effect = [throttled, ok]
+            result = graph_request("GET", "/users", "tok")
+
+        assert result.status_code == 200
+        assert mock_requests.request.call_count == 2
+        mock_time.sleep.assert_called_once_with(0)
+
     def test_retry_on_503(self):
         from entrabot.graph_helpers import graph_request
 
@@ -260,9 +276,10 @@ class TestGraphCollectionValues:
 
         assert result == [{"id": "a"}, {"id": "b"}]
         assert mock_requests.request.call_args_list[1].args == ("GET", next_link)
-        assert mock_requests.request.call_args_list[1].kwargs["headers"][
-            "Authorization"
-        ] == "Bearer tok"
+        assert (
+            mock_requests.request.call_args_list[1].kwargs["headers"]["Authorization"]
+            == "Bearer tok"
+        )
 
     def test_error_raises(self):
         from entrabot.graph_helpers import graph_collection_values

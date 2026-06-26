@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 import requests
 
+from entrabot.tools.rate_limit import parse_retry_after
 from entrabot.url_safety import _is_graph_url
 
 GRAPH_BETA = "https://graph.microsoft.com/beta"
@@ -84,7 +85,7 @@ def graph_request(
     resp = requests.request(method, url, headers=headers, json=json_body, timeout=timeout)
 
     if retry and resp.status_code in _RETRYABLE:
-        wait = int(resp.headers.get("Retry-After", "10"))
+        wait = parse_retry_after(resp.headers.get("Retry-After"), default=10)
         print(f"  Graph API returned {resp.status_code}; retrying in {wait}s…")
         time.sleep(wait)
         resp = requests.request(method, url, headers=headers, json=json_body, timeout=timeout)

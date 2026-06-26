@@ -20,6 +20,7 @@ from entrabot.errors import (
     AgentIDNotAvailable,
     ChatNotFound,
     MessageTooLong,
+    RateLimitError,
     TeamsNotLicensed,
     TokenExchangeError,
     TokenExpiredError,
@@ -765,9 +766,7 @@ def _sponsor_gate_patches(*, chat_id: str = "19:chat-id@thread.v2"):
         patch(
             "entrabot.tools.teams._fetch_chat_members_for_gate",
             new=AsyncMock(
-                return_value=[
-                    {"user_id": "sponsor-uid", "email": "sponsor@contoso.com"}
-                ]
+                return_value=[{"user_id": "sponsor-uid", "email": "sponsor@contoso.com"}]
             ),
         ),
     ]
@@ -1439,6 +1438,26 @@ class TestCreateOneOnOneChat:
                 target_email="someone@example.com",
                 agent_user_id="agent-oid-123",
             )
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_429_http_date_retry_after_raises_rate_limit(self) -> None:
+        from entrabot.tools.teams import create_one_on_one_chat
+
+        respx.post(f"{GRAPH_BASE}/chats").mock(
+            return_value=httpx.Response(
+                429,
+                headers={"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"},
+            )
+        )
+        with pytest.raises(RateLimitError) as exc_info:
+            await create_one_on_one_chat(
+                token="tok",
+                target_email="someone@example.com",
+                agent_user_id="agent-oid-123",
+            )
+
+        assert exc_info.value.retry_after == 0
 
 
 # ---------------------------------------------------------------------------
