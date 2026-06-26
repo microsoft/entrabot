@@ -100,12 +100,17 @@ class PersonaBackend:
         report = PersonaReport()
         if not self._root.exists():
             return report
+        root = self._root.resolve()
         for path in sorted(self._root.rglob("*")):
-            if not path.is_file():
-                continue
             rel = path.relative_to(self._root).as_posix()
             key = f"{self.prefix}{rel}"
+            if path.is_symlink():
+                report.errors.append((key, "symlinks are not allowed"))
+                continue
+            if not path.is_file():
+                continue
             try:
+                path.resolve().relative_to(root)
                 if self._backend.exists(key):
                     report.skipped += 1
                     continue
