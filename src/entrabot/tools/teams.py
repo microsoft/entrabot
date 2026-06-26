@@ -38,7 +38,7 @@ from entrabot.errors import (
 from entrabot.graph_helpers import odata_escape
 from entrabot.platform import get_credential_store
 from entrabot.tools.audit import log_event
-from entrabot.tools.rate_limit import RetryOn429Transport
+from entrabot.tools.rate_limit import RetryOn429Transport, parse_retry_after
 from entrabot.url_safety import _is_graph_url
 
 logger = logging.getLogger("entrabot.tools.teams")
@@ -336,9 +336,7 @@ async def create_one_on_one_chat(
     agent_member: dict = {
         "@odata.type": "#microsoft.graph.aadUserConversationMember",
         "roles": ["owner"],
-        "user@odata.bind": (
-            f"https://graph.microsoft.com/v1.0/users('{_agent_bind_value}')"
-        ),
+        "user@odata.bind": (f"https://graph.microsoft.com/v1.0/users('{_agent_bind_value}')"),
     }
 
     payload = {
@@ -371,7 +369,7 @@ async def create_one_on_one_chat(
             logger.error("400 creating 1:1 chat: %s", error_msg)
             raise ValueError(f"Graph API rejected chat creation: {error_msg}")
         if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After", "60"))
+            retry_after = parse_retry_after(resp.headers.get("Retry-After"), default=60)
             raise RateLimitError(retry_after)
         resp.raise_for_status()
 
@@ -499,7 +497,7 @@ async def create_or_find_chat(
                 "their actual UPN. Check ENTRABOT_HUMAN_USER_MAILS in .env."
             )
         if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After", "60"))
+            retry_after = parse_retry_after(resp.headers.get("Retry-After"), default=60)
             raise RateLimitError(retry_after)
         resp.raise_for_status()
 
@@ -635,9 +633,7 @@ async def add_member(
             (
                 s
                 for s in sponsors
-                if any(
-                    e.lower() == requester_lower for e in s.email_identifiers()
-                )
+                if any(e.lower() == requester_lower for e in s.email_identifiers())
             ),
             None,
         )
@@ -711,13 +707,8 @@ async def add_member(
         # Gate 2 (defense-in-depth): existing Graph membership check.
         members = await _fetch_chat_members_for_gate(chat_id)
         matched_user_id = matched_sponsor.user_id.lower()
-        if not any(
-            (m.get("user_id") or "").strip().lower() == matched_user_id
-            for m in members
-        ):
-            err = RequesterNotInChatError(
-                requester=requester_email, chat_id=chat_id
-            )
+        if not any((m.get("user_id") or "").strip().lower() == matched_user_id for m in members):
+            err = RequesterNotInChatError(requester=requester_email, chat_id=chat_id)
             log_event(
                 action="teams.add_member",
                 resource=audit_resource,
@@ -771,11 +762,9 @@ async def add_member(
                     error_msg = resp.text or "Not found"
                 raise ChatNotFound(f"Could not add member: {error_msg}")
             if resp.status_code == 401:
-                raise TokenExpiredError(
-                    "Agent User token expired — re-acquire via three-hop flow"
-                )
+                raise TokenExpiredError("Agent User token expired — re-acquire via three-hop flow")
             if resp.status_code == 429:
-                retry_after = int(resp.headers.get("Retry-After", "60"))
+                retry_after = parse_retry_after(resp.headers.get("Retry-After"), default=60)
                 raise RateLimitError(retry_after)
             resp.raise_for_status()
 
@@ -842,7 +831,7 @@ async def list_members(
         if resp.status_code == 401:
             raise TokenExpiredError("Agent User token expired — re-acquire via three-hop flow")
         if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After", "60"))
+            retry_after = parse_retry_after(resp.headers.get("Retry-After"), default=60)
             raise RateLimitError(retry_after)
         resp.raise_for_status()
 
@@ -929,7 +918,7 @@ async def send(
         if resp.status_code == 401:
             raise TokenExpiredError("Token expired — re-acquire")
         if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After", "60"))
+            retry_after = parse_retry_after(resp.headers.get("Retry-After"), default=60)
             raise RateLimitError(retry_after)
         if resp.status_code == 404:
             raise ChatNotFound(f"Chat {chat_id} not found")
@@ -985,7 +974,7 @@ async def post_thinking_placeholder(
         if resp.status_code == 404:
             raise ChatNotFound(f"Chat {chat_id} not found")
         if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After", "60"))
+            retry_after = parse_retry_after(resp.headers.get("Retry-After"), default=60)
             raise RateLimitError(retry_after)
         resp.raise_for_status()
 
@@ -1039,7 +1028,7 @@ async def update_placeholder(
         if resp.status_code == 401:
             raise TokenExpiredError("Token expired — re-acquire")
         if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After", "60"))
+            retry_after = parse_retry_after(resp.headers.get("Retry-After"), default=60)
             raise RateLimitError(retry_after)
         if 200 <= resp.status_code < 300:
             return {"message_id": placeholder_id, "mode": "edit"}
@@ -1098,7 +1087,7 @@ async def resolve_placeholder(
             if resp.status_code == 401:
                 raise TokenExpiredError("Token expired — re-acquire")
             if resp.status_code == 429:
-                retry_after = int(resp.headers.get("Retry-After", "60"))
+                retry_after = parse_retry_after(resp.headers.get("Retry-After"), default=60)
                 raise RateLimitError(retry_after)
             if 200 <= resp.status_code < 300:
                 return {"message_id": placeholder_id, "mode": "edit"}
@@ -1121,7 +1110,7 @@ async def resolve_placeholder(
         if sd_resp.status_code == 401:
             raise TokenExpiredError("Token expired — re-acquire")
         if sd_resp.status_code == 429:
-            retry_after = int(sd_resp.headers.get("Retry-After", "60"))
+            retry_after = parse_retry_after(sd_resp.headers.get("Retry-After"), default=60)
             raise RateLimitError(retry_after)
         delete_ok = 200 <= sd_resp.status_code < 300
     if not delete_ok:
@@ -1198,7 +1187,7 @@ async def delete_chat_message(
         if resp.status_code == 401:
             raise TokenExpiredError("Token expired — re-acquire")
         if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After", "60"))
+            retry_after = parse_retry_after(resp.headers.get("Retry-After"), default=60)
             raise RateLimitError(retry_after)
         if 200 <= resp.status_code < 300:
             return True
@@ -1234,7 +1223,7 @@ async def fetch_hosted_image(*, token: str, url: str) -> bytes | None:
         if resp.status_code == 404:
             return None
         if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After", "60"))
+            retry_after = parse_retry_after(resp.headers.get("Retry-After"), default=60)
             raise RateLimitError(retry_after)
         resp.raise_for_status()
         return resp.content
@@ -1324,7 +1313,7 @@ async def fetch_message(
         if resp.status_code == 401:
             raise TokenExpiredError("Token expired — re-acquire")
         if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After", "60"))
+            retry_after = parse_retry_after(resp.headers.get("Retry-After"), default=60)
             raise RateLimitError(retry_after)
         if not (200 <= resp.status_code < 300):
             return None
@@ -1366,7 +1355,7 @@ async def read(
         if resp.status_code == 404:
             raise ChatNotFound(f"Chat {chat_id} not found")
         if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After", "60"))
+            retry_after = parse_retry_after(resp.headers.get("Retry-After"), default=60)
             raise RateLimitError(retry_after)
         resp.raise_for_status()
 
