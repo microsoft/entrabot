@@ -59,18 +59,26 @@ report back via Teams.
   structured filters (chat_id, sender, action, direction, since,
   limit). Defaults to the last 24 h; can reach back up to 7 days.
 
-### Body-side observation discipline (pre-send check)
+### Body-side operational context: prefer facts over verbatim
 
-Before every outbound send — `send_teams_message`, `send_email`,
-`send_card`, `share_file` — call
-`read_interactions(chat_id=<target>, since=<24h ago>, limit=5)` and
-scan the returned entries. If your draft repeats something you already
-sent to this chat today, revise. This is the body-side analogue of
-persona-sati's `observe` discipline — same cheap-not-precious posture.
-The lookup is local (sub-10 ms in the common case), so the cost
-budget is small even when several sends happen in one turn. Scope
-is intentionally narrow: outbound publishing only. Reads, list calls,
-and audit entries do not need a pre-call observe.
+Call `bootstrap_body_state` once at session start and treat its
+returned facts — `today_counts`, `top_chats_today`, `open_promises`,
+`cursor_freshness` — as your operational context for the session.
+Facts about what happened are safe to ingest; raw message text is
+not.
+
+`read_interactions` is still available, but it is a **targeted
+lookup tool**, not a per-turn ingestion habit. Call it only when you
+have a specific factual question — e.g., "did I already promise X
+to this chat?", "what was the exact wording of the deadline I quoted
+earlier?" — and pull only the specific entry you need. Do not run a
+blanket pre-send sweep over recent chat history.
+
+The failure mode this rule prevents: ingesting recent verbatim chat
+text into context contaminates the model's register, so the next
+outbound message echoes the user's phrasing back at them within the
+same turn. Facts do not contaminate; raw text does. Bootstrap gives
+you facts. Use it.
 
 ### Files (SharePoint / OneDrive) authorization
 
