@@ -20,7 +20,7 @@ venv/
 .pyright/
 .openclaw-state.json
 .entrabot-state.json
-.entrabot-state.json.bak.*
+.entrabot-state.json.bak*
 .mcp.json
 a365.config.json
 a365.generated.config.json
@@ -54,6 +54,3 @@ docs/superpowers/
 
 # ENTRABOT harness per-directory config (local)
 .entrabot/
-# Provisioning state + any local backups (never commit — carry tenant/cert identifiers)
-.entrabot-state.json
-*.bak
