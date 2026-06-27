@@ -103,18 +103,35 @@ class TestRehydrateOnRegister:
         assert state["seen_ids"] == {"msg-a", "msg-b"}
 
     def test_stale_cursor_falls_through_to_bootstrap(self, tmp_path) -> None:
-        """A cursor older than the staleness cap → ignore and bootstrap."""
-        old = (
+        """A cursor not WRITTEN within the staleness cap → ignore and bootstrap.
+
+        Staleness is judged by ``last_written_at`` (write time), so to build a
+        genuinely-stale cursor we write the file directly with an old
+        ``last_written_at`` (``save_cursor`` would stamp it to *now*). The
+        ``last_ts`` here is recent on purpose, to prove the watermark is NOT
+        what drives the decision.
+        """
+        import json
+
+        from entrabot.storage.backend import get_backend
+
+        recent_msg_ts = (datetime.now(UTC) - timedelta(minutes=10)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        old_write = (
             datetime.now(UTC)
             - timedelta(seconds=chat_cursors.CURSOR_STALENESS_SECONDS + 3600)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        chat_cursors.save_cursor(
-            "19:stale@thread.v2",
-            {
-                "last_ts": old,
-                "seen_ids_tail": ["msg-a"],
-                "bootstrapped": True,
-            },
+        ).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        get_backend().write_text(
+            chat_cursors.cursor_key("19:stale@thread.v2"),
+            json.dumps(
+                {
+                    "last_ts": recent_msg_ts,
+                    "seen_ids_tail": ["msg-a"],
+                    "bootstrapped": True,
+                    "last_written_at": old_write,
+                }
+            ),
         )
 
         mcp_server._register_watched_chat("19:stale@thread.v2", persist=False)
@@ -124,6 +141,46 @@ class TestRehydrateOnRegister:
         assert state["bootstrapped"] is False
         assert state["last_ts"] is None
         assert state["seen_ids"] == set()
+
+    def test_idle_chat_recent_write_rehydrates_despite_old_last_ts(
+        self, tmp_path
+    ) -> None:
+        """Regression for the replay flood.
+
+        An idle chat has an old ``last_ts`` (its newest message is weeks
+        old) but a freshly-written cursor. Staleness must be judged by
+        ``last_written_at`` (when the cursor was persisted), NOT ``last_ts``
+        (the message watermark). Judging by ``last_ts`` made every idle chat
+        re-bootstrap on each restart, re-firing its weeks-old newest message
+        as if it were live — the flood. Such a cursor must REHYDRATE.
+        """
+        import json
+
+        from entrabot.storage.backend import get_backend
+
+        ancient_msg_ts = "2026-05-28T22:00:00Z"  # weeks old — idle chat
+        recent_write = (datetime.now(UTC) - timedelta(minutes=5)).strftime(
+            "%Y-%m-%dT%H:%M:%S.%fZ"
+        )
+        get_backend().write_text(
+            chat_cursors.cursor_key("19:idle@thread.v2"),
+            json.dumps(
+                {
+                    "last_ts": ancient_msg_ts,
+                    "seen_ids_tail": ["old-1", "old-2"],
+                    "bootstrapped": True,
+                    "last_written_at": recent_write,
+                }
+            ),
+        )
+
+        mcp_server._register_watched_chat("19:idle@thread.v2", persist=False)
+
+        state = mcp_server._state["watched_chats"]["19:idle@thread.v2"]
+        # Recently-written cursor → rehydrate, preserve seen-set + watermark.
+        assert state["bootstrapped"] is True
+        assert state["last_ts"] == ancient_msg_ts
+        assert state["seen_ids"] == {"old-1", "old-2"}
 
     def test_corrupt_cursor_falls_through_to_bootstrap(self, tmp_path) -> None:
         """Corrupt JSON → treat as absent (defensive: boot must not die)."""

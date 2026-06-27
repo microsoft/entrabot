@@ -1209,11 +1209,16 @@ def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
     watched = _state.get("watched_chats", {})
     if chat_id not in watched:
         # Issue #17: try to rehydrate a persisted cursor first. If it exists
-        # and ``last_ts`` is within the staleness cap, we keep the prior
-        # process's seen-set + watermark and skip ``_bootstrap_chat`` (which
-        # would otherwise re-fire the "newest at boot" message even when that
-        # message is days old). If absent, stale, or corrupt, fall through to
-        # the existing fresh-state path and let the bootstrap path baseline.
+        # and its ``last_written_at`` is within the staleness cap (i.e. the
+        # cursor was persisted recently, regardless of how old its newest
+        # message is), we keep the prior process's seen-set + watermark and
+        # skip ``_bootstrap_chat`` (which would otherwise re-fire the "newest
+        # at boot" message even when that message is days old). Staleness is
+        # judged by write time, NOT by ``last_ts`` — keying off ``last_ts``
+        # re-bootstrapped every idle chat on each restart, re-firing its old
+        # newest message as if it were live (the replay flood). If absent,
+        # stale, or corrupt, fall through to the fresh-state path and let the
+        # bootstrap path baseline.
         from entrabot.tools.chat_cursors import is_stale, load_cursor
 
         rehydrated: dict | None = None
@@ -1229,7 +1234,7 @@ def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
                     type(exc).__name__,
                     exc,
                 )
-        if cursor and not is_stale(cursor.get("last_ts")):
+        if cursor and not is_stale(cursor.get("last_written_at")):
             rehydrated = cursor
 
         if rehydrated is not None:
