@@ -330,15 +330,33 @@ class TestCursorFreshness:
         assert cf["cursors_stale"] == 0
 
     def test_distinguishes_stale_from_fresh(self, tmp_data_dir: Path) -> None:
+        """Staleness is judged by ``last_written_at`` (write time), not by the
+        ``last_ts`` message watermark. The fresh cursor is saved normally
+        (``save_cursor`` stamps ``last_written_at`` to now); the stale one is
+        written directly with an old ``last_written_at`` — and a *recent*
+        ``last_ts``, to prove the watermark does not drive the decision.
+        """
+        import json
+
+        from entrabot.storage.backend import get_backend
+
         recent = (datetime.now(UTC) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        stale = (
+        old_write = (
             datetime.now(UTC) - timedelta(seconds=chat_cursors.CURSOR_STALENESS_SECONDS + 3600)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         chat_cursors.save_cursor(
             "19:fresh@thread.v2", {"last_ts": recent, "seen_ids_tail": [], "bootstrapped": True}
         )
-        chat_cursors.save_cursor(
-            "19:stale@thread.v2", {"last_ts": stale, "seen_ids_tail": [], "bootstrapped": True}
+        get_backend().write_text(
+            chat_cursors.cursor_key("19:stale@thread.v2"),
+            json.dumps(
+                {
+                    "last_ts": recent,
+                    "seen_ids_tail": [],
+                    "bootstrapped": True,
+                    "last_written_at": old_write,
+                }
+            ),
         )
         result = bootstrap_body_state()
         cf = result["cursor_freshness"]

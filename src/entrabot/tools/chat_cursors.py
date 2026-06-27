@@ -46,10 +46,12 @@ logger = logging.getLogger("entrabot.tools.chat_cursors")
 # against same-second message races. 50 is plenty.
 MAX_SEEN_IDS_TAIL = 50
 
-# Staleness cap: if the persisted cursor's ``last_ts`` is older than this,
-# treat the chat as needing a fresh bootstrap. Better to bootstrap than to
-# fire a 3-day-old message as if it were live (the symptom that drove this
-# fix — today's session replayed messages from 11 days ago).
+# Staleness cap: if the cursor's ``last_written_at`` (when it was last
+# persisted) is older than this, the server was likely down long enough that
+# messages may have been missed and the seen-set can't be trusted — re-baseline
+# via a fresh bootstrap. NOTE: measured from the cursor's WRITE time, not from
+# ``last_ts`` (the newest-message watermark). Keying off ``last_ts`` re-fired
+# every idle chat's old newest message on each restart — the replay flood.
 CURSOR_STALENESS_SECONDS = 24 * 60 * 60  # 24 hours
 
 # Storage key prefix. One file per chat under this prefix so writes are
@@ -137,21 +139,35 @@ def save_cursor(chat_id: str, state: dict) -> None:
     backend.write_text(cursor_key(chat_id), json.dumps(payload))
 
 
-def is_stale(last_ts: str | None) -> bool:
-    """Return True if *last_ts* is too old to safely rehydrate from.
+def is_stale(last_written_at: str | None) -> bool:
+    """Return True if a cursor written at *last_written_at* is too old to trust.
 
-    "Too old" means older than :data:`CURSOR_STALENESS_SECONDS`. A stale
-    cursor triggers a fresh ``_bootstrap_chat`` instead of rehydration — this
-    is the defense against the 11-day-old replay flood that motivated this
-    fix.
+    Staleness is measured from ``last_written_at`` — *when the cursor was
+    last persisted* — NOT from ``last_ts``, the newest *message* watermark.
+    This distinction is the whole fix: an idle chat legitimately has an old
+    ``last_ts`` (its newest message may be weeks old) while its cursor was
+    written seconds ago. Such a cursor is perfectly trustworthy — rehydrating
+    it preserves the seen-set and the watermark, so the old message is NOT
+    re-surfaced.
+
+    The prior implementation keyed off ``last_ts``, so every chat idle longer
+    than the cap was judged "stale" and re-bootstrapped on each restart —
+    and ``_bootstrap_chat`` deliberately leaves the newest message unseen, so
+    that weeks-old message got re-pushed as if it were live. With ~50 idle
+    chats and frequent restarts that produced a flood of stale replays.
+
+    Keying off ``last_written_at`` preserves the genuine protection the cap is
+    for: if the server was actually down longer than
+    :data:`CURSOR_STALENESS_SECONDS`, messages may have been missed and the
+    seen-set can no longer be trusted, so we re-baseline via a fresh bootstrap.
 
     ``None``, empty string, and unparseable timestamps are treated as stale
     (defensive: better to bootstrap than to crash boot on a bad cursor).
     """
-    if not last_ts:
+    if not last_written_at:
         return True
     try:
-        dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(last_written_at.replace("Z", "+00:00"))
     except (ValueError, AttributeError):
         return True
     if dt.tzinfo is None:
