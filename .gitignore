@@ -54,3 +54,7 @@ docs/runbooks/session-*.md
 docs/superpowers/
 .entraclaw-state.json
 .mxc-build/mxc-src/
+# MXC Windows SDK fetched on demand by scripts/setup_sandbox.ps1 (large; the
+# pinned SHA256 in src/entrabot/sandbox/binary.py is the trust anchor, not the
+# committed bytes).
+.mxc-build/npm/

@@ -13,7 +13,8 @@ def get_sandbox_runner() -> SandboxRunner:
     """Get platform-specific sandbox runner with verified binary.
     
     Returns:
-        SandboxRunner for current platform (SeatbeltRunner on macOS)
+        SandboxRunner for current platform (SeatbeltRunner on macOS,
+        ProcessContainerRunner on Windows)
     
     Raises:
         SandboxUnavailableError: No binary found or platform unsupported
@@ -27,8 +28,8 @@ def get_sandbox_runner() -> SandboxRunner:
         from entrabot.sandbox.mac import SeatbeltRunner
         return SeatbeltRunner(binary_path)
     elif sys.platform == "win32":
-        # TODO: Windows runner (T4)
-        raise SandboxUnavailableError("Windows ProcessContainer runner not yet implemented")
+        from entrabot.sandbox.windows import ProcessContainerRunner
+        return ProcessContainerRunner(binary_path)
     else:
         # TODO: Linux runner (T10, optional)
         raise SandboxUnavailableError(f"Sandbox not supported on platform: {sys.platform}")

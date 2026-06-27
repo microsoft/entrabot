@@ -287,6 +287,31 @@ def test_clamp_rejects_path_outside_ceiling_dir():
         assert clamped.readwrite_paths == []
 
 
+@pytest.mark.skipif(
+    os.name != "nt", reason="case-insensitive containment is a Windows concern"
+)
+def test_clamp_admits_case_insensitive_subpath_on_windows():
+    """On Windows (case-insensitive FS) a differently-cased request is admitted.
+
+    Windows paths are case-insensitive, so a request spelled with different case
+    than the granted ceiling entry must still be contained, not silently dropped.
+    """
+    from entrabot.sandbox.policy import clamp_to_ceiling
+
+    with tempfile.TemporaryDirectory() as d:
+        d = os.path.realpath(d)
+        sub = os.path.join(d, "Output")
+        os.mkdir(sub)
+
+        ceiling = _clamp_policy(readwrite=[sub])
+        # Same directory, lower-cased spelling.
+        llm = _clamp_policy(readwrite=[sub.lower()])
+
+        clamped = clamp_to_ceiling(llm, ceiling)
+
+        assert clamped.readwrite_paths == [sub.lower()]
+
+
 def test_clamp_blocks_symlink_escape_from_ceiling_dir():
     """A symlink inside a granted dir that points outside it is rejected (security).
 
@@ -303,7 +328,13 @@ def test_clamp_blocks_symlink_escape_from_ceiling_dir():
         os.mkdir(granted)
         os.mkdir(secret)
         evil = os.path.join(granted, "evil")
-        os.symlink(secret, evil)  # granted/evil -> ../secret (escapes ceiling)
+        try:
+            os.symlink(secret, evil)  # granted/evil -> ../secret (escapes ceiling)
+        except OSError as e:
+            # Creating symlinks on Windows requires SeCreateSymbolicLinkPrivilege
+            # (admin or Developer Mode). The canonicalize-then-contain property is
+            # validated on POSIX / privileged hosts; skip where unprivileged.
+            pytest.skip(f"symlink creation not permitted on this host: {e}")
 
         ceiling = _clamp_policy(readwrite=[granted])
         llm = _clamp_policy(readwrite=[evil])
@@ -324,7 +355,11 @@ def test_canonicalize_paths_resolves_symlinks():
         real_path.mkdir()
         
         symlink_path = Path(tmpdir) / "link"
-        symlink_path.symlink_to(real_path)
+        try:
+            symlink_path.symlink_to(real_path)
+        except OSError as e:
+            # Windows symlink creation needs elevated privilege / Developer Mode.
+            pytest.skip(f"symlink creation not permitted on this host: {e}")
         
         # Pass symlink, should resolve to real path
         canonicalized = canonicalize_paths([str(symlink_path)])

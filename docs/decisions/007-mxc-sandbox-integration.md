@@ -63,7 +63,7 @@ Phase 2 stub shipped in `src/entrabot/sandbox/session.py` with `NotImplementedEr
 │  ├─ policy.py: Policy builder + clamping   │
 │  ├─ binary.py: Binary resolution + verify  │
 │  ├─ mac.py: macOS Seatbelt runner          │
-│  ├─ windows.py: Windows AppContainer (TODO)│
+│  ├─ windows.py: Windows processcontainer   │
 │  ├─ linux.py: seccomp-bpf runner (TODO)    │
 │  └─ session.py: Phase 2 stub               │
 └──────────────────┬──────────────────────────┘
@@ -144,7 +144,7 @@ audit.emit("run_code", "success" if result.exit_code == 0 else "failure", result
 | Platform | Backend | Status | Notes |
 |----------|---------|--------|-------|
 | macOS | Seatbelt | ✅ SHIPPED | Requires `--experimental` flag |
-| Windows | AppContainer | ⏳ TODO (T4) | Lower priority, design complete |
+| Windows | processcontainer | ✅ SHIPPED | AppContainer/BaseContainer; default (non-experimental) backend, Win11 24H2+ (build 26100+). Verified against `@microsoft/mxc-sdk` v0.7.0 `wxc-exec.exe`. |
 | Linux | seccomp-bpf | ⏳ TODO (T10) | Optional, lower priority |
 
 ### Demonstration Tool
@@ -327,11 +327,23 @@ export ENTRABOT_ENABLE_RUN_CODE=1
 - Can MXC sessions reference external identity providers (Entra)?
 - Does Intune expose agent governance APIs for non-human principals?
 
-### Phase 3: Windows Support (T4)
+### Phase 3: Windows Support (T4) — SHIPPED
 
-- Implement `sandbox/windows.py` with AppContainerRunner
-- Add Windows-specific tests (AppContainer SID checks, network isolation)
-- Update setup_sandbox.ps1 for Windows binary provisioning
+- [x] Implement `sandbox/windows.py` with `ProcessContainerRunner`
+- [x] Wire `get_sandbox_runner()` to return it on `win32`
+- [x] Pin real `wxc-exec.exe` SHA256 (`win32-arm64`, `win32-x64`) from `@microsoft/mxc-sdk` v0.7.0
+- [x] Normalize Windows `platform.machine()` (`AMD64`/`ARM64`) for binary lookup + hash key
+- [x] Fix `os.pathsep` ceiling parsing (drive-letter colon no longer shreds paths)
+- [x] Windows-path + arch tests; `setup_sandbox.ps1` provisioning script
+- [x] Preview learnings: `docs/platform-learnings/mxc-windows-sandbox-preview.md`
+
+Differences from macOS captured during the port: config is delivered via
+`--config-base64` (no stdin), `--experimental` is NOT needed (processcontainer is
+a default backend), the parser rejects unknown top-level fields (the stray
+`keychainAccess` field was removed from `build_policy`), `commandLine` runs via
+`CreateProcessW` with no implicit shell (use `cmd /c ...`), and host-based network
+filtering (`allowedHosts`) is unenforced — reflected in `get_capabilities` so
+fail-closed logic refuses it.
 
 ### Phase 4: Linux Support (T10)
 

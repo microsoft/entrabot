@@ -40,8 +40,16 @@ def build_policy(policy: SandboxPolicy) -> str:
         "network": {
             "defaultPolicy": policy.network_default_policy,
         },
-        "keychainAccess": False,  # Hardcoded, never True
     }
+    # NOTE: keychain access is intentionally NOT emitted as a top-level field.
+    # No MXC schema version (0.6.0-alpha / 0.7.0-alpha) defines a top-level
+    # ``keychainAccess`` key, and the real ``wxc-exec.exe`` parser rejects
+    # unknown top-level fields (``Unknown top-level field(s) in config:
+    # keychainAccess``). On macOS keychain access is governed by
+    # ``experimental.seatbelt.keychainAccess`` instead; here it stays denied by
+    # default-deny. ``policy.keychain_access`` is hardcoded False and never
+    # widened (see clamp_to_ceiling), so omitting the field is the correct,
+    # cross-platform-safe behaviour — not a relaxation.
     
     # Add allowedHosts if specified (best-effort on macOS)
     if policy.allowed_hosts:

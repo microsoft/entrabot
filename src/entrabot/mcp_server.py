@@ -4864,6 +4864,72 @@ async def share_file(
 # Check env flag to decide whether to register run_code tool
 _ENABLE_RUN_CODE = os.environ.get("ENTRABOT_ENABLE_RUN_CODE") == "1"
 
+
+# Substrings the sandbox helper (e.g. wxc-exec.exe) emits on stderr when it
+# launched successfully but could NOT spawn the inner command via CreateProcessW.
+# This is an internal sandbox-configuration problem (the helper ran but the
+# command it was told to run is not a launchable executable) — it is NOT a
+# blocked path or a missing target file, and must be reported distinctly so the
+# agent does not tell the user "the file does not exist / is outside the ceiling"
+# when the real cause is the sandbox command construction or MXC binary.
+_SANDBOX_SPAWN_FAILURE_SIGNATURES = (
+    "createprocessw failed",
+    "0x80070002",
+    "error_file_not_found",
+    "backend_error",
+)
+
+
+def _is_sandbox_spawn_failure(stderr: str | None) -> bool:
+    """True if ``stderr`` carries the sandbox-helper spawn-failure signature."""
+    s = (stderr or "").lower()
+    return any(sig in s for sig in _SANDBOX_SPAWN_FAILURE_SIGNATURES)
+
+
+def _local_file_failure_response(result, *, operation: str, path: str) -> dict:
+    """Build the failure dict for read_local_file / write_local_file.
+
+    Discriminates two genuinely different failures that both surface as a nonzero
+    runner exit:
+
+    * **Sandbox-helper spawn failure** (``CreateProcessW failed`` / ``0x80070002``
+      / ``backend_error``): the helper ran but could not spawn the inner command.
+      This is an internal sandbox configuration problem, not a policy denial.
+    * **Policy denial / nonzero inner exit**: the command ran inside the sandbox
+      and was blocked by the operator ceiling, or the target file is missing.
+    """
+    verb = "Read" if operation == "read" else "Write"
+    response = {
+        "success": False,
+        "path": path,
+        "stderr": (result.stderr or "").strip()[:1024],
+        "exit_code": result.exit_code,
+    }
+    if _is_sandbox_spawn_failure(result.stderr):
+        response["error"] = "Sandbox helper could not run the command"
+        response["help"] = (
+            "The sandbox helper launched but could not spawn the inner command "
+            "(CreateProcessW failed / file not found at the OS-spawn level). This "
+            "is an internal sandbox configuration problem — the helper ran but the "
+            "command it was given is not a launchable executable. It is NOT a "
+            "blocked path or a missing target file: check the sandbox command "
+            "construction / MXC binary, not the operator's allow-list."
+        )
+        return response
+    response["error"] = f"{verb} blocked or failed"
+    if operation == "read":
+        response["help"] = (
+            "The path is likely outside the sandbox's allowed read paths "
+            "(the operator's ceiling), or the file does not exist."
+        )
+    else:
+        response["help"] = (
+            "The target directory is likely outside the sandbox's allowed "
+            "write paths (the operator's ceiling)."
+        )
+    return response
+
+
 if _ENABLE_RUN_CODE:
     @mcp.tool()
     def run_code(
@@ -4957,8 +5023,16 @@ if _ENABLE_RUN_CODE:
             # Get operator ceiling from environment
             # In production, this would be configured via env vars
             # For now, use a restrictive default ceiling
-            ceiling_readonly = os.environ.get("ENTRABOT_SANDBOX_READONLY_PATHS", "").split(":")
-            ceiling_readwrite = os.environ.get("ENTRABOT_SANDBOX_READWRITE_PATHS", "").split(":")
+            # Operator ceiling paths are an OS-path-separator-delimited list
+            # (':' on POSIX, ';' on Windows). Using os.pathsep — not a hardcoded
+            # ':' — is load-bearing on Windows: a colon split would shred drive
+            # letters (e.g. 'C:\\Users\\me' -> ['C', '\\Users\\me']).
+            ceiling_readonly = os.environ.get(
+                "ENTRABOT_SANDBOX_READONLY_PATHS", ""
+            ).split(os.pathsep)
+            ceiling_readwrite = os.environ.get(
+                "ENTRABOT_SANDBOX_READWRITE_PATHS", ""
+            ).split(os.pathsep)
             ceiling_timeout = int(os.environ.get("ENTRABOT_SANDBOX_TIMEOUT_MS", "30000"))
             
             # Filter out empty strings from split
@@ -5151,16 +5225,10 @@ if _ENABLE_RUN_CODE:
                     {"success": True, "path": path,
                      "content": result.stdout[:10 * 1024]}, indent=2
                 )
-            return json.dumps({
-                "success": False, "path": path,
-                "error": "Read blocked or failed",
-                "stderr": result.stderr.strip()[:1024],
-                "exit_code": result.exit_code,
-                "help": (
-                    "The path is likely outside the sandbox's allowed read "
-                    "paths (the operator's ceiling), or the file does not exist."
-                ),
-            }, indent=2)
+            return json.dumps(
+                _local_file_failure_response(result, operation="read", path=path),
+                indent=2,
+            )
         except SandboxPolicyError as e:
             return json.dumps({"success": False, "path": path,
                                "error": "Path not accessible", "message": str(e)}, indent=2)
@@ -5235,16 +5303,10 @@ if _ENABLE_RUN_CODE:
                     {"success": True, "path": path, "bytes_written": len(content)},
                     indent=2,
                 )
-            return json.dumps({
-                "success": False, "path": path,
-                "error": "Write blocked or failed",
-                "stderr": result.stderr.strip()[:1024],
-                "exit_code": result.exit_code,
-                "help": (
-                    "The target directory is likely outside the sandbox's allowed "
-                    "write paths (the operator's ceiling)."
-                ),
-            }, indent=2)
+            return json.dumps(
+                _local_file_failure_response(result, operation="write", path=path),
+                indent=2,
+            )
         except SandboxPolicyError as e:
             return json.dumps({"success": False, "path": path,
                                "error": "Path not accessible", "message": str(e)}, indent=2)
