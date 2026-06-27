@@ -17,8 +17,18 @@ ever *narrow* it, and the OS kernel enforces the result.
 > Decision record: [ADR-007](../decisions/007-mxc-sandbox-integration.md) ·
 > Platform research: [`mxc-windows-sandbox.md`](../platform-learnings/mxc-windows-sandbox.md)
 
-Phase 1 ships **macOS (Seatbelt)**. Windows AppContainer and Linux seccomp-bpf are on
-the roadmap.
+Phase 1 ships **macOS (Seatbelt)** and **Windows (`processcontainer`)**. Linux
+seccomp-bpf is on the roadmap. The Windows path is documented inline below where it
+differs; see also
+[`mxc-windows-sandbox-preview.md`](../platform-learnings/mxc-windows-sandbox-preview.md)
+for what the Windows preview build actually exposes, and run
+[`scripts/setup_sandbox.ps1`](../../scripts/setup_sandbox.ps1) (the PowerShell
+counterpart to `setup_sandbox.sh`) to provision `wxc-exec.exe` and pin its hash.
+
+> **Windows notes.** Ceiling lists are **`;`-separated** (`os.pathsep`), not
+> colon-separated. `wxc-exec.exe` runs commands via `CreateProcessW` with **no
+> implicit shell**, so invoke builtins/redirection as `cmd /c ...`. The
+> `processcontainer` backend is default (no `--experimental`) on Win11 24H2+.
 
 ---
 

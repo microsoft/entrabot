@@ -11,6 +11,7 @@ All binaries are SHA256-verified before use.
 
 import hashlib
 import os
+import platform as _platform_module
 import subprocess
 from pathlib import Path
 
@@ -19,17 +20,55 @@ from entrabot.sandbox.base import (
     SandboxUntrustedBinaryError,
 )
 
-# Pinned SHA256 hashes for MXC binaries (commit-pinned, verified).
+# Pinned SHA256 hashes for MXC binaries (commit-pinned / release-pinned, verified).
+#
 # darwin-arm64 is built from microsoft/mxc v0.6.1 (commit
 # 161598fd08a4fdd030f461de19af23ce4a310b41) with the local stdin-compat
 # patch in scripts/mxc-mac-stdin-compat.patch applied.
+#
+# win32-arm64 / win32-x64 are the prebuilt ``wxc-exec.exe`` shipped in
+# @microsoft/mxc-sdk v0.7.0 (npm), under ``bin/arm64`` and ``bin/x64``. The
+# Windows binary is distributed (not built locally), so the pin is taken
+# directly from the published package.
+#
+# Hash keys are ``<sys.platform>-<normalized-arch>`` where the normalized arch
+# is produced by ``normalize_arch`` (e.g. Windows ``AMD64`` -> ``x64``,
+# ``ARM64`` -> ``arm64``). This keeps the key, the ``MXC_BIN_DIR/<arch>/``
+# lookup, and the npm ``bin/<arch>/`` layout consistent across platforms.
 PINNED_HASHES: dict[str, str] = {
     "darwin-arm64": "700e9e7120c78fe9ecdb8c99309ba6df0ea467ac5b581b803b73d655bbccff36",
     "darwin-x86_64": "0000000000000000000000000000000000000000000000000000000000000000",
-    "win32-x86_64": "0000000000000000000000000000000000000000000000000000000000000000",
-    "win32-amd64": "0000000000000000000000000000000000000000000000000000000000000000",
+    "win32-arm64": "e430d0e4f44f616e91db684f8d825a6dc93e06a1262b8d00bcaac7522a317aab",
+    "win32-x64": "db0a3422be9e1b396cc1b2547c70ff16b27412438a31c10a45abf370cac86ae2",
     "linux-x86_64": "0000000000000000000000000000000000000000000000000000000000000000",
 }
+
+
+def normalize_arch(platform_name: str, machine: str) -> str:
+    """Normalize a ``platform.machine()`` value to a canonical arch token.
+
+    ``platform.machine()`` is inconsistent across platforms and runtimes
+    (Windows reports ``AMD64`` / ``ARM64`` in upper case; macOS reports
+    ``arm64`` / ``x86_64``; Linux reports ``x86_64`` / ``aarch64``). This maps
+    those onto the per-platform token used for both the pinned-hash key and the
+    ``<dir>/<arch>/<binary>`` resolution layout.
+
+    Windows uses the npm package's ``bin`` subdirectory names (``x64`` /
+    ``arm64``); macOS and Linux keep the ``x86_64`` / ``arm64`` spelling already
+    used by ``PINNED_HASHES``.
+    """
+    m = machine.lower()
+    if platform_name == "win32":
+        if m in ("arm64", "aarch64"):
+            return "arm64"
+        # AMD64, x86_64, x64 all collapse to the npm "x64" subdir name.
+        return "x64"
+    # darwin / linux
+    if m in ("arm64", "aarch64"):
+        return "arm64"
+    if m in ("x86_64", "amd64", "x64"):
+        return "x86_64"
+    return m
 
 
 def get_binary_name(platform_name: str) -> str:
@@ -72,7 +111,12 @@ def resolve_binary(
         platform = sys.platform
     
     if arch is None:
-        arch = platform.machine()
+        arch = _platform_module.machine()
+    
+    # Normalize the arch to the canonical per-platform token so the
+    # ``<dir>/<arch>/<binary>`` lookup matches the npm ``bin/<arch>/`` layout
+    # (e.g. Windows ``AMD64`` -> ``x64``, ``ARM64`` -> ``arm64``).
+    arch = normalize_arch(platform, arch)
     
     binary_name = get_binary_name(platform)
     
@@ -172,8 +216,11 @@ def resolve_and_verify(
         platform_name = sys.platform
     
     if arch is None:
-        import platform as platform_module
-        arch = platform_module.machine()
+        arch = _platform_module.machine()
+    
+    # Normalize arch so the hash key and binary lookup agree across platforms
+    # (Windows ``platform.machine()`` is upper case: ``AMD64`` / ``ARM64``).
+    arch = normalize_arch(platform_name, arch)
     
     # Resolve binary
     binary_path = resolve_binary(platform_name, arch)

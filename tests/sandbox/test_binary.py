@@ -70,37 +70,37 @@ def test_resolve_binary_returns_none_when_not_found():
 def test_verify_binary_accepts_good_hash():
     """verify_binary() accepts binary matching expected SHA256."""
     from entrabot.sandbox.binary import verify_binary
-    
+
+    # delete_on_close=False so the handle is released before we unlink — on
+    # Windows you cannot delete a file while a handle to it is still open.
     with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
         test_content = b"test binary content"
         f.write(test_content)
-        f.flush()
-        
-        # Compute actual SHA256 of test content
-        import hashlib
-        expected_hash = hashlib.sha256(test_content).hexdigest()
-        
-        try:
-            # Should not raise
-            verify_binary(f.name, expected_hash)
-        finally:
-            os.unlink(f.name)
+
+    # Compute actual SHA256 of test content
+    import hashlib
+    expected_hash = hashlib.sha256(test_content).hexdigest()
+
+    try:
+        # Should not raise
+        verify_binary(f.name, expected_hash)
+    finally:
+        os.unlink(f.name)
 
 
 def test_verify_binary_rejects_bad_hash():
     """verify_binary() raises SandboxUntrustedBinaryError on hash mismatch."""
     from entrabot.sandbox.base import SandboxUntrustedBinaryError
     from entrabot.sandbox.binary import verify_binary
-    
+
     with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
         f.write(b"test binary content")
-        f.flush()
-        
-        try:
-            with pytest.raises(SandboxUntrustedBinaryError, match="SHA256 mismatch"):
-                verify_binary(f.name, "wrong_hash_1234567890abcdef")
-        finally:
-            os.unlink(f.name)
+
+    try:
+        with pytest.raises(SandboxUntrustedBinaryError, match="SHA256 mismatch"):
+            verify_binary(f.name, "wrong_hash_1234567890abcdef")
+    finally:
+        os.unlink(f.name)
 
 
 def test_verify_binary_rejects_nonexistent():
@@ -134,6 +134,79 @@ def test_get_binary_name_linux():
     assert get_binary_name("linux") == "lxc-exec"
 
 
+# RED: Test arch normalization (Windows machine() is upper-case AMD64/ARM64)
+def test_normalize_arch_windows_amd64():
+    """normalize_arch() maps Windows 'AMD64' to the npm 'x64' subdir token."""
+    from entrabot.sandbox.binary import normalize_arch
+
+    assert normalize_arch("win32", "AMD64") == "x64"
+    assert normalize_arch("win32", "x86_64") == "x64"
+    assert normalize_arch("win32", "x64") == "x64"
+
+
+def test_normalize_arch_windows_arm64():
+    """normalize_arch() maps Windows 'ARM64' to 'arm64'."""
+    from entrabot.sandbox.binary import normalize_arch
+
+    assert normalize_arch("win32", "ARM64") == "arm64"
+    assert normalize_arch("win32", "aarch64") == "arm64"
+
+
+def test_normalize_arch_darwin():
+    """normalize_arch() keeps macOS tokens as arm64 / x86_64."""
+    from entrabot.sandbox.binary import normalize_arch
+
+    assert normalize_arch("darwin", "arm64") == "arm64"
+    assert normalize_arch("darwin", "x86_64") == "x86_64"
+
+
+def test_resolve_binary_finds_windows_binary():
+    """resolve_binary() finds wxc-exec.exe under MXC_BIN_DIR/<arch>/ on Windows."""
+    from entrabot.sandbox.binary import resolve_binary
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        bin_dir = Path(tmpdir) / "bin"
+        arch_dir = bin_dir / "arm64"
+        arch_dir.mkdir(parents=True)
+
+        fake_binary = arch_dir / "wxc-exec.exe"
+        fake_binary.write_bytes(b"fake wxc binary")
+
+        # platform.machine() is upper-case on Windows; resolution must normalize.
+        with patch.dict(os.environ, {"MXC_BIN_DIR": str(bin_dir)}):
+            binary_path = resolve_binary(platform="win32", arch="ARM64")
+
+            assert binary_path == str(fake_binary)
+
+
+def test_resolve_and_verify_windows_arch_hash_key():
+    """resolve_and_verify() uses a normalized 'win32-<arch>' hash key on Windows."""
+    import hashlib
+
+    from entrabot.sandbox import binary as binary_module
+    from entrabot.sandbox.binary import resolve_and_verify
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        bin_dir = Path(tmpdir) / "bin"
+        arch_dir = bin_dir / "x64"
+        arch_dir.mkdir(parents=True)
+
+        fake_binary = arch_dir / "wxc-exec.exe"
+        content = b"fake wxc x64 binary"
+        fake_binary.write_bytes(content)
+        expected_hash = hashlib.sha256(content).hexdigest()
+
+        with patch.dict(os.environ, {"MXC_BIN_DIR": str(bin_dir)}):
+            original = binary_module.PINNED_HASHES.copy()
+            binary_module.PINNED_HASHES["win32-x64"] = expected_hash
+            try:
+                # AMD64 (what platform.machine() reports) must normalize to x64.
+                binary_path = resolve_and_verify(platform_name="win32", arch="AMD64")
+                assert binary_path == str(fake_binary)
+            finally:
+                binary_module.PINNED_HASHES = original
+
+
 # RED: Test pinned hashes
 def test_pinned_hashes_exist():
     """PINNED_HASHES dict contains expected SHA256 for known binaries."""
@@ -141,7 +214,7 @@ def test_pinned_hashes_exist():
     
     # Should have entries for each platform
     assert "darwin-arm64" in PINNED_HASHES or "darwin-x86_64" in PINNED_HASHES
-    assert "win32-x86_64" in PINNED_HASHES or "win32-amd64" in PINNED_HASHES
+    assert "win32-arm64" in PINNED_HASHES or "win32-x64" in PINNED_HASHES
     
     # Hashes should be 64-char hex strings
     for _key, hash_val in PINNED_HASHES.items():

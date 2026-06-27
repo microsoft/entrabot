@@ -39,12 +39,25 @@ def _parse_csv_preserve_empty(value: str | None) -> list[str]:
 def _windows_root(home: Path | None = None) -> Path:
     """Return the per-user data root on Windows.
 
-    Prefers ``%LOCALAPPDATA%``; falls back to ``<home>/AppData/Local`` when
-    the env var is missing (rare on stripped CI runners).
+    Prefers ``%LOCALAPPDATA%``; falls back to ``<home>/AppData/Local`` when the
+    env var is missing, and to the system temp dir as a last resort when the
+    home directory itself cannot be determined. On a fully stripped environment
+    (CI / sandboxed runners with no ``USERPROFILE``/``HOMEDRIVE``) Windows
+    ``Path.home()`` *raises* — unlike POSIX, it has no passwd-database fallback —
+    so importing config must not depend on it unconditionally.
     """
-    home = home or Path.home()
     local = os.environ.get("LOCALAPPDATA")
-    base = Path(local) if local else home / "AppData" / "Local"
+    if local:
+        base = Path(local)
+    else:
+        if home is None:
+            try:
+                home = Path.home()
+            except RuntimeError:
+                import tempfile
+
+                home = Path(tempfile.gettempdir())
+        base = home / "AppData" / "Local"
     return base / "entrabot"
 
 

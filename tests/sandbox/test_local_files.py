@@ -42,26 +42,83 @@ class _FakeRunner:
         return self._result
 
 
-# ── command construction (injection-safe quoting) ───────────────────────────
-def test_build_read_command_quotes_path():
+# ── command construction: POSIX branch (macOS/Linux) ────────────────────────
+def test_build_read_command_posix_uses_cat(monkeypatch):
+    monkeypatch.setattr("os.name", "posix")
     from entrabot.sandbox.local_files import build_read_command
 
     cmd = build_read_command("/Users/me/My Docs/a b.txt")
     # The path has spaces; it must be shell-quoted so it's one argument.
-    assert "'/Users/me/My Docs/a b.txt'" in cmd
     assert cmd.startswith("cat ")
+    assert "'/Users/me/My Docs/a b.txt'" in cmd
 
 
-def test_build_write_command_quotes_path_and_content():
+def test_build_write_command_posix_uses_printf(monkeypatch):
+    monkeypatch.setattr("os.name", "posix")
     from entrabot.sandbox.local_files import build_write_command
 
     cmd = build_write_command("/tmp/o ut.txt", "hi; rm -rf $HOME `x`")
     # Both the dangerous content and the spaced path must be quoted — no
     # metacharacters can escape into the shell.
+    assert cmd.startswith("printf ")
     assert "rm -rf" in cmd  # present as literal data
     assert "> '/tmp/o ut.txt'" in cmd
     # The command substitution / variable must be inside single quotes (inert).
     assert "`x`" in cmd
+
+
+# ── command construction: Windows branch (processcontainer, no shell) ────────
+def test_build_read_command_windows_uses_cmd_type_not_cat(monkeypatch):
+    """On Windows the command must be a cmd-launchable `type`, not bare `cat`.
+
+    Regression for CreateProcessW failed: ERROR_FILE_NOT_FOUND (0x80070002):
+    wxc-exec.exe has no implicit shell, so `cat` (not a Windows executable) is
+    never found. `cmd /c type` is launchable and prints the file to stdout.
+    """
+    monkeypatch.setattr("os.name", "nt")
+    from entrabot.sandbox.local_files import build_read_command
+
+    cmd = build_read_command(r"C:\Users\me\My Docs\a b.txt")
+    assert not cmd.startswith("cat")
+    assert cmd.startswith("cmd /c type ")
+    # Path is force-quoted so the embedded space (and cmd metacharacters) is inert.
+    assert '"C:\\Users\\me\\My Docs\\a b.txt"' in cmd
+
+
+def test_build_read_command_windows_quotes_cmd_metacharacters(monkeypatch):
+    """An '&' in a (legal) Windows path must stay inside quotes — no injection."""
+    monkeypatch.setattr("os.name", "nt")
+    from entrabot.sandbox.local_files import build_read_command
+
+    cmd = build_read_command(r"C:\tmp\a & b.txt")
+    # The '&' appears only inside the quoted path token, never as a bare cmd
+    # command separator.
+    assert 'type "C:\\tmp\\a & b.txt"' in cmd
+    assert "& b.txt\"" in cmd  # the & is within the closing-quoted region
+
+
+def test_build_write_command_windows_is_byte_exact_and_injection_safe(monkeypatch):
+    """Windows write must be byte-exact (base64) and injection-proof (no shell)."""
+    monkeypatch.setattr("os.name", "nt")
+    import base64
+
+    from entrabot.sandbox.local_files import build_write_command
+
+    nasty = '--lead\r\nno-trailing-nl "q" & echo PWNED %PATH%\\back'
+    cmd = build_write_command(r"C:\out\o ut.txt", nasty)
+
+    # NOT the POSIX printf form.
+    assert "printf" not in cmd
+    # Content is base64-encoded so arbitrary bytes survive verbatim, and the
+    # dangerous literal never appears un-encoded -> nothing can escape the shell.
+    assert "echo PWNED" not in cmd
+    b64 = base64.b64encode(nasty.encode("utf-8")).decode("ascii")
+    assert b64 in cmd
+    # The path is a quoted argv token (it has a space), passed separately — not
+    # interpolated into executable code.
+    assert '"C:\\out\\o ut.txt"' in cmd
+    # The Python writer decodes base64 to exact bytes.
+    assert "b64decode" in cmd
 
 
 # ── path grant shaping ──────────────────────────────────────────────────────
@@ -141,10 +198,13 @@ def test_sandboxed_write_outside_ceiling_is_clamped_empty():
 
 
 # ── env ceiling loader ──────────────────────────────────────────────────────
-def test_ceiling_from_env_parses_colon_lists(monkeypatch):
+def test_ceiling_from_env_parses_pathsep_lists(monkeypatch):
     from entrabot.sandbox.local_files import ceiling_from_env
 
-    monkeypatch.setenv("ENTRABOT_SANDBOX_READONLY_PATHS", "/a:/b")
+    # Use the OS path separator so the test holds on both POSIX (':') and
+    # Windows (';'). A hardcoded ':' would shred Windows drive letters.
+    ro = os.pathsep.join(["/a", "/b"])
+    monkeypatch.setenv("ENTRABOT_SANDBOX_READONLY_PATHS", ro)
     monkeypatch.setenv("ENTRABOT_SANDBOX_READWRITE_PATHS", "/c")
     monkeypatch.setenv("ENTRABOT_SANDBOX_TIMEOUT_MS", "12345")
 
@@ -153,3 +213,29 @@ def test_ceiling_from_env_parses_colon_lists(monkeypatch):
     assert ceiling.readonly_paths == ["/a", "/b"]
     assert ceiling.readwrite_paths == ["/c"]
     assert ceiling.timeout_ms == 12345
+
+
+def test_ceiling_from_env_preserves_windows_drive_letters(monkeypatch):
+    """A 'C:\\Users\\me' ceiling entry must not be split on the drive-letter colon.
+
+    Regression for the os.pathsep bug: splitting on a hardcoded ':' turned
+    'C:\\Users\\me' into ['C', '\\Users\\me'], making every Windows ceiling path
+    unusable. With os.pathsep, ';' separates entries on Windows and the colon in
+    the drive letter is preserved.
+    """
+    from entrabot.sandbox.local_files import ceiling_from_env
+
+    # Two Windows-style paths joined by the OS separator.
+    ro = os.pathsep.join(["C:\\Users\\me\\Documents", "D:\\data"])
+    monkeypatch.setenv("ENTRABOT_SANDBOX_READONLY_PATHS", ro)
+    monkeypatch.setenv("ENTRABOT_SANDBOX_READWRITE_PATHS", "C:\\Temp")
+
+    ceiling = ceiling_from_env()
+
+    # On Windows the two entries survive intact; on POSIX they are treated as a
+    # single (unusual) path — either way no entry is shredded mid-drive-letter.
+    assert "C:\\Users\\me\\Documents" in os.pathsep.join(ceiling.readonly_paths)
+    assert all(p for p in ceiling.readonly_paths)  # no empty fragments
+    if os.pathsep == ";":
+        assert ceiling.readonly_paths == ["C:\\Users\\me\\Documents", "D:\\data"]
+        assert ceiling.readwrite_paths == ["C:\\Temp"]
