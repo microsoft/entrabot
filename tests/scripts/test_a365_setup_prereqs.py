@@ -69,8 +69,14 @@ def test_unix_setup_can_create_fresh_identity_under_existing_blueprint() -> None
     assert 'export ENTRABOT_PIN_BLUEPRINT_APP_ID="$USE_BLUEPRINT"' in script
     assert "--new: will create a fresh Agent Identity/User under Blueprint" in script
     assert '_REUSE_BLUEPRINT = os.environ.get("ENTRABOT_REUSE_BLUEPRINT") == "1"' in ids_script
-    assert '_PINNED_BLUEPRINT_APP_ID = os.environ.get("ENTRABOT_PIN_BLUEPRINT_APP_ID", "").strip()' in ids_script
-    assert 'mode = "[--new --use-blueprint]" if _FORCE_NEW and _REUSE_BLUEPRINT else "[use-blueprint]"' in ids_script
+    assert (
+        '_PINNED_BLUEPRINT_APP_ID = os.environ.get("ENTRABOT_PIN_BLUEPRINT_APP_ID", "").strip()'
+        in ids_script
+    )
+    assert (
+        'mode = "[--new --use-blueprint]" if _FORCE_NEW and _REUSE_BLUEPRINT '
+        'else "[use-blueprint]"'
+    ) in ids_script
 
 
 def test_unix_teardown_supports_targeted_upn_and_preserves_cloud_storage() -> None:
