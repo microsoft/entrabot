@@ -319,3 +319,15 @@ def test_load_existing_app_registration_does_not_repair_permissions(
     assert client_id == "client-id"
     assert returned_pem == pem_bundle
     assert tenant_id == "tenant-id"
+
+
+def test_state_file_can_be_overridden_with_env_var(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    state_path = tmp_path / ".entrabot-state-mxc-test.json"
+    monkeypatch.setenv("ENTRABOT_STATE_FILE", str(state_path))
+
+    provisioning_module.set_state("AGENT_USER_UPN", "entrabot-mxc-test@werner.ac")
+
+    assert state_path.exists()
+    assert provisioning_module.get_state("AGENT_USER_UPN") == "entrabot-mxc-test@werner.ac"

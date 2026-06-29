@@ -1,4 +1,4 @@
-# Entrabot: Identity Research for Microsoft 365 Agents
+# Entrabot: Identity Research for Microsoft 365 Agents using Autopilot
 
 
 Entrabot is a Python MCP server that gives a device-local agent its own Entra **Agent ID** and an **Agent User** that has all the capabilities of a human user in a Microsoft tenant. It can have a Teams presence and be invited to meetings to chat with your colleagues 1:1, a mailbox it can monitor and respond to, create and edit Word documents, make PowerPoint presentations, and allows you to access your CLI. The agent signs in autonomously, sends Teams messages from its own account, and writes audit events against its own object ID. It runs on macOS, Linux, and Windows, and works with Claude Code, Copilot CLI, or any MCP-speaking client.
@@ -35,6 +35,7 @@ entrabot is the device-side glue for a set of platform primitives Microsoft ship
 
 - **Entra Agent ID** — the four-object hierarchy: Agent Identity Blueprint → BlueprintPrincipal → Agent Identity → Agent User. Confidential clients only; no public-client flows; tokens carry `idtyp=user` for the Agent User leaf. ([platform learning](docs/platform-learnings/agent-id-blueprints-and-users.md))
 - **Microsoft Agent 365** — the control plane: admin-center inventory, OTel observability, Work IQ MCP servers (Mail, Calendar, Teams, SharePoint, OneDrive, Word, User, Copilot, Dataverse), AI-teammate lifecycle. GA 2026-05-01. ([platform learning](docs/platform-learnings/microsoft-agent-365.md))
+- **MXC Sandbox** — OS-enforced containment for local code execution. Process-level isolation with positive-allowlist filesystem access, network blocking, and operator-set capability ceilings. Opt-in `run_code` tool (disabled by default). Phase 1 ships macOS Seatbelt; Windows AppContainer and Linux seccomp-bpf coming next. Phase 2 will bind sessions to Agent User identity for M365 audit attribution. ([setup guide](docs/guides/mxc-sandbox.md) · [ADR-007](docs/decisions/007-mxc-sandbox-integration.md))
 - **Conditional Access for agents** — GA. Apply CA policies to Agent Identity sign-ins the same way you apply them to users.
 - **ID Protection for agents** — GA. Risk scoring and remediation against the agent's own object.
 - **FastMCP** — the Python MCP server framework. entrabot registers every Teams, Outlook, Files, Word, audit, and identity tool through it.
@@ -96,7 +97,7 @@ source .venv/bin/activate
 claude --dangerously-load-development-channels server:entrabot
 ```
 
-`setup.sh` is idempotent. It provisions the Blueprint, BlueprintPrincipal, Agent Identity, and Agent User; assigns a Teams-capable license; uploads a self-signed certificate to Entra; and writes `.env` plus `.mcp.json` with no secrets on disk. Full walkthrough — including Windows, cloud memory, cross-tenant group chats, and the Work IQ Word setup — is in [`docs/getting-started/quickstart.md`](docs/getting-started/quickstart.md) and [`INSTALL.md`](INSTALL.md).
+`setup.sh` is idempotent. It provisions the Blueprint, BlueprintPrincipal, Agent Identity, and Agent User; assigns a Teams-capable license; uploads a self-signed certificate to Entra; and writes `.env` plus `.mcp.json` with no secrets on disk. Add `--use-cloud-memory` to enable Azure Blob storage for operational state, or `--enable-sandbox` to provision MXC sandbox for contained local code execution (opt-in, disabled by default; full walkthrough in the [MXC sandbox setup guide](docs/guides/mxc-sandbox.md)). Full walkthrough — including Windows, cloud memory, cross-tenant group chats, and the Work IQ Word setup — is in [`docs/getting-started/quickstart.md`](docs/getting-started/quickstart.md) and [`INSTALL.md`](INSTALL.md).
 
 ### Launching the agent
 
@@ -146,6 +147,7 @@ The full doc site: **<https://microsoft.github.io/entrabot/>**
 Direct pointers:
 
 - [Quickstart](docs/getting-started/quickstart.md) — five minutes from clone to first Teams message
+- [MXC sandbox setup](docs/guides/mxc-sandbox.md) — enable contained local code execution (`run_code`): build the binary, set the operator ceiling, verify kernel enforcement
 - [MCP tool reference](docs/reference/mcp-tools.md) — every tool, every parameter
 - [Setup script reference](docs/reference/setup-script.md) — every `setup.sh` flag
 - [Script reference](docs/reference/scripts/operations.md) — status, health, DM, email, setup, teardown, and diagnostic scripts

@@ -142,6 +142,68 @@ class TestFindExistingAgentIdentity:
         assert result is None
 
 
+class TestCreateBlueprint:
+    def test_reuses_pinned_blueprint_when_force_new_chain_targets_existing_blueprint(
+        self, agent_ids_module, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        saved: dict[str, str] = {}
+        ensured: list[str] = []
+        calls: list[tuple[str, str]] = []
+
+        def fake_graph_request(method, path, token, **kw):
+            del token, kw
+            calls.append((method, path))
+            if path == f"/applications?$filter=appId eq '{BLUEPRINT_OURS}'":
+                return _resp(
+                    200,
+                    {"value": [{"id": "blueprint-obj", "appId": BLUEPRINT_OURS}]},
+                )
+            raise AssertionError(f"unexpected Graph call: {method} {path}")
+
+        monkeypatch.setattr(agent_ids_module, "_FORCE_NEW", True)
+        monkeypatch.setattr(agent_ids_module, "_REUSE_BLUEPRINT", True)
+        monkeypatch.setattr(agent_ids_module, "_PINNED_BLUEPRINT_APP_ID", BLUEPRINT_OURS)
+        monkeypatch.setattr(agent_ids_module, "graph_request", fake_graph_request)
+        monkeypatch.setattr(agent_ids_module, "set_state", saved.__setitem__)
+        monkeypatch.setattr(
+            agent_ids_module,
+            "ensure_blueprint_principal",
+            lambda token, app_id: ensured.append(app_id),
+        )
+
+        result = agent_ids_module.create_blueprint("tok")
+
+        assert result == (BLUEPRINT_OURS, "blueprint-obj")
+        assert saved == {
+            "BLUEPRINT_APP_ID": BLUEPRINT_OURS,
+            "BLUEPRINT_OBJECT_ID": "blueprint-obj",
+        }
+        assert ensured == [BLUEPRINT_OURS]
+        assert not any(path == "/applications" for _, path in calls)
+
+    def test_pinned_blueprint_missing_fails_without_display_name_fallback(
+        self, agent_ids_module, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[tuple[str, str]] = []
+
+        def fake_graph_request(method, path, token, **kw):
+            del token, kw
+            calls.append((method, path))
+            if path == f"/applications?$filter=appId eq '{BLUEPRINT_OURS}'":
+                return _resp(200, {"value": []})
+            raise AssertionError(f"unexpected Graph call: {method} {path}")
+
+        monkeypatch.setattr(agent_ids_module, "_PINNED_BLUEPRINT_APP_ID", BLUEPRINT_OURS)
+        monkeypatch.setattr(agent_ids_module, "_FORCE_NEW", False)
+        monkeypatch.setattr(agent_ids_module, "_REUSE_BLUEPRINT", False)
+        monkeypatch.setattr(agent_ids_module, "graph_request", fake_graph_request)
+
+        with pytest.raises(SystemExit):
+            agent_ids_module.create_blueprint("tok")
+
+        assert calls == [("GET", f"/applications?$filter=appId eq '{BLUEPRINT_OURS}'")]
+
+
 class TestFindExistingAgentUser:
     _OUR_AI = "eba51655-0aed-4a79-a5f2-7167ec9b8fa0"
     _OTHER_AI = "22222222-2222-2222-2222-222222222222"

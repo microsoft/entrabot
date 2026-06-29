@@ -19,9 +19,11 @@ venv/
 .mypy_cache/
 .pyright/
 .openclaw-state.json
-.entrabot-state.json
-.entrabot-state.json.bak.*
+.entrabot-state*.json
+.entrabot-state*.json.bak.*
 .mcp.json
+.mcp.json.bak.*
+.mcp.*.json
 a365.config.json
 a365.generated.config.json
 ToolingManifest.json
@@ -51,3 +53,8 @@ pip.ini
 docs/runbooks/session-*.md
 docs/superpowers/
 .entraclaw-state.json
+.mxc-build/mxc-src/
+# MXC Windows SDK fetched on demand by scripts/setup_sandbox.ps1 (large; the
+# pinned SHA256 in src/entrabot/sandbox/binary.py is the trust anchor, not the
+# committed bytes).
+.mxc-build/npm/

@@ -257,8 +257,8 @@ class TestTokenCache:
         scratch = Path.cwd() / ".pytest-scratch" / "delegated-cache-stable"
         cwd_one = scratch / "cwd-one"
         cwd_two = scratch / "cwd-two"
-        cwd_one.mkdir(parents=True)
-        cwd_two.mkdir(parents=True)
+        cwd_one.mkdir(parents=True, exist_ok=True)
+        cwd_two.mkdir(parents=True, exist_ok=True)
 
         try:
             monkeypatch.chdir(cwd_one)

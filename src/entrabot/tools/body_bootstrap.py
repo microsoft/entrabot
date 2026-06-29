@@ -147,7 +147,10 @@ def _cursor_freshness() -> dict:
             continue
         cursors_present += 1
         last_ts = payload.get("last_ts")
-        if chat_cursors.is_stale(last_ts):
+        # Staleness is judged by when the cursor was last written, not by the
+        # newest-message watermark — an idle chat's cursor is fresh even when
+        # its newest message is old. (See chat_cursors.is_stale.)
+        if chat_cursors.is_stale(payload.get("last_written_at")):
             cursors_stale += 1
         if last_ts:
             timestamps.append(last_ts)
