@@ -1,4 +1,4 @@
-from entrabot.harness import permissions
+from entrabot.harness.session import permissions
 
 
 def test_toolpolicy_defaults():

@@ -13,8 +13,8 @@ import json
 import os
 import uuid
 from dataclasses import dataclass, field, fields
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 CONFIG_DIR = ".entrabot"
 CONFIG_FILE = "harness.json"
@@ -40,37 +40,37 @@ class HarnessConfig:
     name: str
     description: str
     version: int = 1
-    model: Optional[str] = None
-    reasoning_effort: Optional[str] = None
-    context_tier: Optional[str] = None  # "default" | "long_context"
-    agent_id: Optional[str] = None
-    created_utc: Optional[str] = None  # ISO-8601 UTC
+    model: str | None = None
+    reasoning_effort: str | None = None
+    context_tier: str | None = None  # "default" | "long_context"
+    agent_id: str | None = None
+    created_utc: str | None = None  # ISO-8601 UTC
     # Teams binding: chat IDs this ENTRABOT listens to (ingress). May be empty and
     # discovered/added at runtime.
-    watched_chats: List[str] = field(default_factory=list)
+    watched_chats: list[str] = field(default_factory=list)
     # Per-caller permission policy (see permissions.py). Opaque here; parsed there.
-    permissions: Dict[str, Any] = field(default_factory=dict)
+    permissions: dict[str, Any] = field(default_factory=dict)
 
     # ---- serialization ---------------------------------------------------------------
-    def to_json_dict(self) -> Dict[str, Any]:
-        out: Dict[str, Any] = {}
-        for f in fields(self):
-            val = getattr(self, f.name)
+    def to_json_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for field_def in fields(self):
+            value = getattr(self, field_def.name)
             # null-omit, and omit empty collections to keep files tidy
-            if val is None:
+            if value is None:
                 continue
-            if isinstance(val, (list, dict)) and not val:
+            if isinstance(value, (list, dict)) and not value:
                 continue
-            out[_CAMEL[f.name]] = val
+            out[_CAMEL[field_def.name]] = value
         return out
 
     @classmethod
-    def from_json_dict(cls, raw: Dict[str, Any]) -> "HarnessConfig":
-        kwargs: Dict[str, Any] = {}
-        for k, v in raw.items():
-            snake = _SNAKE.get(k)
+    def from_json_dict(cls, raw: dict[str, Any]) -> HarnessConfig:
+        kwargs: dict[str, Any] = {}
+        for camel_key, value in raw.items():
+            snake = _SNAKE.get(camel_key)
             if snake:
-                kwargs[snake] = v
+                kwargs[snake] = value
         # required fields fall back to safe defaults if a hand-edited file omits them
         kwargs.setdefault("name", kwargs.get("name", "entrabot"))
         kwargs.setdefault("description", kwargs.get("description", ""))
@@ -83,7 +83,7 @@ class HarnessConfig:
             self.agent_id = uuid.uuid4().hex
             changed = True
         if not self.created_utc:
-            self.created_utc = datetime.now(timezone.utc).isoformat()
+            self.created_utc = datetime.now(UTC).isoformat()
             changed = True
         return changed
 
@@ -101,11 +101,11 @@ def exists(root: str) -> bool:
     return os.path.isfile(config_path(root))
 
 
-def try_load(root: str) -> Optional[HarnessConfig]:
+def try_load(root: str) -> HarnessConfig | None:
     path = config_path(root)
     try:
-        with open(path, "r", encoding="utf-8") as fh:
-            raw = json.load(fh)
+        with open(path, encoding="utf-8") as handle:
+            raw = json.load(handle)
     except (FileNotFoundError, json.JSONDecodeError):
         return None
     return HarnessConfig.from_json_dict(raw)
@@ -113,6 +113,6 @@ def try_load(root: str) -> Optional[HarnessConfig]:
 
 def save(root: str, cfg: HarnessConfig) -> None:
     os.makedirs(config_dir(root), exist_ok=True)
-    with open(config_path(root), "w", encoding="utf-8") as fh:
-        json.dump(cfg.to_json_dict(), fh, indent=2)
-        fh.write("\n")
+    with open(config_path(root), "w", encoding="utf-8") as handle:
+        json.dump(cfg.to_json_dict(), handle, indent=2)
+        handle.write("\n")

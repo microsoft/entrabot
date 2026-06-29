@@ -11,30 +11,29 @@ repo-independent.
 from __future__ import annotations
 
 import os
-from typing import Optional
 
 # The canonical source repo (used for doc links until the package is published on GitHub).
 REPO_URL = "https://github.com/microsoft/entrabot"
 
 
 def _repo_root() -> str:
-    """Candidate cloned-repo root: this package lives at <repo>/src/entrabot/harness/."""
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    """Candidate cloned-repo root: this module lives at <repo>/src/entrabot/harness/setup/."""
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 
-def is_clone() -> bool:
-    """True when running from a source checkout (the provisioning scripts are present)."""
-    return scripts_dir() is not None
+def _has_setup_scripts(directory: str) -> bool:
+    """True when ``directory`` contains a recognized platform setup script."""
+    return os.path.isfile(os.path.join(directory, "setup-windows.ps1")) or os.path.isfile(
+        os.path.join(directory, "setup.sh")
+    )
 
 
-def scripts_dir() -> Optional[str]:
+def scripts_dir() -> str | None:
     """Directory holding the platform setup/provisioning scripts, or ``None`` if unavailable
     (e.g. installed from a wheel without a clone). A clear sentinel beats a path that 404s."""
-    cand = os.path.join(_repo_root(), "scripts")
-    if os.path.isfile(os.path.join(cand, "setup-windows.ps1")) or os.path.isfile(
-        os.path.join(cand, "setup.sh")
-    ):
-        return cand
+    candidate_scripts_dir = os.path.join(_repo_root(), "scripts")
+    if _has_setup_scripts(candidate_scripts_dir):
+        return candidate_scripts_dir
     return None
 
 
@@ -42,6 +41,10 @@ def doc_url(anchor: str = "") -> str:
     """Link to a doc — a local INSTALL.md when running from a clone, else the GitHub URL."""
     local = os.path.join(_repo_root(), "INSTALL.md")
     if os.path.isfile(local):
-        return local + (f" § {anchor}" if anchor else "")
-    suffix = f"/blob/main/INSTALL.md" + (f"#{anchor.lower().replace(' ', '-')}" if anchor else "")
+        if anchor:
+            return f"{local} § {anchor}"
+        return local
+    suffix = "/blob/main/INSTALL.md"
+    if anchor:
+        suffix += f"#{anchor.lower().replace(' ', '-')}"
     return REPO_URL + suffix

@@ -1,4 +1,4 @@
-from entrabot.harness.toolcatalog import group_sections
+from entrabot.harness.session.toolcatalog import group_sections
 
 
 def test_group_sections_orders_native_mcp_skills():

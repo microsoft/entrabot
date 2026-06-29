@@ -77,7 +77,7 @@ provisioning, then "copy the generated `.env` to `~/.entrabot/.env`". `.env` loo
 - `ENTRABOT_GRAPH_TOKEN` — set to enable the Teams bridge (ingress polling + outbound).
   Without it the harness runs **console-only** (you can chat with the agent; it just won't
   listen to / post on Teams). Production should wire entrabot's three-hop token in
-  `auth.py` (`make_token_provider`, marked INTEGRATION POINT).
+  `teams/auth.py` (`make_token_provider`, marked INTEGRATION POINT).
 - `ENTRABOT_AGENT_USER_ID` — the agent's own Teams user id (so it doesn't echo itself).
 - `ENTRABOT_TUI=1` — use the full-screen Textual UI (`pip install -e '.[tui]'`); the
   console UI is the default.
@@ -98,28 +98,27 @@ provisioning, then "copy the generated `.env` to `~/.entrabot/.env`". `.env` loo
 }
 ```
 
-The active Teams caller (resolved by `teams_comms.TeamsBridge`) is matched against the
+The active Teams caller (resolved by `teams.TeamsBridge`) is matched against the
 policy in `permissions.py`, which feeds the SDK's `on_permission_request` hook. Tokens are
 `<kind>` (`shell`/`write`/`read`/`url`/`mcp`/`custom`) or `<kind>:<glob>`. An explicit
 `allow`/`deny` is authoritative; only the undecided ("ask") case is affected by `--yolo`
 (skips the prompt) — so `--yolo` can never blow past a caller the policy explicitly denies.
 
-## Module map (port of the .NET harness)
+## Package map (port of the .NET harness)
 
-| Module | Ports from | Status |
+Every concern lives in a subpackage (the package root holds only `__init__.py` + `__main__.py`);
+each re-exports its public surface from `__init__`, so `entrabot.harness.<package>` import paths
+stay stable.
+
+| Package | Ports from | Status |
 |--------|-----------|--------|
-| `cli.py` | Program.cs | run / init / version / help |
-| `session.py` | Session/InteractiveSession.cs | client+session, event→UI streaming, slash cmds, steering inject |
-| `permissions.py` | the permission model (+ per-caller extension) | complete |
-| `teams_comms.py` | Session/ChannelConnection.cs (MQTT→Teams) | poll ingress + egress; tracks active caller |
-| `teams_tools.py` | Session/ChannelTools.cs (`channels_*`→`entrabot_*`) | send / read / list |
-| `scheduler.py` | Session/Scheduling.cs + SelfScheduler.cs | interval/oneshot/cron, persisted |
-| `mcp_loader.py` | Session/McpConfigLoader.cs | `.mcp.json` / `.vscode/mcp.json` |
-| `config.py` | Config/TeammateConfig.cs + ConfigStore.cs | `.entrabot/harness.json` |
-| `scaffold.py` | Bootstrap/Scaffolder.cs | AGENT.md + copilot-instructions.md |
-| `banner.py` / `ansi.py` | Cli/Banner.cs + Ansi.cs | ENTRABOT wordmark (ENTRA blue / BOT pink) |
-| `ui/console.py` | Ui/ConsoleUi.cs | complete |
-| `ui/tui.py` | Ui/TuiUi.cs (Terminal.Gui → Textual) | functional; line-buffered (not char-streamed) |
+| `cli/` (`dispatch`, `subcommands`, `terminal`) | Program.cs | the `entrabot` subcommands: run / init / users / migrate / doctor |
+| `session/` (`core`, `events`, `slash_commands`, `model_config`, `mcp_panel`, `sponsors`, `scheduling`, `status`, `permissions`, `toolcatalog`, `mcp_loader`) | Session/InteractiveSession.cs (+ the permission model + McpConfigLoader.cs) | `InteractiveSession` composed from one mixin per concern: client+session, event→UI streaming, in-session `/slash` commands (incl. SDK command discovery), the per-caller permission gate, tool enumeration, and `.mcp.json` discovery |
+| `teams/` (`bridge`, `tools`, `auth`) | Session/ChannelConnection.cs + ChannelTools.cs | poll ingress + egress, the `entrabot_*` reply tools, and the token provider |
+| `scheduler/` (`spec`, `cron`, `manager`) | Session/Scheduling.cs + SelfScheduler.cs | interval/oneshot/cron, persisted |
+| `config/` (`__init__` = HarnessConfig, `globalcfg`) | Config/TeammateConfig.cs + ConfigStore.cs | `.entrabot/harness.json` + the global/per-agent `.env` split |
+| `setup/` (`wizard`, `steps`, `provisioning`, `platform`, `scaffold`, `resources`) | the `init` walkthrough + Bootstrap/Scaffolder.cs | guided cross-platform provisioning + AGENT.md/copilot-instructions scaffolding |
+| `ui/` (`console`, `tui` + `tui_constants`/`tui_screens`/`tui_widgets`, `banner`, `ansi`) | Ui/ConsoleUi.cs + Ui/TuiUi.cs (Terminal.Gui → Textual) + Cli/Banner.cs + Ansi.cs | the console + Textual UIs, the ENTRABOT wordmark, and ANSI helpers |
 
 ## Status
 

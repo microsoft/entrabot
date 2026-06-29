@@ -1,7 +1,7 @@
 """Tests for `entrabot init` helpers (idempotent re-run env layering)."""
 
-from entrabot.harness import globalcfg
-from entrabot.harness import setup_wizard as sw
+from entrabot.harness import setup as sw
+from entrabot.harness.config import globalcfg
 
 
 # ── _apply_existing_env (idempotent re-run / resume) ──────────────────────────

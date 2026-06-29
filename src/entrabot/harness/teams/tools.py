@@ -6,12 +6,12 @@ permission policy governs the dangerous tools (shell/write/read/url/mcp), not th
 
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any
 
 import copilot
 from pydantic import BaseModel, Field
 
-from .teams_comms import TeamsBridge, TurnContext
+from .bridge import TeamsBridge, TurnContext
 
 # The agent's voice on Teams — the reply path. The agent can't respond to ANY caller without
 # these, so they're locked ON for sponsors and guests alike (never gated by the per-caller
@@ -36,30 +36,35 @@ def _arg(args: Any, key: str, default: Any = None) -> Any:
     return getattr(args, key, default)
 
 
-def build_teams_tools(bridge: TeamsBridge, ctx: TurnContext) -> List[Any]:
+def _format_watched(chats: list[str]) -> str:
+    if not chats:
+        return "(no watched chats)"
+    return "watched chats:\n" + "\n".join(f"- {chat}" for chat in chats)
+
+
+def build_teams_tools(bridge: TeamsBridge, ctx: TurnContext) -> list[Any]:
     async def _send(_ctx: Any, inv: copilot.ToolInvocation) -> str:
-        a = inv.arguments
-        chat = _arg(a, "chat_id") or ctx.chat
+        arguments = inv.arguments
+        chat = _arg(arguments, "chat_id") or ctx.chat
         if not chat:
             return "error: no chat_id given and no active chat to reply to."
-        message = _arg(a, "message", "")
+        message = _arg(arguments, "message", "")
         if not message:
             return "error: message is empty."
-        res = await bridge.send(chat, message, content_type=_arg(a, "content_type", "html"))
-        return f"sent to {chat} (message id {res.get('id', '?')})"
+        result = await bridge.send(chat, message, content_type=_arg(arguments, "content_type", "html"))
+        return f"sent to {chat} (message id {result.get('id', '?')})"
 
     async def _read(_ctx: Any, inv: copilot.ToolInvocation) -> str:
-        a = inv.arguments
-        chat = _arg(a, "chat_id") or ctx.chat
+        arguments = inv.arguments
+        chat = _arg(arguments, "chat_id") or ctx.chat
         if not chat:
             return "error: no chat_id given and no active chat."
-        msgs = await bridge.read(chat, count=int(_arg(a, "count", 5)))
-        lines = [f"- {m.get('from', '?')}: {m.get('content', '')}" for m in msgs]
+        messages = await bridge.read(chat, count=int(_arg(arguments, "count", 5)))
+        lines = [f"- {m.get('from', '?')}: {m.get('content', '')}" for m in messages]
         return "\n".join(lines) if lines else "(no messages)"
 
     async def _list(_ctx: Any, _inv: copilot.ToolInvocation) -> str:
-        chats = bridge.watched_chats()
-        return "watched chats:\n" + "\n".join(f"- {c}" for c in chats) if chats else "(no watched chats)"
+        return _format_watched(bridge.watched_chats())
 
     return [
         copilot.define_tool(

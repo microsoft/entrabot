@@ -8,11 +8,17 @@ arrives), then prompts again — matching the .NET redirected-IO behavior.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
-from typing import Awaitable, Callable
 
-from .. import ansi
-from . import UI, BannerRows, UiStyle
+from . import UI, BannerRows, UiStyle, ansi
+
+# Width of the tool-name column in the permissions matrix.
+_COL_WIDTH = 40
+
+# Caller classes that share a column in the permissions matrix. This concept is
+# shared with the rest of the package; the tuple is kept local on purpose.
+_COLUMNS = ("cli", "sponsor", "guest")
 
 _STYLE_FN = {
     UiStyle.USER: ansi.cyan,
@@ -29,14 +35,12 @@ _STYLE_FN = {
 
 
 def _style(text: str, style: UiStyle) -> str:
-    fn = _STYLE_FN.get(style)
-    return fn(text) if fn else text
+    style_fn = _STYLE_FN.get(style)
+    return style_fn(text) if style_fn else text
 
 
 class ConsoleUI(UI):
     def __init__(self) -> None:
-        self._name = "entrabot"
-        self._model = ""
         self._stop = asyncio.Event()
         self._open_line = False
 
@@ -54,11 +58,10 @@ class ConsoleUI(UI):
             print("".join(line))
 
     def set_identity(self, name: str) -> None:
-        self._name = name
         print(ansi.magenta(f"entrabot: {name}"))
 
     def set_status(self, left: str, right: str) -> None:
-        self._model = right  # not continuously shown in plain mode
+        pass  # the plain console doesn't show a continuous status line
 
     def set_working(self, working: bool) -> None:
         pass
@@ -88,7 +91,7 @@ class ConsoleUI(UI):
             self._open_line = False
 
     def set_commands(self, names) -> None:
-        pass  # the plain console UI has no autocomplete
+        pass  # no-op: the plain console UI has no autocomplete
 
     # The console UI prints spinner stages as plain lines (no animation in a redirected loop).
     def start_spinner(self, label: str) -> None:
@@ -102,59 +105,82 @@ class ConsoleUI(UI):
         pass
 
     def clear(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             print("\x1b[2J\x1b[H", end="")
-        except Exception:
-            pass
-
-    async def confirm(self, title: str, message: str) -> bool:
-        self._end_line()
-        prompt = ansi.yellow(f"{title}: {message} [y/N] ")
-        try:
-            answer = await asyncio.to_thread(input, prompt)
-        except EOFError:
-            return False
-        return answer.strip().lower() in ("y", "yes")
 
     async def select(self, title, options):
         self._end_line()
         print(ansi.bold(title))
-        for i, o in enumerate(options, 1):
-            print(f"  {i}. {o}")
+        for index, option in enumerate(options, 1):
+            print(f"  {index}. {option}")
         try:
-            ans = await asyncio.to_thread(input, ansi.cyan("select #: "))
+            answer = await asyncio.to_thread(input, ansi.cyan("select #: "))
         except (EOFError, KeyboardInterrupt):
             return None
         try:
-            n = int(ans.strip()) - 1
-            return n if 0 <= n < len(options) else None
+            selected_index = int(answer.strip()) - 1
+            return selected_index if 0 <= selected_index < len(options) else None
         except ValueError:
             return None
 
     async def edit_permissions(self, sections, state):
         # Data-driven columns so the matrix isn't hardwired to two classes (cli · sponsor · guest).
-        cols = ["cli", "sponsor", "guest"]
-        all_on = {c: bool(state.get(f"{c}_all", c != "guest")) for c in cols}
-        sets = {c: set(state.get(c, set())) for c in cols}
-        tools = {it["name"] for _, items in sections for it in items}
-        locked = {it["name"] for _, items in sections for it in items if it.get("locked")}
-        mark = lambda on: ansi.green("✓") if on else ansi.dim("·")
+        all_on = {col: bool(state.get(f"{col}_all", col != "guest")) for col in _COLUMNS}
+        sets = {col: set(state.get(col, set())) for col in _COLUMNS}
+        tools = {item["name"] for _, items in sections for item in items}
+        locked = {
+            item["name"]
+            for _, items in sections
+            for item in items
+            if item.get("locked")
+        }
+
+        def mark(on: bool) -> str:
+            return ansi.green("✓") if on else ansi.dim("·")
 
         def cells(on_for):
-            return "  ".join(f"{c}:{on_for(c)}" for c in cols)
+            return "  ".join(f"{col}:{on_for(col)}" for col in _COLUMNS)
+
+        def tool_mark(col, name):
+            return mark(all_on[col] or name in sets[col])
 
         def show():
             print(ansi.bold("Tool permissions  (toggle: '<tool> <cli|sponsor|guest>' / "
                             "'yolo <class>'; 'done')"))
-            print(f"  {'YOLO':40} {cells(lambda c: mark(all_on[c]))}")
+            print(f"  {'YOLO':{_COL_WIDTH}} {cells(lambda col: mark(all_on[col]))}")
             for section, items in sections:
                 print(ansi.dim(f"  ── {section} ──"))
-                for it in items:
-                    n = it["name"]
-                    if n in locked:
-                        print(f"  {('🔒 ' + n):40} {cells(lambda c: ansi.green('✓'))}  {ansi.dim('(required)')}")
+                for item in items:
+                    item_name = item["name"]
+                    if item_name in locked:
+                        label = f"🔒 {item_name}"
+                        print(
+                            f"  {label:{_COL_WIDTH}} {cells(lambda col: ansi.green('✓'))}  "
+                            f"{ansi.dim('(required)')}"
+                        )
                     else:
-                        print(f"  {n:40} {cells(lambda c, n=n: mark(all_on[c] or n in sets[c]))}")
+                        cells_text = cells(lambda col, name=item_name: tool_mark(col, name))
+                        print(f"  {item_name:{_COL_WIDTH}} {cells_text}")
+
+        def apply_command(cmd: str) -> bool:
+            """Apply one perm-editor command; return True if the matrix should redraw."""
+            parts = cmd.split()
+            if len(parts) != 2 or parts[1].lower() not in _COLUMNS:
+                print(ansi.dim("  e.g.  yolo guest   |   powershell sponsor   |   done"))
+                return False
+            name, col = parts[0], parts[1].lower()
+            if name.lower() == "yolo":
+                all_on[col] = not all_on[col]
+            elif name in locked:
+                print(ansi.dim("  (required — always enabled, can't be changed)"))
+                return False
+            elif name in tools:
+                target = sets[col]
+                target.discard(name) if name in target else target.add(name)
+            else:
+                print(ansi.dim("  unknown tool"))
+                return False
+            return True
 
         show()
         while True:
@@ -166,50 +192,12 @@ class ConsoleUI(UI):
                 break
             if cmd.lower() in ("q", "quit", "cancel"):
                 return None
-            parts = cmd.split()
-            if len(parts) == 2 and parts[1].lower() in cols:
-                name, col = parts[0], parts[1].lower()
-                if name.lower() == "yolo":
-                    all_on[col] = not all_on[col]
-                elif name in locked:
-                    print(ansi.dim("  (required — always enabled, can't be changed)"))
-                    continue
-                elif name in tools:
-                    tgt = sets[col]
-                    tgt.discard(name) if name in tgt else tgt.add(name)
-                else:
-                    print(ansi.dim("  unknown tool"))
-                    continue
+            if apply_command(cmd):
                 show()
-            else:
-                print(ansi.dim("  e.g.  yolo guest   |   powershell sponsor   |   done"))
         return {
-            **{f"{c}_all": all_on[c] for c in cols},
-            **{c: sets[c] for c in cols},
+            **{f"{col}_all": all_on[col] for col in _COLUMNS},
+            **{col: sets[col] for col in _COLUMNS},
         }
-
-    async def form(self, title, fields):
-        print(ansi.bold(title))
-        values = {}
-        for f in fields:
-            req = ansi.red(" *") if f.get("required") else ""
-            desc = f"  ({f['description']})" if f.get("description") else ""
-            if f.get("type") == "bool":
-                try:
-                    ans = await asyncio.to_thread(input, f"  {f['label']}{req} [y/N]{ansi.dim(desc)}: ")
-                except (EOFError, KeyboardInterrupt):
-                    return None
-                values[f["key"]] = ans.strip().lower() in ("y", "yes")
-            else:
-                default = f.get("default") or ""
-                try:
-                    ans = await asyncio.to_thread(
-                        input, f"  {f['label']}{req}{ansi.dim(desc)} [{default}]: "
-                    )
-                except (EOFError, KeyboardInterrupt):
-                    return None
-                values[f["key"]] = ans.strip() or default
-        return values
 
     async def run(self, on_submit, on_interrupt=None, on_start=None) -> None:
         if on_start is not None:

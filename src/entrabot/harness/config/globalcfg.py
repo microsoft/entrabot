@@ -14,27 +14,15 @@ additional named blocks here.
 from __future__ import annotations
 
 import os
-from typing import Dict, Tuple
 
-# Keys that belong to the shared root (tenant + blueprint + cert). Provisioned once.
-GLOBAL_KEYS = (
-    "ENTRABOT_TENANT_ID",
-    "ENTRABOT_BLUEPRINT_APP_ID",
-    "ENTRABOT_BLUEPRINT_OBJECT_ID",
-    "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT",
-    "ENTRABOT_BLUEPRINT_CERT_SHA1",
-    "ENTRABOT_BLUEPRINT_KSP",
-    "ENTRABOT_AUTHORITY",
-)
-# Keys unique to one agent (its Entra identity + Teams user). One set per directory.
+# Keys unique to one agent (its Entra identity + Teams user). One set per directory. The shared
+# root keys (tenant/blueprint/cert) are simply "everything that isn't an AGENT_KEY" — see split().
 AGENT_KEYS = (
     "ENTRABOT_AGENT_ID",
     "ENTRABOT_AGENT_OBJECT_ID",
     "ENTRABOT_AGENT_USER_ID",
     "ENTRABOT_AGENT_USER_UPN",
 )
-# The humans an agent may talk to are shared across agents → kept global.
-HUMAN_PREFIX = "ENTRABOT_HUMAN_"
 
 GLOBAL_ENV_FILENAME = "global.env"
 AGENT_ENV_FILENAME = ".env"
@@ -63,16 +51,22 @@ def home_agent_env_path() -> str:
     return os.path.join(global_dir(), AGENT_ENV_FILENAME)
 
 
-def read_env(path: str) -> Dict[str, str]:
+def _is_valid_env_line(line: str) -> bool:
+    """True for a non-blank, non-comment ``KEY=VALUE`` line."""
+    return bool(line) and not line.startswith("#") and "=" in line
+
+
+def read_env(path: str) -> dict[str, str]:
     """Parse a KEY=VALUE ``.env`` file (ignores blanks/comments). Missing file → {}."""
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     try:
-        text = open(path, encoding="utf-8").read()
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
     except (FileNotFoundError, OSError):
         return out
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not _is_valid_env_line(line):
             continue
         key, _, value = line.partition("=")
         key = key.strip()
@@ -80,40 +74,41 @@ def read_env(path: str) -> Dict[str, str]:
         # overwrites an already-set key. A combined .env that accumulated duplicate keys across
         # setup runs (e.g. rotated cert thumbprints) must resolve to the SAME value the runtime
         # uses, or migrate would capture a stale/unregistered one.
-        if key not in out:
-            out[key] = value.strip()
+        out.setdefault(key, value.strip())
     return out
 
 
-def write_env(path: str, mapping: Dict[str, str], header: str = "") -> None:
+def write_env(path: str, mapping: dict[str, str], header: str = "") -> None:
     """Write a ``.env`` file (creating parent dirs). Sorted for stable diffs."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     lines = []
     if header:
-        lines += ["# " + h for h in header.splitlines()]
+        lines += ["# " + header_line for header_line in header.splitlines()]
     for key in sorted(mapping):
         lines.append(f"{key}={mapping[key]}")
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write("\n".join(lines) + "\n")
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write("\n".join(lines) + "\n")
 
 
-def split(env: Dict[str, str]) -> Tuple[Dict[str, str], Dict[str, str]]:
+def split(env: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
     """Partition a combined env into (global, per-agent). Per-agent = the agent identity keys;
     global = everything else (tenant/blueprint/cert, shared HUMAN_*, and any runtime prefs), so
     no key is ever dropped on the round-trip."""
-    agent = {k: v for k, v in env.items() if k in AGENT_KEYS and v}
-    glob = {k: v for k, v in env.items() if k not in AGENT_KEYS and v}
+    agent = {key: value for key, value in env.items() if key in AGENT_KEYS and value}
+    glob = {key: value for key, value in env.items() if key not in AGENT_KEYS and value}
     return glob, agent
 
 
-def read_global() -> Dict[str, str]:
+def read_global() -> dict[str, str]:
     return read_env(global_env_path())
 
 
 def global_exists() -> bool:
     """True once the shared tenant + blueprint have been provisioned."""
-    g = read_global()
-    return bool(g.get("ENTRABOT_TENANT_ID") and g.get("ENTRABOT_BLUEPRINT_APP_ID"))
+    global_env = read_global()
+    return bool(
+        global_env.get("ENTRABOT_TENANT_ID") and global_env.get("ENTRABOT_BLUEPRINT_APP_ID")
+    )
 
 
 def agent_exists(root: str) -> bool:

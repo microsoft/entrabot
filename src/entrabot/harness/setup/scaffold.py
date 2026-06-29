@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import List
 
-from . import config as cfgmod
-from .config import HarnessConfig
+from .. import config as cfgmod
+from ..config import HarnessConfig
 
 _AGENT_MD = """# {name}
 
@@ -57,11 +56,20 @@ editing (or use `/reload`).
 class ScaffoldResult:
     config_path: str
     agent_path: str
-    created: List[str]
+    created: list[str]
+
+
+def _write_template(path: str, content: str) -> bool:
+    """Write ``content`` to ``path`` only if it does not already exist. Returns True if written."""
+    if os.path.exists(path):
+        return False
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(content)
+    return True
 
 
 def bootstrap(root: str, cfg: HarnessConfig) -> ScaffoldResult:
-    created: List[str] = []
+    created: list[str] = []
     os.makedirs(root, exist_ok=True)
 
     cfg.ensure_identity()
@@ -72,15 +80,15 @@ def bootstrap(root: str, cfg: HarnessConfig) -> ScaffoldResult:
     os.makedirs(github_dir, exist_ok=True)
 
     instr_path = os.path.join(github_dir, "copilot-instructions.md")
-    if not os.path.exists(instr_path):
-        with open(instr_path, "w", encoding="utf-8") as fh:
-            fh.write(_COPILOT_INSTRUCTIONS.format(name=cfg.name, description=cfg.description))
+    if _write_template(
+        instr_path, _COPILOT_INSTRUCTIONS.format(name=cfg.name, description=cfg.description)
+    ):
         created.append(instr_path)
 
     agent_path = os.path.join(root, "AGENT.md")
-    if not os.path.exists(agent_path):
-        with open(agent_path, "w", encoding="utf-8") as fh:
-            fh.write(_AGENT_MD.format(name=cfg.name, description=cfg.description))
+    if _write_template(agent_path, _AGENT_MD.format(name=cfg.name, description=cfg.description)):
         created.append(agent_path)
 
-    return ScaffoldResult(config_path=cfgmod.config_path(root), agent_path=agent_path, created=created)
+    return ScaffoldResult(
+        config_path=cfgmod.config_path(root), agent_path=agent_path, created=created
+    )

@@ -1,4 +1,4 @@
-from entrabot.harness import banner
+from entrabot.harness.ui import banner
 
 
 def test_render_single_line_block_glyphs():

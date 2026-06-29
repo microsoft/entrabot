@@ -12,16 +12,17 @@ from __future__ import annotations
 
 import asyncio
 import html
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Dict, List, Optional, Set
 
 # Token provider: returns a valid Agent-User Graph token (entrabot's three-hop auth).
 TokenProvider = Callable[[], Awaitable[str]]
 # Inject a steering prompt into the session: (prompt, caller_id, chat_id).
-InjectFn = Callable[[str, Optional[str], Optional[str]], Awaitable[None]]
+InjectFn = Callable[[str, str | None, str | None], Awaitable[None]]
 
 _POLL_SECONDS = 5
 _DISCOVER_SECONDS = 120  # re-sweep GET /me/chats this often to pick up new chats
+_ME_CHATS_URL = "https://graph.microsoft.com/v1.0/me/chats"
 
 
 @dataclass
@@ -32,42 +33,55 @@ class TurnContext:
     reply tools (which chat do I answer in?). ``None`` for operator-typed/local input.
     """
 
-    caller: Optional[str] = None
-    chat: Optional[str] = None
+    caller: str | None = None
+    chat: str | None = None
 
 
 def _field(msg: dict, *names: str, default: str = "") -> str:
-    for n in names:
-        v = msg.get(n)
-        if v:
-            return str(v)
+    """First non-empty value among ``names`` in ``msg`` (Graph shapes vary), else ``default``."""
+    for name in names:
+        value = msg.get(name)
+        if value:
+            return str(value)
     return default
+
+
+def _discovery_error_hint(status_code: int) -> str:
+    """Human hint for a non-200 GET /me/chats response (empty for unrecognized codes)."""
+    if status_code == 403:
+        return (
+            " — the token is missing Chat.Read/Chat.ReadWrite. Complete the entrabot agent "
+            "provisioning (it issues a token with Teams scopes)."
+        )
+    if status_code == 401:
+        return " — token expired/invalid."
+    return ""
 
 
 class TeamsBridge:
     def __init__(
         self,
         token_provider: TokenProvider,
-        watched_chats: List[str],
+        watched_chats: list[str],
         inject: InjectFn,
         *,
-        self_id: Optional[str] = None,
+        self_id: str | None = None,
         poll_seconds: int = _POLL_SECONDS,
-        on_note: Optional[Callable[[str], None]] = None,
+        on_note: Callable[[str], None] | None = None,
     ):
         self._token = token_provider
-        self._watched: List[str] = list(watched_chats)
+        self._watched: list[str] = list(watched_chats)
         self._inject = inject
         self._self_id = self_id
         self._poll_seconds = poll_seconds
         self._on_note = on_note
-        self._noted: Set[str] = set()  # de-dupe repeated status notes
-        self._seen: Dict[str, Set[str]] = {c: set() for c in self._watched}
-        self._task: Optional[asyncio.Task] = None
+        self._noted: set[str] = set()  # de-dupe repeated status notes
+        self._seen: dict[str, set[str]] = {chat: set() for chat in self._watched}
+        self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
 
     # ---- watched chats ---------------------------------------------------------------
-    def watched_chats(self) -> List[str]:
+    def watched_chats(self) -> list[str]:
         return list(self._watched)
 
     def watch(self, chat_id: str) -> None:
@@ -77,13 +91,15 @@ class TeamsBridge:
 
     # ---- egress ----------------------------------------------------------------------
     async def send(self, chat_id: str, message: str, content_type: str = "html") -> dict:
-        from ..tools import teams  # lazy: entrabot auth need not be configured to import
+        from ...tools import teams  # lazy: entrabot auth need not be configured to import
 
         token = await self._token()
-        return await teams.send(chat_id=chat_id, message=message, token=token, content_type=content_type)
+        return await teams.send(
+            chat_id=chat_id, message=message, token=token, content_type=content_type
+        )
 
-    async def read(self, chat_id: str, count: int = 5) -> List[dict]:
-        from ..tools import teams
+    async def read(self, chat_id: str, count: int = 5) -> list[dict]:
+        from ...tools import teams
 
         token = await self._token()
         return await teams.read(chat_id=chat_id, token=token, count=count)
@@ -109,57 +125,61 @@ class TeamsBridge:
 
         try:
             token = await self._token()
-        except Exception as e:
-            self._note("teams-token", f"Teams: could not acquire a token — {type(e).__name__}: {e}")
+        except Exception as error:
+            self._note(
+                "teams-token", f"Teams: could not acquire a token — {type(error).__name__}: {error}"
+            )
             return 0
-        new: List[str] = []
+
+        new_chats: list[str] = []
         try:
-            async with httpx.AsyncClient() as c:
-                r = await c.get(
-                    "https://graph.microsoft.com/v1.0/me/chats",
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    _ME_CHATS_URL,
                     headers={"Authorization": f"Bearer {token}"},
                     params={"$top": "50"},
                 )
-            if r.status_code != 200:
-                hint = ""
-                if r.status_code == 403:
-                    hint = " — the token is missing Chat.Read/Chat.ReadWrite. Complete the entrabot agent provisioning (it issues a token with Teams scopes)."
-                elif r.status_code == 401:
-                    hint = " — token expired/invalid."
-                self._note(f"discover-{r.status_code}", f"Teams: GET /me/chats returned {r.status_code}{hint}")
+            if response.status_code != 200:
+                self._note(
+                    f"discover-{response.status_code}",
+                    f"Teams: GET /me/chats returned {response.status_code}"
+                    f"{_discovery_error_hint(response.status_code)}",
+                )
                 return 0
-            for ch in r.json().get("value", []):
-                cid = ch.get("id")
-                if cid and cid not in self._watched:
-                    self._watched.append(cid)
-                    self._seen.setdefault(cid, set())
-                    new.append(cid)
-        except Exception as e:
-            self._note("discover-err", f"Teams: chat discovery failed — {type(e).__name__}: {e}")
+            for chat in response.json().get("value", []):
+                chat_id = chat.get("id")
+                if chat_id and chat_id not in self._watched:
+                    self._watched.append(chat_id)
+                    self._seen.setdefault(chat_id, set())
+                    new_chats.append(chat_id)
+        except Exception as error:
+            self._note(
+                "discover-err", f"Teams: chat discovery failed — {type(error).__name__}: {error}"
+            )
             return 0
-        for cid in new:
-            try:
-                for m in await self.read(cid, count=20):
-                    self._seen[cid].add(_field(m, "message_id", "id"))
-            except Exception:
-                pass
+
+        for chat_id in new_chats:
+            await self._mark_seen(chat_id)
         if self._watched:
             self._note("watching", f"Teams: watching {len(self._watched)} chat(s)")
-        return len(new)
+        return len(new_chats)
 
     def _note(self, key: str, msg: str) -> None:
         if self._on_note and key not in self._noted:
             self._noted.add(key)
             self._on_note(msg)
 
+    async def _mark_seen(self, chat_id: str, count: int = 20) -> None:
+        """Mark a chat's existing messages as seen so they aren't injected as 'new'."""
+        try:
+            for message in await self.read(chat_id, count=count):
+                self._seen[chat_id].add(_field(message, "message_id", "id"))
+        except Exception:
+            pass
+
     async def _prime(self) -> None:
-        """Mark existing messages as seen so we only inject genuinely new ones."""
         for chat in self._watched:
-            try:
-                for m in await self.read(chat, count=20):
-                    self._seen[chat].add(_field(m, "message_id", "id"))
-            except Exception:
-                pass
+            await self._mark_seen(chat)
 
     async def _poll(self) -> None:
         await self.discover_chats()  # find chats the agent is in before priming
@@ -172,20 +192,23 @@ class TeamsBridge:
                 elapsed = 0
                 await self.discover_chats()
             for chat in list(self._watched):
-                try:
-                    msgs = await self.read(chat, count=10)
-                except Exception:
-                    continue
-                # oldest-first so injection order is chronological
-                for m in reversed(msgs):
-                    mid = _field(m, "message_id", "id")
-                    if not mid or mid in self._seen[chat]:
-                        continue
-                    self._seen[chat].add(mid)
-                    sender_id = _field(m, "sender_id", "from_id", "fromId")
-                    if self._self_id and sender_id == self._self_id:
-                        continue  # don't echo our own messages
-                    await self._inject_message(chat, m)
+                await self._inject_new_messages(chat)
+
+    async def _inject_new_messages(self, chat: str) -> None:
+        try:
+            messages = await self.read(chat, count=10)
+        except Exception:
+            return
+        # oldest-first so injection order is chronological
+        for message in reversed(messages):
+            message_id = _field(message, "message_id", "id")
+            if not message_id or message_id in self._seen[chat]:
+                continue
+            self._seen[chat].add(message_id)
+            sender_id = _field(message, "sender_id", "from_id", "fromId")
+            if self._self_id and sender_id == self._self_id:
+                continue  # don't echo our own messages
+            await self._inject_message(chat, message)
 
     async def _inject_message(self, chat: str, msg: dict) -> None:
         sender = _field(msg, "from", "sender_name", "senderName", default="someone")

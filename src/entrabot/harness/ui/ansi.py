@@ -15,17 +15,12 @@ ENABLED: bool = os.environ.get("NO_COLOR") is None and sys.stdout.isatty()
 _CODES = {
     "dim": "2",
     "bold": "1",
-    "inverse": "7",
     "red": "31",
     "green": "32",
     "yellow": "33",
     "blue": "34",
     "magenta": "35",
     "cyan": "36",
-    "bright_blue": "94",
-    "bright_magenta": "95",
-    "bright_cyan": "96",
-    "gray": "90",
     # ENTRABOT wordmark: bright top rows ("_hi"), deeper body, and a dark drop shadow.
     "entra_hi": "38;5;75",
     "entra": "38;5;33",
@@ -45,10 +40,6 @@ def dim(s: str) -> str:
 
 def bold(s: str) -> str:
     return _wrap(_CODES["bold"], s)
-
-
-def inverse(s: str) -> str:
-    return _wrap(_CODES["inverse"], s)
 
 
 def red(s: str) -> str:

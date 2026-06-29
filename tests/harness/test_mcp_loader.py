@@ -1,6 +1,6 @@
 import json
 
-from entrabot.harness import mcp_loader
+from entrabot.harness.session import mcp_loader
 
 
 def test_stdio_and_http(tmp_path):
@@ -42,7 +42,7 @@ def test_skips_entrabot_body_mcp_by_name(tmp_path):
     # spawn a second background poller. Drop it; keep the others.
     (tmp_path / ".mcp.json").write_text(json.dumps({"mcpServers": {
         "entrabot": {"command": "/x/.venv/bin/entrabot-mcp"},
-        "ado": {"command": "agency", "args": ["mcp", "ado"]},
+        "ado": {"command": "npx", "args": ["-y", "ado-mcp"]},
     }}))
     skipped = []
     res = mcp_loader.load(str(tmp_path), on_skip=skipped.append)

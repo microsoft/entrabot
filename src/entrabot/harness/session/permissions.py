@@ -2,7 +2,7 @@
 
 Every caller falls in one of three classes: **cli** (the local terminal operator), **sponsor**
 (a configured/elevated human on Teams), or **guest** (everyone else). Each individual tool
-(native / MCP / skill — see :mod:`entrabot.harness.toolcatalog`) is independently enabled per
+(native / MCP / skill — see :mod:`entrabot.harness.session.toolcatalog`) is independently enabled per
 class. The YOLO row is three independent toggles — ``cli_all`` / ``sponsor_all`` / ``guest_all``
 — that grant *all* tools to that class.
 
@@ -13,13 +13,14 @@ with ``toolName`` and returns ``permissionDecision: "allow" | "deny"`` — deter
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional
+from typing import Any
 
 import copilot
 
 # Returns the running turn's caller class: "cli" | "sponsor" | "guest" (None -> defensive "cli").
-ClassResolver = Callable[[], Optional[str]]
+ClassResolver = Callable[[], "str | None"]
 
 
 @dataclass
@@ -34,7 +35,7 @@ class ToolPolicy:
     guest: set[str] = field(default_factory=set)
 
     @classmethod
-    def from_config(cls, raw: Optional[Dict[str, Any]]) -> "ToolPolicy":
+    def from_config(cls, raw: dict[str, Any] | None) -> ToolPolicy:
         if not raw:
             return cls()
         return cls(
@@ -46,7 +47,7 @@ class ToolPolicy:
             guest=set(raw.get("guest", [])),
         )
 
-    def to_config(self) -> Dict[str, Any]:
+    def to_config(self) -> dict[str, Any]:
         return {
             "cli_all": self.cli_all,
             "sponsor_all": self.sponsor_all,
@@ -64,10 +65,10 @@ class ToolPolicy:
         return self.guest_all or tool in self.guest
 
 
-def _tool_name(inp: Any) -> Optional[str]:
-    if isinstance(inp, dict):
-        return inp.get("toolName") or inp.get("tool_name")
-    return getattr(inp, "toolName", None) or getattr(inp, "tool_name", None)
+def _tool_name(hook_input: Any) -> str | None:
+    if isinstance(hook_input, dict):
+        return hook_input.get("toolName") or hook_input.get("tool_name")
+    return getattr(hook_input, "toolName", None) or getattr(hook_input, "tool_name", None)
 
 
 def build_tool_gate(
@@ -75,7 +76,7 @@ def build_tool_gate(
     resolve_class: ClassResolver,
     *,
     force_yolo: bool = False,
-    always_allow: Optional[set[str]] = None,
+    always_allow: set[str] | None = None,
 ):
     """Return an ``on_pre_tool_use`` hook that allows/denies each tool by the running turn's
     caller class. Reads ``policy`` live, so /permissions edits apply without a reload.
@@ -85,8 +86,8 @@ def build_tool_gate(
     entirely (you can't deny the agent its own voice)."""
     locked = always_allow or set()
 
-    async def hook(inp: Any, context: Any = None):
-        name = _tool_name(inp)
+    async def hook(hook_input: Any, context: Any = None):
+        name = _tool_name(hook_input)
         if not name:
             return None
         caller_class = resolve_class() or "cli"  # no caller bound → local operator

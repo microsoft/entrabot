@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from entrabot.harness import globalcfg
+from entrabot.harness.config import globalcfg
 
 
 def _combined():

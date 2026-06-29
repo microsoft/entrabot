@@ -3,7 +3,8 @@
 
 from types import SimpleNamespace
 
-from entrabot.harness import cli, globalcfg
+from entrabot.harness import cli
+from entrabot.harness.config import globalcfg
 
 
 def _seed_global(monkeypatch, tmp_path):
