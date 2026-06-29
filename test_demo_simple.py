@@ -2,17 +2,18 @@
 """
 Simple demo: READ allowed, WRITE blocked via operator ceiling
 """
-import os
-import sys
 import json
+import os
+import shutil
+import sys
 from pathlib import Path
 
 # Setup paths
 repo_root = Path(__file__).parent
 sys.path.insert(0, str(repo_root / "src"))
 
-# Import after path setup
-from entrabot.mcp_server import run_code
+# Import after path setup (must follow sys.path insertion above)
+from entrabot.mcp_server import run_code  # noqa: E402
 
 # Setup test environment
 demo_dir = Path.home() / "Documents" / "entrabot-sandbox-demo"
@@ -120,7 +121,6 @@ print("   unless the operator explicitly adds Documents to readwrite ceiling.")
 print()
 
 # Cleanup
-import shutil
 shutil.rmtree(demo_dir, ignore_errors=True)
 Path("/tmp/entrabot_test.txt").unlink(missing_ok=True)
 print("🧹 Cleaned up test files")
