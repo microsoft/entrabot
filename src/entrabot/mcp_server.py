@@ -845,6 +845,8 @@ async def _init_auth() -> None:
     - If three-hop fails → warn + MSAL delegated auth → DELEGATED
     - If MSAL also fails → UNAUTHENTICATED
     """
+    import asyncio
+
     global _identity
     _identity = IdentityStateMachine()
     set_active_identity_state(_identity)
@@ -855,7 +857,14 @@ async def _init_auth() -> None:
     # Fast path: try three-hop with existing creds (unless SKIP_PROVISIONING)
     if not config.skip_provisioning and config.blueprint_app_id and config.tenant_id:
         try:
-            token = acquire_agent_user_token(config)
+            # acquire_agent_user_token is synchronous and makes several
+            # blocking HTTPS token calls (~seconds). Run it in a worker
+            # thread so eager boot does not starve the asyncio loop and
+            # stall the MCP `initialize` handshake — a stalled handshake
+            # makes stdio/ACP engine hosts (e.g. copilot) time out the
+            # server start and abort the launch. See test
+            # TestInitAuthDoesNotBlockEventLoop.
+            token = await asyncio.to_thread(acquire_agent_user_token, config)
             await _identity.update_session(
                 token=token,
                 token_acquired_at=time.monotonic(),
@@ -887,7 +896,9 @@ async def _init_auth() -> None:
                 client_id=config.client_id,
                 tenant_id=config.tenant_id or "common",
             )
-            result = auth.authenticate()
+            # Blocking (and potentially interactive) — keep it off the loop
+            # so the MCP handshake stays responsive during boot.
+            result = await asyncio.to_thread(auth.authenticate)
             if result and "error" in result:
                 error = str(result.get("error") or "msal_error")
                 description = str(

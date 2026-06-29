@@ -911,6 +911,26 @@ After this, `setup.sh --diagnose` passed all 7 checks including the three-hop to
 
 ---
 
+### Learning #69: Eager Synchronous Boot Auth Stalled the MCP Handshake — copilot Engine Launch Timed Out Where Claude Code Tolerated It
+
+**Date:** 2026-06-29
+**Status:** **CONFIRMED — fixed by offloading boot auth to a worker thread (`asyncio.to_thread`). Test `TestInitAuthDoesNotBlockEventLoop`.**
+**Context:** Launching entrabot under GitHub Copilot CLI (`copilot`, v1.0.65). Copilot was started as an engine from the trusted folder `C:\Development\entrabot`, so it auto-loaded the workspace `.mcp.json` and tried to boot the `entrabot` MCP server during launch.
+**Problem:** Host reported `execution failed: launch_engine - …\copilot.exe exited with non-zero status (exit code: 1)`. copilot.exe was healthy in isolation — `--version`, `-p "say hi"`, and `--acp` all exited 0. The failure was the `entrabot` MCP server: copilot's log showed `Failed to start MCP client for entrabot: McpError: MCP error -32001: Request timed out` after ~63s. A raw `initialize` sent directly to `entrabot-mcp.exe` sat with **no response for >60s**.
+**Root cause:** `mcp_server._run_stdio_with_write_stream` kicks off `_eager_init()` via `asyncio.create_task` (eager boot so Teams/email observation starts immediately, not lazily on first tool call — that design choice landed at the `entraclaw → entrabot` rename, `2e22527`). But `_init_auth` called the **synchronous, blocking** `acquire_agent_user_token` (several blocking HTTPS token POSTs, ~60s for the three-hop flow) and the MSAL `auth.authenticate()` **directly on the event loop**. `create_task` looks concurrent but a sync blocking call inside an async task still freezes the single asyncio loop — so the MCP stdio read loop could not service the client's `initialize` request until auth finished. Claude Code tolerates a slow/late MCP server (keeps the session, connects whenever it's ready); copilot's stdio/ACP engine launch enforces a startup readiness deadline and treats the stalled handshake as a fatal launch failure → exit 1.
+**Fix:** Wrap both blocking calls in `await asyncio.to_thread(...)` in `_init_auth`, so auth runs on a worker thread and the loop stays free to answer `initialize` immediately. Post-fix the handshake returns in ~1.8s (was >60s). Eager observation is preserved — auth still starts at boot, it just no longer monopolizes the loop.
+**Prevention:**
+
+- **This is a code fix, not a config fix.** Nothing was wrong with `.mcp.json` or `scripts/mcp_config.py` (it only writes a standard `command`/`args`/`type` `mcpServers` entry — there is no per-server startup-timeout knob to tune). A slow handshake must be fixed in the server's boot path, and the fix benefits every host.
+- **Never run synchronous blocking I/O directly on the asyncio loop in a server's boot/lifespan path.** `asyncio.create_task(coro)` does not make the *body* of `coro` non-blocking — only its `await` points yield. Any sync network/crypto/file call inside must go through `asyncio.to_thread` (or an async client), or it starves every other task including the protocol handshake.
+- **Test the property, not the path:** assert the loop stays responsive (a concurrent heartbeat coroutine fires promptly) while a deliberately slow (`time.sleep`) blocking dependency runs — don't just assert the token was acquired.
+- **Host tolerance differs.** "Works in Claude Code" does not mean the MCP server boots cleanly — Claude Code masks slow/failed handshakes that stricter stdio/ACP engine hosts (copilot, Zed-style ACP clients) reject. When validating an MCP server, probe the raw `initialize` latency directly.
+- Related to the open `docs/runbooks/mcp-disconnect-investigation.md` slow-boot dossier — same eager-boot weight, different symptom (here: launch-time handshake timeout rather than mid-session drop).
+
+**Evidence/references:** Live session 2026-06-29. copilot log `~/.copilot/logs/process-1782754836854-3540.log:153`. Boot path: `src/entrabot/mcp_server.py` `_run_stdio_with_write_stream` → `_eager_init` → `_init_auth` (the two `asyncio.to_thread` wraps). Blocking dependency: `src/entrabot/tools/teams.py:126` `def acquire_agent_user_token` (synchronous). Test: `tests/test_mcp_server_integration.py::TestInitAuthDoesNotBlockEventLoop`.
+
+---
+
 ### [HISTORICAL] Learning #4: OBO Requires Matching Token Audience
 
 **Date:** 2026-04-06
