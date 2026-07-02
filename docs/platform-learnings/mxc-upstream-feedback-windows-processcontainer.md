@@ -7,12 +7,13 @@ local code execution behind an Entra Agent identity).
 Windows **11 build 28120 (26H1), ARM64**, `processcontainer` backend, policy schema
 `0.6.0-alpha`, config delivered via `--config-base64`.
 **Selected isolation tier:** `appcontainer-dacl` (see Issue 3).
-**Date:** 2026-06-29.
+**Date:** 2026-06-29. **Updated:** 2026-07-02 — added Issue 4 (file- vs directory-level read
+grant) and `prepare-system-drive` results (Issue 3 update; answers the prior open question).
 
 This note is intentionally self-contained so it can be forwarded as-is. **None of these
-are correctness/security bugs** — default-deny behaves correctly throughout. They are three
-developer-experience papercuts we hit while wiring a byte-exact file writer through the
-Windows backend, plus one question.
+are correctness/security bugs** — default-deny behaves correctly throughout. They are four
+developer-experience papercuts we hit while wiring byte-exact file read/write through the
+Windows backend, plus a couple of questions.
 
 ---
 
@@ -35,7 +36,14 @@ Windows backend, plus one question.
    falls back to this tier (`bfsCompiledIn: false`). **Question:** does
    `wxc-host-prep prepare-system-drive` (which the `--probe` output recommends) restore the
    ability to launch arbitrary `System32` exes, or only fix `C:\` root metadata stats? We
-   could not test the prepped tier (it needs elevation).
+   could not test the prepped tier (it needs elevation). **Update 2026-07-02:** we have since
+   run it elevated — it completes `exit 0`, but `--probe` still reports
+   `needsDaclAugmentation: true` afterward (see the Issue 3 update).
+
+4. **A file-level `readonlyPaths` grant is not enough to READ that file on the
+   `appcontainer-dacl` tier — you must grant the parent directory.** Granting the exact file and
+   `type`-ing it is denied; granting its parent dir (identical command) succeeds. The same
+   file-scoped policy works on macOS Seatbelt, so this is a portability surprise (see Issue 4).
 
 For contrast, granting an executable's *own* dependency tree read-only makes it launch
 cleanly — e.g. granting a venv `python.exe`'s venv root + base CPython install as
@@ -158,6 +166,52 @@ tree explicitly granted.
      build) means integrators get a materially weaker/different tier than `processcontainer`
      implies, with no error — only a `--probe` reveals it. Surfacing the effective tier (and
      why) at spawn time, or shipping a BFS-enabled build on npm, would reduce surprise.
+
+### Update (2026-07-02): we ran `wxc-host-prep prepare-system-drive` (elevated)
+
+This answers the "we could not test the prepped tier" caveat above.
+
+- It completes with **exit 0**.
+- **`--probe` afterward still reports `tier: appcontainer-dacl` and `needsDaclAugmentation:
+  true`** — the flag does **not** flip to `false` after a successful prep, so integrators cannot
+  use it as an "already applied?" signal; it appears to describe the tier *category*, not the
+  applied state. (The `warnings` array did shrink 2 → 1.)
+- We did not re-measure arbitrary `System32`-exe launch (`certutil.exe`, `whoami.exe`) after the
+  prep, so question 1 above remains open — but the persistent `needsDaclAugmentation: true` means
+  a tool that keys off that flag to decide whether to run the prep will run it **every time**
+  (idempotently). A distinct "applied"/"satisfied" probe field would let integrators make the
+  step truly one-time.
+
+---
+
+## Issue 4 — a file-level `readonlyPaths` grant is not sufficient to READ that file; grant the parent directory
+
+### Symptom
+
+Granting read access to a single file and reading it with `cmd /c type` is denied; granting its
+**parent directory** (identical command) succeeds. Reproduced with v0.7.0 on the
+`appcontainer-dacl` tier:
+
+| `readonlyPaths` | `commandLine` | Result |
+| --- | --- | --- |
+| `["C:\\Users\\me\\Documents\\info.txt"]` (the file) | `cmd /c type "…\\Documents\\info.txt"` | ❌ exit 1, `Access is denied.` |
+| `["C:\\Users\\me\\Documents"]` (the parent dir) | `cmd /c type "…\\Documents\\info.txt"` | ✅ exit 0, contents returned |
+
+### Observations
+
+- On macOS Seatbelt a file-level read grant is sufficient to read that file. On the Windows
+  `appcontainer-dacl` tier it is not — opening the file appears to require directory-traversal
+  access to the containing directory, so a file-only grant is deterministically denied.
+- This is a portability surprise: the same "grant exactly the file you read" policy that works on
+  macOS silently fails on Windows. We work around it by granting the file's parent directory
+  read-only (still clamped to our operator ceiling) on Windows.
+
+### Suggested fix / question
+
+- Either auto-include the minimal parent-directory traversal grant when a file is passed in
+  `readonlyPaths`, or document that on the `appcontainer-dacl` tier reading a file requires its
+  parent directory to be reachable. A one-line note in the policy docs would save integrators the
+  guesswork.
 
 ---
 
