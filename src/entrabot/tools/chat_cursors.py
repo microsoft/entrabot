@@ -34,7 +34,9 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import Enum
 from urllib.parse import quote
 
 from entrabot.storage.backend import get_backend
@@ -113,6 +115,92 @@ def load_cursor(chat_id: str) -> dict | None:
         )
         return None
     return parsed
+
+
+class CursorOutcome(Enum):
+    """Classification of a cursor read, used to decide whether the poll may push.
+
+    The distinction is load-bearing for fleet safety (design doc F1):
+
+    * ``ABSENT`` — the read SUCCEEDED and no cursor exists. This is the only
+      case where "surface the newest message once" is allowed: a genuinely new
+      chat that no instance has ever cursor-ed.
+    * ``PRESENT`` — a cursor exists and parsed (fresh OR stale). Always
+      rehydrate; the steady-state timestamp gate does catch-up (F4). Never
+      re-bootstrap a present cursor.
+    * ``UNRESOLVED`` — the read FAILED, or the payload is corrupt / the wrong
+      shape. Ambiguous: a transient blob 401/timeout/throttle or a partial
+      write could be hiding a live cursor. **Fail closed — never push.** The
+      caller must retry the read on a later cycle before delivering anything.
+    """
+
+    ABSENT = "absent"
+    PRESENT = "present"
+    UNRESOLVED = "unresolved"
+
+
+@dataclass(frozen=True)
+class CursorResolution:
+    """Result of :func:`resolve_cursor` — an outcome plus the parsed cursor.
+
+    ``cursor`` is populated only for :attr:`CursorOutcome.PRESENT`; it is
+    ``None`` for ``ABSENT`` and ``UNRESOLVED``.
+    """
+
+    outcome: CursorOutcome
+    cursor: dict | None
+
+
+def resolve_cursor(chat_id: str) -> CursorResolution:
+    """Classify *chat_id*'s cursor read into ABSENT / PRESENT / UNRESOLVED.
+
+    Unlike :func:`load_cursor` (which collapses every miss to ``None``), this
+    keeps the three cases apart so the poll can fail closed. The rules:
+
+    * Backend read raises (transient blob/disk error, 401 refresh race,
+      throttle) → ``UNRESOLVED``. The whole point of the fleet-safety fix: an
+      ambiguous read must never be mistaken for "new chat, push newest".
+    * Read returns ``None`` (the backend positively determined the key is
+      absent) → ``ABSENT``.
+    * Content present but not valid JSON, or valid JSON that isn't an object →
+      ``UNRESOLVED``. A partial/corrupt write is ambiguous; do not treat it as
+      a clean slate and re-push.
+    * Content present and a JSON object (fresh OR stale) → ``PRESENT``.
+    """
+    backend = get_backend()
+    try:
+        raw = backend.read_text(cursor_key(chat_id))
+    except Exception as exc:  # noqa: BLE001 — any read failure is ambiguous.
+        logger.warning(
+            "Cursor read failed for %s (UNRESOLVED, failing closed): %s: %s",
+            chat_id,
+            type(exc).__name__,
+            exc,
+        )
+        return CursorResolution(CursorOutcome.UNRESOLVED, None)
+
+    if raw is None:
+        return CursorResolution(CursorOutcome.ABSENT, None)
+
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "Corrupt chat cursor for %s (UNRESOLVED, failing closed): %s",
+            chat_id,
+            exc,
+        )
+        return CursorResolution(CursorOutcome.UNRESOLVED, None)
+
+    if not isinstance(parsed, dict):
+        logger.warning(
+            "Unexpected chat cursor shape for %s (UNRESOLVED, failing closed): %r",
+            chat_id,
+            type(parsed),
+        )
+        return CursorResolution(CursorOutcome.UNRESOLVED, None)
+
+    return CursorResolution(CursorOutcome.PRESENT, parsed)
 
 
 def save_cursor(chat_id: str, state: dict) -> None:

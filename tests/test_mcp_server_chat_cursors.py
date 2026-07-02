@@ -71,13 +71,15 @@ def _isolate_state(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 class TestRehydrateOnRegister:
     def test_no_cursor_present_leaves_state_unbootstrapped(self, tmp_path) -> None:
-        """First-time registration → no cursor file → falls through to bootstrap."""
+        """ABSENT (successful empty read) → new chat, may bootstrap-push once."""
         mcp_server._register_watched_chat("19:fresh@thread.v2", persist=False)
         state = mcp_server._state["watched_chats"]["19:fresh@thread.v2"]
-        # Default fresh state: not bootstrapped, empty seen, no last_ts.
+        # Default fresh state: not bootstrapped, empty seen, no last_ts, and NOT
+        # flagged for re-resolution (it resolved cleanly to ABSENT).
         assert state["bootstrapped"] is False
         assert state["last_ts"] is None
         assert state["seen_ids"] == set()
+        assert state.get("needs_resolution") is False
 
     def test_fresh_cursor_present_rehydrates_and_skips_bootstrap(
         self, tmp_path
@@ -102,8 +104,14 @@ class TestRehydrateOnRegister:
         assert state["last_ts"] == recent
         assert state["seen_ids"] == {"msg-a", "msg-b"}
 
-    def test_stale_cursor_falls_through_to_bootstrap(self, tmp_path) -> None:
-        """A cursor older than the staleness cap → ignore and bootstrap."""
+    def test_stale_cursor_rehydrates_for_catch_up(self, tmp_path) -> None:
+        """F4: a stale-but-present cursor rehydrates (NOT re-bootstrap).
+
+        The steady-state timestamp gate does catch-up (surfaces only messages
+        newer than ``last_ts``); an idle chat with no new messages emits
+        nothing. Re-bootstrapping a stale cursor is exactly the replay-flood
+        bug this fix removes.
+        """
         old = (
             datetime.now(UTC)
             - timedelta(seconds=chat_cursors.CURSOR_STALENESS_SECONDS + 3600)
@@ -120,13 +128,19 @@ class TestRehydrateOnRegister:
         mcp_server._register_watched_chat("19:stale@thread.v2", persist=False)
 
         state = mcp_server._state["watched_chats"]["19:stale@thread.v2"]
-        # Stale → treat as fresh registration; bootstrap will re-baseline.
-        assert state["bootstrapped"] is False
-        assert state["last_ts"] is None
-        assert state["seen_ids"] == set()
+        # Present cursor → rehydrate + catch up; never re-baseline-and-push.
+        assert state["bootstrapped"] is True
+        assert state["last_ts"] == old
+        assert state["seen_ids"] == {"msg-a"}
+        assert state.get("needs_resolution") is False
 
-    def test_corrupt_cursor_falls_through_to_bootstrap(self, tmp_path) -> None:
-        """Corrupt JSON → treat as absent (defensive: boot must not die)."""
+    def test_corrupt_cursor_marks_needs_resolution(self, tmp_path) -> None:
+        """F1: corrupt JSON is ambiguous → fail closed, do NOT bootstrap-push.
+
+        A partial write could be hiding a live cursor. The chat is flagged
+        ``needs_resolution`` so the poll loop re-reads before delivering
+        anything — it must never surface the newest message on a corrupt read.
+        """
         from entrabot.storage.backend import get_backend
 
         get_backend().write_text(
@@ -139,6 +153,131 @@ class TestRehydrateOnRegister:
         state = mcp_server._state["watched_chats"]["19:corrupt@thread.v2"]
         assert state["bootstrapped"] is False
         assert state["last_ts"] is None
+        assert state["needs_resolution"] is True
+
+    def test_read_error_marks_needs_resolution(self, tmp_path, monkeypatch) -> None:
+        """F1 core: a transient read failure must fail closed, never bootstrap.
+
+        This is the exact fleet-replay trigger — a blob 401/timeout/throttle at
+        registration used to fall through to ``_bootstrap_chat`` and push the
+        newest (weeks-old) message. Now it flags ``needs_resolution``.
+        """
+        import entrabot.tools.chat_cursors as cc
+
+        class ExplodingBackend:
+            def read_text(self, key: str) -> str | None:
+                raise OSError("simulated transient blob read failure")
+
+        monkeypatch.setattr(cc, "get_backend", lambda: ExplodingBackend())
+
+        mcp_server._register_watched_chat("19:boom@thread.v2", persist=False)
+
+        state = mcp_server._state["watched_chats"]["19:boom@thread.v2"]
+        assert state["bootstrapped"] is False
+        assert state["needs_resolution"] is True
+
+
+# ---------------------------------------------------------------------------
+# Poll loop — fail-closed handling of a needs_resolution chat (F1)
+# ---------------------------------------------------------------------------
+class TestPollFailClosed:
+    """The per-chat poll step must never push while a chat is unresolved.
+
+    A chat flagged ``needs_resolution`` (transient read failure or corrupt
+    cursor at registration) must re-read the cursor and, until it resolves,
+    push NOTHING and NOT bootstrap. This is the security-relevant fail-closed
+    guarantee: an ambiguous read never re-injects stale messages.
+    """
+
+    @pytest.mark.asyncio
+    async def test_unresolved_chat_does_not_push_or_bootstrap(
+        self, monkeypatch
+    ) -> None:
+        chat_id = "19:unresolved@thread.v2"
+        chat_state = {
+            "seen_ids": set(),
+            "last_ts": None,
+            "bootstrapped": False,
+            "needs_resolution": True,
+        }
+        mcp_server._state["watched_chats"] = {chat_id: chat_state}
+
+        # Cursor read still failing → resolve_cursor returns UNRESOLVED.
+        import entrabot.tools.chat_cursors as cc
+
+        monkeypatch.setattr(
+            cc,
+            "resolve_cursor",
+            lambda cid: cc.CursorResolution(cc.CursorOutcome.UNRESOLVED, None),
+        )
+
+        pushed: list = []
+        bootstrapped: list = []
+        monkeypatch.setattr(
+            mcp_server,
+            "_push_channel_notification",
+            _async_recorder(pushed),
+        )
+        monkeypatch.setattr(mcp_server, "_bootstrap_chat", _async_recorder(bootstrapped))
+
+        await mcp_server._poll_watched_chat(chat_id, chat_state, "EntraBot Agent")
+
+        assert pushed == []
+        assert bootstrapped == []
+        # Still unresolved → stays flagged for retry next cycle.
+        assert chat_state["needs_resolution"] is True
+        assert chat_state["bootstrapped"] is False
+
+    @pytest.mark.asyncio
+    async def test_unresolved_chat_rehydrates_when_read_recovers(
+        self, monkeypatch
+    ) -> None:
+        chat_id = "19:recovers@thread.v2"
+        chat_state = {
+            "seen_ids": set(),
+            "last_ts": None,
+            "bootstrapped": False,
+            "needs_resolution": True,
+        }
+        mcp_server._state["watched_chats"] = {chat_id: chat_state}
+
+        recovered = {
+            "last_ts": "2026-06-09T18:00:00Z",
+            "seen_ids_tail": ["m1", "m2"],
+            "bootstrapped": True,
+        }
+        import entrabot.tools.chat_cursors as cc
+
+        monkeypatch.setattr(
+            cc,
+            "resolve_cursor",
+            lambda cid: cc.CursorResolution(cc.CursorOutcome.PRESENT, recovered),
+        )
+
+        pushed: list = []
+        bootstrapped: list = []
+        monkeypatch.setattr(
+            mcp_server, "_push_channel_notification", _async_recorder(pushed)
+        )
+        monkeypatch.setattr(mcp_server, "_bootstrap_chat", _async_recorder(bootstrapped))
+
+        await mcp_server._poll_watched_chat(chat_id, chat_state, "EntraBot Agent")
+
+        # Resolution cycle rehydrates but does NOT push (fail-closed): the
+        # steady-state gate handles delivery on the NEXT cycle.
+        assert pushed == []
+        assert bootstrapped == []
+        assert chat_state["needs_resolution"] is False
+        assert chat_state["bootstrapped"] is True
+        assert chat_state["last_ts"] == "2026-06-09T18:00:00Z"
+        assert chat_state["seen_ids"] == {"m1", "m2"}
+
+
+def _async_recorder(sink: list):
+    async def _rec(*args, **kwargs):
+        sink.append((args, kwargs))
+
+    return _rec
 
 
 # ---------------------------------------------------------------------------

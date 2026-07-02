@@ -26,10 +26,12 @@ import pytest
 from entrabot.tools.chat_cursors import (
     CURSOR_STALENESS_SECONDS,
     MAX_SEEN_IDS_TAIL,
+    CursorOutcome,
     bound_seen_ids,
     cursor_key,
     is_stale,
     load_cursor,
+    resolve_cursor,
     save_cursor,
 )
 
@@ -234,8 +236,87 @@ class TestIsStale:
 
 
 # ---------------------------------------------------------------------------
-# Storage key shape — confirm the on-disk layout matches the issue spec
+# resolve_cursor — fail-closed classification (F1)
 # ---------------------------------------------------------------------------
+class TestResolveCursor:
+    """resolve_cursor must distinguish the three read outcomes that decide
+    whether the poll may push:
+
+    * ABSENT      — read SUCCEEDED and no cursor exists → genuinely new chat,
+                    may surface newest message once.
+    * PRESENT     — cursor exists & parsed (fresh OR stale) → rehydrate; the
+                    steady-state timestamp gate does catch-up (F4).
+    * UNRESOLVED  — read FAILED / corrupt / ambiguous → fail closed, NEVER push.
+
+    Collapsing UNRESOLVED into ABSENT is exactly the fleet-replay bug: a
+    transient blob read failure must not be read as "new chat, push newest".
+    """
+
+    def test_absent_cursor_is_absent_outcome(self, tmp_data_dir) -> None:
+        res = resolve_cursor("19:absent@thread.v2")
+        assert res.outcome is CursorOutcome.ABSENT
+        assert res.cursor is None
+
+    def test_fresh_cursor_is_present_outcome(self, tmp_data_dir) -> None:
+        recent = (datetime.now(UTC) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        save_cursor(
+            "19:fresh@thread.v2",
+            {"last_ts": recent, "seen_ids_tail": ["m1"], "bootstrapped": True},
+        )
+        res = resolve_cursor("19:fresh@thread.v2")
+        assert res.outcome is CursorOutcome.PRESENT
+        assert res.cursor is not None
+        assert res.cursor["last_ts"] == recent
+
+    def test_stale_cursor_is_present_not_absent(self, tmp_data_dir) -> None:
+        # F4: a stale-but-present cursor is still PRESENT. It must rehydrate and
+        # let the timestamp gate catch up — NOT re-bootstrap and re-push.
+        old = (
+            datetime.now(UTC) - timedelta(seconds=CURSOR_STALENESS_SECONDS + 3600)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        save_cursor(
+            "19:stale@thread.v2",
+            {"last_ts": old, "seen_ids_tail": ["m1"], "bootstrapped": True},
+        )
+        res = resolve_cursor("19:stale@thread.v2")
+        assert res.outcome is CursorOutcome.PRESENT
+        assert res.cursor is not None
+        assert res.cursor["last_ts"] == old
+
+    def test_corrupt_json_is_unresolved_not_absent(self, tmp_data_dir) -> None:
+        from entrabot.storage.backend import get_backend
+
+        get_backend().write_text(cursor_key("19:corrupt@thread.v2"), "{not-json")
+        res = resolve_cursor("19:corrupt@thread.v2")
+        # Corrupt is ambiguous — a partial write could hide a live cursor.
+        # Fail closed: UNRESOLVED, never ABSENT.
+        assert res.outcome is CursorOutcome.UNRESOLVED
+        assert res.cursor is None
+
+    def test_non_dict_json_is_unresolved(self, tmp_data_dir) -> None:
+        from entrabot.storage.backend import get_backend
+
+        get_backend().write_text(cursor_key("19:list@thread.v2"), "[1, 2, 3]")
+        res = resolve_cursor("19:list@thread.v2")
+        assert res.outcome is CursorOutcome.UNRESOLVED
+        assert res.cursor is None
+
+    def test_backend_read_error_is_unresolved(self, tmp_data_dir, monkeypatch) -> None:
+        # A transient backend read failure (401 refresh race, timeout, throttle)
+        # must be UNRESOLVED so the caller fails closed — this is the core F1 fix.
+        import entrabot.tools.chat_cursors as cc
+
+        class ExplodingBackend:
+            def read_text(self, key: str) -> str | None:
+                raise OSError("simulated transient blob read failure")
+
+        monkeypatch.setattr(cc, "get_backend", lambda: ExplodingBackend())
+        res = resolve_cursor("19:boom@thread.v2")
+        assert res.outcome is CursorOutcome.UNRESOLVED
+        assert res.cursor is None
+
+
+
 class TestOnDiskLayout:
     def test_cursor_written_under_chat_cursors_prefix(self, tmp_data_dir) -> None:
         save_cursor(
