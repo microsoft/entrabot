@@ -135,8 +135,42 @@ def test_sandboxed_read_requests_readonly_grant_for_the_file():
         ceiling = _ceiling(readonly=[d], readwrite=[])
         sandboxed_read(f, ceiling=ceiling, runner=runner)
 
-        # Read grants read-only on the file; never any write access.
-        assert runner.last_policy.readonly_paths == [f]
+        # Read grants read-only; never any write access. On Windows the grant is
+        # the parent DIRECTORY (the AppContainer needs directory-traversal access
+        # to open the file); on POSIX a file-level grant suffices.
+        if os.name == "nt":
+            assert runner.last_policy.readonly_paths == [d]
+        else:
+            assert runner.last_policy.readonly_paths == [f]
+        assert runner.last_policy.readwrite_paths == []
+
+
+def test_sandboxed_read_windows_grants_parent_dir_for_traversal(monkeypatch):
+    """On Windows, read grants the file's PARENT DIR read-only, not just the file.
+
+    Regression for ``Access is denied`` on ``read_local_file``: the Windows
+    AppContainer tier needs directory-traversal access to open a file. Granting
+    only the file (as POSIX/Seatbelt does) is deterministically denied — verified
+    live against ``wxc-exec.exe`` (file grant -> denied; parent-dir grant ->
+    allowed). The grant stays clamped to the operator ceiling, so it cannot widen
+    beyond the operator's (directory-level) read allowance.
+    """
+    monkeypatch.setattr("os.name", "nt")
+    from entrabot.sandbox.local_files import sandboxed_read
+
+    with tempfile.TemporaryDirectory() as d:
+        d = os.path.realpath(d)
+        f = os.path.join(d, "secret.txt")
+        with open(f, "w") as fh:
+            fh.write("x")
+
+        runner = _FakeRunner(exit_code=0, stdout="x")
+        ceiling = _ceiling(readonly=[d], readwrite=[])
+        sandboxed_read(f, ceiling=ceiling, runner=runner)
+
+        # Parent dir granted (for traversal), not the bare file.
+        assert runner.last_policy.readonly_paths == [d]
+        assert f not in runner.last_policy.readonly_paths
         assert runner.last_policy.readwrite_paths == []
 
 

@@ -128,7 +128,26 @@ Write-Host "`n  Operator ceiling (the human-set maximum):" -ForegroundColor Whit
 Write-Host "    read-only : $($probe.ceiling_ro -join ', ')" -ForegroundColor Green
 Write-Host "    read-write: $($probe.ceiling_rw -join ', ')" -ForegroundColor Green
 Write-Host "    keychain  : hard-disabled (not overridable by the agent)" -ForegroundColor DarkGray
-Write-Host "`n  Backend: $($probe.backend) (real binary, SHA256-verified)" -ForegroundColor White
+# Report the ACTUAL selected isolation tier from --probe, not just the backend
+# family. The family ("processcontainer") can silently be running on the
+# AppContainer+DACL fallback tier; surfacing the real tier (and any needed DACL
+# augmentation) keeps the demo honest.
+$tierLine = "  Backend: $($probe.backend) (real binary, SHA256-verified)"
+try {
+    $binDir = if ($env:MXC_BIN_DIR) { $env:MXC_BIN_DIR } else {
+        $envFile = Join-Path $RepoRoot ".env"
+        (Select-String -Path $envFile -Pattern '^\s*MXC_BIN_DIR=(.+)$' | Select-Object -First 1).Matches[0].Groups[1].Value.Trim()
+    }
+    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
+    $exe = Join-Path $binDir (Join-Path $arch "wxc-exec.exe")
+    $tier = (& $exe --probe 2>$null | Out-String) | ConvertFrom-Json
+    Write-Host "`n$tierLine  |  isolation tier: $($tier.tier)" -ForegroundColor White
+    if ($tier.needsDaclAugmentation) {
+        Write-Host "    [!] tier needs a one-time system-drive DACL augmentation - run scripts\setup_sandbox.ps1 (it applies it), or 'wxc-host-prep prepare-system-drive' elevated." -ForegroundColor Yellow
+    }
+} catch {
+    Write-Host "`n$tierLine" -ForegroundColor White
+}
 $agent = if ($env:ENTRABOT_AGENT_USER_UPN) { $env:ENTRABOT_AGENT_USER_UPN } else {
     # Not in the shell env; the runner reads .env, so surface it here too.
     $envFile = Join-Path $RepoRoot ".env"

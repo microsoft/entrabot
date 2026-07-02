@@ -62,7 +62,7 @@ $HashKey = "win32-$Arch"
 Write-Info "Platform: win32  Arch: $Arch  Hash key: $HashKey"
 
 # ── Step 1: Locate an existing binary ───────────────────────────────────────
-Write-Info "Step 1/4: Locating $BinaryName ..."
+Write-Info "Step 1/5: Locating $BinaryName ..."
 $BinaryPath = $null
 
 if (-not $ForceInstall) {
@@ -83,7 +83,7 @@ if (-not $ForceInstall) {
 
 # ── Step 2: Install the npm SDK if needed ───────────────────────────────────
 if (-not $BinaryPath) {
-    Write-Info "Step 2/4: Installing @microsoft/mxc-sdk@$SdkVersion via npm ..."
+    Write-Info "Step 2/5: Installing @microsoft/mxc-sdk@$SdkVersion via npm ..."
     if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
         Fail-Soft "npm not found. Install Node.js >= 18 (https://nodejs.org) to fetch wxc-exec.exe, or set MXC_BIN_DIR."
     }
@@ -105,12 +105,12 @@ if (-not $BinaryPath) {
     }
     Write-Ok "Installed: $BinaryPath"
 } else {
-    Write-Info "Step 2/4: Skipped (binary already present)."
+    Write-Info "Step 2/5: Skipped (binary already present)."
     Write-Ok "Found: $BinaryPath"
 }
 
 # ── Step 3: Record SHA256 into binary.py ────────────────────────────────────
-Write-Info "Step 3/4: Recording SHA256 in binary.py ($HashKey) ..."
+Write-Info "Step 3/5: Recording SHA256 in binary.py ($HashKey) ..."
 $Hash = (Get-FileHash -Algorithm SHA256 -Path $BinaryPath).Hash.ToLower()
 Write-Info "SHA256: $Hash"
 
@@ -134,9 +134,9 @@ if ($content -match $pattern) {
 
 # ── Step 4: Configure .env ──────────────────────────────────────────────────
 if ($SkipEnv) {
-    Write-Info "Step 4/4: Skipped (--SkipEnv)."
+    Write-Info "Step 4/5: Skipped (--SkipEnv)."
 } else {
-    Write-Info "Step 4/4: Configuring .env ..."
+    Write-Info "Step 4/5: Configuring .env ..."
     if (-not (Test-Path $EnvFile)) { New-Item -ItemType File -Path $EnvFile | Out-Null }
 
     function Set-EnvVar {
@@ -169,6 +169,46 @@ if ($SkipEnv) {
     Set-EnvVar "ENTRABOT_SANDBOX_TIMEOUT_MS" "30000" -OnlyIfMissing
     Set-EnvVar "ENTRABOT_SANDBOX_NETWORK" "block" -OnlyIfMissing
     Write-Ok "Updated .env"
+}
+
+# ── Step 5: Stabilize the isolation tier (one-time DACL augmentation) ─────────
+# When MXC falls back to the AppContainer+DACL tier (BaseContainer/BFS not
+# available in this binary), contained processes can't stat the system-drive
+# root, so even *allowed* reads/writes intermittently fail with "Access is
+# denied". `wxc-host-prep prepare-system-drive` grants the minimal metadata ACEs
+# that fix this. It is a ONE-TIME, per-machine step whose ACEs persist across
+# reboots — do it here at setup so operators never hit it at demo/run time.
+Write-Info "Step 5/5: Checking isolation tier ..."
+$HostPrep = Join-Path (Split-Path $BinaryPath -Parent) "wxc-host-prep.exe"
+try {
+    $probe = (& $BinaryPath --probe 2>$null | Out-String) | ConvertFrom-Json
+    Write-Info "Selected isolation tier: $($probe.tier)"
+    if ($probe.needsDaclAugmentation) {
+        Write-Warn "Tier '$($probe.tier)' needs a one-time system-drive DACL augmentation."
+        if (-not (Test-Path $HostPrep)) {
+            Write-Warn "wxc-host-prep.exe not found next to the binary; run once, elevated: prepare-system-drive"
+        } else {
+            $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
+            if ($isAdmin) {
+                & $HostPrep prepare-system-drive
+                if ($LASTEXITCODE -eq 0) { Write-Ok "System-drive DACL augmentation applied." }
+                else { Write-Warn "wxc-host-prep exited $LASTEXITCODE; run manually: `"$HostPrep`" prepare-system-drive" }
+            } else {
+                Write-Info "Requesting elevation to apply it (accept the UAC prompt) ..."
+                try {
+                    $p = Start-Process -FilePath $HostPrep -ArgumentList "prepare-system-drive" -Verb RunAs -Wait -PassThru
+                    if ($p.ExitCode -eq 0) { Write-Ok "System-drive DACL augmentation applied (elevated)." }
+                    else { Write-Warn "wxc-host-prep exited $($p.ExitCode); run once, elevated: `"$HostPrep`" prepare-system-drive" }
+                } catch {
+                    Write-Warn "Elevation declined/failed. Run once, elevated: `"$HostPrep`" prepare-system-drive"
+                }
+            }
+        }
+    } else {
+        Write-Ok "Isolation tier '$($probe.tier)' needs no augmentation."
+    }
+} catch {
+    Write-Warn "Could not probe the isolation tier ($_); skipping the DACL check."
 }
 
 Write-Host ""

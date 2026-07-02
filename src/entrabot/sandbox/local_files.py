@@ -214,12 +214,28 @@ def _prepare_policy(
 
 
 def sandboxed_read(path: str, *, ceiling: SandboxPolicy, runner) -> SandboxResult:
-    """Read a local file inside the sandbox, granting read-only on that file."""
+    """Read a local file inside the sandbox, granting read-only for the read.
+
+    Grant granularity is platform-specific:
+
+    * **POSIX / Seatbelt** — a file-level read grant is sufficient, so grant the
+      file itself (minimal surface).
+    * **Windows / AppContainer** — opening a file requires directory-traversal
+      access to its parent, so a file-only grant is *deterministically* denied
+      with ``Access is denied`` (verified live against ``wxc-exec.exe``: file
+      grant -> denied; parent-dir grant -> allowed). Grant the parent directory
+      instead. This mirrors ``sandboxed_write`` (which already grants the parent)
+      and stays clamped to the operator ceiling — the ceiling's read paths are
+      directory-level, so this never widens beyond the operator's allowance.
+    """
     expanded = os.path.expanduser(path)
     command = build_read_command(expanded)
+    read_grant = (
+        os.path.dirname(os.path.abspath(expanded)) if os.name == "nt" else expanded
+    )
     policy = _prepare_policy(
         command,
-        readonly_paths=[expanded],
+        readonly_paths=[read_grant],
         readwrite_paths=[],
         ceiling=ceiling,
         runner=runner,
