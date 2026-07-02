@@ -1,6 +1,10 @@
 # DESIGN — Multi-Instance Cursor Consistency (fleet-safe Teams channel poll)
 
-> **Status:** Proposed. Problem confirmed in production 2026-07-02.
+> **Status:** Partially shipped (branch `fix/fleet-safe-cursor`). F1, F2, F4,
+> F5, and per-message cloud idempotency are implemented + tested. F6 is served
+> by the existing process singleton (`src/entrabot/singleton.py`); orphan
+> cleanup is tracked separately. F3 (cloud-authoritative `watched_chats`) is
+> deferred — see "Deferred" below. Problem confirmed in production 2026-07-02.
 > **Owner:** unassigned (handed off for implementation).
 > **Related:** ADR-005 (cloud-hosted memory), `docs/decisions/005-cloud-hosted-memory.md`;
 > TODOS.md → "MCP server orphans when Claude Code exits" (P1) and
@@ -227,3 +231,48 @@ surface entirely. Treat F1 as security-relevant, not cosmetic.
   `seen_ids_tail`). A separate `delivered/` object is optional and additive.
 - Land F1 + F6 first (stops the flood and the injection surface), then F2/F3,
   then F4/F5 (correctness under long downtime and high write concurrency).
+
+## Shipped (branch `fix/fleet-safe-cursor`)
+
+Landed with full TDD (`pytest -v && ruff check .` green):
+
+- **F1 — fail closed on read miss.** `chat_cursors.resolve_cursor()` classifies
+  a cursor read as `PRESENT` / `ABSENT` / `UNRESOLVED`. A backend read error or
+  a corrupt payload is `UNRESOLVED` (distinct from a successful empty read,
+  `ABSENT`). `_register_watched_chat` flags `UNRESOLVED` chats
+  `needs_resolution`; `_poll_watched_chat` re-reads them each cycle and pushes
+  nothing until they resolve. Only a provably-`ABSENT` chat may surface its
+  newest message once.
+- **F4 — catch-up read on stale.** A present-but-stale cursor now rehydrates
+  (never re-bootstraps); the steady-state timestamp gate surfaces only messages
+  newer than `last_ts`. Idle chats emit nothing.
+- **Per-message cloud idempotency.** `chat_cursors.claim_delivery()` treats the
+  shared cursor's `seen_ids_tail` as the fleet delivery ledger: an ETag
+  compare-and-swap records the candidate batch and returns only the ids THIS
+  instance won. Across N instances exactly one wins each id; losers claim
+  nothing. New-chat first delivery also flows through it (bootstrap defers the
+  push one cycle). All ambiguity (read error / corrupt / exhausted retries)
+  fails closed.
+- **F5 — optimistic concurrency.** `BlobStore.get_with_etag()` +
+  `MemoryBackend.read_text_with_etag()` / `write_text(if_match=)` (Local uses a
+  content-hash ETag, Blob the real ETag). `claim_delivery` merges `max(last_ts)`
+  + `union(seen_ids)` and retries on `ConcurrencyError`, so a slow writer can't
+  regress the watermark.
+- **F2 — uniform backend at boot.** `get_backend()` raises
+  `BackendMisconfiguredError` on a half-configured blob env instead of silently
+  using Local. `assert_backend_config()` (called from `_initialize`) logs the
+  resolved backend + container and fails loud on half-config.
+- **F6 — singleton.** Served by the existing `src/entrabot/singleton.py` flock
+  acquired at the top of `main()`. Orphan cleanup (background tasks outside
+  FastMCP's lifespan cancel scope) remains tracked in `TODOS.md` ("MCP server
+  orphans when Claude Code exits").
+
+### Deferred
+
+- **F3 — cloud-authoritative `watched_chats`.** Not shipped in this branch. It
+  is the largest structural change (moving the watched-chats list into the
+  cloud store with the local file as a cache) and is not required by the
+  fail-closed + idempotency guarantees above: with F1/F2 + the idempotency
+  ledger, an instance that registers a chat late or on a divergent local list
+  still cannot replay — it either fails closed (unresolved) or loses the
+  delivery claim. Tracked as a follow-up.
