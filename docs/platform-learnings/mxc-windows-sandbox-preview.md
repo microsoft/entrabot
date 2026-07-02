@@ -5,6 +5,8 @@
 **Status:** Verified against a real Windows preview build — not announcement-only.
 **Companion to:** [`mxc-windows-sandbox.md`](mxc-windows-sandbox.md) (the pre-build
 research) and [ADR-007](../decisions/007-mxc-sandbox-integration.md).
+**Upstream feedback:** rough edges to send the MXC team are collected in
+[`mxc-upstream-feedback-windows-processcontainer.md`](mxc-upstream-feedback-windows-processcontainer.md).
 
 This note records what the **shipped** MXC Windows binary actually does, measured
 on a real machine, versus what the earlier platform research inferred from the
