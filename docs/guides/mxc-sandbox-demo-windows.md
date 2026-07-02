@@ -173,7 +173,7 @@ attributed to the **agent's own Entra identity**, not yours. Chat with the agent
 >
 > **1) Read your Documents.** Documents is in my read-only ceiling, so this is
 > allowed.
-> ✅ I read it: *"SECRET: quarterly numbers the agent may read but must not alter."*
+> ✅ I read it: *"EntraBot demo file - quarterly figures the agent may read but must not alter."*
 >
 > **2) Write to your Documents.** Documents is not in my read-write ceiling — the
 > policy clamps it to `[]`, and the OS kernel blocks the write.
@@ -192,7 +192,7 @@ attributed to the **agent's own Entra identity**, not yours. Chat with the agent
 
 **Suggested prompts to type in Teams:**
 
-1. *"Read my file at `~\Documents\entrabot-secret.txt` and tell me what it says."*
+1. *"Read my file at `~\Documents\entrabot-info.txt` and tell me what it says."*
    → Agent reads it. Point out: Documents is read-only in the ceiling.
 2. *"Now save the text `hello` to `~\Documents\note.txt`."*
    → Blocked. The agent reports it can't write there. Show the audit log.

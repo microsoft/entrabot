@@ -213,12 +213,12 @@ def main() -> int:
         )
         return 0
 
-    # Fixture: a "confidential" file in Documents the agent may READ but not WRITE.
-    secret = Path(HOME) / "Documents" / "entrabot-secret.txt"
-    secret.parent.mkdir(parents=True, exist_ok=True)
-    if not secret.exists():
-        secret.write_text("SECRET: quarterly numbers the agent may read but must not alter\n")
-    print(f"\n{DIM}Fixture ready: {secret}{NC}")
+    # Fixture: an informational file in Documents the agent may READ but not WRITE.
+    info = Path(HOME) / "Documents" / "entrabot-info.txt"
+    info.parent.mkdir(parents=True, exist_ok=True)
+    if not info.exists():
+        info.write_text("EntraBot demo file - figures the agent may read but must not alter\n")
+    print(f"\n{DIM}Fixture ready: {info}{NC}")
 
     # ── Act 1: the threat ────────────────────────────────────────────────
     banner("Act 1 — Why containment matters")
@@ -237,8 +237,8 @@ def main() -> int:
     beat("Scenario 1 — the agent reads your Documents (legitimate analysis)")
     results.append(run_scenario(
         runner, caps, ceiling_ro, ceiling_rw,
-        title="“Read my confidential file in Documents.”",
-        cmd=f"cat {HOME}/Documents/entrabot-secret.txt",
+        title="“Read my file in Documents.”",
+        cmd=f"cat {HOME}/Documents/entrabot-info.txt",
         req_ro=[f"{HOME}/Documents"], req_rw=[],
         expect_allow=True,
     ))
@@ -338,7 +338,7 @@ def print_teams_talktrack() -> None:
   Chat with the agent ({BOLD}entrabot-mxc-test@werner.ac{NC}) in Teams and ask,
   in plain language. The agent will call run_code under the hood.
 
-  {GREEN}1){NC} "Read my file at ~/Documents/entrabot-secret.txt and tell me what it says."
+  {GREEN}1){NC} "Read my file at ~/Documents/entrabot-info.txt and tell me what it says."
        {DIM}→ Agent reads it. Point out: Documents is read-only in the ceiling.{NC}
 
   {RED}2){NC} "Now save the text 'hello' to ~/Documents/note.txt."

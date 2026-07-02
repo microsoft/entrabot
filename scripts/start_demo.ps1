@@ -102,10 +102,14 @@ if ($LASTEXITCODE -eq 0 -and ($br -match "BACKEND:")) { Ok "MXC binary resolved 
 else { Err "MXC sandbox unavailable:"; Write-Host $br; Err "Run: .\scripts\setup_sandbox.ps1"; exit 1 }
 
 # -- 3. .mcp.json (Windows path) ---------------------------------------------
+# Write UTF-8 WITHOUT a BOM. Claude's JSON parser rejects a leading BOM
+# ("Failed to parse .mcp.json"), and PowerShell 5.1's `Set-Content -Encoding utf8`
+# emits one -- so use .NET UTF8Encoding($false) to guarantee no BOM.
 $mcpJson = Join-Path $RepoRoot ".mcp.json"
 $cfg = @{ mcpServers = @{ entrabot = @{ type = "stdio"; command = $McpExe; args = @(); description = "EntraBot Agent Identity - Teams + sandboxed run_code" } } }
-($cfg | ConvertTo-Json -Depth 5) | Set-Content -Path $mcpJson -Encoding utf8
-Ok ".mcp.json written -> $McpExe"
+$jsonText = ($cfg | ConvertTo-Json -Depth 5)
+[System.IO.File]::WriteAllText($mcpJson, $jsonText, (New-Object System.Text.UTF8Encoding($false)))
+Ok ".mcp.json written (no BOM) -> $McpExe"
 
 # -- 4. Optional: elevated diagnostic console --------------------------------
 $binDir = EnvVal "MXC_BIN_DIR"
@@ -170,7 +174,7 @@ if ($claude) {
 
 Write-Host ""
 Write-Host "  Then, in Teams, DM the agent ($agent) and ask:" -ForegroundColor White
-Write-Host '    1) "Read ~\Documents\entrabot-secret.txt and tell me what it says."  (allowed)' -ForegroundColor Green
+Write-Host '    1) "Read ~\Documents\entrabot-info.txt and tell me what it says."  (allowed)' -ForegroundColor Green
 Write-Host '    2) "Save the text hello to ~\Documents\note.txt."                    (blocked)' -ForegroundColor Red
 Write-Host '    3) "Write a short summary to ~\Downloads\summary.txt instead."       (allowed)' -ForegroundColor Green
 Write-Host ""

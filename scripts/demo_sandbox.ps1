@@ -147,23 +147,23 @@ if ($ConfigOnly) {
     exit 0
 }
 
-# Fixture: a 'confidential' file in Documents the agent may READ but not WRITE.
+# Fixture: an informational file in Documents the agent may READ but not WRITE.
 New-Item -ItemType Directory -Force $Docs | Out-Null
-$Secret = Join-Path $Docs "entrabot-secret.txt"
-if (-not (Test-Path $Secret)) {
+$InfoFile = Join-Path $Docs "entrabot-info.txt"
+if (-not (Test-Path $InfoFile)) {
     # ASCII (no BOM) so `cmd /c type` doesn't show stray BOM bytes in the demo.
-    Set-Content -Path $Secret -Value "SECRET: quarterly numbers the agent may read but must not alter" -Encoding ascii
+    Set-Content -Path $InfoFile -Value "EntraBot demo file - quarterly figures the agent may read but must not alter" -Encoding ascii
 }
 New-Item -ItemType Directory -Force $Downloads | Out-Null
-Write-Host "`n  Fixture ready: $Secret" -ForegroundColor DarkGray
+Write-Host "`n  Fixture ready: $InfoFile" -ForegroundColor DarkGray
 
 $results = @()
 
 Banner "Act 1 - The agent reads what you allow"
 Beat "Scenario 1 - read your Documents (legitimate analysis)"
-$results += Invoke-Scenario -Title '"Read my confidential file in Documents."' `
+$results += Invoke-Scenario -Title '"Read my file in Documents."' `
     -Say "Documents is in my read-only ceiling, so this is allowed." `
-    -Cmd ('cmd /c type "' + $Secret + '"') -Ro @($Docs) -ExpectAllow $true
+    -Cmd ('cmd /c type "' + $InfoFile + '"') -Ro @($Docs) -ExpectAllow $true
 
 Banner "Act 2 - The agent cannot tamper"
 $hackFile = Join-Path $Docs "entrabot-hack.txt"
@@ -214,7 +214,7 @@ Write-Host ""
 Write-Host "  Chat with the agent ($agent) in Teams and ask, in plain language."
 Write-Host "  The agent calls run_code / read_local_file / write_local_file under the hood."
 Write-Host ""
-Write-Host '  1) "Read my file at ~\Documents\entrabot-secret.txt and tell me what it says."' -ForegroundColor Green
+Write-Host '  1) "Read my file at ~\Documents\entrabot-info.txt and tell me what it says."' -ForegroundColor Green
 Write-Host "       -> Agent reads it. Point out: Documents is read-only in the ceiling." -ForegroundColor DarkGray
 Write-Host ""
 Write-Host '  2) "Now save the text hello to ~\Documents\note.txt."' -ForegroundColor Red
