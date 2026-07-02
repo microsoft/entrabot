@@ -83,6 +83,13 @@ Observed twice: when the parent Claude process exits, the `entrabot-mcp` child k
 - **Effort:** S (~40 LOC + test that proves stdin-EOF cancels polls)
 - **Source:** Live observation 2026-04-17 (second occurrence in one day)
 
+### Multi-instance cursor consistency: bootstrap fails open → fleet replay flood
+The background Teams poll re-pushes a chat's newest message on *any* failure to read a fresh cloud cursor — absent, stale, corrupt, and read-exception all fall through to `_bootstrap_chat`, which pushes. In a fleet (N instances → one blob container) these misses are routine: silent `LocalBackend` fallback when blob env is half-configured, transient blob read failures, the 24h `is_stale` cap re-bootstrapping a cold store, and last-writer-wins cursor writes with no ETag. Result: idle chats replay their newest (weeks-old) message. Also a security surface — the replay re-injects stale imperative messages ("read special data in my Documents", "ship to <address>", "run <script>") into the agent's channel. The steady-state gate (`_filter_new_messages`) already supports N-instances-one-store; only the bootstrap decision and write coordination break it. Confirmed 2026-07-02 (a base instance pointed at a shared blob container replayed ~5-week-old DMs while the blob cursors were correct + fresh). Fix: fail closed on read-miss + per-message cloud idempotency ledger + co-locate `watched_chats` in cloud + catch-up-read instead of bootstrap-on-stale + `If-Match` ETag concurrency on cursor writes + assert uniform backend at boot.
+- **Effort:** M
+- **Depends on:** "MCP server orphans when Claude Code exits" (enforce the singleton so duplicate pollers can't start); ADR-005 blob backend.
+- **See:** `docs/architecture/DESIGN-multi-instance-cursor-consistency.md`
+- **Source:** Live diagnosis 2026-07-02.
+
 ### Daily summary scheduler: wrong day + double-fire
 Two bugs, both observed at 2026-04-17T17:00:00 PDT (= 00:00:01 UTC 2026-04-18):
 1. `_run_daily_summary_internal` defaults `target_day = datetime.now(UTC).strftime("%Y-%m-%d")`. At 5pm PDT the UTC clock is already past midnight, so the scheduler summarizes the brand-new UTC day (empty) instead of the one that just ended. Fix: when called from the scheduler, target `now_utc - 1 day` — or compute the "just-ended PDT day" explicitly.
