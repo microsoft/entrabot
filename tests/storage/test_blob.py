@@ -90,6 +90,45 @@ class TestBlobGet:
             assert route.calls.last.request.headers["authorization"] == "Bearer stub-token"
 
 
+class TestBlobGetWithEtag:
+    @pytest.mark.asyncio
+    async def test_get_with_etag_returns_bytes_and_etag(self) -> None:
+        """get_with_etag returns (content, ETag) so the caller can do a later
+        If-Match conditional write (optimistic concurrency for cursors)."""
+        with respx.mock:
+            respx.get(f"{BLOB_URL}/chat_cursors/c.json").mock(
+                return_value=httpx.Response(
+                    200,
+                    content=b'{"last_ts": "t"}',
+                    headers={"ETag": '"0xETAG1"'},
+                ),
+            )
+            store = _make_store()
+            data, etag = await store.get_with_etag("chat_cursors/c.json")
+            assert data == b'{"last_ts": "t"}'
+            assert etag == '"0xETAG1"'
+
+    @pytest.mark.asyncio
+    async def test_get_with_etag_raises_keyerror_on_404(self) -> None:
+        with respx.mock:
+            respx.get(f"{BLOB_URL}/missing.json").mock(
+                return_value=httpx.Response(404)
+            )
+            store = _make_store()
+            with pytest.raises(KeyError):
+                await store.get_with_etag("missing.json")
+
+    @pytest.mark.asyncio
+    async def test_get_with_etag_401_raises_token_expired(self) -> None:
+        from entrabot.errors import TokenExpiredError
+
+        with respx.mock:
+            respx.get(f"{BLOB_URL}/x.json").mock(return_value=httpx.Response(401))
+            store = _make_store()
+            with pytest.raises(TokenExpiredError):
+                await store.get_with_etag("x.json")
+
+
 class TestBlobExists:
     @pytest.mark.asyncio
     async def test_exists_true_on_200(self) -> None:

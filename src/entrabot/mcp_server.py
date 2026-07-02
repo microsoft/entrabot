@@ -1425,23 +1425,32 @@ async def _poll_watched_chat(
     if not new_msgs:
         return
 
+    from entrabot.tools.chat_cursors import claim_delivery
+
     newest = max(new_msgs, key=lambda m: m.get("sent_at", ""))
+    candidate_ids = [m["message_id"] for m in new_msgs]
+
+    # Fleet idempotency + F5: claim delivery in the SHARED cloud ledger via an
+    # ETag compare-and-swap. Only ids this instance wins are pushed; the CAS
+    # write persists the advanced cursor (union seen-set, max watermark) so a
+    # sibling can't clobber it with a stale one. On any ambiguity claim_delivery
+    # fails closed (returns []), so we push nothing rather than risk a replay.
+    claimed = set(claim_delivery(chat_id, candidate_ids, newest["sent_at"]))
+
+    # Advance the in-memory cursor for ALL candidates — they were handled this
+    # cycle regardless of which instance pushed — so the next local cycle won't
+    # re-evaluate them.
     chat_state["last_ts"] = newest["sent_at"]
-    for m in new_msgs:
-        chat_state["seen_ids"].add(m["message_id"])
+    for mid in candidate_ids:
+        chat_state["seen_ids"].add(mid)
 
     # Bounded cleanup (keep last 500)
     if len(chat_state["seen_ids"]) > SEEN_SET_MAX:
         chat_state["seen_ids"] = set(sorted(chat_state["seen_ids"])[-100:])
 
     for m in sorted(new_msgs, key=lambda m: m.get("sent_at", "")):
-        await _push_channel_notification(m, chat_id=chat_id)
-
-    # Issue #17: persist the advanced cursor through the MemoryBackend so the
-    # next process picks up where we left off instead of replaying the
-    # newest-at-boot message as fresh. Debounced ~1s so a chatty group chat
-    # doesn't trigger a write per message.
-    _schedule_cursor_save(chat_id)
+        if m["message_id"] in claimed:
+            await _push_channel_notification(m, chat_id=chat_id)
 
 
 async def _background_poll() -> None:

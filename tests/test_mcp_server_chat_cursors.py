@@ -281,6 +281,93 @@ def _async_recorder(sink: list):
 
 
 # ---------------------------------------------------------------------------
+# Poll loop — steady-state pushes only fleet-claimed messages (idempotency)
+# ---------------------------------------------------------------------------
+class TestPollSteadyStateIdempotent:
+    """Steady-state delivery routes through ``claim_delivery`` so only the
+    messages THIS instance wins in the shared ledger are pushed."""
+
+    @pytest.mark.asyncio
+    async def test_pushes_only_claimed_messages(self, monkeypatch) -> None:
+        chat_id = "19:steady@thread.v2"
+        chat_state = {
+            "seen_ids": set(),
+            "last_ts": "2026-06-09T18:00:00Z",
+            "bootstrapped": True,
+            "needs_resolution": False,
+        }
+        mcp_server._state["watched_chats"] = {chat_id: chat_state}
+
+        msgs = [
+            {"message_id": "m1", "sent_at": "2026-06-09T18:05:00Z", "text": "one"},
+            {"message_id": "m2", "sent_at": "2026-06-09T18:06:00Z", "text": "two"},
+        ]
+
+        async def fake_token_retry(fn, **kwargs):
+            return msgs
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_token_retry)
+        monkeypatch.setattr(
+            "entrabot.tools.teams.filter_human_messages",
+            lambda messages, name: messages,
+        )
+
+        # Sibling already delivered m2 → only m1 is ours to push.
+        import entrabot.tools.chat_cursors as cc
+
+        monkeypatch.setattr(cc, "claim_delivery", lambda cid, ids, ts: ["m1"])
+
+        pushed: list = []
+        monkeypatch.setattr(
+            mcp_server, "_push_channel_notification", _async_recorder(pushed)
+        )
+
+        await mcp_server._poll_watched_chat(chat_id, chat_state, "EntraBot Agent")
+
+        pushed_ids = [call[0][0]["message_id"] for call in pushed]
+        assert pushed_ids == ["m1"]
+        # Both candidates are marked seen in-memory (handled this cycle),
+        # regardless of who pushed.
+        assert chat_state["seen_ids"] == {"m1", "m2"}
+        assert chat_state["last_ts"] == "2026-06-09T18:06:00Z"
+
+    @pytest.mark.asyncio
+    async def test_claim_returns_empty_pushes_nothing(self, monkeypatch) -> None:
+        chat_id = "19:steady2@thread.v2"
+        chat_state = {
+            "seen_ids": set(),
+            "last_ts": "2026-06-09T18:00:00Z",
+            "bootstrapped": True,
+            "needs_resolution": False,
+        }
+        mcp_server._state["watched_chats"] = {chat_id: chat_state}
+
+        msgs = [{"message_id": "m1", "sent_at": "2026-06-09T18:05:00Z"}]
+
+        async def fake_token_retry(fn, **kwargs):
+            return msgs
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_token_retry)
+        monkeypatch.setattr(
+            "entrabot.tools.teams.filter_human_messages",
+            lambda messages, name: messages,
+        )
+        # Everything already claimed by a sibling (or CAS failed closed).
+        import entrabot.tools.chat_cursors as cc
+
+        monkeypatch.setattr(cc, "claim_delivery", lambda cid, ids, ts: [])
+
+        pushed: list = []
+        monkeypatch.setattr(
+            mcp_server, "_push_channel_notification", _async_recorder(pushed)
+        )
+
+        await mcp_server._poll_watched_chat(chat_id, chat_state, "EntraBot Agent")
+
+        assert pushed == []
+
+
+# ---------------------------------------------------------------------------
 # Marking a chat dirty + flushing
 # ---------------------------------------------------------------------------
 class TestMarkDirtyAndFlush:

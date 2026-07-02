@@ -317,6 +317,114 @@ class TestResolveCursor:
 
 
 
+# ---------------------------------------------------------------------------
+# claim_delivery — fleet idempotency + optimistic-concurrency merge
+# ---------------------------------------------------------------------------
+class TestClaimDelivery:
+    """The shared cursor's ``seen_ids_tail`` is the fleet delivery ledger.
+
+    ``claim_delivery`` atomically records a batch of candidate message ids in
+    the shared cloud cursor and returns only the ids THIS instance won — the
+    ones it should push. Across N instances one wins each id; the rest see it
+    already delivered and push nothing.
+    """
+
+    def test_claims_all_ids_on_empty_store(self, tmp_data_dir) -> None:
+        claimed = resolve_claim("19:c@thread.v2", ["m1", "m2"], "2026-06-09T18:00:00Z")
+        assert set(claimed) == {"m1", "m2"}
+        cur = load_cursor("19:c@thread.v2")
+        assert cur is not None
+        assert set(cur["seen_ids_tail"]) == {"m1", "m2"}
+        assert cur["last_ts"] == "2026-06-09T18:00:00Z"
+
+    def test_already_delivered_ids_are_not_reclaimed(self, tmp_data_dir) -> None:
+        resolve_claim("19:c@thread.v2", ["m1"], "2026-06-09T18:00:00Z")
+        claimed = resolve_claim("19:c@thread.v2", ["m1", "m2"], "2026-06-09T18:05:00Z")
+        assert claimed == ["m2"]
+
+    def test_empty_candidates_returns_empty_without_write(self, tmp_data_dir) -> None:
+        assert resolve_claim("19:c@thread.v2", [], None) == []
+        assert load_cursor("19:c@thread.v2") is None
+
+    def test_fleet_two_instances_one_push(self, tmp_data_dir, monkeypatch) -> None:
+        """Two instances sharing one store poll the same new message → exactly
+        one of them is told to push it."""
+        import entrabot.tools.chat_cursors as cc
+        from entrabot.storage.backend import BlobBackend
+        from tests.storage.test_backend import _FakeBlobStore
+
+        shared = _FakeBlobStore()
+        monkeypatch.setattr(cc, "get_backend", lambda: BlobBackend(shared))
+
+        a = cc.claim_delivery("19:c@thread.v2", ["m1"], "2026-06-09T18:00:00Z")
+        b = cc.claim_delivery("19:c@thread.v2", ["m1"], "2026-06-09T18:00:00Z")
+
+        assert sorted([*a, *b]) == ["m1"]
+
+    def test_concurrency_merge_keeps_max_ts_and_union(
+        self, tmp_data_dir, monkeypatch
+    ) -> None:
+        """A racing writer trips one 412; the retry re-reads and merges: the
+        final cursor keeps the max watermark and the union of delivered ids."""
+        import entrabot.tools.chat_cursors as cc
+        from entrabot.storage.blob import ConcurrencyError
+
+        class RacingBackend:
+            def __init__(self) -> None:
+                self.tripped = False
+                self.store: dict[str, str] = {}
+                self.etags: dict[str, str] = {}
+                self._n = 0
+
+            def read_text_with_etag(self, key: str):
+                return self.store.get(key), self.etags.get(key)
+
+            def write_text(self, key, content, *, if_match=None):
+                if not self.tripped:
+                    self.tripped = True
+                    self.store[key] = (
+                        '{"last_ts": "2026-06-09T20:00:00Z", '
+                        '"seen_ids_tail": ["sibling"], "bootstrapped": true}'
+                    )
+                    self.etags[key] = "sib-etag"
+                    raise ConcurrencyError("simulated 412")
+                if if_match is not None and self.etags.get(key) != if_match:
+                    raise ConcurrencyError("stale")
+                self._n += 1
+                self.store[key] = content
+                self.etags[key] = f"etag-{self._n}"
+                return self.etags[key]
+
+        backend = RacingBackend()
+        monkeypatch.setattr(cc, "get_backend", lambda: backend)
+
+        claimed = cc.claim_delivery("19:c@thread.v2", ["mine"], "2026-06-09T18:00:00Z")
+        assert claimed == ["mine"]
+
+        import json as _json
+
+        final = _json.loads(backend.store["chat_cursors/19%3Ac%40thread.v2.json"])
+        assert final["last_ts"] == "2026-06-09T20:00:00Z"
+        assert set(final["seen_ids_tail"]) == {"sibling", "mine"}
+
+    def test_read_error_fails_closed(self, tmp_data_dir, monkeypatch) -> None:
+        """A backend read failure must claim nothing (fail closed — no push)."""
+        import entrabot.tools.chat_cursors as cc
+
+        class ExplodingBackend:
+            def read_text_with_etag(self, key: str):
+                raise OSError("transient read failure")
+
+        monkeypatch.setattr(cc, "get_backend", lambda: ExplodingBackend())
+        assert cc.claim_delivery("19:c@thread.v2", ["m1"], "t") == []
+
+
+def resolve_claim(chat_id, ids, last_ts):
+    from entrabot.tools.chat_cursors import claim_delivery
+
+    return claim_delivery(chat_id, ids, last_ts)
+
+
 class TestOnDiskLayout:
     def test_cursor_written_under_chat_cursors_prefix(self, tmp_data_dir) -> None:
         save_cursor(

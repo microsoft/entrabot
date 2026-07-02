@@ -99,20 +99,35 @@ class _FakeBlobStore:
     """In-memory async BlobStore stand-in.
 
     Mirrors the real ``BlobStore`` API surface used by ``BlobBackend``:
-    async ``get`` (raises KeyError on miss), ``put``, ``exists``, ``list``.
+    async ``get`` (raises KeyError on miss), ``get_with_etag``, ``put``
+    (honors ``if_match`` for optimistic concurrency), ``exists``, ``list``.
     """
 
     def __init__(self) -> None:
         self.data: dict[str, bytes] = {}
+        self.etags: dict[str, str] = {}
+        self._counter = 0
 
     async def get(self, path: str) -> bytes:
         if path not in self.data:
             raise KeyError(path)
         return self.data[path]
 
+    async def get_with_etag(self, path: str) -> tuple[bytes, str]:
+        if path not in self.data:
+            raise KeyError(path)
+        return self.data[path], self.etags[path]
+
     async def put(self, path: str, data: bytes, *, if_match: str | None = None) -> str:
+        from entrabot.storage.blob import ConcurrencyError
+
+        if if_match is not None and self.etags.get(path) != if_match:
+            raise ConcurrencyError(f"put({path!r}) refused: If-Match={if_match!r} stale")
+        self._counter += 1
+        etag = f'"etag-{self._counter}"'
         self.data[path] = data
-        return f'"etag-{len(self.data)}"'
+        self.etags[path] = etag
+        return etag
 
     async def exists(self, path: str) -> bool:
         return path in self.data
@@ -162,6 +177,97 @@ class TestBlobBackend:
             "interactions/a.jsonl",
             "interactions/b.jsonl",
         ]
+
+
+# ---------------------------------------------------------------------------
+# ETag optimistic concurrency (design F5) — read_text_with_etag + if_match
+# ---------------------------------------------------------------------------
+class TestLocalBackendEtag:
+    def test_read_with_etag_absent_returns_none_none(self, tmp_path: Path) -> None:
+        backend = LocalBackend(tmp_path)
+        content, etag = backend.read_text_with_etag("absent.json")
+        assert content is None
+        assert etag is None
+
+    def test_read_with_etag_present_returns_content_and_stable_etag(
+        self, tmp_path: Path
+    ) -> None:
+        backend = LocalBackend(tmp_path)
+        backend.write_text("c.json", "hello")
+        content, etag = backend.read_text_with_etag("c.json")
+        assert content == "hello"
+        assert etag is not None
+        # ETag is stable for unchanged content.
+        _, etag2 = backend.read_text_with_etag("c.json")
+        assert etag2 == etag
+
+    def test_etag_changes_when_content_changes(self, tmp_path: Path) -> None:
+        backend = LocalBackend(tmp_path)
+        backend.write_text("c.json", "v1")
+        _, e1 = backend.read_text_with_etag("c.json")
+        backend.write_text("c.json", "v2")
+        _, e2 = backend.read_text_with_etag("c.json")
+        assert e1 != e2
+
+    def test_conditional_write_succeeds_when_etag_matches(self, tmp_path: Path) -> None:
+        backend = LocalBackend(tmp_path)
+        backend.write_text("c.json", "v1")
+        _, etag = backend.read_text_with_etag("c.json")
+        new_etag = backend.write_text("c.json", "v2", if_match=etag)
+        assert backend.read_text("c.json") == "v2"
+        assert new_etag is not None and new_etag != etag
+
+    def test_conditional_write_raises_on_stale_etag(self, tmp_path: Path) -> None:
+        from entrabot.storage.blob import ConcurrencyError
+
+        backend = LocalBackend(tmp_path)
+        backend.write_text("c.json", "v1")
+        _, etag = backend.read_text_with_etag("c.json")
+        # A concurrent writer bumps the content out from under us.
+        backend.write_text("c.json", "raced")
+        with pytest.raises(ConcurrencyError):
+            backend.write_text("c.json", "v2", if_match=etag)
+        # The racing write survives; our stale write did not land.
+        assert backend.read_text("c.json") == "raced"
+
+    def test_conditional_write_on_absent_with_etag_raises(self, tmp_path: Path) -> None:
+        from entrabot.storage.blob import ConcurrencyError
+
+        backend = LocalBackend(tmp_path)
+        with pytest.raises(ConcurrencyError):
+            backend.write_text("c.json", "v1", if_match="some-etag")
+
+    def test_unconditional_write_ignores_etag(self, tmp_path: Path) -> None:
+        backend = LocalBackend(tmp_path)
+        backend.write_text("c.json", "v1")
+        # if_match=None → unconditional, always writes.
+        backend.write_text("c.json", "v2", if_match=None)
+        assert backend.read_text("c.json") == "v2"
+
+
+class TestBlobBackendEtag:
+    def test_read_with_etag_absent_returns_none_none(self) -> None:
+        backend = BlobBackend(_FakeBlobStore())
+        assert backend.read_text_with_etag("absent") == (None, None)
+
+    def test_read_with_etag_present_returns_content_and_etag(self) -> None:
+        store = _FakeBlobStore()
+        backend = BlobBackend(store)
+        backend.write_text("c.json", "hello")
+        content, etag = backend.read_text_with_etag("c.json")
+        assert content == "hello"
+        assert etag
+
+    def test_conditional_write_raises_concurrency_on_stale(self) -> None:
+        from entrabot.storage.blob import ConcurrencyError
+
+        store = _FakeBlobStore()
+        backend = BlobBackend(store)
+        backend.write_text("c.json", "v1")
+        _, etag = backend.read_text_with_etag("c.json")
+        backend.write_text("c.json", "raced")  # bumps etag
+        with pytest.raises(ConcurrencyError):
+            backend.write_text("c.json", "v2", if_match=etag)
 
 
 # ---------------------------------------------------------------------------

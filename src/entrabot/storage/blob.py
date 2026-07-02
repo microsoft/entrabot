@@ -104,6 +104,22 @@ class BlobStore:
             resp.raise_for_status()
             return resp.content
 
+    async def get_with_etag(self, path: str) -> tuple[bytes, str]:
+        """Download *path* and its current ETag.
+
+        Returns ``(content, etag)``. Raises ``KeyError`` on 404 so callers can
+        distinguish "absent" from a transport failure. The ETag lets a caller
+        do a later ``put(..., if_match=etag)`` for optimistic concurrency
+        (fleet-safe cursor writes — design F5).
+        """
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(self._url(path), headers=self._headers())
+            _check_auth(resp)
+            if resp.status_code == 404:
+                raise KeyError(path)
+            resp.raise_for_status()
+            return resp.content, resp.headers.get("ETag", "")
+
     async def exists(self, path: str) -> bool:
         """Probe whether *path* exists. HEAD request — doesn't pull the body."""
         async with httpx.AsyncClient() as client:
