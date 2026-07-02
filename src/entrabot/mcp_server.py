@@ -1022,6 +1022,20 @@ async def _initialize() -> None:
     await _init_auth()
     await _init_poll()
 
+    # F2: resolve + validate the storage backend once at boot. A half-configured
+    # blob env raises here (fail loud) instead of silently using an empty Local
+    # store and re-bootstrapping every chat (the fleet replay-flood root cause).
+    # Logs the resolved backend + container so operators can confirm fleet-wide
+    # agreement in production logs.
+    try:
+        from entrabot.storage.backend import assert_backend_config
+
+        assert_backend_config(logger=logger)
+    except Exception as exc:
+        if logger:
+            logger.error("Storage backend misconfigured: %s", exc)
+        raise
+
     # authorization fix: log the active-sponsor-channel binding TTL so operators
     # can verify the security configuration in production logs.
     if logger:

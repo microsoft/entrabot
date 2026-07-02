@@ -2017,10 +2017,19 @@ class TestBackgroundPollPerChatResilience:
     from being polled and pushing notifications."""
 
     @pytest.mark.asyncio
-    async def test_one_chat_403_does_not_starve_others(self, monkeypatch) -> None:
+    async def test_one_chat_403_does_not_starve_others(
+        self, monkeypatch, tmp_path
+    ) -> None:
         import asyncio as _asyncio
 
         from entrabot import mcp_server
+
+        # Isolate the storage backend to a tmp dir so claim_delivery's cursor
+        # persistence doesn't leak into (or read from) the real data dir.
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
+        monkeypatch.delenv("ENTRABOT_BLOB_ENDPOINT", raising=False)
+        monkeypatch.delenv("ENTRABOT_BLOB_CONTAINER", raising=False)
+        monkeypatch.delenv("ENTRABOT_KEEP_MEMORY_LOCAL", raising=False)
 
         bad_chat = "19:bad@thread.v2"
         good_chat = "19:good@thread.v2"

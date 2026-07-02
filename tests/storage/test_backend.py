@@ -311,16 +311,46 @@ class TestGetBackend:
         backend = get_backend()
         assert isinstance(backend, BlobBackend)
 
-    def test_blob_endpoint_without_container_falls_back_local(
+    def test_half_configured_blob_endpoint_without_container_raises(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Half-configured cloud (endpoint without container) falls back
-        to Local — better safe than panicking inside the hot path.
+        """F2: half-configured cloud (endpoint without container) is a HARD
+        misconfiguration, not a silent Local fallback.
+
+        A silent fallback is exactly how a mis-enved fleet instance ends up on
+        an empty Local store and re-bootstraps every chat → replay flood. Fail
+        loud so the operator sees it instead of the fleet diverging.
         """
+        from entrabot.errors import BackendMisconfiguredError
+
         monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
         monkeypatch.setenv("ENTRABOT_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net")
         monkeypatch.delenv("ENTRABOT_BLOB_CONTAINER", raising=False)
         monkeypatch.delenv("ENTRABOT_KEEP_MEMORY_LOCAL", raising=False)
+        with pytest.raises(BackendMisconfiguredError):
+            get_backend()
+
+    def test_half_configured_blob_container_without_endpoint_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from entrabot.errors import BackendMisconfiguredError
+
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
+        monkeypatch.delenv("ENTRABOT_BLOB_ENDPOINT", raising=False)
+        monkeypatch.setenv("ENTRABOT_BLOB_CONTAINER", "agent-abc-123")
+        monkeypatch.delenv("ENTRABOT_KEEP_MEMORY_LOCAL", raising=False)
+        with pytest.raises(BackendMisconfiguredError):
+            get_backend()
+
+    def test_keep_memory_local_suppresses_half_config_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The explicit local escape hatch wins even over a half-config, so an
+        operator can always force Local without untangling blob env first."""
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net")
+        monkeypatch.delenv("ENTRABOT_BLOB_CONTAINER", raising=False)
+        monkeypatch.setenv("ENTRABOT_KEEP_MEMORY_LOCAL", "true")
         assert isinstance(get_backend(), LocalBackend)
 
     def test_keep_memory_local_overrides_blob_endpoint(
@@ -332,3 +362,49 @@ class TestGetBackend:
         monkeypatch.setenv("ENTRABOT_BLOB_CONTAINER", "agent-abc-123")
         monkeypatch.setenv("ENTRABOT_KEEP_MEMORY_LOCAL", "true")
         assert isinstance(get_backend(), LocalBackend)
+
+
+# ---------------------------------------------------------------------------
+# assert_backend_config — boot-time uniform-backend assertion (F2)
+# ---------------------------------------------------------------------------
+class TestAssertBackendConfig:
+    def test_returns_local_summary(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from entrabot.storage.backend import assert_backend_config
+
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
+        monkeypatch.delenv("ENTRABOT_BLOB_ENDPOINT", raising=False)
+        monkeypatch.delenv("ENTRABOT_BLOB_CONTAINER", raising=False)
+        summary = assert_backend_config()
+        assert summary["backend"] == "LocalBackend"
+
+    def test_returns_blob_summary_with_container(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from entrabot.storage.backend import assert_backend_config
+
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net")
+        monkeypatch.setenv("ENTRABOT_BLOB_CONTAINER", "agent-abc-123")
+        monkeypatch.delenv("ENTRABOT_KEEP_MEMORY_LOCAL", raising=False)
+        monkeypatch.setattr(
+            "entrabot.storage.backend.acquire_agent_user_storage_token",
+            lambda cfg: "fake-storage-token",
+        )
+        summary = assert_backend_config()
+        assert summary["backend"] == "BlobBackend"
+        assert summary["container"] == "agent-abc-123"
+
+    def test_raises_on_half_configured_blob(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from entrabot.errors import BackendMisconfiguredError
+        from entrabot.storage.backend import assert_backend_config
+
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net")
+        monkeypatch.delenv("ENTRABOT_BLOB_CONTAINER", raising=False)
+        monkeypatch.delenv("ENTRABOT_KEEP_MEMORY_LOCAL", raising=False)
+        with pytest.raises(BackendMisconfiguredError):
+            assert_backend_config()

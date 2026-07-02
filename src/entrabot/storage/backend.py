@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from entrabot.config import get_config
+from entrabot.errors import BackendMisconfiguredError
 from entrabot.storage.blob import BlobStore, ConcurrencyError
 from entrabot.tools.teams import acquire_agent_user_storage_token
 
@@ -221,11 +222,13 @@ def get_backend() -> MemoryBackend:
       2. ``blob_endpoint`` AND ``blob_container`` set → :class:`BlobBackend`
          wrapping a :class:`BlobStore` whose token provider is the Agent
          User's storage-scope three-hop token.
-      3. Otherwise → :class:`LocalBackend` rooted at ``cfg.data_dir``.
+      3. Neither set → :class:`LocalBackend` rooted at ``cfg.data_dir``.
 
-    Half-configured cloud (endpoint without container, or vice versa) is
-    treated as not-configured rather than raising — the local fallback is
-    safer for the hot path.
+    Half-configured cloud (exactly one of endpoint/container set) is a HARD
+    error (:class:`BackendMisconfiguredError`), not a silent Local fallback
+    (design F2). A silent fallback is how a mis-enved fleet instance lands on
+    an empty local store and re-bootstraps every chat → replay flood; failing
+    loud surfaces the misconfiguration instead of letting the fleet diverge.
     """
     cfg = get_config()
     if cfg.keep_memory_local:
@@ -237,4 +240,48 @@ def get_backend() -> MemoryBackend:
             token_provider=lambda: acquire_agent_user_storage_token(get_config()),
         )
         return BlobBackend(store)
+    if cfg.blob_endpoint or cfg.blob_container:
+        raise BackendMisconfiguredError(
+            endpoint=cfg.blob_endpoint,
+            container=cfg.blob_container,
+        )
     return LocalBackend(cfg.data_dir)
+
+
+def assert_backend_config(logger=None) -> dict[str, str | None]:
+    """Resolve + validate the storage backend once at boot (design F2).
+
+    Raises :class:`BackendMisconfiguredError` on a half-configured blob env
+    (so a mis-enved instance refuses to start instead of silently using an
+    empty Local store), and logs the resolved backend + container so operators
+    can confirm fleet-wide agreement in production logs.
+
+    Returns a small summary ``{"backend": ..., "container": ..., "root": ...}``
+    for callers/tests. Never resolves the storage token — construction is
+    lazy, so this is safe to call before auth.
+    """
+    cfg = get_config()
+    backend = get_backend()  # raises on half-config
+    if isinstance(backend, BlobBackend):
+        summary: dict[str, str | None] = {
+            "backend": "BlobBackend",
+            "endpoint": cfg.blob_endpoint,
+            "container": cfg.blob_container,
+            "root": None,
+        }
+        if logger:
+            logger.info(
+                "Resolved MemoryBackend=BlobBackend endpoint=%s container=%s",
+                cfg.blob_endpoint,
+                cfg.blob_container,
+            )
+    else:
+        summary = {
+            "backend": "LocalBackend",
+            "endpoint": None,
+            "container": None,
+            "root": str(cfg.data_dir),
+        }
+        if logger:
+            logger.info("Resolved MemoryBackend=LocalBackend root=%s", cfg.data_dir)
+    return summary

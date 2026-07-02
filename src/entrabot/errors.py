@@ -33,6 +33,31 @@ class ConfigError(EntraBotError):
     """Configuration errors (invalid or removed settings)."""
 
 
+class BackendMisconfiguredError(ConfigError):
+    """Storage backend env is half-configured (design F2).
+
+    Exactly one of ``ENTRABOT_BLOB_ENDPOINT`` / ``ENTRABOT_BLOB_CONTAINER``
+    is set. Silently falling back to Local here is how a mis-enved fleet
+    instance ends up on an empty local store and re-bootstraps every chat
+    (the replay-flood root cause). Fail loud so the operator fixes the env
+    instead of the fleet diverging. Set ``ENTRABOT_KEEP_MEMORY_LOCAL=true``
+    to deliberately force Local.
+    """
+
+    def __init__(self, *, endpoint: str | None, container: str | None) -> None:
+        self.endpoint = endpoint
+        self.container = container
+        missing = "container" if endpoint else "endpoint"
+        super().__init__(
+            "storage backend is half-configured: "
+            f"blob {missing} is unset "
+            f"(endpoint={'set' if endpoint else 'unset'}, "
+            f"container={'set' if container else 'unset'}). "
+            "Set BOTH ENTRABOT_BLOB_ENDPOINT and ENTRABOT_BLOB_CONTAINER, or set "
+            "ENTRABOT_KEEP_MEMORY_LOCAL=true to force local storage."
+        )
+
+
 class InsecureKeyringBackendError(EntraBotError):
     """The selected keyring backend is not an approved OS keystore."""
 
