@@ -153,7 +153,54 @@ def test_sandboxed_write_requests_readwrite_grant_for_parent_dir():
 
         # Write grants read-write on the parent dir (the file may not exist yet).
         assert runner.last_policy.readwrite_paths == [d]
-        assert runner.last_policy.readonly_paths == []
+        if os.name == "nt":
+            # On Windows the writer spawns python.exe, so its runtime dirs are
+            # granted read-only (infrastructure grant). No *user* read grant is
+            # added — only the interpreter's own dirs.
+            assert runner.last_policy.readonly_paths  # non-empty (interpreter dirs)
+        else:
+            # POSIX uses a shell builtin (printf); no interpreter grant needed.
+            assert runner.last_policy.readonly_paths == []
+
+
+def test_sandboxed_write_windows_grants_interpreter_dirs(monkeypatch):
+    """On Windows, write grants the python.exe runtime dirs read-only, post-clamp.
+
+    Regression for ``failed to locate pyvenv.cfg: Access is denied`` (exit 106):
+    the Windows write path spawns ``sys.executable`` (a venv python) inside the
+    processcontainer, which cannot boot unless its venv root and base install are
+    readable. These dirs are NOT in the operator ceiling, so they must be added
+    AFTER the clamp — verified here by using a ceiling that grants neither.
+    """
+    import sys
+
+    monkeypatch.setattr("os.name", "nt")
+    from entrabot.sandbox.local_files import (
+        _windows_interpreter_grants,
+        sandboxed_write,
+    )
+
+    with tempfile.TemporaryDirectory() as d:
+        d = os.path.realpath(d)
+        target = os.path.join(d, "note.txt")
+
+        runner = _FakeRunner(exit_code=0)
+        # Ceiling allows writing the parent dir but grants NO read paths at all.
+        ceiling = _ceiling(readonly=[], readwrite=[d])
+        sandboxed_write(target, "hello", ceiling=ceiling, runner=runner)
+
+        ro = runner.last_policy.readonly_paths
+        # The interpreter's base install must be granted readable even though the
+        # ceiling granted no read paths (infrastructure grant bypasses the clamp).
+        base = os.path.realpath(sys.base_prefix)
+        assert any(os.path.realpath(p) == base for p in ro), (
+            f"base interpreter dir {base} not in readonly grant {ro}"
+        )
+        # And the grant comes from the interpreter-dir helper, not the ceiling.
+        expected = {os.path.realpath(p) for p in _windows_interpreter_grants()}
+        assert {os.path.realpath(p) for p in ro} <= expected
+        # The write target stays clamped to the operator ceiling.
+        assert runner.last_policy.readwrite_paths == [d]
 
 
 # ── ceiling enforcement (clamp) ─────────────────────────────────────────────

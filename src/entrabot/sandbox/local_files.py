@@ -141,13 +141,15 @@ def build_write_command(path: str, content: str) -> str:
       metacharacter or ``%VAR%`` layer, so no character in the path or content
       can escape into a shell.
 
-    Containment caveat (needs runtime validation): this requires ``python.exe``
-    and its stdlib to be loadable inside the processcontainer. The Windows
-    preview confirms the backend auto-grants the cmd.exe + system-DLL baseline
-    (mxc-windows-sandbox-preview.md §4) but does NOT document a Python baseline,
-    so the inner ``python.exe`` must be reachable/readable in the container for
-    this path to spawn. Validate against the real ``wxc-exec.exe`` via the
-    write_local_file demo before relying on it.
+    Containment note: the inner ``python.exe`` must be loadable inside the
+    processcontainer. ``sandboxed_write`` therefore grants the interpreter's
+    runtime dirs (venv root + base install) read-only, post-clamp, via
+    ``_windows_interpreter_grants`` — without that grant the venv launcher dies
+    with ``failed to locate pyvenv.cfg: Access is denied`` (exit 106). This is
+    validated end-to-end against the real ``wxc-exec.exe`` (byte-exact write of
+    content with embedded quotes, ``&``, ``%PATH%``, CRLF, and no trailing
+    newline). The MXC backend auto-grants the cmd.exe + system-DLL baseline
+    (mxc-windows-sandbox-preview.md §4); the interpreter grant supplies the rest.
     """
     if os.name == "nt":
         content_b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
@@ -155,6 +157,33 @@ def build_write_command(path: str, content: str) -> str:
             [sys.executable, "-c", _WINDOWS_WRITER_PROGRAM, path, content_b64]
         )
     return f"printf '%s' {shlex.quote(content)} > {shlex.quote(path)}"
+
+
+def _windows_interpreter_grants() -> list[str]:
+    """Read-only dirs the inner ``python.exe`` needs to boot inside the sandbox.
+
+    The Windows write path (``build_write_command``) spawns ``sys.executable`` —
+    typically a venv ``python.exe`` — to decode base64 and write the bytes. For
+    that interpreter to start, the processcontainer must be able to *read* its own
+    runtime: the venv root (``pyvenv.cfg`` + ``Scripts\\python.exe``) and the base
+    CPython install (``pythonXY.dll`` + the standard library). Without these, the
+    launcher dies with ``failed to locate pyvenv.cfg: Access is denied`` (exit
+    106) and nothing is written — the bug this grant fixes.
+
+    These are sandbox *infrastructure* grants, not agent-requested paths: they
+    expose only the Python runtime (no user data) and are therefore added AFTER
+    the operator-ceiling clamp. The clamp governs which *user* files the agent may
+    touch; it must not strip the writer's own interpreter — exactly as MXC already
+    auto-grants the system-DLL baseline needed to launch ``cmd.exe``. The grant is
+    read-only and the write target stays clamped to the operator ceiling, so this
+    cannot widen what user data the agent can read or write.
+    """
+    candidates = {
+        os.path.dirname(sys.executable),  # ...\.venv\Scripts (holds python.exe)
+        sys.prefix,  # venv root (pyvenv.cfg); == base install when not in a venv
+        sys.base_prefix,  # base CPython install (pythonXY.dll + stdlib)
+    }
+    return [p for p in candidates if p and os.path.isdir(p)]
 
 
 def _prepare_policy(
@@ -217,4 +246,12 @@ def sandboxed_write(
         ceiling=ceiling,
         runner=runner,
     )
+    if os.name == "nt":
+        # The Windows writer spawns python.exe to write the bytes; grant its
+        # runtime dirs read access AFTER the clamp. This is an infrastructure
+        # grant (the interpreter's own files, no user data) — see
+        # _windows_interpreter_grants — and must bypass the operator-ceiling
+        # clamp so the writer can boot. Dedup while preserving order.
+        infra = canonicalize_paths(_windows_interpreter_grants())
+        policy.readonly_paths = list(dict.fromkeys(policy.readonly_paths + infra))
     return runner.run(policy)
