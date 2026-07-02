@@ -20,16 +20,29 @@ Phase 5 wires the cloud branch into ``get_backend`` once
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from entrabot.config import get_config
-from entrabot.storage.blob import BlobStore
+from entrabot.errors import BackendMisconfiguredError
+from entrabot.storage.blob import BlobStore, ConcurrencyError
 from entrabot.tools.teams import acquire_agent_user_storage_token
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
+
+
+def _content_etag(content: str) -> str:
+    """Deterministic content-hash ETag for local files.
+
+    Mirrors Azure Blob ETag semantics closely enough for optimistic
+    concurrency: identical content → identical ETag; any change → different
+    ETag. Used by :class:`LocalBackend` so the same CAS code path works for
+    both local and blob storage.
+    """
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 @runtime_checkable
@@ -44,8 +57,25 @@ class MemoryBackend(Protocol):
         """Return text at *key*, or ``None`` if it doesn't exist."""
         ...
 
-    def write_text(self, key: str, content: str) -> None:
-        """Replace *key*'s content with *content*. Creates parents as needed."""
+    def read_text_with_etag(self, key: str) -> tuple[str | None, str | None]:
+        """Return ``(text, etag)`` for *key*, or ``(None, None)`` if absent.
+
+        The ETag is an opaque concurrency token to pass back to
+        :meth:`write_text` as ``if_match`` for an optimistic-concurrency
+        write (design F5). Backends without native ETags synthesize one from
+        the content hash.
+        """
+        ...
+
+    def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str | None:
+        """Replace *key*'s content with *content*. Creates parents as needed.
+
+        When ``if_match`` is provided, the write is conditional: it succeeds
+        only if *key*'s current ETag equals ``if_match``, otherwise it raises
+        :class:`entrabot.storage.blob.ConcurrencyError`. ``if_match=None``
+        (default) is an unconditional overwrite. Returns the new ETag (or
+        ``None`` for backends that don't track one).
+        """
         ...
 
     def append_text(self, key: str, content: str) -> None:
@@ -77,10 +107,26 @@ class LocalBackend:
             return None
         return p.read_text()
 
-    def write_text(self, key: str, content: str) -> None:
+    def read_text_with_etag(self, key: str) -> tuple[str | None, str | None]:
         p = self._path(key)
+        if not p.exists():
+            return None, None
+        content = p.read_text()
+        return content, _content_etag(content)
+
+    def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str | None:
+        p = self._path(key)
+        if if_match is not None:
+            # Conditional write: current content hash must equal if_match.
+            current = _content_etag(p.read_text()) if p.exists() else None
+            if current != if_match:
+                raise ConcurrencyError(
+                    f"write_text({key!r}) refused: If-Match={if_match!r} is stale "
+                    f"(current={current!r})"
+                )
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
+        return _content_etag(content)
 
     def append_text(self, key: str, content: str) -> None:
         p = self._path(key)
@@ -142,8 +188,17 @@ class BlobBackend:
             return None
         return data.decode("utf-8")
 
-    def write_text(self, key: str, content: str) -> None:
-        _run_sync(self._store.put(key, content.encode("utf-8")))
+    def read_text_with_etag(self, key: str) -> tuple[str | None, str | None]:
+        try:
+            data, etag = _run_sync(self._store.get_with_etag(key))
+        except KeyError:
+            return None, None
+        return data.decode("utf-8"), etag
+
+    def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str | None:
+        return _run_sync(
+            self._store.put(key, content.encode("utf-8"), if_match=if_match or None)
+        )
 
     def append_text(self, key: str, content: str) -> None:
         existing = self.read_text(key) or ""
@@ -167,11 +222,13 @@ def get_backend() -> MemoryBackend:
       2. ``blob_endpoint`` AND ``blob_container`` set → :class:`BlobBackend`
          wrapping a :class:`BlobStore` whose token provider is the Agent
          User's storage-scope three-hop token.
-      3. Otherwise → :class:`LocalBackend` rooted at ``cfg.data_dir``.
+      3. Neither set → :class:`LocalBackend` rooted at ``cfg.data_dir``.
 
-    Half-configured cloud (endpoint without container, or vice versa) is
-    treated as not-configured rather than raising — the local fallback is
-    safer for the hot path.
+    Half-configured cloud (exactly one of endpoint/container set) is a HARD
+    error (:class:`BackendMisconfiguredError`), not a silent Local fallback
+    (design F2). A silent fallback is how a mis-enved fleet instance lands on
+    an empty local store and re-bootstraps every chat → replay flood; failing
+    loud surfaces the misconfiguration instead of letting the fleet diverge.
     """
     cfg = get_config()
     if cfg.keep_memory_local:
@@ -183,4 +240,48 @@ def get_backend() -> MemoryBackend:
             token_provider=lambda: acquire_agent_user_storage_token(get_config()),
         )
         return BlobBackend(store)
+    if cfg.blob_endpoint or cfg.blob_container:
+        raise BackendMisconfiguredError(
+            endpoint=cfg.blob_endpoint,
+            container=cfg.blob_container,
+        )
     return LocalBackend(cfg.data_dir)
+
+
+def assert_backend_config(logger=None) -> dict[str, str | None]:
+    """Resolve + validate the storage backend once at boot (design F2).
+
+    Raises :class:`BackendMisconfiguredError` on a half-configured blob env
+    (so a mis-enved instance refuses to start instead of silently using an
+    empty Local store), and logs the resolved backend + container so operators
+    can confirm fleet-wide agreement in production logs.
+
+    Returns a small summary ``{"backend": ..., "container": ..., "root": ...}``
+    for callers/tests. Never resolves the storage token — construction is
+    lazy, so this is safe to call before auth.
+    """
+    cfg = get_config()
+    backend = get_backend()  # raises on half-config
+    if isinstance(backend, BlobBackend):
+        summary: dict[str, str | None] = {
+            "backend": "BlobBackend",
+            "endpoint": cfg.blob_endpoint,
+            "container": cfg.blob_container,
+            "root": None,
+        }
+        if logger:
+            logger.info(
+                "Resolved MemoryBackend=BlobBackend endpoint=%s container=%s",
+                cfg.blob_endpoint,
+                cfg.blob_container,
+            )
+    else:
+        summary = {
+            "backend": "LocalBackend",
+            "endpoint": None,
+            "container": None,
+            "root": str(cfg.data_dir),
+        }
+        if logger:
+            logger.info("Resolved MemoryBackend=LocalBackend root=%s", cfg.data_dir)
+    return summary

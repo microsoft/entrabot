@@ -34,10 +34,13 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import Enum
 from urllib.parse import quote
 
 from entrabot.storage.backend import get_backend
+from entrabot.storage.blob import ConcurrencyError
 
 logger = logging.getLogger("entrabot.tools.chat_cursors")
 
@@ -115,6 +118,92 @@ def load_cursor(chat_id: str) -> dict | None:
     return parsed
 
 
+class CursorOutcome(Enum):
+    """Classification of a cursor read, used to decide whether the poll may push.
+
+    The distinction is load-bearing for fleet safety (design doc F1):
+
+    * ``ABSENT`` — the read SUCCEEDED and no cursor exists. This is the only
+      case where "surface the newest message once" is allowed: a genuinely new
+      chat that no instance has ever cursor-ed.
+    * ``PRESENT`` — a cursor exists and parsed (fresh OR stale). Always
+      rehydrate; the steady-state timestamp gate does catch-up (F4). Never
+      re-bootstrap a present cursor.
+    * ``UNRESOLVED`` — the read FAILED, or the payload is corrupt / the wrong
+      shape. Ambiguous: a transient blob 401/timeout/throttle or a partial
+      write could be hiding a live cursor. **Fail closed — never push.** The
+      caller must retry the read on a later cycle before delivering anything.
+    """
+
+    ABSENT = "absent"
+    PRESENT = "present"
+    UNRESOLVED = "unresolved"
+
+
+@dataclass(frozen=True)
+class CursorResolution:
+    """Result of :func:`resolve_cursor` — an outcome plus the parsed cursor.
+
+    ``cursor`` is populated only for :attr:`CursorOutcome.PRESENT`; it is
+    ``None`` for ``ABSENT`` and ``UNRESOLVED``.
+    """
+
+    outcome: CursorOutcome
+    cursor: dict | None
+
+
+def resolve_cursor(chat_id: str) -> CursorResolution:
+    """Classify *chat_id*'s cursor read into ABSENT / PRESENT / UNRESOLVED.
+
+    Unlike :func:`load_cursor` (which collapses every miss to ``None``), this
+    keeps the three cases apart so the poll can fail closed. The rules:
+
+    * Backend read raises (transient blob/disk error, 401 refresh race,
+      throttle) → ``UNRESOLVED``. The whole point of the fleet-safety fix: an
+      ambiguous read must never be mistaken for "new chat, push newest".
+    * Read returns ``None`` (the backend positively determined the key is
+      absent) → ``ABSENT``.
+    * Content present but not valid JSON, or valid JSON that isn't an object →
+      ``UNRESOLVED``. A partial/corrupt write is ambiguous; do not treat it as
+      a clean slate and re-push.
+    * Content present and a JSON object (fresh OR stale) → ``PRESENT``.
+    """
+    backend = get_backend()
+    try:
+        raw = backend.read_text(cursor_key(chat_id))
+    except Exception as exc:  # noqa: BLE001 — any read failure is ambiguous.
+        logger.warning(
+            "Cursor read failed for %s (UNRESOLVED, failing closed): %s: %s",
+            chat_id,
+            type(exc).__name__,
+            exc,
+        )
+        return CursorResolution(CursorOutcome.UNRESOLVED, None)
+
+    if raw is None:
+        return CursorResolution(CursorOutcome.ABSENT, None)
+
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "Corrupt chat cursor for %s (UNRESOLVED, failing closed): %s",
+            chat_id,
+            exc,
+        )
+        return CursorResolution(CursorOutcome.UNRESOLVED, None)
+
+    if not isinstance(parsed, dict):
+        logger.warning(
+            "Unexpected chat cursor shape for %s (UNRESOLVED, failing closed): %r",
+            chat_id,
+            type(parsed),
+        )
+        return CursorResolution(CursorOutcome.UNRESOLVED, None)
+
+    return CursorResolution(CursorOutcome.PRESENT, parsed)
+
+
 def save_cursor(chat_id: str, state: dict) -> None:
     """Persist *state* as *chat_id*'s cursor through the configured backend.
 
@@ -135,6 +224,133 @@ def save_cursor(chat_id: str, state: dict) -> None:
     }
     backend = get_backend()
     backend.write_text(cursor_key(chat_id), json.dumps(payload))
+
+
+def _later_ts(a: str | None, b: str | None) -> str | None:
+    """Return the later of two ISO-8601 timestamps, ignoring ``None``.
+
+    Parses to timezone-aware datetimes so mixed sub-second precision compares
+    correctly (``"...15Z"`` vs ``"...15.261Z"``, where a naive string ``max``
+    would pick the wrong one). Falls back to string ``max`` if either value is
+    unparseable — defensive, never raises.
+    """
+    if a is None:
+        return b
+    if b is None:
+        return a
+
+    def _parse(ts: str) -> datetime | None:
+        try:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return None
+        return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
+
+    da, db = _parse(a), _parse(b)
+    if da is None or db is None:
+        return max(a, b)
+    return a if da >= db else b
+
+
+# Bounded retries for the ETag compare-and-swap in :func:`claim_delivery`.
+# Each retry re-reads the shared cursor, so a handful covers realistic fleet
+# write contention; exhausting them fails closed (claim nothing → push
+# nothing) rather than risk a double delivery.
+CLAIM_MAX_ATTEMPTS = 4
+
+
+def claim_delivery(
+    chat_id: str,
+    candidate_ids: Iterable[str],
+    last_ts: str | None = None,
+) -> list[str]:
+    """Atomically claim delivery of *candidate_ids* in the shared cloud cursor.
+
+    The persisted cursor's ``seen_ids_tail`` doubles as the fleet delivery
+    ledger. This reads the shared cursor, computes which candidates are NOT
+    already recorded as delivered, writes the merged cursor
+    (``seen ∪ candidates``, ``max(last_ts)``) back with an ``If-Match``
+    precondition, and returns the newly-claimed ids — the ones THIS instance
+    should push.
+
+    Fleet guarantee (design "per-message cloud idempotency" + F5): across N
+    instances polling the same message, exactly one wins the compare-and-swap
+    for a given id; the losers hit ``ConcurrencyError``, re-read, see the id
+    already delivered, and claim nothing for it. Delivery is idempotent across
+    the whole fleet.
+
+    Fail-closed everywhere: a read failure, a corrupt shared cursor, or
+    exhausted CAS retries all return ``[]`` (claim nothing → push nothing)
+    rather than risk re-injecting a message.
+    """
+    candidates = list(candidate_ids)
+    if not candidates:
+        return []
+
+    backend = get_backend()
+    key = cursor_key(chat_id)
+
+    for _attempt in range(CLAIM_MAX_ATTEMPTS):
+        try:
+            raw, etag = backend.read_text_with_etag(key)
+        except Exception as exc:  # noqa: BLE001 — ambiguous read → fail closed.
+            logger.warning(
+                "claim_delivery read failed for %s (fail closed, no push): %s: %s",
+                chat_id,
+                type(exc).__name__,
+                exc,
+            )
+            return []
+
+        existing: dict = {}
+        if raw is not None:
+            try:
+                parsed = json.loads(raw)
+            except (ValueError, json.JSONDecodeError):
+                logger.warning(
+                    "claim_delivery: corrupt shared cursor for %s (fail closed)",
+                    chat_id,
+                )
+                return []
+            if isinstance(parsed, dict):
+                existing = parsed
+
+        seen = set(existing.get("seen_ids_tail") or [])
+        newly = [mid for mid in candidates if mid not in seen]
+        if not newly:
+            return []  # every candidate already delivered by a sibling
+
+        merged_seen = seen | set(candidates)
+        payload = {
+            "last_ts": _later_ts(existing.get("last_ts"), last_ts),
+            "seen_ids_tail": bound_seen_ids(sorted(merged_seen)),
+            "bootstrapped": True,
+            "last_written_at": _now_iso(),
+        }
+
+        try:
+            backend.write_text(key, json.dumps(payload), if_match=etag or None)
+        except ConcurrencyError:
+            logger.info(
+                "claim_delivery: cursor ETag conflict for %s; re-reading and retrying",
+                chat_id,
+            )
+            continue
+        except Exception as exc:  # noqa: BLE001 — write failure → fail closed.
+            logger.warning(
+                "claim_delivery write failed for %s (fail closed, no push): %s: %s",
+                chat_id,
+                type(exc).__name__,
+                exc,
+            )
+            return []
+        return newly
+
+    logger.warning(
+        "claim_delivery: CAS retries exhausted for %s (fail closed, no push)",
+        chat_id,
+    )
+    return []
 
 
 def is_stale(last_ts: str | None) -> bool:

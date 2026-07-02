@@ -1022,6 +1022,20 @@ async def _initialize() -> None:
     await _init_auth()
     await _init_poll()
 
+    # F2: resolve + validate the storage backend once at boot. A half-configured
+    # blob env raises here (fail loud) instead of silently using an empty Local
+    # store and re-bootstrapping every chat (the fleet replay-flood root cause).
+    # Logs the resolved backend + container so operators can confirm fleet-wide
+    # agreement in production logs.
+    try:
+        from entrabot.storage.backend import assert_backend_config
+
+        assert_backend_config(logger=logger)
+    except Exception as exc:
+        if logger:
+            logger.error("Storage backend misconfigured: %s", exc)
+        raise
+
     # authorization fix: log the active-sponsor-channel binding TTL so operators
     # can verify the security configuration in production logs.
     if logger:
@@ -1208,45 +1222,59 @@ def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
     """
     watched = _state.get("watched_chats", {})
     if chat_id not in watched:
-        # Issue #17: try to rehydrate a persisted cursor first. If it exists
-        # and ``last_ts`` is within the staleness cap, we keep the prior
-        # process's seen-set + watermark and skip ``_bootstrap_chat`` (which
-        # would otherwise re-fire the "newest at boot" message even when that
-        # message is days old). If absent, stale, or corrupt, fall through to
-        # the existing fresh-state path and let the bootstrap path baseline.
-        from entrabot.tools.chat_cursors import is_stale, load_cursor
+        # Issue #17 / fleet-safety F1+F4: classify the persisted cursor read
+        # into PRESENT / ABSENT / UNRESOLVED and fail CLOSED on ambiguity.
+        #
+        #   PRESENT (fresh OR stale) → rehydrate seen-set + watermark and mark
+        #     bootstrapped. The steady-state timestamp gate does catch-up (F4);
+        #     a present cursor is NEVER re-bootstrapped, so idle chats can't
+        #     replay their newest message.
+        #   ABSENT (read succeeded, no cursor) → genuinely new chat; leave
+        #     un-bootstrapped so the first poll surfaces the newest message once.
+        #   UNRESOLVED (read failed / corrupt / ambiguous) → do NOT push. Flag
+        #     ``needs_resolution`` so the poll loop re-reads before delivering
+        #     anything. This is the core fix for the fleet replay flood: a
+        #     transient blob 401/timeout/throttle must never be mistaken for a
+        #     new chat and trigger a bootstrap push of a weeks-old message.
+        from entrabot.tools.chat_cursors import CursorOutcome, resolve_cursor
 
-        rehydrated: dict | None = None
-        try:
-            cursor = load_cursor(chat_id)
-        except Exception as exc:  # noqa: BLE001
-            # Backend read failure (transient disk/blob error) → bootstrap.
-            cursor = None
-            if logger:
-                logger.warning(
-                    "Cursor load failed for %s (treating as absent): %s: %s",
-                    chat_id,
-                    type(exc).__name__,
-                    exc,
-                )
-        if cursor and not is_stale(cursor.get("last_ts")):
-            rehydrated = cursor
+        resolution = resolve_cursor(chat_id)
 
-        if rehydrated is not None:
+        if resolution.outcome is CursorOutcome.PRESENT:
+            cursor = resolution.cursor or {}
             watched[chat_id] = {
-                "seen_ids": set(rehydrated.get("seen_ids_tail") or []),
-                "last_ts": rehydrated.get("last_ts"),
+                "seen_ids": set(cursor.get("seen_ids_tail") or []),
+                "last_ts": cursor.get("last_ts"),
                 "bootstrapped": True,
+                "needs_resolution": False,
             }
             if logger:
                 logger.info(
                     "Rehydrated chat cursor (last_ts=%s, seen_ids=%d): %s",
-                    rehydrated.get("last_ts"),
+                    cursor.get("last_ts"),
                     len(watched[chat_id]["seen_ids"]),
                     chat_id,
                 )
-        else:
-            watched[chat_id] = {"seen_ids": set(), "last_ts": None, "bootstrapped": False}
+        elif resolution.outcome is CursorOutcome.UNRESOLVED:
+            watched[chat_id] = {
+                "seen_ids": set(),
+                "last_ts": None,
+                "bootstrapped": False,
+                "needs_resolution": True,
+            }
+            if logger:
+                logger.warning(
+                    "Cursor UNRESOLVED at registration for %s — failing closed, "
+                    "will re-resolve before delivering (no bootstrap push)",
+                    chat_id,
+                )
+        else:  # ABSENT — genuinely new chat.
+            watched[chat_id] = {
+                "seen_ids": set(),
+                "last_ts": None,
+                "bootstrapped": False,
+                "needs_resolution": False,
+            }
             if logger:
                 logger.info("Registered chat for background polling: %s", chat_id)
         _state["watched_chats"] = watched
@@ -1325,6 +1353,120 @@ async def _bootstrap_chat(chat_id: str) -> None:
     _schedule_cursor_save(chat_id)
 
 
+def _apply_present_cursor(chat_state: dict, cursor: dict | None) -> None:
+    """Rehydrate *chat_state* in place from a PRESENT cursor read.
+
+    Carries the persisted seen-set + watermark and marks the chat bootstrapped
+    so the steady-state gate (not ``_bootstrap_chat``) drives delivery. Clears
+    ``needs_resolution``.
+    """
+    cursor = cursor or {}
+    chat_state["seen_ids"] = set(cursor.get("seen_ids_tail") or [])
+    chat_state["last_ts"] = cursor.get("last_ts")
+    chat_state["bootstrapped"] = True
+    chat_state["needs_resolution"] = False
+
+
+def _resolve_pending_chat(chat_id: str, chat_state: dict) -> None:
+    """Re-attempt cursor resolution for a chat flagged ``needs_resolution``.
+
+    Fail-closed retry (design F1): the registration read was ambiguous
+    (transient failure / corrupt), so we re-read here on the poll cadence.
+
+    * PRESENT → rehydrate in place; the NEXT cycle delivers via the
+      steady-state gate. This cycle pushes nothing.
+    * ABSENT → clear the flag; the chat is genuinely new, so the next cycle's
+      bootstrap surfaces its newest message once.
+    * UNRESOLVED → leave the flag set; retry again next cycle. Still no push.
+
+    Never pushes and never bootstraps within this call — the resolution cycle
+    is always delivery-free.
+    """
+    from entrabot.tools.chat_cursors import CursorOutcome, resolve_cursor
+
+    resolution = resolve_cursor(chat_id)
+    if resolution.outcome is CursorOutcome.UNRESOLVED:
+        return  # still ambiguous — fail closed, retry next cycle
+    if resolution.outcome is CursorOutcome.PRESENT:
+        _apply_present_cursor(chat_state, resolution.cursor)
+        if logger:
+            logger.info(
+                "Re-resolved chat cursor to PRESENT (last_ts=%s): %s",
+                chat_state.get("last_ts"),
+                chat_id,
+            )
+    else:  # ABSENT — genuinely new; allow the next cycle to bootstrap.
+        chat_state["needs_resolution"] = False
+        if logger:
+            logger.info("Re-resolved chat cursor to ABSENT (new chat): %s", chat_id)
+
+
+async def _poll_watched_chat(
+    chat_id: str,
+    chat_state: dict,
+    agent_display_name: str,
+) -> None:
+    """Run one poll cycle for a single watched chat.
+
+    Three mutually-exclusive branches, in priority order:
+
+    1. ``needs_resolution`` → re-read the cursor (fail-closed). Never delivers.
+    2. not ``bootstrapped`` → ``_bootstrap_chat`` (surface newest once). Only
+       reached for a chat that resolved to ABSENT — a genuinely new chat.
+    3. bootstrapped → steady-state: read, filter, push genuinely-new messages,
+       advance + persist the cursor.
+    """
+    from entrabot.tools.teams import filter_human_messages, read
+
+    # (1) Fail-closed resolution retry — pushes nothing this cycle.
+    if chat_state.get("needs_resolution"):
+        _resolve_pending_chat(chat_id, chat_state)
+        return
+
+    # (2) Genuinely-new chat → bootstrap once.
+    if not chat_state.get("bootstrapped"):
+        await _bootstrap_chat(chat_id)
+        return
+
+    # (3) Steady state.
+    raw_messages = await _with_token_retry(read, chat_id=chat_id, count=10)
+    human_msgs = filter_human_messages(raw_messages, agent_display_name)
+    new_msgs = _filter_new_messages(
+        human_msgs,
+        chat_state["last_ts"],
+        chat_state["seen_ids"],
+    )
+    if not new_msgs:
+        return
+
+    from entrabot.tools.chat_cursors import claim_delivery
+
+    newest = max(new_msgs, key=lambda m: m.get("sent_at", ""))
+    candidate_ids = [m["message_id"] for m in new_msgs]
+
+    # Fleet idempotency + F5: claim delivery in the SHARED cloud ledger via an
+    # ETag compare-and-swap. Only ids this instance wins are pushed; the CAS
+    # write persists the advanced cursor (union seen-set, max watermark) so a
+    # sibling can't clobber it with a stale one. On any ambiguity claim_delivery
+    # fails closed (returns []), so we push nothing rather than risk a replay.
+    claimed = set(claim_delivery(chat_id, candidate_ids, newest["sent_at"]))
+
+    # Advance the in-memory cursor for ALL candidates — they were handled this
+    # cycle regardless of which instance pushed — so the next local cycle won't
+    # re-evaluate them.
+    chat_state["last_ts"] = newest["sent_at"]
+    for mid in candidate_ids:
+        chat_state["seen_ids"].add(mid)
+
+    # Bounded cleanup (keep last 500)
+    if len(chat_state["seen_ids"]) > SEEN_SET_MAX:
+        chat_state["seen_ids"] = set(sorted(chat_state["seen_ids"])[-100:])
+
+    for m in sorted(new_msgs, key=lambda m: m.get("sent_at", "")):
+        if m["message_id"] in claimed:
+            await _push_channel_notification(m, chat_id=chat_id)
+
+
 async def _background_poll() -> None:
     """Background polling loop — pushes inbound Teams messages to Claude Code.
 
@@ -1343,8 +1485,6 @@ async def _background_poll() -> None:
     still works as a fallback.
     """
     import asyncio
-
-    from entrabot.tools.teams import filter_human_messages, read
 
     if logger:
         logger.info("Starting background Teams poll (interval=%ds)", BACKGROUND_POLL_INTERVAL)
@@ -1372,48 +1512,7 @@ async def _background_poll() -> None:
 
             for chat_id, chat_state in watched.items():
                 try:
-                    # Bootstrap on first encounter
-                    if not chat_state.get("bootstrapped"):
-                        await _bootstrap_chat(chat_id)
-                        continue
-
-                    raw_messages = await _with_token_retry(
-                        read,
-                        chat_id=chat_id,
-                        count=10,
-                    )
-                    human_msgs = filter_human_messages(
-                        raw_messages,
-                        agent_display_name,
-                    )
-                    new_msgs = _filter_new_messages(
-                        human_msgs,
-                        chat_state["last_ts"],
-                        chat_state["seen_ids"],
-                    )
-
-                    if new_msgs:
-                        newest = max(new_msgs, key=lambda m: m.get("sent_at", ""))
-                        chat_state["last_ts"] = newest["sent_at"]
-                        for m in new_msgs:
-                            chat_state["seen_ids"].add(m["message_id"])
-
-                        # Bounded cleanup (keep last 500)
-                        if len(chat_state["seen_ids"]) > SEEN_SET_MAX:
-                            chat_state["seen_ids"] = set(sorted(chat_state["seen_ids"])[-100:])
-
-                        for m in sorted(
-                            new_msgs,
-                            key=lambda m: m.get("sent_at", ""),
-                        ):
-                            await _push_channel_notification(m, chat_id=chat_id)
-
-                        # Issue #17: persist the advanced cursor through the
-                        # MemoryBackend so the next process picks up where we
-                        # left off instead of replaying the newest-at-boot
-                        # message as fresh. Debounced ~1s so a chatty group
-                        # chat doesn't trigger a write per message.
-                        _schedule_cursor_save(chat_id)
+                    await _poll_watched_chat(chat_id, chat_state, agent_display_name)
                 except Exception as chat_exc:
                     # One chat's failure must not starve the others in this
                     # cycle. Log and move on; the next cycle will retry.

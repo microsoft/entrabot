@@ -84,10 +84,16 @@ Observed twice: when the parent Claude process exits, the `entrabot-mcp` child k
 - **Source:** Live observation 2026-04-17 (second occurrence in one day)
 
 ### Multi-instance cursor consistency: bootstrap fails open → fleet replay flood
-The background Teams poll re-pushes a chat's newest message on *any* failure to read a fresh cloud cursor — absent, stale, corrupt, and read-exception all fall through to `_bootstrap_chat`, which pushes. In a fleet (N instances → one blob container) these misses are routine: silent `LocalBackend` fallback when blob env is half-configured, transient blob read failures, the 24h `is_stale` cap re-bootstrapping a cold store, and last-writer-wins cursor writes with no ETag. Result: idle chats replay their newest (weeks-old) message. Also a security surface — the replay re-injects stale imperative messages ("read special data in my Documents", "ship to <address>", "run <script>") into the agent's channel. The steady-state gate (`_filter_new_messages`) already supports N-instances-one-store; only the bootstrap decision and write coordination break it. Confirmed 2026-07-02 (a base instance pointed at a shared blob container replayed ~5-week-old DMs while the blob cursors were correct + fresh). Fix: fail closed on read-miss + per-message cloud idempotency ledger + co-locate `watched_chats` in cloud + catch-up-read instead of bootstrap-on-stale + `If-Match` ETag concurrency on cursor writes + assert uniform backend at boot.
-- **Effort:** M
-- **Depends on:** "MCP server orphans when Claude Code exits" (enforce the singleton so duplicate pollers can't start); ADR-005 blob backend.
-- **See:** `docs/architecture/DESIGN-multi-instance-cursor-consistency.md`
+**Status: mostly shipped on `fix/fleet-safe-cursor`** (F1, F2, F4, F5, per-message cloud idempotency). F3 (cloud-authoritative `watched_chats`) deferred; F6 served by the existing process singleton.
+
+The background Teams poll re-pushed a chat's newest message on *any* failure to read a fresh cloud cursor — absent, stale, corrupt, and read-exception all fell through to `_bootstrap_chat`, which pushes. In a fleet (N instances → one blob container) these misses are routine: silent `LocalBackend` fallback when blob env is half-configured, transient blob read failures, the 24h `is_stale` cap re-bootstrapping a cold store, and last-writer-wins cursor writes with no ETag. Result: idle chats replay their newest (weeks-old) message. Also a security surface — the replay re-injects stale imperative messages ("read special data in my Documents", "ship to <address>", "run <script>") into the agent's channel. Confirmed 2026-07-02 (a base instance pointed at a shared blob container replayed ~5-week-old DMs while the blob cursors were correct + fresh).
+
+**Shipped:** fail-closed cursor classification (`resolve_cursor` → PRESENT/ABSENT/UNRESOLVED); rehydrate-and-catch-up on stale instead of re-bootstrap; per-message cloud idempotency via `claim_delivery` (CAS on the shared `seen_ids_tail` ledger); `If-Match` ETag concurrency on cursor writes (`get_with_etag` + `read_text_with_etag` + `write_text(if_match=)`); boot-time backend assertion (`assert_backend_config`, half-config → `BackendMisconfiguredError`).
+
+**Remaining:** F3 — co-locate the `watched_chats` list in the cloud store (local file becomes a cache). Deferred as the largest structural change and not required by the fail-closed + idempotency guarantees.
+- **Effort:** S (F3 only)
+- **Depends on:** "MCP server orphans when Claude Code exits" (enforce the singleton so duplicate pollers can't start — the process singleton exists; orphan cleanup is the remaining gap); ADR-005 blob backend.
+- **See:** `docs/architecture/DESIGN-multi-instance-cursor-consistency.md` (§Shipped / §Deferred)
 - **Source:** Live diagnosis 2026-07-02.
 
 ### Daily summary scheduler: wrong day + double-fire
