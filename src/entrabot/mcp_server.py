@@ -5356,7 +5356,17 @@ if _ENABLE_RUN_CODE:
                 action="read_local_file", resource=path, outcome="pending",
                 metadata={"backend": runner.get_capabilities()["backend"]},
             )
-            result = sandboxed_read(path, ceiling=ceiling, runner=runner)
+            try:
+                result = sandboxed_read(path, ceiling=ceiling, runner=runner)
+            except Exception as e:
+                # Close the audit trail: without this, a sandbox exception
+                # (e.g. SandboxTimeoutError) leaves the "pending" event
+                # dangling — indistinguishable from an in-flight read.
+                audit_event(
+                    action="read_local_file", resource=path, outcome="failure",
+                    metadata={"error": type(e).__name__, "message": str(e)},
+                )
+                raise
             ok = result.exit_code == 0
             audit_event(
                 action="read_local_file", resource=path,
@@ -5434,7 +5444,17 @@ if _ENABLE_RUN_CODE:
                 metadata={"backend": runner.get_capabilities()["backend"],
                           "content_length": len(content)},
             )
-            result = sandboxed_write(path, content, ceiling=ceiling, runner=runner)
+            try:
+                result = sandboxed_write(path, content, ceiling=ceiling, runner=runner)
+            except Exception as e:
+                # Close the audit trail: without this, a sandbox exception
+                # (e.g. SandboxTimeoutError) leaves the "pending" event
+                # dangling — indistinguishable from an in-flight write.
+                audit_event(
+                    action="write_local_file", resource=path, outcome="failure",
+                    metadata={"error": type(e).__name__, "message": str(e)},
+                )
+                raise
             ok = result.exit_code == 0
             audit_event(
                 action="write_local_file", resource=path,

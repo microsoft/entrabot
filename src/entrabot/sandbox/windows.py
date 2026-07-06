@@ -23,6 +23,7 @@ Containment notes (see docs/platform-learnings/mxc-windows-sandbox-preview.md):
 """
 
 import base64
+import contextlib
 import subprocess
 import time
 
@@ -32,6 +33,32 @@ from entrabot.sandbox.base import (
     SandboxTimeoutError,
 )
 from entrabot.sandbox.policy import build_policy
+
+# Bound on the post-kill pipe drain. After a tree-kill every pipe writer is
+# dead, so the drain normally returns in milliseconds; the bound only matters
+# if taskkill could not reach a descendant.
+_POST_KILL_DRAIN_TIMEOUT_S = 5.0
+
+
+def _kill_process_tree(pid: int) -> None:
+    """Force-kill ``pid`` and every descendant via ``taskkill /T /F``.
+
+    ``Popen.kill()`` (TerminateProcess) reaches only the direct child.
+    ``wxc-exec.exe`` spawns the container host as a grandchild that inherits
+    the stdout/stderr pipe handles; if only the direct child dies, those
+    handles stay open and any pipe drain blocks until the orphan exits —
+    observed live 2026-07-02 as a 26-minute ``write_local_file`` hang on a
+    30-second timeout. ``taskkill /T`` walks the tree so every handle-holder
+    dies. Failures are ignored: the tree may already be gone, and the caller's
+    bounded drain is the backstop either way.
+    """
+    with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+        subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(pid)],
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
 
 
 class ProcessContainerRunner:
@@ -76,32 +103,39 @@ class ProcessContainerRunner:
         ]
 
         start_time = time.time()
+        timeout_seconds = policy.timeout_ms / 1000.0
 
+        # NOT subprocess.run(timeout=...): on Windows its timeout path kills
+        # only the direct child and then drains the pipes with NO timeout —
+        # the container grandchild inherits the pipe handles, so that drain
+        # blocks for as long as the orphan lives (26 minutes observed on a
+        # 30s timeout). Popen + explicit tree-kill + bounded drain instead.
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         try:
-            timeout_seconds = policy.timeout_ms / 1000.0
-
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-            )
-
-            end_time = time.time()
-            duration_ms = int((end_time - start_time) * 1000)
-
-            return SandboxResult(
-                exit_code=result.returncode,
-                stdout=result.stdout,
-                stderr=result.stderr,
-                duration_ms=duration_ms,
-                timed_out=False,
-            )
-
+            stdout, stderr = process.communicate(timeout=timeout_seconds)
         except subprocess.TimeoutExpired as e:
-            raise SandboxTimeoutError(
-                f"Execution exceeded {policy.timeout_ms}ms timeout"
-            ) from e
+            _kill_process_tree(process.pid)
+            # Abandon the pipes rather than block the tool call if the drain
+            # still cannot complete after the tree-kill.
+            with contextlib.suppress(subprocess.TimeoutExpired, OSError, ValueError):
+                process.communicate(timeout=_POST_KILL_DRAIN_TIMEOUT_S)
+            raise SandboxTimeoutError(f"Execution exceeded {policy.timeout_ms}ms timeout") from e
+
+        end_time = time.time()
+        duration_ms = int((end_time - start_time) * 1000)
+
+        return SandboxResult(
+            exit_code=process.returncode,
+            stdout=stdout,
+            stderr=stderr,
+            duration_ms=duration_ms,
+            timed_out=False,
+        )
 
     def get_capabilities(self) -> dict:
         """Return processcontainer backend capabilities.

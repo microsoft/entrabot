@@ -8,6 +8,7 @@ the same sandbox machinery) and must NOT be exposed when the sandbox is disabled
 
 import asyncio
 import importlib
+import json
 import os
 from unittest.mock import patch
 
@@ -16,6 +17,14 @@ def _registered_tool_names() -> list[str]:
     import entrabot.mcp_server as server
 
     return [t.name for t in asyncio.run(server.mcp.list_tools())]
+
+
+def _call_tool(server, name: str, args: dict) -> dict:
+    """Invoke a registered MCP tool and parse its JSON text result."""
+    result = asyncio.run(server.mcp.call_tool(name, args))
+    if isinstance(result, tuple):  # newer SDK: (content_blocks, structured)
+        result = result[0]
+    return json.loads(result[0].text)
 
 
 def test_local_file_tools_not_registered_without_flag():
@@ -104,3 +113,68 @@ def test_write_handler_distinguishes_spawn_failure_from_blocked_path():
     )
     assert blocked["error"] == "Write blocked or failed"
     assert "outside the sandbox's allowed write paths" in blocked["help"]
+
+
+# ── audit trail must close on sandbox exceptions ─────────────────────────────
+# Observed live 2026-07-02: a SandboxTimeoutError from sandboxed_write left the
+# audit trail at "pending" forever — indistinguishable from an in-flight write.
+# Any exception raised after the "pending" event must be answered by a
+# "failure" event before the handler returns.
+
+
+def _audit_outcomes(mock_audit, action: str) -> list[str]:
+    return [
+        c.kwargs.get("outcome")
+        for c in mock_audit.call_args_list
+        if c.kwargs.get("action") == action
+    ]
+
+
+def test_write_handler_closes_audit_trail_on_sandbox_timeout():
+    import entrabot.mcp_server as server
+    from entrabot.sandbox.base import SandboxTimeoutError
+
+    with patch.dict(os.environ, {"ENTRABOT_ENABLE_RUN_CODE": "1"}, clear=False):
+        importlib.reload(server)
+        with (
+            patch("entrabot.sandbox.get_sandbox_runner") as mock_runner,
+            patch(
+                "entrabot.sandbox.local_files.sandboxed_write",
+                side_effect=SandboxTimeoutError("Execution exceeded 30000ms timeout"),
+            ),
+            patch("entrabot.tools.audit.log_event") as mock_audit,
+        ):
+            mock_runner.return_value.get_capabilities.return_value = {"backend": "processcontainer"}
+            result = _call_tool(
+                server, "write_local_file", {"path": "C:\\x\\duck.txt", "content": "quack"}
+            )
+    importlib.reload(server)  # restore real env
+
+    assert result["success"] is False
+    outcomes = _audit_outcomes(mock_audit, "write_local_file")
+    assert "pending" in outcomes
+    assert "failure" in outcomes  # the trail must not dangle at "pending"
+
+
+def test_read_handler_closes_audit_trail_on_sandbox_timeout():
+    import entrabot.mcp_server as server
+    from entrabot.sandbox.base import SandboxTimeoutError
+
+    with patch.dict(os.environ, {"ENTRABOT_ENABLE_RUN_CODE": "1"}, clear=False):
+        importlib.reload(server)
+        with (
+            patch("entrabot.sandbox.get_sandbox_runner") as mock_runner,
+            patch(
+                "entrabot.sandbox.local_files.sandboxed_read",
+                side_effect=SandboxTimeoutError("Execution exceeded 30000ms timeout"),
+            ),
+            patch("entrabot.tools.audit.log_event") as mock_audit,
+        ):
+            mock_runner.return_value.get_capabilities.return_value = {"backend": "processcontainer"}
+            result = _call_tool(server, "read_local_file", {"path": "C:\\x\\duck.txt"})
+    importlib.reload(server)  # restore real env
+
+    assert result["success"] is False
+    outcomes = _audit_outcomes(mock_audit, "read_local_file")
+    assert "pending" in outcomes
+    assert "failure" in outcomes

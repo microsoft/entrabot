@@ -949,6 +949,23 @@ After this, `setup.sh --diagnose` passed all 7 checks including the three-hop to
 
 **Evidence/references:** Live session 2026-06-29. copilot log `~/.copilot/logs/process-1782754836854-3540.log:153`. Boot path: `src/entrabot/mcp_server.py` `_run_stdio_with_write_stream` → `_eager_init` → `_init_auth` (the two `asyncio.to_thread` wraps). Blocking dependency: `src/entrabot/tools/teams.py:126` `def acquire_agent_user_token` (synchronous). Test: `tests/test_mcp_server_integration.py::TestInitAuthDoesNotBlockEventLoop`.
 
+### Learning #70: `subprocess.run(timeout=…)` on Windows Hangs Unboundedly When the Child Spawns a Pipe-Inheriting Grandchild — 30s Sandbox Timeout Became a 26-Minute MCP Tool Hang
+
+**Date:** 2026-07-06 (incident 2026-07-02)
+**Status:** **CONFIRMED — fixed by `Popen` + `taskkill /T /F` tree-kill + bounded post-kill drain in `ProcessContainerRunner.run`.**
+**Context:** Sponsor asked (via Teams DM) for a `write_local_file` to `~\Documents\entrabot-info.txt`. The MCP tool call sat silent for ~26 minutes; the operator eventually interrupted the CLI turn. Server log showed the `pending` audit event at 21:28:19 and the `SandboxTimeoutError` traceback at **21:54:37** — for a **30-second** configured timeout.
+**Problem:** `ProcessContainerRunner.run` used `subprocess.run(cmd, capture_output=True, timeout=30)`. The timeout *fired* on schedule (the `TimeoutExpired` in the traceback says "timed out after 30.0 seconds"), but the call didn't return for 26 more minutes.
+**Root cause:** CPython's `subprocess.run` timeout path on Windows is: `process.kill()` (TerminateProcess — direct child only), then `process.communicate()` **with no timeout** to collect output. `wxc-exec.exe` spawns the AppContainer host as a grandchild that inherits the stdout/stderr pipe write handles. Killing only `wxc-exec.exe` leaves those handles open, so the unbounded drain blocks until the orphaned container process happens to exit. Windows has no process-group semantics here — nothing in the stdlib kills the tree for you.
+**Fix:** `src/entrabot/sandbox/windows.py`: `Popen` + `communicate(timeout=…)`; on `TimeoutExpired`, `taskkill /T /F /PID <pid>` (kills every descendant, closing all pipe handles), then a **bounded** second `communicate(timeout=5)` as backstop, then raise `SandboxTimeoutError`. Worst case is now ~50s (timeout + taskkill bound + drain bound), not open-ended. Companion fix in `mcp_server.py`: the `read_local_file`/`write_local_file` handlers now audit-log `outcome="failure"` when the sandbox raises, so the trail can no longer dangle at `pending` (which is indistinguishable from an in-flight write).
+**Prevention:**
+
+- **Never use bare `subprocess.run(timeout=…)` on Windows for a child that spawns its own children** (container runners, launchers, `npm`/`node` wrappers, venv redirectors). Use `Popen` + explicit tree-kill (`taskkill /T /F`, or a Job Object with `KILL_ON_JOB_CLOSE`) before draining pipes.
+- **A "timeout" is only as good as its cleanup path.** Test the *bounded-return* property, not just that a timeout exception is raised: `tests/sandbox/test_windows.py::test_process_container_runner_timeout_kills_process_tree` and `…_timeout_drain_is_bounded`.
+- **Every audit `pending` must be answered** by `success` or `failure` on all exit paths, including exceptions — a permanently pending audit event is a fail-open trail.
+- Diagnosis shortcut for "MCP tool call hangs forever": check `%LOCALAPPDATA%\entrabot\logs\entrabot.log` for a `pending` audit line with no completion, then look for the late `SandboxTimeoutError` traceback — the gap between the two is the pipe-drain hang, not the sandbox timeout.
+
+**Evidence/references:** `%LOCALAPPDATA%\entrabot\logs\entrabot.log` 2026-07-02 21:28:19 → 21:54:37 (traceback through `subprocess.py:556 communicate`). Fix: `src/entrabot/sandbox/windows.py` (`_kill_process_tree`, `_POST_KILL_DRAIN_TIMEOUT_S`), `src/entrabot/mcp_server.py` (audit-closing wrappers). Tests: `tests/sandbox/test_windows.py`, `tests/test_local_file_tools.py::test_{read,write}_handler_closes_audit_trail_on_sandbox_timeout`. Same incident also confirmed the effective policy had empty `readwritePaths` (operator ceiling env not set for that server boot) — the write would have been *denied*, not hung, with a healthy timeout path.
+
 ---
 
 ### [HISTORICAL] Learning #4: OBO Requires Matching Token Audience
