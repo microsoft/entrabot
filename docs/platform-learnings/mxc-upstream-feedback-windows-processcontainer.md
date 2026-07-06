@@ -15,6 +15,10 @@ events; orphaned descendant outlives a kill of `wxc-exec.exe`; DACL recovery aft
 wedges when spawned from our long-running host process (allowed AND denied targets), 3/3
 clean standalone; read-vs-write asymmetry narrows suspicion to the interpreter-dir DACL
 grants.
+**Updated:** 2026-07-06 (evening) — added Issue 6: the Diagnostic Console shows zero
+`ProcessModel` ETW events for ANY `processcontainer` run, successful or wedged; corrected
+Issue 5's earlier zero-ETW-implies-pre-containment inference accordingly (the DACL partial-
+edit evidence carries that conclusion now).
 
 This note is intentionally self-contained so it can be forwarded as-is. **None of these
 are correctness/security bugs** — default-deny behaves correctly throughout. They are four
@@ -52,13 +56,21 @@ Windows backend, plus a couple of questions.
    file-scoped policy works on macOS Seatbelt, so this is a portability surprise (see Issue 4).
 
 5. **Write-policy runs spawned from a long-running host process wedge pre-containment —
-   reproducibly (4/4), on allowed AND denied targets — with ZERO `ProcessModel` ETW events
-   and no self-enforcement of `process.timeout`.** Identical policies standalone: 3/3 clean
-   in seconds. The working server-spawned *read* vs the wedging server-spawned *writes*
-   differ only by the interpreter-directory grants, and the grant target is the very venv
-   the spawning process runs from. Force-killing `wxc-exec.exe` orphans a descendant that
-   can hold inherited stdio pipes (26 minutes observed); the next run prints
-   `DACL recovery: … ACE(s) restored`. See Issue 5.
+   reproducibly (4/4), on allowed AND denied targets — with no self-enforcement of
+   `process.timeout`.** Identical policies standalone: 3/3 clean in seconds. The working
+   server-spawned *read* vs the wedging server-spawned *writes* differ only by the
+   interpreter-directory grants, and the grant target is the very venv the spawning process
+   runs from. Wedged runs leave *partial* DACL edits (the next run prints
+   `DACL recovery: … ACE(s) restored`), placing the freeze mid-grant-phase. Force-killing
+   `wxc-exec.exe` orphans a descendant that can hold inherited stdio pipes (26 minutes
+   observed). See Issue 5.
+
+6. **The Diagnostic Console shows no `ProcessModel` (Sandboxing) ETW events for ANY
+   `processcontainer` run — successful or wedged.** Multiple byte-exact successful contained
+   runs and four wedged runs over two days produced zero events from the registered
+   Sandboxing provider (`f6ec123e-…`); only `Kernel-General` noise appears. Either the
+   `appcontainer-dacl` tier / v0.7.0 doesn't emit, or the provider GUID doesn't match this
+   SDK build — either way integrators have no tracing for this backend. See Issue 6.
 
 For contrast, granting an executable's *own* dependency tree read-only makes it launch
 cleanly — e.g. granting a venv `python.exe`'s venv root + base CPython install as
@@ -263,8 +275,12 @@ directories, it is editing ACLs on files the parent process holds open. Addition
   **~26 minutes**, blocking the host's pipe drain the whole time.
 - During the 2026-07-06 wedges, the MXC Diagnostic Console (verbose mode, `ProcessModel` +
   `Kernel-General` providers registered) showed **no Sandboxing events at all** for the
-  wedged runs — while the successful standalone runs traced normally — so the wedge occurs
-  *before* containment setup / tracing begins.
+  wedged runs. **Correction (later same day):** the console showed no `ProcessModel` events
+  for the *successful* standalone runs either (see Issue 6), so ETW silence is a diagnostics
+  blind spot, not evidence of where the wedge sits. The pre-containment placement instead
+  rests on the DACL evidence below: wedged runs made *partial* ACL edits (recovered by the
+  next run) and never launched the inner command — i.e. they froze mid-grant-phase, before
+  container creation.
 - The first standalone run after each force-killed wedge printed a DACL recovery line
   (`DACL recovery: 1 file(s), 3 ACE(s) restored, 0 error(s)`, later `4 ACE(s)`) — recovery
   worked both times (good), but it confirms a killed run leaves real DACL edits behind, and
@@ -296,6 +312,44 @@ directories, it is editing ACLs on files the parent process holds open. Addition
   them) wedge 4/4; both work standalone. If grant setup edits DACLs on directories the
   parent holds open handles into, that is the strongest candidate for the pre-containment
   block.
+
+---
+
+## Issue 6 — Diagnostic Console: zero `ProcessModel` ETW events for any `processcontainer` run
+
+### Symptom
+
+The MXC Diagnostic Console (listening on the `mxc-diagnostics-<SID>` pipe, verbose mode)
+registers both advertised providers:
+
+```
+[ETW]   ProcessModel {f6ec123e-314e-400b-9e0a-151365e23083} (Sandboxing)
+[ETW]   Kernel-General {a68ca8b7-004f-d7b6-a698-07e2de0f1f5d} (Learning Mode messages)
+```
+
+Over a two-day window covering **at least seven `wxc-exec.exe` runs** — four wedged, three
+fully successful byte-exact contained executions (container created, inner `python.exe`
+launched, file written, exit 0) — the console displayed **zero events from the Sandboxing
+provider**. Everything shown came from `Kernel-General` (registry-hive flushes,
+`prl_tools.exe` time sync). A successful contained run is indistinguishable from no run at
+all.
+
+### Why it matters
+
+We initially read "no ETW during the wedge" as evidence the hang was pre-containment. That
+inference was invalid — the provider is silent for successes too — and we only caught the
+error because the operator kept the console open across known-good runs. A diagnostics
+surface that never emits is worse than none: it actively supports wrong conclusions.
+
+### Suggested fix / question
+
+- Does the `appcontainer-dacl` fallback tier emit `ProcessModel` events at all, or only the
+  full BFS tier (`bfsCompiledIn: false` on this build)? If the tier doesn't emit, the console
+  should say so at startup instead of listening silently.
+- Confirm the provider GUID matches what `wxc-exec.exe` v0.7.0 (npm `@microsoft/mxc-sdk`)
+  actually fires; a GUID drift between SDK and console builds would produce exactly this.
+- Minimum bar: one start event and one exit event per run, emitted by `wxc-exec.exe` itself
+  (not the backend), so integrators can at least bracket run lifetimes on every tier.
 
 ---
 
