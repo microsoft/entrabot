@@ -34,6 +34,18 @@ Claude Code v2.1.152 now does MCP OAuth 2.1 discovery and ignores `.mcp.json` `h
 
 ## P1
 
+### Cache the Agent User storage token — every blob op re-runs the three-hop flow synchronously on the event loop
+`_ConditionalBlobAdapter` (promises path) passes `token_provider=lambda: acquire_agent_user_storage_token(...)` with no caching (`src/entrabot/tools/promises.py:163`), so each blob GET/PUT pays up to three blocking HTTPS token round-trips on the asyncio loop — a `resolve_promise` can cost ~8 sequential requests, each a timeout opportunity, and each blocks the loop (same anti-pattern Learning #69 fixed at boot). A short-TTL storage-token cache would cut the failure surface and the loop stalls.
+
+- **Effort:** S–M
+- **Source:** resolve_promise empty-error investigation, 2026-07-06 (sub-agent report; fix for the error *surfacing* shipped separately — this is the amplifier).
+
+### Investigate chronic connectivity degradation of the MCP server process
+The rotating server log holds **644** empty-message `ConnectTimeout`/`getaddrinfo` warnings (102 on 2026-07-06 alone, starting ~18:52Z) hitting cursor saves, chat bootstraps, and email polls, while cached-token Teams Graph calls kept working. Suspects: Parallels VM pauses (multi-minute `SystemTimeChange` jumps from `prl_tools.exe`), per-call token acquisition (see above), and/or the open MCP-disconnect dossier (`docs/runbooks/mcp-disconnect-investigation.md`) — read that runbook first, do not restart the investigation from scratch.
+
+- **Effort:** M (instrumentation-first)
+- **Source:** 2026-07-06 session — the degradation window is what made `resolve_promise` fail 4/4 while `add_promise` (called earlier) succeeded.
+
 ### Follow-up: two-phase sponsor confirmation flow for mutating tools
 The active-sponsor-channel binding shipped in PR `fix/msrc-active-sponsor-channel-binding` closes Chain A from the security confused-deputy report (attacker in low-priv chat manipulating action on a chat where sponsor is passive) but does NOT close the residual window where a sponsor IS actively engaged in the target chat. An attacker who gets a sponsor to read an injected SharePoint doc (Chain B) can still trigger a malicious `add_member` / `share_file` because all binding checks pass.
 

@@ -3371,6 +3371,97 @@ class TestPromiseTools:
         assert "not found" in parsed["error"].lower()
 
     @pytest.mark.asyncio
+    async def test_resolve_promise_surfaces_httpx_timeout_with_nonempty_error(
+        self, monkeypatch
+    ) -> None:
+        """httpx timeout exceptions have an empty ``str()``. If they leak to
+        the MCP layer, FastMCP surfaces "Error executing tool
+        resolve_promise:" with no detail. The wrapper must instead return a
+        JSON error that names the exception type."""
+        import json as _json
+
+        import httpx
+
+        from entrabot import mcp_server
+
+        monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
+        monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock(return_value=None))
+        monkeypatch.setattr(mcp_server, "_log_interaction_safe", lambda **kw: None)
+        monkeypatch.setattr(
+            "entrabot.tools.audit.log_event",
+            lambda **kw: {"event_id": "evt-x"},
+        )
+
+        async def fake_retry(fn, **kwargs):
+            raise httpx.ConnectTimeout("")
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+        result = await mcp_server.resolve_promise(promise_id="abc", resolution="done")
+        parsed = _json.loads(result)
+        assert "error" in parsed
+        assert "ConnectTimeout" in parsed["error"]
+
+    @pytest.mark.asyncio
+    async def test_add_promise_surfaces_httpx_timeout_with_nonempty_error(
+        self, monkeypatch
+    ) -> None:
+        """add_promise shares resolve_promise's leak: an httpx timeout (empty
+        ``str()``) must come back as a JSON error naming the type, not leak
+        to FastMCP as an empty-message tool error."""
+        import json as _json
+
+        import httpx
+
+        from entrabot import mcp_server
+
+        monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
+        monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock(return_value=None))
+        monkeypatch.setattr(mcp_server, "_log_interaction_safe", lambda **kw: None)
+        monkeypatch.setattr(
+            "entrabot.tools.audit.log_event",
+            lambda **kw: {"event_id": "evt-x"},
+        )
+
+        async def fake_retry(fn, **kwargs):
+            raise httpx.ConnectTimeout("")
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+        result = await mcp_server.add_promise(chat_id="terminal", description="x")
+        parsed = _json.loads(result)
+        assert "error" in parsed
+        assert "ConnectTimeout" in parsed["error"]
+
+    @pytest.mark.asyncio
+    async def test_list_promises_surfaces_httpx_timeout_with_nonempty_error(
+        self, monkeypatch
+    ) -> None:
+        """list_promises shares the same leak — guard it identically."""
+        import json as _json
+
+        import httpx
+
+        from entrabot import mcp_server
+
+        monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
+        monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock(return_value=None))
+        monkeypatch.setattr(
+            "entrabot.tools.audit.log_event",
+            lambda **kw: {"event_id": "evt-x"},
+        )
+
+        async def fake_retry(fn, **kwargs):
+            raise httpx.ConnectTimeout("")
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+        result = await mcp_server.list_promises(open_only=True)
+        parsed = _json.loads(result)
+        assert "error" in parsed
+        assert "ConnectTimeout" in parsed["error"]
+
+    @pytest.mark.asyncio
     async def test_round_trip_add_list_resolve_list(self, monkeypatch) -> None:
         """End-to-end with a real in-memory backend wired through.
 

@@ -4046,7 +4046,22 @@ async def add_promise(
             due_by=due_by or None,
         )
 
-    promise = await _with_token_retry(_call)
+    try:
+        promise = await _with_token_retry(_call)
+    except httpx.HTTPError as exc:
+        # httpx timeout exceptions str() to "" — name the type explicitly so
+        # the MCP layer never surfaces an empty error (seen 2026-07-06).
+        log_event(
+            action="promise.add",
+            resource="new",
+            outcome="failure",
+            agent_id=agent_id,
+            metadata={"error": type(exc).__name__},
+            attribution_type=attribution,
+        )
+        return json.dumps(
+            {"error": f"promise store I/O failed: {type(exc).__name__}: {exc}"}
+        )
 
     _log_interaction_safe(
         channel=detect_channel(
@@ -4101,7 +4116,22 @@ async def list_promises(open_only: bool = True) -> str:
     async def _call(token: str) -> list:  # noqa: ARG001 — token unused
         return await _list(open_only=open_only)
 
-    promises = await _with_token_retry(_call)
+    try:
+        promises = await _with_token_retry(_call)
+    except httpx.HTTPError as exc:
+        # httpx timeout exceptions str() to "" — name the type explicitly so
+        # the MCP layer never surfaces an empty error (seen 2026-07-06).
+        log_event(
+            action="promise.list",
+            resource="all",
+            outcome="failure",
+            agent_id=agent_id,
+            metadata={"error": type(exc).__name__},
+            attribution_type=attribution,
+        )
+        return json.dumps(
+            {"error": f"promise store I/O failed: {type(exc).__name__}: {exc}"}
+        )
     return json.dumps([p.to_entry() for p in promises], indent=2)
 
 
@@ -4247,6 +4277,20 @@ async def resolve_promise(promise_id: str, resolution: str) -> str:
             metadata={"promise_id": promise_id, "outcome": "not_found"},
         )
         return json.dumps({"error": f"promise not found: {promise_id}"})
+    except httpx.HTTPError as exc:
+        # httpx timeout exceptions str() to "" — name the type explicitly so
+        # the MCP layer never surfaces an empty error (seen 2026-07-06).
+        log_event(
+            action="promise.resolve",
+            resource=promise_id,
+            outcome="failure",
+            agent_id=agent_id,
+            metadata={"error": type(exc).__name__},
+            attribution_type=attribution,
+        )
+        return json.dumps(
+            {"error": f"promise store I/O failed: {type(exc).__name__}: {exc}"}
+        )
 
     _log_interaction_safe(
         channel=detect_channel(
