@@ -9,6 +9,8 @@ Windows **11 build 28120 (26H1), ARM64**, `processcontainer` backend, policy sch
 **Selected isolation tier:** `appcontainer-dacl` (see Issue 3).
 **Date:** 2026-06-29. **Updated:** 2026-07-02 — added Issue 4 (file- vs directory-level read
 grant) and `prepare-system-drive` results (Issue 3 update; answers the prior open question).
+**Updated:** 2026-07-06 — added Issue 5 (intermittent pre-containment wedge with zero ETW
+events; orphaned descendant outlives a kill of `wxc-exec.exe`; DACL recovery after force-kill).
 
 This note is intentionally self-contained so it can be forwarded as-is. **None of these
 are correctness/security bugs** — default-deny behaves correctly throughout. They are four
@@ -44,6 +46,13 @@ Windows backend, plus a couple of questions.
    `appcontainer-dacl` tier — you must grant the parent directory.** Granting the exact file and
    `type`-ing it is denied; granting its parent dir (identical command) succeeds. The same
    file-scoped policy works on macOS Seatbelt, so this is a portability surprise (see Issue 4).
+
+5. **Intermittently, a run wedges past its configured `process.timeout` while the MXC
+   Diagnostic Console shows ZERO `ProcessModel` (Sandboxing) ETW events** — i.e. the hang is
+   *before* containment setup/tracing. When the integrator force-kills `wxc-exec.exe`, an
+   orphaned descendant can survive holding the inherited stdio pipes (26 minutes observed),
+   and the next run prints `DACL recovery: … ACE(s) restored`. The identical policy run
+   standalone minutes later completes in seconds (clean denial or success). See Issue 5.
 
 For contrast, granting an executable's *own* dependency tree read-only makes it launch
 cleanly — e.g. granting a venv `python.exe`'s venv root + base CPython install as
@@ -212,6 +221,52 @@ Granting read access to a single file and reading it with `cmd /c type` is denie
   `readonlyPaths`, or document that on the `appcontainer-dacl` tier reading a file requires its
   parent directory to be reachable. A one-line note in the policy docs would save integrators the
   guesswork.
+
+---
+
+## Issue 5 — intermittent pre-containment wedge: run exceeds `process.timeout` with ZERO `ProcessModel` ETW events; killed run orphans a pipe-holding descendant
+
+### Symptom
+
+Twice (2026-07-02 and 2026-07-06), the **identical** write policy — `readwritePaths: []` after
+our operator-ceiling clamp, interpreter dirs in `readonlyPaths`, inner command a venv
+`python.exe` writer — wedged past its configured `process.timeout` (30000 ms) when invoked
+from our long-running MCP server process:
+
+- The run did not complete or exit at the configured `process.timeout`; our own watchdog had
+  to terminate it.
+- On 2026-07-02, terminating only `wxc-exec.exe` (CPython `subprocess.run`'s kill-direct-child
+  behavior) left an orphaned descendant holding the inherited stdout/stderr pipe handles for
+  **~26 minutes**, blocking the host's pipe drain the whole time.
+- During the 2026-07-06 wedge, the MXC Diagnostic Console (verbose mode, `ProcessModel` +
+  `Kernel-General` providers registered) showed **no Sandboxing events at all** for the run —
+  suggesting the wedge occurs *before* containment setup / tracing begins.
+- Minutes later, the identical policy run **standalone** behaved perfectly: denied write →
+  clean `exit 1` (inner `PermissionError`) in **4.5 s**; control write inside the ceiling →
+  `exit 0` in **2.2 s**.
+- The first standalone run after the force-killed wedge printed
+  `DACL recovery: 1 file(s), 3 ACE(s) restored, 0 error(s)` — recovery worked (good), but it
+  confirms a killed run leaves real DACL edits behind, and raises the question whether the
+  wedge itself is serialization/contention on the DACL-grant path (e.g. debris from a prior
+  killed run, or two host processes granting the same interpreter directories concurrently —
+  we had two MCP server instances alive during the first incident).
+- Environmental note, in case it matters: the host is a Parallels VM (ARM64) whose wall clock
+  jumps 2–5 minutes at a time on resume (`prl_tools.exe` `SystemTimeChange` ETW events).
+
+### Suggested fixes / questions
+
+- **Emit one ETW event immediately at `wxc-exec.exe` startup**, before grant setup, so
+  integrators can distinguish "wedged before containment" from "container ran and hung".
+  Today a pre-containment hang is invisible to the diagnostic console.
+- **Place the container host / child tree in a Job Object with `KILL_ON_JOB_CLOSE`** so that
+  killing `wxc-exec.exe` reaps every descendant. As-is, integrators must know to
+  `taskkill /T` or the orphan outlives the kill holding inherited handles.
+- **Clarify whether `process.timeout` is enforced by `wxc-exec.exe` itself.** In both
+  incidents the process outlived its configured timeout and the integrator's watchdog had to
+  intervene.
+- Is there a known lock or serialization point in the `appcontainer-dacl` grant path that
+  could block startup when a previous run was killed mid-grant, or when another process is
+  granting the same directories?
 
 ---
 
