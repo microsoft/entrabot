@@ -11,6 +11,10 @@ Windows **11 build 28120 (26H1), ARM64**, `processcontainer` backend, policy sch
 grant) and `prepare-system-drive` results (Issue 3 update; answers the prior open question).
 **Updated:** 2026-07-06 — added Issue 5 (intermittent pre-containment wedge with zero ETW
 events; orphaned descendant outlives a kill of `wxc-exec.exe`; DACL recovery after force-kill).
+**Updated:** 2026-07-06 (later) — Issue 5 hardened from intermittent to reproducible: 4/4
+wedges when spawned from our long-running host process (allowed AND denied targets), 3/3
+clean standalone; read-vs-write asymmetry narrows suspicion to the interpreter-dir DACL
+grants.
 
 This note is intentionally self-contained so it can be forwarded as-is. **None of these
 are correctness/security bugs** — default-deny behaves correctly throughout. They are four
@@ -47,12 +51,14 @@ Windows backend, plus a couple of questions.
    `type`-ing it is denied; granting its parent dir (identical command) succeeds. The same
    file-scoped policy works on macOS Seatbelt, so this is a portability surprise (see Issue 4).
 
-5. **Intermittently, a run wedges past its configured `process.timeout` while the MXC
-   Diagnostic Console shows ZERO `ProcessModel` (Sandboxing) ETW events** — i.e. the hang is
-   *before* containment setup/tracing. When the integrator force-kills `wxc-exec.exe`, an
-   orphaned descendant can survive holding the inherited stdio pipes (26 minutes observed),
-   and the next run prints `DACL recovery: … ACE(s) restored`. The identical policy run
-   standalone minutes later completes in seconds (clean denial or success). See Issue 5.
+5. **Write-policy runs spawned from a long-running host process wedge pre-containment —
+   reproducibly (4/4), on allowed AND denied targets — with ZERO `ProcessModel` ETW events
+   and no self-enforcement of `process.timeout`.** Identical policies standalone: 3/3 clean
+   in seconds. The working server-spawned *read* vs the wedging server-spawned *writes*
+   differ only by the interpreter-directory grants, and the grant target is the very venv
+   the spawning process runs from. Force-killing `wxc-exec.exe` orphans a descendant that
+   can hold inherited stdio pipes (26 minutes observed); the next run prints
+   `DACL recovery: … ACE(s) restored`. See Issue 5.
 
 For contrast, granting an executable's *own* dependency tree read-only makes it launch
 cleanly — e.g. granting a venv `python.exe`'s venv root + base CPython install as
@@ -228,28 +234,44 @@ Granting read access to a single file and reading it with `cmd /c type` is denie
 
 ### Symptom
 
-Twice (2026-07-02 and 2026-07-06), the **identical** write policy — `readwritePaths: []` after
-our operator-ceiling clamp, interpreter dirs in `readonlyPaths`, inner command a venv
-`python.exe` writer — wedged past its configured `process.timeout` (30000 ms) when invoked
-from our long-running MCP server process:
+**Four out of four** write-policy runs wedged past their configured `process.timeout`
+(30000 ms) when `wxc-exec.exe` was spawned from our long-running MCP server process
+(2026-07-02 ×1, 2026-07-06 ×3), while the **identical** policies run standalone from a fresh
+terminal process completed cleanly **three out of three** (same day, minutes apart):
 
-- The run did not complete or exit at the configured `process.timeout`; our own watchdog had
-  to terminate it.
+| Spawned from | Target | Policy verdict | Result |
+| --- | --- | --- | --- |
+| long-running server | Documents (denied) | outside write ceiling | ❌ wedge >30s, killed (×2: 07-02, 07-06) |
+| long-running server | Downloads (allowed) | inside write ceiling | ❌ wedge >30s, killed (×2: 07-06) |
+| fresh terminal process | Documents (denied) | outside write ceiling | ✅ clean exit 1 in 4.5 s |
+| fresh terminal process | Downloads (allowed) | inside write ceiling | ✅ exit 0 in 2.2–3.5 s, byte-exact |
+| long-running server | Documents READ (`cmd /c type`) | inside read ceiling | ✅ exit 0 in ~90 ms (07-02) |
+
+The wedge is therefore **not policy-dependent** (allowed and denied targets both wedge) and
+**not machine-state-dependent in general** (standalone runs interleaved with the wedges all
+succeed). Two variables correlate: (a) the spawning process is long-running with many open
+handles and active worker threads, and (b) the wedging runs are all *writes*, whose policy —
+unlike the working server-spawned *read* — includes the interpreter-directory grants
+(venv root + base CPython install). Note the venv being granted is the very tree the
+spawning server's own `python.exe` is running from, so if grant setup edits DACLs on those
+directories, it is editing ACLs on files the parent process holds open. Additional facts:
+
+- No run exited at the configured `process.timeout`; our own watchdog had to terminate every
+  wedged run.
 - On 2026-07-02, terminating only `wxc-exec.exe` (CPython `subprocess.run`'s kill-direct-child
   behavior) left an orphaned descendant holding the inherited stdout/stderr pipe handles for
   **~26 minutes**, blocking the host's pipe drain the whole time.
-- During the 2026-07-06 wedge, the MXC Diagnostic Console (verbose mode, `ProcessModel` +
-  `Kernel-General` providers registered) showed **no Sandboxing events at all** for the run —
-  suggesting the wedge occurs *before* containment setup / tracing begins.
-- Minutes later, the identical policy run **standalone** behaved perfectly: denied write →
-  clean `exit 1` (inner `PermissionError`) in **4.5 s**; control write inside the ceiling →
-  `exit 0` in **2.2 s**.
-- The first standalone run after the force-killed wedge printed
-  `DACL recovery: 1 file(s), 3 ACE(s) restored, 0 error(s)` — recovery worked (good), but it
-  confirms a killed run leaves real DACL edits behind, and raises the question whether the
-  wedge itself is serialization/contention on the DACL-grant path (e.g. debris from a prior
-  killed run, or two host processes granting the same interpreter directories concurrently —
-  we had two MCP server instances alive during the first incident).
+- During the 2026-07-06 wedges, the MXC Diagnostic Console (verbose mode, `ProcessModel` +
+  `Kernel-General` providers registered) showed **no Sandboxing events at all** for the
+  wedged runs — while the successful standalone runs traced normally — so the wedge occurs
+  *before* containment setup / tracing begins.
+- The first standalone run after each force-killed wedge printed a DACL recovery line
+  (`DACL recovery: 1 file(s), 3 ACE(s) restored, 0 error(s)`, later `4 ACE(s)`) — recovery
+  worked both times (good), but it confirms a killed run leaves real DACL edits behind, and
+  strengthens the suspicion that the wedge itself is serialization/contention on the
+  DACL-grant path (debris from a prior killed run, another process granting the same
+  interpreter directories, or the grant editing ACLs under the spawning process's own open
+  handles — we had two MCP server instances alive during the first incident).
 - Environmental note, in case it matters: the host is a Parallels VM (ARM64) whose wall clock
   jumps 2–5 minutes at a time on resume (`prl_tools.exe` `SystemTimeChange` ETW events).
 
@@ -267,6 +289,13 @@ from our long-running MCP server process:
 - Is there a known lock or serialization point in the `appcontainer-dacl` grant path that
   could block startup when a previous run was killed mid-grant, or when another process is
   granting the same directories?
+- **Likely repro shape for your side:** spawn `wxc-exec.exe` from a long-lived parent with
+  many open handles/threads, with a policy whose `readonlyPaths` include the directory tree
+  the parent's own executable/runtime lives in (our case: the venv the spawning `python.exe`
+  runs from). Server-spawned *reads* (no such grants) work; server-spawned *writes* (with
+  them) wedge 4/4; both work standalone. If grant setup edits DACLs on directories the
+  parent holds open handles into, that is the strongest candidate for the pre-containment
+  block.
 
 ---
 
