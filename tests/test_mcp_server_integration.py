@@ -986,13 +986,32 @@ class TestDelegatedModeFiltering:
     def test_excludes_sent_message_ids(self) -> None:
         """Messages in sent_message_ids should be filtered out."""
         messages = [
-            {"message_id": "m1", "from": "Human", "content": "hello"},
-            {"message_id": "m2", "from": "Human", "content": "world"},
-            {"message_id": "m3", "from": "Human", "content": "test"},
+            {
+                "message_id": "m1",
+                "from": "Human",
+                "sender_upn": "brandon@werner.ac",
+                "sender_id": "h",
+                "content": "hello",
+            },
+            {
+                "message_id": "m2",
+                "from": "Human",
+                "sender_upn": "brandon@werner.ac",
+                "sender_id": "h",
+                "content": "world",
+            },
+            {
+                "message_id": "m3",
+                "from": "Human",
+                "sender_upn": "brandon@werner.ac",
+                "sender_id": "h",
+                "content": "test",
+            },
         ]
         result = filter_human_messages(
             messages,
-            "Agent",
+            agent_upn="entra-agent@werner.ac",
+            agent_object_id="a",
             sent_message_ids={"m1", "m3"},
         )
         assert len(result) == 1
@@ -1001,35 +1020,98 @@ class TestDelegatedModeFiltering:
     def test_excludes_entrabot_prefix(self) -> None:
         """Messages starting with [EntraBot] should be filtered (restart-safe dedup)."""
         messages = [
-            {"message_id": "m1", "from": "Human", "content": "[EntraBot] automated msg"},
-            {"message_id": "m2", "from": "Human", "content": "normal human msg"},
+            {
+                "message_id": "m1",
+                "from": "Human",
+                "sender_upn": "brandon@werner.ac",
+                "sender_id": "h",
+                "content": "[EntraBot] automated msg",
+            },
+            {
+                "message_id": "m2",
+                "from": "Human",
+                "sender_upn": "brandon@werner.ac",
+                "sender_id": "h",
+                "content": "normal human msg",
+            },
         ]
-        result = filter_human_messages(messages, "Agent")
+        result = filter_human_messages(
+            messages,
+            agent_upn="entra-agent@werner.ac",
+            agent_object_id="a",
+        )
         assert len(result) == 1
         assert result[0]["content"] == "normal human msg"
 
-    def test_agent_display_name_still_filtered(self) -> None:
-        """Agent's own messages are still filtered by display name."""
+    def test_agent_upn_filters_self_authored(self) -> None:
+        """Agent's own messages are filtered by UPN, not display name."""
         messages = [
-            {"message_id": "m1", "from": "EntraBot Agent", "content": "hi"},
-            {"message_id": "m2", "from": "Human", "content": "response"},
+            {
+                "message_id": "m1",
+                "from": "EntraBot Agent",
+                "sender_upn": "entra-agent@werner.ac",
+                "sender_id": "a",
+                "content": "hi",
+            },
+            {
+                "message_id": "m2",
+                "from": "Human",
+                "sender_upn": "brandon@werner.ac",
+                "sender_id": "h",
+                "content": "response",
+            },
         ]
-        result = filter_human_messages(messages, "EntraBot Agent")
+        result = filter_human_messages(
+            messages,
+            agent_upn="entra-agent@werner.ac",
+            agent_object_id="a",
+        )
         assert len(result) == 1
         assert result[0]["from"] == "Human"
 
     def test_combined_filters(self) -> None:
         """All filter modes work together."""
         messages = [
-            {"message_id": "m1", "from": "Agent", "content": "agent msg"},
-            {"message_id": "m2", "from": "unknown", "content": "system msg"},
-            {"message_id": "m3", "from": "Human", "content": "[EntraBot] echo"},
-            {"message_id": "m4", "from": "Human", "content": "sent by me"},
-            {"message_id": "m5", "from": "Human", "content": "real human msg"},
+            {
+                "message_id": "m1",
+                "from": "Agent",
+                "sender_upn": "entra-agent@werner.ac",
+                "sender_id": "a",
+                "content": "agent msg",
+            },
+            {
+                "message_id": "m2",
+                "from": "unknown",
+                "sender_upn": "",
+                "sender_id": "",
+                "content": "system msg",
+            },
+            {
+                "message_id": "m3",
+                "from": "Human",
+                "sender_upn": "brandon@werner.ac",
+                "sender_id": "h",
+                "content": "[EntraBot] echo",
+            },
+            {
+                "message_id": "m4",
+                "from": "Human",
+                "sender_upn": "brandon@werner.ac",
+                "sender_id": "h",
+                "content": "sent by me",
+            },
+            {
+                "message_id": "m5",
+                "from": "Human",
+                "sender_upn": "brandon@werner.ac",
+                "sender_id": "h",
+                "content": "real human msg",
+            },
         ]
         result = filter_human_messages(
             messages,
-            "Agent",
+            agent_upn="entra-agent@werner.ac",
+            agent_object_id="a",
             sent_message_ids={"m4"},
         )
         assert len(result) == 1

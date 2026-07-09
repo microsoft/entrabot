@@ -100,6 +100,13 @@ async def whoami(*, token: str | None = None) -> dict:
         "agent_type": "Entra Agent Identity",
         "blueprint_app_id": config.blueprint_app_id or "not_configured",
         "agent_id": config.agent_id or "not_configured",
+        # Canonical machine identity used by the self-authored filter
+        # (Learning #69). Displayed for observability; never used for
+        # authorization.
+        "agent_upn": config.agent_user_upn or "not_configured",
+        "agent_object_id": (
+            config.agent_user_id or config.agent_object_id or "not_configured"
+        ),
         "tenant_id": config.tenant_id or "not_configured",
         "status": "authenticated" if token else "not_authenticated",
     }

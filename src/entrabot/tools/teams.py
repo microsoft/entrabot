@@ -1391,13 +1391,20 @@ async def read(
             ]
             user_obj = (m.get("from") or {}).get("user", {}) or {}
             sender_id = str(user_obj.get("id") or "")
+            # UPN is the canonical machine-identity field on Graph's message
+            # payload; ``mail`` is a mailbox alias that some tenants populate
+            # in its stead. Prefer UPN, fall back to mail, keep ``sender`` for
+            # backwards-compat display alongside a first-class ``sender_upn``
+            # so callers filter on identity, never on displayName.
             sender_email = user_obj.get("userPrincipalName") or user_obj.get("mail") or ""
+            sender_upn = str(user_obj.get("userPrincipalName") or "")
             out.append(
                 {
                     "message_id": m["id"],
                     "from": user_obj.get("displayName", "unknown"),
                     "sender": str(sender_email or ""),
                     "sender_id": sender_id,
+                    "sender_upn": sender_upn,
                     "content": body_content,
                     "content_text": body_content,
                     "sent_at": m.get("createdDateTime"),
@@ -1410,33 +1417,50 @@ async def read(
 
 def filter_human_messages(
     messages: list[dict],
-    agent_user_display_name: str,
     *,
+    agent_upn: str | None = None,
+    agent_object_id: str | None = None,
     sent_message_ids: set[str] | None = None,
 ) -> list[dict]:
     """Return only messages from the human (not the agent, not system messages).
 
-    Filters out:
-    - Messages where ``from`` starts with the agent's display name. Graph
-      can append a persona suffix (e.g. "EntraBot Agent (sati-agent)"),
-      so prefix-match instead of exact-match to catch agent echoes.
-    - Messages where ``from`` is ``"unknown"`` (system messages with null from field)
-    - Messages whose ``message_id`` is in *sent_message_ids* (echo prevention for delegated mode)
-    - Messages whose content starts with ``[EntraBot]`` (restart-safe dedup filter)
+    Identity match order — display name is NEVER an identity predicate:
 
-    All filtering is client-side — Graph API ``$filter`` is unreliable for chat messages.
+    1. ``sender_upn`` (case-insensitive) vs *agent_upn* (canonical).
+    2. ``sender_id`` (AAD object-id) vs *agent_object_id* (fallback, used
+       when the Graph payload lacks UPN or *agent_upn* is not configured).
+
+    Also filters out:
+
+    * Messages where ``from`` is ``"unknown"`` (system messages with null from field).
+    * Messages whose ``message_id`` is in *sent_message_ids* (echo prevention
+      for delegated mode).
+    * Messages whose content starts with ``[EntraBot]`` (restart-safe dedup filter).
+
+    All filtering is client-side — Graph API ``$filter`` is unreliable for chat
+    messages. See ``docs/architecture/PLAN-agent-identity-by-upn.md`` and
+    Learning #69: display names are user-mutable and localizable and MUST NOT
+    be used as identity in filter / dedup / authorization / routing code paths.
     """
     exclude_ids = sent_message_ids or set()
+    agent_upn_normalized = (agent_upn or "").strip().lower() or None
+    agent_oid_normalized = (agent_object_id or "").strip() or None
 
-    def _is_agent(sender: str) -> bool:
-        if not agent_user_display_name:
-            return False
-        return sender == agent_user_display_name or sender.startswith(agent_user_display_name + " ")
+    def _is_agent(m: dict) -> bool:
+        msg_upn = str(m.get("sender_upn") or "").strip().lower()
+        msg_oid = str(m.get("sender_id") or "").strip()
+        upn_match = bool(
+            agent_upn_normalized and msg_upn and msg_upn == agent_upn_normalized
+        )
+        oid_match = bool(
+            agent_oid_normalized and msg_oid and msg_oid == agent_oid_normalized
+        )
+        return upn_match or oid_match
 
     return [
         m
         for m in messages
-        if not _is_agent(m.get("from", ""))
+        if not _is_agent(m)
         and m.get("from") != "unknown"
         and m.get("message_id") not in exclude_ids
         and not (m.get("content", "").strip().startswith("[EntraBot]"))

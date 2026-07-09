@@ -1404,7 +1404,9 @@ def _resolve_pending_chat(chat_id: str, chat_state: dict) -> None:
 async def _poll_watched_chat(
     chat_id: str,
     chat_state: dict,
-    agent_display_name: str,
+    *,
+    agent_upn: str | None,
+    agent_object_id: str | None,
 ) -> None:
     """Run one poll cycle for a single watched chat.
 
@@ -1415,6 +1417,9 @@ async def _poll_watched_chat(
        reached for a chat that resolved to ABSENT — a genuinely new chat.
     3. bootstrapped → steady-state: read, filter, push genuinely-new messages,
        advance + persist the cursor.
+
+    Self-authored filtering matches on UPN (canonical) then AAD object-id
+    (fallback) — never display name. See Learning #69.
     """
     from entrabot.tools.teams import filter_human_messages, read
 
@@ -1430,7 +1435,11 @@ async def _poll_watched_chat(
 
     # (3) Steady state.
     raw_messages = await _with_token_retry(read, chat_id=chat_id, count=10)
-    human_msgs = filter_human_messages(raw_messages, agent_display_name)
+    human_msgs = filter_human_messages(
+        raw_messages,
+        agent_upn=agent_upn,
+        agent_object_id=agent_object_id,
+    )
     new_msgs = _filter_new_messages(
         human_msgs,
         chat_state["last_ts"],
@@ -1489,11 +1498,10 @@ async def _background_poll() -> None:
     if logger:
         logger.info("Starting background Teams poll (interval=%ds)", BACKGROUND_POLL_INTERVAL)
 
-    # Must match the displayName that Graph API returns in message.from.user.displayName
-    # Identity-aware: filter out messages from BOTH the agent and the human user
-    # depending on current identity mode
-    agent_display_name = "EntraBot Agent"
-
+    # Identity-by-UPN (Learning #69). We match self-authored messages by
+    # canonical UPN with AAD object-id fallback — never displayName, which is
+    # user-mutable and localizable. Sourced from the resolved config; refreshed
+    # each cycle so a mid-run config reload takes effect.
     while True:
         try:
             await asyncio.sleep(BACKGROUND_POLL_INTERVAL)
@@ -1507,12 +1515,23 @@ async def _background_poll() -> None:
 
             await _ensure_valid_token()
 
+            poll_config = _state.get("config") or get_config()
+            agent_upn = poll_config.agent_user_upn
+            agent_object_id = (
+                poll_config.agent_user_id or poll_config.agent_object_id
+            )
+
             # Snapshot chat IDs to avoid mutation during iteration
             watched = dict(_state.get("watched_chats", {}))
 
             for chat_id, chat_state in watched.items():
                 try:
-                    await _poll_watched_chat(chat_id, chat_state, agent_display_name)
+                    await _poll_watched_chat(
+                        chat_id,
+                        chat_state,
+                        agent_upn=agent_upn,
+                        agent_object_id=agent_object_id,
+                    )
                 except Exception as chat_exc:
                     # One chat's failure must not starve the others in this
                     # cycle. Log and move on; the next cycle will retry.
@@ -2340,7 +2359,10 @@ async def send_teams_message(
         "wait_tool_dedup", deque()
     )
 
-    agent_display_name = (wait_config.agent_user_upn or "").split("@", 1)[0] or "EntraBot Agent"
+    # Identity-by-UPN (Learning #69): match self-authored on canonical UPN and
+    # AAD object-id, never display name.
+    agent_upn = wait_config.agent_user_upn
+    agent_object_id = wait_config.agent_user_id or wait_config.agent_object_id
 
     def list_chat_ids() -> list[str]:
         watched = _state.get("watched_chats") or {}
@@ -2348,7 +2370,11 @@ async def send_teams_message(
 
     async def read_chat_for_wait(cid: str) -> list[dict]:
         raw = await _with_token_retry(read, chat_id=cid, count=10)
-        return filter_human_messages(raw, agent_display_name)
+        return filter_human_messages(
+            raw,
+            agent_upn=agent_upn,
+            agent_object_id=agent_object_id,
+        )
 
     async def heartbeat(elapsed_s: float = 0.0) -> None:
         if ctx is not None:
@@ -3319,9 +3345,11 @@ async def watch_teams_replies(
             }
         )
 
-    # Must match the displayName that Graph API returns in message.from.user.displayName
-    # NOT the UPN — Graph returns "EntraBot Agent", not the agent's UPN.
-    agent_display_name = "EntraBot Agent"
+    # Identity-by-UPN (Learning #69). Match self-authored on canonical UPN and
+    # AAD object-id, never displayName.
+    watch_config = _state.get("config") or get_config()
+    agent_upn = watch_config.agent_user_upn
+    agent_object_id = watch_config.agent_user_id or watch_config.agent_object_id
 
     # Bootstrap cursor on first call: fetch latest messages, set cursor to newest
     if _state.get("last_seen_timestamp") is None:
@@ -3364,7 +3392,11 @@ async def watch_teams_replies(
         )
 
         # Client-side filtering: human only, then dedup
-        human_msgs = filter_human_messages(raw_messages, agent_display_name)
+        human_msgs = filter_human_messages(
+            raw_messages,
+            agent_upn=agent_upn,
+            agent_object_id=agent_object_id,
+        )
         new_msgs = _filter_new_messages(
             human_msgs,
             _state.get("last_seen_timestamp"),
@@ -3559,7 +3591,9 @@ async def wait_for_sponsor_dm(
         "wait_tool_dedup", deque()
     )
 
-    agent_display_name = (config.agent_user_upn or "").split("@", 1)[0] or "EntraBot Agent"
+    # Identity-by-UPN (Learning #69).
+    agent_upn = config.agent_user_upn
+    agent_object_id = config.agent_user_id or config.agent_object_id
 
     def list_chat_ids() -> list[str]:
         watched = _state.get("watched_chats") or {}
@@ -3569,7 +3603,11 @@ async def wait_for_sponsor_dm(
         raw = await _with_token_retry(read, chat_id=chat_id, count=10)
         # Filter out the agent's own messages so the agent never gates
         # on its own echo. Sponsor gate runs on top of this.
-        return filter_human_messages(raw, agent_display_name)
+        return filter_human_messages(
+            raw,
+            agent_upn=agent_upn,
+            agent_object_id=agent_object_id,
+        )
 
     async def heartbeat(elapsed_s: float = 0.0) -> None:
         if ctx is not None:
