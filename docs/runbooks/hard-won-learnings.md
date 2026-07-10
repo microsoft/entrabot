@@ -911,6 +911,26 @@ After this, `setup.sh --diagnose` passed all 7 checks including the three-hop to
 
 ---
 
+### Learning #69: Agent Names Change — Never Identify Agents by Display Name
+
+**Date:** 2026-07-09
+**Status:** **CONFIRMED — root cause of the 2026-07-09 cursor-replay incident.**
+**Context:** The background Teams poll needs to filter out the agent's own outbound messages before pushing incoming messages as channel notifications; otherwise it would push every message the agent itself just sent back to the agent as if it were fresh inbound. That filter (`filter_human_messages` in `src/entrabot/tools/teams.py:1411`, callers at `src/entrabot/mcp_server.py:1495` and `:3324`) compared `message.from.user.displayName` against a hard-coded string `"EntraBot Agent"`. Weeks after the code was written, the agent was renamed (Entra directory display name changed to `"EntraClaw Agent"`). Graph messages started returning the new name; the string compare stopped matching; the filter no-oped.
+**Symptom:** On 2026-07-09, 6-week-old self-authored Teams messages began replaying as fresh channel notifications. `bootstrap_body_state` reported `watched_chat_count=62, cursors_present=62, cursors_stale=61, oldest_cursor_ts=2026-05-28T22:43:19.927Z`. The cursor-date alignment (2026-05-28T22:43 cursor → 22:48 and 22:59 replays in the same chats) matched the mechanism precisely: cursors were pinned just before self-authored messages from the pre-rename window, and today's poll pass finally re-ran the filter, failed to recognize the agent's own messages as its own, and pushed them.
+**Root cause:** Identifying an AAD principal by display name. Display names are user-mutable, localizable, unindexed, and unstable. They have no place in code paths that filter, deduplicate, authorize, or route.
+**Fix:** Switch the self-identity filter to match on `sender_upn` first (the config-side canonical is `ENTRABOT_AGENT_UPN=entra-agent@werner.ac`), falling back to `sender_id` (AAD object-id) when the Graph payload doesn't surface UPN. Never use `sender_display_name` for anything except human-facing rendering. Full plan: `docs/architecture/PLAN-agent-identity-by-upn.md`.
+**Prevention:**
+
+- **UPN is the config canonical.** Human-readable, matches the Entra directory, easy to grep.
+- **Object-id is the runtime fallback.** Guaranteed stable, present on every Graph message.
+- **Display name is for humans only.** If you see a code path comparing display names to identify a principal, it is a bug.
+- **Rename tests.** When adding an identity-based filter, add a test that renames the display name mid-test and confirms the filter still holds. This would have caught this at PR-write time.
+- **Sibling to Learning #68.** That learning covered persistent surfaces a rename PR won't touch (OS keystore, state dirs, MCP configs). This one covers the shape a rename PR *should* touch but often doesn't notice: identity-by-name predicates. Same anti-pattern (rename can only touch what the grepper looks for) with a different failure surface.
+
+**Evidence/references:** Live session 2026-07-09 with Brandon. Symptom captured live: two channel notifications for messages `1780008526013` (chat `19:...f9aee2c4...@unq.gbl.spaces`, ts `2026-05-28T22:48:46Z`) and `1780009182250` (chat `19:...a1f896a9...@unq.gbl.spaces`, ts `2026-05-28T22:59:42Z`), both from sender `"EntraClaw Agent"` self-authored, both pushed as if fresh inbound. Fix files: `src/entrabot/tools/teams.py:1411` (predicate), `src/entrabot/mcp_server.py:1495` and `:3324` (callers), `src/entrabot/config.py` (`AGENT_UPN` added), `scripts/migrate_cursors_to_upn.py` (one-shot cursor migration + `last_ts` bump + `seen_ids_tail` populate). PR #97 (`77b6d49`) fleet-safe idempotency was working as designed — it just never saw these message IDs before, so `claim_delivery` correctly treated them as new.
+
+---
+
 ### [HISTORICAL] Learning #4: OBO Requires Matching Token Audience
 
 **Date:** 2026-04-06

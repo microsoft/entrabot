@@ -15,94 +15,206 @@ from entrabot.tools.teams import GRAPH_BASE, filter_human_messages
 
 
 class TestFilterHumanMessages:
-    def test_filters_agent_messages(self) -> None:
+    """Identity-by-UPN filter.
+
+    Agent-self identification is by UPN (canonical) and AAD object-id
+    (fallback). Display name is NEVER used — it's user-mutable and
+    localizable. See ``docs/architecture/PLAN-agent-identity-by-upn.md``
+    and Learning #69.
+    """
+
+    def test_filter_matches_agent_upn(self) -> None:
+        """UPN-first: message whose sender_upn matches config UPN is filtered."""
         messages = [
             {
                 "message_id": "m1",
                 "from": "Human User",
+                "sender_upn": "brandon@werner.ac",
+                "sender_id": "human-oid",
                 "content": "hello",
                 "sent_at": "2026-04-06T12:00:00Z",
             },
             {
                 "message_id": "m2",
-                "from": "EntraBot Agent",
+                "from": "EntraClaw Agent",
+                "sender_upn": "entra-agent@werner.ac",
+                "sender_id": "agent-oid",
                 "content": "hi back",
                 "sent_at": "2026-04-06T12:00:01Z",
             },
-            {
-                "message_id": "m3",
-                "from": "Human User",
-                "content": "do something",
-                "sent_at": "2026-04-06T12:00:02Z",
-            },
         ]
-        result = filter_human_messages(messages, agent_user_display_name="EntraBot Agent")
-        assert len(result) == 2
+        result = filter_human_messages(
+            messages,
+            agent_upn="entra-agent@werner.ac",
+            agent_object_id="agent-oid",
+        )
+        assert len(result) == 1
         assert result[0]["message_id"] == "m1"
-        assert result[1]["message_id"] == "m3"
 
-    def test_filters_no_from_field(self) -> None:
+    def test_filter_matches_agent_object_id_when_upn_absent(self) -> None:
+        """Object-id fallback: no sender_upn on payload, matches on sender_id."""
         messages = [
             {
                 "message_id": "m1",
                 "from": "Human User",
+                "sender_upn": "",
+                "sender_id": "human-oid",
+                "content": "hello",
+                "sent_at": "2026-04-06T12:00:00Z",
+            },
+            {
+                "message_id": "m2",
+                "from": "EntraClaw Agent",
+                "sender_upn": "",
+                "sender_id": "agent-oid",
+                "content": "hi back",
+                "sent_at": "2026-04-06T12:00:01Z",
+            },
+        ]
+        result = filter_human_messages(
+            messages,
+            agent_upn="entra-agent@werner.ac",
+            agent_object_id="agent-oid",
+        )
+        assert len(result) == 1
+        assert result[0]["message_id"] == "m1"
+
+    def test_filter_ignores_display_name_match(self) -> None:
+        """Display name is NEVER an identity predicate.
+
+        The 2026-07-09 rename incident: after "EntraBot Agent" was renamed to
+        "EntraClaw Agent", the filter's displayName match no-op'd and old
+        outbounds replayed as fresh inbound. Regression guard: even if the
+        message's ``from`` displayName matches the old hard-coded string, if
+        UPN and object-id do NOT match config, the message is NOT filtered.
+        """
+        messages = [
+            {
+                "message_id": "m1",
+                # display name matches the pre-rename hard-coded string
+                "from": "EntraBot Agent",
+                # ...but UPN and object-id belong to a human
+                "sender_upn": "brandon@werner.ac",
+                "sender_id": "human-oid",
+                "content": "impersonation attempt via displayName",
+                "sent_at": "2026-04-06T12:00:00Z",
+            },
+        ]
+        result = filter_human_messages(
+            messages,
+            agent_upn="entra-agent@werner.ac",
+            agent_object_id="agent-oid",
+        )
+        # Display name is data, not identity — this message must survive.
+        assert len(result) == 1
+        assert result[0]["message_id"] == "m1"
+
+    def test_filter_matches_when_both_present(self) -> None:
+        """Both UPN and object-id match → filtered (redundant match is fine)."""
+        messages = [
+            {
+                "message_id": "m1",
+                "from": "EntraClaw Agent",
+                "sender_upn": "entra-agent@werner.ac",
+                "sender_id": "agent-oid",
+                "content": "self echo",
+                "sent_at": "2026-04-06T12:00:00Z",
+            },
+        ]
+        result = filter_human_messages(
+            messages,
+            agent_upn="entra-agent@werner.ac",
+            agent_object_id="agent-oid",
+        )
+        assert result == []
+
+    def test_filter_no_config_upn_falls_back_to_object_id(self) -> None:
+        """Missing AGENT_UPN config: object-id still filters self-authored."""
+        messages = [
+            {
+                "message_id": "m1",
+                "from": "EntraClaw Agent",
+                "sender_upn": "entra-agent@werner.ac",
+                "sender_id": "agent-oid",
+                "content": "self",
+                "sent_at": "2026-04-06T12:00:00Z",
+            },
+            {
+                "message_id": "m2",
+                "from": "Human",
+                "sender_upn": "brandon@werner.ac",
+                "sender_id": "human-oid",
+                "content": "human",
+                "sent_at": "2026-04-06T12:00:01Z",
+            },
+        ]
+        result = filter_human_messages(
+            messages,
+            agent_upn=None,
+            agent_object_id="agent-oid",
+        )
+        assert len(result) == 1
+        assert result[0]["message_id"] == "m2"
+
+    def test_filter_upn_match_is_case_insensitive(self) -> None:
+        """UPN compares are case-insensitive because Entra ID / Graph treats them that way.
+
+        Not an RFC-822 property — RFC 5321/5322 don't mandate case-insensitive
+        local-parts. The invariant we rely on here is the Entra directory's
+        behavior, not the email standard.
+        """
+        messages = [
+            {
+                "message_id": "m1",
+                "from": "EntraClaw Agent",
+                "sender_upn": "Entra-Agent@Werner.AC",
+                "sender_id": "agent-oid",
+                "content": "self",
+                "sent_at": "2026-04-06T12:00:00Z",
+            },
+        ]
+        result = filter_human_messages(
+            messages,
+            agent_upn="entra-agent@werner.ac",
+            agent_object_id="agent-oid",
+        )
+        assert result == []
+
+    def test_filters_unknown_system_messages(self) -> None:
+        """System messages (``from`` == "unknown") are still filtered out."""
+        messages = [
+            {
+                "message_id": "m1",
+                "from": "Human User",
+                "sender_upn": "brandon@werner.ac",
+                "sender_id": "human-oid",
                 "content": "hello",
                 "sent_at": "2026-04-06T12:00:00Z",
             },
             {
                 "message_id": "m2",
                 "from": "unknown",
+                "sender_upn": "",
+                "sender_id": "",
                 "content": "",
-                "sent_at": "2026-04-06T12:00:01Z",
-            },
-        ]
-        # "unknown" is what teams.read() returns when from is None — see existing code
-        # System messages have from="unknown", so filter those out too
-        result = filter_human_messages(messages, agent_user_display_name="EntraBot Agent")
-        assert len(result) == 1
-        assert result[0]["message_id"] == "m1"
-
-    def test_empty_list(self) -> None:
-        result = filter_human_messages([], agent_user_display_name="EntraBot Agent")
-        assert result == []
-
-    def test_all_agent_messages(self) -> None:
-        messages = [
-            {
-                "message_id": "m1",
-                "from": "EntraBot Agent",
-                "content": "hi",
-                "sent_at": "2026-04-06T12:00:00Z",
-            },
-        ]
-        result = filter_human_messages(messages, agent_user_display_name="EntraBot Agent")
-        assert result == []
-
-    def test_filters_agent_with_persona_suffix(self) -> None:
-        """Graph can append a persona-sati suffix to the agent's display
-        name (e.g. "EntraBot Agent (sati-agent)"). Prefix-match so the
-        agent's own outbound still gets filtered out of the inbound poll.
-        """
-        messages = [
-            {
-                "message_id": "m1",
-                "from": "EntraBot Agent (sati-agent)",
-                "content": "hi back",
-                "sent_at": "2026-04-06T12:00:00Z",
-            },
-            {
-                "message_id": "m2",
-                "from": "Human User",
-                "content": "hey",
                 "sent_at": "2026-04-06T12:00:01Z",
             },
         ]
         result = filter_human_messages(
             messages,
-            agent_user_display_name="EntraBot Agent",
+            agent_upn="entra-agent@werner.ac",
+            agent_object_id="agent-oid",
         )
         assert len(result) == 1
-        assert result[0]["message_id"] == "m2"
+        assert result[0]["message_id"] == "m1"
+
+    def test_empty_list(self) -> None:
+        result = filter_human_messages(
+            [],
+            agent_upn="entra-agent@werner.ac",
+            agent_object_id="agent-oid",
+        )
+        assert result == []
 
 
 class TestEagerTokenRefresh:
@@ -569,7 +681,13 @@ class TestWatchTeamsReplies:
                         "value": [
                             {
                                 "id": "old-1",
-                                "from": {"user": {"displayName": "Human"}},
+                                "from": {
+                                    "user": {
+                                        "displayName": "Human",
+                                        "id": "human-oid",
+                                        "userPrincipalName": "brandon@werner.ac",
+                                    }
+                                },
                                 "body": {"content": "old msg"},
                                 "createdDateTime": "2026-04-06T11:59:00Z",
                             },
@@ -583,13 +701,27 @@ class TestWatchTeamsReplies:
                         "value": [
                             {
                                 "id": "new-1",
-                                "from": {"user": {"displayName": "Human"}},
+                                "from": {
+                                    "user": {
+                                        "displayName": "Human",
+                                        "id": "human-oid",
+                                        "userPrincipalName": "brandon@werner.ac",
+                                    }
+                                },
                                 "body": {"content": "do something"},
                                 "createdDateTime": "2026-04-06T12:00:05Z",
                             },
                             {
                                 "id": "agent-1",
-                                "from": {"user": {"displayName": "EntraBot Agent"}},
+                                "from": {
+                                    "user": {
+                                        # Agent renamed post-rollout — displayName
+                                        # doesn't match config; identity is UPN.
+                                        "displayName": "EntraClaw Agent",
+                                        "id": "agent-oid",
+                                        "userPrincipalName": "entra-agent@werner.ac",
+                                    }
+                                },
                                 "body": {"content": "sure thing"},
                                 "createdDateTime": "2026-04-06T12:00:06Z",
                             },
@@ -601,7 +733,9 @@ class TestWatchTeamsReplies:
 
         mock_acquire = MagicMock(return_value="token")
         mock_config = MagicMock()
-        mock_config.agent_user_upn = "EntraBot Agent"
+        mock_config.agent_user_upn = "entra-agent@werner.ac"
+        mock_config.agent_user_id = "agent-oid"
+        mock_config.agent_object_id = "agent-oid"
 
         old_state = mcp_server._state.copy()
         try:

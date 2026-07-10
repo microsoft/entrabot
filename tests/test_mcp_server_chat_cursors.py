@@ -220,7 +220,12 @@ class TestPollFailClosed:
         )
         monkeypatch.setattr(mcp_server, "_bootstrap_chat", _async_recorder(bootstrapped))
 
-        await mcp_server._poll_watched_chat(chat_id, chat_state, "EntraBot Agent")
+        await mcp_server._poll_watched_chat(
+            chat_id,
+            chat_state,
+            agent_upn="entra-agent@werner.ac",
+            agent_object_id="agent-oid",
+        )
 
         assert pushed == []
         assert bootstrapped == []
@@ -261,7 +266,12 @@ class TestPollFailClosed:
         )
         monkeypatch.setattr(mcp_server, "_bootstrap_chat", _async_recorder(bootstrapped))
 
-        await mcp_server._poll_watched_chat(chat_id, chat_state, "EntraBot Agent")
+        await mcp_server._poll_watched_chat(
+            chat_id,
+            chat_state,
+            agent_upn="entra-agent@werner.ac",
+            agent_object_id="agent-oid",
+        )
 
         # Resolution cycle rehydrates but does NOT push (fail-closed): the
         # steady-state gate handles delivery on the NEXT cycle.
@@ -309,7 +319,7 @@ class TestPollSteadyStateIdempotent:
         monkeypatch.setattr(mcp_server, "_with_token_retry", fake_token_retry)
         monkeypatch.setattr(
             "entrabot.tools.teams.filter_human_messages",
-            lambda messages, name: messages,
+            lambda messages, **kwargs: messages,
         )
 
         # Sibling already delivered m2 → only m1 is ours to push.
@@ -322,7 +332,12 @@ class TestPollSteadyStateIdempotent:
             mcp_server, "_push_channel_notification", _async_recorder(pushed)
         )
 
-        await mcp_server._poll_watched_chat(chat_id, chat_state, "EntraBot Agent")
+        await mcp_server._poll_watched_chat(
+            chat_id,
+            chat_state,
+            agent_upn="entra-agent@werner.ac",
+            agent_object_id="agent-oid",
+        )
 
         pushed_ids = [call[0][0]["message_id"] for call in pushed]
         assert pushed_ids == ["m1"]
@@ -350,7 +365,7 @@ class TestPollSteadyStateIdempotent:
         monkeypatch.setattr(mcp_server, "_with_token_retry", fake_token_retry)
         monkeypatch.setattr(
             "entrabot.tools.teams.filter_human_messages",
-            lambda messages, name: messages,
+            lambda messages, **kwargs: messages,
         )
         # Everything already claimed by a sibling (or CAS failed closed).
         import entrabot.tools.chat_cursors as cc
@@ -362,7 +377,12 @@ class TestPollSteadyStateIdempotent:
             mcp_server, "_push_channel_notification", _async_recorder(pushed)
         )
 
-        await mcp_server._poll_watched_chat(chat_id, chat_state, "EntraBot Agent")
+        await mcp_server._poll_watched_chat(
+            chat_id,
+            chat_state,
+            agent_upn="entra-agent@werner.ac",
+            agent_object_id="agent-oid",
+        )
 
         assert pushed == []
 

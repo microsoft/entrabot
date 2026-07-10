@@ -346,9 +346,15 @@ def write_send_teams_driver(path: Path) -> None:
                 while True:
                     poll_count += 1
                     raw_messages = await read(chat_id=chat_id, token=token, count=20)
+                    # Identity-by-UPN (Learning #69): match self-authored on
+                    # UPN + object-id sourced from config, never displayName.
+                    _cfg = get_config()
                     human_messages = filter_human_messages(
                         raw_messages,
-                        "EntraBot Agent",
+                        agent_upn=_cfg.agent_user_upn,
+                        agent_object_id=(
+                            _cfg.agent_user_id or _cfg.agent_object_id
+                        ),
                         sent_message_ids={sent_message_id},
                     )
                     replies = [

@@ -1,5 +1,22 @@
 # TODOS
 
+## Shipped (pending merge)
+
+### Cursor-replay bug: identify self-authored by UPN, not display name
+2026-07-09 incident — after the agent was renamed ("EntraBot Agent" → "EntraClaw Agent"), the Teams poll's self-authored filter no-op'd on display-name comparison and 6-week-old outbounds replayed as fresh inbound across 61/62 watched chats.
+
+Fix landed on this branch:
+
+- `filter_human_messages` now matches on canonical UPN + AAD object-id fallback; display name is no longer an identity predicate anywhere in the code path.
+- `read` (Teams Graph adapter) emits `sender_upn` alongside `sender_id`.
+- All four callers in `mcp_server.py` (background poll, `send_teams_message` auto-wait, `watch_teams_replies`, `wait_for_sponsor_dm`) source UPN + object-id from config instead of the hard-coded `"EntraBot Agent"` string.
+- `whoami` surfaces `agent_upn` + `agent_object_id` for observability.
+- New Non-Negotiable "AGENT NAMES CHANGE — USE UPN" in `CLAUDE.md` and `AGENTS.md`; Learning #69 in `docs/runbooks/hard-won-learnings.md`.
+- One-shot migration script `scripts/migrate_cursors_to_upn.py` with `--dry-run` and `--verify` flags. Idempotent; bumps `last_ts` past now + seeds `seen_ids_tail` with recent self-authored message IDs.
+- Test count: 1562 → 1576 (+14 new tests across `tests/tools/test_watch.py::TestFilterHumanMessages` and `tests/test_cursor_migration.py`).
+
+Remaining before close: Brandon reviews the diff, runs the migration script live against the 62 cursor blobs, restarts entrabot, and confirms the next poll pass is clean.
+
 ## P0 — DO NEXT
 
 ### persona-sati: implement /authorize + /token PKCE flow (blocks Claude Code SSE)

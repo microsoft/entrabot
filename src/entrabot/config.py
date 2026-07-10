@@ -214,7 +214,15 @@ class EntraBotConfig:
             agent_id=os.environ.get("ENTRABOT_AGENT_ID"),
             agent_object_id=os.environ.get("ENTRABOT_AGENT_OBJECT_ID"),
             agent_user_id=os.environ.get("ENTRABOT_AGENT_USER_ID"),
-            agent_user_upn=os.environ.get("ENTRABOT_AGENT_USER_UPN"),
+            # Canonical machine identity for the self-authored filter
+            # (Learning #69). Accepts either ``ENTRABOT_AGENT_UPN`` (the
+            # rename-safe canonical name from the 2026-07-09 fix) or the
+            # historical ``ENTRABOT_AGENT_USER_UPN``. Prefer the new name;
+            # keep the old for existing ``.env`` files.
+            agent_user_upn=(
+                os.environ.get("ENTRABOT_AGENT_UPN")
+                or os.environ.get("ENTRABOT_AGENT_USER_UPN")
+            ),
             human_user_id=os.environ.get("ENTRABOT_HUMAN_USER_ID"),
             human_upn=os.environ.get("ENTRABOT_HUMAN_UPN"),
             human_user_ids=_parse_csv(os.environ.get("ENTRABOT_HUMAN_USER_IDS"))
