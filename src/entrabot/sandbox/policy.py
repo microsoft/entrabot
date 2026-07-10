@@ -12,7 +12,6 @@ import json
 import os
 import sys
 import tempfile
-from pathlib import Path
 
 from entrabot.sandbox.base import (
     SandboxBackendUnsupportedError,
@@ -191,13 +190,12 @@ def canonicalize_paths(paths: list[str]) -> list[str]:
     """
     canonicalized = []
     for path in paths:
-        p = Path(path).expanduser()
-        if not p.exists():
+        expanded = os.path.expanduser(path)
+        if not os.path.exists(expanded):
             raise SandboxPolicyError(f"Path does not exist: {path}")
-        
-        # Resolve symlinks and make absolute
-        real_path = p.resolve()
-        canonicalized.append(str(real_path))
+
+        # Resolve symlinks and make absolute using the host path implementation.
+        canonicalized.append(os.path.realpath(expanded))
     
     return canonicalized
 
@@ -233,5 +231,5 @@ def get_user_profile_discovery_paths() -> dict:
         - home_dir: User home directory path
     """
     return {
-        "home_dir": str(Path.home()),
+        "home_dir": os.path.expanduser("~"),
     }
