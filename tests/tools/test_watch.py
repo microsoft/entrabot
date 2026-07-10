@@ -157,7 +157,12 @@ class TestFilterHumanMessages:
         assert result[0]["message_id"] == "m2"
 
     def test_filter_upn_match_is_case_insensitive(self) -> None:
-        """UPNs are case-insensitive per RFC 822 local-part convention."""
+        """UPN compares are case-insensitive because Entra ID / Graph treats them that way.
+
+        Not an RFC-822 property — RFC 5321/5322 don't mandate case-insensitive
+        local-parts. The invariant we rely on here is the Entra directory's
+        behavior, not the email standard.
+        """
         messages = [
             {
                 "message_id": "m1",

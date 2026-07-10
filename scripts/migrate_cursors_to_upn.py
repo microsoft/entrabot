@@ -14,9 +14,15 @@ replays.
 
 Contract:
 
-* Idempotent — a cursor whose ``last_ts`` is already >= ``now`` is skipped.
-* ``--dry-run`` prints planned changes and writes nothing.
-* ``--verify`` reports the pending/migrated split without touching state.
+* **Idempotent, stably.** A migration-run flag blob at
+  ``chat_cursors/_migrated_upn_fix.json`` is written after the first
+  successful run; every subsequent invocation reads the flag first and
+  returns without touching any cursor. A per-cursor timestamp predicate
+  (``last_ts >= now``) is unstable — it drifts as time passes and a
+  legitimate ``save_cursor`` strips any per-cursor marker — so we use a
+  separate namespace instead.
+* ``--dry-run`` prints planned changes and writes nothing (including the flag).
+* ``--verify`` reports whether the flag is present. Read-only.
 * Only touches the operational cursor prefix (``chat_cursors/``) — persona-sati
   memory and interaction logs are never read or written.
 
@@ -57,6 +63,13 @@ logger = logging.getLogger("entrabot.migrate_cursors_to_upn")
 # refactor there doesn't silently re-scope this migration.
 _CURSOR_PREFIX = "chat_cursors/"
 
+# Stable migration marker. Lives under the cursor prefix but in a distinct
+# ``_``-prefixed namespace so ``_list_cursor_keys`` can filter it out. Its
+# presence is the ONLY signal for "migration already ran" — a per-cursor
+# ``last_ts >= now`` predicate would drift as time passes, and any per-cursor
+# field would be stripped by the next ``save_cursor`` call from the poll.
+_MIGRATION_FLAG_KEY = "chat_cursors/_migrated_upn_fix.json"
+
 # The migration bumps ``last_ts`` this many seconds past ``now`` so a
 # concurrently-running poll doesn't race back before us on a machine with
 # skewed clocks. 2s > the poll's overlap window.
@@ -78,23 +91,52 @@ def _bumped_ts() -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")[:-4] + "Z"
 
 
-def _is_already_migrated(last_ts: str | None, threshold: datetime) -> bool:
-    """True when *last_ts* is already >= threshold (so this cursor is done)."""
-    if not last_ts:
-        return False
+def _read_migration_flag() -> dict | None:
+    """Return the migration flag payload if present, else ``None``.
+
+    The flag blob is the *stable* skip predicate — its presence means the
+    migration has already run at some point on this backend, regardless of
+    how far individual cursors have advanced since. Any read error is treated
+    as "flag absent" so a temporary I/O hiccup can't lock the migration out.
+    """
+    backend = get_backend()
     try:
-        dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
-    except (ValueError, AttributeError):
-        return False
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    return dt >= threshold
+        raw = backend.read_text(_MIGRATION_FLAG_KEY)
+    except Exception:  # noqa: BLE001
+        return None
+    if raw is None:
+        return None
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _write_migration_flag(*, cursors_migrated: int) -> None:
+    """Write the migration flag after a successful non-dry-run pass."""
+    backend = get_backend()
+    payload = {
+        "migration": "upn-fix-2026-07-09",
+        "written_at": _now_iso(),
+        "cursors_migrated": cursors_migrated,
+    }
+    backend.write_text(_MIGRATION_FLAG_KEY, json.dumps(payload))
 
 
 def _list_cursor_keys() -> list[str]:
-    """Return every ``chat_cursors/*.json`` key currently in the backend."""
+    """Return every real ``chat_cursors/*.json`` key currently in the backend.
+
+    Filters out the migration flag blob (``chat_cursors/_migrated_upn_fix.json``)
+    and any other ``_``-prefixed namespace keys so a future migration can add
+    its own flag without this one accidentally processing it as a cursor.
+    """
     backend = get_backend()
-    return [k for k in backend.list(_CURSOR_PREFIX) if k.endswith(".json")]
+    return [
+        k
+        for k in backend.list(_CURSOR_PREFIX)
+        if k.endswith(".json") and not k[len(_CURSOR_PREFIX) :].startswith("_")
+    ]
 
 
 def _chat_id_from_key(key: str) -> str:
@@ -199,7 +241,22 @@ def run(
     )
 
     backend = get_backend()
-    threshold = datetime.now(UTC)  # anything >= now is already migrated
+
+    # Stable skip: if the migration flag exists, we've already run to
+    # completion on this backend. Return early — even a --dry-run just reports
+    # "nothing to do" rather than re-simulating work that was already done.
+    flag = _read_migration_flag()
+    if flag is not None:
+        return {
+            "inspected": 0,
+            "changed": 0,
+            "would_change": 0,
+            "skipped_already_migrated": 0,
+            "chats": [],
+            "flag_present": True,
+            "flag_written_at": flag.get("written_at"),
+            "flag_cursors_migrated": flag.get("cursors_migrated"),
+        }
 
     keys = _list_cursor_keys()
     summary = {
@@ -208,6 +265,7 @@ def run(
         "would_change": 0,
         "skipped_already_migrated": 0,
         "chats": [],
+        "flag_present": False,
     }
 
     for key in keys:
@@ -221,13 +279,6 @@ def run(
             if not isinstance(cursor, dict):
                 summary["chats"].append(
                     {"chat_id": chat_id, "action": "skip-bad-shape"}
-                )
-                continue
-
-            if _is_already_migrated(cursor.get("last_ts"), threshold):
-                summary["skipped_already_migrated"] += 1
-                summary["chats"].append(
-                    {"chat_id": chat_id, "action": "skip-already-migrated"}
                 )
                 continue
 
@@ -281,52 +332,46 @@ def run(
                 }
             )
 
+    # Write the stable migration flag on a successful non-dry-run pass. The
+    # flag's presence — not per-cursor state — is the skip predicate for
+    # future invocations.
+    if not dry_run:
+        _write_migration_flag(cursors_migrated=summary["changed"])
+
     return summary
 
 
 def verify() -> dict:
-    """Report how many cursors are already migrated vs still pending.
+    """Report whether the migration flag is present.
 
-    Read-only; safe to call at any time.
+    Read-only. The flag is a stable predicate: once written, it stays written,
+    so verify's answer does not drift over time (unlike a per-cursor
+    ``last_ts >= now`` check, which would flip cursors from "migrated" back to
+    "pending" a few seconds after the initial bump).
     """
-    backend = get_backend()
-    threshold = datetime.now(UTC)
+    flag = _read_migration_flag()
     keys = _list_cursor_keys()
-
-    migrated = 0
-    pending = 0
-    unreadable = 0
-    for key in keys:
-        try:
-            raw = backend.read_text(key)
-            if raw is None:
-                unreadable += 1
-                continue
-            cursor = json.loads(raw)
-            if not isinstance(cursor, dict):
-                unreadable += 1
-                continue
-            if _is_already_migrated(cursor.get("last_ts"), threshold):
-                migrated += 1
-            else:
-                pending += 1
-        except Exception:  # noqa: BLE001
-            unreadable += 1
-
     return {
-        "inspected": len(keys),
-        "migrated": migrated,
-        "pending": pending,
-        "unreadable": unreadable,
+        "flag_present": flag is not None,
+        "flag_written_at": (flag or {}).get("written_at"),
+        "flag_cursors_migrated": (flag or {}).get("cursors_migrated"),
+        "cursors_present": len(keys),
     }
 
 
 def _print_summary(summary: dict, *, dry_run: bool) -> None:
     prefix = "[DRY-RUN] " if dry_run else ""
+    if summary.get("flag_present") and summary["inspected"] == 0:
+        print(
+            f"{prefix}Migration flag already present "
+            f"(written_at={summary.get('flag_written_at')}, "
+            f"cursors_migrated={summary.get('flag_cursors_migrated')}). "
+            "Nothing to do."
+        )
+        return
     print(f"{prefix}Inspected: {summary['inspected']}")
     print(f"{prefix}Would change: {summary['would_change']}")
     print(f"{prefix}Changed (written): {summary['changed']}")
-    print(f"{prefix}Skipped (already migrated): {summary['skipped_already_migrated']}")
     errors = sum(1 for c in summary["chats"] if c.get("action") == "error")
     if errors:
         print(f"{prefix}Errors: {errors} (see log)")

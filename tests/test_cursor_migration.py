@@ -9,10 +9,14 @@ any residual replays.
 
 Contract:
 
-* Idempotent: two runs land the same state as one.
-* ``--dry-run``: prints planned changes, writes nothing.
+* Idempotent (stably): a migration flag blob at
+  ``chat_cursors/_migrated_upn_fix.json`` is written after the first
+  successful non-dry-run pass; every subsequent invocation sees the flag and
+  returns without touching cursors. The flag is the stable skip predicate —
+  per-cursor ``last_ts >= now`` would drift, and any per-cursor marker would
+  be stripped by the next ``save_cursor`` write.
+* ``--dry-run``: prints planned changes, writes NOTHING (including the flag).
 * Only touches the operational cursor prefix (``chat_cursors/``).
-* Skips cursors whose ``last_ts`` is already past ``now`` (already migrated).
 """
 
 from __future__ import annotations
@@ -218,14 +222,20 @@ class TestMigrationDryRun:
         cursor_path = _local_backend / cursor_key
         before = json.loads(cursor_path.read_text())
 
+        # The migration flag blob must not exist before or after --dry-run.
+        flag_path = _local_backend / "chat_cursors" / "_migrated_upn_fix.json"
+        assert not flag_path.exists()
+
         migrate = _import_migrate()
         report = migrate.run(dry_run=True)
 
         after = json.loads(cursor_path.read_text())
         assert before == after, "dry-run must not modify persisted cursor"
+        assert not flag_path.exists(), "dry-run must not write the migration flag"
         # The report surfaces what the live run WOULD do.
         assert report["inspected"] >= 1
         assert report["would_change"] >= 1
+        assert report["flag_present"] is False
 
 
 class TestMigrationScopedToCursorPrefix:
@@ -266,22 +276,64 @@ class TestMigrationScopedToCursorPrefix:
 
 
 class TestMigrationVerify:
-    def test_verify_flags_unmigrated_cursors(
+    def test_verify_reports_flag_absent_before_run(
         self, _local_backend: Path
     ) -> None:
-        """``--verify`` returns a report distinguishing migrated vs pending."""
-        started = datetime.now(UTC)
-        future = (started + timedelta(minutes=5)).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
-        _seed_cursor("19:already@thread.v2", future, [])
-        _seed_cursor("19:pending@thread.v2", "2026-04-01T00:00:00Z", [])
+        """``--verify`` before any migration reports flag absent + cursor count."""
+        _seed_cursor("19:chatA@thread.v2", "2026-04-01T00:00:00Z", [])
+        _seed_cursor("19:chatB@thread.v2", "2026-04-01T00:00:00Z", [])
 
         migrate = _import_migrate()
         report = migrate.verify()
 
-        assert report["migrated"] == 1
-        assert report["pending"] == 1
+        assert report["flag_present"] is False
+        assert report["flag_written_at"] is None
+        assert report["cursors_present"] == 2
+
+    def test_verify_reports_flag_present_after_run(
+        self, _local_backend: Path
+    ) -> None:
+        """After a live run, ``verify()`` reports the flag as present + stable.
+
+        The whole point of the flag-based verify: the report does NOT drift
+        over time. Regardless of how far the poll has advanced individual
+        cursors since the migration, ``flag_present`` stays True.
+        """
+        _seed_cursor("19:chatA@thread.v2", "2026-04-01T00:00:00Z", [])
+        _seed_cursor("19:chatB@thread.v2", "2026-04-01T00:00:00Z", [])
+
+        migrate = _import_migrate()
+        migrate.run(dry_run=False)
+        report = migrate.verify()
+
+        assert report["flag_present"] is True
+        assert report["flag_written_at"] is not None
+        assert report["flag_cursors_migrated"] == 2
+
+
+class TestMigrationFlagSkipsRerun:
+    def test_second_run_sees_flag_and_returns_early(
+        self, _local_backend: Path
+    ) -> None:
+        """A second live invocation returns an empty summary without work.
+
+        Regression guard for the reviewer's concern: a re-run days later would
+        otherwise keep advancing cursors and potentially skip legitimate
+        inbound. With the flag, the second call is a no-op.
+        """
+        _seed_cursor("19:chatA@thread.v2", "2026-04-01T00:00:00Z", [])
+
+        migrate = _import_migrate()
+        first = migrate.run(dry_run=False)
+        assert first["inspected"] == 1
+        assert first["changed"] == 1
+        assert first["flag_present"] is False  # this run just wrote it
+
+        second = migrate.run(dry_run=False)
+        assert second["inspected"] == 0
+        assert second["changed"] == 0
+        assert second["flag_present"] is True
+        assert second["flag_written_at"] is not None
 
 
 # ---------------------------------------------------------------------------
