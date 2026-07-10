@@ -30,6 +30,7 @@ nav:
   - Guides:
     - Customizing the body prompt: guides/customizing-the-body-prompt.md
     - Storage configuration: guides/storage-configuration.md
+    - MXC sandbox setup: guides/mxc-sandbox.md
   - Architecture:
     - System Overview: architecture/system-overview.md
     - Enforcement Flow: architecture/enforcement-flow.md

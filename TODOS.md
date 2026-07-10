@@ -34,6 +34,18 @@ Claude Code v2.1.152 now does MCP OAuth 2.1 discovery and ignores `.mcp.json` `h
 
 ## P1
 
+### Cache the Agent User storage token — every blob op re-runs the three-hop flow synchronously on the event loop
+`_ConditionalBlobAdapter` (promises path) passes `token_provider=lambda: acquire_agent_user_storage_token(...)` with no caching (`src/entrabot/tools/promises.py:163`), so each blob GET/PUT pays up to three blocking HTTPS token round-trips on the asyncio loop — a `resolve_promise` can cost ~8 sequential requests, each a timeout opportunity, and each blocks the loop (same anti-pattern Learning #69 fixed at boot). A short-TTL storage-token cache would cut the failure surface and the loop stalls.
+
+- **Effort:** S–M
+- **Source:** resolve_promise empty-error investigation, 2026-07-06 (sub-agent report; fix for the error *surfacing* shipped separately — this is the amplifier).
+
+### Investigate chronic connectivity degradation of the MCP server process
+The rotating server log holds **644** empty-message `ConnectTimeout`/`getaddrinfo` warnings (102 on 2026-07-06 alone, starting ~18:52Z) hitting cursor saves, chat bootstraps, and email polls, while cached-token Teams Graph calls kept working. Suspects: Parallels VM pauses (multi-minute `SystemTimeChange` jumps from `prl_tools.exe`), per-call token acquisition (see above), and/or the open MCP-disconnect dossier (`docs/runbooks/mcp-disconnect-investigation.md`) — read that runbook first, do not restart the investigation from scratch.
+
+- **Effort:** M (instrumentation-first)
+- **Source:** 2026-07-06 session — the degradation window is what made `resolve_promise` fail 4/4 while `add_promise` (called earlier) succeeded.
+
 ### Follow-up: two-phase sponsor confirmation flow for mutating tools
 The active-sponsor-channel binding shipped in PR `fix/msrc-active-sponsor-channel-binding` closes Chain A from the security confused-deputy report (attacker in low-priv chat manipulating action on a chat where sponsor is passive) but does NOT close the residual window where a sponsor IS actively engaged in the target chat. An attacker who gets a sponsor to read an injected SharePoint doc (Chain B) can still trigger a malicious `add_member` / `share_file` because all binding checks pass.
 
@@ -128,11 +140,11 @@ Two bugs, both observed at 2026-04-17T17:00:00 PDT (= 00:00:01 UTC 2026-04-18):
 ### ~~Token auto-refresh in teams_send~~ ✅ DONE
 Implemented as `_with_token_retry()` in `mcp_server.py` and `_ensure_valid_token()` (proactive refresh at 55 min). All tools use it.
 
-### AppContainer sandbox production implementation
-Tonight's spike proves feasibility. Production version needs: filesystem allowlist, network filtering (Graph API only), process spawn restrictions, MCP server integration. May require Win32 C extension from Python.
-- **Effort:** L (CC: ~1-2 days)
-- **Depends on:** AppContainer spike results
+### ~~AppContainer sandbox production implementation~~ ✅ DONE (MXC sandbox integration)
+**Shipped as MXC sandbox integration (Issue #84, ADR-007).** Phase 1 complete: process-level containment via MXC 0.6.0-alpha (macOS Seatbelt). Positive-allowlist filesystem, network blocking, operator ceiling enforcement, binary SHA256 verification, opt-in `run_code` tool. The macOS mock binary was retired on 2026-06-18 and replaced with a real `mxc-exec-mac` built from `microsoft/mxc` v0.6.1 plus the repo-local stdin compatibility patch in `scripts/mxc-mac-stdin-compat.patch`. Phase 2 stub (session-bound Entra identity attribution) ready for future APIs. Windows AppContainer + Linux seccomp-bpf deferred to T4/T10.
+- **Status:** Phase 1 shipped (1605 tests passing), Phase 2 stub in place
 - **Source:** CEO review, refined premise (sandbox co-equal with identity)
+- **See:** `docs/decisions/007-mxc-sandbox-integration.md`, `docs/architecture/DESIGN-mxc-sandbox.md`
 
 ## P2
 

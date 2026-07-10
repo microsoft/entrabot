@@ -927,6 +927,78 @@ class TestTokenRefreshDispatch:
             mcp_server._identity = old_identity
 
 
+class TestInitAuthDoesNotBlockEventLoop:
+    """Boot auth must not starve the asyncio loop while the (synchronous,
+    multi-second) three-hop token call runs.
+
+    Regression: copilot launches entrabot as a stdio/ACP engine with a
+    startup readiness deadline. The eager boot ran the blocking three-hop
+    ``acquire_agent_user_token`` directly on the event loop, so the MCP
+    ``initialize`` handshake could not be serviced until auth finished
+    (~60s) — the engine launch timed out (``MCP error -32001``) and copilot
+    exited 1. The fix offloads the blocking call to a worker thread so the
+    loop stays responsive and the handshake returns immediately.
+    """
+
+    @pytest.mark.asyncio
+    async def test_blocking_three_hop_token_does_not_freeze_loop(self) -> None:
+        import asyncio
+
+        from entrabot import mcp_server
+        from entrabot.config import EntraBotConfig
+
+        BLOCK = 1.0  # seconds the (synchronous) token acquisition stalls
+
+        cfg = EntraBotConfig(
+            blueprint_app_id="bp-app-id",
+            tenant_id="tenant-id",
+            agent_user_id="agent-user-id",
+            skip_provisioning=False,
+        )
+
+        def slow_blocking_token(_config: object) -> str:
+            time.sleep(BLOCK)
+            return "agent-user-token"
+
+        old_state = mcp_server._state.copy()
+        old_identity = mcp_server._identity
+        try:
+            mcp_server._state.clear()
+            mcp_server._identity = None
+
+            loop = asyncio.get_running_loop()
+            start = loop.time()
+            heartbeat_at: list[float] = []
+
+            async def heartbeat() -> None:
+                # If the loop is not starved, this fires almost immediately.
+                await asyncio.sleep(0.05)
+                heartbeat_at.append(loop.time() - start)
+
+            with (
+                patch("entrabot.mcp_server.get_config", return_value=cfg),
+                patch(
+                    "entrabot.mcp_server.acquire_agent_user_token",
+                    side_effect=slow_blocking_token,
+                ),
+            ):
+                auth_task = asyncio.create_task(mcp_server._init_auth())
+                hb_task = asyncio.create_task(heartbeat())
+                await asyncio.gather(auth_task, hb_task)
+
+            assert heartbeat_at, "heartbeat never completed"
+            # A starved loop would delay the heartbeat until ~BLOCK seconds.
+            assert heartbeat_at[0] < BLOCK / 2, (
+                f"event loop blocked for {heartbeat_at[0]:.2f}s during boot auth "
+                "— the synchronous three-hop token call is running on the loop"
+            )
+            assert mcp_server._state.get("token") == "agent-user-token"
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+            mcp_server._identity = old_identity
+
+
 # ---------------------------------------------------------------------------
 # view_image URL safety
 # ---------------------------------------------------------------------------
@@ -3297,6 +3369,97 @@ class TestPromiseTools:
         parsed = _json.loads(result)
         assert "error" in parsed
         assert "not found" in parsed["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_resolve_promise_surfaces_httpx_timeout_with_nonempty_error(
+        self, monkeypatch
+    ) -> None:
+        """httpx timeout exceptions have an empty ``str()``. If they leak to
+        the MCP layer, FastMCP surfaces "Error executing tool
+        resolve_promise:" with no detail. The wrapper must instead return a
+        JSON error that names the exception type."""
+        import json as _json
+
+        import httpx
+
+        from entrabot import mcp_server
+
+        monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
+        monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock(return_value=None))
+        monkeypatch.setattr(mcp_server, "_log_interaction_safe", lambda **kw: None)
+        monkeypatch.setattr(
+            "entrabot.tools.audit.log_event",
+            lambda **kw: {"event_id": "evt-x"},
+        )
+
+        async def fake_retry(fn, **kwargs):
+            raise httpx.ConnectTimeout("")
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+        result = await mcp_server.resolve_promise(promise_id="abc", resolution="done")
+        parsed = _json.loads(result)
+        assert "error" in parsed
+        assert "ConnectTimeout" in parsed["error"]
+
+    @pytest.mark.asyncio
+    async def test_add_promise_surfaces_httpx_timeout_with_nonempty_error(
+        self, monkeypatch
+    ) -> None:
+        """add_promise shares resolve_promise's leak: an httpx timeout (empty
+        ``str()``) must come back as a JSON error naming the type, not leak
+        to FastMCP as an empty-message tool error."""
+        import json as _json
+
+        import httpx
+
+        from entrabot import mcp_server
+
+        monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
+        monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock(return_value=None))
+        monkeypatch.setattr(mcp_server, "_log_interaction_safe", lambda **kw: None)
+        monkeypatch.setattr(
+            "entrabot.tools.audit.log_event",
+            lambda **kw: {"event_id": "evt-x"},
+        )
+
+        async def fake_retry(fn, **kwargs):
+            raise httpx.ConnectTimeout("")
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+        result = await mcp_server.add_promise(chat_id="terminal", description="x")
+        parsed = _json.loads(result)
+        assert "error" in parsed
+        assert "ConnectTimeout" in parsed["error"]
+
+    @pytest.mark.asyncio
+    async def test_list_promises_surfaces_httpx_timeout_with_nonempty_error(
+        self, monkeypatch
+    ) -> None:
+        """list_promises shares the same leak — guard it identically."""
+        import json as _json
+
+        import httpx
+
+        from entrabot import mcp_server
+
+        monkeypatch.setattr(mcp_server, "_initialize", AsyncMock(return_value=None))
+        monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock(return_value=None))
+        monkeypatch.setattr(
+            "entrabot.tools.audit.log_event",
+            lambda **kw: {"event_id": "evt-x"},
+        )
+
+        async def fake_retry(fn, **kwargs):
+            raise httpx.ConnectTimeout("")
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+        result = await mcp_server.list_promises(open_only=True)
+        parsed = _json.loads(result)
+        assert "error" in parsed
+        assert "ConnectTimeout" in parsed["error"]
 
     @pytest.mark.asyncio
     async def test_round_trip_add_list_resolve_list(self, monkeypatch) -> None:

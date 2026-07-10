@@ -931,6 +931,43 @@ After this, `setup.sh --diagnose` passed all 7 checks including the three-hop to
 
 ---
 
+### Learning #71: Eager Synchronous Boot Auth Stalled the MCP Handshake — copilot Engine Launch Timed Out Where Claude Code Tolerated It
+
+**Date:** 2026-06-29
+**Status:** **CONFIRMED — fixed by offloading boot auth to a worker thread (`asyncio.to_thread`). Test `TestInitAuthDoesNotBlockEventLoop`.**
+**Context:** Launching entrabot under GitHub Copilot CLI (`copilot`, v1.0.65). Copilot was started as an engine from the trusted folder `C:\Development\entrabot`, so it auto-loaded the workspace `.mcp.json` and tried to boot the `entrabot` MCP server during launch.
+**Problem:** Host reported `execution failed: launch_engine - …\copilot.exe exited with non-zero status (exit code: 1)`. copilot.exe was healthy in isolation — `--version`, `-p "say hi"`, and `--acp` all exited 0. The failure was the `entrabot` MCP server: copilot's log showed `Failed to start MCP client for entrabot: McpError: MCP error -32001: Request timed out` after ~63s. A raw `initialize` sent directly to `entrabot-mcp.exe` sat with **no response for >60s**.
+**Root cause:** `mcp_server._run_stdio_with_write_stream` kicks off `_eager_init()` via `asyncio.create_task` (eager boot so Teams/email observation starts immediately, not lazily on first tool call — that design choice landed at the `entraclaw → entrabot` rename, `2e22527`). But `_init_auth` called the **synchronous, blocking** `acquire_agent_user_token` (several blocking HTTPS token POSTs, ~60s for the three-hop flow) and the MSAL `auth.authenticate()` **directly on the event loop**. `create_task` looks concurrent but a sync blocking call inside an async task still freezes the single asyncio loop — so the MCP stdio read loop could not service the client's `initialize` request until auth finished. Claude Code tolerates a slow/late MCP server (keeps the session, connects whenever it's ready); copilot's stdio/ACP engine launch enforces a startup readiness deadline and treats the stalled handshake as a fatal launch failure → exit 1.
+**Fix:** Wrap both blocking calls in `await asyncio.to_thread(...)` in `_init_auth`, so auth runs on a worker thread and the loop stays free to answer `initialize` immediately. Post-fix the handshake returns in ~1.8s (was >60s). Eager observation is preserved — auth still starts at boot, it just no longer monopolizes the loop.
+**Prevention:**
+
+- **This is a code fix, not a config fix.** Nothing was wrong with `.mcp.json` or `scripts/mcp_config.py` (it only writes a standard `command`/`args`/`type` `mcpServers` entry — there is no per-server startup-timeout knob to tune). A slow handshake must be fixed in the server's boot path, and the fix benefits every host.
+- **Never run synchronous blocking I/O directly on the asyncio loop in a server's boot/lifespan path.** `asyncio.create_task(coro)` does not make the *body* of `coro` non-blocking — only its `await` points yield. Any sync network/crypto/file call inside must go through `asyncio.to_thread` (or an async client), or it starves every other task including the protocol handshake.
+- **Test the property, not the path:** assert the loop stays responsive (a concurrent heartbeat coroutine fires promptly) while a deliberately slow (`time.sleep`) blocking dependency runs — don't just assert the token was acquired.
+- **Host tolerance differs.** "Works in Claude Code" does not mean the MCP server boots cleanly — Claude Code masks slow/failed handshakes that stricter stdio/ACP engine hosts (copilot, Zed-style ACP clients) reject. When validating an MCP server, probe the raw `initialize` latency directly.
+- Related to the open `docs/runbooks/mcp-disconnect-investigation.md` slow-boot dossier — same eager-boot weight, different symptom (here: launch-time handshake timeout rather than mid-session drop).
+
+**Evidence/references:** Live session 2026-06-29. copilot log `~/.copilot/logs/process-1782754836854-3540.log:153`. Boot path: `src/entrabot/mcp_server.py` `_run_stdio_with_write_stream` → `_eager_init` → `_init_auth` (the two `asyncio.to_thread` wraps). Blocking dependency: `src/entrabot/tools/teams.py:126` `def acquire_agent_user_token` (synchronous). Test: `tests/test_mcp_server_integration.py::TestInitAuthDoesNotBlockEventLoop`.
+
+### Learning #70: `subprocess.run(timeout=…)` on Windows Hangs Unboundedly When the Child Spawns a Pipe-Inheriting Grandchild — 30s Sandbox Timeout Became a 26-Minute MCP Tool Hang
+
+**Date:** 2026-07-06 (incident 2026-07-02)
+**Status:** **CONFIRMED — fixed by `Popen` + `taskkill /T /F` tree-kill + bounded post-kill drain in `ProcessContainerRunner.run`.**
+**Context:** Sponsor asked (via Teams DM) for a `write_local_file` to `~\Documents\entrabot-info.txt`. The MCP tool call sat silent for ~26 minutes; the operator eventually interrupted the CLI turn. Server log showed the `pending` audit event at 21:28:19 and the `SandboxTimeoutError` traceback at **21:54:37** — for a **30-second** configured timeout.
+**Problem:** `ProcessContainerRunner.run` used `subprocess.run(cmd, capture_output=True, timeout=30)`. The timeout *fired* on schedule (the `TimeoutExpired` in the traceback says "timed out after 30.0 seconds"), but the call didn't return for 26 more minutes.
+**Root cause:** CPython's `subprocess.run` timeout path on Windows is: `process.kill()` (TerminateProcess — direct child only), then `process.communicate()` **with no timeout** to collect output. `wxc-exec.exe` spawns the AppContainer host as a grandchild that inherits the stdout/stderr pipe write handles. Killing only `wxc-exec.exe` leaves those handles open, so the unbounded drain blocks until the orphaned container process happens to exit. Windows has no process-group semantics here — nothing in the stdlib kills the tree for you.
+**Fix:** `src/entrabot/sandbox/windows.py`: `Popen` + `communicate(timeout=…)`; on `TimeoutExpired`, `taskkill /T /F /PID <pid>` (kills every descendant, closing all pipe handles), then a **bounded** second `communicate(timeout=5)` as backstop, then raise `SandboxTimeoutError`. Worst case is now ~50s (timeout + taskkill bound + drain bound), not open-ended. Companion fix in `mcp_server.py`: the `read_local_file`/`write_local_file` handlers now audit-log `outcome="failure"` when the sandbox raises, so the trail can no longer dangle at `pending` (which is indistinguishable from an in-flight write).
+**Prevention:**
+
+- **Never use bare `subprocess.run(timeout=…)` on Windows for a child that spawns its own children** (container runners, launchers, `npm`/`node` wrappers, venv redirectors). Use `Popen` + explicit tree-kill (`taskkill /T /F`, or a Job Object with `KILL_ON_JOB_CLOSE`) before draining pipes.
+- **A "timeout" is only as good as its cleanup path.** Test the *bounded-return* property, not just that a timeout exception is raised: `tests/sandbox/test_windows.py::test_process_container_runner_timeout_kills_process_tree` and `…_timeout_drain_is_bounded`.
+- **Every audit `pending` must be answered** by `success` or `failure` on all exit paths, including exceptions — a permanently pending audit event is a fail-open trail.
+- Diagnosis shortcut for "MCP tool call hangs forever": check `%LOCALAPPDATA%\entrabot\logs\entrabot.log` for a `pending` audit line with no completion, then look for the late `SandboxTimeoutError` traceback — the gap between the two is the pipe-drain hang, not the sandbox timeout.
+
+**Evidence/references:** `%LOCALAPPDATA%\entrabot\logs\entrabot.log` 2026-07-02 21:28:19 → 21:54:37 (traceback through `subprocess.py:556 communicate`). Fix: `src/entrabot/sandbox/windows.py` (`_kill_process_tree`, `_POST_KILL_DRAIN_TIMEOUT_S`), `src/entrabot/mcp_server.py` (audit-closing wrappers). Tests: `tests/sandbox/test_windows.py`, `tests/test_local_file_tools.py::test_{read,write}_handler_closes_audit_trail_on_sandbox_timeout`. Same incident also confirmed the effective policy had empty `readwritePaths` (operator ceiling env not set for that server boot) — the write would have been *denied*, not hung, with a healthy timeout path.
+
+---
+
 ### [HISTORICAL] Learning #4: OBO Requires Matching Token Audience
 
 **Date:** 2026-04-06

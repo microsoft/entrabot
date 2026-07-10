@@ -32,14 +32,14 @@ Run `./scripts/setup.sh --help` for the full flag matrix.
 - Calls `entra_provisioning.py` to mint or reuse the dedicated Provisioner app (cert-auth).
 - Calls `create_entra_agent_ids.py` to create Blueprint + Agent Identity + Agent User.
 - Generates a Blueprint cert, stores the private key in the OS keystore, uploads the public cert to the Blueprint app.
-- Writes `.env` with the resulting IDs and thumbprints.
+- Writes `.env` (or the file given by `--env-file`) with the resulting IDs and thumbprints.
 - Optionally provisions Azure Blob Storage when `--use-cloud-memory` is passed (see `provision_blob_storage.py`).
 - Registers `entrabot` in `.mcp.json` and `~/.copilot/mcp-config.json` via `mcp_config.py`.
 - With `--status`, skips provisioning and delegates to `./status.sh`, forwarding status arguments such as `--json`, `--health-only`, and `--strict`.
 
 ### Idempotency
 
-Re-runs reuse the existing chain unless `--new` is passed. Each step short-circuits when its target already exists; cert verification (`verify_blueprint_cert.py`) decides whether to keep or rotate the cert.
+Re-runs reuse the existing chain unless `--new` is passed. Pairing `--new` with `--use-blueprint=<APP_ID>` creates a fresh Agent Identity/User under an existing Blueprint instead of provisioning a second Blueprint. Each step short-circuits when its target already exists; cert verification (`verify_blueprint_cert.py`) decides whether to keep or rotate the cert.
 
 See `docs/reference/setup-script.md` for the long form. ADR-003 covers the cert-auth choice. ADR-005 covers cloud memory.
 

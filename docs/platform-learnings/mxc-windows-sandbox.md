@@ -110,6 +110,48 @@ macOS support is **experimental**, requires schema **`0.6.0-alpha`+** and the `-
 
 ---
 
+## 5.1 Entrabot macOS build/install notes (2026-06-18)
+
+For Entrabot's macOS E2E work we build the native Seatbelt runner from source
+and install it at `.mxc-build/target/release/mxc-exec-mac`.
+
+- **Upstream source:** `https://github.com/microsoft/mxc`
+- **Pinned version:** `v0.6.1`
+- **Pinned commit:** `161598fd08a4fdd030f461de19af23ce4a310b41`
+- **Local compatibility patch:** `scripts/mxc-mac-stdin-compat.patch`
+  - Why: Entrabot's `SeatbeltRunner` streams policy JSON on stdin.
+  - Upstream `mxc-exec-mac` v0.6.1 accepts file/base64 config but not stdin.
+  - The patch adds: "if no config arg is present, read JSON from stdin and
+    feed it through the existing base64 parse path."
+- **Installed binary SHA256 (darwin-arm64):**
+  `700e9e7120c78fe9ecdb8c99309ba6df0ea467ac5b581b803b73d655bbccff36`
+
+Rebuild recipe:
+
+```bash
+git clone --depth 1 --branch v0.6.1 https://github.com/microsoft/mxc.git .mxc-build/mxc-src
+git -C .mxc-build/mxc-src fetch --depth 1 origin 161598fd08a4fdd030f461de19af23ce4a310b41
+git -C .mxc-build/mxc-src checkout --force 161598fd08a4fdd030f461de19af23ce4a310b41
+git -C .mxc-build/mxc-src apply scripts/mxc-mac-stdin-compat.patch
+cd .mxc-build/mxc-src && ./build-mac.sh --rust-only
+cp src/target/aarch64-apple-darwin/release/mxc-exec-mac ../target/release/mxc-exec-mac
+shasum -a 256 ../target/release/mxc-exec-mac
+```
+
+Smoke checks:
+
+```bash
+# File-based config (upstream interface)
+.mxc-build/target/release/mxc-exec-mac --experimental .mxc-build/smoke-config.json
+
+# Entrabot compatibility path (stdin)
+cat .mxc-build/smoke-config.json | .mxc-build/target/release/mxc-exec-mac --experimental
+```
+
+Both should print the configured command output and exit 0.
+
+---
+
 ## 6. Where MXC fits entrabot
 
 entrabot and MXC are **two halves of the same security thesis**, and they don't overlap — they compose:

@@ -15,10 +15,12 @@ The `./scripts/setup.sh` script provisions and configures an EntraBot agent end 
 | Flag | Purpose |
 |------|---------|
 | *(none)* | Reuse existing Blueprint / Agent Identity / Agent User from `.entrabot-state.json`. This is the common case on a machine that's already been set up. |
-| `--new` | Provision a brand-new identity chain (Blueprint + Agent Identity + Agent User). Does not touch the existing chain; the current `.env` is backed up. Must be paired with `--with-upn-suffix` or you'll be prompted. |
-| `--use-blueprint=<app-id>` | Attach to an existing Blueprint from a different machine. Generates a new cert locally and uploads its public key to the Blueprint. Reuses the existing Agent Identity and Agent User. Also handles the "switch this machine to a different Blueprint" case — stale Agent Identity / User / cert thumbprint are wiped from local state. |
+| `--new` | Provision a fresh Agent Identity + Agent User. By default this also provisions a fresh Blueprint. Does not touch the existing chain; the current env/state files are backed up if they are the targets for this run. Must be paired with `--with-upn-suffix` or `--agent-user-upn`, otherwise you'll be prompted. |
+| `--use-blueprint=<app-id>` | Attach to an existing Blueprint from a different machine. Generates a new cert locally and uploads its public key to the Blueprint. Without `--new`, reuses the existing Agent Identity and Agent User. With `--new`, creates a fresh Agent Identity + Agent User under the existing Blueprint. Also handles the "switch this machine to a different Blueprint" case — stale Agent Identity / User / cert thumbprint are wiped from local state. |
 | `--with-upn-suffix=<name>` | Required with `--new`; also supported with `--use-blueprint` to select an existing suffixed Agent User under the Blueprint. Example: `--with-upn-suffix=sati-agent` produces or selects `entrabot-agent-sati-agent@yourdomain.com`. |
 | `--agent-user-upn=<upn>` | Explicit Agent User UPN. With `--use-blueprint`, selects an existing Agent User to reuse, e.g. `entrabot-agent-sati-agent@yourtenant.onmicrosoft.com`. With `--new`, creates exactly that UPN, e.g. `entrabot-agent@yourtenant.onmicrosoft.com`. |
+| `--state-file=<path>` | Write provisioning state to a custom file instead of `./.entrabot-state.json`. Useful for keeping production and test Agent Identity chains side by side. |
+| `--env-file=<path>` | Write generated env config to a custom file instead of `./.env`. Useful for parallel prod/test setups and E2E fixtures. |
 
 ### User identity
 
@@ -82,6 +84,19 @@ If the Blueprint has a suffixed Agent User, pin that chain explicitly:
 
 If the local OS keystore already has the matching Blueprint private key, setup recovers the registered cert thumbprint and does not prompt to rotate the Blueprint cert.
 
+### Create a fresh test Agent Identity under the existing Blueprint
+
+```bash
+./scripts/setup.sh \
+  --new \
+  --use-blueprint=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx \
+  --agent-user-upn=entrabot-mxc-test@yourtenant.com \
+  --state-file=.entrabot-state-mxc-test.json \
+  --env-file=.env.mxc-test
+```
+
+This reuses the existing Blueprint, creates a new Agent Identity + Agent User under it, and keeps the test chain's state/config separate from production.
+
 ### Configure Work IQ Word for an existing Agent User
 
 ```bash
@@ -111,7 +126,7 @@ Auto-detects the external UPN, resolves their home tenant, and creates a federat
 
 ## Environment outcomes
 
-After a successful run, `.env` will have the following entries (at minimum):
+After a successful run, the target env file (`.env` by default, or `--env-file`) will have the following entries (at minimum):
 
 ```
 ENTRABOT_TENANT_ID=...
