@@ -763,7 +763,11 @@ class TestWatchTeamsReplies:
             assert result["timed_out"] is False
             assert len(result["messages"]) == 1
             assert result["messages"][0]["message_id"] == "new-1"
-            assert result["messages"][0]["content"] == "do something"
+            # ``watch_teams_replies`` piggybacks on ``read()``, which now
+            # wraps message bodies in the XPIA envelope. The original
+            # text sits inside.
+            assert "do something" in result["messages"][0]["content"]
+            assert result["messages"][0]["content"].startswith("<external_content ")
         finally:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)

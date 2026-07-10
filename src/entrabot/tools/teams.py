@@ -1359,6 +1359,10 @@ async def read(
             raise RateLimitError(retry_after)
         resp.raise_for_status()
 
+        # Lazy import so the module boot cost of teams.py doesn't grow
+        # for callers that never hit the wrap path (e.g. token-only).
+        from entrabot.security.xpia import wrap_external
+
         messages = resp.json().get("value", [])
         out: list[dict] = []
         for m in messages:
@@ -1387,6 +1391,20 @@ async def read(
             # so callers filter on identity, never on displayName.
             sender_email = user_obj.get("userPrincipalName") or user_obj.get("mail") or ""
             sender_upn = str(user_obj.get("userPrincipalName") or "")
+            # Extract reply-to IDs from the RAW body (before wrapping) —
+            # the ``<attachment id=...>`` markers are Graph metadata and
+            # need to be visible to the extractor.
+            reply_to_ids = extract_reply_to_ids(body_content)
+            # XPIA envelope: wrap the model-facing body so the model
+            # treats it as data. Metadata (message_id, sender_id, etc.)
+            # stays outside the envelope so downstream filters/counts
+            # still work. See src/entrabot/security/xpia.py.
+            wrapped_body = wrap_external(
+                body_content,
+                source=f"teams:{chat_id}",
+                sender=sender_email or sender_id or None,
+                received_at=None,
+            )
             out.append(
                 {
                     "message_id": m["id"],
@@ -1394,10 +1412,10 @@ async def read(
                     "sender": str(sender_email or ""),
                     "sender_id": sender_id,
                     "sender_upn": sender_upn,
-                    "content": body_content,
-                    "content_text": body_content,
+                    "content": wrapped_body,
+                    "content_text": wrapped_body,
                     "sent_at": m.get("createdDateTime"),
-                    "reply_to_ids": extract_reply_to_ids(body_content),
+                    "reply_to_ids": reply_to_ids,
                     "attachments": attachments,
                 }
             )

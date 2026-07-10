@@ -729,12 +729,25 @@ async def read_file(
 
         text, truncated = _truncate(text, max_bytes=_max_text_bytes())
 
+        # XPIA envelope: file bodies are model-facing external content;
+        # wrap AFTER truncation so the size cap operates on real content
+        # and the model always sees the same envelope shape regardless
+        # of format.
+        from entrabot.security.xpia import wrap_external
+
+        wrap_source = (
+            f"file:{file_ref.web_url}"
+            if file_ref.web_url
+            else f"file:{file_ref.drive_id}:{file_ref.item_id}"
+        )
+        wrapped = wrap_external(text, source=wrap_source, sender=None)
+
         return FileContent(
             drive_id=file_ref.drive_id,
             item_id=file_ref.item_id,
             name=file_ref.name,
             mime_type=file_ref.mime_type,
-            text=text,
+            text=wrapped,
             page_count=page_count,
             truncated=truncated,
         )

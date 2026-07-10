@@ -200,6 +200,11 @@ class EntraBotConfig:
     blob_endpoint: str | None = field(default=None)
     blob_container: str | None = field(default=None)
     keep_memory_local: bool = field(default=False)
+    # XPIA content-wrapping rollback flag. Default True so protection
+    # is on unless an operator explicitly opts out.
+    # ``ENTRABOT_XPIA_WRAP_ENABLE=false`` disables the wrap without a
+    # code revert; see docs/architecture/PLAN-xpia-content-wrapping.md.
+    xpia_wrap_enable: bool = field(default=True)
 
     @classmethod
     def from_env(cls) -> EntraBotConfig:
@@ -251,6 +256,12 @@ class EntraBotConfig:
             blob_container=os.environ.get("ENTRABOT_BLOB_CONTAINER"),
             keep_memory_local=os.environ.get("ENTRABOT_KEEP_MEMORY_LOCAL", "").lower()
             in ("true", "1", "yes"),
+            # Default True — the flag is a rollback path, not an opt-in.
+            # Any non-empty value that is not explicitly falsy stays enabled.
+            xpia_wrap_enable=(
+                os.environ.get("ENTRABOT_XPIA_WRAP_ENABLE", "").strip().lower()
+                not in ("false", "0", "no", "off")
+            ),
         )
 
 

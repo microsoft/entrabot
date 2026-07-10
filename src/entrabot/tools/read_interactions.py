@@ -185,7 +185,44 @@ def read_interactions(
                 direction=direction,
                 cutoff=cutoff,
             ):
-                collected.append(entry)
+                collected.append(_annotate_inbound_with_xpia_wrap(entry))
 
     collected.sort(key=lambda e: e.get("ts", ""), reverse=True)
     return collected[:limit]
+
+
+def _annotate_inbound_with_xpia_wrap(entry: dict) -> dict:
+    """Return ``entry`` with a ``content_wrapped`` field on inbound rows.
+
+    Deviation from the plan (see PLAN §"Files touched" and the report on
+    PR #99): the plan asked for the message-body field to be wrapped
+    in-place. This log's stored ``summary`` is a short pre-truncated
+    preview, not the raw body. To satisfy the plan's intent without
+    breaking the append-only schema promise of the log itself (and the
+    many tests that assert on ``summary`` verbatim), we add
+    ``content_wrapped`` as a NEW read-only field on inbound entries.
+    """
+    if entry.get("direction") != "inbound":
+        return entry
+
+    from entrabot.security.xpia import wrap_external
+
+    channel = entry.get("channel") or ""
+    meta = entry.get("metadata") or {}
+    chat_id = meta.get("chat_id") or ""
+    if channel.startswith("teams") and chat_id:
+        source = f"teams:{chat_id}"
+    elif channel == "email":
+        source = f"email:{entry.get('content_ref') or ''}".rstrip(":")
+    else:
+        source = f"{channel or 'unknown'}:{entry.get('content_ref') or ''}".rstrip(":")
+
+    body = entry.get("summary") or ""
+    enriched = dict(entry)
+    enriched["content_wrapped"] = wrap_external(
+        body,
+        source=source,
+        sender=entry.get("sender") or None,
+        received_at=None,
+    )
+    return enriched

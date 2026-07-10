@@ -46,6 +46,7 @@ The architectural fix is a two-phase confirmation: when a high-risk mutation is 
 ### Follow-up: `read_file` content sanitization / spotlighting
 Document content currently enters LLM context unguarded. Sponsor-readable but attacker-authored content can carry instructions that survive into tool-call reasoning. Pair with a content-spotlighting pass on `read_file` output so injected instructions are marked as data, not commands.
 
+- **Status update (2026-07-09):** Primary defense LANDED on `feat/xpia-content-wrapping` — every `read_file` / `read_email` / `read_teams_messages` / `read_word_document` / `read_a365_text_file` return now wraps the model-facing body in `<external_content source=... sender=...>…</external_content>` at the tool boundary, and the body prompt was updated to teach the model that envelope-wrapped content is data. Boundary-enforced, not model-enforced. See `docs/architecture/PLAN-xpia-content-wrapping.md` (landing in PR #99) and Learning #70. Residual scope in this TODO: LLM-level taint tracking, spotlighting on adversarial patterns inside the envelope, and any follow-up hardening as adversarial evidence lands. Do NOT close this TODO — the wrap is the first mechanical layer, not the full defense.
 - **Why deferred:** distinct from the security authorization fix; covers a wider class of prompt-injection vectors than just the add/share confused-deputy.
 - **Effort:** M
 - **Source:** Internal security report 2026-06-04, Chain B.

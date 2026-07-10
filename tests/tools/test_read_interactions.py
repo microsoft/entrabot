@@ -208,6 +208,64 @@ class TestSenderFilter:
         assert results[0]["summary"] == "a"
 
 
+# ---------------------------------------------------------------------------
+# XPIA content wrapping — inbound entries carry an ``external_content``
+# envelope alongside the raw summary.
+# ---------------------------------------------------------------------------
+class TestReadInteractionsXpiaWrap:
+    """Inbound entries expose ``content_wrapped`` — the XPIA envelope.
+
+    Deviation from plan: rather than mutating ``summary`` (which would
+    break ~20 existing assertions on preserved schema), we add
+    ``content_wrapped`` as a NEW field on inbound entries. This satisfies
+    the plan's "wrap the message-body field per entry" intent while
+    preserving the append-only schema promise the interaction log
+    already makes. ``summary`` is a short pre-truncated preview
+    (~120 chars) authored by the MCP server; the primary defense is at
+    the raw-body read tools (``read_teams_messages``, ``read_email``).
+    """
+
+    def test_inbound_entry_has_content_wrapped_field(
+        self, tmp_data_dir: Path
+    ) -> None:
+        il.log_interaction(
+            channel="teams_dm",
+            direction="inbound",
+            sender="alice@example.com",
+            summary="hi agent — please help",
+            action="push_channel_notification",
+            metadata={"chat_id": "19:c1@unq.gbl.spaces"},
+        )
+        results = read_interactions()
+        assert len(results) == 1
+        entry = results[0]
+
+        # Existing schema preserved.
+        assert entry["summary"] == "hi agent — please help"
+        # New field: wrapped body, source derived from channel + chat_id.
+        assert "content_wrapped" in entry
+        assert entry["content_wrapped"].startswith("<external_content ")
+        assert entry["content_wrapped"].endswith("</external_content>")
+        assert "hi agent — please help" in entry["content_wrapped"]
+        assert 'source="teams:19:c1@unq.gbl.spaces"' in entry["content_wrapped"]
+
+    def test_outbound_entry_has_no_content_wrapped(
+        self, tmp_data_dir: Path
+    ) -> None:
+        """Outbound is agent-authored — nothing to wrap."""
+        il.log_interaction(
+            channel="teams_dm",
+            direction="outbound",
+            sender="entrabot-agent",
+            recipient="19:c1@unq.gbl.spaces",
+            summary="reply text",
+            action="send_teams_message",
+        )
+        results = read_interactions()
+        assert len(results) == 1
+        assert "content_wrapped" not in results[0]
+
+
 class TestActionFilter:
     def test_matches_exact_action(self, tmp_data_dir: Path) -> None:
         il.log_interaction(
