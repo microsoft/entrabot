@@ -19,6 +19,11 @@ COMPILED_PATTERNS = [
 ]
 
 
+def test_reviewed_by_codex_is_forbidden():
+    """Regression test: the documented "reviewed by Codex" example must be caught."""
+    assert any(pattern.search("Reviewed by Codex") for pattern in COMPILED_PATTERNS)
+
+
 def test_no_agent_attribution_bylines():
     offenders: list[str] = []
     for relative_path in all_public_markdown_files():
@@ -27,7 +32,7 @@ def test_no_agent_attribution_bylines():
         for pattern in COMPILED_PATTERNS:
             if pattern.search(text):
                 offenders.append(f"{relative_path}: {pattern.pattern}")
-    assert offenders == [], (
+    assert sorted(offenders) == [], (
         "Public docs must not carry agent-authorship attribution bylines: "
-        f"{offenders}"
+        f"{sorted(offenders)}"
     )
