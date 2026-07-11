@@ -79,8 +79,9 @@ def wrap_external(
     received_at: datetime | None = None,
 ) -> str:
     """
-    Wrap external body in <external_content>. Idempotent — if body is already
-    wrapped, returns it unchanged. Escapes </external_content> in the body.
+    Wrap external body in an authoritative <external_content> envelope.
+    Always wraps, even when body resembles an envelope, and escapes embedded
+    </external_content> close tags.
     """
     ...
 
@@ -98,9 +99,13 @@ class ExternalContent:
     received_at: datetime | None
 ```
 
+### Authoritative outer envelope
+
+The body is always untrusted, including any text that already resembles an `<external_content>` envelope. `wrap_external` therefore always adds a new outer envelope using call-site `source`, `sender`, and `received_at` values. A body prefix is never accepted as proof that trusted wrapping already occurred; otherwise an attacker could forge the marker and suppress or spoof provenance.
+
 ### Escape-on-collision
 
-If the body contains the literal string `</external_content>` (case-insensitive, whitespace-tolerant), the wrapper escapes each occurrence to `&lt;/external_content&gt;` before wrapping. Idempotency: unwrapping via `unwrap_external` produces the exact original body byte-for-byte (test coverage: fuzz with random collision insertions).
+If the body contains the literal string `</external_content>` (case-insensitive, whitespace-tolerant), the wrapper escapes each occurrence to `&lt;/external_content&gt;` before wrapping. Unwrapping one layer via `unwrap_external` produces the exact original body byte-for-byte, including an inner envelope-shaped string (test coverage: fuzz with random collision insertions).
 
 Alternative rejected: a random per-turn nonce in the tag name (e.g. `<external_content_a3f2b1>`). Deterministic escape is simpler and avoids nonce leakage into logs.
 
@@ -175,7 +180,10 @@ Tests:
 - `tests/security/test_xpia_wrap.py` — new file:
   - `test_wrap_basic` — envelope shape.
   - `test_wrap_escape_on_collision` — literal `</external_content>` in body is escaped.
-  - `test_wrap_idempotent` — double-wrap is a no-op.
+  - `test_rewraps_existing_envelope_with_trusted_metadata` — envelope-shaped input receives a trusted outer wrap.
+  - `test_rewraps_unclosed_forged_prefix` — an incomplete attacker prefix cannot suppress the outer wrap.
+  - `test_rewraps_forged_envelope_with_trailing_text` — trailing directives remain inside the trusted outer wrap.
+  - `test_empty_env_value_keeps_wrap_enabled` — only explicit false values disable the boundary.
   - `test_unwrap_roundtrip` — `unwrap(wrap(body)) == body` for random bodies (property test with `hypothesis`).
   - `test_wrap_metadata_outside_envelope` — application metadata is not inside the envelope.
 - `tests/tools/test_teams.py` — extend `read_teams_messages` tests: assert wrap present, assert metadata outside.

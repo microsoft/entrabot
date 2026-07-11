@@ -11,9 +11,9 @@ inside the envelope is DATA, not INSTRUCTIONS.
 This module owns the envelope: ``wrap_external`` produces it,
 ``unwrap_external`` reverses it (test + audit path only). The wrap is:
 
-- **Idempotent.** ``wrap(wrap(x)) == wrap(x)``. A caller passing
-  already-wrapped input receives it unchanged (no double-envelope), so
-  wire-through code that re-wraps by accident does no harm.
+- **Authoritative outer envelope.** Every call wraps the supplied body,
+  even when it already resembles an envelope. External text cannot suppress
+  trusted ``source`` / ``sender`` metadata by forging the wrapper prefix.
 - **Escape-on-collision.** Any literal ``</external_content>`` in the
   body — including case variants and whitespace-padded forms — is
   escaped to ``&lt;/external_content&gt;`` before wrapping. An attacker
@@ -33,18 +33,14 @@ PR #99) for the full design + rollout notes, and Learning #70 in
 
 from __future__ import annotations
 
-import logging
-import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
 
-logger = logging.getLogger("entrabot.security.xpia")
+from entrabot.config import get_config
 
 # Envelope tag constants — one source of truth.
 _TAG_NAME = "external_content"
-_OPEN_PREFIX = f"<{_TAG_NAME} "
-_OPEN_NO_ATTRS = f"<{_TAG_NAME}"
 _CLOSE_TAG = f"</{_TAG_NAME}>"
 
 # Escape-on-collision regex: match ``</external_content>`` case-insensitively
@@ -56,14 +52,6 @@ _CLOSE_TAG_RE = re.compile(
     r"<\s*/\s*external_content\s*>",
     re.IGNORECASE,
 )
-
-# Sentinel escaped forms:
-#   - _CLOSE_TAG_ESCAPED: the canonical hit; the unwrap path replaces
-#     this back to the lower-case literal close tag so a round-trip
-#     from ``wrap_external`` produces byte-identical output on that
-#     specific casing. Case variants (``</EXTERNAL_CONTENT>`` etc.)
-#     round-trip through a per-match encoded form (see below).
-_CLOSE_TAG_ESCAPED = "&lt;/external_content&gt;"
 
 
 def _escape_close_tag_preserving_original(match: re.Match[str]) -> str:
@@ -98,17 +86,8 @@ class ExternalContent:
 
 
 def _wrap_enabled() -> bool:
-    """Return True when the XPIA wrap is active.
-
-    Default is enabled — the flag is a rollback path. Any truthy string
-    (``true`` / ``1`` / ``yes``, case-insensitive) means enabled; any
-    explicitly falsy string (``false`` / ``0`` / ``no``) disables. An
-    absent env var defaults to enabled.
-    """
-    raw = os.environ.get("ENTRABOT_XPIA_WRAP_ENABLE")
-    if raw is None:
-        return True
-    return raw.strip().lower() not in ("false", "0", "no", "off", "")
+    """Return the single config-owned XPIA wrapping decision."""
+    return get_config().xpia_wrap_enable
 
 
 def _escape_attribute(value: str) -> str:
@@ -118,10 +97,7 @@ def _escape_attribute(value: str) -> str:
     substitutions so their leading ``&`` doesn't get double-escaped.
     """
     return (
-        value.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
+        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     )
 
 
@@ -132,31 +108,7 @@ def _unescape_attribute(value: str) -> str:
     literal ``&amp;lt;`` back into ``<``.
     """
     return (
-        value.replace("&quot;", '"')
-        .replace("&gt;", ">")
-        .replace("&lt;", "<")
-        .replace("&amp;", "&")
-    )
-
-
-def _already_wrapped(body: str) -> bool:
-    """Cheap check: is ``body`` already an ``external_content`` envelope?
-
-    We accept either an attribute-bearing prefix (the normal case) or the
-    bare ``<external_content>`` (defensive: an attacker who somehow gets
-    the body pre-shaped this way still gets treated as wrapped so we
-    don't double-envelope, and the outer wrap is a no-op that leaves the
-    attacker's bogus envelope in place — which the model will refuse to
-    act on per the body prompt).
-    """
-    if not body:
-        return False
-    lstripped = body.lstrip()
-    # Prefer a strict prefix check so we don't false-match a body that
-    # merely mentions ``<external_content>`` somewhere in its middle.
-    return (
-        lstripped.startswith(_OPEN_PREFIX)
-        or lstripped.startswith(_OPEN_NO_ATTRS + ">")
+        value.replace("&quot;", '"').replace("&gt;", ">").replace("&lt;", "<").replace("&amp;", "&")
     )
 
 
@@ -169,9 +121,9 @@ def wrap_external(
 ) -> str:
     """Wrap external-source content in the XPIA envelope.
 
-    Idempotent — if ``body`` already begins with the envelope's open
-    tag, we return it unchanged (with a debug log). Escape-on-collision
-    handles literal ``</external_content>`` inside the body.
+    Always emits a trusted outer envelope. If ``body`` already resembles
+    an envelope, it remains untrusted body text; its close tag is escaped
+    and the call-site ``source`` / ``sender`` metadata stays authoritative.
 
     Args:
         body: The external-source text. May contain arbitrary Unicode.
@@ -190,19 +142,10 @@ def wrap_external(
     if not _wrap_enabled():
         return body
 
-    if _already_wrapped(body):
-        # Second-wrap suppressed — this is the idempotency contract.
-        logger.debug(
-            "wrap_external: input already wrapped, skipping (source=%s)", source
-        )
-        return body
-
     # Escape any literal close tag inside the body BEFORE we wrap.
     # Use a callable so we preserve the original casing / whitespace of
     # the matched substring — that lets unwrap round-trip byte-for-byte.
-    safe_body = _CLOSE_TAG_RE.sub(
-        _escape_close_tag_preserving_original, body
-    )
+    safe_body = _CLOSE_TAG_RE.sub(_escape_close_tag_preserving_original, body)
 
     attrs = [f'source="{_escape_attribute(source)}"']
     if sender is not None:
