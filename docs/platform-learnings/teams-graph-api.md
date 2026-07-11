@@ -1,22 +1,24 @@
 # Teams Graph API
 
-> **Last updated:** 2025-07-17
+> **Last updated:** 2026-07-10
 > **Context:** Entrabot identity research — autonomous agents communicating with humans via Microsoft Teams
+>
+> **Current Entrabot boundary:** Teams is Graph-native and uses an Agent User token from the autonomous three-hop flow. OBO and Bot Framework sections below are retained as historical research and are not the shipped runtime (ADR-006).
 
 ## Overview
 
 The Microsoft Graph API provides a comprehensive REST interface for interacting with Microsoft Teams programmatically. For Entrabot, Graph API is the primary pathway for an autonomous agent to:
 
 - **Send messages** (status updates, results, alerts) to a human operator in Teams
-- **Receive commands** from the human via webhook-driven notifications
-- **Set presence** to indicate the agent's operational status (Available, Busy, Away)
+- **Receive messages** through background Graph polling and host channel push
+- **Research presence APIs** for a future agent-status integration; Entrabot does not currently set presence
 - **Create and manage chats** to establish dedicated agent↔human communication channels
 
 The base URL for all endpoints is `https://graph.microsoft.com/v1.0` (stable) or `https://graph.microsoft.com/beta` (preview).
 
 ### Why This Matters for Entrabot
 
-Our agent architecture has agents running on Mac/Linux/Windows with Agent IDs, using OBO (On-Behalf-Of) token flows. The agent connects to Teams as an "Agent User" — a real Entra ID user account — for bidirectional communication. Understanding Graph API's capabilities, permissions model, and limitations is critical to designing this integration correctly.
+Entrabot agents run on macOS, Linux, and Windows and connect to Teams as an Agent User. The current runtime uses the autonomous three-hop `user_fic` flow, not OBO. Understanding Graph permissions and chat-message limitations remains critical to the integration.
 
 ---
 
@@ -73,7 +75,7 @@ POST https://graph.microsoft.com/v1.0/chats/{chat-id}/messages
 
 **Permissions:** `ChatMessage.Send` (delegated only for normal use)
 
-**⚠️ CRITICAL:** Application permissions CANNOT send regular chat messages. Only delegated permissions (user context) can send messages. This is the single most important constraint for Entrabot — the agent MUST have a user identity and use delegated auth (OBO flow) to send messages.
+**⚠️ CRITICAL:** Application permissions cannot send regular chat messages. Entrabot therefore uses the delegated Agent User token produced by `user_fic`; it does not need a human OBO token in `agent_user` mode.
 
 #### List Messages in a Chat
 
@@ -85,7 +87,7 @@ GET https://graph.microsoft.com/v1.0/chats/{chat-id}/messages
 - Delegated: `Chat.Read`, `Chat.ReadWrite`
 - Application: `Chat.Read.All` (requires admin consent)
 
-**Supports:** `$top`, `$filter`, `$orderby`, pagination via `@odata.nextLink`
+**Query options:** `$top`, `$filter`, `$orderby`, and pagination via `@odata.nextLink` exist, but chat-message `$filter`/`$orderby` behavior is unreliable in practice. Entrabot fetches and filters client-side.
 
 #### Get a Specific Message
 
@@ -177,9 +179,9 @@ POST https://graph.microsoft.com/v1.0/users/{userId}/presence/setPresence
 - You must periodically re-set presence to keep it active
 - Calendar-derived statuses ("In a meeting", "Out of office") cannot be overridden
 
-**Permissions:** `Presence.ReadWrite.All` (application permission, admin consent required)
+**Permissions:** `Presence.ReadWrite` for delegated calls that set the signed-in Agent User's presence; `Presence.ReadWrite.All` is the application permission for setting another user's presence.
 
-**Entrabot pattern:** Agent sets presence to `Available` on startup, `Busy` when processing a task, and `Away` or `Offline` on shutdown. A background timer re-sets presence every 55 minutes to prevent expiration.
+**Potential pattern:** a future integration could set `Available` on startup, `Busy` during work, and refresh before expiry. This behavior is not implemented in the current Entrabot runtime.
 
 #### Clear Presence
 
@@ -307,12 +309,13 @@ This requires a Teams app manifest and is typically used for bots/apps installed
 | `ChannelMessage.Read.All` | Delegated | Read channel messages | Yes |
 | `Presence.Read` | Delegated | Read own presence | No |
 | `Presence.Read.All` | Delegated/App | Read any user's presence | Yes (for app) |
+| `Presence.ReadWrite` | Delegated | Set signed-in user's presence | No |
 | `Presence.ReadWrite.All` | Application | Set any user's presence | Yes |
 | `Chat.Read.All` | Application | Read all chats (compliance) | Yes |
 | `Chat.ReadWrite.All` | Application | Read/write all chats | Yes |
 | `TeamsAppInstallation.ReadWriteSelfForUser.All` | Application | Install bot app for users | Yes |
 
-### OBO (On-Behalf-Of) Flow for Entrabot Agents
+### Historical: OBO (On-Behalf-Of) flow research
 
 The OBO flow is the recommended pattern for Entrabot's "Agent User" scenario:
 
@@ -663,8 +666,8 @@ Files shared in Teams are stored in SharePoint. SharePoint's rate limits and sto
 |---|---|---|---|---|
 | Get my presence | GET | `/me/presence` | `Presence.Read` | — |
 | Get user presence | GET | `/users/{id}/presence` | `Presence.Read.All` | `Presence.Read.All` |
-| Set presence | POST | `/users/{id}/presence/setPresence` | — | `Presence.ReadWrite.All` |
-| Clear presence | POST | `/users/{id}/presence/clearPresence` | — | `Presence.ReadWrite.All` |
+| Set presence | POST | `/users/{id}/presence/setPresence` | `Presence.ReadWrite` | `Presence.ReadWrite.All` |
+| Clear presence | POST | `/users/{id}/presence/clearPresence` | `Presence.ReadWrite` | `Presence.ReadWrite.All` |
 | Get multiple users | POST | `/communications/getPresencesByUserId` | `Presence.Read.All` | `Presence.Read.All` |
 
 ### Subscription Operations

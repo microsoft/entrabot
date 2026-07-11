@@ -10,16 +10,16 @@ Append-only log of gotchas, surprises, and non-obvious behaviors discovered duri
 **Context:** Running setup.sh to create Agent Identity Blueprint
 **Problem:** `az rest` calls to Agent Identity beta APIs returned 403
 **Root cause:** Azure CLI tokens always include `Directory.AccessAsUser.All` delegated permission. Agent Identity APIs explicitly reject any token containing this permission.
-**Fix:** Created a dedicated "Entrabot Provisioner" app registration. Use `ClientSecretCredential` from `azure-identity` to get a clean `client_credentials` token.
-**Prevention:** Never use `az rest` or `DefaultAzureCredential` for Agent Identity APIs. Always use a dedicated app with `client_credentials`.
+**Fix:** Created a dedicated Entrabot Provisioner app registration. It now uses certificate credentials with the private key in the OS credential store; legacy password credentials are removed.
+**Prevention:** Never use `az rest`, `DefaultAzureCredential`, or a persisted client secret for Agent Identity APIs. Use the dedicated certificate-backed provisioner.
 
 ### Learning #2: BlueprintPrincipal Must Be Created Separately
 
 **Date:** 2026-04-06
 **Context:** Creating Agent Identity after Blueprint
 **Problem:** Agent Identity creation failed with 400: "The Agent Blueprint Principal for the Agent Blueprint does not exist"
-**Root cause:** Creating a Blueprint (`POST /applications`) does NOT auto-create its BlueprintPrincipal (service principal). This is an explicit second step.
-**Fix:** Always `POST /servicePrincipals` with `@odata.type: AgentIdentityBlueprintPrincipal` immediately after Blueprint creation. Also check on the skip path (idempotent re-runs).
+**Root cause:** Creating a Blueprint does NOT auto-create its BlueprintPrincipal (service principal). This is an explicit second step.
+**Fix:** Always call `POST /v1.0/servicePrincipals/microsoft.graph.agentIdentityBlueprintPrincipal` immediately after Blueprint creation. Also check on the skip path (idempotent re-runs).
 **Prevention:** Follow the implement-agent-id skill checklist.
 
 ### Learning #3: Token Responses Return Error Dicts, Not Exceptions
@@ -37,7 +37,7 @@ Append-only log of gotchas, surprises, and non-obvious behaviors discovered duri
 **Context:** Trying to create an agent as a regular Entra user with a password
 **Problem:** Agent Identities are service principals without backing application objects. `passwordCredentials` returns `PropertyNotCompatibleWithAgentIdentity`.
 **Root cause:** Agent IDs are designed for managed identity federation and certificates, not passwords.
-**Fix:** Use client credentials on the Blueprint (which IS an application) for device-local scenarios. Production uses managed identity + federated credentials.
+**Fix:** Use certificate-backed client credentials on the Blueprint and federated identity credentials for the Agent Identity exchange. Keep private keys in the platform credential store.
 **Prevention:** Never create "fake users" for agents. Always use the Agent Identity Blueprint → Agent Identity pattern.
 
 ### Learning #6: Never Redirect Stderr to /dev/null
@@ -772,7 +772,7 @@ Microsoft's published beta documentation only covers `workbookComment` / `workbo
 
 1. The existing `add_file_comment` tool has shipped against a non-functional endpoint for `.docx` (and the wrong endpoint for `.xlsx` — the Excel surface is `/workbook/comments`, not `/drives/{id}/items/{id}/comments`). It works in unit tests because tests are respx-mocked and never hit Graph. Any production caller would 404. Nobody has reported this because the tool has not been used live against Word.
 2. The plan to extend `add_file_comment` with list / get / reply / list-replies tools is not viable on this Graph surface — none of those reads or writes will ever succeed for Word.
-3. The Hirsch-doc defense use case (the headline motivation) requires a different API surface entirely.
+3. Word document comments require a different API surface entirely.
 
 **The pivot.** Microsoft Agent 365's **Work IQ Word MCP server** (`mcp_WordServer`) exposes the right primitives:
 
@@ -825,7 +825,7 @@ Auth model uses **Entra Agent ID** delegated tokens — the same identity primit
 
 **Date:** 2026-05-08
 **Status:** **CONFIRMED — fixed in `a365-upgrade`.**
-**Context:** Entrabot provisions its Agent Identity Blueprint directly through Graph beta with display name `EntraBot Code Agent`. The A365 setup script originally called `a365 setup permissions mcp --agent-name "EntraBot Code Agent"` before Entrabot provisioning had loaded the existing blueprint state.
+**Context:** Entrabot provisions its Agent Identity Blueprint directly through the dedicated Graph v1.0 subtype endpoint with display name `EntraBot Code Agent`. The A365 setup script originally called `a365 setup permissions mcp --agent-name "EntraBot Code Agent"` before Entrabot provisioning had loaded the existing blueprint state.
 **Problem:** A365 config-free mode derives `"<agent-name> Blueprint"`, so it looked for `EntraBot Code Agent Blueprint` and failed with `Blueprint 'EntraBot Code Agent Blueprint' not found in Entra` plus `No generated config found ... a365.generated.config.json`. Calling `a365 setup blueprint` would create/reuse the A365-derived blueprint, but that is the wrong fix for Entrabot because it would split Work IQ permissions away from the existing Agent User chain.
 **Fix:** Run Work IQ configuration after Entrabot Step 5, write `a365.config.json` from `.entrabot-state.json`/Azure CLI (`tenantId`, `clientAppId`, `agentBlueprintId`, `agentBlueprintObjectId`, `agentIdentityId`, `agentIdentityDisplayName`, `deploymentProjectPath`), then call `a365 setup permissions mcp` without `--agent-name`.
 **Prevention:** For repos that already own their Blueprint lifecycle, never use A365 config-free `--agent-name` for permissions. Use explicit config IDs so A365 patches the existing blueprint instead of deriving names.
@@ -898,7 +898,7 @@ pem = keyring.get_password("entraclaw", "blueprint-private-key")
 assert pem and pem.startswith("-----BEGIN")
 keyring.set_password("entrabot", "blueprint-private-key", pem)
 ```
-After this, `setup.sh --diagnose` passed all 7 checks including the three-hop token mint and Graph identity confirmation (`entrabot-agent@werner.ac`).
+After this, `setup.sh --diagnose` passed all 7 checks including the three-hop token mint and Graph identity confirmation (`entra-agent@contoso.onmicrosoft.com`).
 **Prevention:**
 
 - **Never grep for "is the rename done"; also enumerate persistent surfaces outside the repo.** A package rename can touch four surfaces the source tree doesn't show: (1) OS keystore service names (Keychain on macOS, Secret Service on Linux, Credential Manager / DPAPI on Windows), (2) per-user state directories (`~/.entraclaw/` vs `~/.entrabot/`), (3) per-machine MCP config files (`.mcp.json`, `~/.copilot/mcp-config.json` — see also #16 `chore(setup)` and the same-day `.mcp.json` stale-binary fix), (4) installed console scripts in old venvs. Walk all four explicitly before declaring a rename complete.
@@ -918,7 +918,7 @@ After this, `setup.sh --diagnose` passed all 7 checks including the three-hop to
 **Context:** The background Teams poll needs to filter out the agent's own outbound messages before pushing incoming messages as channel notifications; otherwise it would push every message the agent itself just sent back to the agent as if it were fresh inbound. That filter (`filter_human_messages` in `src/entrabot/tools/teams.py:1411`, callers at `src/entrabot/mcp_server.py:1495` and `:3324`) compared `message.from.user.displayName` against a hard-coded string `"EntraBot Agent"`. Weeks after the code was written, the agent was renamed (Entra directory display name changed to `"EntraClaw Agent"`). Graph messages started returning the new name; the string compare stopped matching; the filter no-oped.
 **Symptom:** On 2026-07-09, 6-week-old self-authored Teams messages began replaying as fresh channel notifications. `bootstrap_body_state` reported `watched_chat_count=62, cursors_present=62, cursors_stale=61, oldest_cursor_ts=2026-05-28T22:43:19.927Z`. The cursor-date alignment (2026-05-28T22:43 cursor → 22:48 and 22:59 replays in the same chats) matched the mechanism precisely: cursors were pinned just before self-authored messages from the pre-rename window, and today's poll pass finally re-ran the filter, failed to recognize the agent's own messages as its own, and pushed them.
 **Root cause:** Identifying an AAD principal by display name. Display names are user-mutable, localizable, unindexed, and unstable. They have no place in code paths that filter, deduplicate, authorize, or route.
-**Fix:** Switch the self-identity filter to match on `sender_upn` first (the config-side canonical is `ENTRABOT_AGENT_UPN=entra-agent@werner.ac`), falling back to `sender_id` (AAD object-id) when the Graph payload doesn't surface UPN. Never use `sender_display_name` for anything except human-facing rendering. Full plan: `docs/architecture/PLAN-agent-identity-by-upn.md`.
+**Fix:** Switch the self-identity filter to match on `sender_upn` first (the config-side canonical is `ENTRABOT_AGENT_UPN=entra-agent@contoso.onmicrosoft.com`), falling back to `sender_id` (AAD object-id) when the Graph payload doesn't surface UPN. Never use `sender_display_name` for anything except human-facing rendering. Full plan: `docs/architecture/PLAN-agent-identity-by-upn.md`.
 **Prevention:**
 
 - **UPN is the config canonical.** Human-readable, matches the Entra directory, easy to grep.

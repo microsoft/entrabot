@@ -1,5 +1,7 @@
 # PLAN: Identify Self-Authored Messages by UPN, Not Display Name
 
+**Status:** Shipped on `main` (2026-07)
+
 Status: **In progress** — 2026-07-09
 Owner: Brandon (sponsor) + entrabot agent
 Trigger: 2026-07-09 cursor-replay incident — 6-week-old self-authored Teams messages replayed as fresh channel notifications after agent rename.
@@ -20,13 +22,13 @@ Graph now returns `"EntraClaw Agent"` in `message.from.user.displayName` because
 
 Use **UPN as the canonical self-identity** in config and in the filter predicate. Use **AAD object-id as fallback** when the Graph message payload does not surface UPN.
 
-- **Config canonical:** `ENTRABOT_AGENT_UPN` (e.g. `entra-agent@werner.ac`) — human-readable, matches the Entra directory, easy to grep.
+- **Config canonical:** `ENTRABOT_AGENT_UPN` (e.g. `entra-agent@contoso.onmicrosoft.com`) — human-readable, matches the Entra directory, easy to grep.
 - **Runtime match on the message payload:** whichever of `sender_upn` or `sender_id` (object-id) is present, in that order. Never `sender_display_name`.
 - **Never trust display names for identity anywhere.** Displayed names are for humans, not for authorization or de-duplication.
 
 ### Why UPN and object-id, in that order
 
-- UPN is stable in practice for machine identities under an owned domain (`werner.ac`). Renaming a UPN in production is a deliberate migration, not an incidental change.
+- UPN is stable in practice for machine identities under an owned domain (`contoso.onmicrosoft.com`). Renaming a UPN in production is a deliberate migration, not an incidental change.
 - Object-id is guaranteed stable and is present on every Graph message. It's the correct fallback when UPN is absent from the payload.
 - Display name is user-mutable, unindexed, and localizable. It has no business being an identity predicate.
 

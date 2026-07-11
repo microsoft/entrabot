@@ -14,7 +14,7 @@ The persona carries personality, callbacks, long-term memory, and per-user relat
 
 When both are present the body **loads first** and the persona is appended after. The body is intentionally non-overridable — a persona that tried to relax a security rule or invent a new channel would be ignored.
 
-See the `## Non-Negotiables` section in [`CLAUDE.md`](../../CLAUDE.md) for the formal rule.
+See the `## Non-Negotiables` section in [`CLAUDE.md`](https://github.com/microsoft/entrabot/blob/main/CLAUDE.md) for the formal rule.
 
 ## File layout
 
@@ -139,8 +139,8 @@ Rule of thumb: if changing it would affect *what the agent is allowed to do*, it
 
 ## See also
 
-- [`prompts/agent_system.md`](../../prompts/agent_system.md) — the stock body
-- [`prompts/anatomy/security.md`](../../prompts/anatomy/security.md) — baseline + Critical Security Rules
-- [`prompts/anatomy/channel-discipline.md`](../../prompts/anatomy/channel-discipline.md) — response etiquette
-- [`prompts/anatomy/identity-and-tools.md`](../../prompts/anatomy/identity-and-tools.md) — identity framing + tool reference
+- [`prompts/agent_system.md`](https://github.com/microsoft/entrabot/blob/main/prompts/agent_system.md) — the stock body
+- [`prompts/anatomy/security.md`](https://github.com/microsoft/entrabot/blob/main/prompts/anatomy/security.md) — baseline + Critical Security Rules
+- [`prompts/anatomy/channel-discipline.md`](https://github.com/microsoft/entrabot/blob/main/prompts/anatomy/channel-discipline.md) — response etiquette
+- [`prompts/anatomy/identity-and-tools.md`](https://github.com/microsoft/entrabot/blob/main/prompts/anatomy/identity-and-tools.md) — identity framing + tool reference
 - `CLAUDE.md` / `AGENTS.md` — the non-negotiable that anchors the body

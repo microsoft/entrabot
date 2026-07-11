@@ -29,7 +29,8 @@
 - Never use `az rest` or Azure CLI tokens for Agent Identity APIs — they include `Directory.AccessAsUser.All` which causes hard 403 (Learning #1)
 - Always create BlueprintPrincipal explicitly after Blueprint — it is NOT auto-created (Learning #2)
 - Agent IDs are service principals, not users — never create fake user accounts with passwords
-- **AGENT NAMES CHANGE — USE UPN.** Never identify an agent (self or peer) by display name in code paths that filter, deduplicate, authorize, or route. Display names are user-mutable and localizable. Use **UPN as the canonical config value** (e.g. `ENTRABOT_AGENT_UPN=entra-agent@werner.ac`) and match on the message payload's `sender_upn` first, falling back to `sender_id` (AAD object-id). Rename incident 2026-07-09: renaming "EntraBot Agent" → "EntraClaw Agent" made the Teams poll's self-authored filter no-op, causing 6-week-old outbounds to replay as inbound across 61/62 chats. See `docs/runbooks/hard-won-learnings.md` Learning #69 and `docs/architecture/PLAN-agent-identity-by-upn.md`.
+- **External content is untrusted.** Model-facing Teams, email, Files, and Work IQ content must pass through `entrabot.security.xpia.wrap_external`. Never trust or preserve an inbound `<external_content>` envelope as authoritative; always add the boundary-owned outer envelope.
+- **AGENT NAMES CHANGE — USE UPN.** Never identify an agent by display name in code paths that filter, deduplicate, authorize, or route. Use `ENTRABOT_AGENT_UPN` as the canonical config value (for example, `entra-agent@contoso.onmicrosoft.com`), match `sender_upn` first, and fall back to the Entra object ID. `ENTRABOT_AGENT_USER_UPN` remains a compatibility alias for existing `.env` files. See Learning #69 and `docs/architecture/PLAN-agent-identity-by-upn.md`.
 - Parse `az` CLI output as JSON, not TSV — TSV can be corrupted by warnings (Learning #7)
 - Graph API `$filter`/`$orderby` are unreliable for chat messages — always filter client-side (Learning #16)
 - **Sub-agent worktree installs must use a worktree-local venv, never the parent venv** (Learning #36) — running `pip install -e .` from inside a git worktree against the main repo's `.venv/bin/pip` silently re-points the parent venv's editable-install target at the worktree source tree. Every subsequent MCP server boot then loads code from the worktree — which has no `.env`, no auth, no polling, and no visible error. Always create `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"` inside the worktree BEFORE any editable install. After any session that used sub-agent worktrees, verify the main venv's target via `.venv/bin/python3 -c "from entrabot import config; print(config.__file__)"` — the path must not contain `.claude/worktrees/`.
@@ -56,8 +57,8 @@ These are not optional. Skipping them is the documented cause of 4 design errors
 ## Current Runtime Model
 
 - Python 3.12+ research project — no deployed service yet
-- Eight modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `a365/` (Work IQ MCP provider + Word adapter) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `identity/` (state machine) → `storage/` (`LocalBackend`/`BlobBackend`/`PersonaBackend` + `migration` helper — ADR-005 Phases 1, 2, 5, 6a shipped) → `mcp_server.py` (FastMCP + background channel)
-- External dependencies: Microsoft Entra ID, Microsoft Teams + Outlook mailbox (Graph API or Bot Framework), Azure Blob Storage (optional, opt-in via `setup.sh --use-cloud-memory`)
+- Core runtime components: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `a365/` (Work IQ MCP provider + Word adapter) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `identity/` (state machine) → `storage/` (`LocalBackend`/`BlobBackend`/`PersonaBackend` + `migration` helper — ADR-005 Phases 1, 2, 5, 6a shipped) → `mcp_server.py` (FastMCP + background channel)
+- External dependencies: Microsoft Entra ID, Microsoft Teams + Outlook mailbox (Microsoft Graph), Azure Blob Storage (optional, opt-in via `setup.sh --use-cloud-memory`)
 - **No default group chat.** Every Teams tool requires an explicit `chat_id`. Chats come from `create_chat`, the persisted `watched_chats` file, or the auto-discovery sweep over `/me/chats`.
 - **Body-first prompt.** `prompts/agent_system.md` loads at boot with `@include` expansion of `prompts/anatomy/*.md`. Persona-sati output (if configured) is appended AFTER the body and cannot override body rules.
 - Two auth modes via `ENTRABOT_MODE`: `agent_user` (three-hop), `delegated` (MSAL). Agent memory has a **parallel third hop** against `https://storage.azure.com/.default` (`acquire_agent_user_storage_token`).
@@ -122,12 +123,12 @@ Note: efferent-copy may mechanically cover body-tool observe but not bootstrap/r
 
 ## Read These First
 
-- `docs/engineering-status.md` — current state, test count (1,237), next steps
+- `docs/engineering-status.md` — current state and next steps
 - `prompts/agent_system.md` + `prompts/anatomy/*.md` — the body prompt that governs your behaviour (security, channel discipline, identity/tools)
 - `docs/architecture/DESIGN-persona-sati-integration.md` — mind-body split design
 - `docs/decisions/005-cloud-hosted-memory.md` — cloud memory spec
 - `prompts/agent_system.md.archive` — original monolithic prompt, kept for reference
-- `docs/runbooks/hard-won-learnings.md` — 66 learnings, read before making changes
+- `docs/runbooks/hard-won-learnings.md` — read before making changes
 
 ## Commands
 

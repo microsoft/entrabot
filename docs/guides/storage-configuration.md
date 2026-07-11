@@ -10,7 +10,7 @@ EntraBot writes *operational* data — interactions log, watched chats, email cu
 
 ## The two backends
 
-Both implement the `MemoryBackend` protocol in [`src/entrabot/storage/backend.py`](../../src/entrabot/storage/backend.py):
+Both implement the `MemoryBackend` protocol in [`src/entrabot/storage/backend.py`](https://github.com/microsoft/entrabot/blob/main/src/entrabot/storage/backend.py):
 
 ```
 MemoryBackend
@@ -93,7 +93,7 @@ The `BlobBackend` authenticates to Azure Blob via an Agent-User-scoped OAuth tok
 If the setup wasn't run with `--use-cloud-memory` and you want to flip later, you'll need to re-run:
 
 ```bash
-./scripts/setup.sh --use-cloud-memory
+./scripts/setup.sh --use-blueprint=<blueprint-app-id> --use-cloud-memory
 ```
 
 This grants the missing `user_impersonation` on Azure Storage, provisions the resources, and updates `.env`. It's idempotent.
@@ -103,7 +103,7 @@ This grants the missing `user_impersonation` on Azure Storage, provisions the re
 If you've been running local and want to move your history to the cloud:
 
 ```bash
-./scripts/setup.sh --use-cloud-memory
+./scripts/setup.sh --use-blueprint=<blueprint-app-id> --use-cloud-memory
 ```
 
 Near the end, the script will prompt you to migrate `~/.entrabot/data` into the blob container. The migration:
@@ -155,7 +155,7 @@ Easiest: pass `--keep-memory-local` to `setup.sh`, or remove `ENTRABOT_BLOB_ENDP
 ## See also
 
 - [`docs/decisions/005-cloud-hosted-memory.md`](../decisions/005-cloud-hosted-memory.md) — the ADR driving this design
-- [`src/entrabot/storage/backend.py`](../../src/entrabot/storage/backend.py) — the backend protocol + factory
-- [`src/entrabot/storage/blob.py`](../../src/entrabot/storage/blob.py) — the async BlobStore client
-- [`src/entrabot/storage/migration.py`](../../src/entrabot/storage/migration.py) — the migrator used by setup.sh and callable by hand
-- [`scripts/provision_blob_storage.py`](../../scripts/provision_blob_storage.py) — the idempotent Azure provisioning routine
+- [`src/entrabot/storage/backend.py`](https://github.com/microsoft/entrabot/blob/main/src/entrabot/storage/backend.py) — the backend protocol + factory
+- [`src/entrabot/storage/blob.py`](https://github.com/microsoft/entrabot/blob/main/src/entrabot/storage/blob.py) — the async BlobStore client
+- [`src/entrabot/storage/migration.py`](https://github.com/microsoft/entrabot/blob/main/src/entrabot/storage/migration.py) — the migrator used by setup.sh and callable by hand
+- [`scripts/provision_blob_storage.py`](https://github.com/microsoft/entrabot/blob/main/scripts/provision_blob_storage.py) — the idempotent Azure provisioning routine

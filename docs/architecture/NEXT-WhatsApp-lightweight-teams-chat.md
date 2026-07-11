@@ -3,7 +3,7 @@
 > **HISTORICAL — landed on `main` (commit `c8ec521`). Kept for design rationale. See [Engineering Status](../engineering-status.md).**
 
 **Date:** 2026-04-08 (updated 2026-04-09 — architecture debate context added, plan unchanged)
-**Status:** Approved — ready to implement
+**Status:** Shipped on `main`; retained as historical design rationale
 **Branch:** `feature/multi-tenant-lightweight-chat`
 **Driver:** PM leadership's request for WhatsApp-like simplicity in Teams; Substrate leadership's standup pushback on heavyweight provisioning
 **Priority:** Moved ahead of Windows isolation work (rescheduled to weekend)
@@ -27,13 +27,13 @@ This is heavyweight for the scenario where you just want an agent to chat with y
 
 ## Agreed Direction
 
-After discussion between Brandon, the agent runtime team, PM leadership, the identity PM, the identity architect, and licensing/federation contacts:
+After discussion between the project owner, the agent runtime team, PM leadership, the identity PM, the identity architect, and licensing/federation contacts:
 
 - **Use a multi-tenant app** that an admin approves once per tenant
 - **Start with the human's delegated token** for instant Teams access
 - **Background-provision Agent User** for eventual identity separation
 - **No WhatsApp integration** — the ask is WhatsApp-like UX **in Teams**
-- **Agent User is non-negotiable** — Brandon and the agent runtime team disagree with dropping it
+- **Agent User is non-negotiable** — the project owner and the agent runtime team disagree with dropping it
 - The identity PM clarified: also want to explore sponsor-identity option, but Agent User path comes first
 - PM leadership confirmed: "having working code that shows/proves some limitations is more helpful than theorizing"
 
@@ -46,7 +46,7 @@ After discussion between Brandon, the agent runtime team, PM leadership, the ide
 ### The Admin Consent Problem
 
 - Chat.ReadWrite delegated permission requires admin consent in enterprise tenants
-- You can work around this by running your own tenant (like Brandon with werner.ac)
+- You can work around this by running your own tenant (in a dedicated development tenant)
 - But for corp tenants (MSIT, etc.), admin approval is unavoidable
 - The identity PM confirmed: even using her own MS account hits "requires admin approval" for Teams messaging APIs
 
@@ -131,7 +131,7 @@ Phase 2: UPGRADE (Agent User)      ▼
 
 ### Step 1: Multi-Tenant App Registration
 
-Create an app registration in Brandon's tenant (werner.ac) configured as multi-tenant.
+Create an app registration in a dedicated development tenant configured as multi-tenant.
 
 - Register app in Azure portal with multi-tenant audience
 - Configure redirect URIs for device code flow
@@ -203,7 +203,7 @@ When Agent User provisioning completes:
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | WhatsApp integration? | No | The identity PM clarified: WhatsApp UX **in Teams**, not actual WhatsApp |
-| Drop Agent User? | No | Brandon and the agent runtime team: non-negotiable for audit separation |
+| Drop Agent User? | No | the project owner and the agent runtime team: non-negotiable for audit separation |
 | Auth flow | Device code | Works headless, no browser redirect needed for CLI |
 | Token library | MSAL | Standard for multi-tenant apps, handles caching/refresh |
 | License for Agent User | FLW F1/F3 preferred | Cheaper ($2.25/mo vs $23/mo), includes Teams |
@@ -229,7 +229,7 @@ A teammate asked: if the corp admin requires MFA for external users, can the age
 
 ### Path B: No Admin Needed (Existing Capability)
 
-If the admin doesn't approve the multi-tenant app, users can still set up their own tenant (like Brandon with werner.ac), create an Agent User there, and federate into any Teams chat in any org. This is the existing EntraBot capability. The multi-tenant app just makes it seamless for users who can get admin approval.
+If the admin doesn't approve the multi-tenant app, users can still set up their own tenant (in a dedicated development tenant), create an Agent User there, and federate into any Teams chat in any org. This is the existing EntraBot capability. The multi-tenant app just makes it seamless for users who can get admin approval.
 
 ## Open Questions
 

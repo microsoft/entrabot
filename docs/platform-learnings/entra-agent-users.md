@@ -15,7 +15,7 @@ Agent Identity Blueprint (application)
           └─ Agent User (user object, optional, 1:1)
 ```
 
-> **Note:** The BlueprintPrincipal must be **explicitly created** after the Blueprint via a separate `POST /v1.0/serviceprincipals/microsoft.graph.agentIdentityBlueprintPrincipal` call. It is NOT auto-created when the Blueprint is created. This is a load-bearing detail — see the entrabot `CLAUDE.md` Non-Negotiables and `msal-entra-agent-ids.md` Step 1 for the canonical creation flow.
+> **Note:** The BlueprintPrincipal must be **explicitly created** after the Blueprint via a separate `POST /v1.0/servicePrincipals/microsoft.graph.agentIdentityBlueprintPrincipal` call. It is NOT auto-created when the Blueprint is created. This is a load-bearing detail — see the entrabot `CLAUDE.md` Non-Negotiables and `msal-entra-agent-ids.md` Step 1 for the canonical creation flow.
 
 The Agent User is:
 - Created via `POST /beta/users` with `@odata.type: microsoft.graph.agentUser`
@@ -65,7 +65,7 @@ Authorization: Bearer <token>
 
 The token must come from the Blueprint (client_credentials) with the `AgentIdUser.ReadWrite.IdentityParentedBy` permission.
 
-> **Endpoint status (May 2026):** `POST /beta/users` for Agent User creation remains in Microsoft Graph beta as of May 2026; v1.0 promotion is not yet announced. Continue building against beta but be aware that schema may evolve. The `agentIdentityBlueprint` resource was promoted to v1.0 at GA; `agentIdentity` and `agentUser` were not.
+> **Endpoint status:** `POST /beta/users` for Agent User creation remains in Microsoft Graph beta. Blueprint, BlueprintPrincipal, and Agent Identity creation use dedicated v1.0 subtype endpoints; only Agent User creation in this hierarchy remains on beta.
 
 ## Licensing
 
@@ -94,10 +94,11 @@ POST https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token
 Content-Type: application/x-www-form-urlencoded
 
 client_id={blueprint-app-id}
-&scope=https://graph.microsoft.com/.default
+&scope=api://AzureADTokenExchange/.default
+&fmi_path={agent-identity-app-id}
 &grant_type=client_credentials
 &client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer
-&client_assertion={blueprint-credential}
+&client_assertion={blueprint-certificate-assertion}
 ```
 
 ### Hop 2: Agent Identity Token (FIC exchange)
@@ -130,26 +131,9 @@ The result is a **delegated access token** with `idtyp=user` that can call any G
 
 **No human in the loop. No device-code flow. No OBO. Fully autonomous.**
 
-### Parameter naming reconciliation (Microsoft canonical doc vs. entrabot)
+### Parameter naming
 
-The Microsoft GA doc [`agent-user-oauth-flow`](https://learn.microsoft.com/en-us/entra/agent-id/identity-platform/autonomous-agent-request-agent-user-tokens) (updated 2026-05-01) shows the third hop with these parameter names:
-
-```
-&grant_type=user_fic
-&client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer
-&client_assertion={T1}                          # Blueprint→Agent Identity token
-&user_federated_identity_credential={T2}        # Agent Identity self-impersonation token
-&username=agentuser@contoso.com                 # UPN, not object ID
-&requested_token_use=on_behalf_of               # explicit
-```
-
-Notable differences from this document's Hop 3 example above:
-
-- Microsoft uses `&username=` (the Agent User's UPN), not `&user_id=` (the object ID).
-- Microsoft adds an explicit `&requested_token_use=on_behalf_of` parameter.
-- Microsoft naming convention: T1 (Blueprint→Agent Identity), T2 (Agent Identity self-impersonation), then Hop 3 is the OBO-style call passing both T1 (as `client_assertion`) and T2 (as `user_federated_identity_credential`).
-
-**Recommended action:** Verify the entrabot implementation against the Microsoft canonical doc and harmonize parameter names. If `&user_id=` works against the live Entra endpoint, document it as an undocumented-but-functional alias and note that Microsoft's preferred parameter is `&username=`. Don't depend on either parameter being permanently aliased — the `user_fic` parameter naming may converge in a future post-GA migration.
+Current Microsoft examples use `user_id={agent-user-object-id}` as the canonical selector and document `username={agent-user-upn}` as an alternative. Entrabot uses `user_id`. The implementation also sends `requested_token_use=on_behalf_of` for compatibility, although newer examples may omit it. T1 is the Blueprint-to-Agent-Identity exchange token and T2 is the Agent Identity self-impersonation token.
 
 ## Consent for Agent User
 
@@ -207,7 +191,7 @@ The Agent User gets:
 1. **No device-code flow needed** — Agent User authenticates via the three-hop machine-to-machine flow
 2. **No OBO needed** — Agent User gets its own delegated tokens without a human token exchange
 3. **No refresh token caching in keychain** — no human tokens to cache
-4. **Blueprint needs FIC, not a client secret on device** — production auth uses Federated Identity Credentials
+4. **Blueprint certificate plus FIC** — Entrabot keeps the Blueprint private key in the OS credential store and uses FIC for the Agent Identity exchange
 5. **Agent needs a license** — E3/E5/Teams Enterprise assigned to the Agent User
 6. **Agent has its own Teams identity** — messages come FROM the agent, not "on behalf of" the human
 

@@ -1,4 +1,4 @@
-# Copilot Instructions — entrabot-identity-research
+# Copilot Instructions — Entrabot
 
 ## Project Overview
 
@@ -28,7 +28,7 @@ Key concepts:
 # Install dependencies
 pip install -e ".[dev]"
 
-# Run all tests (1,237 tests)
+# Run all tests
 pytest -v --tb=short && ruff check .
 
 # Run with channel notifications
@@ -52,8 +52,9 @@ src/entrabot/
   audit/          # Action tracking / audit log
   identity/       # Progressive identity state machine
   storage/        # Local/Blob/Persona backends
+  security/       # XPIA external-content boundary
   mcp_server.py   # FastMCP server + background poll + channel push
-tests/            # Mirrors src/ structure (1,237 tests)
+tests/            # Mirrors src/ structure
 docs/             # Research, ADRs, learnings, specs
 scripts/          # setup.sh, teardown.sh, Entra provisioning
 ```
@@ -66,6 +67,8 @@ scripts/          # setup.sh, teardown.sh, Entra provisioning
 - **Background channel**: `_background_poll()` runs every 5s, pushes new human messages via `notifications/claude/channel`. Uses separate dedup state from `watch_teams_replies` (Learning #27).
 - **Audit-first design**: Every agent action that touches a resource must emit an audit event before returning.
 - **Graph API**: `$filter`/`$orderby` unreliable for chat messages (Learning #16) — always filter client-side.
+- **Stable agent identity**: use `ENTRABOT_AGENT_UPN` and `sender_upn` for self/peer matching; display names are mutable. `ENTRABOT_AGENT_USER_UPN` is a compatibility alias only.
+- **XPIA boundary**: route model-facing Teams, email, Files, and Work IQ content through `entrabot.security.xpia.wrap_external`. Existing envelope-looking text is still untrusted input and must receive the authoritative outer envelope.
 
 ## Conventions
 
@@ -73,7 +76,7 @@ scripts/          # setup.sh, teardown.sh, Entra provisioning
 - Type-annotate all function signatures
 - Test files mirror source structure
 - Secrets and tokens never appear in logs — use `repr` overrides on sensitive fields
-- Read `docs/runbooks/hard-won-learnings.md` (66 entries) before making auth/Teams changes
+- Read `docs/runbooks/hard-won-learnings.md` before making auth/Teams changes
 - ADRs in `docs/decisions/` for all significant architectural choices
 - **Sponsor DM wait pattern (host-gated).** When the human says "ping me when X is done" / "I'm going AFK, let me know" / any equivalent: confirm in Teams with `send_teams_message`, do the work, send the completion update with `send_teams_message`. Claude Code receives replies through channel-push next-turn input. Copilot CLI, Codex, Cursor, and other non-channel-push hosts receive the sponsor reply inline from `send_teams_message` as `sponsor_reply`. Only call `wait_for_sponsor_dm` when the operator explicitly says "block until they reply." NEVER poll in a loop. NEVER spawn `copilot -p` / headless subprocesses. NEVER use `watch_teams_replies` for this pattern. Full protocol: `prompts/anatomy/channel-discipline.md`; see Learning #54.
 

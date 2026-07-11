@@ -89,7 +89,7 @@ State files: `.entrabot-state.json` (provisioning state, idempotency keys), `.en
 
 ### Items unchanged from Mac/Linux
 
-- Entra Graph beta API behavior, including all Agent Identity quirks (BlueprintPrincipal not auto-created, sponsors must be users, permission propagation 30–120s, `oauth2PermissionGrant` requires `startTime`, etc.). These are tenant-side.
+- Entra Agent Identity API behavior (creation now uses dedicated Graph v1.0 subtype endpoints; Agent User creation remains beta), including the platform quirks (BlueprintPrincipal not auto-created, sponsors must be users, permission propagation 30–120s, `oauth2PermissionGrant` requires `startTime`, etc.). These are tenant-side.
 - The three-hop token flow itself (`acquire_agent_user_token` in `tools/teams.py`) is pure Python and works as-is on Windows once the credential store returns the PEM.
 - `provision_blob_storage.py` shells out to `az` — on Windows, `az` resolves to `az.cmd`. Python's `subprocess.run(["az", ...])` finds it on `PATH` and works. No code change.
 

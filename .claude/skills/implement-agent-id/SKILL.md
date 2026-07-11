@@ -1,358 +1,217 @@
 ---
 name: implement-agent-id
-description: Guide for integrating with Microsoft Entra Agent Identity APIs (Graph beta). Covers authentication, blueprint creation, agent identity provisioning, sponsors, permissions, and known pitfalls. Use when implementing Entra Agent IDs, Agent Identity Blueprints, AgentIdentityBlueprintPrincipal, or working with the Graph beta Agent Identity endpoints.
+description: Guide for Microsoft Entra Agent ID and Agent User integration. Covers certificate authentication, stable Graph creation endpoints, sponsors, BlueprintPrincipal creation, permissions, consent, and the three-hop user_fic token flow.
 ---
 
-# Integrating with Microsoft Entra Agent Identity APIs
+# Implementing Microsoft Entra Agent ID
 
-## Overview
+Read these repository sources before changing identity or token code:
 
-Microsoft Entra Agent Identity (preview, Nov 2025) provides a new identity primitive for AI agents in Microsoft Entra ID. It creates OAuth2-capable identities (service principals) that represent individual agent instances, organized under an "Agent Identity Blueprint" (application registration).
+- `docs/platform-learnings/agent-id-blueprints-and-users.md`
+- `docs/platform-learnings/entra-agent-users.md`
+- `docs/platform-learnings/msal-entra-agent-ids.md`
+- `docs/reference/token-flows.md`
+- `docs/runbooks/hard-won-learnings.md`
 
-**Conceptual Model:**
+Microsoft Entra Agent ID and Microsoft Agent 365 reached GA on 2026-05-01, but not every related API is on Microsoft Graph v1.0. Use the endpoint version documented for each object rather than treating the whole surface as beta or stable.
+
+## Object model
+
+```text
+Agent Identity Blueprint (application)
+  └─ AgentIdentityBlueprintPrincipal (service principal; create explicitly)
+      ├─ Agent Identity (service principal)
+      └─ Agent Identity (service principal)
+           └─ Agent User (user; linked through user_fic)
 ```
-Agent Identity Blueprint (application)     ← one per agent "kind" or project
-  └─ AgentIdentityBlueprintPrincipal (SP)  ← must be created explicitly
-      ├─ Agent Identity (SP): agent-1      ← one per agent instance
-      ├─ Agent Identity (SP): agent-2
-      └─ Agent Identity (SP): agent-3
-```
 
-**Graph beta API base:** `https://graph.microsoft.com/beta`
+An Agent Identity is a service principal, not a user. Do not create a password-backed fake user to represent an agent.
 
----
+## Non-negotiable constraints
 
-## Critical Pitfalls (Read First)
+### Use a dedicated provisioner identity
 
-### 1. Azure CLI Tokens Are Rejected
+Azure CLI user tokens contain `Directory.AccessAsUser.All`; Agent Identity APIs reject those tokens with a hard 403. Use Azure CLI only to bootstrap the dedicated provisioner app and identify the signed-in sponsor.
 
-**Problem:** Azure CLI tokens always include the `Directory.AccessAsUser.All` delegated permission. The Agent Identity APIs **explicitly reject** any token containing this permission, returning a generic 403.
+The provisioner authenticates with a certificate credential. Keep the private key in the OS credential store and purge legacy password credentials. Entrabot implements this in:
 
-**Solution:** You MUST use a dedicated app registration with `client_credentials` flow:
+- `scripts/entra_provisioning.py`
+- `scripts/create_entra_agent_ids.py`
+
+Do not add a client secret fallback.
+
+### Parse Azure CLI output as JSON
+
+CLI warnings can corrupt TSV output. Request JSON and parse the `id` field:
 
 ```python
-from azure.identity import ClientSecretCredential
-
-credential = ClientSecretCredential(
-    tenant_id="<tenant-id>",
-    client_id="<app-client-id>",
-    client_secret="<app-secret>",
-)
-token = credential.get_token("https://graph.microsoft.com/.default")
-```
-
-**DO NOT** use `DefaultAzureCredential` or `AzureCliCredential` — they will produce tokens with `Directory.AccessAsUser.All` and every Agent Identity API call will fail with 403.
-
-Auto-provisioning the app registration via `az ad app create` is the recommended approach. See the reference implementation in `scripts/create-entra-agent-ids.py`.
-
-### 2. Sponsors Are Required
-
-**Problem:** Both Blueprint and Agent Identity creation require a `sponsors@odata.bind` field. Without it, you get: `400: No sponsor specified. Please provide at least one sponsor.`
-
-**Rules:**
-- Sponsors must be **User** references — ServicePrincipals are NOT valid
-- Use the `/users/{objectId}` URL format (not `/directoryObjects/` or `/servicePrincipals/`)
-- Since you're using `client_credentials` (no user context), you CANNOT use `GET /me` to get the user ID. Use `az ad signed-in-user show --query id -o tsv` instead.
-
-```python
-# Get sponsor user ID (az CLI has the user's auth context)
 result = subprocess.run(
-    ["az", "ad", "signed-in-user", "show", "--query", "id", "-o", "tsv"],
-    capture_output=True, text=True,
+    ["az", "ad", "signed-in-user", "show", "-o", "json"],
+    check=True,
+    capture_output=True,
+    text=True,
 )
-user_id = result.stdout.strip()
-
-# Add to any Blueprint or Agent Identity creation body
-body["sponsors@odata.bind"] = [
-    f"https://graph.microsoft.com/beta/users/{user_id}"
-]
+user_id = json.loads(result.stdout)["id"]
 ```
 
-### 3. BlueprintPrincipal Must Be Created Separately
+### Sponsors are user references
 
-**Problem:** Creating a Blueprint (`POST /applications`) does NOT auto-create its BlueprintPrincipal (SP). Without the BlueprintPrincipal, all Agent Identity creation fails with: `400: The Agent Blueprint Principal for the Agent Blueprint does not exist.`
-
-**Solution:** Always create the BlueprintPrincipal immediately after the Blueprint:
+Blueprint and Agent Identity creation require at least one sponsor. Bind a Microsoft Graph v1.0 user reference:
 
 ```python
-# Step 1: Create Blueprint
-blueprint_body = {
-    "@odata.type": "Microsoft.Graph.AgentIdentityBlueprint",
-    "displayName": "My Agent Blueprint",
-    "sponsors@odata.bind": [f"https://graph.microsoft.com/beta/users/{user_id}"],
-}
-resp = requests.post(f"{GRAPH_BASE}/applications", headers=headers, json=blueprint_body)
-app_id = resp.json()["appId"]
-
-# Step 2: Create BlueprintPrincipal (REQUIRED — not auto-created)
-sp_body = {
-    "@odata.type": "Microsoft.Graph.AgentIdentityBlueprintPrincipal",
-    "appId": app_id,
-}
-requests.post(f"{GRAPH_BASE}/servicePrincipals", headers=headers, json=sp_body)
+sponsors = [f"https://graph.microsoft.com/v1.0/users/{user_id}"]
 ```
 
-**Also important:** If you're implementing idempotent scripts that skip Blueprint creation when it already exists, you MUST check for and create the BlueprintPrincipal on the skip path too. A previous run may have created the Blueprint but crashed before creating the SP.
+Do not bind a service principal, group, or `/directoryObjects/` reference.
 
-### 4. Permission Propagation Takes 30-120+ Seconds
+### Create BlueprintPrincipal explicitly
 
-After `az ad app permission admin-consent`, newly-granted Agent Identity permissions don't appear in tokens immediately. The token endpoint serves cached claims.
+Creating a Blueprint does not create its BlueprintPrincipal. Always create or verify the principal immediately after creating or discovering the Blueprint, including idempotent resume paths.
 
-**Solution:** Retry with fresh tokens:
+## Current creation endpoints
 
-```python
-for attempt in range(5):
-    token = credential.get_token("https://graph.microsoft.com/.default")
-    # Try the actual operation
-    resp = requests.post(url, headers=auth_header(token), json=body)
-    if resp.status_code == 403:
-        wait = 20 * (attempt + 1)
-        time.sleep(wait)
-        continue
-    break
+### Blueprint
+
+```http
+POST https://graph.microsoft.com/v1.0/applications/microsoft.graph.agentIdentityBlueprint
+Content-Type: application/json
+
+{
+  "displayName": "My Agent Blueprint",
+  "description": "Optional description",
+  "sponsors@odata.bind": [
+    "https://graph.microsoft.com/v1.0/users/{sponsor-object-id}"
+  ]
+}
 ```
 
-Key insight: `credential.get_token()` returns cached tokens. For `ClientSecretCredential`, the cache is based on token lifetime (usually 1hr). But Entra's token endpoint itself may serve tokens with stale claims for 30-120s after a permission change. The retry loop handles this.
+Persist both returned identifiers:
 
----
+- `appId`: Blueprint client/application ID used by token requests.
+- `id`: Blueprint directory-object ID used by object-specific Graph paths.
 
-## Required Permissions
+### BlueprintPrincipal
 
-### Minimum for Blueprint + Agent Identity Creation
+```http
+POST https://graph.microsoft.com/v1.0/servicePrincipals/microsoft.graph.agentIdentityBlueprintPrincipal
+Content-Type: application/json
 
-There are **18 Agent Identity-specific** Graph application permissions. They can be discovered dynamically:
+{
+  "appId": "{blueprint-app-id}"
+}
+```
+
+### Agent Identity
+
+```http
+POST https://graph.microsoft.com/v1.0/servicePrincipals/microsoft.graph.agentIdentity
+Content-Type: application/json
+
+{
+  "displayName": "my-agent-instance",
+  "agentIdentityBlueprintId": "{blueprint-app-id}",
+  "sponsors@odata.bind": [
+    "https://graph.microsoft.com/v1.0/users/{sponsor-object-id}"
+  ]
+}
+```
+
+The Agent Identity has no backing application object. Do not call application password APIs for it.
+
+### Agent User
+
+Agent User creation remains on Microsoft Graph beta:
+
+```http
+POST https://graph.microsoft.com/beta/users
+```
+
+Use the current request shape in `scripts/create_entra_agent_ids.py` and `docs/platform-learnings/entra-agent-users.md`. License the resulting user before relying on Teams or Outlook.
+
+## Permissions and consent
+
+Discover Agent Identity application roles from the Microsoft Graph service principal rather than copying an old fixed list:
 
 ```bash
-az ad sp show --id 00000003-0000-0000-c000-000000000000 \
-  --query "appRoles[?contains(value, 'AgentIdentity')].{id:id, value:value}" -o json
+az ad sp show \
+  --id 00000003-0000-0000-c000-000000000000 \
+  --query "appRoles[?contains(value, 'AgentIdentity')].{id:id,value:value}" \
+  -o json
 ```
 
-**Core permissions needed:**
-| Permission | Purpose |
-|-----------|---------|
-| `Application.ReadWrite.All` | Read/write applications (for Blueprint CRUD) |
-| `AgentIdentityBlueprint.Create` | Create new Blueprints |
-| `AgentIdentityBlueprint.ReadWrite.All` | Read/update Blueprints |
-| `AgentIdentityBlueprintPrincipal.Create` | Create BlueprintPrincipals |
-| `AgentIdentity.Create.All` | Create Agent Identities |
-| `AgentIdentity.ReadWrite.All` | Read/update Agent Identities |
+Grant the dedicated provisioner only the roles required by the provisioning operations, then grant admin consent. Expect service-principal and permission propagation delays; retry with bounded backoff and acquire a fresh token for each attempt.
 
-**Microsoft Graph API ID** (constant across all tenants): `00000003-0000-0000-c000-000000000000`
+Entrabot writes Agent User delegated consent through:
 
-**Application.ReadWrite.All role ID**: `1bfefb4e-e0b5-418b-a88f-73c46d2cc8e9`
-
-In practice, granting all 18 Agent Identity permissions plus `Application.ReadWrite.All` is the safest approach — the granular permission set is underdocumented and it's unclear which exact subset is needed for which operations.
-
-### Admin Consent
-
-All these are **Application permissions** (not delegated), so they require tenant admin consent:
-
-```bash
-az ad app permission admin-consent --id <client-id>
+```http
+POST https://graph.microsoft.com/v1.0/oauth2PermissionGrants
 ```
 
-Admin consent may fail with 404 if the service principal hasn't replicated yet. Retry with 10-40s backoff:
+Some tenants require `startTime` even when a newer Microsoft example omits it. Preserve the compatibility behavior in the repository helper.
 
-```python
-for attempt in range(4):
-    wait = 10 * (attempt + 1)
-    time.sleep(wait)
-    rc, _, err = run_az(["ad", "app", "permission", "admin-consent", "--id", client_id])
-    if rc == 0:
-        break
+## Autonomous three-hop token flow
+
+All requests use:
+
+```text
+https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token
 ```
 
----
+### Hop 1: Blueprint certificate to T1
 
-## API Reference
-
-### Create Agent Identity Blueprint
-
-```
-POST https://graph.microsoft.com/beta/applications
-```
-
-```json
-{
-    "@odata.type": "Microsoft.Graph.AgentIdentityBlueprint",
-    "displayName": "My Agent Blueprint",
-    "description": "Optional description",
-    "sponsors@odata.bind": [
-        "https://graph.microsoft.com/beta/users/{user-object-id}"
-    ]
-}
+```text
+client_id={blueprint_app_id}
+scope=api://AzureADTokenExchange/.default
+fmi_path={agent_identity_app_id}
+grant_type=client_credentials
+client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer
+client_assertion={certificate_signed_jwt}
 ```
 
-Returns: Application object with `appId` (GUID) and `id` (object ID).
+### Hop 2: Agent Identity FIC exchange to T2
 
-### Create BlueprintPrincipal
-
-```
-POST https://graph.microsoft.com/beta/servicePrincipals
-```
-
-```json
-{
-    "@odata.type": "Microsoft.Graph.AgentIdentityBlueprintPrincipal",
-    "appId": "{blueprint-appId-from-step-1}"
-}
+```text
+client_id={agent_identity_app_id}
+scope=api://AzureADTokenExchange/.default
+grant_type=client_credentials
+client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer
+client_assertion={T1}
 ```
 
-### Create Agent Identity
+### Hop 3: Agent User resource token
 
-```
-POST https://graph.microsoft.com/beta/servicePrincipals
-```
-
-```json
-{
-    "@odata.type": "Microsoft.Graph.AgentIdentity",
-    "displayName": "my-agent-instance",
-    "agentIdentityBlueprintId": "{blueprint-appId}",
-    "sponsors@odata.bind": [
-        "https://graph.microsoft.com/beta/users/{user-object-id}"
-    ]
-}
+```text
+client_id={agent_identity_app_id}
+scope=https://graph.microsoft.com/.default
+grant_type=user_fic
+client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer
+client_assertion={T1}
+user_id={agent_user_object_id}
+user_federated_identity_credential={T2}
+requested_token_use=on_behalf_of
 ```
 
-Returns: ServicePrincipal object. The `appId` or `id` field is the Entra Agent ID (UUID).
+`user_id` is Entrabot's canonical selector; Microsoft also documents `username={agent_user_upn}` as an alternative. For Azure Blob Storage, keep Hops 1 and 2 and request `https://storage.azure.com/.default` at Hop 3.
 
-### Find Existing Blueprint
+Check every token response for an `error` key before reading `access_token`. Never log tokens, assertions, certificate private keys, or full token responses.
 
-```
-GET https://graph.microsoft.com/beta/applications?$filter=displayName eq 'My Agent Blueprint'
-```
+## Delegated mode is separate
 
-### Find Existing Agent Identity
+`ENTRABOT_MODE=delegated` uses MSAL browser authentication with device-code fallback and represents the signed-in human. It does not provide Agent User attribution. Agent Blueprints are confidential clients and cannot be turned into OAuth public clients for PKCE or device-code flows; use a separate app registration when both patterns are required.
 
-```
-GET https://graph.microsoft.com/beta/servicePrincipals?$filter=displayName eq 'my-agent-instance'
-```
+## Implementation checklist
 
-### Check BlueprintPrincipal Exists
+1. Create or recover the certificate-backed provisioner app.
+2. Discover and grant required Graph application permissions.
+3. Grant admin consent and wait for propagation with bounded retries.
+4. Resolve the sponsor from JSON Azure CLI output.
+5. Create or discover the Blueprint with the v1.0 subtype endpoint.
+6. Create or verify BlueprintPrincipal with the v1.0 subtype endpoint.
+7. Create or discover the Agent Identity with the v1.0 subtype endpoint.
+8. Create or discover the Agent User on Graph beta.
+9. Assign required Microsoft 365 licenses.
+10. Create delegated consent records for Graph and optional Storage.
+11. Store private key material only in the platform credential store.
+12. Verify a three-hop resource token has `idtyp=user` and the Agent User object ID.
 
-```
-GET https://graph.microsoft.com/beta/servicePrincipals?$filter=appId eq '{blueprint-appId}'
-```
-
----
-
-## Complete Integration Sequence
-
-The correct order of operations:
-
-1. **Create dedicated app registration** (`az ad app create`)
-2. **Create its service principal** (`az ad sp create --id <appId>`)
-3. **Add permissions** (`az ad app permission add --id <appId> --api 00000003-... --api-permissions <id>=Role <id>=Role ...`)
-   - Note: Each `<id>=Role` must be a **separate argument** to `--api-permissions`, not a joined string
-4. **Grant admin consent** (`az ad app permission admin-consent --id <appId>`) — retry with backoff
-5. **Wait 30s** for permission propagation to token endpoint
-6. **Acquire token** via `ClientSecretCredential` with `client_credentials` flow
-7. **Verify permissions** by attempting a test blueprint creation, retry with fresh tokens if 403
-8. **Get sponsor user ID** via `az ad signed-in-user show --query id -o tsv`
-9. **Create Blueprint** (`POST /applications` with `AgentIdentityBlueprint` type + sponsors)
-10. **Create BlueprintPrincipal** (`POST /servicePrincipals` with `AgentIdentityBlueprintPrincipal` type)
-11. **Create Agent Identities** (`POST /servicePrincipals` with `AgentIdentity` type + sponsors + `agentIdentityBlueprintId`)
-
-### Idempotency
-
-All steps should be idempotent — check for existing resources before creating:
-- Blueprint: filter `/applications` by `displayName`
-- BlueprintPrincipal: filter `/servicePrincipals` by `appId`
-- Agent Identity: filter `/servicePrincipals` by `displayName`
-
-Agent Identities are **durable** — they should survive environment teardowns (infra destroy/recreate). Only delete them when decommissioning the project entirely.
-
----
-
-## Reference Implementation
-
-See `scripts/create-entra-agent-ids.py` in this repo for a battle-tested implementation that handles all of the above, including:
-- Auto-provisioning the dedicated app registration via `az ad` CLI
-- Dynamic discovery of all 18 Agent Identity permissions
-- Admin consent with retry and SP propagation handling
-- Token verification with actual blueprint creation probe
-- Idempotent blueprint, BlueprintPrincipal, and agent identity creation
-- Sponsor assignment from `az ad signed-in-user show`
-- Workload Identity Federation for OAuth2 token acquisition
-- azd env integration for credential and ID storage
-
----
-
-## OAuth2 Token Flow (Workload Identity Federation)
-
-Agent Identities authenticate using **Managed Identity + Workload Identity Federation** — NOT password credentials (which are explicitly blocked).
-
-### Architecture
-
-```
-Container App (user-assigned MI)
-  → ManagedIdentityCredential.get_token("api://{blueprint-app-id}/.default")
-    → Azure AD token exchange (MI token → Agent ID token)
-      → JWT with oid = MI principal, aud = api://{blueprint-app-id}
-        → Backend validates JWT signature + claims
-```
-
-### Setup Steps
-
-1. **Create federated identity credential** on the Blueprint:
-
-```
-POST /applications/{blueprint-obj-id}/microsoft.graph.agentIdentityBlueprint/federatedIdentityCredentials
-```
-
-```json
-{
-    "name": "aim-fic-budget-report",
-    "issuer": "https://login.microsoftonline.com/{tenant-id}/v2.0",
-    "subject": "{mi-principal-id}",
-    "audiences": ["api://AzureADTokenExchange"]
-}
-```
-
-2. **Caller acquires token** using its MI:
-
-```python
-from azure.identity import ManagedIdentityCredential
-cred = ManagedIdentityCredential(client_id=mi_client_id)
-token = cred.get_token(f"api://{blueprint_app_id}/.default")
-# Include in request: Authorization: Bearer {token.token}
-```
-
-3. **Backend validates token** using PyJWT + Microsoft JWKS:
-
-```python
-import jwt
-from jwt import PyJWKClient
-jwks_client = PyJWKClient(jwks_uri)
-signing_key = jwks_client.get_signing_key_from_jwt(token)
-claims = jwt.decode(token, signing_key.key, algorithms=["RS256"],
-                    audience=f"api://{blueprint_app_id}",
-                    issuer=f"https://sts.windows.net/{tenant_id}/")
-```
-
-### Key Learnings
-
-- **Agent Identities do NOT support `passwordCredentials`** — you get `PropertyNotCompatibleWithAgentIdentity`. Use federated credentials (MI or certificate) instead.
-- **Agent Identities are SPs without backing application objects** — you cannot use `/applications/{appId}/addPassword`. The SP has no corresponding application.
-- **Federated credentials go on the Blueprint**, not the Agent Identity SP. Use the `.../microsoft.graph.agentIdentityBlueprint/federatedIdentityCredentials` path.
-- **The `subject` is the MI's `principalId`** (object ID), not the client ID.
-- **The `audiences` must be `["api://AzureADTokenExchange"]`** — this is the token exchange audience, not your API audience.
-- **The Blueprint must have an Application ID URI set** — callers request tokens for `api://{blueprint-app-id}/.default`, but this scope won't resolve unless `identifierUris` includes `api://{app-id}`. Set it via `PATCH /applications/{id}` with `{"identifierUris": ["api://{app-id}"]}`.
-- **Token issuer varies by endpoint version** — v1.0 tokens use `https://sts.windows.net/{tenant}/`, v2.0 tokens use `https://login.microsoftonline.com/{tenant}/v2.0`. Accept both in validation.
-- **Token audience may or may not have `api://` prefix** — accept both `api://{app-id}` and `{app-id}` bare when validating the `aud` claim.
-
----
-
-## Known Limitations (as of March 2026)
-
-1. **Preview API only** — all endpoints are under `/beta`, not `/v1.0`
-2. **Sponsors must be Users** — ServicePrincipals and Groups are not accepted
-3. **`/me` endpoint unavailable** in `client_credentials` flow — must use CLI for user context
-4. **No "quick start" permission bundle** — must discover and grant 18+ individual permissions
-5. **BlueprintPrincipal not auto-created** — requires explicit `POST /servicePrincipals`
-6. **Permission propagation delay** — 30-120s after admin consent before tokens include new claims
-7. **`Directory.AccessAsUser.All` hard rejection** — makes Azure CLI tokens (the most common auth method) unusable
-8. **Agent Identities cannot have password credentials** — use Managed Identity federation or certificates
-9. **Agent Identities have no backing application object** — they are service-principal-only entities
-10. **Blueprint needs explicit `identifierUris`** — not set by default, required for OAuth2 scoping
+Use `scripts/create_entra_agent_ids.py` as the repository reference implementation and add focused endpoint-contract tests before changing provisioning behavior.

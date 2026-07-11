@@ -1,5 +1,7 @@
 # PLAN: XPIA Content Wrapping at the Tool Boundary
 
+**Status:** Shipped on `main` (2026-07)
+
 Status: **Draft** — 2026-07-09
 Owner: Brandon (sponsor) + entrabot agent
 Parent: `docs/architecture/PLAN-entrabot-new-features.md` — Feature 1 (Best Short Term).
@@ -117,9 +119,9 @@ Tool returns typically include application-generated metadata: message IDs, time
 {
   "message_id": "1783625109846",
   "sender_id": "9dc5ad9d-549c-4338-961c-ada7365ad57c",
-  "sender_upn": "brandon@werner.ac",
+  "sender_upn": "operator@contoso.com",
   "sent_at": "2026-07-09T19:25:09.846Z",
-  "body_wrapped": "<external_content source=\"teams:...\" sender=\"brandon@werner.ac\">Hello!</external_content>"
+  "body_wrapped": "<external_content source=\"teams:...\" sender=\"operator@contoso.com\">Hello!</external_content>"
 }
 ```
 

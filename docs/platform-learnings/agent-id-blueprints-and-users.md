@@ -1,6 +1,6 @@
 # Agent Identities, Blueprints, and Users — Post-GA (May 1, 2026)
 
-> **Last updated:** 2026-05-05
+> **Last updated:** 2026-07-10
 > **Status:** Authoritative reference. READ BEFORE designing any auth flow that touches Agent Identity, Agent Blueprint, or Agent User objects.
 > **Cross-repo:** This doc may be mirrored in related internal Agent Identity research repos. Update via PR to each.
 
@@ -12,13 +12,13 @@ These are the load-bearing facts. If you only read one section, read this. Each 
 
 1. **Agent Identity Blueprints CANNOT be OAuth public clients.** Microsoft enforces this at the platform level. Quoting Microsoft Learn verbatim: *"Public client capabilities aren't available, requiring all agents to operate as confidential clients. Redirect URLs aren't supported."* ([learn.microsoft.com/entra/agent-id/agent-oauth-protocols](https://learn.microsoft.com/en-us/entra/agent-id/agent-oauth-protocols), updated 2026-05-01). The Blueprint application object inherits from `application` but the `publicClient`, `spa`, and `isFallbackPublicClient` surfaces are excluded — they return `null` or are rejected on PATCH. **A Blueprint cannot be the `client_id` of a browser-based PKCE auth-code flow.**
 2. **There is exactly one OAuth/redirect-URI exception for Blueprints, and it is narrow.** A Blueprint configured as an **interactive agent** (acts on behalf of users via OBO) gets a `web.redirectUris` entry — but that redirect URI is where Entra sends the user **after consent recording**, not where any auth-code lands for the Blueprint itself. The actual OAuth client in interactive flows is a **separate client app registration** (frontend / mobile / SPA / desktop), and the auth-code request uses **the agent identity's** `client_id` — not the Blueprint's. ([learn.microsoft.com/entra/agent-id/identity-platform/interactive-agent-authentication-authorization-flow](https://learn.microsoft.com/en-us/entra/agent-id/identity-platform/interactive-agent-authentication-authorization-flow), updated 2026-05-01).
-3. **Agent Identities are confidential service principals, full stop.** `servicePrincipalType=ServiceIdentity`. They cannot have credentials of their own; the Blueprint impersonates them via FIC. They cannot be public clients. ([learn.microsoft.com/graph/api/resources/agentidentity?view=graph-rest-beta](https://learn.microsoft.com/en-us/graph/api/resources/agentidentity?view=graph-rest-beta), updated 2026-05-01).
+3. **Agent Identities are confidential service principals, full stop.** `servicePrincipalType=ServiceIdentity`. They cannot have credentials of their own; the Blueprint impersonates them via FIC. They cannot be public clients. ([learn.microsoft.com/graph/api/resources/agentidentity?view=graph-rest-1.0](https://learn.microsoft.com/en-us/graph/api/resources/agentidentity?view=graph-rest-1.0), updated 2026-05-01).
 4. **Microsoft Entra does NOT implement RFC 7591 Dynamic Client Registration.** There is no `registration_endpoint` in Entra v2.0's OIDC discovery doc. App registrations must be created manually via the admin center or Microsoft Graph (`POST /v1.0/applications`). Confirmed by Microsoft Q&A and observed behavior; the MCP authorization spec lists DCR as MAY-support and explicitly notes it's a backwards-compat option ([modelcontextprotocol.io/specification/2025-11-25/basic/authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)).
 5. **Entra v2.0's OIDC discovery doc does NOT include `code_challenge_methods_supported`.** The MCP authorization spec **MUST**-requires this field; clients that strictly validate the AS metadata (Claude Code's MCP TS SDK, VS Code) refuse to proceed without it. Workaround: a metadata shim. ([learn.microsoft.com/entra/identity-platform/v2-protocols-oidc](https://learn.microsoft.com/en-us/entra/identity-platform/v2-protocols-oidc) sample response shows the omission; MCP spec section "Authorization Code Protection" says clients **MUST** refuse if the field is absent.)
 6. **Entra v2.0 silently ignores RFC 8707 `resource` parameter on `/authorize`.** Entra is scope-centric: the supported pattern is `scope={resource}/.default`. Sending `resource=https://...` returns AADSTS901002 on the v1 endpoint and is silently dropped on v2. Audience binding happens through the scope's identifier URI. The MCP spec **MUST**-requires `resource` in both auth and token requests; clients send it, Entra ignores it, and tokens come back with `aud` derived from scope.
 7. **Agent OBO flows do NOT use `/authorize` directly for the Blueprint.** Quoting docs verbatim: *"OBO flows using the `/authorize` endpoint aren't supported for any agent entity, ensuring all authentication occurs programmatically."* The user-facing `/authorize` step is run by the **client app** (a separate, regular public-client or web app reg), which gets a token whose `aud` is the Blueprint, then sends it to the agent backend, which then does OBO. ([learn.microsoft.com/entra/agent-id/agent-oauth-protocols](https://learn.microsoft.com/en-us/entra/agent-id/agent-oauth-protocols)).
 8. **`AgentIdentity.Create`, `AgentIdentityBlueprint.Create`, `Application.ReadWrite.All`, `Application.ReadWrite.OwnedBy`, `Directory.ReadWrite.All`, and many more are BLOCKED for agents.** Granting any of these to an Agent Identity returns HTTP 400 from Graph. Any auth-flow design that tries to let an agent manage other apps will fail. ([learn.microsoft.com/graph/api/resources/agentid-platform-overview?view=graph-rest-beta](https://learn.microsoft.com/en-us/graph/api/resources/agentid-platform-overview?view=graph-rest-beta), updated 2026-04-28 — full blocked-permissions table.)
-9. **GA (May 1, 2026) made `AgentIdentityBlueprint` v1.0.** The resource is now created via `POST /v1.0/applications/microsoft.graph.agentIdentityBlueprint` (NOT the older preview `/beta/agentIdentityBlueprints` collection). The 2025-07-14 doc still references the beta collection — that path is preview-era and now deprecated.
+9. **GA (May 1, 2026) moved Blueprint and Agent Identity creation to dedicated v1.0 subtype endpoints.** Use `POST /v1.0/applications/microsoft.graph.agentIdentityBlueprint`, `POST /v1.0/servicePrincipals/microsoft.graph.agentIdentityBlueprintPrincipal`, and `POST /v1.0/servicePrincipals/microsoft.graph.agentIdentity`. Agent User creation remains `POST /beta/users` with the subtype discriminator.
 10. **Sponsor groups changed at GA.** Role-assignable groups and fixed-membership security groups are no longer accepted as group-type sponsors. Only **dynamic-membership groups** and **Microsoft 365 groups** count. Individual users still work. ([devblogs.microsoft.com/microsoft365dev/sponsor-group-type-requirements-for-agent-identities/](https://devblogs.microsoft.com/microsoft365dev/sponsor-group-type-requirements-for-agent-identities/), published 2026-05-01.)
 
 If your design assumes any of (1)–(7), it is wrong, and you will discover this at deploy time. Don't.
@@ -31,9 +31,9 @@ The Agent ID platform has **four** distinct first-class object types, each with 
 
 | Object | Graph resource | `@odata.type` | Underlying type | Distinguishing field |
 |---|---|---|---|---|
-| **Agent Identity Blueprint** | [`agentIdentityBlueprint`](https://learn.microsoft.com/en-us/graph/api/resources/agentidentityblueprint?view=graph-rest-1.0) | `#microsoft.graph.agentIdentityBlueprint` | application (subtype) | Created by `POST /v1.0/applications` with `@odata.type` field; subset of application properties applies |
-| **Agent Identity Blueprint Principal** | [`agentIdentityBlueprintPrincipal`](https://learn.microsoft.com/en-us/graph/api/resources/agentidentityblueprintprincipal?view=graph-rest-beta) | `#microsoft.graph.agentIdentityBlueprintPrincipal` | servicePrincipal (subtype) | `servicePrincipalType = Application` |
-| **Agent Identity** | [`agentIdentity`](https://learn.microsoft.com/en-us/graph/api/resources/agentidentity?view=graph-rest-beta) | `#microsoft.graph.agentIdentity` | servicePrincipal (subtype) | `servicePrincipalType = ServiceIdentity` |
+| **Agent Identity Blueprint** | [`agentIdentityBlueprint`](https://learn.microsoft.com/en-us/graph/api/resources/agentidentityblueprint?view=graph-rest-1.0) | `#microsoft.graph.agentIdentityBlueprint` | application (subtype) | Create with `POST /v1.0/applications/microsoft.graph.agentIdentityBlueprint` |
+| **Agent Identity Blueprint Principal** | [`agentIdentityBlueprintPrincipal`](https://learn.microsoft.com/en-us/graph/api/resources/agentidentityblueprintprincipal?view=graph-rest-1.0) | `#microsoft.graph.agentIdentityBlueprintPrincipal` | servicePrincipal (subtype) | Create with `POST /v1.0/servicePrincipals/microsoft.graph.agentIdentityBlueprintPrincipal` |
+| **Agent Identity** | [`agentIdentity`](https://learn.microsoft.com/en-us/graph/api/resources/agentidentity?view=graph-rest-1.0) | `#microsoft.graph.agentIdentity` | servicePrincipal (subtype) | Create with `POST /v1.0/servicePrincipals/microsoft.graph.agentIdentity`; `servicePrincipalType = ServiceIdentity` |
 | **Agent User** | `agentUser` | `#microsoft.graph.agentUser` | user (subtype) | Token has `idtyp=user`; `identityParentId` links to the Agent Identity |
 
 Lifecycle hierarchy:
@@ -56,13 +56,12 @@ Quoting [learn.microsoft.com/en-us/entra/agent-id/key-concepts](https://learn.mi
 Created via:
 
 ```http
-POST https://graph.microsoft.com/v1.0/applications/
+POST https://graph.microsoft.com/v1.0/applications/microsoft.graph.agentIdentityBlueprint
 OData-Version: 4.0
 Authorization: Bearer <token-with-AgentIdentityBlueprint.Create>
 Content-Type: application/json
 
 {
-  "@odata.type": "Microsoft.Graph.AgentIdentityBlueprint",
   "displayName": "...",
   "sponsors@odata.bind": ["https://graph.microsoft.com/v1.0/users/<id>"],
   "owners@odata.bind": ["https://graph.microsoft.com/v1.0/users/<id>"]
@@ -89,7 +88,7 @@ The supported property list, per the v1.0 reference:
 - `spa` — ❌ no SPA redirect URIs
 - `isFallbackPublicClient` — ❌ cannot be flipped to fallback-public-client mode
 
-This is enforced at the API surface — `az ad app update` returns *"incompatible with Agent Blueprints"* and Graph PATCH rejects setting these. (Observed 2026-05-04 against `contoso.com` tenant; documented in [persona-sati engineering-status.md](https://github.com/example/persona-sati/blob/main/docs/engineering-status.md) as `feature/entra-delegated-oauth` constraint.)
+This is enforced at the API surface — `az ad app update` returns *"incompatible with Agent Blueprints"* and Graph PATCH rejects setting these. (Observed against a development tenant during post-GA validation.)
 
 `signInAudience` for Blueprints supports the standard four values (`AzureADMyOrg` (default), `AzureADMultipleOrgs`, `AzureADandPersonalMicrosoftAccount`, `PersonalMicrosoftAccount`), but **Agent Identities themselves are always single-tenant regardless** — quoting [agent-autonomous-app-oauth-flow](https://learn.microsoft.com/en-us/entra/agent-id/agent-autonomous-app-oauth-flow):
 
@@ -97,10 +96,10 @@ This is enforced at the API surface — `az ad app update` returns *"incompatibl
 
 ### Agent Identity Blueprint Principal
 
-Auto-created when a Blueprint is added to a tenant, via:
+Created explicitly after the Blueprint application, via:
 
 ```http
-POST https://graph.microsoft.com/v1.0/serviceprincipals/microsoft.graph.agentIdentityBlueprintPrincipal
+POST https://graph.microsoft.com/v1.0/servicePrincipals/microsoft.graph.agentIdentityBlueprintPrincipal
 { "appId": "<blueprint-appId>" }
 ```
 
@@ -128,7 +127,7 @@ Created from a Blueprint, single-tenant by definition. The full property list is
 
 Note: `servicePrincipalType` is fixed at `"ServiceIdentity"` for all Agent Identities. There is no redirect-URI field, no credential field, no `web`/`spa`/`publicClient`. The Agent Identity is purely a service principal that holds **permissions and audit identity** — the Blueprint holds the credentials and impersonates it.
 
-Source: [Graph beta resource](https://learn.microsoft.com/en-us/graph/api/resources/agentidentity?view=graph-rest-beta), updated 2026-05-01.
+Create the resource with `POST /v1.0/servicePrincipals/microsoft.graph.agentIdentity`. Source: [Graph v1.0 resource](https://learn.microsoft.com/en-us/graph/api/resources/agentidentity?view=graph-rest-1.0).
 
 ### Agent User
 
@@ -211,7 +210,7 @@ Source: [graph.api.resources/agentid-platform-overview](https://learn.microsoft.
 ### 2.3 Agent User
 
 **Supported flows:**
-- The 3-hop **`user_fic`** flow that the Agent Identity runs to mint tokens **as** the Agent User. The third hop uses `grant_type=user_fic` (NOT `urn:ietf:params:oauth:grant-type:jwt-bearer`), `username=<agentuser>@tenant.onmicrosoft.com`, `client_assertion=<T1>`, and `user_federated_identity_credential=<T2>`. Source: [agent-user-oauth-flow](https://learn.microsoft.com/en-us/entra/agent-id/agent-user-oauth-flow) updated 2026-05-01.
+- The 3-hop **`user_fic`** flow that the Agent Identity runs to mint tokens **as** the Agent User. The third hop uses `grant_type=user_fic` (NOT `urn:ietf:params:oauth:grant-type:jwt-bearer`), canonical `user_id=<agent-user-object-id>` (or alternative `username=<agent-user-upn>`), `client_assertion=<T1>`, and `user_federated_identity_credential=<T2>`. Source: [agent-user-oauth-flow](https://learn.microsoft.com/en-us/entra/agent-id/agent-user-oauth-flow) updated 2026-05-01.
 
 **Unsupported / blocked flows:**
 - All human-interactive flows (no passwords, no passkeys, no MFA, no device code, no authorization_code where the user is the subject). Cannot sign in directly.
@@ -352,12 +351,12 @@ PKCE works against Entra. The metadata is just missing. MCP clients (Claude Code
 
 ## What changed at the May 1, 2026 GA
 
-For comparison: the existing `/path/to/entrabot-identity-research/docs/platform-learnings/msal-entra-agent-ids.md` was last updated 2025-07-14, when Agent ID was in public preview. The doc lists "preview only", "Microsoft Graph beta API required — not yet in v1.0", and "Single-tenant only". Many of those statements are now outdated.
+For comparison: `msal-entra-agent-ids.md` was originally written in the 2025 preview period, when Agent ID was in public preview. The doc lists "preview only", "Microsoft Graph beta API required — not yet in v1.0", and "Single-tenant only". Many of those statements are now outdated.
 
 ### What's GA'd
 
 - **Microsoft Agent 365** (which includes Entra Agent ID) became GA on **May 1, 2026**, $15/user/month standalone or as part of M365 E7 ($99/user/month). Source: [Microsoft Security blog 2026-05-01](https://www.microsoft.com/en-us/security/blog/2026/05/01/microsoft-agent-365-now-generally-available-expands-capabilities-and-integrations/).
-- The `agentIdentityBlueprint` resource is in **Microsoft Graph v1.0** (was beta-only). Created via `POST /v1.0/applications/microsoft.graph.agentIdentityBlueprint`. The `agentIdentity` and `agentUser` resources remain in **beta** (the v1.0 ref says "Other Supported Versions: graph-rest-1.0" but the canonical doc URL still uses `view=graph-rest-beta`).
+- `agentIdentityBlueprint`, `agentIdentityBlueprintPrincipal`, and `agentIdentity` creation use dedicated **Microsoft Graph v1.0** subtype endpoints. `agentUser` creation remains on **beta** through `POST /beta/users`.
 - **Conditional Access for Agent Identities** is generally available (was preview as of March 2026) — agent risk, agent custom security attributes, agent identity targeting are all live.
 - **ID Protection for agents** (`agentRiskDetection`, `riskyAgent` resources) is GA.
 - **ID Governance for agents** (access reviews, entitlement management for agent identities) is GA.
@@ -501,8 +500,8 @@ When designing any auth flow that touches an Agent Identity, Agent Blueprint, or
 - [Grant agents access to Microsoft 365 resources](https://learn.microsoft.com/en-us/entra/agent-id/grant-agent-access-microsoft-365) (updated 2026-05-01)
 - [Microsoft Entra Agent ID APIs in Microsoft Graph](https://learn.microsoft.com/en-us/graph/api/resources/agentid-platform-overview?view=graph-rest-beta) (updated 2026-04-28) — **the blocked-permissions table**
 - [agentIdentityBlueprint v1.0 resource](https://learn.microsoft.com/en-us/graph/api/resources/agentidentityblueprint?view=graph-rest-1.0) (updated 2026-04-25)
-- [agentIdentity beta resource](https://learn.microsoft.com/en-us/graph/api/resources/agentidentity?view=graph-rest-beta) (updated 2026-05-01)
-- [agentIdentityBlueprintPrincipal beta resource](https://learn.microsoft.com/en-us/graph/api/resources/agentidentityblueprintprincipal?view=graph-rest-beta)
+- [agentIdentity v1.0 resource](https://learn.microsoft.com/en-us/graph/api/resources/agentidentity?view=graph-rest-1.0) (updated 2026-05-01)
+- [agentIdentityBlueprintPrincipal v1.0 resource](https://learn.microsoft.com/en-us/graph/api/resources/agentidentityblueprintprincipal?view=graph-rest-1.0)
 - [OpenID Connect on Microsoft identity platform (v2-protocols-oidc)](https://learn.microsoft.com/en-us/entra/identity-platform/v2-protocols-oidc) (updated 2026-04-24) — confirms the OIDC discovery doc shape
 
 ### Official blog posts and release notes
@@ -533,7 +532,7 @@ When designing any auth flow that touches an Agent Identity, Agent Blueprint, or
 1. **Will Entra add `code_challenge_methods_supported` to its OIDC discovery doc?** The MCP authorization spec's strictness is now widely deployed (Claude Code, VS Code, Cursor). Microsoft has incentive to add this field. If they do, the OIDC shim becomes a no-op and can be removed.
 2. **Will Entra add an RFC 7591 registration_endpoint?** The Microsoft Q&A thread tracking this remains unanswered with no roadmap commitment. External ID / CIAM may add it before workforce tenants do.
 3. **Will managerApplications be opened to non-Microsoft first-party apps?** Currently limited to Microsoft first-party apps only — meaningful agent-management automation by third parties is gated on this.
-4. **Will the `agentIdentity` and `agentUser` resources move from beta to v1.0?** The Blueprint resource already moved; the others are next.
+4. **When will `agentUser` creation move from beta to v1.0?** Blueprint, BlueprintPrincipal, and Agent Identity creation already use v1.0 subtype endpoints.
 5. **Will the Agent Registry beta APIs deprecate cleanly?** The transition to Agent 365-powered registry APIs is announced but the cutover and migration tooling are not yet documented.
 6. **Will Agent Users become first-class for Conditional Access targeting?** Currently CA targeting for Agent Users is layered through the parent Agent Identity; direct Agent User targeting is announced but the schema is still settling.
 7. **Will Microsoft's OAuth Client ID Metadata Document support land?** This would be the cleanest fix for MCP — clients self-publish metadata at HTTPS URLs, no DCR needed. Entra has not committed to this yet.

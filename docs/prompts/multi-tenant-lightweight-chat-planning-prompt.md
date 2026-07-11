@@ -141,7 +141,7 @@ Key decisions to make:
 - **Auth flow:** localhost redirect (PKCE) vs device code. The security architect flagged device code; plan should default to localhost redirect and only fall back to device code for headless scenarios.
 - **MSAL client type:** public (desktop app) vs confidential (secret-holding). For a CLI tool on user's machine, public is usually correct.
 - **Token storage:** in-memory only vs persistent cache. MSAL's default cache is in-memory; for persistence across restarts, where do we store it securely? (Keychain? File + encryption?)
-- **Multi-tenant app registration ownership:** Brandon's tenant (werner.ac) or a new shared tenant?
+- **Multi-tenant app registration ownership:** A dedicated development tenant or a shared test tenant?
 - **Phase 1 message identity:** how does the agent identify itself when using the human's token? (Prefix like `[EntraBot]` per the spec, but what does this look like in practice?)
 - **Phase 2 trigger:** when does the Agent User provisioning START? Immediately on first auth? On user command? Lazy?
 - **Phase 2 swap:** how is the token swap communicated to the user? Silent? Notification?

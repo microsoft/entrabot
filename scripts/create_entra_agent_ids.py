@@ -45,7 +45,7 @@ from entra_provisioning import (  # noqa: E402 — sys.path insert precedes this
 
 # The repo root is one directory up; src/ contains the entrabot package.
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent / "src"))
-from entrabot.graph_helpers import graph_request, odata_escape  # noqa: E402
+from entrabot.graph_helpers import GRAPH_V1, graph_request, odata_escape  # noqa: E402
 from entrabot.preflight import COPILOT_CAPABLE_SKUS, TEAMS_CAPABLE_SKUS  # noqa: E402
 
 BLUEPRINT_DISPLAY_NAME = "EntraBot Code Agent"
@@ -109,12 +109,15 @@ def ensure_blueprint_principal(token: str, app_id: str) -> None:
             return
 
     print("  Creating BlueprintPrincipal...")
-    sp_body = {
-        "@odata.type": "Microsoft.Graph.AgentIdentityBlueprintPrincipal",
-        "appId": app_id,
-    }
+    sp_body = {"appId": app_id}
     for attempt in range(4):
-        sp_resp = graph_request("POST", "/servicePrincipals", token, json_body=sp_body)
+        sp_resp = graph_request(
+            "POST",
+            "/servicePrincipals/microsoft.graph.agentIdentityBlueprintPrincipal",
+            token,
+            json_body=sp_body,
+            base_url=GRAPH_V1,
+        )
         if sp_resp.status_code in (200, 201):
             sp_data = sp_resp.json()
             print(f"  BlueprintPrincipal created: {sp_data.get('id', 'unknown')}")
@@ -153,7 +156,6 @@ def create_blueprint(token: str) -> tuple[str, str]:
         return app_id, obj_id
 
     body: dict = {
-        "@odata.type": "Microsoft.Graph.AgentIdentityBlueprint",
         "displayName": BLUEPRINT_DISPLAY_NAME,
         "description": "Agent Identity Blueprint for EntraBot device agents",
     }
@@ -161,7 +163,13 @@ def create_blueprint(token: str) -> tuple[str, str]:
     if sponsors_bind:
         body["sponsors@odata.bind"] = sponsors_bind
 
-    resp = graph_request("POST", "/applications", token, json_body=body)
+    resp = graph_request(
+        "POST",
+        "/applications/microsoft.graph.agentIdentityBlueprint",
+        token,
+        json_body=body,
+        base_url=GRAPH_V1,
+    )
     if resp.status_code not in (200, 201):
         resp_text = resp.text
         if "Directory.AccessAsUser.All" in resp_text:
@@ -291,15 +299,20 @@ def create_agent_identity(token: str, blueprint_app_id: str) -> tuple[str, str]:
         print("  WARNING: Could not get current user for sponsorship")
 
     body: dict = {
-        "@odata.type": "Microsoft.Graph.AgentIdentity",
         "displayName": display_name,
         "agentIdentityBlueprintId": blueprint_app_id,
     }
     if sponsor_id:
-        body["sponsors@odata.bind"] = [f"https://graph.microsoft.com/beta/users/{sponsor_id}"]
+        body["sponsors@odata.bind"] = [f"https://graph.microsoft.com/v1.0/users/{sponsor_id}"]
 
     for attempt in range(3):
-        resp = graph_request("POST", "/servicePrincipals", token, json_body=body)
+        resp = graph_request(
+            "POST",
+            "/servicePrincipals/microsoft.graph.agentIdentity",
+            token,
+            json_body=body,
+            base_url=GRAPH_V1,
+        )
         if resp.status_code in (200, 201):
             data = resp.json()
             agent_id = data.get("appId", "")

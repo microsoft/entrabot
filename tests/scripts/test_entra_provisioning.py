@@ -22,6 +22,16 @@ def provisioning_module():
     sys.modules.pop("entra_provisioning", None)
 
 
+def test_build_sponsors_bind_uses_v1_user_reference(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(provisioning_module, "get_signed_in_user_id", lambda: "sponsor-id")
+
+    assert provisioning_module.build_sponsors_bind() == [
+        "https://graph.microsoft.com/v1.0/users/sponsor-id"
+    ]
+
+
 def test_existing_local_cert_is_uploaded_when_provisioner_app_is_recreated(
     provisioning_module, monkeypatch: pytest.MonkeyPatch
 ) -> None:

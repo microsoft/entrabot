@@ -1,92 +1,112 @@
-# Token Flows Reference
+# Token flows
 
-## Overview
+Entrabot has two authentication modes. `agent_user` uses the autonomous three-hop Agent User flow described below. `delegated` uses MSAL interactive authentication (localhost redirect with device-code fallback) and is intended for demos or environments without a provisioned Agent User.
 
-Entrabot uses the **three-hop Agent User flow** for all Graph API calls. This is a fully autonomous machine-to-machine flow — no human authentication, no device-code prompts, no OBO exchange.
+## Autonomous Agent User flow
 
-The result is a delegated token with `idtyp=user` that can call any Graph API requiring user context (Teams, Exchange, OneDrive).
+All three requests use the tenant v2 token endpoint:
 
-## The Three Hops
-
-### Hop 1: Blueprint Token (client_credentials)
-
-The Blueprint authenticates with its own client secret (dev) or certificate/FIC (production).
-
-```http
-POST https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token
-
-client_id={blueprint-app-id}
-&scope=https://graph.microsoft.com/.default
-&grant_type=client_credentials
-&client_secret={blueprint-secret}
+```text
+https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token
 ```
 
-**Result:** An application token for the Blueprint. Used as the `client_assertion` in Hop 2.
+The implementation is `acquire_agent_user_token(config, resource_scope=...)` in `src/entrabot/tools/teams.py`. Every token response is checked for an `error` key before `access_token` is read.
 
-### Hop 2: Agent Identity Token (FIC exchange)
+### Hop 1: Blueprint certificate → Agent Identity exchange token (T1)
 
-The Agent Identity authenticates by presenting the Blueprint token. This works because Agent Identities are parented by the Blueprint — the Blueprint's token is trusted as a credential.
+The Blueprint authenticates with a certificate-signed client assertion and binds the exchange token to the target Agent Identity through `fmi_path`.
 
 ```http
-POST https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token
+POST /{tenant_id}/oauth2/v2.0/token
+Content-Type: application/x-www-form-urlencoded
 
-client_id={agent-identity-id}
+client_id={blueprint_app_id}
+&scope=api://AzureADTokenExchange/.default
+&fmi_path={agent_identity_app_id}
+&grant_type=client_credentials
+&client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer
+&client_assertion={certificate_signed_jwt}
+```
+
+The private key is loaded from the platform credential store; it is not read from a PEM path in `.env`.
+
+### Hop 2: Agent Identity FIC exchange → Agent Identity token (T2)
+
+The Agent Identity presents T1 as its client assertion:
+
+```http
+POST /{tenant_id}/oauth2/v2.0/token
+Content-Type: application/x-www-form-urlencoded
+
+client_id={agent_identity_app_id}
 &scope=api://AzureADTokenExchange/.default
 &grant_type=client_credentials
 &client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer
-&client_assertion={blueprint-token}
+&client_assertion={T1}
 ```
 
-**Result:** A token representing the Agent Identity. Used as the `user_federated_identity_credential` in Hop 3.
+### Hop 3: Agent User `user_fic` grant → resource token
 
-### Hop 3: Agent User Token (user_fic grant)
-
-The final hop produces a delegated user token for the Agent User.
+Entrabot requests a delegated token for the selected resource:
 
 ```http
-POST https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token
+POST /{tenant_id}/oauth2/v2.0/token
+Content-Type: application/x-www-form-urlencoded
 
-client_id={agent-identity-id}
+client_id={agent_identity_app_id}
 &scope=https://graph.microsoft.com/.default
 &grant_type=user_fic
 &client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer
-&client_assertion={blueprint-token}
-&user_id={agent-user-object-id}
-&user_federated_identity_credential={agent-identity-token}
+&client_assertion={T1}
+&user_id={agent_user_object_id}
+&user_federated_identity_credential={T2}
+&requested_token_use=on_behalf_of
 ```
 
-**Result:** A delegated token with `idtyp=user`. The Agent User is the principal. Can call Teams, Exchange, OneDrive, etc.
+Microsoft's current examples use `user_id` as the canonical object-ID selector and also document `username={agent_user_upn}` as an alternative. Entrabot uses `user_id`. The implementation includes `requested_token_use=on_behalf_of` for compatibility even though newer canonical examples may omit it.
 
-## Consent
+The resulting token has:
 
-Before Hop 3 works, an `oAuth2PermissionGrant` must exist granting the Agent Identity permission to act as the Agent User:
+- `idtyp=user`
+- `oid={agent_user_object_id}`
+- `aud=https://graph.microsoft.com` for the default Graph scope
+- delegated scopes consented to the Agent Identity/Agent User relationship
 
-```http
-POST https://graph.microsoft.com/v1.0/oauth2PermissionGrants
+For Azure Blob Storage, Hops 1 and 2 are unchanged and Hop 3 uses `scope=https://storage.azure.com/.default` through `acquire_agent_user_storage_token()`.
 
+## Consent records
+
+Entrabot grants delegated scopes with `POST /v1.0/oauth2PermissionGrants`:
+
+```json
 {
-  "clientId": "{agent-identity-object-id}",
+  "clientId": "{agent-identity-service-principal-object-id}",
   "consentType": "Principal",
   "principalId": "{agent-user-object-id}",
-  "resourceId": "{ms-graph-sp-object-id}",
-  "scope": "Chat.Create Chat.ReadWrite ChatMessage.Send User.Read"
+  "resourceId": "{resource-service-principal-object-id}",
+  "scope": "Chat.ReadWrite Mail.ReadWrite Files.ReadWrite.All User.Read",
+  "startTime": "2026-07-10T00:00:00Z"
 }
 ```
 
-This is a one-time admin operation, handled by `create_entra_agent_ids.py` during setup.
+Microsoft's current request example may omit `startTime`, but Entrabot has observed tenants that reject the grant without it. The provisioning helper therefore includes it as a compatibility requirement.
 
-## Why Not OBO?
+## Token refresh
 
-The previous design used On-Behalf-Of (OBO) token exchange:
+The MCP server uses two layers:
 
-```
-Human (device-code flow) → human token → OBO exchange → agent-attributed token
-```
+1. `_ensure_valid_token()` refreshes eagerly before expiry.
+2. `_with_token_retry()` retries once after a Graph 401.
 
-This was replaced because:
-1. **Device-code flow requires a human** — can't run headless or in CI
-2. **Refresh tokens in the keychain** — security risk, expiry management overhead
-3. **MSAL runtime dependency** — complex library for a simple token exchange
-4. **Agent Users are purpose-built** for this exact scenario — they exist so agents don't need OBO
+Tokens and assertions must never be logged. Failures surface as typed errors that identify the failed hop without exposing token material.
 
-See [ADR-002](../decisions/002-agent-user-over-obo.md) for the full rationale.
+## Delegated mode
+
+`ENTRABOT_MODE=delegated` uses the regular Entrabot app registration and MSAL. The primary flow is localhost browser authentication; device code is a fallback for headless environments. Delegated tokens represent the signed-in human and therefore do not provide Agent User attribution. This mode is separate from the autonomous three-hop flow and does not turn a Blueprint into an OAuth public client.
+
+## Related
+
+- [Agent Identity platform constraints](../platform-learnings/agent-id-blueprints-and-users.md)
+- [Agent Users](../platform-learnings/entra-agent-users.md)
+- [Certificate authentication](../decisions/003-certificate-auth-over-client-secrets.md)
+- [Auth API reference](api/auth.md)

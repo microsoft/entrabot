@@ -5,11 +5,11 @@
 **SUPERSEDED 2026-04-28** by [`docs/architecture/PLAN-windows-port.md`](./architecture/PLAN-windows-port.md).
 Kept for the TPM/CNG signer design notes (which were adopted, with a software-KSP fallback added).
 
-Proposed — 2026-04-24, author: Claude (PM: Brandon).
+Proposed — 2026-04-24, author: Claude (PM: the project owner).
 
 ## Problem statement
 
-Today the three-hop flow runs end-to-end on macOS only. The Mac path leans on `bash`, Homebrew `openssl` (transitively, via `cryptography`), and the macOS Keychain accessed through Python `keyring`. Brandon wants the same one-command UX on Windows: `scripts/setup-windows.ps1` provisions a fresh device; `scripts/deploy-windows.ps1` re-mints the cert and refreshes registration without rebuilding the Blueprint or Agent User. The interesting design call is *where the private key lives* — the Mac path picked Keychain because it was the smallest viable step; Windows has a strictly stronger primitive (TPM-backed CNG) that is one PowerShell line away, but it requires a non-trivial change to how Hop 1's JWT assertion gets signed (`src/entrabot/auth/certificate.py:48` loads PEM bytes; CNG won't hand those over). This doc resolves that and the six other surface decisions, then sketches the two scripts and the `windows.py` rewrite.
+Today the three-hop flow runs end-to-end on macOS only. The Mac path leans on `bash`, Homebrew `openssl` (transitively, via `cryptography`), and the macOS Keychain accessed through Python `keyring`. the project owner wants the same one-command UX on Windows: `scripts/setup-windows.ps1` provisions a fresh device; `scripts/deploy-windows.ps1` re-mints the cert and refreshes registration without rebuilding the Blueprint or Agent User. The interesting design call is *where the private key lives* — the Mac path picked Keychain because it was the smallest viable step; Windows has a strictly stronger primitive (TPM-backed CNG) that is one PowerShell line away, but it requires a non-trivial change to how Hop 1's JWT assertion gets signed (`src/entrabot/auth/certificate.py:48` loads PEM bytes; CNG won't hand those over). This doc resolves that and the six other surface decisions, then sketches the two scripts and the `windows.py` rewrite.
 
 ## Mac path inventory
 
@@ -33,7 +33,7 @@ The runtime touchpoint is `src/entrabot/tools/teams.py:104` — `store.retrieve(
 
 Recommendation: generate the cert with `New-SelfSignedCertificate -Provider 'Microsoft Platform Crypto Provider' -KeyExportPolicy NonExportable -CertStoreLocation Cert:\CurrentUser\My`. Private key never leaves the TPM; only a key handle is exposed.
 
-Why not the lazy port (Credential Manager via `keyring`): it works, but it's strictly worse than the Mac baseline. macOS Keychain on Apple Silicon backs into the Secure Enclave; the equivalent move on Windows is TPM, not Credential Manager. Credential Manager is DPAPI-backed, current-user scope, and additionally has a hard `CRED_MAX_CREDENTIAL_BLOB_SIZE = 2560 bytes` ceiling (per the [`CREDENTIALW`](https://learn.microsoft.com/windows/win32/api/wincred/ns-wincred-credentialw) struct). RSA-2048 PKCS#8 PEM (~1700 bytes) fits with ~30% headroom, but RSA-3072+ PEM does not. We are knowingly designing in a future-incompatibility for an algorithmic agility cost we don't need to pay.
+Why not the lazy port (Credential Manager via `keyring`): it works, but the current macOS implementation stores an exportable PEM in the login Keychain. Windows Software KSP is comparable to that baseline, while TPM-backed CNG is stronger because the private key is non-exportable. Credential Manager is DPAPI-backed, current-user scope, and additionally has a hard `CRED_MAX_CREDENTIAL_BLOB_SIZE = 2560 bytes` ceiling (per the [`CREDENTIALW`](https://learn.microsoft.com/windows/win32/api/wincred/ns-wincred-credentialw) struct). RSA-2048 PKCS#8 PEM (~1700 bytes) fits with ~30% headroom, but RSA-3072+ PEM does not. We are knowingly designing in a future-incompatibility for an algorithmic agility cost we don't need to pay.
 
 The non-trivial cost of CNG: `python-cryptography` (which `auth/certificate.py:48` uses) is OpenSSL-bound and only operates on PEM/DER bytes loaded into process memory. A non-exportable CNG key cannot be handed to it. The Windows Hop 1 signer must instead call `ncrypt.dll` via `ctypes`: `CryptAcquireCertificatePrivateKey(CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG)` → `NCryptSignHash(NCRYPT_PAD_PKCS1_FLAG, BCRYPT_PKCS1_PADDING_INFO{pszAlgId="SHA256"})` over the JWT signing input (the dot-joined base64url of header and payload). The signer assembles the final JWT and hands it to the existing Hop 1 POST. ~half-day of plumbing, isolated to a new function in `src/entrabot/auth/certificate_windows.py`. The `build_client_assertion` interface stays unchanged for callers.
 
@@ -41,14 +41,14 @@ Native-Windows feel: 10/10 (one PowerShell line + ctypes shim is the documented 
 
 ### 2. AppContainer / sandbox sequencing — recommended: leave hooks; do not gate v1 on it.
 
-Microsoft published [Sandboxing Python with Win32 app isolation](https://blogs.windows.com/windowsdeveloper/2024/03/06/sandboxing-python-with-win32-app-isolation/) in March 2024, which is the canonical walkthrough for the spike Brandon and the identity architect discussed. Win32 app isolation is AppContainer + MSIX-packaged, with the Application Capability Profiler (ACP) running the app in "learn mode" to enumerate the capability SIDs Python actually needs (file paths, registry keys, named-pipe servers).
+Microsoft published [Sandboxing Python with Win32 app isolation](https://blogs.windows.com/windowsdeveloper/2024/03/06/sandboxing-python-with-win32-app-isolation/) in March 2024, which is the canonical walkthrough for the spike the project owner and the identity architect discussed. Win32 app isolation is AppContainer + MSIX-packaged, with the Application Capability Profiler (ACP) running the app in "learn mode" to enumerate the capability SIDs Python actually needs (file paths, registry keys, named-pipe servers).
 
 For the setup script the deliverable is *not* "ship a sandboxed entrabot v1." It is: arrange the file system so a future MSIX wrapper can drop in without the install layout fighting it.
 
 - Use `%LOCALAPPDATA%\entrabot\` for state (writable from inside an AppContainer with the right capability — the historical Windows pattern, and what AppContainer expects).
 - Avoid writing to `%PROGRAMFILES%\` or anywhere needing admin elevation. Setup must run as a regular user end-to-end.
 - Keep the entrabot MCP binary path as `.venv\Scripts\entrabot-mcp.exe`, not a system-wide install. MSIX packaging is a separate downstream step.
-- Surface this as **OPEN QUESTION 2** below — owner: Brandon, with proposed default = "ship without sandboxing in v1, leave the layout AppContainer-ready."
+- Surface this as **OPEN QUESTION 2** below — owner: the project owner, with proposed default = "ship without sandboxing in v1, leave the layout AppContainer-ready."
 
 ### 3. `az` CLI parity — recommended: assume parity, hard-fail on the two known divergences.
 
@@ -132,7 +132,8 @@ if ($SwitchUser) { az login | Out-Null }
 $account = az account show --output json | ConvertFrom-Json
 if (-not $account) { Die 'az login required' }
 $tenantId = $account.tenantId
-$humanUserId = az ad signed-in-user show --query id -o tsv
+$humanUser = az ad signed-in-user show -o json | ConvertFrom-Json
+$humanUserId = $humanUser.id
 # (Teams-user resolution — same Graph queries as bash, port the guest #EXT# detection inline)
 
 # Step 3-5: portable Python provisioning
@@ -358,7 +359,7 @@ sequenceDiagram
     App->>Graph: Graph API call as Agent User
 ```
 
-## Open questions for Brandon
+## Open questions for the project owner
 
 1. **TPM-required vs TPM-preferred?** Default: TPM-preferred — fall back to `Cert:\CurrentUser\My` software-backed key if `Get-Tpm` reports `TpmReady=False`. Hardline TPM-required closes the door on dev VMs and older hardware. Recommended default if no answer: **TPM-preferred with a `WARN` line in setup so the security posture is visible to the user**.
 2. **AppContainer in v1?** Default: no — leave the file layout sandbox-ready (`%LOCALAPPDATA%`, no admin elevation), ship the Win32-app-isolation spike as a follow-on per `docs/engineering-status.md:319`. Recommended default: **defer**.

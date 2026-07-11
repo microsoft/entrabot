@@ -12,13 +12,13 @@ End-to-end macOS / Linux setup. Provisions the Blueprint, Agent Identity, and Ag
 
 ```bash
 # First-time provisioning (creates a new chain)
-./scripts/setup.sh --new --with-upn-suffix=sati-agent
+./scripts/setup.sh --new --with-upn-suffix=workstation
 
 # Attach this machine to an existing Blueprint (multi-device)
 ./scripts/setup.sh --use-blueprint=<APP_ID> --agent-user-upn=<UPN>
 
 # Opt into cloud-hosted memory (Azure Blob)
-./scripts/setup.sh --new --with-upn-suffix=sati-agent --use-cloud-memory
+./scripts/setup.sh --new --with-upn-suffix=workstation --use-cloud-memory
 
 # Skip setup and run the consolidated status check
 ./scripts/setup.sh --status --json
@@ -41,11 +41,21 @@ Run `./scripts/setup.sh --help` for the full flag matrix.
 
 Re-runs reuse the existing chain unless `--new` is passed. Each step short-circuits when its target already exists; cert verification (`verify_blueprint_cert.py`) decides whether to keep or rotate the cert.
 
-See `docs/reference/setup-script.md` for the long form. ADR-003 covers the cert-auth choice. ADR-005 covers cloud memory.
+ADR-003 covers the certificate-auth choice. ADR-005 covers cloud memory.
+
+## `prereqs-macos.sh`
+
+Installs or verifies the macOS command-line prerequisites used by `setup.sh`.
+
+```bash
+./scripts/prereqs-macos.sh
+```
+
+The helper uses Homebrew for Python 3.12+, Azure CLI, GitHub CLI, Node.js, Claude Code, and `jq`, and verifies the Xcode Command Line Tools.
 
 ## `setup_delegated.sh`
 
-Browser-sign-in setup for `delegated` mode. Caches an MSAL token in the OS keystore so the MCP server can pick it up silently — no device-code flow.
+Browser-sign-in setup for `delegated` mode. Caches an MSAL token in the OS keystore so the MCP server can pick it up silently. Localhost browser authentication is primary; device code is the headless fallback.
 
 ### Usage
 
@@ -79,11 +89,11 @@ Windows mirror of `setup.sh`. The `.cmd` is a thin wrapper that elevates PowerSh
 ### Usage
 
 ```cmd
-scripts\setup-windows.cmd
+scripts\setup-windows.cmd -NewChain -UpnSuffix workstation
 ```
 
 ```powershell
-.\scripts\setup-windows.ps1 -NewChain
+.\scripts\setup-windows.ps1 -NewChain -UpnSuffix workstation
 .\scripts\setup-windows.ps1 -UseBlueprint <APP_ID>
 ```
 

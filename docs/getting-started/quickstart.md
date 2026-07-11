@@ -1,128 +1,80 @@
 # Quickstart
 
-**Source:** <https://github.com/brandwe/entrabot-identity-research>
+**Source:** <https://github.com/microsoft/entrabot>
 
-## Prerequisites
+Entrabot gives an autonomous agent its own Microsoft Entra Agent Identity and Agent User. The setup script provisions the identity chain, creates a certificate-backed credential, writes local configuration, and registers the MCP server.
 
-- **Python 3.12+** on `PATH`
-- **Azure CLI** (`az`) logged in with admin access to your Entra tenant (`Application Administrator` or higher)
-- **`gh`** (GitHub CLI) — optional, used by some helper scripts
-- **Git**
-- **An M365 license** available for the Agent User (E3/E5/Teams Enterprise — anything that grants a Teams seat)
-- macOS, Linux, or Windows 10 21H2+/11. Windows uses `scripts/setup-windows.ps1` (PowerShell 7+); see `docs/runbooks/windows-setup.md`.
+> Entrabot is a research project. Use an isolated development tenant and review the generated permissions before relying on it with production data.
 
-## One-Command Setup (macOS/Linux)
+## macOS or Linux
 
 ```bash
-git clone https://github.com/brandwe/entrabot-identity-research.git
-cd entrabot-identity-research
-./scripts/setup.sh
+# 1. Clone the repository
+git clone https://github.com/microsoft/entrabot.git
+cd entrabot
+
+# 2. Install platform prerequisites
+./scripts/prereqs-macos.sh   # macOS
+# Linux: install Python 3.12+, Azure CLI, git, and your Secret Service/keyring
+
+# 3. Create a fresh identity chain
+# Replace "workstation" with a short unique label for this Agent User.
+./scripts/setup.sh --new --with-upn-suffix=workstation
 ```
 
-This will:
-1. Create a dedicated provisioner app registration (avoids Azure CLI token rejection — Learning #1)
-2. Create an Agent Identity Blueprint + BlueprintPrincipal (separate steps — Learning #2)
-3. Create an Agent Identity (per-device service principal)
-4. Create an Agent User (Entra user account linked to the Agent Identity)
-5. Grant consent for Teams/Chat Graph permissions
-6. Generate a self-signed certificate, upload public key to Entra, store private key in the OS keystore (Keychain / TPM / Keyring — ADR-003)
-7. Install Python dependencies and write `.env` (no secrets — only the cert thumbprint)
+To attach this device to an existing Blueprint instead:
 
-The script is **idempotent** — safe to re-run. State is persisted in `.entrabot-state.json`.
+```bash
+./scripts/setup.sh --use-blueprint=<blueprint-app-id>
+```
 
-### Optional flags
+Use `--agent-user-upn=<existing-upn>` or `--with-upn-suffix=<label>` when the Blueprint has multiple Agent Users and auto-discovery would be ambiguous. Run `./scripts/setup.sh --help` for storage, Work IQ, migration, and status options.
 
-- `--use-cloud-memory` — opt in to Azure Blob Storage for operational data (interaction log, daily summaries, watched chats, email cursor). Default is local-only.
-- `--keep-memory-local` — explicit form of the default. Accepted for backwards compatibility.
+## Windows
 
-See `docs/reference/setup-script.md` for the full flag list, and `docs/guides/storage-configuration.md` for the local-vs-cloud trade-offs.
+Use PowerShell 7 (`pwsh`), not Windows PowerShell 5.1:
 
-## After Setup
+```powershell
+git clone https://github.com/microsoft/entrabot.git
+cd entrabot
+pwsh -File scripts/setup-windows.ps1 -NewChain -UpnSuffix workstation
+```
 
-1. **Assign an M365 license** to the Agent User in the Entra admin center (E3/E5/Teams Enterprise).
-2. **Wait 10–15 minutes** for Teams/mailbox provisioning. The Agent User won't be reachable in Teams until this completes — there is no faster path.
-3. **Run tests:**
+For an existing Blueprint:
 
-   ```bash
-   source .venv/bin/activate
-   pytest -v --cov=entrabot --cov-report=term-missing
-   ```
+```powershell
+pwsh -File scripts/setup-windows.ps1 -UseBlueprint <blueprint-app-id>
+```
 
-## Launching the Agent
+Windows setup prefers a TPM-backed CNG key and falls back to a software-protected key when TPM provisioning is unavailable. See the [full installation guide](https://github.com/microsoft/entrabot/blob/main/INSTALL.md) for prerequisites and troubleshooting.
 
-The repo isn't published to npm or pypi — your host CLI loads the local stdio MCP server from `.mcp.json` in the current directory. No flag is needed for that part; MCP servers in `.mcp.json` are auto-discovered. What differs between hosts is **how inbound Teams DMs reach the agent**.
+## Verify the identity
 
-### Claude Code (recommended)
+```bash
+./status.sh --health-only --strict
+```
 
-Channel push: inbound Teams messages and emails arrive as next-turn system reminders without a tool call. Requires the dev-channel allowlist flag:
+On Windows:
+
+```powershell
+pwsh -File status-windows.ps1 -HealthOnly -Strict
+```
+
+A healthy Agent User token has `idtyp=user`, the Agent User's `oid`, and Microsoft Graph as its audience. The Agent Identity and Agent User are separate objects and should both appear in status output.
+
+## Start the MCP host
+
+The setup script registers Entrabot with supported MCP hosts. For Claude Code channel notifications:
 
 ```bash
 claude --dangerously-load-development-channels server:entrabot
 ```
 
-The double-dash matters. Single-dash silently treats `server:entrabot` as prompt text — see Learning #44 in [`docs/runbooks/hard-won-learnings.md`](../runbooks/hard-won-learnings.md). `server:entrabot` is the MCP server name from `.mcp.json`, not a publication identifier — the value matches the key inside the `mcpServers` object in `.mcp.json`.
+Then ask the host to call `whoami`. It should report the Agent User identity, not your human account.
 
-### GitHub Copilot CLI, Codex, Cursor, and other non-Claude hosts
+## Next steps
 
-MCP tools work, but there is no `notifications/claude/channel` equivalent — channel push is silently absent. Inbound Teams messages instead arrive **inline** as a `sponsor_reply` field on `send_teams_message`, which auto-blocks until the sponsor replies. This is host-detected on the server side; no flag, no parameter:
-
-```bash
-copilot   # or: codex, cursor, etc. — no flag, just launch from the repo dir
-```
-
-While the agent is blocked waiting on a Teams reply (any host that calls `wait_for_sponsor_dm` explicitly, or the auto-wait inside `send_teams_message` on non-Claude hosts), the host CLI shows a heartbeat animation so you know it is listening to Teams, not your keyboard:
-
-```
-           __
-      (___()'`;  woof! 🐕
-      /,    /`
-      \"--\
-
-(•ᴗ•) zZz... listening for Teams DM [42s] (Ctrl+C to break)
-```
-
-Frames cycle every ~30s with an elapsed-time counter:
-
-- `(•ᴗ•) zZz... listening for Teams DM`
-- `(•ᴗ•)╯ checking inbox`
-- `ʕ•ᴥ•ʔ waiting on sponsor`
-- `(´･ω･`) sponsor hasn't replied yet`
-- `(╯°□°)╯ Teams DM = next turn`
-- `(◕‿◕) still here, still waiting`
-
-Ctrl+C breaks out cleanly. Full host-by-host protocol is in [`docs/claude-copilot-cli-channel-port.md`](../claude-copilot-cli-channel-port.md) and [`prompts/anatomy/channel-discipline.md`](../../prompts/anatomy/channel-discipline.md).
-
-## Common Pitfalls
-
-- **Teams provisioning latency.** The 10–15 min wait is real. If `create_chat` 404s, give it another five minutes before debugging.
-- **`az` CLI tokens hard-403 against Agent Identity APIs.** Don't `az rest` against the agent-identity beta — the dedicated provisioner app exists for that reason. Learning #1.
-- **`pip install -e .` inside a worktree silently re-points the parent venv.** If you run sub-agents in git worktrees, give them a worktree-local venv. Learning #36.
-- **Stderr must stay visible.** Don't `2>/dev/null` setup scripts — failures become invisible. Learning #6.
-
-## Without an Entra Tenant
-
-If you just want to run the code and tests locally:
-
-```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-pytest -v
-```
-
-All Graph API calls are mocked in tests — no tenant needed.
-
-## Teardown
-
-```bash
-./scripts/teardown.sh
-```
-
-Removes the Agent User, Agent Identity, Blueprint, Provisioner app, and local state.
-
-## Next Steps
-
-- Read the [System Overview](../architecture/system-overview.md)
-- See [Token Flows](../reference/token-flows.md) for auth protocol details
-- See [Enforcement Flow](../architecture/enforcement-flow.md) for how a request moves through the system
-- Skim [Hard-Won Learnings](../runbooks/hard-won-learnings.md) before changing setup — it captures the 66 things that have already cost engineering hours
+- [Installation and platform details](https://github.com/microsoft/entrabot/blob/main/INSTALL.md)
+- [Setup script options](../reference/scripts/setup.md)
+- [Token flow](../reference/token-flows.md)
+- [Troubleshooting](../runbooks/hard-won-learnings.md)
