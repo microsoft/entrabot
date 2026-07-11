@@ -9,12 +9,24 @@ Entrabot requires:
 
 ## Clone and install
 
+### macOS and Linux
+
 ```bash
 git clone https://github.com/microsoft/entrabot.git
 cd entrabot
 python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+```
+
+### Windows (PowerShell)
+
+```powershell
+git clone https://github.com/microsoft/entrabot.git
+cd entrabot
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
 ```
 
 ## Verify the install

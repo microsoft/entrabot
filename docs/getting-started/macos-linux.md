@@ -4,17 +4,17 @@ Assumes you have completed [Prerequisites](prerequisites.md).
 
 ## 1. Install platform prerequisites
 
-=== "macOS"
+### macOS
 
-    ```bash
-    ./scripts/prereqs-macos.sh
-    ```
+```bash
+./scripts/prereqs-macos.sh
+```
 
-    Installs the Azure CLI and confirms Keychain access for certificate storage.
+Installs or verifies the setup prerequisites, including Python 3.12+, Git, the Azure CLI, the .NET SDK, the Microsoft Agent 365 CLI, and PowerShell 7.
 
-=== "Linux"
+### Linux
 
-    Install Python 3.12+, the Azure CLI, `git`, and a Secret Service–compatible keyring (e.g. `gnome-keyring` or KWallet).
+Install Python 3.12+, the Azure CLI, `git`, and a Secret Service–compatible keyring (e.g. `gnome-keyring` or KWallet).
 
 ## 2. Create a fresh identity chain
 
