@@ -784,7 +784,7 @@ This phase rewrites/creates the pages that are not client docs, architecture doc
 
 - [ ] **Step 1: Replace the "Where to Start" and "Open Research Questions" sections**
 
-The current `docs/index.md` links to historical/internal pages (`architecture/DESIGN-persona-sati-integration.md`, `decisions/006-remove-bot-gateway-mode.md` at a path that moves, `platform-learnings/*` at paths that rename, `SECURITY-DEBT-PROVISIONER-SECRET.md` which archives, `runbooks/hard-won-learnings.md` which splits into troubleshooting). Replace the whole file content with:
+The current `docs/index.md` links to historical/internal pages (`architecture/DESIGN-persona-sati-integration.md` which archives to `engineering-history/architecture/`, `decisions/006-remove-bot-gateway-mode.md` which archives to `engineering-history/decisions/` (ADRs are not published — see Task 3.5), `platform-learnings/*` at paths that rename, `SECURITY-DEBT-PROVISIONER-SECRET.md` which archives, `runbooks/hard-won-learnings.md` which splits into troubleshooting). Replace the whole file content with:
 
 ```markdown
 # Entrabot Identity Research
@@ -807,16 +807,15 @@ The scripts take care of the rest: provisioning the Agent Identity Blueprint, Ag
 
 - **New to the project?** Start with the [Quickstart](getting-started/quickstart.md)
 - **Which client do I use?** See [Clients Overview](clients/overview.md)
-- **Current status / what's shipped / what's next?** [Engineering Status](project/engineering-status.md)
+- **Current status / what's shipped / what's next?** [Project Status](project/status.md)
 - **Customizing the agent's prompt?** Read [Customizing the Body Prompt](guides/customizing-the-body-prompt.md)
 - **How the system fits together?** Read [System Overview](architecture/system-overview.md)
 - **Local vs. cloud storage?** Read [Storage Configuration and Migration](guides/storage-configuration.md)
-- **MCP tool reference?** See [MCP Tools](reference/api/mcp-tools.md)
+- **MCP tool reference?** See [MCP Tools](reference/mcp-tools.md)
 - **Script reference?** Browse [Scripts Overview](reference/scripts/index.md)
 - **How tokens flow?** See [Identity and Token Flow](architecture/identity-and-token-flow.md)
 - **Something not working?** Check [Troubleshooting](troubleshooting/index.md)
 - **Platform deep dives (Agent IDs, Agent 365, Teams/Files Graph, OS keystores)?** Browse [Platform Docs](platform-docs/agent-id-blueprints-and-users.md)
-- **Why we made a decision?** Browse [Architecture Decision Records](project/decisions/README.md)
 
 ## Supported Platforms and Clients
 
@@ -840,21 +839,30 @@ git add docs/index.md
 git commit -m "docs: rewrite Home page with current, neutral links"
 ```
 
-### Task 3.2: Add docs/getting-started/installation.md and docs/getting-started/first-agent-user.md
+### Task 3.2: Build the five approved Getting Started pages
+
+The approved spec (`engineering-history/specs/2026-07-10-public-documentation-redesign.md`, "Getting Started") requires exactly five pages: Quickstart, Prerequisites, macOS and Linux installation, Windows installation, and First identity and health verification. Use these exact paths — there is no `installation.md` or `first-agent-user.md` page.
 
 **Files:**
-- Create: `docs/getting-started/installation.md`
-- Create: `docs/getting-started/first-agent-user.md`
-- (existing) `docs/getting-started/quickstart.md` stays as-is; verified in research to already be current and prefix-clean
+- Create: `docs/getting-started/prerequisites.md`
+- Create: `docs/getting-started/macos-linux.md`
+- Create: `docs/getting-started/windows.md`
+- Create: `docs/getting-started/verify.md`
+- Modify: `docs/getting-started/quickstart.md` (existing; fix two stale links — see Step 5)
 
-- [ ] **Step 1: Create docs/getting-started/installation.md**
+- [ ] **Step 1: Create docs/getting-started/prerequisites.md**
 
 ```markdown
-# Installation
+# Prerequisites
 
-Entrabot requires Python 3.12+ and a Microsoft 365 development tenant with permission to create app registrations and grant admin consent.
+Entrabot requires:
 
-## 1. Clone and install
+- A Microsoft 365 development tenant where you can create app registrations and grant admin consent
+- A license that includes Teams and Outlook (E3 or E5 dev tenant licenses work)
+- Python 3.12 or newer
+- `git`
+
+## Clone and install
 
 ```bash
 git clone https://github.com/microsoft/entrabot.git
@@ -864,7 +872,28 @@ source .venv/bin/activate   # Windows: .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 ```
 
-## 2. Install platform prerequisites
+## Verify the install
+
+```bash
+pytest -v --tb=short
+ruff check .
+```
+
+Both commands must pass before you provision an Agent Identity.
+
+## Next step
+
+Continue to platform-specific setup: [macOS and Linux](macos-linux.md) or [Windows](windows.md).
+```
+
+- [ ] **Step 2: Create docs/getting-started/macos-linux.md**
+
+```markdown
+# macOS and Linux Installation
+
+Assumes you have completed [Prerequisites](prerequisites.md).
+
+## 1. Install platform prerequisites
 
 === "macOS"
 
@@ -872,32 +901,70 @@ pip install -e ".[dev]"
     ./scripts/prereqs-macos.sh
     ```
 
-=== "Windows"
-
-    ```powershell
-    .\scripts\prereqs-windows.ps1
-    ```
+    Installs the Azure CLI and confirms Keychain access for certificate storage.
 
 === "Linux"
 
     Install Python 3.12+, the Azure CLI, `git`, and a Secret Service–compatible keyring (e.g. `gnome-keyring` or KWallet).
 
-## 3. Verify the install
+## 2. Create a fresh identity chain
 
 ```bash
-pytest -v --tb=short
-ruff check .
+# Replace "workstation" with a short unique label for this Agent User.
+./scripts/setup.sh --new --with-upn-suffix=workstation
 ```
 
-Both commands must pass before you provision an Agent Identity. See [scripts/setup.sh](../reference/scripts/setup-sh.md) for the next step, or follow the [Quickstart](quickstart.md) for the full walkthrough.
+To attach this device to an existing Blueprint instead:
+
+```bash
+./scripts/setup.sh --use-blueprint=<blueprint-app-id>
 ```
 
-- [ ] **Step 2: Create docs/getting-started/first-agent-user.md**
+Use `--agent-user-upn=<existing-upn>` or `--with-upn-suffix=<label>` when the Blueprint has multiple Agent Users and auto-discovery would be ambiguous. Run `./scripts/setup.sh --help` for storage, Work IQ, migration, and status options — see [scripts/setup.sh reference](../reference/scripts/setup/setup-sh.md) for the full option list.
+
+## Next step
+
+Continue to [Verify Your Agent Identity](verify.md).
+```
+
+- [ ] **Step 3: Create docs/getting-started/windows.md**
 
 ```markdown
-# Your First Agent User
+# Windows Installation
 
-This walks through what `scripts/setup.sh` does, so you know what to expect and what to check afterward.
+Assumes you have completed [Prerequisites](prerequisites.md). Use PowerShell 7 (`pwsh`), not Windows PowerShell 5.1.
+
+## 1. Install platform prerequisites
+
+```powershell
+.\scripts\prereqs-windows.ps1
+```
+
+Windows setup prefers a TPM-backed CNG key and falls back to a software-protected key when TPM provisioning is unavailable.
+
+## 2. Create a fresh identity chain
+
+```powershell
+pwsh -File scripts/setup-windows.ps1 -NewChain -UpnSuffix workstation
+```
+
+For an existing Blueprint:
+
+```powershell
+pwsh -File scripts/setup-windows.ps1 -UseBlueprint <blueprint-app-id>
+```
+
+See [scripts/setup-windows.ps1 reference](../reference/scripts/setup/setup-windows-ps1.md) for the full option list.
+
+## Next step
+
+Continue to [Verify Your Agent Identity](verify.md).
+```
+
+- [ ] **Step 4: Create docs/getting-started/verify.md**
+
+```markdown
+# Verify Your Agent Identity
 
 ## What gets created in Entra
 
@@ -906,29 +973,64 @@ This walks through what `scripts/setup.sh` does, so you know what to expect and 
 3. **Agent Identity** — a federated-identity-credential (FIC) child of the Blueprint, representing this specific agent instance.
 4. **Agent User** — a real Entra user object with a Teams and Outlook license, linked to the Agent Identity via a `user_fic` grant. This is the identity your agent authenticates as.
 
-## What you should see after `scripts/setup.sh` completes
+## Run the health check
+
+```bash
+./status.sh --health-only --strict
+```
+
+On Windows:
+
+```powershell
+pwsh -File status-windows.ps1 -HealthOnly -Strict
+```
+
+A healthy Agent User token has `idtyp=user`, the Agent User's `oid`, and Microsoft Graph as its audience. The Agent Identity and Agent User are separate objects and should both appear in status output.
+
+## Inspect status directly
 
 ```bash
 python3 scripts/show_agent_status.py
 ```
 
-This prints the Agent Identity's object ID, the Agent User's UPN, license assignment status, and certificate expiry. See [scripts/show_agent_status.py reference](../reference/scripts/show-agent-status-py.md) for the full output shape.
+This prints the Agent Identity's object ID, the Agent User's UPN, license assignment status, and certificate expiry. See [scripts/show_agent_status.py reference](../reference/scripts/operations/show-agent-status-py.md) for the full output shape.
 
-## Sending your first message
+## Start the MCP host and send your first message
 
-Once the MCP server is running (see [Quickstart](quickstart.md)), ask your MCP client (Claude Code, Copilot CLI, etc.) to send a Teams message. The message will appear in Teams as sent by the Agent User's own account — not your human account. See [Identity and Token Flow](../architecture/identity-and-token-flow.md) for how the three-hop token exchange makes this possible.
+```bash
+claude --dangerously-load-development-channels server:entrabot
+```
+
+Then ask the host to call `whoami` and send a Teams message. Both should report and act as the Agent User identity, not your human account. See [Identity and Token Flow](../architecture/identity-and-token-flow.md) for how the three-hop token exchange makes this possible.
 
 ## If something goes wrong
 
-See [Troubleshooting: Setup and Authentication](../troubleshooting/setup-and-authentication.md).
+See [Troubleshooting](../troubleshooting/index.md).
 ```
 
-- [ ] **Step 3: Confirm both new files parse as valid Markdown (no unbalanced code fences)**
+- [ ] **Step 5: Fix the two stale links in the existing docs/getting-started/quickstart.md**
+
+`quickstart.md` predates this redesign and still links to a pre-restructure script-docs path and the old monolithic runbook. Update its "Next steps" section:
+
+```markdown
+Old:
+- [Setup script options](../reference/scripts/setup.md)
+- [Token flow](../reference/token-flows.md)
+- [Troubleshooting](../runbooks/hard-won-learnings.md)
+
+New:
+- [Prerequisites](prerequisites.md)
+- [Setup script options](../reference/scripts/setup/setup-sh.md)
+- [Token flow](../reference/token-flows.md)
+- [Troubleshooting](../troubleshooting/index.md)
+```
+
+- [ ] **Step 6: Confirm all new/modified files parse as valid Markdown (no unbalanced code fences)**
 
 ```bash
 python3 - << 'PY'
 from pathlib import Path
-for name in ("installation.md", "first-agent-user.md"):
+for name in ("prerequisites.md", "macos-linux.md", "windows.md", "verify.md", "quickstart.md"):
     text = Path(f"docs/getting-started/{name}").read_text()
     assert text.count("```") % 2 == 0, f"{name} has unbalanced code fences"
 print("OK")
@@ -937,11 +1039,11 @@ PY
 
 Expected: `OK`.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add docs/getting-started/installation.md docs/getting-started/first-agent-user.md
-git commit -m "docs: add installation and first-agent-user getting-started pages"
+git add docs/getting-started/prerequisites.md docs/getting-started/macos-linux.md docs/getting-started/windows.md docs/getting-started/verify.md docs/getting-started/quickstart.md
+git commit -m "docs: add prerequisites, macos-linux, windows, and verify getting-started pages"
 ```
 
 ### Task 3.3: Add docs/guides/configuration.md (source-mapped to src/entrabot/config.py)
@@ -1053,7 +1155,7 @@ Entrabot has no default group chat. Every Teams tool requires an explicit `chat_
 
 ## Sending and receiving messages
 
-`send_teams_message` (see [MCP Tools](../reference/api/mcp-tools.md)) sends as the Agent User and, on non-channel-push hosts (Copilot CLI, Codex), blocks for a sponsor reply by default. On Claude Code, the reply arrives on the next turn via the background poll (every 5 seconds) pushing a `notifications/claude/channel` message. See [Sponsor DM Wait Pattern](../clients/overview.md#sponsor-dm-wait-pattern) for the host-gated behavior.
+`send_teams_message` (see [MCP Tools](../reference/mcp-tools.md)) sends as the Agent User and, on non-channel-push hosts (Copilot CLI, Codex), blocks for a sponsor reply by default. On Claude Code, the reply arrives on the next turn via the background poll (every 5 seconds) pushing a `notifications/claude/channel` message. See [Sponsor DM Wait Pattern](../clients/overview.md#sponsor-dm-wait-pattern) for the host-gated behavior.
 
 ## Promises (deferred commitments)
 
@@ -1065,7 +1167,7 @@ Entrabot has no default group chat. Every Teams tool requires an explicit `chat_
 
 ## Related reference
 
-- [MCP Tools](../reference/api/mcp-tools.md)
+- [MCP Tools](../reference/mcp-tools.md)
 - [Messaging and Channel Delivery](../architecture/messaging-and-delivery.md)
 - [Troubleshooting: Teams and Email](../troubleshooting/teams-and-email.md)
 ```
@@ -1087,7 +1189,7 @@ The scheduler in `daily_summary.py` runs once per day and composes a digest from
 
 ## Related reference
 
-- [MCP Tools](../reference/api/mcp-tools.md)
+- [MCP Tools](../reference/mcp-tools.md)
 - [Troubleshooting: Teams and Email](../troubleshooting/teams-and-email.md)
 ```
 
@@ -1127,7 +1229,7 @@ python3 scripts/show_agent_status.py
 
 ## Rotating certificates
 
-See [scripts/rotate_cert_windows.ps1 reference](../reference/scripts/rotate-cert-windows-ps1.md) (Windows) or re-run `scripts/find_local_blueprint_cert.py` / `scripts/verify_blueprint_cert.py` (macOS/Linux) to confirm the current certificate before rotating manually.
+See [scripts/rotate_cert_windows.py reference](../reference/scripts/auth-and-certs/rotate-cert-windows-py.md) (Windows) or re-run `scripts/find_local_blueprint_cert.py` / `scripts/verify_blueprint_cert.py` (macOS/Linux) to confirm the current certificate before rotating manually.
 
 ## Deprovisioning
 
@@ -1157,29 +1259,31 @@ git add docs/guides/teams-and-chat-workflows.md docs/guides/email-workflows.md d
 git commit -m "docs: add Teams, email, files/Work IQ, and identity lifecycle guides"
 ```
 
-### Task 3.5: Add Project section pages
+### Task 3.5: Add Project section pages (Status and Changelog only) and archive ADRs
+
+Per the approved spec, the public Project section contains exactly two pages: Current Status and Changelog. ADRs are historical, point-in-time rationale — they move to `engineering-history/decisions/` alongside plans, specs, and investigations, and are never published. Their durable rationale is distilled into the functional architecture pages (Tasks 5.2 and 5.5 carry ADR-003 and ADR-005 forward as inline prose, not links).
 
 **Files:**
-- Move: `docs/engineering-status.md` → `docs/project/engineering-status.md`
+- Move: `docs/engineering-status.md` → `docs/project/status.md`
 - Create: `docs/project/changelog.md`
-- Move: `docs/decisions/README.md`, `docs/decisions/001-obo-flows-for-device-agents.md`, `docs/decisions/002-agent-user-over-obo.md`, `docs/decisions/003-certificate-auth-over-client-secrets.md`, `docs/decisions/005-cloud-hosted-memory.md`, `docs/decisions/006-remove-bot-gateway-mode.md` → `docs/project/decisions/` (same filenames)
+- Move: `docs/decisions/README.md`, `docs/decisions/001-obo-flows-for-device-agents.md`, `docs/decisions/002-agent-user-over-obo.md`, `docs/decisions/003-certificate-auth-over-client-secrets.md`, `docs/decisions/005-cloud-hosted-memory.md`, `docs/decisions/006-remove-bot-gateway-mode.md` → `engineering-history/decisions/` (same filenames; not published)
 
-- [ ] **Step 1: Move engineering-status.md into the new project/ directory**
+- [ ] **Step 1: Move engineering-status.md into the new project/ directory as status.md**
 
 ```bash
-mkdir -p docs/project/decisions
-git mv docs/engineering-status.md docs/project/engineering-status.md
+mkdir -p docs/project engineering-history/decisions
+git mv docs/engineering-status.md docs/project/status.md
 ```
 
-- [ ] **Step 2: Move ADRs into docs/project/decisions/ (these stay public — ADRs are current-state rationale, not point-in-time plans)**
+- [ ] **Step 2: Move ADRs into engineering-history/decisions/ — these are NOT published; they never appear under docs_dir or in mkdocs.yml's nav**
 
 ```bash
-git mv docs/decisions/README.md docs/project/decisions/README.md
-git mv docs/decisions/001-obo-flows-for-device-agents.md docs/project/decisions/001-obo-flows-for-device-agents.md
-git mv docs/decisions/002-agent-user-over-obo.md docs/project/decisions/002-agent-user-over-obo.md
-git mv docs/decisions/003-certificate-auth-over-client-secrets.md docs/project/decisions/003-certificate-auth-over-client-secrets.md
-git mv docs/decisions/005-cloud-hosted-memory.md docs/project/decisions/005-cloud-hosted-memory.md
-git mv docs/decisions/006-remove-bot-gateway-mode.md docs/project/decisions/006-remove-bot-gateway-mode.md
+git mv docs/decisions/README.md engineering-history/decisions/README.md
+git mv docs/decisions/001-obo-flows-for-device-agents.md engineering-history/decisions/001-obo-flows-for-device-agents.md
+git mv docs/decisions/002-agent-user-over-obo.md engineering-history/decisions/002-agent-user-over-obo.md
+git mv docs/decisions/003-certificate-auth-over-client-secrets.md engineering-history/decisions/003-certificate-auth-over-client-secrets.md
+git mv docs/decisions/005-cloud-hosted-memory.md engineering-history/decisions/005-cloud-hosted-memory.md
+git mv docs/decisions/006-remove-bot-gateway-mode.md engineering-history/decisions/006-remove-bot-gateway-mode.md
 rmdir docs/decisions
 ```
 
@@ -1204,11 +1308,19 @@ Expected: the current config lacks a `base_path` under `pymdownx.snippets`; reco
       base_path: ["."]
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Confirm no public page links into the moved ADRs**
 
 ```bash
-git add docs/project
-git commit -m "docs: move engineering status and ADRs under project/, add changelog embed"
+grep -rn "docs/decisions/\|project/decisions" docs/ mkdocs.yml
+```
+
+Expected: no output (Tasks 5.2 and 5.5 already carry ADR-003/ADR-005 rationale forward as prose, not links).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add docs/project engineering-history/decisions
+git commit -m "docs: move engineering status to project/status.md, archive ADRs (not published)"
 ```
 
 ---
@@ -1221,7 +1333,8 @@ git commit -m "docs: move engineering status and ADRs under project/, add change
 - Create: `docs/clients/copilot-cli.md`
 - Create: `docs/clients/other-hosts.md`
 - Modify: `docs/clients/persona-sati-host-bootstrap.md`
-- Delete: `docs/claude-copilot-cli-channel-port.md`, `docs/claude-windows-port.md`, `docs/openai-copilot-cli-notifications.md`, `docs/openai-windows-agent-identity-port.md` (moved to `engineering-history/` in Phase 9, not deleted outright — see Phase 9 for the exact `git mv` commands; this phase only creates the replacement pages)
+- Removed from `docs/` (required historical migration; archived to `engineering-history/plans/claude-copilot-cli-channel-port.md` in Phase 9, not deleted — see Phase 9 for the exact `git mv` command; this phase only creates the replacement pages): `docs/claude-copilot-cli-channel-port.md`
+- Delete (superseded duplicate working notes, after unique facts are folded into the replacement pages — see Phase 9 disposition table): `docs/claude-windows-port.md`, `docs/openai-copilot-cli-notifications.md`, `docs/openai-windows-agent-identity-port.md`
 
 **Constraint carried over from research:** `tests/test_prompt_doctrine.py::test_bootstrap_doctrine_file_mentions_markers` (parametrized over `BOOTSTRAP_DOCTRINE_FILES`, which includes `docs/clients/persona-sati-host-bootstrap.md`) requires this file to keep containing the literal strings `bootstrap_session`, `reflect`, `recall`, `observe`, `FastMCP instructions`, `mind_contract_available`. Task 4.5 preserves all six.
 
@@ -1455,7 +1568,7 @@ git commit -m "docs: add mind-body split section to system overview"
 
 ### Task 5.2: Create docs/architecture/identity-and-token-flow.md
 
-**Source mapping:** `src/entrabot/auth/` (certificate JWT builder, MSAL delegated), `src/entrabot/identity/` (state machine), `src/entrabot/tools/teams.py::acquire_agent_user_token` (three-hop flow), `src/entrabot/a365/tokens.py` (parallel Agent 365 hop), `docs/decisions/003-certificate-auth-over-client-secrets.md` (now `docs/project/decisions/003-...`).
+**Source mapping:** `src/entrabot/auth/` (certificate JWT builder, MSAL delegated), `src/entrabot/identity/` (state machine), `src/entrabot/tools/teams.py::acquire_agent_user_token` (three-hop flow), `src/entrabot/a365/tokens.py` (parallel Agent 365 hop), `engineering-history/decisions/003-certificate-auth-over-client-secrets.md` (historical ADR-003, not published — its rationale is distilled inline below).
 
 - [ ] **Step 1: Write the page**
 
@@ -1472,9 +1585,9 @@ Entrabot's Agent User authentication is a single function, `acquire_agent_user_t
 
 A parallel fourth hop (`acquire_agent_user_storage_token` in `src/entrabot/a365/tokens.py` and the storage backend) exchanges against `https://storage.azure.com/.default` for Azure Blob Storage access when cloud memory is enabled.
 
-## Certificate-based JWT assertions (ADR-003)
+## Certificate-based JWT assertions
 
-Client secrets are never used for Hop 1. `src/entrabot/auth/` builds a JWT assertion signed by a private key that never leaves the OS keystore (Keychain on macOS, Certificate Store/TPM on Windows, Secret Service/Keyring on Linux). See [ADR-003: Certificate Auth over Client Secrets](../project/decisions/003-certificate-auth-over-client-secrets.md) for why this was chosen over secrets.
+Client secrets are never used for Hop 1. `src/entrabot/auth/` builds a JWT assertion signed by a private key that never leaves the OS keystore (Keychain on macOS, Certificate Store/TPM on Windows, Secret Service/Keyring on Linux). This design was chosen over client secrets (historical ADR-003, archived at `engineering-history/decisions/003-certificate-auth-over-client-secrets.md`, not published) because secrets are long-lived, transferable, and routinely leak via logs, config files, and CI variables, whereas a private key bound to the OS keystore never leaves the device and cannot be exfiltrated by copying a string.
 
 ## Token refresh
 
@@ -1582,7 +1695,7 @@ git commit -m "docs: add messaging and channel delivery architecture page"
 
 ### Task 5.5: Create docs/architecture/storage-and-memory.md
 
-**Source mapping:** `src/entrabot/storage/{backend,blob,migration,persona}.py`, `docs/guides/storage-configuration.md` (existing, stays — cross-link, do not duplicate its full content), `docs/project/decisions/005-cloud-hosted-memory.md`.
+**Source mapping:** `src/entrabot/storage/{backend,blob,migration,persona}.py`, `docs/guides/storage-configuration.md` (existing, stays — cross-link, do not duplicate its full content), `engineering-history/decisions/005-cloud-hosted-memory.md` (historical ADR-005, not published — its phase history is distilled inline below).
 
 - [ ] **Step 1: Write the page**
 
@@ -1602,9 +1715,9 @@ Two independent memory systems exist side by side:
 2. `ENTRABOT_BLOB_ENDPOINT` + `ENTRABOT_BLOB_CONTAINER` set → `BlobBackend`
 3. Neither → `LocalBackend` (the default; cloud storage is opt-in)
 
-## Cloud memory (ADR-005)
+## Cloud memory
 
-When enabled via `./scripts/setup.sh --use-cloud-memory`, operational memory is written to Azure Blob Storage through a parallel storage-scope token hop (`acquire_agent_user_storage_token`, see [Identity and Token Flow](identity-and-token-flow.md)). `src/entrabot/storage/blob.py` implements the async client (put/get/list/delete/exists, ETag-based optimistic concurrency, 401 → `TokenExpiredError`). `src/entrabot/storage/migration.py` provides an idempotent, source-preserving migration from local files to blob storage, run automatically by `scripts/setup.sh` when switching backends. See [ADR-005: Cloud-Hosted Memory](../project/decisions/005-cloud-hosted-memory.md) for the full phase history and [Storage Configuration and Migration](../guides/storage-configuration.md) for the operator walkthrough.
+When enabled via `./scripts/setup.sh --use-cloud-memory`, operational memory is written to Azure Blob Storage through a parallel storage-scope token hop (`acquire_agent_user_storage_token`, see [Identity and Token Flow](identity-and-token-flow.md)). `src/entrabot/storage/blob.py` implements the async client (put/get/list/delete/exists, ETag-based optimistic concurrency, 401 → `TokenExpiredError`). `src/entrabot/storage/migration.py` provides an idempotent, source-preserving migration from local files to blob storage, run automatically by `scripts/setup.sh` when switching backends. This capability shipped in phases (resource provisioning, RBAC scoped to the Agent User, idempotent migration with a fallback to local storage on failure — historical ADR-005, archived at `engineering-history/decisions/005-cloud-hosted-memory.md`, not published); see [Storage Configuration and Migration](../guides/storage-configuration.md) for the operator walkthrough.
 
 ## Persona-sati memory (mind, not body)
 
@@ -1694,7 +1807,7 @@ See [Platform Docs](../platform-docs/agent-id-blueprints-and-users.md) for OS-sp
 
 ## Windows-specific tooling
 
-Windows has parallel setup, teardown, and certificate scripts (`scripts/setup-windows.ps1`, `scripts/setup-windows.cmd`, `scripts/teardown-windows.ps1`, `scripts/deploy-windows.ps1`, `scripts/generate_windows_cert.py`, `scripts/rotate_cert_windows.ps1`) because certificate handling and service installation differ fundamentally from the Unix keychain model. See [Reference: Scripts Overview](../reference/scripts/index.md) for the full list.
+Windows has parallel setup, teardown, and certificate scripts (`scripts/setup-windows.ps1`, `scripts/setup-windows.cmd`, `scripts/teardown-windows.ps1`, `scripts/deploy-windows.ps1`, `scripts/generate_windows_cert.py`, `scripts/rotate_cert_windows.py`) because certificate handling and service installation differ fundamentally from the Unix keychain model. See [Reference: Scripts Overview](../reference/scripts/index.md) for the full list.
 
 ## Sandboxing status
 
@@ -1843,9 +1956,10 @@ git commit -m "docs: replace mcp-messaging-servers.md and mcp-close-the-loop.md 
 ## Phase 7: Rebuild functional reference; task-oriented troubleshooting
 
 **Files:**
+- Move: `docs/reference/api/mcp-tools.md` → `docs/reference/mcp-tools.md` (canonical path; see Task 7.0 — the existing `docs/reference/mcp-tools.md` is only a 5-line redirect stub today and is overwritten by this move)
 - Create: `docs/reference/configuration.md` (functional reference version of `docs/guides/configuration.md`, cross-linked not duplicated)
 - Create: `docs/reference/api/security.md` (new — `src/entrabot/security/xpia.py` currently has no reference page)
-- Keep as-is: `docs/reference/api/{audit,auth,body-prompt,efferent-copy,identity,mcp-tools,storage-backends}.md`, `docs/reference/token-flows.md`
+- Keep as-is: `docs/reference/api/{audit,auth,body-prompt,efferent-copy,identity,storage-backends}.md`, `docs/reference/token-flows.md`
 - Create: `docs/troubleshooting/index.md`
 - Create: `docs/troubleshooting/setup-and-authentication.md`
 - Create: `docs/troubleshooting/teams-and-email.md`
@@ -1854,6 +1968,32 @@ git commit -m "docs: replace mcp-messaging-servers.md and mcp-close-the-loop.md 
 - Create: `docs/troubleshooting/mcp-connectivity.md`
 - Create: `docs/troubleshooting/migrations-and-upgrades.md`
 - (Archived in Phase 9, not this phase): `docs/runbooks/hard-won-learnings.md` (70 learnings, append-only), `docs/runbooks/mcp-disconnect-investigation.md` (RESOLVED 2026-04-28), `docs/runbooks/cert-auth-migration.md`, `docs/runbooks/windows-setup.md`
+
+### Task 7.0: Consolidate the MCP tool reference at its canonical path, docs/reference/mcp-tools.md
+
+Today, `docs/reference/mcp-tools.md` is a 5-line stub that redirects to `docs/reference/api/mcp-tools.md`, which holds the real 485-line catalog. The approved redesign makes `docs/reference/mcp-tools.md` the canonical page — it is a first-class Reference item, not an "API" sub-page — so the real content moves up one level and the stub's old target is retired.
+
+- [ ] **Step 1: Move the real content over the stub**
+
+```bash
+git rm docs/reference/mcp-tools.md
+git mv docs/reference/api/mcp-tools.md docs/reference/mcp-tools.md
+```
+
+- [ ] **Step 2: Confirm no remaining page under docs/ links to the old api/ path**
+
+```bash
+grep -rn "reference/api/mcp-tools" docs/
+```
+
+Expected: no output.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add -A docs/reference
+git commit -m "docs: consolidate MCP tool reference at canonical docs/reference/mcp-tools.md"
+```
 
 ### Task 7.1: Create docs/reference/configuration.md
 
@@ -2049,7 +2189,7 @@ cat docs/runbooks/windows-setup.md
 
 ## Rotating a certificate on Windows
 
-**Fix:** Use `scripts/rotate_cert_windows.ps1`, which generates a new certificate via the same Key Storage Provider, updates the Blueprint's key credential in Entra, and only removes the old certificate after confirming the new one authenticates successfully.
+**Fix:** Use `scripts/rotate_cert_windows.py`, which generates a new certificate via the same Key Storage Provider, updates the Blueprint's key credential in Entra, and only removes the old certificate after confirming the new one authenticates successfully.
 
 ## Deploying or updating the MCP server on Windows
 
@@ -2069,7 +2209,7 @@ git commit -m "docs: add Windows troubleshooting page"
 
 ### Task 7.7: Create docs/troubleshooting/storage.md
 
-**Source mapping:** `docs/guides/storage-configuration.md` (existing — cross-link, do not duplicate), `docs/project/decisions/005-cloud-hosted-memory.md`.
+**Source mapping:** `docs/guides/storage-configuration.md` (existing — cross-link, do not duplicate), `engineering-history/decisions/005-cloud-hosted-memory.md` (historical ADR-005, not published).
 
 - [ ] **Step 1: Write the page**
 
@@ -2866,28 +3006,27 @@ git commit -m "docs: archive grouped script-reference pages, superseded by per-c
 
 ## Phase 9: Move remaining historical content out of docs/; delete true duplicates
 
-This phase handles every remaining file under `docs/` that Phases 1–8 have not already moved, archived, or superseded. `docs/project/decisions/` (Task 3.5), `docs/platform-docs/` (Phase 6), and `docs/reference/scripts/` grouped pages (Task 8.4) are already done — this phase covers the rest.
+This phase handles every remaining file under `docs/` that Phases 1–8 have not already moved, archived, or superseded. `engineering-history/decisions/` (Task 3.5, ADRs archived, not published), `docs/platform-docs/` (Phase 6), and `docs/reference/scripts/` grouped pages (Task 8.4) are already done — this phase covers the rest.
 
 ### Full disposition table
 
 | Source path | Disposition | Destination / reason |
 | --- | --- | --- |
 | `docs/AGENT-PROMPT-persona-sati-integration.md` | Delete | Agent-authored planning prompt; current facts already captured in `docs/clients/persona-sati-host-bootstrap.md` |
-| `docs/AGENT-PROMPT-provisioner-cert-auth.md` | Delete | Agent-authored planning prompt; current facts already captured in ADR-003 and `architecture/identity-and-token-flow.md` |
+| `docs/AGENT-PROMPT-provisioner-cert-auth.md` | Delete | Agent-authored planning prompt; current facts already captured in `architecture/identity-and-token-flow.md` (historical ADR-003 rationale distilled there) |
 | `docs/TODO-persona-sati-host-bootstrap.md` | Delete | Superseded TODO note; bootstrap protocol has shipped |
 | `docs/TODO-persona-sati-integration.md` | Delete | Explicitly marked historical in `CLAUDE.md`; integration has shipped |
-| `docs/claude-copilot-cli-channel-port.md` | Delete | Superseded by `clients/overview.md` + `clients/claude-code.md` + `clients/copilot-cli.md` (mandatory redirect: `claude-copilot-cli-channel-port.md` → `clients/overview.md`) |
 | `docs/claude-windows-port.md` | Delete | Superseded by `troubleshooting/windows.md` + `architecture/windows-and-platforms.md` |
 | `docs/openai-copilot-cli-notifications.md` | Delete | Superseded by `clients/copilot-cli.md` |
 | `docs/openai-windows-agent-identity-port.md` | Delete | Superseded by `architecture/windows-and-platforms.md` |
-| `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` | Delete | Landed feature, content fully folded into `architecture/messaging-and-delivery.md` (mandatory redirect target) |
-| `docs/architecture/PLAN-windows-port.md` | Delete | Landed feature, content fully folded into `architecture/windows-and-platforms.md` (mandatory redirect target) |
-| `docs/architecture/PLAN-agent-identity-by-upn.md` | Delete | Landed feature, content fully folded into `architecture/identity-and-token-flow.md` (mandatory redirect target) |
-| `docs/architecture/PLAN-xpia-content-wrapping.md` | Delete | Landed feature, content fully folded into `architecture/security-boundaries.md` (mandatory redirect target) |
-| `docs/architecture/DESIGN-persona-sati-integration.md` | Delete | Content fully folded into `system-overview.md`'s Mind-Body Split section |
 | `docs/architecture/enforcement-flow.md` | Delete | Content fully folded into `architecture/security-boundaries.md` |
-| `docs/architecture/next-mcp-server-design.md` | Delete | Landed, content folded into `architecture/mcp-runtime.md` (mandatory redirect target) |
-| `docs/reference/mcp-tools.md` | Delete | 5-line redirect stub; canonical content already lives at `reference/api/mcp-tools.md`, which is already in nav |
+| `docs/claude-copilot-cli-channel-port.md` | Move (required historical migration, not a duplicate) | `engineering-history/plans/claude-copilot-cli-channel-port.md`; facts folded into `clients/overview.md` + `clients/claude-code.md` + `clients/copilot-cli.md` (mandatory redirect: `claude-copilot-cli-channel-port.md` → `clients/overview.md`) |
+| `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` | Move (required historical migration, not a duplicate) | `engineering-history/plans/NEXT-WhatsApp-lightweight-teams-chat.md`; landed feature, facts folded into `architecture/messaging-and-delivery.md` (mandatory redirect target) |
+| `docs/architecture/PLAN-windows-port.md` | Move (required historical migration, not a duplicate) | `engineering-history/plans/PLAN-windows-port.md`; landed feature, facts folded into `architecture/windows-and-platforms.md` (mandatory redirect target) |
+| `docs/architecture/PLAN-agent-identity-by-upn.md` | Move (required historical migration, not a duplicate) | `engineering-history/plans/PLAN-agent-identity-by-upn.md`; landed feature, facts folded into `architecture/identity-and-token-flow.md` (mandatory redirect target) |
+| `docs/architecture/PLAN-xpia-content-wrapping.md` | Move (required historical migration, not a duplicate) | `engineering-history/plans/PLAN-xpia-content-wrapping.md`; landed feature, facts folded into `architecture/security-boundaries.md` (mandatory redirect target) |
+| `docs/architecture/DESIGN-persona-sati-integration.md` | Move (required historical migration, not a duplicate) | `engineering-history/architecture/DESIGN-persona-sati-integration.md`; facts folded into `system-overview.md`'s Mind-Body Split section (mandatory redirect target) |
+| `docs/architecture/next-mcp-server-design.md` | Move (required historical migration, not a duplicate) | `engineering-history/plans/next-mcp-server-design.md`; landed, facts folded into `architecture/mcp-runtime.md` (mandatory redirect target) |
 | `docs/PLAN-mind-body-nervous-system-phase-3.md` | Move | `engineering-history/plans/PLAN-mind-body-nervous-system-phase-3.md` |
 | `docs/PLAN-persona-sati-bootstrap-phases-1-2.md` | Move | `engineering-history/plans/PLAN-persona-sati-bootstrap-phases-1-2.md` |
 | `docs/SECURITY-DEBT-PROVISIONER-SECRET.md` | Move | `engineering-history/investigations/SECURITY-DEBT-PROVISIONER-SECRET.md` |
@@ -2918,6 +3057,8 @@ This phase handles every remaining file under `docs/` that Phases 1–8 have not
 | `docs/runbooks/cert-auth-migration.md` | Move | `engineering-history/investigations/cert-auth-migration.md` |
 | `docs/runbooks/windows-setup.md` | Move | `engineering-history/investigations/windows-setup.md` |
 
+`docs/reference/mcp-tools.md` and `docs/reference/api/mcp-tools.md` do not appear in this table: Task 7.0 (Phase 7) already consolidates them into the single canonical `docs/reference/mcp-tools.md` before this phase runs, so neither path is "remaining" by the time Phase 9 executes.
+
 ### Task 9.1: Create the engineering-history subdirectory structure
 
 - [ ] **Step 1: Create every destination directory**
@@ -2925,6 +3066,7 @@ This phase handles every remaining file under `docs/` that Phases 1–8 have not
 ```bash
 mkdir -p engineering-history/architecture engineering-history/investigations engineering-history/research engineering-history/prompts
 # engineering-history/plans/ and engineering-history/specs/ already exist (this plan and the source spec live there)
+# engineering-history/decisions/ already exists (created in Task 3.5, which archived the ADRs)
 ```
 
 - [ ] **Step 2: Commit**
@@ -2934,7 +3076,7 @@ git add -A engineering-history
 git commit -m "chore: create engineering-history subdirectories for historical migration" --allow-empty
 ```
 
-### Task 9.2: Delete the 16 superseded/duplicate files (facts already extracted into new pages in Phases 3-8)
+### Task 9.2: Delete the 8 superseded/duplicate files (facts already extracted into new pages in Phases 3-8)
 
 - [ ] **Step 1: Confirm every deletion target's content is represented somewhere in the new tree before deleting (spot-check three)**
 
@@ -2946,34 +3088,26 @@ grep -l "XPIA\|cross-prompt injection" docs/architecture/security-boundaries.md
 
 Expected: each grep prints the expected filename(s), confirming the facts survived the fold-in.
 
-- [ ] **Step 2: Delete the 16 files**
+- [ ] **Step 2: Delete the 8 files that are pure duplicates or fully-superseded working notes (not part of the required historical-migration list — see Task 9.3 for the files that must be archived instead of deleted)**
 
 ```bash
 git rm docs/AGENT-PROMPT-persona-sati-integration.md
 git rm docs/AGENT-PROMPT-provisioner-cert-auth.md
 git rm docs/TODO-persona-sati-host-bootstrap.md
 git rm docs/TODO-persona-sati-integration.md
-git rm docs/claude-copilot-cli-channel-port.md
 git rm docs/claude-windows-port.md
 git rm docs/openai-copilot-cli-notifications.md
 git rm docs/openai-windows-agent-identity-port.md
-git rm docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md
-git rm docs/architecture/PLAN-windows-port.md
-git rm docs/architecture/PLAN-agent-identity-by-upn.md
-git rm docs/architecture/PLAN-xpia-content-wrapping.md
-git rm docs/architecture/DESIGN-persona-sati-integration.md
 git rm docs/architecture/enforcement-flow.md
-git rm docs/architecture/next-mcp-server-design.md
-git rm docs/reference/mcp-tools.md
 ```
 
-- [ ] **Step 3: Run the Phase 1 forbidden-prefix and legacy-paths tests — both should show significant progress**
+- [ ] **Step 3: Run the Phase 1 forbidden-prefix and legacy-paths tests — both should show progress**
 
 ```bash
 pytest tests/docs/test_no_historical_prefixes.py tests/docs/test_legacy_paths_removed.py -v
 ```
 
-Expected: `test_no_historical_prefixes.py` still fails (files moved, not yet deleted, still exist elsewhere in `docs/` — Task 9.3 finishes the job); `test_legacy_paths_removed.py` should now PASS for all 6 explicitly-listed legacy paths.
+Expected: `test_no_historical_prefixes.py` still fails (many prefixed files remain — Task 9.3 finishes the job); `test_legacy_paths_removed.py` still fails until Task 9.3 archives `architecture/PLAN-windows-port.md`, `architecture/next-mcp-server-design.md`, `claude-copilot-cli-channel-port.md`, and `architecture/NEXT-WhatsApp-lightweight-teams-chat.md` out of `docs/`.
 
 - [ ] **Step 4: Commit**
 
@@ -2981,13 +3115,19 @@ Expected: `test_no_historical_prefixes.py` still fails (files moved, not yet del
 git commit -m "docs: delete superseded/duplicate historical files after folding facts into new pages"
 ```
 
-### Task 9.3: Move the remaining 27 files to engineering-history
+### Task 9.3: Archive the remaining 34 files to engineering-history (includes the 7 files that must be preserved, not deleted, per the approved spec's required migrations)
 
-- [ ] **Step 1: Plans (10 files)**
+- [ ] **Step 1: Plans (16 files)**
 
 ```bash
 git mv docs/PLAN-mind-body-nervous-system-phase-3.md engineering-history/plans/PLAN-mind-body-nervous-system-phase-3.md
 git mv docs/PLAN-persona-sati-bootstrap-phases-1-2.md engineering-history/plans/PLAN-persona-sati-bootstrap-phases-1-2.md
+git mv docs/claude-copilot-cli-channel-port.md engineering-history/plans/claude-copilot-cli-channel-port.md
+git mv docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md engineering-history/plans/NEXT-WhatsApp-lightweight-teams-chat.md
+git mv docs/architecture/PLAN-windows-port.md engineering-history/plans/PLAN-windows-port.md
+git mv docs/architecture/PLAN-agent-identity-by-upn.md engineering-history/plans/PLAN-agent-identity-by-upn.md
+git mv docs/architecture/PLAN-xpia-content-wrapping.md engineering-history/plans/PLAN-xpia-content-wrapping.md
+git mv docs/architecture/next-mcp-server-design.md engineering-history/plans/next-mcp-server-design.md
 git mv docs/architecture/next-tenant-identity-setup.md engineering-history/plans/next-tenant-identity-setup.md
 git mv docs/architecture/next-windows-dev-environment.md engineering-history/plans/next-windows-dev-environment.md
 git mv docs/architecture/PLAN-entrabot-new-features.md engineering-history/plans/PLAN-entrabot-new-features.md
@@ -3013,13 +3153,13 @@ git mv docs/SECURITY-DEBT-PROVISIONER-SECRET.md engineering-history/investigatio
 git mv docs/runbooks/mcp-disconnect-investigation.md engineering-history/investigations/mcp-disconnect-investigation.md
 git mv docs/runbooks/cert-auth-migration.md engineering-history/investigations/cert-auth-migration.md
 git mv docs/runbooks/windows-setup.md engineering-history/investigations/windows-setup.md
-rmdir docs/runbooks
 ```
 
-- [ ] **Step 4: Architecture (1 file)**
+- [ ] **Step 4: Architecture (2 files)**
 
 ```bash
 git mv docs/architecture/DESIGN-multi-instance-cursor-consistency.md engineering-history/architecture/DESIGN-multi-instance-cursor-consistency.md
+git mv docs/architecture/DESIGN-persona-sati-integration.md engineering-history/architecture/DESIGN-persona-sati-integration.md
 ```
 
 - [ ] **Step 5: Research (9 files)**
@@ -3037,9 +3177,10 @@ git mv docs/platform-docs/teams-bot-framework.md engineering-history/research/te
 git mv docs/platform-docs/teams-toolkit.md engineering-history/research/teams-toolkit.md
 git mv docs/platform-docs/mxc-windows-sandbox.md engineering-history/research/mxc-windows-sandbox.md
 git mv docs/runbooks/hard-won-learnings.md engineering-history/research/hard-won-learnings.md
+rmdir docs/runbooks
 ```
 
-Note: the second `rmdir docs/runbooks` here is a no-op guard in case Step 3's `rmdir` ran before this step's `git mv` populated it again — reorder if your shell reports "directory not empty"; run `git mv` calls first, `rmdir` last, per directory.
+Note: `rmdir docs/runbooks` is repeated at the end of Step 5 as a guard in case Step 3's `git mv` calls leave the directory non-empty until Step 5's `hard-won-learnings.md` move completes; run all `git mv` calls in a directory before its `rmdir`, and re-run `rmdir` once more here if your shell reports "directory not empty" after Step 3.
 
 - [ ] **Step 6: Prompts (1 file)**
 
@@ -3052,16 +3193,16 @@ rmdir docs/prompts
 
 ```bash
 find docs -type d -empty
-pytest tests/docs/test_no_historical_prefixes.py -v
+pytest tests/docs/test_no_historical_prefixes.py tests/docs/test_legacy_paths_removed.py -v
 ```
 
-Expected: no output from `find` (no empty directories); `test_no_historical_prefixes.py` PASSES.
+Expected: no output from `find` (no empty directories); both tests PASS.
 
 - [ ] **Step 8: Commit**
 
 ```bash
 git add -A docs engineering-history
-git commit -m "docs: move remaining historical plans, specs, investigations, research, and prompts to engineering-history"
+git commit -m "docs: archive remaining historical plans, specs, decisions, investigations, research, and prompts to engineering-history"
 ```
 
 ### Task 9.4: Re-run the full Phase 1 docs test suite to confirm migration progress
@@ -3130,8 +3271,10 @@ nav:
   - Home: index.md
   - Getting Started:
       - Quickstart: getting-started/quickstart.md
-      - Installation: getting-started/installation.md
-      - Your First Agent User: getting-started/first-agent-user.md
+      - Prerequisites: getting-started/prerequisites.md
+      - macOS and Linux: getting-started/macos-linux.md
+      - Windows: getting-started/windows.md
+      - Verify Your Agent Identity: getting-started/verify.md
   - Guides:
       - Configuration Reference: guides/configuration.md
       - Storage Configuration and Migration: guides/storage-configuration.md
@@ -3171,6 +3314,7 @@ nav:
       - Linux: platform-docs/platform-linux.md
       - Windows: platform-docs/platform-windows.md
   - Reference:
+      - MCP Tools: reference/mcp-tools.md
       - Configuration: reference/configuration.md
       - Token Flows: reference/token-flows.md
       - Scripts:
@@ -3225,7 +3369,6 @@ nav:
               - list_agent_identities.py: reference/scripts/diagnostics/list-agent-identities-py.md
               - list_sponsors.py: reference/scripts/diagnostics/list-sponsors-py.md
       - API:
-          - MCP Tools: reference/api/mcp-tools.md
           - Storage Backends: reference/api/storage-backends.md
           - Authentication: reference/api/auth.md
           - Identity: reference/api/identity.md
@@ -3242,15 +3385,8 @@ nav:
       - MCP Connectivity: troubleshooting/mcp-connectivity.md
       - Migrations and Upgrades: troubleshooting/migrations-and-upgrades.md
   - Project:
-      - Engineering Status: project/engineering-status.md
+      - Current Status: project/status.md
       - Changelog: project/changelog.md
-      - Decisions:
-          - Index: project/decisions/README.md
-          - ADR-001 OBO Flows: project/decisions/001-obo-flows-for-device-agents.md
-          - ADR-002 Agent User over OBO: project/decisions/002-agent-user-over-obo.md
-          - ADR-003 Certificate Auth: project/decisions/003-certificate-auth-over-client-secrets.md
-          - ADR-005 Cloud Memory: project/decisions/005-cloud-hosted-memory.md
-          - ADR-006 Remove Bot Gateway: project/decisions/006-remove-bot-gateway-mode.md
 ```
 
 **Note:** `status.sh` and `status-windows.ps1` are documented as two separate generated pages (`reference/scripts/operations/status-sh.md` and `reference/scripts/operations/status-windows-ps1.md`) and therefore need two separate nav entries — both must appear per Task 1.6's all-pages-in-nav test.
@@ -3261,7 +3397,7 @@ nav:
 pytest tests/docs/test_nav_targets_exist.py tests/docs/test_all_pages_in_nav.py -v
 ```
 
-Expected: both PASS. If `test_all_pages_in_nav.py` still reports orphans, cross-check the reported paths against the nav block above — every one of the 42 generated script pages, both API pages, all guide/client/architecture/platform-docs/troubleshooting/project pages must be present. Add any missing line and re-run until green.
+Expected: both PASS. If `test_all_pages_in_nav.py` still reports orphans, cross-check the reported paths against the nav block above — every one of the 42 generated script pages, the relocated MCP Tools page, the new Security (XPIA) API page, all guide/client/architecture/platform-docs/troubleshooting/project pages must be present. Add any missing line and re-run until green.
 
 - [ ] **Step 3: Run the full docs suite (redirects test is still expected to fail — Phase 11)**
 
@@ -3313,7 +3449,7 @@ git commit -m "docs: rebuild mkdocs.yml nav with 9 top-level sections"
 | `architecture/SPEC-dual-track-agent-identity.md` | `architecture/identity-and-token-flow.md` |
 | `architecture/PLAN-multi-tenant-lightweight-chat.md` | `architecture/messaging-and-delivery.md` |
 | `architecture/next-tenant-identity-setup.md` | `architecture/identity-and-token-flow.md` |
-| `architecture/PLAN-files-mcp-tools.md` | `reference/api/mcp-tools.md` |
+| `architecture/PLAN-files-mcp-tools.md` | `reference/mcp-tools.md` |
 | `architecture/PLAN-files-llm-authoring-v2.md` | `guides/files-and-work-iq.md` |
 | `architecture/next-windows-dev-environment.md` | `troubleshooting/windows.md` |
 | `architecture/FOURPAGER-entrabot-cli-teams-augmented-token.md` | `architecture/identity-and-token-flow.md` |
@@ -3329,13 +3465,13 @@ git commit -m "docs: rebuild mkdocs.yml nav with 9 top-level sections"
 | `SECURITY-DEBT-PROVISIONER-SECRET.md` | `architecture/identity-and-token-flow.md` |
 | `plans/persona-persistence.md` | `architecture/storage-and-memory.md` |
 | `prompts/multi-tenant-lightweight-chat-planning-prompt.md` | `architecture/messaging-and-delivery.md` |
-| `engineering-status.md` | `project/engineering-status.md` |
-| `decisions/README.md` | `project/decisions/README.md` |
-| `decisions/001-obo-flows-for-device-agents.md` | `project/decisions/001-obo-flows-for-device-agents.md` |
-| `decisions/002-agent-user-over-obo.md` | `project/decisions/002-agent-user-over-obo.md` |
-| `decisions/003-certificate-auth-over-client-secrets.md` | `project/decisions/003-certificate-auth-over-client-secrets.md` |
-| `decisions/005-cloud-hosted-memory.md` | `project/decisions/005-cloud-hosted-memory.md` |
-| `decisions/006-remove-bot-gateway-mode.md` | `project/decisions/006-remove-bot-gateway-mode.md` |
+| `engineering-status.md` | `project/status.md` |
+| `decisions/README.md` | `architecture/system-overview.md` |
+| `decisions/001-obo-flows-for-device-agents.md` | `architecture/identity-and-token-flow.md` |
+| `decisions/002-agent-user-over-obo.md` | `architecture/identity-and-token-flow.md` |
+| `decisions/003-certificate-auth-over-client-secrets.md` | `architecture/identity-and-token-flow.md` |
+| `decisions/005-cloud-hosted-memory.md` | `architecture/storage-and-memory.md` |
+| `decisions/006-remove-bot-gateway-mode.md` | `architecture/messaging-and-delivery.md` |
 | `platform-learnings/agent-id-blueprints-and-users.md` | `platform-docs/agent-id-blueprints-and-users.md` |
 | `platform-learnings/entra-agent-users.md` | `platform-docs/entra-agent-users.md` |
 | `platform-learnings/microsoft-agent-365.md` | `platform-docs/microsoft-agent-365.md` |
@@ -3354,7 +3490,7 @@ git commit -m "docs: rebuild mkdocs.yml nav with 9 top-level sections"
 | `platform-learnings/teams-bot-framework.md` | `platform-docs/teams-graph-api.md` |
 | `platform-learnings/teams-toolkit.md` | `platform-docs/teams-graph-api.md` |
 | `platform-learnings/mxc-windows-sandbox.md` | `architecture/windows-and-platforms.md` |
-| `reference/mcp-tools.md` | `reference/api/mcp-tools.md` |
+| `reference/api/mcp-tools.md` | `reference/mcp-tools.md` |
 | `reference/scripts/setup.md` | `reference/scripts/index.md` |
 | `reference/scripts/provisioning.md` | `reference/scripts/index.md` |
 | `reference/scripts/auth-and-certs.md` | `reference/scripts/index.md` |
@@ -3367,10 +3503,10 @@ git commit -m "docs: rebuild mkdocs.yml nav with 9 top-level sections"
 | `runbooks/mcp-disconnect-investigation.md` | `troubleshooting/mcp-connectivity.md` |
 | `runbooks/cert-auth-migration.md` | `troubleshooting/setup-and-authentication.md` |
 | `runbooks/windows-setup.md` | `troubleshooting/windows.md` |
-| `developer/docs-site.md` | `project/engineering-status.md` |
-| `developer/qa-log.md` | `project/engineering-status.md` |
+| `developer/docs-site.md` | `project/status.md` |
+| `developer/qa-log.md` | `project/status.md` |
 
-That is 66 redirect entries, covering the 6 mandatory ones plus every other removed/renamed public URL from Phases 3–9.
+That is 71 redirect entries, covering the 8 mandatory historical migrations (per the approved spec) plus every other removed/renamed public URL from Phases 3–9.
 
 ### Task 11.1: Populate the redirect_maps block in mkdocs.yml
 
@@ -3403,7 +3539,7 @@ plugins:
         architecture/SPEC-dual-track-agent-identity.md: architecture/identity-and-token-flow.md
         architecture/PLAN-multi-tenant-lightweight-chat.md: architecture/messaging-and-delivery.md
         architecture/next-tenant-identity-setup.md: architecture/identity-and-token-flow.md
-        architecture/PLAN-files-mcp-tools.md: reference/api/mcp-tools.md
+        architecture/PLAN-files-mcp-tools.md: reference/mcp-tools.md
         architecture/PLAN-files-llm-authoring-v2.md: guides/files-and-work-iq.md
         architecture/next-windows-dev-environment.md: troubleshooting/windows.md
         architecture/FOURPAGER-entrabot-cli-teams-augmented-token.md: architecture/identity-and-token-flow.md
@@ -3419,13 +3555,13 @@ plugins:
         SECURITY-DEBT-PROVISIONER-SECRET.md: architecture/identity-and-token-flow.md
         plans/persona-persistence.md: architecture/storage-and-memory.md
         prompts/multi-tenant-lightweight-chat-planning-prompt.md: architecture/messaging-and-delivery.md
-        engineering-status.md: project/engineering-status.md
-        decisions/README.md: project/decisions/README.md
-        decisions/001-obo-flows-for-device-agents.md: project/decisions/001-obo-flows-for-device-agents.md
-        decisions/002-agent-user-over-obo.md: project/decisions/002-agent-user-over-obo.md
-        decisions/003-certificate-auth-over-client-secrets.md: project/decisions/003-certificate-auth-over-client-secrets.md
-        decisions/005-cloud-hosted-memory.md: project/decisions/005-cloud-hosted-memory.md
-        decisions/006-remove-bot-gateway-mode.md: project/decisions/006-remove-bot-gateway-mode.md
+        engineering-status.md: project/status.md
+        decisions/README.md: architecture/system-overview.md
+        decisions/001-obo-flows-for-device-agents.md: architecture/identity-and-token-flow.md
+        decisions/002-agent-user-over-obo.md: architecture/identity-and-token-flow.md
+        decisions/003-certificate-auth-over-client-secrets.md: architecture/identity-and-token-flow.md
+        decisions/005-cloud-hosted-memory.md: architecture/storage-and-memory.md
+        decisions/006-remove-bot-gateway-mode.md: architecture/messaging-and-delivery.md
         platform-learnings/agent-id-blueprints-and-users.md: platform-docs/agent-id-blueprints-and-users.md
         platform-learnings/entra-agent-users.md: platform-docs/entra-agent-users.md
         platform-learnings/microsoft-agent-365.md: platform-docs/microsoft-agent-365.md
@@ -3444,7 +3580,7 @@ plugins:
         platform-learnings/teams-bot-framework.md: platform-docs/teams-graph-api.md
         platform-learnings/teams-toolkit.md: platform-docs/teams-graph-api.md
         platform-learnings/mxc-windows-sandbox.md: architecture/windows-and-platforms.md
-        reference/mcp-tools.md: reference/api/mcp-tools.md
+        reference/api/mcp-tools.md: reference/mcp-tools.md
         reference/scripts/setup.md: reference/scripts/index.md
         reference/scripts/provisioning.md: reference/scripts/index.md
         reference/scripts/auth-and-certs.md: reference/scripts/index.md
@@ -3457,11 +3593,11 @@ plugins:
         runbooks/mcp-disconnect-investigation.md: troubleshooting/mcp-connectivity.md
         runbooks/cert-auth-migration.md: troubleshooting/setup-and-authentication.md
         runbooks/windows-setup.md: troubleshooting/windows.md
-        developer/docs-site.md: project/engineering-status.md
-        developer/qa-log.md: project/engineering-status.md
+        developer/docs-site.md: project/status.md
+        developer/qa-log.md: project/status.md
 ```
 
-- [ ] **Step 2: Validate the YAML parses and has exactly 66 entries**
+- [ ] **Step 2: Validate the YAML parses and has exactly 71 entries**
 
 ```bash
 python3 -c "
@@ -3472,12 +3608,12 @@ for p in data['plugins']:
     if isinstance(p, dict) and 'redirects' in p:
         maps = p['redirects']['redirect_maps']
 assert maps is not None, 'redirects plugin not found'
-assert len(maps) == 66, len(maps)
+assert len(maps) == 71, len(maps)
 print('OK', len(maps))
 "
 ```
 
-Expected: `OK 66`.
+Expected: `OK 71`.
 
 - [ ] **Step 3: Run the full Phase 1 docs test suite — everything should now pass**
 
@@ -3537,7 +3673,7 @@ Old: - [Script reference](docs/reference/scripts/operations.md) — status, heal
 New: - [Script reference](docs/reference/scripts/index.md) — status, health, DM, email, setup, teardown, and diagnostic scripts
 
 Old: - [Architecture decisions](docs/decisions/README.md) — ADRs 001–006
-New: - [Architecture decisions](docs/project/decisions/README.md) — ADRs 001–006
+New: - [Architecture](docs/architecture/system-overview.md) — how the system fits together; historical ADR rationale is distilled into the architecture pages (originals archived internally at `engineering-history/decisions/`, not published)
 
 Old: - [Platform learnings](docs/platform-learnings/) — Entra Agent ID constraints, Agent 365, MSAL, OS-specific notes
 New: - [Platform docs](docs/platform-docs/) — Entra Agent ID constraints, Agent 365, MSAL, OS-specific notes
@@ -3546,16 +3682,16 @@ Old: - [Hard-won learnings](docs/runbooks/hard-won-learnings.md) — non-obvious
 New: - [Troubleshooting](docs/troubleshooting/index.md) — non-obvious gotchas; read before changing auth or Teams code
 
 Old: - [Engineering status](docs/engineering-status.md) — what's shipped, what's open, what's next
-New: - [Engineering status](docs/project/engineering-status.md) — what's shipped, what's open, what's next
+New: - [Project Status](docs/project/status.md) — what's shipped, what's open, what's next
 
 Old: Long-session MCP disconnect investigation and several scheduler/cursor precision fixes remain tracked in [`docs/engineering-status.md`](docs/engineering-status.md).
-New: Several scheduler/cursor precision fixes remain tracked in [`docs/project/engineering-status.md`](docs/project/engineering-status.md). The long-session MCP disconnect investigation is resolved — see [Troubleshooting: MCP Connectivity](docs/troubleshooting/mcp-connectivity.md).
+New: Several scheduler/cursor precision fixes remain tracked in [`docs/project/status.md`](docs/project/status.md). The long-session MCP disconnect investigation is resolved — see [Troubleshooting: MCP Connectivity](docs/troubleshooting/mcp-connectivity.md).
 ```
 
 - [ ] **Step 2: Verify no old paths remain in README.md**
 
 ```bash
-grep -nE "docs/platform-learnings|docs/runbooks|docs/decisions/|docs/architecture/(PLAN|DESIGN|NEXT|SPEC|FOURPAGER)-|docs/(claude|openai|AGENT-PROMPT|TODO)-|docs/engineering-status\.md|docs/reference/scripts/(setup|provisioning|auth-and-certs|storage|operations|diagnostics|teardown|spikes)\.md" README.md
+grep -nE "docs/platform-learnings|docs/runbooks|docs/decisions/|docs/project/decisions|docs/architecture/(PLAN|DESIGN|NEXT|SPEC|FOURPAGER)-|docs/(claude|openai|AGENT-PROMPT|TODO)-|docs/engineering-status\.md|docs/project/engineering-status\.md|docs/reference/scripts/(setup|provisioning|auth-and-certs|storage|operations|diagnostics|teardown|spikes)\.md" README.md
 ```
 
 Expected: no output.
@@ -3605,25 +3741,25 @@ Old: `docs/TODO-persona-sati-integration.md` is now historical.
 New: The historical persona-sati integration TODO has been removed; see `docs/clients/persona-sati-host-bootstrap.md` for the current protocol.
 
 Old: **ADR-005: cloud-hosted memory via Azure Blob Storage** — `docs/decisions/005-cloud-hosted-memory.md`.
-New: **ADR-005: cloud-hosted memory via Azure Blob Storage** — `docs/project/decisions/005-cloud-hosted-memory.md`.
+New: **ADR-005: cloud-hosted memory via Azure Blob Storage** (historical, archived at `engineering-history/decisions/005-cloud-hosted-memory.md`, not published — see `docs/architecture/storage-and-memory.md` for the current-state design).
 
 Old: **Up next** (see `docs/engineering-status.md`
-New: **Up next** (see `docs/project/engineering-status.md`
+New: **Up next** (see `docs/project/status.md`
 
 Old: - `docs/engineering-status.md` — current state and next steps
-New: - `docs/project/engineering-status.md` — current state and next steps
+New: - `docs/project/status.md` — current state and next steps
 
 Old: - `docs/architecture/DESIGN-persona-sati-integration.md` — mind-body split design
 New: - `docs/architecture/system-overview.md` — mind-body split design (see the "Mind-Body Split" section)
 
 Old: - `docs/decisions/005-cloud-hosted-memory.md` — cloud memory spec
-New: - `docs/project/decisions/005-cloud-hosted-memory.md` — cloud memory spec
+New: - `engineering-history/decisions/005-cloud-hosted-memory.md` — cloud memory spec (historical, not published)
 
 Old: - `docs/runbooks/hard-won-learnings.md` — read before making changes
 New: - `engineering-history/research/hard-won-learnings.md` — read before making changes
 
 Old: - `docs/decisions/`: ADRs — every significant architectural choice is recorded here
-New: - `docs/project/decisions/`: ADRs — every significant architectural choice is recorded here
+New: - `engineering-history/decisions/`: ADRs — every significant architectural choice is recorded here (historical, not published; current rationale lives in `docs/architecture/`)
 
 Old: - `docs/runbooks/hard-won-learnings.md`: hard-won learnings — READ THIS before making changes
 New: - `engineering-history/research/hard-won-learnings.md`: hard-won learnings — READ THIS before making changes
@@ -3633,7 +3769,7 @@ New: - `engineering-history/research/hard-won-learnings.md`: hard-won learnings 
 
 ```
 Old: See `docs/engineering-status.md` for the summary and `docs/architecture/DESIGN-persona-sati-integration.md` for the mind-body split design.
-New: See `docs/project/engineering-status.md` for the summary and `docs/architecture/system-overview.md` (Mind-Body Split section) for the split design.
+New: See `docs/project/status.md` for the summary and `docs/architecture/system-overview.md` (Mind-Body Split section) for the split design.
 
 Old: `docs/TODO-persona-sati-integration.md` is now historical.
 New: (same replacement as the shared block above)
@@ -3645,7 +3781,7 @@ Old: **Multi-tenant lightweight chat** — landed to `main` (commit `c8ec521`). 
 New: **Multi-tenant lightweight chat** — landed to `main` (commit `c8ec521`). See `docs/architecture/messaging-and-delivery.md`.
 
 Old: **Up next** (see `docs/engineering-status.md` "In Progress")
-New: **Up next** (see `docs/project/engineering-status.md` "In Progress")
+New: **Up next** (see `docs/project/status.md` "In Progress")
 
 Old: - **`docs/platform-learnings/agent-id-blueprints-and-users.md`** — REQUIRED reading
 New: - **`docs/platform-docs/agent-id-blueprints-and-users.md`** — REQUIRED reading
@@ -3657,16 +3793,16 @@ Old: - `docs/platform-learnings/entra-agent-users.md` — supplementary; the thr
 New: - `docs/platform-docs/entra-agent-users.md` — supplementary; the three-hop
 
 Old: - `docs/engineering-status.md` — current state, test count, next steps
-New: - `docs/project/engineering-status.md` — current state, test count, next steps
+New: - `docs/project/status.md` — current state, test count, next steps
 
 Old: - `docs/architecture/DESIGN-persona-sati-integration.md` — mind-body split design
 New: - `docs/architecture/system-overview.md` — mind-body split design
 
 Old: - `docs/decisions/005-cloud-hosted-memory.md` — cloud memory spec (phase plan + open TODOs)
-New: - `docs/project/decisions/005-cloud-hosted-memory.md` — cloud memory spec (phase plan + open TODOs)
+New: - `engineering-history/decisions/005-cloud-hosted-memory.md` — cloud memory spec (phase plan + open TODOs; historical, not published)
 
 Old: - `docs/decisions/006-remove-bot-gateway-mode.md` — why the Bot Gateway mode was removed
-New: - `docs/project/decisions/006-remove-bot-gateway-mode.md` — why the Bot Gateway mode was removed
+New: - `engineering-history/decisions/006-remove-bot-gateway-mode.md` — why the Bot Gateway mode was removed (historical, not published)
 
 Old: - `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` — delegated mode spec (landed)
 New: - `docs/architecture/messaging-and-delivery.md` — delegated mode spec (landed)
@@ -3678,10 +3814,10 @@ Old: - `docs/runbooks/hard-won-learnings.md` — read before making changes
 New: - `engineering-history/research/hard-won-learnings.md` — read before making changes
 
 Old: - `docs/decisions/001-obo-flows-for-device-agents.md`
-New: - `docs/project/decisions/001-obo-flows-for-device-agents.md`
+New: - `engineering-history/decisions/001-obo-flows-for-device-agents.md` (historical, not published)
 
 Old: - `docs/decisions/003-certificate-auth-over-client-secrets.md`
-New: - `docs/project/decisions/003-certificate-auth-over-client-secrets.md`
+New: - `engineering-history/decisions/003-certificate-auth-over-client-secrets.md` (historical, not published)
 
 Old: - `docs/platform-learnings/microsoft-agent-365.md` — A365 GA'd 2026-05-01. Identity model, Work IQ MCP catalog, four capability tiers, auth flows, gap analysis vs entrabot. Read this before considering any A365 / Work IQ integration work.
 New: - `docs/platform-docs/microsoft-agent-365.md` — A365 GA'd 2026-05-01. Identity model, Work IQ MCP catalog, four capability tiers, auth flows, gap analysis vs entrabot. Read this before considering any A365 / Work IQ integration work.
@@ -3690,7 +3826,7 @@ Old: - `docs/platform-learnings/mcp-close-the-loop.md`
 New: - `docs/platform-docs/mcp-hosts-and-transports.md`
 
 Old: - `docs/decisions/`: ADRs — every significant architectural choice is recorded here
-New: - `docs/project/decisions/`: ADRs — every significant architectural choice is recorded here
+New: - `engineering-history/decisions/`: ADRs — every significant architectural choice is recorded here (historical, not published; current rationale lives in `docs/architecture/`)
 
 Old: - `docs/runbooks/hard-won-learnings.md`: 66 hard-won learnings — READ THIS before making changes
 New: - `engineering-history/research/hard-won-learnings.md`: 70 hard-won learnings — READ THIS before making changes
@@ -3702,7 +3838,7 @@ New: - `engineering-history/investigations/mcp-disconnect-investigation.md`: RES
 - [ ] **Step 3: Verify no old paths remain in either file**
 
 ```bash
-grep -nE "docs/platform-learnings|docs/runbooks|docs/decisions/|docs/architecture/(PLAN|DESIGN|NEXT|SPEC|FOURPAGER)-|docs/(claude|openai|AGENT-PROMPT|TODO)-|docs/engineering-status\.md" AGENTS.md CLAUDE.md
+grep -nE "docs/platform-learnings|docs/runbooks|docs/decisions/|docs/project/decisions|docs/architecture/(PLAN|DESIGN|NEXT|SPEC|FOURPAGER)-|docs/(claude|openai|AGENT-PROMPT|TODO)-|docs/engineering-status\.md|docs/project/engineering-status\.md" AGENTS.md CLAUDE.md
 ```
 
 Expected: no output.
@@ -3723,13 +3859,13 @@ Old: - Read `docs/runbooks/hard-won-learnings.md` before making auth/Teams chang
 New: - Read `engineering-history/research/hard-won-learnings.md` before making auth/Teams changes
 
 Old: - ADRs in `docs/decisions/` for all significant architectural choices
-New: - ADRs in `docs/project/decisions/` for all significant architectural choices
+New: - ADRs in `engineering-history/decisions/` for all significant architectural choices (historical, not published; current rationale is distilled into `docs/architecture/`)
 ```
 
 - [ ] **Step 2: Verify**
 
 ```bash
-grep -nE "docs/platform-learnings|docs/runbooks|docs/decisions/" .github/copilot-instructions.md
+grep -nE "docs/platform-learnings|docs/runbooks|docs/decisions/|docs/project/decisions" .github/copilot-instructions.md
 ```
 
 Expected: no output.
@@ -3784,13 +3920,13 @@ git commit -m "docs: update implement-agent-id SKILL.md links"
 ```
 TODOS.md
 Old: **Current status:** [`docs/engineering-status.md`](docs/engineering-status.md)
-New: **Current status:** [`docs/project/engineering-status.md`](docs/project/engineering-status.md)
+New: **Current status:** [`docs/project/status.md`](docs/project/status.md)
 
 Old: - [ ] **Long-session MCP disconnect.** Continue from `docs/runbooks/mcp-disconnect-investigation.md`; do not restart the investigation without incorporating the existing evidence.
 New: (remove this line entirely — the investigation is resolved; see `engineering-history/investigations/mcp-disconnect-investigation.md` for the historical trail and `docs/troubleshooting/mcp-connectivity.md` for current-state guidance)
 
 Old: When a change materially moves work between backlog, in progress, and shipped, update this file and `docs/engineering-status.md` in the same pull request.
-New: When a change materially moves work between backlog, in progress, and shipped, update this file and `docs/project/engineering-status.md` in the same pull request.
+New: When a change materially moves work between backlog, in progress, and shipped, update this file and `docs/project/status.md` in the same pull request.
 ```
 
 ```
@@ -3802,7 +3938,7 @@ New: - 70 hard-won learnings at `engineering-history/research/hard-won-learnings
 - [ ] **Step 2: Verify**
 
 ```bash
-grep -nE "docs/platform-learnings|docs/runbooks|docs/engineering-status\.md" TODOS.md CHANGELOG.md
+grep -nE "docs/platform-learnings|docs/runbooks|docs/engineering-status\.md|docs/project/engineering-status\.md" TODOS.md CHANGELOG.md
 ```
 
 Expected: no output.
@@ -3827,7 +3963,7 @@ New: # Mandatory per the Windows port design (see docs/architecture/windows-and-
 ```
 pyproject.toml
 Old:     "eval: LLM eval suite for files-mcp scenarios (gates PR1 merge per docs/architecture/PLAN-files-mcp-tools.md §Testing)",
-New:     "eval: LLM eval suite for files-mcp scenarios (gates PR1 merge per docs/reference/api/mcp-tools.md §Testing)",
+New:     "eval: LLM eval suite for files-mcp scenarios (gates PR1 merge per docs/reference/mcp-tools.md §Testing)",
 ```
 
 - [ ] **Step 2: Verify**
@@ -3900,7 +4036,7 @@ New: # engineering-history/investigations/mcp-disconnect-investigation.md.
 
 src/entrabot/mcp_server.py:4484
 Old: ``docs/architecture/PLAN-files-mcp-tools.md`` §"Failure-mode registry").
-New: ``docs/reference/api/mcp-tools.md`` §"Failure-mode registry").
+New: ``docs/reference/mcp-tools.md`` §"Failure-mode registry").
 
 src/entrabot/preflight.py:227
 Old: "failed and inspect docs/runbooks/hard-won-learnings.md."
@@ -3932,11 +4068,11 @@ New: engineering-history/investigations/mcp-disconnect-investigation.md.
 
 scripts/hooks/README.md:71
 Old: Tracked in `docs/engineering-status.md` under "Known Issues (Open)".
-New: Tracked in `docs/project/engineering-status.md` under "Known Issues (Open)".
+New: Tracked in `docs/project/status.md` under "Known Issues (Open)".
 
 scripts/hooks/README.md:107
 Old: `docs/engineering-status.md`.
-New: `docs/project/engineering-status.md`.
+New: `docs/project/status.md`.
 
 scripts/setup-windows.ps1:19
 Old: See docs/architecture/PLAN-windows-port.md for the full design and the
@@ -3946,7 +4082,7 @@ New: See docs/architecture/windows-and-platforms.md for the full design and the
 - [ ] **Step 2: Verify no old-path references remain anywhere outside engineering-history/ and this plan file itself**
 
 ```bash
-git grep -lE "docs/platform-learnings|docs/runbooks|docs/decisions/|docs/architecture/(PLAN|DESIGN|NEXT|SPEC|FOURPAGER)-|docs/(claude|openai|AGENT-PROMPT|TODO)-|docs/engineering-status\.md|docs/reference/scripts/(setup|provisioning|auth-and-certs|storage|operations|diagnostics|teardown|spikes)\.md" -- . ':!engineering-history' ':!engineering-history/plans/2026-07-10-public-documentation-redesign-implementation.md'
+git grep -lE "docs/platform-learnings|docs/runbooks|docs/decisions/|docs/project/decisions|docs/architecture/(PLAN|DESIGN|NEXT|SPEC|FOURPAGER)-|docs/(claude|openai|AGENT-PROMPT|TODO)-|docs/engineering-status\.md|docs/project/engineering-status\.md|docs/reference/api/mcp-tools\.md|docs/reference/scripts/(setup|provisioning|auth-and-certs|storage|operations|diagnostics|teardown|spikes)\.md" -- . ':!engineering-history' ':!engineering-history/plans/2026-07-10-public-documentation-redesign-implementation.md'
 ```
 
 Expected: no output. If any file appears, apply the same substitution pattern used above for that file's context and re-run.
@@ -4069,13 +4205,19 @@ Expected: no output (no trailing whitespace, no conflict markers).
 SERVE_PID=$!
 sleep 3
 curl -sf http://127.0.0.1:8000/ | grep -q "<title>" && echo "home OK"
-curl -sf http://127.0.0.1:8000/getting-started/installation/ | grep -q "<title>" && echo "installation OK"
+curl -sf http://127.0.0.1:8000/getting-started/prerequisites/ | grep -q "<title>" && echo "prerequisites OK"
 curl -sf http://127.0.0.1:8000/clients/overview/ | grep -q "<title>" && echo "clients overview OK"
 curl -sf http://127.0.0.1:8000/architecture/system-overview/ | grep -q "<title>" && echo "architecture OK"
 curl -sf http://127.0.0.1:8000/platform-docs/agent-id-blueprints-and-users/ | grep -q "<title>" && echo "platform docs OK"
 curl -sf http://127.0.0.1:8000/reference/scripts/ | grep -q "<title>" && echo "scripts index OK"
 curl -sf http://127.0.0.1:8000/troubleshooting/ | grep -q "<title>" && echo "troubleshooting OK"
-curl -sfI http://127.0.0.1:8000/architecture/PLAN-windows-port/ | grep -qi "30[128]" && echo "legacy redirect OK"
+curl -sf http://127.0.0.1:8000/project/status/ | grep -q "<title>" && echo "project status OK"
+# mkdocs-redirects serves the redirect target as generated static HTML with a
+# meta-refresh, which returns HTTP 200 at the legacy URL — not a real 301/302 —
+# so validate 200 plus the meta-refresh tag, not a 3xx status code.
+code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/architecture/PLAN-windows-port/)
+body=$(curl -s http://127.0.0.1:8000/architecture/PLAN-windows-port/)
+[ "$code" = "200" ] && echo "$body" | grep -qi 'http-equiv="refresh"' && echo "legacy redirect OK"
 kill $SERVE_PID
 ```
 
@@ -4139,7 +4281,7 @@ Expected: no output.
 - [ ] **Step 4: Placeholder scan across all touched public docs**
 
 ```bash
-git diff --name-only main...HEAD -- docs/ | xargs grep -niE "TBD|TODO|FIXME|placeholder|fill in|implement later" 
+git diff --name-only main...HEAD -- docs/ | xargs grep -niE "TBD|TODO|FIXME|placeholder|fill in|implement later"
 ```
 
 Expected: no output (a hit here means a page was left incomplete — go back to the task that created that file and finish it).
@@ -4188,32 +4330,35 @@ Expected: exit code 0; the `deploy` job runs (this time it fires, because the tr
 
 ### Task 13.10: Crawl live URLs and clean up
 
-- [ ] **Step 1: Determine the published Pages base URL**
+- [ ] **Step 1: Determine the published Pages base URL and store it in a shell variable for the rest of this task**
 
 ```bash
-gh api repos/{owner}/{repo}/pages --jq '.html_url'
+PAGES_URL=$(gh api repos/microsoft/entrabot/pages --jq '.html_url')
+# Known value: https://microsoft.github.io/entrabot/ — the command above confirms
+# it live rather than hardcoding it, in case Pages configuration ever changes.
+echo "${PAGES_URL}"
 ```
 
-- [ ] **Step 2: Crawl canonical pages (replace `<PAGES_URL>` with the Step 1 output)**
+- [ ] **Step 2: Crawl canonical pages**
 
 ```bash
-for path in "" "getting-started/installation/" "guides/configuration/" "clients/overview/" \
+for path in "" "getting-started/prerequisites/" "guides/configuration/" "clients/overview/" \
   "architecture/system-overview/" "platform-docs/agent-id-blueprints-and-users/" \
-  "reference/scripts/" "troubleshooting/" "project/engineering-status/"; do
-  code=$(curl -s -o /dev/null -w "%{http_code}" "<PAGES_URL>${path}")
+  "reference/scripts/" "troubleshooting/" "project/status/"; do
+  code=$(curl -s -o /dev/null -w "%{http_code}" "${PAGES_URL}${path}")
   echo "${path:-<home>}: ${code}"
 done
 ```
 
 Expected: every path reports `200`.
 
-- [ ] **Step 3: Crawl legacy redirect URLs (a representative sample of the 66-entry table from Phase 11)**
+- [ ] **Step 3: Crawl legacy redirect URLs (a representative sample of the 71-entry table from Phase 11)**
 
 ```bash
 for path in "architecture/PLAN-windows-port/" "architecture/next-mcp-server-design/" \
   "claude-copilot-cli-channel-port/" "architecture/NEXT-WhatsApp-lightweight-teams-chat/" \
   "architecture/PLAN-agent-identity-by-upn/" "architecture/PLAN-xpia-content-wrapping/"; do
-  code=$(curl -s -o /dev/null -w "%{http_code}" "<PAGES_URL>${path}")
+  code=$(curl -s -o /dev/null -w "%{http_code}" "${PAGES_URL}${path}")
   echo "${path}: ${code}"
 done
 ```
@@ -4221,7 +4366,7 @@ done
 Expected: every path reports `200` (mkdocs-redirects serves redirect targets as generated static HTML with a meta-refresh/JS redirect, which returns `200` at the legacy URL rather than an HTTP 301, since GitHub Pages serves static files only) and the final rendered page's `<title>` matches the canonical target page, verified by:
 
 ```bash
-curl -s "<PAGES_URL>architecture/PLAN-windows-port/" | grep -o "<title>[^<]*</title>"
+curl -s "${PAGES_URL}architecture/PLAN-windows-port/" | grep -o "<title>[^<]*</title>"
 ```
 
 Expected: the title corresponds to "Windows And Platforms" (the canonical target page), not "PLAN Windows Port".
@@ -4229,7 +4374,7 @@ Expected: the title corresponds to "Windows And Platforms" (the canonical target
 - [ ] **Step 4: Verify the live search index excludes archived titles**
 
 ```bash
-curl -s "<PAGES_URL>search/search_index.json" | python3 -c "
+curl -s "${PAGES_URL}search/search_index.json" | python3 -c "
 import json, sys
 idx = json.load(sys.stdin)
 bad_markers = ['PLAN-', 'SPEC-', 'DESIGN-', 'NEXT-', 'TODO-', 'AGENT-PROMPT-', 'FOURPAGER-']
@@ -4255,8 +4400,8 @@ Expected: worktree removed cleanly (already merged, so `-d` — not `-D` — suc
 
 ## Plan Self-Review
 
-**Spec coverage:** every numbered requirement in `engineering-history/specs/2026-07-10-public-documentation-redesign.md` traces to a phase above: prefix/attribution/nav/redirect/manifest tests → Phase 1; PR-validate/main-deploy CI split → Phase 2; entry points/guides/project pages → Phase 3; neutral client docs → Phase 4; present-tense architecture pages with the explicit MXC-not-shipped constraint → Phase 5; Platform Learnings → Platform Docs rename preserving all 6 subject areas → Phase 6; functional reference + task-oriented troubleshooting replacing runbooks → Phase 7; 42-script manifest-driven reference with the 6 required per-page sections → Phase 8; historical migration out of `docs/` into `engineering-history/` categories with an explicit delete-vs-move disposition table → Phase 9; the exact 9-section `mkdocs.yml` nav → Phase 10; the 66-entry redirect table including all 6 minimum-required mappings → Phase 11; root/instruction/code/test/script comment updates with the internal-vs-public linking rule → Phase 12; and the full validation/PR/merge/deploy/crawl/cleanup sequence → Phase 13.
+**Spec coverage:** every numbered requirement in `engineering-history/specs/2026-07-10-public-documentation-redesign.md` traces to a phase above: prefix/attribution/nav/redirect/manifest tests → Phase 1; PR-validate/main-deploy CI split → Phase 2; entry points/guides/project pages → Phase 3; neutral client docs → Phase 4; present-tense architecture pages with the explicit MXC-not-shipped constraint → Phase 5; Platform Learnings → Platform Docs rename preserving all 6 subject areas → Phase 6; functional reference (including the MCP tool catalog consolidated at its canonical `docs/reference/mcp-tools.md` path) + task-oriented troubleshooting replacing runbooks → Phase 7; 42-script manifest-driven reference with the 6 required per-page sections → Phase 8; historical migration out of `docs/` into `engineering-history/` categories (including the 8 required historical migrations preserved by archive, not deletion, and ADRs archived to `engineering-history/decisions/` rather than kept public) with an explicit delete-vs-move disposition table → Phase 9; the exact 9-section `mkdocs.yml` nav (Project containing only Current Status and Changelog) → Phase 10; the 71-entry redirect table including all 8 mandatory historical-migration mappings and the ADR redirects to functional architecture pages → Phase 11; root/instruction/code/test/script comment updates with the internal-vs-public linking rule → Phase 12; and the full validation/PR/merge/deploy/crawl/cleanup sequence → Phase 13.
 
 **Placeholder scan:** this plan document itself contains no `TBD`, `TODO` (outside of literal filenames/paths being archived, e.g. `TODO-persona-sati-integration.md`, which are content under discussion, not planning placeholders), `FIXME`, or "implement later" language. Every step shows the actual command, code, or exact before/after text required.
 
-**Type/naming consistency:** `commands.yml` fields (`name`, `path`, `category`, `purpose`, `requirements`, `usage`, `effects`, `exit_behavior`, `related`) are used identically in Phase 8's manifest, generator script, and per-page template. The slug function `slugify()` defined in Phase 8 Task 8.2 is the same function invoked by `render_page()` in Task 8.3 and by the nav-generation step in Phase 10. `MemoryBackend`/config env-var names referenced in Phase 3's `guides/configuration.md` cross-check script match `src/entrabot/config.py` exactly (verified by the Python assertion script in Task 3.4). The redirect table in Phase 11 and the `redirect_maps` YAML block inserted into `mkdocs.yml` in the same phase contain the identical 66 `old: new` pairs — verified by the count-check script in Task 11.3.
+**Type/naming consistency:** `commands.yml` fields (`name`, `path`, `category`, `purpose`, `requirements`, `usage`, `effects`, `exit_behavior`, `related`) are used identically in Phase 8's manifest, generator script, and per-page template. The slug function `slugify()` defined in Phase 8 Task 8.2 is the same function invoked by `render_page()` in Task 8.3 and by the nav-generation step in Phase 10. `MemoryBackend`/config env-var names referenced in Phase 3's `guides/configuration.md` cross-check script match `src/entrabot/config.py` exactly (verified by the Python assertion script in Task 3.4). The redirect table in Phase 11 and the `redirect_maps` YAML block inserted into `mkdocs.yml` in the same phase contain the identical 71 `old: new` pairs — verified by the count-check script in Task 11.3.
