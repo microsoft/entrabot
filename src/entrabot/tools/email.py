@@ -200,7 +200,30 @@ async def read_email(
         resp = await client.get(url, params=params, headers=headers)
 
     if resp.status_code == 200:
-        return resp.json()
+        payload = resp.json()
+        # XPIA envelope: wrap the model-facing body so an attacker who
+        # emails the agent cannot smuggle instructions inside the body.
+        # Metadata (subject, recipients, headers, hasAttachments) stays
+        # raw — those fields are attacker-controllable too but the model
+        # needs them for filtering/routing; the body is the primary
+        # injection vector because it's the largest surface.
+        from entrabot.security.xpia import wrap_external
+
+        body = payload.get("body") or {}
+        body_content = body.get("content", "") or ""
+        sender_addr = (
+            (payload.get("from") or {}).get("emailAddress") or {}
+        ).get("address", "") or None
+        payload["body"] = {
+            **body,
+            "content": wrap_external(
+                body_content,
+                source=f"email:{message_id}",
+                sender=sender_addr,
+                received_at=None,
+            ),
+        }
+        return payload
 
     if resp.status_code == 401:
         raise TokenExpiredError("Agent User token expired — re-acquire via three-hop flow")

@@ -98,14 +98,27 @@ async def get_document_content(
     provider: WorkIqProvider | None = None,
 ) -> WordDocumentContent:
     """Read Word document content and comments through Work IQ Word."""
+    from entrabot.security.xpia import wrap_external
+
+    clean_url = _required(url, "url")
     result = await _provider(provider).call_tool(
         server_name=WORD_SERVER_NAME,
         tool_name="GetDocumentContent",
-        arguments={"url": _required(url, "url")},
+        arguments={"url": clean_url},
     )
     comments = result.get("comments")
+    raw_html = str(result.get("content") or result.get("contentInHtml") or "")
+    # XPIA envelope: the document body is external content; wrap it so
+    # a hostile ``.docx`` author cannot smuggle instructions in the
+    # HTML. ``comments`` are already structured metadata; ``raw`` is
+    # the provider's untouched response for audit and stays unchanged.
+    wrapped = wrap_external(
+        raw_html,
+        source=f"file:{clean_url}#word",
+        sender=None,
+    )
     return WordDocumentContent(
-        content_html=str(result.get("content") or result.get("contentInHtml") or ""),
+        content_html=wrapped,
         comments=list(comments) if isinstance(comments, list) else [],
         raw=result,
     )

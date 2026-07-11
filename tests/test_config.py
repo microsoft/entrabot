@@ -233,3 +233,30 @@ class TestBlobStorageConfig:
             with patch.dict(os.environ, {"ENTRABOT_KEEP_MEMORY_LOCAL": val}, clear=False):
                 cfg = EntraBotConfig.from_env()
             assert cfg.keep_memory_local is False, f"Expected False for '{val}'"
+
+
+class TestXpiaWrapEnableFlag:
+    """XPIA content-wrapping rollback flag — default true, opt-out via env."""
+
+    def test_xpia_wrap_enable_default_true(self) -> None:
+        """Absent env var → wrap is enabled. Default is defense-on."""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ENTRABOT_XPIA_WRAP_ENABLE", None)
+            cfg = EntraBotConfig.from_env()
+        assert cfg.xpia_wrap_enable is True
+
+    def test_xpia_wrap_enable_falsy_values_disable(self) -> None:
+        for val in ("false", "False", "0", "no"):
+            with patch.dict(
+                os.environ, {"ENTRABOT_XPIA_WRAP_ENABLE": val}, clear=False
+            ):
+                cfg = EntraBotConfig.from_env()
+            assert cfg.xpia_wrap_enable is False, f"Expected False for '{val}'"
+
+    def test_xpia_wrap_enable_truthy_values_enable(self) -> None:
+        for val in ("true", "True", "1", "yes"):
+            with patch.dict(
+                os.environ, {"ENTRABOT_XPIA_WRAP_ENABLE": val}, clear=False
+            ):
+                cfg = EntraBotConfig.from_env()
+            assert cfg.xpia_wrap_enable is True, f"Expected True for '{val}'"

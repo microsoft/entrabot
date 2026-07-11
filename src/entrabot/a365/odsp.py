@@ -90,16 +90,27 @@ async def read_small_text_file(
     provider: WorkIqProvider | None = None,
 ) -> OdspFileContent:
     """Read a small text file from OneDrive/SharePoint through Work IQ ODSP."""
+    from entrabot.security.xpia import wrap_external
+
+    clean_file_id = _required(file_id, "file_id")
     result = await _provider(provider).call_tool(
         server_name=ODSP_SERVER_NAME,
         tool_name="readSmallTextFile",
         arguments={
             "documentLibraryId": _required(document_library_id, "document_library_id"),
-            "fileId": _required(file_id, "file_id"),
+            "fileId": clean_file_id,
         },
     )
+    raw_content = str(result.get("content") or "")
+    # XPIA envelope: file bodies from OneDrive/SharePoint are model-facing
+    # external content. ``raw`` (the provider's response) stays intact for
+    # audit; ``encoding`` is metadata about the model-facing wrap.
     return OdspFileContent(
-        content=str(result.get("content") or ""),
+        content=wrap_external(
+            raw_content,
+            source=f"a365:{clean_file_id}",
+            sender=None,
+        ),
         encoding="text",
         raw=result,
     )
