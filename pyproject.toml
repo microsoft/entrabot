@@ -30,6 +30,11 @@ dev = [
     "respx>=0.22.0",
     "azure-identity>=1.15.0",
 ]
+docs = [
+    "mkdocs-material>=9.5",
+    "mkdocs-redirects>=1.2",
+    "PyYAML>=6.0",
+]
 provisioning = [
     "azure-identity>=1.15.0",
     "requests>=2.31",
