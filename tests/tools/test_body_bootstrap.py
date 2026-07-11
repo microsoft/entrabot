@@ -192,7 +192,7 @@ class TestTopChatsToday:
         assert result["top_chats_today"][0]["chat_id"] == "19:X@thread.v2"
 
     def test_includes_last_activity_and_last_sender(self, tmp_data_dir: Path) -> None:
-        now = datetime.now(UTC)
+        now = datetime.now(UTC).replace(hour=12, minute=0, second=0, microsecond=0)
         earlier_ts = now - timedelta(minutes=10)
         latest_ts = now - timedelta(minutes=1)
         _log_at(
@@ -211,7 +211,11 @@ class TestTopChatsToday:
             summary="latest",
             metadata={"chat_id": "19:A@thread.v2"},
         )
-        result = bootstrap_body_state()
+        # Keep "today" fixed so a CI run crossing UTC midnight cannot split
+        # these two entries across different interaction-log files.
+        with patch("entrabot.tools.body_bootstrap.datetime") as mocked_datetime:
+            mocked_datetime.now.return_value = now
+            result = bootstrap_body_state()
         assert len(result["top_chats_today"]) == 1
         top = result["top_chats_today"][0]
         assert top["interaction_count"] == 2
