@@ -385,7 +385,7 @@ def build_sponsors_bind() -> list[str]:
     """Build the sponsors@odata.bind array for Blueprint/Agent Identity creation."""
     user_id = get_signed_in_user_id()
     if user_id:
-        return [f"https://graph.microsoft.com/beta/users/{user_id}"]
+        return [f"https://graph.microsoft.com/v1.0/users/{user_id}"]
     return []
 
 

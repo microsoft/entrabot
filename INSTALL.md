@@ -46,7 +46,7 @@ effect.
 From PowerShell 7 (`pwsh`), in the repo root:
 
 ```powershell
-.\scripts\setup-windows.ps1 -NewChain -UpnSuffix yourname
+.\scripts\setup-windows.ps1 -NewChain -UpnSuffix workstation
 ```
 
 This provisions:
@@ -74,7 +74,7 @@ Both are at least as strong as the macOS Keychain baseline.
 .\scripts\setup-windows.ps1 -UseBlueprint <app-id>
 
 # Enable Azure Blob Storage for operational data
-.\scripts\setup-windows.ps1 -NewChain -UpnSuffix yourname -UseCloudMemory
+.\scripts\setup-windows.ps1 -NewChain -UpnSuffix workstation -UseCloudMemory
 ```
 
 ### Teardown
@@ -83,8 +83,10 @@ Both are at least as strong as the macOS Keychain baseline.
 .\scripts\teardown-windows.ps1
 ```
 
-Removes MCP registrations from `claude.json` and `copilot mcp-config.json`.
-Leaves the certificate and `.env` intact.
+Removes Blueprint certificates from the Windows Certificate Store, deletes
+`%LOCALAPPDATA%\entrabot`, removes certificate settings from `.env`, and
+unregisters the MCP servers. It does **not** delete the tenant-side Agent User,
+Agent Identity, or Blueprint.
 
 ---
 
@@ -92,36 +94,25 @@ Leaves the certificate and `.env` intact.
 
 ### Prerequisites
 
-Install manually or via Homebrew:
+Run the repository prerequisite helper:
 
 ```bash
-# Python 3.12+
-brew install python@3.12
-
-# Azure CLI
-brew install azure-cli
-
-# Git (usually pre-installed on macOS)
-brew install git
+./scripts/prereqs-macos.sh
 ```
 
-No build tools needed — macOS ships with the required C compiler via Xcode
-Command Line Tools:
-
-```bash
-xcode-select --install
-```
+It installs or verifies Python 3.12+, Azure CLI, GitHub CLI, Node.js, Claude Code,
+`jq`, and the Xcode Command Line Tools through Homebrew.
 
 ### Setup
 
-```bash
-./scripts/setup.sh
-```
-
-Or with a fresh identity chain:
+Choose exactly one identity mode:
 
 ```bash
-./scripts/setup.sh --new --with-upn-suffix=yourname
+# Create a fresh identity chain
+./scripts/setup.sh --new --with-upn-suffix=workstation
+
+# Or attach to an existing Blueprint
+./scripts/setup.sh --use-blueprint=<blueprint-app-id>
 ```
 
 #### Certificate storage
@@ -132,7 +123,8 @@ the `keyring` Python package. No PEM files on disk.
 #### With Azure Blob Storage
 
 ```bash
-./scripts/setup.sh --use-cloud-memory
+./scripts/setup.sh --new --with-upn-suffix=workstation --use-cloud-memory
+# Or add --use-cloud-memory to an existing --use-blueprint invocation.
 ```
 
 ### Teardown
@@ -166,7 +158,7 @@ sudo dnf install azure-cli
 ### Setup
 
 ```bash
-./scripts/setup.sh --new --with-upn-suffix=yourname
+./scripts/setup.sh --new --with-upn-suffix=workstation
 ```
 
 #### Certificate storage
@@ -197,7 +189,12 @@ After setup completes on any platform, verify the three-hop flow works:
 # Mac/Linux: source .venv/bin/activate
 
 # Test three-hop token acquisition
-python -c "from entrabot.tools.teams import acquire_agent_user_token; print(acquire_agent_user_token()[:40])"
+python - <<'PY'
+from entrabot.config import get_config
+from entrabot.tools.teams import acquire_agent_user_token
+
+print(acquire_agent_user_token(get_config())[:40])
+PY
 ```
 
 You should see a 40-character token prefix. If you get an AADSTS error, check:

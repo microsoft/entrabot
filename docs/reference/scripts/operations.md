@@ -76,6 +76,17 @@ Root-level wrapper for the consolidated Agent Identity status command. This is t
 
 `./scripts/setup.sh --status` delegates to `./status.sh` and forwards any remaining status arguments.
 
+### Windows equivalent
+
+```powershell
+pwsh -File status-windows.ps1
+pwsh -File status-windows.ps1 -Json
+pwsh -File status-windows.ps1 -HealthOnly -Strict
+pwsh -File scripts/setup-windows.ps1 -Status -Json
+```
+
+`status-windows.ps1` activates or creates the local virtual environment and delegates to `scripts/show_agent_status.py`, matching the Unix status surface.
+
 ### What it does
 
 - Ensures the local virtual environment exists.

@@ -22,6 +22,98 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "create_entra_agent_ids.py"
 
 
+class TestCurrentGraphCreationEndpoints:
+    def test_creates_blueprint_principal_with_v1_subtype_endpoint(
+        self, agent_ids_module, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[tuple[str, str, dict | None, str | None]] = []
+
+        def fake_graph_request(method, path, token, **kwargs):
+            calls.append((method, path, kwargs.get("json_body"), kwargs.get("base_url")))
+            if method == "GET":
+                return _resp(200, {"value": []})
+            return _resp(201, {"id": "blueprint-principal-id"})
+
+        monkeypatch.setattr(agent_ids_module, "graph_request", fake_graph_request)
+
+        agent_ids_module.ensure_blueprint_principal("tok", "blueprint-app-id")
+
+        assert calls[1] == (
+            "POST",
+            "/servicePrincipals/microsoft.graph.agentIdentityBlueprintPrincipal",
+            {"appId": "blueprint-app-id"},
+            agent_ids_module.GRAPH_V1,
+        )
+
+    def test_creates_blueprint_with_v1_subtype_endpoint(
+        self, agent_ids_module, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[tuple[str, str, dict | None, str | None]] = []
+
+        def fake_graph_request(method, path, token, **kwargs):
+            calls.append((method, path, kwargs.get("json_body"), kwargs.get("base_url")))
+            return _resp(201, {"appId": "blueprint-app-id", "id": "blueprint-object-id"})
+
+        monkeypatch.setattr(agent_ids_module, "_FORCE_NEW", True)
+        monkeypatch.setattr(
+            agent_ids_module,
+            "build_sponsors_bind",
+            lambda: ["https://graph.microsoft.com/v1.0/users/sponsor-id"],
+        )
+        monkeypatch.setattr(agent_ids_module, "graph_request", fake_graph_request)
+        monkeypatch.setattr(agent_ids_module, "set_state", lambda *args: None)
+        monkeypatch.setattr(agent_ids_module, "ensure_blueprint_principal", lambda *args: None)
+
+        agent_ids_module.create_blueprint("tok")
+
+        assert calls == [
+            (
+                "POST",
+                "/applications/microsoft.graph.agentIdentityBlueprint",
+                {
+                    "displayName": agent_ids_module.BLUEPRINT_DISPLAY_NAME,
+                    "description": "Agent Identity Blueprint for EntraBot device agents",
+                    "sponsors@odata.bind": [
+                        "https://graph.microsoft.com/v1.0/users/sponsor-id"
+                    ],
+                },
+                agent_ids_module.GRAPH_V1,
+            )
+        ]
+
+    def test_creates_agent_identity_with_v1_subtype_endpoint(
+        self, agent_ids_module, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[tuple[str, str, dict | None, str | None]] = []
+
+        def fake_graph_request(method, path, token, **kwargs):
+            calls.append((method, path, kwargs.get("json_body"), kwargs.get("base_url")))
+            return _resp(201, {"appId": "agent-app-id", "id": "agent-object-id"})
+
+        monkeypatch.setattr(agent_ids_module, "_FORCE_NEW", True)
+        monkeypatch.setattr(agent_ids_module, "_agent_display_name", lambda: DISPLAY_NAME)
+        monkeypatch.setattr(agent_ids_module, "get_signed_in_user_id", lambda: "sponsor-id")
+        monkeypatch.setattr(agent_ids_module, "graph_request", fake_graph_request)
+        monkeypatch.setattr(agent_ids_module, "set_state", lambda *args: None)
+
+        agent_ids_module.create_agent_identity("tok", BLUEPRINT_OURS)
+
+        assert calls == [
+            (
+                "POST",
+                "/servicePrincipals/microsoft.graph.agentIdentity",
+                {
+                    "displayName": DISPLAY_NAME,
+                    "agentIdentityBlueprintId": BLUEPRINT_OURS,
+                    "sponsors@odata.bind": [
+                        "https://graph.microsoft.com/v1.0/users/sponsor-id"
+                    ],
+                },
+                agent_ids_module.GRAPH_V1,
+            )
+        ]
+
+
 @pytest.fixture
 def agent_ids_module():
     spec = importlib.util.spec_from_file_location("create_entra_agent_ids", SCRIPT_PATH)

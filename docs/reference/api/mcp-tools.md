@@ -1,6 +1,6 @@
 # MCP tools
 
-The EntraBot MCP server (`src/entrabot/mcp_server.py`) exposes 34 tools across five domains. Every tool that targets a Teams chat requires an explicit `chat_id` — there is no default chat.
+The EntraBot MCP server (`src/entrabot/mcp_server.py`) exposes 37 tools across five domains. Every tool that targets a Teams chat requires an explicit `chat_id` — there is no default chat.
 
 All Teams / Files / Email tools authenticate via the Agent User three-hop token (see [Auth](auth.md) and [Token Flows](../token-flows.md)). Tokens are minted on demand and cached — no credentials need to be supplied at tool-call time.
 
@@ -102,6 +102,21 @@ async def send_email(
 ```
 
 When replying to a known inbound, pass `reply_to_message_id` so Graph preserves the thread headers. Graph uses the original message's subject; any subject you pass here is informational only.
+
+### `read_email`
+
+Fetch the complete body, recipients, headers, and attachment flag for one Graph message.
+
+```python
+async def read_email(message_id: str, mailbox: str = "") -> str
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `message_id` | `str` | yes | Graph message ID from email channel push or another message listing. |
+| `mailbox` | `str` | no | Shared mailbox UPN/address. Empty reads the Agent User's mailbox. |
+
+Use this when the email-poll preview was truncated. A 401 refreshes and retries once; other Graph failures return structured error JSON. The model-facing body is wrapped as untrusted external content.
 
 ### `send_card`
 
@@ -285,7 +300,7 @@ async def add_file_comment(
 ) -> str
 ```
 
-Post a document comment to a Word or Excel file. Files-only — does NOT cross-post to chat. Restrictions: `.docx` or `.xlsx` only; personal OneDrive rejected.
+Call the Graph drive-item comment surface for a `.docx` or `.xlsx` file. Personal OneDrive is rejected. Microsoft Graph does not expose native Word UI comments for `.docx` through this endpoint, so use `add_word_comment` and `reply_to_word_comment` for Word documents.
 
 ### `write_text_file`
 
@@ -425,6 +440,33 @@ def audit_log(
 ```
 
 Record an audit event. Call BEFORE performing any action on the user's behalf. The audit trail proves the agent (not the human) performed the action. Events are written to `~/.entrabot/audit/` as daily JSONL files. See [Audit](audit.md).
+
+### `read_interactions`
+
+Query the body-side interaction log without re-reading Graph.
+
+```python
+async def read_interactions(
+    chat_id: str = "",
+    sender: str = "",
+    action: str = "",
+    direction: str = "",
+    since: str = "",
+    limit: int = 10,
+) -> str
+```
+
+Filters are optional. `direction` is `inbound` or `outbound`; `since` is an ISO 8601 timestamp and can reach back up to seven days. Results are most-recent first. Use this before outbound sends to avoid duplicate replies.
+
+### `bootstrap_body_state`
+
+Return a single operational-continuity packet at session start.
+
+```python
+async def bootstrap_body_state() -> str
+```
+
+Returns counts for today's activity, top chats, open promises, watched-chat count, and cursor freshness. It is an index, not message content; use `read_interactions` for the underlying entries.
 
 ### `run_daily_summary`
 

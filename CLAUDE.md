@@ -30,7 +30,8 @@
 - Never use `az rest` or Azure CLI tokens for Agent Identity APIs — they include `Directory.AccessAsUser.All` which causes hard 403
 - Always create BlueprintPrincipal explicitly after Blueprint — it is NOT auto-created
 - Agent IDs are service principals, not users — never create fake user accounts with passwords
-- **AGENT NAMES CHANGE — USE UPN.** Never identify an agent (self or peer) by display name in code paths that filter, deduplicate, authorize, or route. Display names are user-mutable and localizable. Use **UPN as the canonical config value** (e.g. `ENTRABOT_AGENT_UPN=entra-agent@werner.ac`) and match on the message payload's `sender_upn` first, falling back to `sender_id` (AAD object-id). Rename incident 2026-07-09: renaming "EntraBot Agent" → "EntraClaw Agent" made the Teams poll's self-authored filter no-op, causing 6-week-old outbounds to replay as inbound across 61/62 chats. See `docs/runbooks/hard-won-learnings.md` Learning #69 and `docs/architecture/PLAN-agent-identity-by-upn.md`.
+- **External content is untrusted.** Model-facing Teams, email, Files, and Work IQ content must pass through `entrabot.security.xpia.wrap_external`. Never trust or preserve an inbound `<external_content>` envelope as authoritative; always add the boundary-owned outer envelope.
+- **AGENT NAMES CHANGE — USE UPN.** Never identify an agent by display name in code paths that filter, deduplicate, authorize, or route. Use `ENTRABOT_AGENT_UPN` as the canonical config value (for example, `entra-agent@contoso.onmicrosoft.com`), match `sender_upn` first, and fall back to the Entra object ID. `ENTRABOT_AGENT_USER_UPN` remains a compatibility alias for existing `.env` files. See Learning #69 and `docs/architecture/PLAN-agent-identity-by-upn.md`.
 - Parse `az` CLI output as JSON, not TSV — TSV can be corrupted by warnings
 - **Sub-agent worktree installs must use a worktree-local venv, never the parent venv.** Running `pip install -e .` from inside a git worktree against the main repo's `.venv/bin/pip` silently re-points the parent venv's editable-install target at the worktree source tree. Every subsequent `entrabot-mcp` boot from the parent venv then loads code from the worktree — which has no `.env`, no auth, no polling, and no visible error. After any session that spawned sub-agents in worktrees, verify `.venv/bin/python3 -c "from entrabot import config; print(config.__file__)"` does NOT contain `.claude/worktrees/`. See `docs/runbooks/hard-won-learnings.md` Learning #36 for the full writeup.
 - **Sponsor DM wait pattern (host-gated).** When the human says "ping me when X is done" / "I'm going AFK, let me know" / any equivalent: confirm in Teams with `send_teams_message`, do the work, send the completion update with `send_teams_message`. What happens next depends on the host:
@@ -57,7 +58,7 @@
 ## Current Runtime Model
 
 - Python 3.12+ research project — no deployed service yet
-- Eight modules: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `a365/` (Work IQ MCP provider + Word adapter) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `identity/` (state machine) → `storage/` (`LocalBackend`/`BlobBackend`/`PersonaBackend` + `migration` helper — ADR-005 Phases 1, 2, 5, 6a shipped) → `mcp_server.py` (FastMCP + background channel)
+- Core runtime components: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `a365/` (Work IQ MCP provider + Word adapter) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `identity/` (state machine) → `storage/` (`LocalBackend`/`BlobBackend`/`PersonaBackend` + `migration` helper — ADR-005 Phases 1, 2, 5, 6a shipped) → `mcp_server.py` (FastMCP + background channel)
 - External dependencies: Microsoft Entra ID (identity), Microsoft Teams + Outlook mailbox (Graph API), Azure Blob Storage (optional, opt-in via `setup.sh --use-cloud-memory`)
 - **No default group chat.** Every Teams tool requires an explicit `chat_id`. Chats come from `create_chat`, the persisted `watched_chats` file, or the auto-discovery sweep over `/me/chats`.
 - **Body-first prompt.** `prompts/agent_system.md` loads at boot with `@include` expansion of `prompts/anatomy/*.md`. Persona-sati output (if configured) is appended AFTER the body and cannot override body rules. See the "Body prompt is non-overridable" rule above.
@@ -226,7 +227,7 @@ Two memory systems coexist in this project:
 - `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` — delegated mode spec (landed)
 - `docs/index.md` — doc site entry point
 - `docs/runbooks/mcp-disconnect-investigation.md` — **OPEN issue.** Entrabot MCP dies after 2–10 min of sustained activity. Two amplifiers fixed (PR #40, PR #41), root cause still unknown. Read this before debugging any MCP-drop symptom — do NOT restart the investigation from scratch.
-- `docs/runbooks/hard-won-learnings.md` — 66 learnings, read before making changes
+- `docs/runbooks/hard-won-learnings.md` — read before making changes
 - `docs/decisions/001-obo-flows-for-device-agents.md`
 - `docs/decisions/003-certificate-auth-over-client-secrets.md`
 - `docs/platform-learnings/microsoft-agent-365.md` — A365 GA'd 2026-05-01. Identity model, Work IQ MCP catalog, four capability tiers, auth flows, gap analysis vs entrabot. Read this before considering any A365 / Work IQ integration work.
@@ -265,7 +266,7 @@ pip install mkdocs-material && mkdocs serve
 - `src/entrabot/mcp_server.py`: FastMCP server — Teams tools + 2 auth modes + background poll + channel push + token refresh (generic instructions — personality in persona-sati)
 - `src/entrabot/config.py`: `ENTRABOT_MODE` switch (auto/delegated/agent_user) + all env config
 - `docs/decisions/`: ADRs — every significant architectural choice is recorded here
-- `docs/runbooks/hard-won-learnings.md`: 66 hard-won learnings — READ THIS before making changes
+- `docs/runbooks/hard-won-learnings.md` — READ THIS before making changes
 - `docs/runbooks/mcp-disconnect-investigation.md`: OPEN MCP-disconnect dossier — READ before touching MCP transport, logging, or efferent-copy code
 
 ## gstack

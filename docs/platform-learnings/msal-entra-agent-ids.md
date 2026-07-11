@@ -1,21 +1,17 @@
 # MSAL & Entra Agent IDs
 
-> **Last updated:** 2025-07-14
-> **Status:** Living reference document for Entrabot identity architecture
+> **Last updated:** 2026-07-10
+> **Status:** Historical preview-era research. Use this for MSAL mechanics, not as the current Entrabot architecture.
+>
+> **Current runtime:** `agent_user` mode uses the certificate-backed three-hop `user_fic` flow implemented directly with `httpx`; no human token or OBO exchange is involved. `delegated` mode uses MSAL localhost authentication with device-code fallback and represents the signed-in human. Agent Blueprints cannot be OAuth public clients. See `agent-id-blueprints-and-users.md` and `../reference/token-flows.md`.
 
 ## Overview
 
-MSAL (Microsoft Authentication Library) and Microsoft Entra Agent IDs form the **foundational auth layer** for Entrabot. Every Entrabot agent — whether running on Mac, Linux, or Windows — needs:
+Microsoft Entra Agent ID provides Entrabot's autonomous identity. MSAL is used only by the optional delegated mode and by historical OBO experiments documented below.
 
-1. **A distinct identity** in the enterprise directory (Entra Agent ID)
-2. **Token acquisition** to call APIs on behalf of humans or autonomously (MSAL)
-3. **On-behalf-of (OBO) delegation** so agents act with the human's permissions, not their own blanket access
-
-**Why this combination matters for Entrabot:**
-
-- **Agent IDs** give each Entrabot agent instance a unique, auditable, governable identity in the customer's Entra tenant — separate from the human who deployed it.
-- **MSAL** handles the complex OAuth 2.0 token acquisition, caching, and refresh flows that make this work in production.
-- **OBO flow** is the critical bridge: a human authenticates once (e.g., via device code flow on a CLI), and the agent exchanges that token to call downstream APIs *as the human* — never exceeding the human's own permissions.
+- **Agent User mode:** Blueprint certificate → Agent Identity FIC → Agent User `user_fic`; actions are attributed to the Agent User.
+- **Delegated mode:** MSAL authenticates a human through localhost redirect, with device code as a headless fallback.
+- **Historical OBO material:** useful protocol research, but not the current Agent User implementation.
 
 ---
 
@@ -28,7 +24,7 @@ pip install msal
 pip install msal-extensions  # for persistent token cache
 ```
 
-Current stable version: `msal >= 1.31.x` (check PyPI for latest).
+Use the version constrained by `pyproject.toml`; check Microsoft and PyPI release notes before changing it.
 
 ### Two Application Classes
 
@@ -49,7 +45,7 @@ app = PublicClientApplication(
 ```
 
 **Supported flows:**
-- Device code flow (headless/CLI — our primary bootstrap flow)
+- Device code flow (headless fallback for delegated mode)
 - Interactive browser flow
 - Username/password (ROPC — not recommended)
 
@@ -133,7 +129,7 @@ else:
 
 The OBO flow enables **delegated identity chaining**: when a middle-tier API receives a user's access token, it can exchange that token for a new access token to call a downstream API — preserving the user's identity and permissions throughout the chain.
 
-**This is Entrabot's core auth pattern:**
+**Historical OBO pattern (not current `agent_user` mode):**
 ```
 Human → (device code auth) → Entrabot Agent → (OBO) → Microsoft Graph / other APIs
 ```
@@ -355,40 +351,37 @@ Blueprint: "Entrabot Agent"
 #### Step 1: Create an Agent Identity Blueprint
 
 ```http
-POST https://graph.microsoft.com/v1.0/applications/
+POST https://graph.microsoft.com/v1.0/applications/microsoft.graph.agentIdentityBlueprint
 OData-Version: 4.0
 Content-Type: application/json
 
 {
-  "@odata.type": "Microsoft.Graph.AgentIdentityBlueprint",
   "displayName": "Entrabot Agent",
-  "sponsors@odata.bind": ["https://graph.microsoft.com/v1.0/users/<sponsor-oid>"],
-  "owners@odata.bind": ["https://graph.microsoft.com/v1.0/users/<owner-oid>"]
+  "sponsors@odata.bind": ["https://graph.microsoft.com/v1.0/users/<sponsor-oid>"]
 }
 ```
 
-The Blueprint is now created on the standard `applications` collection with an `@odata.type` discriminator, and exists in Microsoft Graph v1.0 (not beta). Then explicitly create the BlueprintPrincipal:
+The Blueprint is created through the dedicated v1.0 subtype endpoint. Then explicitly create the BlueprintPrincipal:
 
 ```http
-POST https://graph.microsoft.com/v1.0/serviceprincipals/microsoft.graph.agentIdentityBlueprintPrincipal
+POST https://graph.microsoft.com/v1.0/servicePrincipals/microsoft.graph.agentIdentityBlueprintPrincipal
 { "appId": "<blueprint-appId>" }
 ```
 
 #### Step 2: Create an Agent Identity from the Blueprint
 
 ```http
-POST https://graph.microsoft.com/beta/agentIdentities
+POST https://graph.microsoft.com/v1.0/servicePrincipals/microsoft.graph.agentIdentity
 Content-Type: application/json
 
 {
-    "agentIdentityBlueprintId": "{blueprint-id}",
-    "displayName": "Entrabot-Dev-Jane",
-    "owner": "{owner-object-id}",
-    "sponsor": "{sponsor-object-id}"
+  "agentIdentityBlueprintId": "{blueprint-app-id}",
+  "displayName": "Entrabot-Dev-Jane",
+  "sponsors@odata.bind": ["https://graph.microsoft.com/v1.0/users/<sponsor-oid>"]
 }
 ```
 
-> **Note (post-GA, May 2026):** This endpoint remains in Microsoft Graph beta — `agentIdentity` itself has not been promoted to v1.0 yet (only `agentIdentityBlueprint` was). The body schema is correct. `servicePrincipalType` will be set to `ServiceIdentity` automatically on the resulting service principal.
+> **Current endpoint:** Agent Identity creation uses the dedicated Graph v1.0 subtype endpoint. `servicePrincipalType` is set to `ServiceIdentity` automatically on the resulting service principal. Agent User creation remains on beta.
 
 #### Step 3: Register to the Agent Registry (Optional) [HISTORICAL — preview-era, deprecated 2026-05-01]
 
@@ -445,7 +438,7 @@ The **Microsoft Entra SDK for Agent Identities** provides simplified token acqui
 ### Post-GA capabilities and remaining constraints (May 1, 2026)
 
 - **GA as of 2026-05-01.** Microsoft Agent 365 (which includes Entra Agent ID) is generally available. Standalone $15/user/month or part of M365 E7 ($99/user/month).
-- **`agentIdentityBlueprint` is in Graph v1.0;** `agentIdentity` and `agentUser` remain in beta but are stable.
+- **Blueprint, BlueprintPrincipal, and Agent Identity creation use Graph v1.0 subtype endpoints;** Agent User creation remains on beta.
 - **Single-tenant Agent Identities, regardless of Blueprint tenancy.** Agent Identities are always single-tenant even if the Blueprint is multi-tenant.
 - **No public-client capabilities for any agent entity.** Confidential clients only. No native, mobile, SPA, or device-code flows for Blueprints or Agent Identities.
 - **No `/authorize` flows for any agent entity.** Authorization-code flows for an interactive agent run on a separate client app reg, not the Blueprint.
@@ -575,7 +568,7 @@ MSAL handles refresh automatically in `acquire_token_silent()`:
 
 ## Device Code Flow
 
-The device code flow is Entrabot's **primary bootstrap authentication method** for CLI/headless scenarios where the agent runs in a terminal without a browser.
+In current Entrabot, device code is a **fallback for delegated mode** when localhost browser authentication is unavailable. It is not used by the autonomous Agent User flow and cannot use an Agent Blueprint as its public client.
 
 ### How It Works
 

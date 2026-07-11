@@ -54,11 +54,11 @@ client_id=<blueprint-app-id>
 ```
 
 The JWT assertion is signed by a private key stored in the OS credential store:
-- **macOS:** Keychain (Secure Enclave on Apple Silicon)
-- **Windows:** Certificate Store (TPM 2.0 on supported hardware)
+- **macOS:** Keychain
+- **Windows:** Certificate Store through CNG (TPM-backed when available, Software KSP fallback)
 - **Linux:** Secret Service API / GNOME Keyring
 
-The private key never leaves the secure hardware. Only the public certificate is registered in Entra.
+The private key is never written to `.env` or the repository. TPM-backed Windows keys are non-exportable; other platforms protect the key with the operating system credential store. Only the public certificate is registered in Entra.
 
 ## Implementation Plan
 
@@ -81,7 +81,7 @@ The private key never leaves the secure hardware. Only the public certificate is
 
 **Positive:**
 - No plaintext secrets on disk
-- Private key bound to device hardware (Keychain/TPM)
+- Private key protected by the OS credential store, with TPM hardware protection on supported Windows devices
 - Aligns with Microsoft's production recommendation
 - Certificate rotation is device-local (no Entra portal visit needed if automated)
 - The `platform/` layer already has OS-specific shims — natural extension
@@ -92,7 +92,7 @@ The private key never leaves the secure hardware. Only the public certificate is
 - Self-signed certs have no revocation infrastructure (acceptable for PoC)
 
 **Risks:**
-- Agent ID APIs are still in preview — certificate auth may have undocumented behaviors
+- Agent User creation remains on Graph beta and the Agent ID platform can still have tenant-specific behavior
 - Initial certificate enrollment still requires admin action or a provisioning flow
 
 ## Related
@@ -116,10 +116,10 @@ ADR's spirit holds, but the mechanics are now per-platform:
 | Key storage | Keychain / Secret Service via ``keyring`` (PEM blob) | ``Cert:\\CurrentUser\\My`` via Windows CNG |
 | Key extractability | PEM is exportable; protected by OS access control | TPM KSP keys are **non-exportable**; software KSP is DPAPI-bound |
 | Signing path | ``cryptography.load_pem_private_key`` → ``rsa.sign`` | ``ncrypt.dll`` ``NCryptSignHash`` (PKCS1+SHA256) via ``auth/cncrypt_signer.py`` |
-| Cert generation | OpenSSL via ``scripts/generate_cert.py`` | ``New-SelfSignedCertificate`` via ``scripts/generate_windows_cert.py`` |
+| Cert generation | Python ``cryptography`` in ``setup.sh`` | ``New-SelfSignedCertificate`` via ``scripts/generate_windows_cert.py`` |
 | KSP selection | n/a — software-only on Mac/Linux | TPM-first (``Microsoft Platform Crypto Provider``), software-fallback (``Microsoft Software Key Storage Provider``) |
 | Thumbprint | SHA-256 b64url (used as JWT ``x5t#S256``) | SHA-1 hex (used to find cert in store) **plus** SHA-256 b64url (header) |
-| Rotation | ``deploy.sh`` | ``deploy-windows.ps1`` + ``rotate_cert_windows.py`` (transactional rollback per D7) |
+| Rotation | ``setup.sh`` verifies and regenerates when needed | ``deploy-windows.ps1`` + ``rotate_cert_windows.py`` (transactional rollback per D7) |
 
 The dispatch lives in ``src/entrabot/auth/certificate.py``:
 ``build_client_assertion`` accepts either ``private_key_pem`` (Mac/Linux)

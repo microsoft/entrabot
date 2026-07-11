@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Rename-safe agent matching through canonical `ENTRABOT_AGENT_UPN` with object-ID fallback.
+- Boundary-owned XPIA envelopes for model-facing Teams, email, Files, and Work IQ content.
+- `read_email`, `read_interactions`, and `bootstrap_body_state`, bringing the MCP surface to 37 tools.
+- Windows status tooling and expanded Windows setup/teardown guidance.
+
+### Changed
+
+- Blueprint, BlueprintPrincipal, and Agent Identity creation now use the dedicated Microsoft Graph v1.0 subtype endpoints; Agent User creation remains on beta.
+- Documentation, quickstarts, API references, script references, and GitHub Pages navigation were refreshed against current code and platform APIs.
+- GitHub Pages builds run in strict mode.
+
+### Fixed
+
+- Self-authored Teams messages remain filtered after an Agent User display-name change.
+- Forged `<external_content>` text can no longer bypass the authoritative XPIA boundary.
+- A UTC-midnight-dependent test no longer fails intermittently on Windows CI.
+
+### Removed
+
+- Bot Gateway mode and its M365 Agents SDK dependency (ADR-006).
+- The unused Claude pull-request review workflow.
+
 ## v0.1 — 2026-05-21
 
 First public release. Reference implementation for Microsoft Entra Agent ID and Microsoft Agent 365 (GA 2026-05-01). MIT licensed. **Research repo, not production-ready** — see Known Limitations below.
@@ -27,7 +53,7 @@ First public release. Reference implementation for Microsoft Entra Agent ID and 
 
 **Body prompt architecture**
 - Non-overridable body prompt at `prompts/agent_system.md` with `@include` expansion of `prompts/anatomy/*.md`. Security, channel discipline, identity/tools rules load below the persona line.
-- Instruction-injection defense at the architectural level — an agent that runs on entrabot cannot be jailbroken into impersonating its operator.
+- Body-first instruction boundaries and channel discipline designed to reduce instruction-injection and operator-impersonation risk.
 
 **Mind / persona (optional)**
 - Persona-sati MCP integration. Body composes `body + persona` at boot when `PERSONA_SATI_MCP_URL` is set. Clean fallback to body-only mode when persona-sati is unreachable.

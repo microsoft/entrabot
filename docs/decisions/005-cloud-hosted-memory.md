@@ -150,7 +150,7 @@ Comfortable fit. Retention isn't bounded by context; it's bounded by the usefuln
 
 ### Concurrency
 
-Low-risk in practice — the agent runs on one machine at a time, one process. Guard anyway with **ETag-based optimistic concurrency** on blob writes. If the ETag changed since our last read, the write fails with HTTP 412; we refetch and retry. This handles the rare case of two of the same user's machines writing simultaneously (e.g. Brandon forgot to stop the Mac Studio server before switching to the laptop). Last-writer-wins semantics after retry, which is correct for single-user-multi-machine.
+Low-risk in practice — the agent runs on one machine at a time, one process. Guard anyway with **ETag-based optimistic concurrency** on blob writes. If the ETag changed since our last read, the write fails with HTTP 412; we refetch and retry. This handles the rare case of two of the same user's machines writing simultaneously (for example, one device is left running while the operator switches to another). Last-writer-wins semantics after retry, which is correct for single-user-multi-machine.
 
 ### Migration
 

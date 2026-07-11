@@ -1,6 +1,6 @@
 # Documentation Site
 
-## Local Preview
+## Local preview
 
 ```bash
 pip install mkdocs-material  # first time only
@@ -9,48 +9,52 @@ mkdocs serve
 
 Open <http://localhost:8000>.
 
+## Validation
+
+Documentation builds are warning-free by contract:
+
+```bash
+mkdocs build --strict
+```
+
+Keep links between files under `docs/` relative so MkDocs can validate them. Links to repository-root source, scripts, prompts, or instruction files must use canonical `https://github.com/microsoft/entrabot/blob/main/...` URLs because those targets are outside the MkDocs content tree.
+
 ## Auto-deploy
 
-Docs auto-publish to GitHub Pages on every push to `main` that touches `docs/`, `mkdocs.yml`, or the workflow itself. Workflow file: `.github/workflows/docs.yml`.
+Docs publish to GitHub Pages on every push to `main` that touches `docs/`, `mkdocs.yml`, or `.github/workflows/docs.yml`. The workflow:
 
-The workflow:
+1. Checks out the repository.
+2. Installs Python 3.12 and `mkdocs-material`.
+3. Runs `mkdocs build --strict`.
+4. Uploads the generated `site/` artifact.
+5. Deploys with `actions/deploy-pages@v4`.
 
-1. Checks out the repo.
-2. Installs Python 3.12 and `mkdocs-material` (+ `mkdocstrings[python]` for future API extraction).
-3. Runs `mkdocs build` (non-strict — see warnings below).
-4. Uploads the `site/` artifact to GitHub Pages.
-5. Deploys via `actions/deploy-pages@v4`.
+Published site: <https://microsoft.github.io/entrabot/>.
 
-Published at <https://microsoft.github.io/entrabot/>. GitHub Pages is configured with `build_type=workflow`; re-enable via:
+GitHub Pages uses `build_type=workflow`. To enable it on a new fork:
 
 ```bash
 gh api -X POST repos/<owner>/<repo>/pages -f 'build_type=workflow'
 ```
 
-`gh` returns `409 GitHub Pages is already enabled` when Pages is already on — that's expected and safe to ignore.
+A `409 GitHub Pages is already enabled` response is safe to ignore.
 
-## Build warnings
+## Adding pages
 
-`mkdocs build --strict` currently fails because some in-repo docs reference source files via `../../src/...` and `../../scripts/...`. MkDocs can't validate those because they live outside `docs/`. The workflow runs without `--strict` to keep the build green. The links work at GitHub-rendered Markdown level (they point at real files in the repo tree).
-
-If you add new docs, keep cross-tree links pointing at real source paths so reading on GitHub still works. Inside `docs/`, prefer relative links so MkDocs can validate them.
-
-## Adding new pages
-
-1. Create the markdown file in the appropriate `docs/` subdirectory.
-2. Add it to the `nav:` section in `mkdocs.yml`.
-3. Cross-link from related pages.
-4. Run `mkdocs build` locally and check for new warnings.
+1. Create the Markdown file in the appropriate `docs/` subdirectory.
+2. Add important current pages to `nav:` in `mkdocs.yml`; historical supporting material may remain unlisted.
+3. Cross-link related pages.
+4. Run `mkdocs build --strict` and fix every warning.
 
 ## Layout
 
-- `docs/getting-started/` — onboarding pages (quickstart).
-- `docs/guides/` — how-to guides for operators.
-- `docs/architecture/` — system design docs, four-pagers, plan documents.
-- `docs/reference/scripts/` — one page per script category.
-- `docs/reference/api/` — Python API surface (MCP tools, storage, auth, identity, audit, efferent-copy, body prompt).
+- `docs/getting-started/` — onboarding.
+- `docs/guides/` — operator how-to guides.
+- `docs/clients/` — MCP host integration.
+- `docs/architecture/` — system designs and implementation records.
+- `docs/reference/scripts/` — script categories.
+- `docs/reference/api/` — MCP and Python API surfaces.
 - `docs/decisions/` — ADRs.
 - `docs/runbooks/` — operational runbooks and hard-won learnings.
-- `docs/platform-learnings/` — vendor-platform notes (Entra, Teams, MCP, A365, etc.).
-- `docs/developer/` — contributor-facing docs (this file, QA log, engineering status).
-- `docs/plans/`, `docs/prompts/`, `docs/clients/` — supporting material.
+- `docs/platform-learnings/` — vendor-platform research.
+- `docs/developer/` — contributor documentation.

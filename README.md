@@ -1,11 +1,11 @@
 # Entrabot: Identity Research for Microsoft 365 Agents
 
 
-Entrabot is a Python MCP server that gives a device-local agent its own Entra **Agent ID** and an **Agent User** that has all the capabilities of a human user in a Microsoft tenant. It can have a Teams presence and be invited to meetings to chat with your colleagues 1:1, a mailbox it can monitor and respond to, create and edit Word documents, make PowerPoint presentations, and allows you to access your CLI. The agent signs in autonomously, sends Teams messages from its own account, and writes audit events against its own object ID. It runs on macOS, Linux, and Windows, and works with Claude Code, Copilot CLI, or any MCP-speaking client.
+Entrabot is a Python MCP server that gives a device-local agent its own Entra **Agent ID** and **Agent User**. The agent can sign in autonomously, send and receive Teams messages from its own account, use its mailbox, work with Microsoft 365 files, and write audit events against its own object ID. It runs on macOS, Linux, and Windows and works with Claude Code, Copilot CLI, or any MCP-speaking client.
 
 **All you need to get started is:**
 
-* A Free Microsoft 365 Developer tenant (sign up at <https://aka.ms/m365devprogram>)
+* A Microsoft 365 development tenant where you can create app registrations and grant admin consent
 * A license that includes Teams and Outlook (E3 or E5 dev tenant licenses work)
 * Python 3.12 installed locally
 
@@ -25,7 +25,7 @@ A device-local MCP server that turns an LLM agent into a first-class principal i
 
 It is for developers building agents on Microsoft 365 who want the security posture to match the architecture. The agent's smarts are up to you. entrabot gives it a secure seat at the table and the keys to the kingdom; what it does with that power is your call.
 
-The body prompt (`prompts/agent_system.md` plus `prompts/anatomy/*.md`) is non-overridable and loads before any user turn. Security rules, channel discipline, and instruction-injection defense are baked in below the persona line. An agent that runs on entrabot cannot be jailbroken into impersonating its operator.
+The body prompt (`prompts/agent_system.md` plus `prompts/anatomy/*.md`) loads before any optional persona. Security rules, channel discipline, and external-content boundaries are enforced by the body and reinforced in code. These controls reduce instruction-injection risk; they are not an absolute guarantee against every jailbreak technique.
 
 ---
 
@@ -38,7 +38,7 @@ entrabot is the device-side glue for a set of platform primitives Microsoft ship
 - **Conditional Access for agents** — GA. Apply CA policies to Agent Identity sign-ins the same way you apply them to users.
 - **ID Protection for agents** — GA. Risk scoring and remediation against the agent's own object.
 - **FastMCP** — the Python MCP server framework. entrabot registers every Teams, Outlook, Files, Word, audit, and identity tool through it.
-- **Three-hop certificate chain** — Blueprint token (cert JWT) → Agent Identity token (federated identity credential) → Agent User token (`user_fic` grant). No client secret in flight. Private key in macOS Keychain, Windows TPM via CNG, or Linux Secret Service.
+- **Three-hop certificate chain** — Blueprint token (cert JWT) → Agent Identity token (federated identity credential) → Agent User token (`user_fic` grant). No client secret in flight. Private key in macOS Keychain, Windows CNG (TPM-backed when available), or Linux Secret Service.
 
 entrabot connects these. The Blueprint is provisioned via Graph. The Agent User is licensed and visible in Teams. The MCP server runs locally, mints tokens against Entra without a human, and exposes the resulting capability surface to the agent.
 
@@ -89,10 +89,10 @@ Full walkthrough in [`docs/architecture/system-overview.md`](docs/architecture/s
 Mac or Linux:
 
 ```bash
-git clone https://github.com/brandwe/entrabot-identity-research.git
-cd entrabot-identity-research
-./scripts/setup.sh --new --with-upn-suffix=yourname
-source .venv/bin/activate
+git clone https://github.com/microsoft/entrabot.git
+cd entrabot
+./scripts/prereqs-macos.sh   # macOS; see INSTALL.md for Linux/Windows
+./scripts/setup.sh --new --with-upn-suffix=workstation
 claude --dangerously-load-development-channels server:entrabot
 ```
 
@@ -127,7 +127,7 @@ While the agent is blocked waiting on a Teams reply (any host that calls `wait_f
 (•ᴗ•) zZz... listening for Teams DM [42s] (Ctrl+C to break)
 ```
 
-Frames cycle (`ʕ•ᴥ•ʔ waiting on sponsor`, `(´･ω･`) sponsor hasn't replied yet`, `(◕‿◕) still here, still waiting`, …) every ~30s with elapsed time. Ctrl+C breaks out cleanly. Full host-by-host protocol: [`docs/claude-copilot-cli-channel-port.md`](docs/claude-copilot-cli-channel-port.md) and [`prompts/anatomy/channel-discipline.md`](prompts/anatomy/channel-discipline.md).
+Frames cycle (`ʕ•ᴥ•ʔ waiting on sponsor`, `(´･ω･`) sponsor hasn't replied yet`, `(◕‿◕) still here, still waiting`, …) every ~30s with elapsed time. Ctrl+C breaks out cleanly. Full host-by-host protocol: [`docs/claude-copilot-cli-channel-port.md`](docs/claude-copilot-cli-channel-port.md) and [`prompts/anatomy/channel-discipline.md`](prompts/anatomy/channel-discipline.md). On Windows, use `pwsh -File status-windows.ps1` for the equivalent status surface.
 
 After setup, use `./status.sh` as the canonical health and identity check:
 
@@ -146,14 +146,14 @@ The full doc site: **<https://microsoft.github.io/entrabot/>**
 Direct pointers:
 
 - [Quickstart](docs/getting-started/quickstart.md) — five minutes from clone to first Teams message
-- [MCP tool reference](docs/reference/mcp-tools.md) — every tool, every parameter
-- [Setup script reference](docs/reference/setup-script.md) — every `setup.sh` flag
+- [MCP tool reference](docs/reference/api/mcp-tools.md) — every tool, every parameter
+- [Setup script reference](docs/reference/scripts/setup.md) — every `setup.sh` and `setup-windows.ps1` flag
 - [Script reference](docs/reference/scripts/operations.md) — status, health, DM, email, setup, teardown, and diagnostic scripts
 - [Token flows](docs/reference/token-flows.md) — the three hops, annotated
 - [System overview](docs/architecture/system-overview.md) — how the modules fit together
-- [Architecture decisions](docs/decisions/README.md) — ADRs 001–005
+- [Architecture decisions](docs/decisions/README.md) — ADRs 001–006
 - [Platform learnings](docs/platform-learnings/) — Entra Agent ID constraints, Agent 365, MSAL, OS-specific notes
-- [Hard-won learnings](docs/runbooks/hard-won-learnings.md) — 66 non-obvious gotchas; read before changing auth or Teams code
+- [Hard-won learnings](docs/runbooks/hard-won-learnings.md) — non-obvious gotchas; read before changing auth or Teams code
 - [Engineering status](docs/engineering-status.md) — what's shipped, what's open, what's next
 
 ---
@@ -172,7 +172,7 @@ This is a research repo, not a production service. It runs reliably on a develop
 - Storage: `LocalBackend` (default) and `BlobBackend` (Azure Blob Storage, opt-in via `setup.sh --use-cloud-memory`)
 - Body-first prompt architecture with optional persona layer from a separate MCP (`persona-sati`)
 - Audit fails closed: if the audit write fails, the action does not proceed
-- 1,237 tests; `pytest -v && ruff check .` gate every commit
+- `pytest -v --tb=short && ruff check .` gates every commit
 
 **Persona-sati host bootstrap:** Hosts that attach persona-sati must call `bootstrap_session` before the first substantive answer because FastMCP instructions do not reliably reach the LLM prompt. If `mind_contract_available` is false, operate in body-only mode. When the mind contract is available, follow the per-turn cognition tools: `observe` around external tools, `reflect` for durable observations, and `recall` when a returned memory excerpt is insufficient.
 
@@ -182,12 +182,12 @@ This is a research repo, not a production service. It runs reliably on a develop
 |---|---|
 | macOS | Shipped — Keychain-backed cert storage, full three-hop flow |
 | Linux | Works — Secret Service (libsecret) backend |
-| Windows | Shipped, acceptance-tested on ARM64 Windows 11 — TPM-backed CNG cert storage |
+| Windows | Shipped, acceptance-tested on ARM64 Windows 11 — CNG cert storage with TPM-first/software fallback |
 
 **Open:**
 
-- AppContainer sandbox spike on Windows for stronger process isolation
-- A few platform-edge bugs tracked in [`docs/engineering-status.md`](docs/engineering-status.md) (Agent Identity missing `Application.Read.All`; `add_file_comment` Word 404; persona-sati 12h MCP refresh bug paused at the Blueprint public-client constraint)
+- MXC/AppContainer sandbox integration is under review and is not part of the current `main` runtime.
+- Long-session MCP disconnect investigation and several scheduler/cursor precision fixes remain tracked in [`docs/engineering-status.md`](docs/engineering-status.md).
 
 ---
 

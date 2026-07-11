@@ -1,5 +1,7 @@
 # Plan: Windows Port (host-agnostic, lean scope)
 
+> **Status: Shipped.** Windows setup, status, teardown, CNG signing, and certificate rotation are on `main`. This file is retained as the implementation design record; future-tense statements below describe the pre-implementation state.
+
 > Supersedes `docs/architecture/next-windows-dev-environment.md` (2026-04-05),
 > `docs/openai-windows-agent-identity-port.md` (2026-04-24), and
 > `docs/claude-windows-port.md` (2026-04-28). Those three docs were built off
@@ -9,12 +11,11 @@
 >
 > **Scope decision (2026-04-28, /plan-eng-review D1):** ship Windows in ~6
 > files by writing `setup-windows.ps1` directly against the existing
-> cross-platform Python helpers. Do NOT refactor `setup.sh` (1,032 lines of
-> bash) into a Python orchestrator package as part of this work — that was
+> cross-platform Python helpers. Do NOT refactor `setup.sh`
+> (the existing bash orchestrator) into a Python orchestrator package as part of this work — that was
 > rejected as scope creep. A future "unify Mac/Linux/Windows on one
 > orchestrator" is its own project, evaluated on its own merits when there
-> is real evidence the bash↔PowerShell duplication is causing pain. See
-> `PLAN-windows-port.md.v1-bak` for the rejected fuller plan.
+> is real evidence the bash↔PowerShell duplication is causing pain.
 
 ## Problem
 
@@ -31,14 +32,13 @@ that wires both Copilot CLI (`~/.copilot/mcp-config.json`) and Claude Code
 The work below leans on cross-platform Python helpers that already ship and are
 already used by `setup.sh` via `python3 ...`:
 
-- `scripts/entra_provisioning.py` (658 lines) — Blueprint + AgentIdentity + sponsors.
-- `scripts/create_entra_agent_ids.py` (1055 lines) — Agent User provisioning, FIC, consent.
-- `scripts/provision_blob_storage.py` (250 lines) — RG + storage account + RBAC.
-- `scripts/mcp_config.py` (158 lines) — writes BOTH `.mcp.json` AND
-  `~/.copilot/mcp-config.json` with the right binary path (verified at
-  `tests/scripts/test_mcp_config.py:43-374`).
+- `scripts/entra_provisioning.py` — Blueprint + AgentIdentity + sponsors.
+- `scripts/create_entra_agent_ids.py` — Agent User provisioning, FIC, consent.
+- `scripts/provision_blob_storage.py` — RG + storage account + RBAC.
+- `scripts/mcp_config.py` — writes both `.mcp.json` and
+  `~/.copilot/mcp-config.json`; covered by `tests/scripts/test_mcp_config.py`.
 
-`setup.sh` itself (1,032 lines) is bash orchestration around those Python
+`setup.sh` itself is bash orchestration around those Python
 helpers. We do NOT touch it as part of this work. The Windows port writes a
 parallel PowerShell orchestrator that calls the same Python helpers.
 
@@ -60,11 +60,10 @@ and returns a thumbprint. Cert generation is the one task on Windows that
 diverges meaningfully from the Mac path (Keychain PEM gen) and warrants its
 own helper rather than being inlined into PS1.
 
-Rejected alternative: extracting `setup.sh` into a `scripts/entrabot_setup/`
-Python package. That was the original v1 proposal — see `.v1-bak` for the
-file layout. Rejected because it bundles "port to Windows" with "rewrite
-1,032 lines of bash" and the second is a separate refactor that should stand
-on its own merits, not ride on this PR.
+Rejected alternative: extracting `setup.sh` into a Python orchestrator package.
+That draft is no longer retained. It bundled "port to Windows" with "rewrite
+the bash orchestrator"; the latter is a separate refactor that should stand on
+its own merits.
 
 ### Decision B — Keystore: TPM-first, software fallback (per user)
 

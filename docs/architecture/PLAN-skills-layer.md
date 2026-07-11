@@ -102,7 +102,7 @@ Envelope shape reuses the XPIA wrap primitive from Feature 1 — a skill body is
 Example inbound: `/prep-1on1 Alice`. Effective turn:
 
 ```
-<skill_activation source="teams:19:..." skill="prep-1on1" invoked_by="brandon@werner.ac">
+<skill_activation source="teams:19:..." skill="prep-1on1" invoked_by="sponsor@contoso.onmicrosoft.com">
 <SKILL.md body here>
 </skill_activation>
 

@@ -41,9 +41,9 @@ Set `ENTRABOT_NEW_CHAIN=1` to force creation (skips reuse lookups). `setup.sh --
 ### What it does
 
 - Mints a Provisioner Graph token via `entra_provisioning.get_existing_graph_token()`.
-- Creates or reuses the Blueprint app registration via Graph beta `/applications`.
-- Creates `BlueprintPrincipal` explicitly (NOT auto-created — Learning #2).
-- Creates the Agent Identity service principal via `/servicePrincipals`.
+- Creates or reuses the Blueprint through `POST /v1.0/applications/microsoft.graph.agentIdentityBlueprint`.
+- Creates `BlueprintPrincipal` explicitly through `POST /v1.0/servicePrincipals/microsoft.graph.agentIdentityBlueprintPrincipal` (NOT auto-created — Learning #2).
+- Creates the Agent Identity through `POST /v1.0/servicePrincipals/microsoft.graph.agentIdentity`.
 - Creates the Agent User via `/users` and links it to the Agent Identity.
 - Grants required `oauth2PermissionGrants` for Graph delegated scopes.
 
