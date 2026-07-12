@@ -44,3 +44,14 @@ def test_setup_embedded_token_path_is_explicitly_bootstrap_capable() -> None:
 
     assert "from entra_provisioning import get_bootstrap_graph_token" in script
     assert "get_bootstrap_graph_token(wait_for_propagation=False)" in script
+
+
+def test_teardown_no_token_warning_does_not_promise_az_cli_fallback() -> None:
+    """The Agent Identity/Blueprint deletion paths only warn and skip (or
+    require manual cleanup) when no Provisioner token exists — they never
+    fall back to az CLI, which is rejected by Agent Identity APIs (Learning
+    #1). The top-level warning text must not claim otherwise."""
+    script = (REPO_ROOT / "scripts" / "teardown.sh").read_text(encoding="utf-8")
+
+    assert "will try az CLI" not in script
+    assert "No Provisioner token — manual cleanup may be required for Agent Identity APIs" in script

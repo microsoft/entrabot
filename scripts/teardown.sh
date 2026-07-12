@@ -172,6 +172,7 @@ echo "  Cloud storage: not deleted by teardown.sh"
 echo ""
 if [ "$DRY_RUN" = true ]; then
     echo -e "${YELLOW}Dry run only — no tenant or local state will be deleted.${NC}"
+    exit 0
 elif [ "$ASSUME_YES" = false ]; then
     read -p "Are you sure? (y/N) " -n 1 -r
     echo
@@ -208,7 +209,7 @@ fi
 if [ -n "$PROV_TOKEN" ] && [ ${#PROV_TOKEN} -gt 100 ]; then
     echo -e "  ${GREEN}Got Provisioner token for Agent Identity API deletions${NC}"
 else
-    echo -e "  ${YELLOW}⚠️  No Provisioner token — will try az CLI (may fail for Agent Identity APIs)${NC}"
+    echo -e "  ${YELLOW}⚠️  No Provisioner token — manual cleanup may be required for Agent Identity APIs${NC}"
     PROV_TOKEN=""
 fi
 
