@@ -1,7 +1,7 @@
 """Generate the Blueprint cert on Windows.
 
-Wraps ``New-SelfSignedCertificate`` with hard-locked crypto parameters
-(D9 in PLAN-windows-port.md). Auto-detects TPM availability and falls
+Wraps ``New-SelfSignedCertificate`` with hard-locked crypto parameters.
+Auto-detects TPM availability and falls
 back to the software KSP. Returns the SHA-1 thumbprint, the SHA-256
 b64url JWT thumbprint, and the public DER bytes ready for upload to
 the Blueprint app.

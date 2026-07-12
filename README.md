@@ -146,13 +146,13 @@ The full doc site: **<https://microsoft.github.io/entrabot/>**
 Direct pointers:
 
 - [Quickstart](docs/getting-started/quickstart.md) — five minutes from clone to first Teams message
-- [MCP tool reference](docs/reference/api/mcp-tools.md) — every tool, every parameter
-- [Setup script reference](docs/reference/scripts/setup.md) — every `setup.sh` and `setup-windows.ps1` flag
-- [Script reference](docs/reference/scripts/operations.md) — status, health, DM, email, setup, teardown, and diagnostic scripts
+- [MCP tool reference](docs/reference/mcp-tools.md) — every tool, every parameter
+- [Setup script reference](docs/reference/scripts/setup/setup-sh.md) — `setup.sh` options and behavior
+- [Script reference](docs/reference/scripts/index.md) — status, health, DM, email, setup, teardown, and diagnostic scripts
 - [Token flows](docs/reference/token-flows.md) — the three hops, annotated
 - [System overview](docs/architecture/system-overview.md) — how the modules fit together
 - [Platform docs](docs/platform-docs/) — Entra Agent ID constraints, Agent 365, delegated auth, OS-specific notes
-- [Hard-won learnings](docs/runbooks/hard-won-learnings.md) — non-obvious gotchas; read before changing auth or Teams code
+- [Troubleshooting](docs/troubleshooting/index.md) — symptom-first guide to common setup, auth, and runtime failures
 - [Current status](docs/project/status.md) — what's shipped, what's open, what's next
 - [Changelog](CHANGELOG.md) — release history
 

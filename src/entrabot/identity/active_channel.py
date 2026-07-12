@@ -21,7 +21,7 @@ Design notes (from rubber-duck review):
 - TTL of 120 seconds is intentional. This is an AUTHORIZATION window,
   not a context-freshness window. Workflows that legitimately need
   multi-minute gaps between sponsor request and agent action should
-  use an explicit confirmation flow (future PR — see TODOS.md).
+  use explicit confirmation; this binding does not implement that flow.
 - Not thread-safe by design — single-process MCP-server event loop.
 """
 

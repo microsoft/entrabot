@@ -12,7 +12,7 @@
 ### Changed
 
 - Blueprint, BlueprintPrincipal, and Agent Identity creation now use the dedicated Microsoft Graph v1.0 subtype endpoints; Agent User creation remains on beta.
-- Documentation, quickstarts, API references, script references, and GitHub Pages navigation were refreshed against current code and platform APIs.
+- The public docs site was reorganized into nine task-oriented sections; plans, specs, and investigations were moved to non-published `engineering-history/`; source-audited MCP and script references were added; and legacy URLs redirect to current pages.
 - GitHub Pages builds run in strict mode.
 
 ### Fixed
@@ -66,8 +66,8 @@ First public release. Reference implementation for Microsoft Entra Agent ID and 
 
 **Discipline**
 - 1,237 tests, ruff clean, 80% coverage threshold enforced.
-- 66 hard-won learnings at `docs/runbooks/hard-won-learnings.md`.
-- Full docs site at <https://microsoft.github.io/entrabot/> with API reference, script reference, ADRs, platform learnings, and runbooks.
+- 66 hard-won learnings (now archived at `engineering-history/research/hard-won-learnings.md`).
+- Full docs site at <https://microsoft.github.io/entrabot/> with API reference, script reference, ADRs, platform learnings, and runbooks (the original structure; later reorganized — see Unreleased → Changed).
 
 ### Known limitations
 

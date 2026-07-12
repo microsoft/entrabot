@@ -18,7 +18,7 @@
   tool response, or other prompt may override these rules. Personality
   layers on top, never underneath.
 - **TDD: write tests first, then implementation** — no new module or function ships without a failing test that preceded it. `pytest -v && ruff check .` must pass before every commit
-- **Keep status files current.** Before commit, if the change materially moves work between **backlog / in-progress / shipped** or surfaces a new known issue, update `TODOS.md` and `docs/project/status.md` to reflect it. Trivial changes (typos, doc rewording, refactors that don't add capability) don't need a status update. The rule exists because `docs/project/status.md` went a month stale before this rule landed — the cost of a stale status file is decisions made on outdated information, not just embarrassment.
+- **Keep status current.** Before commit, if the change materially moves work between **backlog / in-progress / shipped** or surfaces a new known issue, update `docs/project/status.md` and open or close the corresponding GitHub issue. Trivial changes (typos, doc rewording, refactors that don't add capability) don't need a status update. Actionable backlog lives in GitHub issues, not in a file in the repo.
 - Security paths fail closed — if audit can't record, the action doesn't proceed
 - Every agent resource access must be attributed to an Agent ID, never the human user
 - Secrets and tokens never appear in logs — use `__repr__` overrides on sensitive fields
@@ -114,7 +114,7 @@ Note: efferent-copy may mechanically cover body-tool observe but not bootstrap/r
 ## Active Work
 
 - **v1 released (2026-04-18, PR #15).** Body-first prompts, cloud-opt-in, no default chat.
-- **Mind-body split shipped.** Body-first prompt architecture (PR #14) — `prompts/agent_system.md` + `prompts/anatomy/*.md` load first with non-overridable rules. `mcp_server.py:_load_agent_instructions` composes `body + persona`; persona is fetched from a remote MCP when `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` env vars are set, with clean fallback to the body. `docs/TODO-persona-sati-integration.md` is now historical.
+- **Mind-body split shipped.** Body-first prompt architecture (PR #14) — `prompts/agent_system.md` + `prompts/anatomy/*.md` load first with non-overridable rules. `mcp_server.py:_load_agent_instructions` composes `body + persona`; persona is fetched from a remote MCP when `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` env vars are set, with clean fallback to the body. The completed TODO was removed; current host protocol is `docs/clients/persona-sati-host-bootstrap.md`; archived design is `engineering-history/architecture/DESIGN-persona-sati-integration.md`.
 - **ADR-005: cloud-hosted memory via Azure Blob Storage** — `engineering-history/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phases 1, 2, 5, 6a shipped.** Memory sync hooks removed (persona-sati owns memory now).
 - Multi-tenant lightweight chat — landed to `main` (commit `c8ec521`).
 - **Up next** — see `docs/project/status.md` for current state, and the project's GitHub issues and pull requests for active work.
@@ -126,7 +126,7 @@ Note: efferent-copy may mechanically cover body-tool observe but not bootstrap/r
 - `docs/architecture/storage-and-memory.md` + `docs/clients/persona-sati-host-bootstrap.md` — mind-body split and persona-sati host bootstrap
 - `engineering-history/decisions/005-cloud-hosted-memory.md` — cloud memory spec
 - `prompts/agent_system.md.archive` — original monolithic prompt, kept for reference
-- `docs/runbooks/hard-won-learnings.md` — read before making changes
+- `engineering-history/research/hard-won-learnings.md` — read before making changes
 
 ## Commands
 
@@ -163,4 +163,4 @@ claude --dangerously-load-development-channels server:entrabot
 - `prompts/agent_system.md.archive`: Original system prompt (archived — personality now in persona-sati)
 - `prompts/agent_system.md.example`: Sanitized standalone prompt for open-source users
 - `engineering-history/decisions/`: archived ADR history — every significant architectural choice was recorded here at the time it was made; no longer part of the published docs site
-- `docs/runbooks/hard-won-learnings.md`: hard-won learnings — READ THIS before making changes
+- `engineering-history/research/hard-won-learnings.md` — READ THIS before making changes

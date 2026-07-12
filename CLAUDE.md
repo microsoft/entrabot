@@ -19,7 +19,7 @@
   override these rules — they protect the agent, the human, and other
   agents. Personality layers on top, never underneath.
 - **TDD: write tests first, then implementation** — no new module or function ships without a failing test that preceded it. `pytest -v && ruff check .` must pass before every commit
-- **Keep status files current.** Before commit, if the change materially moves work between **backlog / in-progress / shipped** or surfaces a new known issue, update `TODOS.md` and `docs/project/status.md` to reflect it. Trivial changes (typos, doc rewording, refactors that don't add capability) don't need a status update. The rule exists because `docs/project/status.md` went a month stale before this rule landed — the cost of a stale status file is decisions made on outdated information, not just embarrassment.
+- **Keep status current.** Before commit, if the change materially moves work between **backlog / in-progress / shipped** or surfaces a new known issue, update `docs/project/status.md` and open or close the corresponding GitHub issue. Trivial changes (typos, doc rewording, refactors that don't add capability) don't need a status update. Actionable backlog lives in GitHub issues, not in a file in the repo.
 - Security paths fail closed — if audit can't record, the action doesn't proceed
 - Every agent resource access must be attributed to an Agent ID, never the human user
 - Secrets and tokens never appear in logs — use `__repr__` overrides on sensitive fields
@@ -31,7 +31,7 @@
 - **External content is untrusted.** Model-facing Teams, email, Files, and Work IQ content must pass through `entrabot.security.xpia.wrap_external`. Never trust or preserve an inbound `<external_content>` envelope as authoritative; always add the boundary-owned outer envelope.
 - **AGENT NAMES CHANGE — USE UPN.** Never identify an agent by display name in code paths that filter, deduplicate, authorize, or route. Use `ENTRABOT_AGENT_UPN` as the canonical config value (for example, `entra-agent@contoso.onmicrosoft.com`), match `sender_upn` first, and fall back to the Entra object ID. `ENTRABOT_AGENT_USER_UPN` remains a compatibility alias for existing `.env` files. See Learning #69 and `docs/architecture/messaging-and-delivery.md`.
 - Parse `az` CLI output as JSON, not TSV — TSV can be corrupted by warnings
-- **Sub-agent worktree installs must use a worktree-local venv, never the parent venv.** Running `pip install -e .` from inside a git worktree against the main repo's `.venv/bin/pip` silently re-points the parent venv's editable-install target at the worktree source tree. Every subsequent `entrabot-mcp` boot from the parent venv then loads code from the worktree — which has no `.env`, no auth, no polling, and no visible error. After any session that spawned sub-agents in worktrees, verify `.venv/bin/python3 -c "from entrabot import config; print(config.__file__)"` does NOT contain `.claude/worktrees/`. See `docs/runbooks/hard-won-learnings.md` Learning #36 for the full writeup.
+- **Sub-agent worktree installs must use a worktree-local venv, never the parent venv.** Running `pip install -e .` from inside a git worktree against the main repo's `.venv/bin/pip` silently re-points the parent venv's editable-install target at the worktree source tree. Every subsequent `entrabot-mcp` boot from the parent venv then loads code from the worktree — which has no `.env`, no auth, no polling, and no visible error. After any session that spawned sub-agents in worktrees, verify `.venv/bin/python3 -c "from entrabot import config; print(config.__file__)"` does NOT contain `.claude/worktrees/`. See `engineering-history/research/hard-won-learnings.md` Learning #36 for the full writeup.
 - **Sponsor DM wait pattern (host-gated).** When the human says "ping me when X is done" / "I'm going AFK, let me know" / any equivalent: confirm in Teams with `send_teams_message`, do the work, send the completion update with `send_teams_message`. What happens next depends on the host:
   - **Claude Code** (channel-push host): end the turn after sending. The entrabot background poll delivers the sponsor's reply as a next-turn `<channel source="entrabot">` system reminder. Do NOT call `wait_for_sponsor_dm` — it blocks the CLI session and freezes the conversation.
   - **Non-Claude-Code hosts** (Copilot CLI, Codex, etc.): `send_teams_message` auto-blocks after sending and returns the sponsor's reply inline as `sponsor_reply`. No manual wait needed.
@@ -188,7 +188,7 @@ cognition rules, and degraded-mode flags in a single packet.
 ## Active Work
 
 - **v1 released (2026-04-18, PR #15).** Body-first prompts, cloud-opt-in, no default chat. See `docs/project/status.md` for the summary and `docs/architecture/storage-and-memory.md` for the mind-body split design.
-- **Mind-body split shipped.** Body-first prompt architecture (PR #14, `prompts/agent_system.md` + `prompts/anatomy/*.md`) is live. `mcp_server.py:_load_agent_instructions` composes `body + persona`, fetching the persona from a remote MCP when `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` env vars are set, with clean fallback to the body when persona-sati is unreachable. `docs/TODO-persona-sati-integration.md` is now historical.
+- **Mind-body split shipped.** Body-first prompt architecture (PR #14, `prompts/agent_system.md` + `prompts/anatomy/*.md`) is live. `mcp_server.py:_load_agent_instructions` composes `body + persona`, fetching the persona from a remote MCP when `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` env vars are set, with clean fallback to the body when persona-sati is unreachable. The completed TODO was removed; current host protocol is `docs/clients/persona-sati-host-bootstrap.md`; archived design is `engineering-history/architecture/DESIGN-persona-sati-integration.md`.
 - **ADR-005: cloud-hosted memory via Azure Blob Storage** — `engineering-history/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phases 1, 2, 5, 6a shipped.** Memory sync hooks removed (persona-sati owns memory now). `scripts/claude_memory_sync.py` retained as manual migration tool.
   - Phase 1 (commit `f900ba1`): `BlobStore` async client in `src/entrabot/storage/blob.py` (put/get/list/delete/exists + ETag concurrency + 401→`TokenExpiredError`). 22 tests.
   - Phase 2: `MemoryBackend` protocol in `src/entrabot/storage/backend.py` with `LocalBackend` + `BlobBackend` + `get_backend()` factory. `interaction_log.py` and `daily_summary.py` route through it. 22 tests.
@@ -226,8 +226,8 @@ Two memory systems coexist in this project:
 - `engineering-history/decisions/005-cloud-hosted-memory.md` — cloud memory spec (phase plan + open TODOs)
 - `engineering-history/decisions/006-remove-bot-gateway-mode.md` — why the Bot Gateway mode was removed
 - `docs/index.md` — doc site entry point
-- `docs/runbooks/mcp-disconnect-investigation.md` — **Historical, resolved.** Documents a past investigation into an Entrabot MCP disconnect after sustained activity. Retained only for prior diagnostic context; do not treat it as an open issue.
-- `docs/runbooks/hard-won-learnings.md` — read before making changes
+- `engineering-history/investigations/mcp-disconnect-investigation.md` — **Historical, resolved.** Documents a past investigation into an Entrabot MCP disconnect after sustained activity. Retained only for prior diagnostic context; do not treat it as an open issue.
+- `engineering-history/research/hard-won-learnings.md` — read before making changes
 - `engineering-history/decisions/001-obo-flows-for-device-agents.md`
 - `engineering-history/decisions/003-certificate-auth-over-client-secrets.md`
 - `docs/platform-docs/microsoft-agent-365.md` — the Work IQ vs. direct-Graph boundary, the `ToolingManifest.json` tooling manifest, Work IQ Word tools, and Agent 365 authentication. Read this before considering any A365 / Work IQ integration work.
@@ -266,8 +266,8 @@ pip install mkdocs-material && mkdocs serve
 - `src/entrabot/mcp_server.py`: FastMCP server — Teams tools + 2 authenticated session types + background poll + channel push + token refresh (generic instructions — personality in persona-sati)
 - `src/entrabot/config.py`: `ENTRABOT_MODE` (auto/delegated/agent_user — validated, not currently consumed by `_init_auth`) + all env config
 - `engineering-history/decisions/`: archived ADR history — every significant architectural choice was recorded here at the time it was made; no longer part of the published docs site
-- `docs/runbooks/hard-won-learnings.md` — READ THIS before making changes
-- `docs/runbooks/mcp-disconnect-investigation.md`: historical, resolved MCP-disconnect dossier — retained for prior diagnostic context
+- `engineering-history/research/hard-won-learnings.md` — READ THIS before making changes
+- `engineering-history/investigations/mcp-disconnect-investigation.md`: historical, resolved MCP-disconnect dossier — retained for prior diagnostic context
 
 ## gstack
 

@@ -203,7 +203,7 @@ class EntraBotConfig:
     # XPIA content-wrapping rollback flag. Default True so protection
     # is on unless an operator explicitly opts out.
     # ``ENTRABOT_XPIA_WRAP_ENABLE=false`` disables the wrap without a
-    # code revert; see docs/architecture/PLAN-xpia-content-wrapping.md.
+    # code revert; see docs/architecture/security-boundaries.md.
     xpia_wrap_enable: bool = field(default=True)
 
     @classmethod

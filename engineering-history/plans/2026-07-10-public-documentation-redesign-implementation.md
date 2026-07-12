@@ -1,5 +1,9 @@
 # Public Documentation Redesign Implementation Plan
 
+> **Status:** Implementation complete through Phase 12 on branch `docs/public-site-restructure`. Remaining: full-repository verification, independent review, PR/merge, Pages deployment, and live-site crawl.
+
+> **Final review note:** `engineering-history/**` was removed from the docs workflow path filters — archived files are neither published by MkDocs nor read by `tests/docs` validation, so triggering CI on changes to them added noise without safety benefit. Changes to `docs/**` already trigger when a document is moved out of the public tree.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Rebuild the published MkDocs site (`docs/`, `mkdocs.yml`) so it contains only current, neutral, present-tense product and engineering documentation, move every plan/spec/design/investigation/prompt/ADR/QA-log artifact into the non-published `engineering-history/` tree (deleting true duplicates), replace grouped script docs with one page per supported operator-facing command driven by a manifest, and add automated repository tests that make the old structure mechanically impossible to reintroduce — per the approved design in `engineering-history/specs/2026-07-10-public-documentation-redesign.md`.

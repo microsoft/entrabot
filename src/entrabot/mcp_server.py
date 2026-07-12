@@ -1283,7 +1283,7 @@ def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
         # this, a chat created mid-session (e.g. via create_chat in a fresh
         # Copilot CLI session) is invisible to the gate's user_ids set —
         # federated B2B sponsors never get matched and wait hangs forever.
-        # See Learning #52 in docs/runbooks/hard-won-learnings.md.
+        # See Learning #52 in engineering-history/research/hard-won-learnings.md.
         if _state.pop("sponsor_gate", None) is not None and logger:
             logger.info(
                 "Invalidated cached sponsor gate after new watched chat: %s",
@@ -1907,7 +1907,7 @@ def _summarize_content(content: str, limit: int = 200) -> str:
     ``<img src>`` and ``<a href>`` URLs are extracted into plain-text
     markers before tags are stripped so the channel push doesn't lose
     the only signal in giphy embeds and link cards (regression
-    2026-04-27 — see ``docs/runbooks/mcp-disconnect-investigation.md``).
+    2026-04-27 — see ``engineering-history/investigations/mcp-disconnect-investigation.md``).
 
     HTML entities are unescaped *before* tag stripping so encoded
     angles (``&lt;p&gt;``) survive a round-trip without leaving
@@ -1947,7 +1947,7 @@ def _summarize_content(content: str, limit: int = 200) -> str:
 # add_member / share_file can verify the sponsor is actively engaged in the
 # chat the LLM is asking to mutate. See:
 #   src/entrabot/identity/active_channel.py
-#   docs/runbooks/hard-won-learnings.md (Learning #67)
+#   engineering-history/research/hard-won-learnings.md (Learning #67)
 
 
 async def _get_sponsor_records_for_binding() -> list:
@@ -2107,7 +2107,7 @@ async def _push_channel_notification(
     # fields like `reply_to_ids` or `quoted_messages`, regardless of
     # their content. The earlier 2026-04-24 sanitizer fix on
     # `params.content` is still required as defense-in-depth — see
-    # docs/runbooks/mcp-disconnect-investigation.md.
+    # engineering-history/investigations/mcp-disconnect-investigation.md.
     meta: dict = {
         "chat_id": resolved_chat_id,
         "message_id": message.get("message_id", ""),
@@ -4491,8 +4491,8 @@ async def add_file_comment(
     - Site must not be in ``ENTRABOT_FILES_DENIED_SITES``.
 
     Endpoint: ``POST /beta/drives/{drive-id}/items/{item-id}/comments``
-    (Microsoft's beta surface — V1 plan accepts this risk; see
-    ``docs/architecture/PLAN-files-mcp-tools.md`` §"Failure-mode registry").
+    (Microsoft's beta surface — accepted risk; see
+    ``docs/reference/mcp-tools.md``).
 
     Args:
         drive_id, item_id, name, mime_type, kind, site_id: ``FileRef``

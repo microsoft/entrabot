@@ -1380,7 +1380,7 @@ async def share_file(
         # chat. Defends Chain A confused-deputy: attacker in chat A
         # cannot get the agent to share a file in chat B's authority
         # context even when the sponsor is a genuine member of B.
-        # See docs/runbooks/hard-won-learnings.md Learning #67.
+        # See engineering-history/research/hard-won-learnings.md Learning #67.
         from entrabot.identity.active_channel import get_bindings
 
         binding = get_bindings().lookup(matched_sponsor.user_id)

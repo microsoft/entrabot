@@ -1,7 +1,7 @@
 """Tests for the long-blocking sponsor-DM wait tool.
 
 This tool is the primary integration path for Copilot CLI and an
-opt-in path for Claude Code. See ``docs/architecture/PLAN-copilot-cli-watcher.md``.
+opt-in path for Claude Code. See ``docs/clients/overview.md``.
 """
 
 from __future__ import annotations

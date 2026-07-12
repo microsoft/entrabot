@@ -3,7 +3,7 @@
 This is the primary integration path for Copilot CLI, which does NOT
 plumb FastMCP server ``instructions=`` into the LLM system prompt and
 does NOT subscribe to the experimental ``notifications/claude/channel``
-push (Claude Code does both — see ``docs/runbooks/hard-won-learnings.md``
+push (Claude Code does both — see ``engineering-history/research/hard-won-learnings.md``
 Learning #54).
 
 The tool sleeps inside the SAME MCP session as the working agent —

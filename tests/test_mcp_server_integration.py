@@ -9,6 +9,9 @@ Tests cover:
 - Silent-refresh-failure → UNAUTHENTICATED transition
 - Audit attribution reads from identity state machine (Tension 1)
 - filter_human_messages with sent_message_ids and [EntraBot] prefix
+
+The four persona-sati instruction-loading cases are documented in
+``engineering-history/architecture/DESIGN-persona-sati-integration.md``.
 """
 
 from __future__ import annotations
@@ -182,10 +185,11 @@ class TestLoadAgentInstructions:
 
 
 # ---------------------------------------------------------------------------
-# Persona-sati integration (TODO 4)
+# Persona-sati integration
 # ---------------------------------------------------------------------------
 class TestLoadAgentInstructionsPersonaSati:
-    """Covers the four cases from docs/TODO-persona-sati-integration.md.
+    """Covers the four persona-sati instruction-loading cases documented in
+    ``engineering-history/architecture/DESIGN-persona-sati-integration.md``.
 
     _load_agent_instructions() should:
       - return the local fallback when the persona-sati env vars are absent,
@@ -1442,7 +1446,7 @@ class TestPushChannelNotificationObservability:
         omitted from the channel push: 2026-04-28 forensic envelope dumps
         proved Claude Code's MCP client closes the stream whenever these
         custom fields are populated, regardless of content. See
-        docs/runbooks/mcp-disconnect-investigation.md.
+        engineering-history/investigations/mcp-disconnect-investigation.md.
         """
         monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
 
@@ -1503,7 +1507,7 @@ class TestPushChannelNotificationObservability:
         push. Claude Code's MCP client closes the stream on those custom
         fields. The fetch path is also gone on main — quoted bodies aren't
         needed for any other purpose since they're not in the push.
-        See docs/runbooks/mcp-disconnect-investigation.md.
+        See engineering-history/investigations/mcp-disconnect-investigation.md.
         """
         monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
 
@@ -1545,7 +1549,7 @@ class TestPushChannelNotificationObservability:
         future Graph fields that creep into ``meta`` must be sanitized.
         The walk-every-string assertion is stronger than per-field checks
         — it catches new fields that future code might add.
-        See ``docs/runbooks/mcp-disconnect-investigation.md``.
+        See ``engineering-history/investigations/mcp-disconnect-investigation.md``.
         """
         monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
 

@@ -1,6 +1,6 @@
 # Current Status
 
-**Last updated:** July 11, 2026
+**Last updated:** July 12, 2026
 
 !!! note "Research implementation"
     Entrabot is a research implementation, not a hosted production service. Run it against an isolated development tenant, and review every permission it requests before granting consent.
@@ -32,6 +32,11 @@
 - Local operational storage by default, with Azure Blob Storage available as an opt-in.
 - Setup and teardown flows for macOS, Linux, and Windows.
 - Windows support is acceptance-tested on Windows 11 ARM64.
+
+### Documentation and operations
+
+- Public site with nine task-oriented sections and source-audited references for all registered MCP tools and all 42 supported operator commands.
+- Legacy URLs redirect to current pages; plans, specs, investigations, and research are retained only under non-published `engineering-history/`.
 
 ## Active development
 

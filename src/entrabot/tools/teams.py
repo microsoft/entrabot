@@ -660,7 +660,7 @@ async def add_member(
         # (within TTL) inbound message from this sponsor in this chat. Defends
         # the Chain A confused-deputy: an attacker in chat A cannot get the
         # agent to mutate chat B even when the sponsor is a genuine member of
-        # B. See docs/runbooks/hard-won-learnings.md Learning #67 and
+        # B. See engineering-history/research/hard-won-learnings.md Learning #67 and
         # src/entrabot/identity/active_channel.py.
         from entrabot.identity.active_channel import get_bindings
 

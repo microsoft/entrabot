@@ -57,7 +57,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
-    "eval: LLM eval suite for files-mcp scenarios (gates PR1 merge per docs/architecture/PLAN-files-mcp-tools.md §Testing)",
+    "eval: LLM eval suite for files-mcp scenarios (see docs/reference/mcp-tools.md)",
 ]
 
 [tool.coverage.run]

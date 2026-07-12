@@ -76,8 +76,8 @@ scripts/          # setup.sh, teardown.sh, Entra provisioning
 - Type-annotate all function signatures
 - Test files mirror source structure
 - Secrets and tokens never appear in logs — use `repr` overrides on sensitive fields
-- Read `docs/runbooks/hard-won-learnings.md` before making auth/Teams changes
-- ADRs in `docs/decisions/` for all significant architectural choices
+- Read `engineering-history/research/hard-won-learnings.md` before making auth/Teams changes
+- Historical ADRs archived under `engineering-history/decisions/`; current architecture rationale lives under `docs/architecture/`
 - **Sponsor DM wait pattern (host-gated).** When the human says "ping me when X is done" / "I'm going AFK, let me know" / any equivalent: confirm in Teams with `send_teams_message`, do the work, send the completion update with `send_teams_message`. Claude Code receives replies through channel-push next-turn input. Copilot CLI, Codex, Cursor, and other non-channel-push hosts receive the sponsor reply inline from `send_teams_message` as `sponsor_reply`. Only call `wait_for_sponsor_dm` when the operator explicitly says "block until they reply." NEVER poll in a loop. NEVER spawn `copilot -p` / headless subprocesses. NEVER use `watch_teams_replies` for this pattern. Full protocol: `prompts/anatomy/channel-discipline.md`; see Learning #54.
 
 ## Persona-Sati Bootstrap

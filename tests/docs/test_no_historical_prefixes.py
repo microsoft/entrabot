@@ -2,8 +2,7 @@
 
 Plans, specs, designs, and other point-in-time artifacts belong under
 engineering-history/, not docs/. This test fails loudly (naming every
-offending file) as long as any prefixed file remains under docs/, which
-is true today until Phase 9 completes the migration.
+offending file) as long as any prefixed file remains under docs/.
 """
 
 from pathlib import Path

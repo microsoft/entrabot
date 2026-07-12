@@ -11,7 +11,7 @@ Read these repository sources before changing identity or token code:
 - `docs/platform-docs/entra-agent-users.md`
 - `docs/platform-docs/delegated-auth.md`
 - `docs/reference/token-flows.md`
-- `docs/runbooks/hard-won-learnings.md`
+- `engineering-history/research/hard-won-learnings.md`
 
 Microsoft Entra Agent ID and Microsoft Agent 365 reached GA on 2026-05-01, but not every related API is on Microsoft Graph v1.0. Use the endpoint version documented for each object rather than treating the whole surface as beta or stable.
 

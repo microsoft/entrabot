@@ -1,5 +1,8 @@
 # Documentation Site
 
+> **Archive notice:** This document describes the pre-restructure site layout. The current
+> published structure is defined by `docs/` and `mkdocs.yml`.
+
 ## Local preview
 
 ```bash

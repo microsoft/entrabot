@@ -38,7 +38,7 @@ mkdocs build --strict
 Coverage threshold is 80%. The full test suite is fast (~17s) — run it before
 every commit, not just the targeted file. For anything touching auth, Teams,
 or the body prompt, read
-[`docs/runbooks/hard-won-learnings.md`](docs/runbooks/hard-won-learnings.md)
+[`engineering-history/research/hard-won-learnings.md`](engineering-history/research/hard-won-learnings.md)
 first. That file is append-only; new gotchas get numbered entries, never
 deletions.
 

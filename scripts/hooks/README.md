@@ -68,7 +68,7 @@ Future fix paths considered:
    that supports them (Claude Code today; others future). Defers
    the work and accepts duplication.
 
-Tracked in `docs/engineering-status.md` under "Known Issues (Open)".
+Tracked in `docs/project/status.md` under "Known Issues (Open)".
 
 ## Bypass env vars (summary)
 
@@ -104,4 +104,4 @@ boundary.
 6. If the gate has a known coverage gap (e.g. only fires on certain
    hosts or certain channels), add a "Known coverage gaps" entry
    above and cross-reference it from
-   `docs/engineering-status.md`.
+   `docs/project/status.md`.

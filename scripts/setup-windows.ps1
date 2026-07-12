@@ -16,7 +16,7 @@
        update .env or rotation halts.
     8. Register the entrabot MCP server via mcp_config.py.
 
-  See docs/architecture/PLAN-windows-port.md for the full design and the
+  See docs/architecture/windows-and-platforms.md for the full design and the
   failure-modes table.
 
 .PARAMETER NewChain

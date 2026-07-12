@@ -223,8 +223,8 @@ def _token_mint_check(config: EntraBotConfig) -> tuple[Check, str | None]:
                 status="fail",
                 detail=f"{exc.hop} failed — {exc.error}: {exc.description}",
                 remediation=(
-                    "Re-run ./scripts/setup.sh --diagnose to see which hop "
-                    "failed and inspect docs/runbooks/hard-won-learnings.md."
+                    "Re-run ./scripts/setup.sh --diagnose to see which hop failed "
+                    "and consult docs/troubleshooting/setup-and-authentication.md."
                 ),
             ),
             None,

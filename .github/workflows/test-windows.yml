@@ -1,6 +1,6 @@
 name: test-windows
 
-# Mandatory per PLAN-windows-port.md D3 — without this CI gate, the
+# Mandatory per the Windows architecture documentation — without this CI gate, the
 # Windows port rots silently. Mac developers can't run the win32-gated
 # tests locally, so this is the only place real Cert: store / CNG
 # behavior is exercised on every PR.
