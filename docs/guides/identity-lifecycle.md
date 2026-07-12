@@ -13,7 +13,7 @@ Provisioning creates four resources, in order:
    auto-created alongside the Blueprint application.
 3. **Agent Identity** — a service principal scoped to the Blueprint.
 4. **Agent User** — a real Entra user account linked to the Agent Identity,
-   which is what gives the agent Teams presence and a `idtyp=user` token.
+   which is what gives the agent Teams presence and an `idtyp=user` token.
 
 See the
 [`create_entra_agent_ids.py` reference](../reference/scripts/provisioning/create-entra-agent-ids-py.md)
