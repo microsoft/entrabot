@@ -18,7 +18,7 @@ Certificate handling differs by platform, and the two paths are not equivalent i
 - **macOS and Linux** — `_build_blueprint_assertion()` retrieves the PEM private key from the OS keystore (Keychain via `MacCredentialStore`, Secret Service/KWallet via `LinuxCredentialStore`) **into the process**, then signs the JWT in-process with `cryptography`'s `load_pem_private_key` and PyJWT. The key material is present in process memory for the duration of the signing call.
 - **Windows** — the private key is a non-exportable CNG key in `Cert:\CurrentUser\My`, backed by the Microsoft Platform Crypto Provider (TPM) when available or the Microsoft Software Key Storage Provider otherwise (`generate_windows_cert.py`, `auth/cncrypt_signer.py`). Signing happens through `ncrypt.dll`; only the signature crosses back into the process, never the key.
 
-Both paths produce the same JWT shape (`x5t#S256` header, 10-minute assertion lifetime — `auth/certificate.py`), so the two are interchangeable at the protocol level. They are **not** interchangeable at the threat-model level: only the Windows CNG path is non-exportable, and only a TPM-backed CNG key is hardware-backed. Don't describe the Mac/Linux path as hardware-backed or non-exportable — the PEM is retrievable by anything that can read the OS keystore under the agent's account.
+Both paths produce the same JWT shape (`x5t#S256` header, 10-minute assertion lifetime — `auth/certificate.py`), so the two are interchangeable at the protocol level. They are **not** interchangeable at the threat-model level: only the Windows CNG path is non-exportable, and only a TPM-backed CNG key is hardware-backed. The Mac/Linux path is neither hardware-backed nor non-exportable because anything that can read the OS keystore under the agent's account can retrieve the PEM.
 
 ## Audit-first, fail-closed attribution
 
@@ -54,7 +54,7 @@ This is a text-escaping and provenance boundary, not a cryptographic signature.
 - **`SponsorGate`** (`identity/sponsors.py`) decides whether an inbound message can satisfy an explicit `wait_for_sponsor_dm` or server-side auto-wait. It matches on sponsor user ID, UPN, or email, extended with chat-member and cross-tenant B2B lookups across watched chats.
 - **Active-channel binding** (`identity/active_channel.py::ActiveChannelBindings`) is the separate, TTL-scoped gate that authorizes *mutations*. A binding is minted only after a sponsor's inbound message has been **successfully pushed** to the model (via the channel-push notification path) — recording `(sponsor_user_id, chat_id, graph_sent_at)`. The TTL (120s) is enforced against the message's Graph-authored `sent_at`, not against when the server observed it, specifically so a stale message can't be replayed at bootstrap to mint a fresh authorization window. Bindings expire on read as well as on write, so a clock rewind can't resurrect one.
 - **Mutating tools require both.** `add_teams_member()` (`tools/teams.py`) and `share_file()` (`tools/files.py`) both gate on: (1) the requester matching a sponsor identity, (2) an active-channel binding for that sponsor whose `chat_id` matches the one supplied, and (3) — defense in depth — the sponsor actually being a Graph member of the target chat. `SponsorChannelMismatchError` is raised specifically to catch a confused-deputy pattern: an LLM in chat A being induced to act on chat B, where the sponsor is a genuine member of B but not actively engaged there right now.
-- **For `share_file`, only the requester is gated — not the recipient.** A sponsor may direct the agent to share a file with anyone; the recipient email is unrestricted. Do not describe `share_file` as gating both sides.
+- **For `share_file`, only the requester is gated — not the recipient.** A sponsor may direct the agent to share a file with anyone; the recipient email is unrestricted.
 - **Wait validation and mutation authorization are separate.** `SponsorGate.accepts()` decides whether an inbound message can satisfy a sponsor wait. The general background poll delivers human messages without using `SponsorGate` as its filter; sponsor lookup is used after successful delivery only to decide whether to mint an active-channel binding. That binding, not `SponsorGate`, authorizes `add_teams_member` and `share_file` mutations.
 
 ## Server-side auto-wait, not a model-facing switch
@@ -80,7 +80,7 @@ Sensitive values are redacted before leaving the body by a case-insensitive, sub
 
 ## Current limitation: no shipped execution sandbox
 
-There is no `src/entrabot/sandbox/` package in this branch, and no process- or filesystem-level containment ships today for code the agent might execute or files it might touch beyond normal OS user permissions. Sandboxing/execution containment remains under evaluation rather than implemented — do not describe it as an available or enabled feature.
+Entrabot does not currently ship an execution sandbox. Process- and filesystem-level containment remains under evaluation.
 
 ## See also
 

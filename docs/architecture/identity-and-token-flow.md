@@ -80,7 +80,7 @@ Two independent mechanisms in `mcp_server.py` keep the active token usable witho
 | `AGENT_USER` | `ERROR`, `UNAUTHENTICATED` |
 | `ERROR` | `DELEGATED`, `UNAUTHENTICATED` |
 
-At MCP server boot, `_init_auth()` takes the fast path directly from `UNAUTHENTICATED` to `AGENT_USER` when Blueprint credentials are configured, falling back to `DELEGATED` via MSAL if the three-hop flow fails, and remaining `UNAUTHENTICATED` if both fail. `PROVISIONING` and its rollback edges exist for the in-session promotion path (upgrading an already-`DELEGATED` session to `AGENT_USER`) and for recovery back out of `ERROR`.
+At MCP server boot, `_init_auth()` takes the fast path directly from `UNAUTHENTICATED` to `AGENT_USER` when Blueprint credentials are configured, falling back to `DELEGATED` via MSAL if the three-hop flow fails, and remaining `UNAUTHENTICATED` if both fail. `PROVISIONING` is modeled in `VALID_TRANSITIONS` for a delegated-to-Agent-User promotion and rollback, but the current `mcp_server.py` runtime has no call site that enters it; the boot path transitions directly and does not use this state.
 
 Rollback is not a side note — it's built into `transition()`. The state machine snapshots the entire `IdentitySession` (not just the state field) after acquiring the lock. If the caller's transition callback raises, the whole session — including any `update_session()` mutations made before the transition started — is restored to that snapshot, and an `InvalidTransitionError`/`TransitionError` propagates. A transition attempt never leaves the session in a partially-updated state.
 

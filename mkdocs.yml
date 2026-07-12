@@ -45,25 +45,17 @@ nav:
       - Persona-Sati Host Bootstrap: clients/persona-sati-host-bootstrap.md
   - Architecture:
       - System Overview: architecture/system-overview.md
+      - Identity and Token Flow: architecture/identity-and-token-flow.md
+      - MCP Runtime: architecture/mcp-runtime.md
+      - Messaging and Delivery: architecture/messaging-and-delivery.md
+      - Storage and Memory: architecture/storage-and-memory.md
+      - Security Boundaries: architecture/security-boundaries.md
+      - Windows and Platform Support: architecture/windows-and-platforms.md
       - Layers:
           - Platform: architecture/layers/platform.md
           - Authentication: architecture/layers/auth.md
           - Teams: architecture/layers/teams.md
           - Audit: architecture/layers/audit.md
-      - Mind-Body Split: architecture/DESIGN-persona-sati-integration.md
-      - Lightweight Teams Chat: architecture/NEXT-WhatsApp-lightweight-teams-chat.md
-      - Windows Port: architecture/PLAN-windows-port.md
-      - Multi-Instance Cursor Consistency: architecture/DESIGN-multi-instance-cursor-consistency.md
-      - Agent Identity by UPN: architecture/PLAN-agent-identity-by-upn.md
-      - XPIA Content Wrapping: architecture/PLAN-xpia-content-wrapping.md
-      - New Features Plan: architecture/PLAN-entrabot-new-features.md
-      - Skills Layer Plan: architecture/PLAN-skills-layer.md
-      - MXC Sandbox Design (Under Review): architecture/DESIGN-mxc-sandbox.md
-      - Research Snapshots:
-          - Dual-Track Identity: architecture/SPEC-dual-track-agent-identity.md
-          - Multi-Tenant Chat Plan: architecture/PLAN-multi-tenant-lightweight-chat.md
-          - Identity Setup Notes: architecture/next-tenant-identity-setup.md
-          - MCP Server Design Notes: architecture/next-mcp-server-design.md
   - Platform Learnings:
       - Microsoft Agent 365: platform-learnings/microsoft-agent-365.md
       - Agent ID Blueprints and Users: platform-learnings/agent-id-blueprints-and-users.md

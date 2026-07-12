@@ -31,7 +31,7 @@ Each loop wraps its own iteration in `try`/`except` and sleeps before continuing
 
 ## Token handling
 
-`_ensure_valid_token()` and `_with_token_retry()` (both in `mcp_server.py`) are the two token-refresh mechanisms every tool and background task goes through — see [Identity and Token Flow](identity-and-token-flow.md#token-lifecycle) for the eager-refresh-and-lazy-retry mechanics. Background tasks call `_ensure_valid_token()` directly before making a Graph call; tool wrappers use `_with_token_retry()` to wrap the underlying call.
+`_ensure_valid_token()` and `_with_token_retry()` (both in `mcp_server.py`) are the two token-refresh mechanisms used by Graph-backed tools and background tasks — see [Identity and Token Flow](identity-and-token-flow.md#token-lifecycle) for the eager-refresh-and-lazy-retry mechanics. Graph background tasks call `_ensure_valid_token()` directly before making a call; Graph-backed tool wrappers use `_with_token_retry()` around the underlying operation. A365/provider-only and local tools may use their provider's authentication or local storage instead of these Graph token helpers.
 
 ## Body prompt assembly
 

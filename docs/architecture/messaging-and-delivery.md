@@ -52,10 +52,6 @@ For hosts not in the small hardcoded channel-push set (Copilot CLI, Codex, and a
 
 `_background_discover_chats()` runs every 120 seconds, in Agent User mode only (it targets `/me/chats`, which resolves to the human's chats in delegated mode — not what's wanted). It cannot use Graph's `$orderby` on this endpoint (it 400s there); results are not sorted, but chat IDs are deduplicated against `watched_chats` client-side. Newly discovered chats are persisted to the `watched_chats` file immediately so a restart inherits them, and they pick up their cursor from the normal bootstrap path on the next poll cycle — no historical flood of old messages.
 
-## `dispatch.py`: a naming safety net, not a router
-
-`src/entrabot/tools/dispatch.py` is a small regex-based recognizer (`is_write_shaped_tool_name`) that flags tool names matching a write-shaped prefix pattern (`send`, `reply`, `create`, `delete`, `upload`, `share`, `add_`, `resolve_`). It is **not** an outbound router and **not** an authorization layer — it doesn't touch, gate, or redirect any actual message. Its only effect today is a debug log line at tool-registration time, flagging that a newly registered tool matches the write-shaped naming pattern so it inherits scrutiny before anyone reviews it. Every real write path (sending a message, adding a chat member, sharing a file) has its own independent audit and authorization gate; `dispatch.py` is a name-shape lint, not where those gates live.
-
 ## See also
 
 - [MCP Runtime](mcp-runtime.md) — the background task matrix and initialization lifecycle this messaging path runs inside.

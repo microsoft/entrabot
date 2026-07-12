@@ -12,7 +12,7 @@ In **delegated mode**, the token belongs to the human, so outbound messages are 
 
 ## No default chat
 
-Every Teams tool requires an explicit `chat_id`. There is no default group chat or fallback conversation. A `chat_id` comes from `create_chat` (or its underlying `create_or_find_chat()`), from the persisted `watched_chats` file, or from the background auto-discovery sweep over `/me/chats`.
+Every Teams tool requires an explicit `chat_id`; Entrabot has no default or fallback chat. See [Messaging and Delivery](../messaging-and-delivery.md) for chat sources and persistence.
 
 ## Chat creation
 
@@ -20,7 +20,7 @@ Every Teams tool requires an explicit `chat_id`. There is no default group chat 
 
 - **1:1 chat** (one human) — `chatType: oneOnOne`. Graph's create-chat endpoint is idempotent for one-on-one chats: calling it again with the same two members returns the existing chat rather than creating a duplicate.
 - **Group chat** (multiple humans) — `chatType: group` with a fixed topic. Group chat creation is **not** idempotent; each call creates a new chat.
-- **Cross-tenant / guest members** — when a tenant ID and mail are supplied for a member, the payload includes `tenantId` and an email-based `user@odata.bind` so Graph can resolve and route the chat to an external tenant; guest members are always added via a group chat with an explicit `guest` role.
+- **Cross-tenant / guest members** — when a home-tenant ID and email are supplied, the payload includes `tenantId` and an email-based `user@odata.bind` so Graph can resolve the federated identity. The member role remains `owner`, and chat type still depends on the human count: one human produces `oneOnOne`; multiple humans produce `group`.
 
 `add_member()` layers sponsor-gated authorization on top of a plain Graph member-add: the requester must match a known Agent Identity sponsor, and that sponsor must currently be bound to `chat_id` through the active-channel mechanism, before the invite is attempted.
 

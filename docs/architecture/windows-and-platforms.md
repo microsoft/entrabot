@@ -52,7 +52,7 @@ Once a certificate-signed JWT assertion exists, the rest of the three-hop token 
 
 ## Current limitation: no execution sandbox
 
-There is no `src/entrabot/sandbox/` package on this branch, on any platform. Process- and filesystem-level containment for code the agent executes or files it touches remains under evaluation rather than shipped — do not present sandboxing as an available feature on Windows or elsewhere.
+Entrabot does not currently ship an execution sandbox on any platform. Process- and filesystem-level containment remains under evaluation.
 
 ## See also
 

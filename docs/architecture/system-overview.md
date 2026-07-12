@@ -36,36 +36,13 @@ See [Identity and Token Flow](identity-and-token-flow.md) for the token exchange
 ## Runtime topology
 
 ```
-                          ┌───────────────────────────┐
-                          │   MCP host (LLM client)   │
-                          │  Claude Code / Copilot CLI │
-                          │       / other hosts        │
-                          └─────────────┬─────────────┘
-                                        │ stdio (MCP)
-                                        ▼
-                          ┌───────────────────────────┐
-                          │      Entrabot (local)      │
-                          │  mcp_server.py + tools/    │
-                          │  platform/ · auth/ · audit  │
-                          └──┬───────────┬─────────┬───┘
-                             │           │         │
-             Graph / Teams /  │  Blob Storage       │  Work IQ (A365)
-              Outlook (Entra) │  (opt-in)           │
-                             ▼           ▼         ▼
-                    ┌────────────┐ ┌──────────┐ ┌────────────┐
-                    │ Microsoft  │ │  Azure   │ │  Agent 365 │
-                    │ Entra ID / │ │  Blob    │ │  Work IQ   │
-                    │  Graph API │ │ Storage  │ │  servers   │
-                    └────────────┘ └──────────┘ └────────────┘
-
-                 optional persona-sati service:
-                          ┌───────────────────────────┐
-                          │        persona-sati        │
-                          │  (personality / memory /    │
-                          │   observe·reflect·recall)   │
-                          └───────────────────────────┘
-                    ▲ host peer MCP     ▲ optional boot-time
-                    └───────────────────┘ remote prompt fetch
+MCP host
+  |-- stdio --------------------------> Entrabot
+  |                                      |---> Microsoft Entra ID / Graph API
+  |                                      |---> Azure Blob Storage (optional)
+  |                                      |---> Agent 365 Work IQ
+  |                                      `-- optional boot prompt fetch ---> persona-sati
+  `-- optional peer MCP ---------------------------------------------> persona-sati
 ```
 
 Teams, email, Files, and other resource calls do not depend on persona-sati. When configured, Entrabot may contact a remote persona-sati MCP directly at boot to fetch its prompt; independently, the host may attach persona-sati beside Entrabot so the LLM can call its cognition and memory tools. See [MCP Runtime](mcp-runtime.md) for how tools, background tasks, and the channel push extension fit together inside the process.
@@ -81,13 +58,13 @@ Without persona-sati configured (or when it's unreachable), Entrabot runs in **b
 See [Persona-Sati Host Bootstrap](../clients/persona-sati-host-bootstrap.md) for the per-host protocol that connects a host LLM to the mind contract.
 
 <a id="message-delivery-channel-push-vs-polling"></a>
-## Background work
+## Background work and message delivery
 
 The MCP server runs a small set of background tasks, each gated differently:
 
 - **Teams chat poll (5s).** Starts as soon as at least one chat is being watched — from a persisted `watched_chats` file or a chat created during the session. It is not gated on the auth mode; a delegated-mode session with a watched chat polls it too.
 - **Email poll (60s), chat auto-discovery via `/me/chats` (120s), and the daily summary scheduler** all start only in **Agent User mode**, because they operate against `/me/*` endpoints that must resolve to the agent's own mailbox and chats — not the human's, which is what `/me/*` would mean in delegated mode. The daily summary fires at a fixed UTC-7 offset (not DST-adjusted).
-- **persona-sati heartbeat (300s).** Also started in Agent User mode, but it self-skips (logs `"skipped"` and returns) whenever `PERSONA_SATI_MCP_URL` / `PERSONA_SATI_MCP_TOKEN_COMMAND` aren't configured — so enabling it costs nothing when no persona-sati peer is attached.
+- **persona-sati heartbeat (300s).** Also started in Agent User mode, but it returns `"skipped"` without logging whenever `PERSONA_SATI_MCP_URL` / `PERSONA_SATI_MCP_TOKEN_COMMAND` aren't configured — so enabling it costs nothing when no persona-sati peer is attached.
 
 See [MCP Runtime](mcp-runtime.md) and [Messaging and Delivery](messaging-and-delivery.md) for the full task inventory and the channel-push delivery mechanism.
 
