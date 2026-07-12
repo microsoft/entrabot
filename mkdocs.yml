@@ -27,16 +27,98 @@ markdown_extensions:
   - pymdownx.snippets:
       base_path: ["."]
 
+plugins:
+  - search
+  - redirects:
+      redirect_maps:
+        architecture/PLAN-windows-port.md: architecture/windows-and-platforms.md
+        architecture/next-mcp-server-design.md: architecture/mcp-runtime.md
+        claude-copilot-cli-channel-port.md: clients/overview.md
+        architecture/NEXT-WhatsApp-lightweight-teams-chat.md: architecture/messaging-and-delivery.md
+        architecture/PLAN-agent-identity-by-upn.md: architecture/identity-and-token-flow.md
+        architecture/PLAN-xpia-content-wrapping.md: architecture/security-boundaries.md
+        architecture/DESIGN-persona-sati-integration.md: architecture/system-overview.md
+        architecture/enforcement-flow.md: architecture/security-boundaries.md
+        architecture/DESIGN-multi-instance-cursor-consistency.md: architecture/system-overview.md
+        architecture/PLAN-entrabot-new-features.md: architecture/system-overview.md
+        architecture/PLAN-skills-layer.md: architecture/mcp-runtime.md
+        architecture/DESIGN-mxc-sandbox.md: architecture/windows-and-platforms.md
+        architecture/SPEC-dual-track-agent-identity.md: architecture/identity-and-token-flow.md
+        architecture/PLAN-multi-tenant-lightweight-chat.md: architecture/messaging-and-delivery.md
+        architecture/next-tenant-identity-setup.md: architecture/identity-and-token-flow.md
+        architecture/PLAN-files-mcp-tools.md: reference/mcp-tools.md
+        architecture/PLAN-files-llm-authoring-v2.md: guides/files-and-work-iq.md
+        architecture/next-windows-dev-environment.md: troubleshooting/windows.md
+        architecture/FOURPAGER-entrabot-cli-teams-augmented-token.md: architecture/identity-and-token-flow.md
+        claude-windows-port.md: architecture/windows-and-platforms.md
+        openai-copilot-cli-notifications.md: clients/copilot-cli.md
+        openai-windows-agent-identity-port.md: architecture/windows-and-platforms.md
+        AGENT-PROMPT-persona-sati-integration.md: clients/persona-sati-host-bootstrap.md
+        AGENT-PROMPT-provisioner-cert-auth.md: architecture/identity-and-token-flow.md
+        TODO-persona-sati-host-bootstrap.md: clients/persona-sati-host-bootstrap.md
+        TODO-persona-sati-integration.md: clients/persona-sati-host-bootstrap.md
+        PLAN-mind-body-nervous-system-phase-3.md: architecture/system-overview.md
+        PLAN-persona-sati-bootstrap-phases-1-2.md: clients/persona-sati-host-bootstrap.md
+        SECURITY-DEBT-PROVISIONER-SECRET.md: architecture/identity-and-token-flow.md
+        plans/persona-persistence.md: architecture/storage-and-memory.md
+        prompts/multi-tenant-lightweight-chat-planning-prompt.md: architecture/messaging-and-delivery.md
+        engineering-status.md: project/status.md
+        decisions/README.md: architecture/system-overview.md
+        decisions/001-obo-flows-for-device-agents.md: architecture/identity-and-token-flow.md
+        decisions/002-agent-user-over-obo.md: architecture/identity-and-token-flow.md
+        decisions/003-certificate-auth-over-client-secrets.md: architecture/identity-and-token-flow.md
+        decisions/005-cloud-hosted-memory.md: architecture/storage-and-memory.md
+        decisions/006-remove-bot-gateway-mode.md: architecture/messaging-and-delivery.md
+        platform-learnings/agent-id-blueprints-and-users.md: platform-docs/agent-id-blueprints-and-users.md
+        platform-learnings/entra-agent-users.md: platform-docs/entra-agent-users.md
+        platform-learnings/microsoft-agent-365.md: platform-docs/microsoft-agent-365.md
+        platform-learnings/teams-graph-api.md: platform-docs/teams-graph-api.md
+        platform-learnings/files-graph-api.md: platform-docs/files-graph-api.md
+        platform-learnings/platform-macos.md: platform-docs/platform-macos.md
+        platform-learnings/platform-linux.md: platform-docs/platform-linux.md
+        platform-learnings/platform-windows.md: platform-docs/platform-windows.md
+        platform-learnings/msal-entra-agent-ids.md: platform-docs/delegated-auth.md
+        platform-learnings/mcp-messaging-servers.md: platform-docs/mcp-hosts-and-transports.md
+        platform-learnings/mcp-close-the-loop.md: platform-docs/mcp-hosts-and-transports.md
+        platform-learnings/agent-memory-systems.md: architecture/storage-and-memory.md
+        platform-learnings/copilot-extensibility.md: clients/other-hosts.md
+        platform-learnings/github-copilot-extensions.md: clients/other-hosts.md
+        platform-learnings/github-cli.md: reference/scripts/index.md
+        platform-learnings/teams-bot-framework.md: platform-docs/teams-graph-api.md
+        platform-learnings/teams-toolkit.md: platform-docs/teams-graph-api.md
+        platform-learnings/mxc-windows-sandbox.md: architecture/windows-and-platforms.md
+        reference/api/mcp-tools.md: reference/mcp-tools.md
+        reference/scripts/setup.md: reference/scripts/index.md
+        reference/scripts/provisioning.md: reference/scripts/index.md
+        reference/scripts/auth-and-certs.md: reference/scripts/index.md
+        reference/scripts/storage.md: reference/scripts/index.md
+        reference/scripts/operations.md: reference/scripts/index.md
+        reference/scripts/diagnostics.md: reference/scripts/index.md
+        reference/scripts/teardown.md: reference/scripts/index.md
+        reference/scripts/spikes.md: reference/scripts/index.md
+        runbooks/hard-won-learnings.md: troubleshooting/index.md
+        runbooks/mcp-disconnect-investigation.md: troubleshooting/mcp-connectivity.md
+        runbooks/cert-auth-migration.md: troubleshooting/setup-and-authentication.md
+        runbooks/windows-setup.md: troubleshooting/windows.md
+        developer/docs-site.md: project/status.md
+        developer/qa-log.md: project/status.md
+
 nav:
   - Home: index.md
-  - Project:
-      - Current Status: project/status.md
-      - Changelog: project/changelog.md
   - Getting Started:
       - Quickstart: getting-started/quickstart.md
+      - Prerequisites: getting-started/prerequisites.md
+      - macOS and Linux: getting-started/macos-linux.md
+      - Windows: getting-started/windows.md
+      - Verify Your Agent Identity: getting-started/verify.md
   - Guides:
-      - Storage Configuration: guides/storage-configuration.md
+      - Configuration Reference: guides/configuration.md
+      - Storage Configuration and Migration: guides/storage-configuration.md
       - Customizing the Body Prompt: guides/customizing-the-body-prompt.md
+      - Teams and Chat Workflows: guides/teams-and-chat-workflows.md
+      - Email Workflows: guides/email-workflows.md
+      - Files and Microsoft Agent 365 Work IQ: guides/files-and-work-iq.md
+      - Identity Lifecycle and Deprovisioning: guides/identity-lifecycle.md
   - Clients:
       - Overview: clients/overview.md
       - Claude Code: clients/claude-code.md
@@ -45,28 +127,28 @@ nav:
       - Persona-Sati Host Bootstrap: clients/persona-sati-host-bootstrap.md
   - Architecture:
       - System Overview: architecture/system-overview.md
-      - Identity and Token Flow: architecture/identity-and-token-flow.md
-      - MCP Runtime: architecture/mcp-runtime.md
-      - Messaging and Delivery: architecture/messaging-and-delivery.md
-      - Storage and Memory: architecture/storage-and-memory.md
-      - Security Boundaries: architecture/security-boundaries.md
-      - Windows and Platform Support: architecture/windows-and-platforms.md
-      - Layers:
+      - Components:
           - Platform: architecture/layers/platform.md
           - Authentication: architecture/layers/auth.md
           - Teams: architecture/layers/teams.md
           - Audit: architecture/layers/audit.md
+      - Identity and Token Flow: architecture/identity-and-token-flow.md
+      - MCP Runtime: architecture/mcp-runtime.md
+      - Messaging and Channel Delivery: architecture/messaging-and-delivery.md
+      - Storage and Memory: architecture/storage-and-memory.md
+      - Security Boundaries: architecture/security-boundaries.md
+      - Cross-Platform and Windows Architecture: architecture/windows-and-platforms.md
   - Platform Docs:
-      - Microsoft Entra Agent ID: platform-docs/agent-id-blueprints-and-users.md
+      - Agent ID Blueprints and Users: platform-docs/agent-id-blueprints-and-users.md
       - Agent Users: platform-docs/entra-agent-users.md
-      - Delegated Authentication: platform-docs/delegated-auth.md
       - Microsoft Agent 365: platform-docs/microsoft-agent-365.md
+      - Delegated Authentication: platform-docs/delegated-auth.md
       - Teams Graph API: platform-docs/teams-graph-api.md
       - Files Graph API: platform-docs/files-graph-api.md
       - MCP Hosts and Transports: platform-docs/mcp-hosts-and-transports.md
-      - macOS Platform APIs: platform-docs/platform-macos.md
-      - Linux Platform APIs: platform-docs/platform-linux.md
-      - Windows Platform APIs: platform-docs/platform-windows.md
+      - macOS: platform-docs/platform-macos.md
+      - Linux: platform-docs/platform-linux.md
+      - Windows: platform-docs/platform-windows.md
   - Reference:
       - MCP Tools: reference/mcp-tools.md
       - Configuration: reference/configuration.md
@@ -138,6 +220,6 @@ nav:
       - Storage: troubleshooting/storage.md
       - MCP Connectivity: troubleshooting/mcp-connectivity.md
       - Migrations and Upgrades: troubleshooting/migrations-and-upgrades.md
-  - Developer:
-      - Docs Site: developer/docs-site.md
-      - QA Log: developer/qa-log.md
+  - Project:
+      - Current Status: project/status.md
+      - Changelog: project/changelog.md
