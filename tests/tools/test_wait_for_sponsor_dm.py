@@ -525,36 +525,102 @@ class TestWaitListenerBanner:
         assert "\x1b[" in banner
 
 
-# --- Anti-regression: tool doctrine names the broadened trigger ---------
+# --- Anti-regression: tool doctrine matches the host-gated wait pattern --
 
 
-class TestBroadenedWaitDoctrine:
-    """After 2026-04-28 we broadened the wait protocol from 'long-running
-    work + ping me when done' to 'any proactive 1:1 Teams DM'. The
-    triggering rule must live (1) in the body prompt anatomy fragment
-    and (2) in the wait tool's MCP description, because per Learning #48
-    those are the only two reliable injection vectors into Copilot CLI."""
+class TestHostGatedWaitDoctrine:
+    """As of the host-gated sponsor-DM rewrite, manual waiting is no
+    longer the default after any proactive Teams DM. The current
+    doctrine (see ``prompts/anatomy/channel-discipline.md`` and
+    Learning #54) is:
 
-    def test_channel_discipline_broadened_trigger_present(self) -> None:
+    - Channel-push hosts (Claude Code): ``send_teams_message`` returns
+      immediately; the sponsor's reply arrives as a later channel
+      notification. Never manually wait.
+    - Non-channel-push hosts (Copilot CLI, Codex, etc.):
+      ``send_teams_message`` auto-waits server-side and returns
+      ``sponsor_reply``. Never manually wait.
+    - ``wait_for_sponsor_dm`` is reserved for an operator's *explicit*
+      request to block until a sponsor replies mid-task.
+    - ``watch_teams_replies`` is explicit direct polling/fallback, never
+      the normal completion path after ``send_teams_message``.
+
+    These tests pin those constraints directly against the tool
+    docstrings/source in ``src/entrabot/mcp_server.py`` so a docstring
+    rewrite can't silently reintroduce double-waiting.
+    """
+
+    def test_channel_discipline_describes_proactive_dm_wait_state(self) -> None:
         from pathlib import Path
 
         text = (
             Path(__file__).resolve().parents[2] / "prompts/anatomy/channel-discipline.md"
         ).read_text(encoding="utf-8")
-        # The broadened rule must be findable as a single phrase. Lock
-        # to a canonical wording so the doctrine can't silently drift
-        # back to the narrow 'long-running' framing.
-        assert "any proactive" in text.lower() or "any time you proactively" in text.lower()
-        # And it must connect that broadened trigger to wait_for_sponsor_dm.
+        text_lower = text.lower()
+        # The doc describes *why* wait state exists (a proactive DM's
+        # reply lands in Teams, not the CLI) — it must not prescribe
+        # manually invoking wait_for_sponsor_dm as the default response.
+        assert "any proactive" in text_lower or "any time you proactively" in text_lower
         assert "wait_for_sponsor_dm" in text
+        # It must be explicit that wait_for_sponsor_dm is reserved for an
+        # explicit operator request, not a default after every send.
+        assert "explicitly" in text_lower
+        assert "rarely the right tool" in text_lower or "only when" in text_lower
 
-    def test_mcp_tool_docstring_carries_broadened_trigger(self) -> None:
+    def test_wait_for_sponsor_dm_docstring_requires_explicit_operator_request(self) -> None:
         from pathlib import Path
 
         mcp_src = (Path(__file__).resolve().parents[2] / "src/entrabot/mcp_server.py").read_text(
             encoding="utf-8"
         )
-        # The wait_for_sponsor_dm tool body in mcp_server.py must
-        # surface the broadened rule, since Copilot CLI only reads tool
-        # descriptions reliably (Learning #48).
-        assert "any proactive" in mcp_src.lower() or "any time you proactively" in mcp_src.lower()
+        from entrabot import mcp_server
+
+        docstring = mcp_server.wait_for_sponsor_dm.__doc__ or ""
+        docstring_lower = docstring.lower()
+
+        # Stale doctrine: "call this after every proactive DM" must be gone.
+        assert "any time you proactively" not in docstring_lower, (
+            "wait_for_sponsor_dm docstring still tells the model to call "
+            "it after every proactive DM — this causes double-waiting on "
+            "hosts where send_teams_message already auto-waits."
+        )
+        assert "after every such proactive" not in docstring_lower, (
+            "wait_for_sponsor_dm docstring still frames itself as the "
+            "default follow-up to any proactive DM instead of an "
+            "explicit operator request."
+        )
+        # Current doctrine: only call it when the operator explicitly asks
+        # to block mid-task.
+        assert "explicit" in docstring_lower, (
+            "wait_for_sponsor_dm docstring must say it is reserved for an "
+            "operator's explicit request to block until a sponsor replies."
+        )
+        assert (
+            "operator" in docstring_lower or "sponsor" in docstring_lower
+        ), "wait_for_sponsor_dm docstring must name who must ask for the wait."
+        # Sanity: the whole source file shouldn't carry the stale phrase
+        # anywhere else near this tool (e.g. in a stray comment).
+        assert "after every such proactive 1:1 dm" not in mcp_src.lower()
+
+    def test_watch_teams_replies_docstring_is_not_default_send_completion(self) -> None:
+        from entrabot import mcp_server
+
+        docstring = mcp_server.watch_teams_replies.__doc__ or ""
+        docstring_lower = docstring.lower()
+
+        # Stale doctrine: "Always after send_teams_message" made this look
+        # like the normal completion step of every send, which conflicts
+        # with send_teams_message's own built-in auto-wait.
+        assert "always after send_teams_message" not in docstring_lower, (
+            "watch_teams_replies docstring still claims it should always "
+            "be called after send_teams_message — that is not the normal "
+            "completion path; send_teams_message already auto-waits where "
+            "needed, and channel-push hosts get the reply via next-turn "
+            "notification."
+        )
+        # Current doctrine: this tool is explicit direct polling / a
+        # fallback, not the standard send-then-watch loop.
+        assert "fallback" in docstring_lower or "explicit" in docstring_lower, (
+            "watch_teams_replies docstring must describe itself as "
+            "explicit direct polling/fallback, not the default reply path."
+        )
