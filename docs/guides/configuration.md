@@ -53,7 +53,7 @@ Precedence and list rules:
 | `ENTRABOT_MODE` | Selects the auth mode. Valid values: `auto` (default), `delegated`, `agent_user`. The historical `bot` mode was removed (Bot Framework gateway bypassed the Agent Identity model) and setting `ENTRABOT_MODE=bot` now fails loudly with `RemovedModeError` rather than silently falling back. Any other unrecognized value falls back to `auto`. |
 | `ENTRABOT_SKIP_PROVISIONING` | Truthy values `true`, `1`, or `yes` (case-insensitive) skip the provisioning check at boot. |
 | `ENTRABOT_LOG_LEVEL` | Python logging level name. Defaults to `INFO`. |
-| `ENTRABOT_XPIA_WRAP_ENABLE` | Enabled by default — external content (Teams, email, Files, Work IQ) is wrapped through the XPIA boundary. Set to `false`, `0`, `no`, or `off` (case-insensitive) to disable the wrap as a rollback path. See [XPIA Content Wrapping](../architecture/PLAN-xpia-content-wrapping.md). |
+| `ENTRABOT_XPIA_WRAP_ENABLE` | Enabled by default — external content (Teams, email, Files, Work IQ) is wrapped through the XPIA boundary. Set to `false`, `0`, `no`, or `off` (case-insensitive) to disable the wrap as a rollback path. See [Security Boundaries](../architecture/security-boundaries.md). |
 
 ## Local paths
 
@@ -83,4 +83,4 @@ If any of these is unset, it defaults to a platform-specific subdirectory:
 3. Neither is set → `LocalBackend` rooted at `ENTRABOT_DATA_DIR` (or its platform default).
 4. Exactly one of `ENTRABOT_BLOB_ENDPOINT` / `ENTRABOT_BLOB_CONTAINER` is set → **fails closed** with `BackendMisconfiguredError` rather than silently falling back to local. A half-configured cloud setup is treated as a misconfiguration that must be fixed, not tolerated.
 
-See [Storage Configuration and Migration](storage-configuration.md) and the [Storage Backends](../reference/api/storage-backends.md) API reference for the full backend implementation and migration path.
+See [Storage Configuration and Migration](storage-configuration.md) for backend selection and migration guidance, and [Reference: Configuration](../reference/configuration.md) for the compact lookup in the Reference section.
