@@ -1,6 +1,6 @@
 """Tool-name shape recognizer for outbound (write-shaped) MCP tools.
 
-Per ``docs/architecture/PLAN-xpia-content-wrapping.md`` §"Deny-list guard
+Per ``docs/architecture/security-boundaries.md`` §"Deny-list guard
 on outbound tool names": a lightweight regex that identifies write-shaped
 tool names so future tools default to gated behavior even before their
 explicit gate is written. Read this as a safety net, not the primary
@@ -12,7 +12,7 @@ this" pressure before anyone reviews the tool.
 Design note: the recognizer is a name-based deny-list rather than a
 read-based allowlist because a deny-list is safer for evolution — a new
 tool that we forgot to explicitly gate defaults to *more* gating, not
-less. See the plan for the full trade-off.
+less. See ``docs/architecture/security-boundaries.md`` for the full trade-off.
 """
 
 from __future__ import annotations

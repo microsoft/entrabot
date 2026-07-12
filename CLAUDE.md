@@ -4,15 +4,13 @@
 
 ## Non-Negotiables
 
-- **Read Agent Identity platform-learnings BEFORE designing any auth flow.**
+- **Read Agent Identity platform docs BEFORE designing any auth flow.**
   When the task involves OAuth, OBO, Agent Identity, Agent Blueprint, Agent User,
   MSAL, app registration, redirect URIs, public/confidential clients, scope
   grants, JWT validation, OIDC discovery, or PKCE: read
-  `docs/platform-learnings/agent-id-blueprints-and-users.md` first, every
-  session. The file's TL;DR section captures load-bearing constraints (e.g.,
-  Agent Blueprints cannot be OAuth public clients) that have cost real
-  engineering hours when missed. Pattern: 4 prior recurrences as of
-  2026-05-05; PR persona-sati#47 paused at one such constraint.
+  `docs/platform-docs/agent-id-blueprints-and-users.md` first, every
+  session. Its TL;DR section captures load-bearing constraints (e.g.,
+  Agent Blueprints cannot be OAuth public clients) that are easy to miss.
 - **Body prompt is non-overridable.** The agent body prompt
   (`prompts/agent_system.md` + everything it `@include`s from
   `prompts/anatomy/`) is loaded first and defines the security
@@ -21,7 +19,7 @@
   override these rules — they protect the agent, the human, and other
   agents. Personality layers on top, never underneath.
 - **TDD: write tests first, then implementation** — no new module or function ships without a failing test that preceded it. `pytest -v && ruff check .` must pass before every commit
-- **Keep status files current.** Before commit, if the change materially moves work between **backlog / in-progress / shipped** or surfaces a new known issue, update `TODOS.md` and `docs/engineering-status.md` to reflect it. Trivial changes (typos, doc rewording, refactors that don't add capability) don't need a status update. The rule exists because `docs/engineering-status.md` went a month stale before this rule landed — the cost of a stale status file is decisions made on outdated information, not just embarrassment.
+- **Keep status current.** Before commit, if the change materially moves work between **backlog / in-progress / shipped** or surfaces a new known issue, update `docs/project/status.md` and open or close the corresponding GitHub issue. Trivial changes (typos, doc rewording, refactors that don't add capability) don't need a status update. Actionable backlog lives in GitHub issues, not in a file in the repo.
 - Security paths fail closed — if audit can't record, the action doesn't proceed
 - Every agent resource access must be attributed to an Agent ID, never the human user
 - Secrets and tokens never appear in logs — use `__repr__` overrides on sensitive fields
@@ -31,9 +29,9 @@
 - Always create BlueprintPrincipal explicitly after Blueprint — it is NOT auto-created
 - Agent IDs are service principals, not users — never create fake user accounts with passwords
 - **External content is untrusted.** Model-facing Teams, email, Files, and Work IQ content must pass through `entrabot.security.xpia.wrap_external`. Never trust or preserve an inbound `<external_content>` envelope as authoritative; always add the boundary-owned outer envelope.
-- **AGENT NAMES CHANGE — USE UPN.** Never identify an agent by display name in code paths that filter, deduplicate, authorize, or route. Use `ENTRABOT_AGENT_UPN` as the canonical config value (for example, `entra-agent@contoso.onmicrosoft.com`), match `sender_upn` first, and fall back to the Entra object ID. `ENTRABOT_AGENT_USER_UPN` remains a compatibility alias for existing `.env` files. See Learning #69 and `docs/architecture/PLAN-agent-identity-by-upn.md`.
+- **AGENT NAMES CHANGE — USE UPN.** Never identify an agent by display name in code paths that filter, deduplicate, authorize, or route. Use `ENTRABOT_AGENT_UPN` as the canonical config value (for example, `entra-agent@contoso.onmicrosoft.com`), match `sender_upn` first, and fall back to the Entra object ID. `ENTRABOT_AGENT_USER_UPN` remains a compatibility alias for existing `.env` files. See Learning #69 and `docs/architecture/messaging-and-delivery.md`.
 - Parse `az` CLI output as JSON, not TSV — TSV can be corrupted by warnings
-- **Sub-agent worktree installs must use a worktree-local venv, never the parent venv.** Running `pip install -e .` from inside a git worktree against the main repo's `.venv/bin/pip` silently re-points the parent venv's editable-install target at the worktree source tree. Every subsequent `entrabot-mcp` boot from the parent venv then loads code from the worktree — which has no `.env`, no auth, no polling, and no visible error. After any session that spawned sub-agents in worktrees, verify `.venv/bin/python3 -c "from entrabot import config; print(config.__file__)"` does NOT contain `.claude/worktrees/`. See `docs/runbooks/hard-won-learnings.md` Learning #36 for the full writeup.
+- **Sub-agent worktree installs must use a worktree-local venv, never the parent venv.** Running `pip install -e .` from inside a git worktree against the main repo's `.venv/bin/pip` silently re-points the parent venv's editable-install target at the worktree source tree. Every subsequent `entrabot-mcp` boot from the parent venv then loads code from the worktree — which has no `.env`, no auth, no polling, and no visible error. After any session that spawned sub-agents in worktrees, verify `.venv/bin/python3 -c "from entrabot import config; print(config.__file__)"` does NOT contain `.claude/worktrees/`. See `engineering-history/research/hard-won-learnings.md` Learning #36 for the full writeup.
 - **Sponsor DM wait pattern (host-gated).** When the human says "ping me when X is done" / "I'm going AFK, let me know" / any equivalent: confirm in Teams with `send_teams_message`, do the work, send the completion update with `send_teams_message`. What happens next depends on the host:
   - **Claude Code** (channel-push host): end the turn after sending. The entrabot background poll delivers the sponsor's reply as a next-turn `<channel source="entrabot">` system reminder. Do NOT call `wait_for_sponsor_dm` — it blocks the CLI session and freezes the conversation.
   - **Non-Claude-Code hosts** (Copilot CLI, Codex, etc.): `send_teams_message` auto-blocks after sending and returns the sponsor's reply inline as `sponsor_reply`. No manual wait needed.
@@ -62,15 +60,17 @@
 - External dependencies: Microsoft Entra ID (identity), Microsoft Teams + Outlook mailbox (Graph API), Azure Blob Storage (optional, opt-in via `setup.sh --use-cloud-memory`)
 - **No default group chat.** Every Teams tool requires an explicit `chat_id`. Chats come from `create_chat`, the persisted `watched_chats` file, or the auto-discovery sweep over `/me/chats`.
 - **Body-first prompt.** `prompts/agent_system.md` loads at boot with `@include` expansion of `prompts/anatomy/*.md`. Persona-sati output (if configured) is appended AFTER the body and cannot override body rules. See the "Body prompt is non-overridable" rule above.
-- Two auth modes via `ENTRABOT_MODE` config switch:
+- Two authenticated session types (selected by credential presence, not by `ENTRABOT_MODE`):
   - `agent_user` — three-hop Agent User flow (Blueprint cert → Agent Identity FIC → Agent User `user_fic`)
   - `delegated` — MSAL interactive auth with human's token, messages prefixed `[EntraBot]`
+  - `_init_auth` tries three-hop first when a Blueprint app ID + tenant ID are present and `ENTRABOT_SKIP_PROVISIONING` is false; on failure or bypass it falls back to MSAL delegated when `ENTRABOT_CLIENT_ID` is set. `ENTRABOT_MODE` is validated but not currently consumed as a selector.
 - Certificate auth: private key in OS keystore (Keychain/TPM/Keyring), JWT assertion for Hop 1 (ADR-003)
-- Background tasks (all started eagerly at MCP server boot in `agent_user` mode):
-  - Teams chat poll (5s) — pushes inbound DMs / group-chat messages via `notifications/claude/channel`
-  - Email poll (60s) — `/me/messages`, filters Teams/M365 noise, detects Purview-encrypted mail
-  - Chat auto-discovery (120s) — `GET /me/chats`, registers any chat not in `watched_chats`
-  - Daily summary scheduler — 5pm PDT triage email of the day's interactions
+- Background tasks: initialization is eagerly scheduled at stdio boot, but each task's own gate decides whether it actually starts.
+  - Teams chat poll (5s) — starts whenever `watched_chats` is non-empty, in either authenticated session type; pushes inbound DMs / group-chat messages via `notifications/claude/channel`
+  - Email poll (60s) — Agent-User-only; `/me/messages`, filters Teams/M365 noise, detects Purview-encrypted mail
+  - Chat auto-discovery (120s) — Agent-User-only; `GET /me/chats`, registers any chat not in `watched_chats`
+  - Daily summary scheduler — Agent-User-only; fixed 17:00 UTC-7 triage email of the day's interactions
+  - Persona-sati heartbeat (300s) — Agent-User-only; self-skips when `PERSONA_SATI_MCP_URL`/token command are unconfigured
 - **Operational storage is local by default.** Cloud (Azure Blob) is opt-in via `./scripts/setup.sh --use-cloud-memory`; recommended for durability but not required. The backend resolves from env at tool-call time: `KEEP_MEMORY_LOCAL=true` → `LocalBackend`, else `BLOB_ENDPOINT`+`BLOB_CONTAINER` → `BlobBackend`, else `LocalBackend`.
 - All structured data uses `dataclasses` or `pydantic` — no raw dicts
 
@@ -187,15 +187,15 @@ cognition rules, and degraded-mode flags in a single packet.
 
 ## Active Work
 
-- **v1 released (2026-04-18, PR #15).** Body-first prompts, cloud-opt-in, no default chat. See `docs/engineering-status.md` for the summary and `docs/architecture/DESIGN-persona-sati-integration.md` for the mind-body split design.
-- **Mind-body split shipped.** Body-first prompt architecture (PR #14, `prompts/agent_system.md` + `prompts/anatomy/*.md`) is live. `mcp_server.py:_load_agent_instructions` composes `body + persona`, fetching the persona from a remote MCP when `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` env vars are set, with clean fallback to the body when persona-sati is unreachable. `docs/TODO-persona-sati-integration.md` is now historical.
-- **ADR-005: cloud-hosted memory via Azure Blob Storage** — `docs/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phases 1, 2, 5, 6a shipped.** Memory sync hooks removed (persona-sati owns memory now). `scripts/claude_memory_sync.py` retained as manual migration tool.
+- **v1 released (2026-04-18, PR #15).** Body-first prompts, cloud-opt-in, no default chat. See `docs/project/status.md` for the summary and `docs/architecture/storage-and-memory.md` for the mind-body split design.
+- **Mind-body split shipped.** Body-first prompt architecture (PR #14, `prompts/agent_system.md` + `prompts/anatomy/*.md`) is live. `mcp_server.py:_load_agent_instructions` composes `body + persona`, fetching the persona from a remote MCP when `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` env vars are set, with clean fallback to the body when persona-sati is unreachable. The completed TODO was removed; current host protocol is `docs/clients/persona-sati-host-bootstrap.md`; archived design is `engineering-history/architecture/DESIGN-persona-sati-integration.md`.
+- **ADR-005: cloud-hosted memory via Azure Blob Storage** — `engineering-history/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phases 1, 2, 5, 6a shipped.** Memory sync hooks removed (persona-sati owns memory now). `scripts/claude_memory_sync.py` retained as manual migration tool.
   - Phase 1 (commit `f900ba1`): `BlobStore` async client in `src/entrabot/storage/blob.py` (put/get/list/delete/exists + ETag concurrency + 401→`TokenExpiredError`). 22 tests.
   - Phase 2: `MemoryBackend` protocol in `src/entrabot/storage/backend.py` with `LocalBackend` + `BlobBackend` + `get_backend()` factory. `interaction_log.py` and `daily_summary.py` route through it. 22 tests.
   - Phase 5: `acquire_agent_user_storage_token` (parallel third hop for `https://storage.azure.com/.default`), `scripts/provision_blob_storage.py` (idempotent resource group + storage account + container + RBAC scoped to Agent User), `grant_agent_user_storage_consent` added to `create_entra_agent_ids.py`, `setup.sh --keep-memory-local` flag + Step 7b provisioning + migration prompt (idempotent, source-preserving), `src/entrabot/storage/migration.py`. 23 tests. Setup now exits red + non-zero on migration failure.
   - Phase 6a: `PersonaBackend` in `src/entrabot/storage/persona.py`. `scripts/claude_memory_sync.py` CLI. Memory sync hooks deprecated — persona-sati owns sync.
-- **Multi-tenant lightweight chat** — landed to `main` (commit `c8ec521`). Spec: `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md`.
-- **Up next** (see `docs/engineering-status.md` "In Progress"): script-toolkit docs closeout, blob-env test isolation, MCP server orphan cleanup, daily-summary scheduler fixes, and email cursor precision.
+- **Multi-tenant lightweight chat** — landed to `main` (commit `c8ec521`). See `docs/platform-docs/delegated-auth.md` and `docs/architecture/messaging-and-delivery.md`.
+- **Up next** — see `docs/project/status.md` for current state, and the project's GitHub issues and pull requests for active work.
 
 ## Memory types
 
@@ -208,30 +208,30 @@ Two memory systems coexist in this project:
 
 ## Read These First
 
-- **`docs/platform-learnings/agent-id-blueprints-and-users.md`** — REQUIRED reading
-  before any auth-flow design. Captures post-GA (May 1, 2026) constraints on
+- **`docs/platform-docs/agent-id-blueprints-and-users.md`** — REQUIRED reading
+  before any auth-flow design. Captures post-GA constraints on
   Agent Identities, Blueprints, and Users: Blueprints can't be OAuth public
   clients; Entra has no DCR; the recommended pattern for MCP servers needing
   both cert-based machine flows AND browser-based PKCE is two app
   registrations. If you're designing anything OAuth-shaped, this is the
   source of truth.
-- `docs/platform-learnings/msal-entra-agent-ids.md` — supplementary; building on
-  the above with token-acquisition specifics and provisioning steps.
-- `docs/platform-learnings/entra-agent-users.md` — supplementary; the three-hop
+- `docs/platform-docs/delegated-auth.md` — supplementary; MSAL delegated
+  auth specifics. For three-hop runtime behavior see
+  `docs/architecture/identity-and-token-flow.md`.
+- `docs/platform-docs/entra-agent-users.md` — supplementary; the three-hop
   user-FIC flow.
-- `docs/engineering-status.md` — current state, test count, next steps
+- `docs/project/status.md` — current shipped capabilities, active development, and known limitations
 - `prompts/agent_system.md` + `prompts/anatomy/*.md` — the body prompt (security, channel discipline, identity/tools)
-- `docs/architecture/DESIGN-persona-sati-integration.md` — mind-body split design
-- `docs/decisions/005-cloud-hosted-memory.md` — cloud memory spec (phase plan + open TODOs)
-- `docs/decisions/006-remove-bot-gateway-mode.md` — why the Bot Gateway mode was removed
-- `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` — delegated mode spec (landed)
+- `docs/architecture/storage-and-memory.md` + `docs/clients/persona-sati-host-bootstrap.md` — mind-body split and persona-sati host bootstrap
+- `engineering-history/decisions/005-cloud-hosted-memory.md` — cloud memory spec (phase plan + open TODOs)
+- `engineering-history/decisions/006-remove-bot-gateway-mode.md` — why the Bot Gateway mode was removed
 - `docs/index.md` — doc site entry point
-- `docs/runbooks/mcp-disconnect-investigation.md` — **OPEN issue.** Entrabot MCP dies after 2–10 min of sustained activity. Two amplifiers fixed (PR #40, PR #41), root cause still unknown. Read this before debugging any MCP-drop symptom — do NOT restart the investigation from scratch.
-- `docs/runbooks/hard-won-learnings.md` — read before making changes
-- `docs/decisions/001-obo-flows-for-device-agents.md`
-- `docs/decisions/003-certificate-auth-over-client-secrets.md`
-- `docs/platform-learnings/microsoft-agent-365.md` — A365 GA'd 2026-05-01. Identity model, Work IQ MCP catalog, four capability tiers, auth flows, gap analysis vs entrabot. Read this before considering any A365 / Work IQ integration work.
-- `docs/platform-learnings/mcp-close-the-loop.md`
+- `engineering-history/investigations/mcp-disconnect-investigation.md` — **Historical, resolved.** Documents a past investigation into an Entrabot MCP disconnect after sustained activity. Retained only for prior diagnostic context; do not treat it as an open issue.
+- `engineering-history/research/hard-won-learnings.md` — read before making changes
+- `engineering-history/decisions/001-obo-flows-for-device-agents.md`
+- `engineering-history/decisions/003-certificate-auth-over-client-secrets.md`
+- `docs/platform-docs/microsoft-agent-365.md` — the Work IQ vs. direct-Graph boundary, the `ToolingManifest.json` tooling manifest, Work IQ Word tools, and Agent 365 authentication. Read this before considering any A365 / Work IQ integration work.
+- `docs/platform-docs/mcp-hosts-and-transports.md` + `docs/architecture/mcp-runtime.md`
 
 ## Commands
 
@@ -263,11 +263,11 @@ pip install mkdocs-material && mkdocs serve
 - `src/entrabot/a365/`: Microsoft Agent 365 Work IQ provider boundary and Word adapter
 - `src/entrabot/identity/`: Progressive identity state machine (UNAUTHENTICATED → DELEGATED → PROVISIONING → AGENT_USER)
 - `src/entrabot/tools/teams.py`: Three-hop token flow + Teams Graph API (send, read, filter, chat creation, add members cross-tenant)
-- `src/entrabot/mcp_server.py`: FastMCP server — Teams tools + 2 auth modes + background poll + channel push + token refresh (generic instructions — personality in persona-sati)
-- `src/entrabot/config.py`: `ENTRABOT_MODE` switch (auto/delegated/agent_user) + all env config
-- `docs/decisions/`: ADRs — every significant architectural choice is recorded here
-- `docs/runbooks/hard-won-learnings.md` — READ THIS before making changes
-- `docs/runbooks/mcp-disconnect-investigation.md`: OPEN MCP-disconnect dossier — READ before touching MCP transport, logging, or efferent-copy code
+- `src/entrabot/mcp_server.py`: FastMCP server — Teams tools + 2 authenticated session types + background poll + channel push + token refresh (generic instructions — personality in persona-sati)
+- `src/entrabot/config.py`: `ENTRABOT_MODE` (auto/delegated/agent_user — validated, not currently consumed by `_init_auth`) + all env config
+- `engineering-history/decisions/`: archived ADR history — every significant architectural choice was recorded here at the time it was made; no longer part of the published docs site
+- `engineering-history/research/hard-won-learnings.md` — READ THIS before making changes
+- `engineering-history/investigations/mcp-disconnect-investigation.md`: historical, resolved MCP-disconnect dossier — retained for prior diagnostic context
 
 ## gstack
 

@@ -1283,7 +1283,7 @@ def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
         # this, a chat created mid-session (e.g. via create_chat in a fresh
         # Copilot CLI session) is invisible to the gate's user_ids set —
         # federated B2B sponsors never get matched and wait hangs forever.
-        # See Learning #52 in docs/runbooks/hard-won-learnings.md.
+        # See Learning #52 in engineering-history/research/hard-won-learnings.md.
         if _state.pop("sponsor_gate", None) is not None and logger:
             logger.info(
                 "Invalidated cached sponsor gate after new watched chat: %s",
@@ -1907,7 +1907,7 @@ def _summarize_content(content: str, limit: int = 200) -> str:
     ``<img src>`` and ``<a href>`` URLs are extracted into plain-text
     markers before tags are stripped so the channel push doesn't lose
     the only signal in giphy embeds and link cards (regression
-    2026-04-27 — see ``docs/runbooks/mcp-disconnect-investigation.md``).
+    2026-04-27 — see ``engineering-history/investigations/mcp-disconnect-investigation.md``).
 
     HTML entities are unescaped *before* tag stripping so encoded
     angles (``&lt;p&gt;``) survive a round-trip without leaving
@@ -1947,7 +1947,7 @@ def _summarize_content(content: str, limit: int = 200) -> str:
 # add_member / share_file can verify the sponsor is actively engaged in the
 # chat the LLM is asking to mutate. See:
 #   src/entrabot/identity/active_channel.py
-#   docs/runbooks/hard-won-learnings.md (Learning #67)
+#   engineering-history/research/hard-won-learnings.md (Learning #67)
 
 
 async def _get_sponsor_records_for_binding() -> list:
@@ -2107,7 +2107,7 @@ async def _push_channel_notification(
     # fields like `reply_to_ids` or `quoted_messages`, regardless of
     # their content. The earlier 2026-04-24 sanitizer fix on
     # `params.content` is still required as defense-in-depth — see
-    # docs/runbooks/mcp-disconnect-investigation.md.
+    # engineering-history/investigations/mcp-disconnect-investigation.md.
     meta: dict = {
         "chat_id": resolved_chat_id,
         "message_id": message.get("message_id", ""),
@@ -3315,8 +3315,15 @@ async def watch_teams_replies(
     server-side cursor to track what's been seen — only returns genuinely
     new human messages.
 
-    WHEN TO CALL: Always after send_teams_message. This completes the
-    bidirectional loop — send a message, then watch for the reply.
+    WHEN TO CALL: This is explicit direct polling — a fallback, not the
+    normal path after ``send_teams_message``. ``send_teams_message``
+    already handles the reply on its own: it auto-waits server-side on
+    hosts without a channel push and returns the sponsor's reply inline,
+    while channel-push hosts (Claude Code) get the reply as a later
+    channel notification. Reach for this tool only when you need to
+    watch a chat directly outside that flow (e.g. polling a chat you
+    didn't just send to, or a host-specific fallback) — not as a default
+    "send then watch" step, which would double-wait.
 
     If timed_out is true, the human hasn't replied yet. You can call this
     again with a longer timeout, or move on and check back later.
@@ -3456,28 +3463,32 @@ async def wait_for_sponsor_dm(
 ) -> str:
     """Block until a Sponsor sends a Teams DM, then return their message.
 
-    **When to call this tool.** Any time you proactively send a Teams
-    DM to a 1:1 sponsor chat as part of completing the operator's
-    request, the human's next-turn reaction lands in Teams, not in the
-    host CLI's terminal. You must therefore stay in-session and listen
-    for it. After every such proactive 1:1 DM, immediately call
-    `wait_for_sponsor_dm` — even when the task itself was trivial.
-    Sending a DM is what opens the conversation; you do not get to
-    fire-and-forget. The one explicit exception is when the operator
-    says "no need to wait" or "don't listen for a reply" in the same
-    turn.
+    **When to call this tool.** Only when the operator explicitly asks
+    you to block until a sponsor replies mid-task (e.g. "wait for
+    Brandon's response before doing X", "block until they reply"). This
+    is NOT the default follow-up to a proactive DM: ``send_teams_message``
+    already handles that reply on its own — it auto-waits server-side on
+    hosts without a channel push (Copilot CLI, Codex) and returns the
+    sponsor's reply inline as ``sponsor_reply``, while channel-push hosts
+    (Claude Code) receive the reply as a later channel notification and
+    should end the turn after sending instead of waiting. Calling this
+    tool after every send would double-wait on top of that built-in
+    behavior. Reach for ``wait_for_sponsor_dm`` only for the rare
+    explicit-block request described above, not as routine housekeeping
+    after a DM.
 
-    The canonical worked example is long-running work with a "ping me
-    when it's done" promise — e.g. "I'm going to lunch. Ping me when
-    the build's green." Send the human a heads-up via
+    A worked example of the rare explicit case: the operator says "I'm
+    going to lunch, ping me when the build's green — and wait for my
+    reply before doing anything else." Send the human a heads-up via
     ``send_teams_message`` first (so they know what to expect), do the
     work, then call this tool. The tool sleeps INSIDE this MCP session
     until the Sponsor (and only the Sponsor — the Agent Identity's
     configured human sponsors, looked up at runtime via Graph) DMs the
     agent in any watched chat. The Sponsor's message text becomes this
     tool's return value, which the model then sees as next-turn input.
-    The same pattern applies to any other proactive 1:1 DM, including
-    quick "done!" pings on two-second tasks.
+    Do not extend this pattern to ordinary proactive DMs or "done!"
+    pings — those are already covered by ``send_teams_message``'s
+    built-in auto-wait / channel-push handling described above.
 
     REQUIRED FOLLOW-UP — when this tool returns a payload with
     ``chat_type == "oneOnOne"`` and a non-empty ``message_id``, you
@@ -4480,8 +4491,8 @@ async def add_file_comment(
     - Site must not be in ``ENTRABOT_FILES_DENIED_SITES``.
 
     Endpoint: ``POST /beta/drives/{drive-id}/items/{item-id}/comments``
-    (Microsoft's beta surface — V1 plan accepts this risk; see
-    ``docs/architecture/PLAN-files-mcp-tools.md`` §"Failure-mode registry").
+    (Microsoft's beta surface — accepted risk; see
+    ``docs/reference/mcp-tools.md``).
 
     Args:
         drive_id, item_id, name, mime_type, kind, site_id: ``FileRef``

@@ -74,7 +74,7 @@ Then ask the host to call `whoami`. It should report the Agent User identity, no
 
 ## Next steps
 
-- [Installation and platform details](https://github.com/microsoft/entrabot/blob/main/INSTALL.md)
-- [Setup script options](../reference/scripts/setup.md)
+- [Prerequisites](prerequisites.md)
+- [Setup script options](../reference/scripts/setup/setup-sh.md)
 - [Token flow](../reference/token-flows.md)
-- [Troubleshooting](../runbooks/hard-won-learnings.md)
+- [Troubleshooting](../troubleshooting/index.md)

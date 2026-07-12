@@ -19,7 +19,7 @@ class TestFilterHumanMessages:
 
     Agent-self identification is by UPN (canonical) and AAD object-id
     (fallback). Display name is NEVER used — it's user-mutable and
-    localizable. See ``docs/architecture/PLAN-agent-identity-by-upn.md``
+    localizable. See ``docs/architecture/identity-and-token-flow.md``
     and Learning #69.
     """
 

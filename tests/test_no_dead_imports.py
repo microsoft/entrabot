@@ -6,7 +6,7 @@ console scripts) once ``wait_for_sponsor_dm`` shipped in PR #46. The wait-tool i
 only sanctioned wake mechanism — any new code that imports the removed modules is a
 regression toward the failed approach. This test fails loudly if it happens.
 
-See ``docs/runbooks/hard-won-learnings.md`` Learning #49 for why the long-blocking
+See ``engineering-history/research/hard-won-learnings.md`` Learning #49 for why the long-blocking
 MCP tool replaces the PTY supervisor.
 """
 

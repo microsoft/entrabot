@@ -85,13 +85,19 @@ def test_wait_tool_docstring_reaches_model_via_tool_description() -> None:
     assert "sponsor" in mcp_src.lower()
 
 
-def test_send_teams_message_docstring_directs_to_wait_for_sponsor_dm() -> None:
+def test_send_teams_message_docstring_pins_auto_wait_and_host_detection() -> None:
     """``send_teams_message``'s docstring becomes its MCP tool description,
     which Copilot CLI and Claude Code BOTH inject into the model's system
-    prompt (Learning #48). Hosts that lack a push channel (Copilot CLI) need
-    the wait-protocol delivered via tool descriptions, not via the body
-    prompt's ``instructions=`` field. Pin the doctrine here so a future
-    docstring rewrite can't silently regress it.
+    prompt (Learning #48). The current contract is that ``send_teams_message``
+    itself auto-waits server-side on hosts without a channel push (Copilot
+    CLI, Codex) and returns the sponsor's reply inline as ``sponsor_reply``,
+    while channel-push hosts (Claude Code) get the reply via a later channel
+    notification instead of blocking. Callers are not expected to manually
+    invoke ``wait_for_sponsor_dm`` after a normal send — that tool is
+    referenced here only as the underlying mechanism, reserved separately
+    for an operator's explicit "block until they reply" request. Pin the
+    doctrine here so a future docstring rewrite can't silently regress it
+    back to "always call wait_for_sponsor_dm after sending."
     """
     from entrabot import mcp_server  # noqa: F401
 
@@ -100,15 +106,26 @@ def test_send_teams_message_docstring_directs_to_wait_for_sponsor_dm() -> None:
     docstring_lower = docstring.lower()
 
     assert "wait_for_sponsor_dm" in docstring, (
-        "send_teams_message docstring must name wait_for_sponsor_dm so "
-        "Copilot CLI sees the wait-protocol via the tool description "
-        "(it ignores FastMCP instructions=; see Learning #48)."
+        "send_teams_message docstring must name wait_for_sponsor_dm (as the "
+        "shared underlying mechanism) so Copilot CLI sees the wait-protocol "
+        "via the tool description (it ignores FastMCP instructions=; see "
+        "Learning #48)."
     )
-    # And it must explain WHEN to call it, so the model doesn't wait after
-    # every send. The trigger is: this DM is a reply the sponsor expects.
     assert "sponsor" in docstring_lower, (
-        "send_teams_message docstring must mention the sponsor trigger so "
-        "the model only waits when a reply is actually expected."
+        "send_teams_message docstring must mention the sponsor so the "
+        "model understands whose reply triggers the built-in auto-wait."
+    )
+    # Current doctrine: this tool's own built-in auto-wait/host-detection,
+    # not a manual "call wait_for_sponsor_dm after send" instruction.
+    assert "auto-wait" in docstring_lower or "auto-blocks" in docstring_lower, (
+        "send_teams_message docstring must describe its own built-in "
+        "auto-wait behavior rather than delegating the wait to a manual "
+        "wait_for_sponsor_dm call."
+    )
+    assert "copilot" in docstring_lower and "claude code" in docstring_lower, (
+        "send_teams_message docstring must name the host-detection contract "
+        "(Claude Code gets channel push; Copilot CLI/Codex get built-in "
+        "auto-wait) so the model doesn't double-wait on either host."
     )
 
 

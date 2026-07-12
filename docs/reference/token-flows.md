@@ -1,6 +1,6 @@
 # Token flows
 
-Entrabot has two authentication modes. `agent_user` uses the autonomous three-hop Agent User flow described below. `delegated` uses MSAL interactive authentication (localhost redirect with device-code fallback) and is intended for demos or environments without a provisioned Agent User.
+Entrabot has two authenticated session types. `agent_user` uses the autonomous three-hop Agent User flow described below. `delegated` uses MSAL interactive authentication (localhost redirect with device-code fallback) and is intended for demos or environments without a provisioned Agent User. `_init_auth` selects between them by credential presence and `ENTRABOT_SKIP_PROVISIONING`, not by `ENTRABOT_MODE`.
 
 ## Autonomous Agent User flow
 
@@ -89,24 +89,27 @@ Entrabot grants delegated scopes with `POST /v1.0/oauth2PermissionGrants`:
 }
 ```
 
-Microsoft's current request example may omit `startTime`, but Entrabot has observed tenants that reject the grant without it. The provisioning helper therefore includes it as a compatibility requirement.
+The example above includes `startTime` because some tenants reject the grant without it, even though Microsoft's reference examples may omit it; the provisioning scripts always set it to the current UTC time.
 
 ## Token refresh
 
 The MCP server uses two layers:
 
-1. `_ensure_valid_token()` refreshes eagerly before expiry.
+1. `_ensure_valid_token()` refreshes eagerly once the token is within 5 minutes of its 60-minute expiry (a 55-minute threshold).
 2. `_with_token_retry()` retries once after a Graph 401.
 
 Tokens and assertions must never be logged. Failures surface as typed errors that identify the failed hop without exposing token material.
 
 ## Delegated mode
 
-`ENTRABOT_MODE=delegated` uses the regular Entrabot app registration and MSAL. The primary flow is localhost browser authentication; device code is a fallback for headless environments. Delegated tokens represent the signed-in human and therefore do not provide Agent User attribution. This mode is separate from the autonomous three-hop flow and does not turn a Blueprint into an OAuth public client.
+The delegated path uses the regular Entrabot app registration (`ENTRABOT_CLIENT_ID`) and MSAL. `_init_auth` takes it when the three-hop fast path is skipped or fails; `ENTRABOT_MODE` is validated but does not currently select it. The primary flow is localhost browser authentication; device code is a fallback for headless environments. Delegated tokens represent the signed-in human and therefore do not provide Agent User attribution. This path is separate from the autonomous three-hop flow and does not turn a Blueprint into an OAuth public client. See [Delegated Authentication](../platform-docs/delegated-auth.md) for detail.
 
 ## Related
 
-- [Agent Identity platform constraints](../platform-learnings/agent-id-blueprints-and-users.md)
-- [Agent Users](../platform-learnings/entra-agent-users.md)
-- [Certificate authentication](../decisions/003-certificate-auth-over-client-secrets.md)
+- [Agent Identity platform constraints](../platform-docs/agent-id-blueprints-and-users.md)
+- [Agent Users](../platform-docs/entra-agent-users.md)
+- [Delegated Authentication](../platform-docs/delegated-auth.md)
+- [Identity and Token Flow](../architecture/identity-and-token-flow.md)
 - [Auth API reference](api/auth.md)
+- [Identity API reference](api/identity.md)
+- [Configuration](configuration.md)

@@ -48,6 +48,7 @@ pip.ini
 .worktrees/
 
 # Internal session transcripts and personal planning docs
-docs/runbooks/session-*.md
+engineering-history/investigations/session-*.md
 docs/superpowers/
 .entraclaw-state.json
+uv.lock

@@ -29,6 +29,12 @@ dev = [
     "ruff>=0.4",
     "respx>=0.22.0",
     "azure-identity>=1.15.0",
+    "PyYAML>=6.0",
+]
+docs = [
+    "mkdocs-material>=9.5",
+    "mkdocs-redirects>=1.2",
+    "PyYAML>=6.0",
 ]
 provisioning = [
     "azure-identity>=1.15.0",
@@ -52,7 +58,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
-    "eval: LLM eval suite for files-mcp scenarios (gates PR1 merge per docs/architecture/PLAN-files-mcp-tools.md §Testing)",
+    "eval: LLM eval suite for files-mcp scenarios (see docs/reference/mcp-tools.md)",
 ]
 
 [tool.coverage.run]

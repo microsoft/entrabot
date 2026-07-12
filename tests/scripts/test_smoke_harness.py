@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import py_compile
+import re
 import sys
 from pathlib import Path
 
@@ -156,3 +157,20 @@ def test_targeted_teardown_does_not_emit_state_delete_warnings() -> None:
     assert "TARGETED_DEPROVISION_DONE=false" in script
     assert "Targeted teardown already removed the identity chain" in script
     assert "if [ \"$TARGETED_DEPROVISION_DONE\" = false ]; then" in script
+
+
+def test_top_level_dry_run_exits_before_provisioner_token_and_deletions() -> None:
+    """--dry-run in default (state-based) mode must stop before any token
+    acquisition or deletion. Regression test: the top-level dry-run branch
+    used to print its message and fall through to the Provisioner token
+    fetch and the deletion sections below."""
+    script = read("scripts/teardown.sh")
+
+    match = re.search(r'if \[ "\$DRY_RUN" = true \]; then(.*?)elif', script, re.DOTALL)
+    assert match, "top-level DRY_RUN branch not found in scripts/teardown.sh"
+    dry_run_branch = match.group(1)
+
+    assert "exit 0" in dry_run_branch, (
+        "top-level dry-run branch prints its message but never exits, "
+        "so control falls through to Provisioner token acquisition and deletions"
+    )

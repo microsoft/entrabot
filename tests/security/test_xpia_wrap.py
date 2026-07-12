@@ -1,7 +1,7 @@
 """Unit tests for ``entrabot.security.xpia`` — boundary-enforced XPIA envelope.
 
-Written RED-first per TDD. See ``docs/architecture/PLAN-xpia-content-wrapping.md``
-(landing separately in PR #99). Rationale: prose-only instruction-injection
+Written RED-first per TDD. See ``docs/architecture/security-boundaries.md``.
+Rationale: prose-only instruction-injection
 defense degrades under long context / novel phrasing. A mechanical envelope
 at the tool return boundary is the first hard layer; this module is that
 layer's implementation.

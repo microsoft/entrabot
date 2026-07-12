@@ -1,6 +1,6 @@
 """Sanity check that the OS credential store can roundtrip a 2048-bit PEM.
 
-Phase 2 hardening (PLAN-windows-port.md). On Mac/Linux the Blueprint
+Keystore backend hardening. On Mac/Linux the Blueprint
 private key is stored as a ~1.7 KB PEM blob via ``keyring``. Some Linux
 backends (older gnome-keyring builds, certain headless Secret Service
 implementations) silently truncate or refuse blobs of that size. The

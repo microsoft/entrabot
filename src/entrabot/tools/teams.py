@@ -393,12 +393,14 @@ async def create_or_find_chat(
 ) -> dict:
     """Create or resume a Teams chat between the Agent User and human(s).
 
-    If one human user is provided, creates a ``oneOnOne`` chat (idempotent).
-    If multiple humans are provided, creates a ``group`` chat with a topic.
+    If a single human user is provided, creates a ``oneOnOne`` chat
+    (idempotent) — this includes a lone B2B guest. If multiple humans are
+    provided, creates a ``group`` chat with a topic.
 
-    For B2B guest users (``human_user_types`` contains ``"Guest"``), the chat
-    is always created as ``group`` with ``role: "guest"`` for the guest member,
-    matching Graph API Create Chat Example 6.
+    For B2B guest users (``human_user_types`` contains ``"Guest"``), the
+    member is bound by email + home tenant ID rather than object ID, matching
+    Graph API Create chat Example 7. The guest member's role is ``"owner"``,
+    same as any other member.
 
     For external/federated users, ``human_user_tenant_ids`` provides the home
     tenant GUID (parallel to ``human_user_ids``).  When a tenant ID is
@@ -658,7 +660,7 @@ async def add_member(
         # (within TTL) inbound message from this sponsor in this chat. Defends
         # the Chain A confused-deputy: an attacker in chat A cannot get the
         # agent to mutate chat B even when the sponsor is a genuine member of
-        # B. See docs/runbooks/hard-won-learnings.md Learning #67 and
+        # B. See engineering-history/research/hard-won-learnings.md Learning #67 and
         # src/entrabot/identity/active_channel.py.
         from entrabot.identity.active_channel import get_bindings
 
@@ -1442,11 +1444,14 @@ def filter_human_messages(
     * Messages where ``from`` is ``"unknown"`` (system messages with null from field).
     * Messages whose ``message_id`` is in *sent_message_ids* (echo prevention
       for delegated mode).
-    * Messages whose content starts with ``[EntraBot]`` (restart-safe dedup filter).
+    * Messages whose content starts with ``[EntraBot]`` (legacy literal-prefix
+      filter, kept for backward compatibility; ineffective once messages are
+      wrapped with the default XPIA envelope, since the prefix no longer
+      leads the raw content). Sender identity matching, ``sent_message_ids``,
+      and read cursors are what provide effective dedup.
 
     All filtering is client-side — Graph API ``$filter`` is unreliable for chat
-    messages. See ``docs/architecture/PLAN-agent-identity-by-upn.md`` and
-    Learning #69: display names are user-mutable and localizable and MUST NOT
+    messages. Display names are user-mutable and localizable and MUST NOT
     be used as identity in filter / dedup / authorization / routing code paths.
     """
     exclude_ids = sent_message_ids or set()

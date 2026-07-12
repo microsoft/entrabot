@@ -26,9 +26,13 @@ This module owns the envelope: ``wrap_external`` produces it,
   ``wrap_external`` to the identity function so a live rollback needs
   only a restart, not a code revert.
 
-See ``docs/architecture/PLAN-xpia-content-wrapping.md`` (landing in
-PR #99) for the full design + rollout notes, and Learning #70 in
-``docs/runbooks/hard-won-learnings.md`` for the motivation.
+This is a text-escaping and provenance boundary, not a cryptographic
+signature: it does not authenticate the body's origin, sanitize its
+contents, or guarantee that a model cannot be persuaded to follow
+instructions embedded in wrapped text. See
+``docs/reference/api/security.md`` for the full public API reference
+and ``docs/architecture/security-boundaries.md`` for how this boundary
+fits alongside identity attribution, sponsor authorization, and audit.
 """
 
 from __future__ import annotations
