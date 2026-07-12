@@ -1,14 +1,12 @@
 # Files and Microsoft Agent 365 Work IQ
 
-EntraBot has two shipped paths for working with files in OneDrive and
-SharePoint: a direct Microsoft Graph integration, and a Microsoft Agent 365
-Work IQ provider. Both are implemented and available — this guide covers what
-each one does and when to reach for which.
+Entrabot offers two ways to work with files in OneDrive and SharePoint: a
+direct Microsoft Graph integration, and a Microsoft Agent 365 Work IQ
+provider. This guide covers what each one does and when to reach for which.
 
-## Two paths, not a proposal
+## Two ways to work with files
 
-**Direct Graph (`src/entrabot/tools/files.py`)** covers general-purpose file
-operations:
+**Direct Graph** covers general-purpose file operations:
 
 - Resolving a OneDrive/SharePoint share URL to a drive item.
 - Listing recent and shared files.
@@ -22,17 +20,18 @@ operations:
 - Adding legacy Graph comments on SharePoint `.docx`/`.xlsx` files (no
   read/list operation — see Work IQ Word for reading comments).
 
-**Work IQ (`src/entrabot/a365/`)** is a separate provider boundary — catalog,
-manifest, token acquisition, and MCP client — with two typed adapters on top:
+**Work IQ** is a separate provider boundary — catalog, manifest, token
+acquisition, and MCP client — with two typed adapters on top:
 
 - **Word adapter** — get document content (with comments), create a new
-  document, create a comment, and reply to a comment. This is the production
-  path for Word document read/create/comment/reply workflows.
+  document, create a comment, and reply to a comment. It supports the full
+  read/create/comment/reply workflow for Word documents.
 - **ODSP adapter** — look up OneDrive/SharePoint file or folder metadata by
   URL, and read small text or binary files.
 
-Work IQ is not Word-only: the ODSP adapter handles generic OneDrive/SharePoint
-metadata and small-file reads independently of the Word-specific tools.
+The ODSP adapter handles generic OneDrive/SharePoint metadata and small-file
+reads independently of the Word-specific tools, so Work IQ is useful beyond
+Word document workflows.
 
 ## When to use which
 
@@ -40,17 +39,17 @@ metadata and small-file reads independently of the Word-specific tools.
   reads, uploads, and sharing — anything that isn't specifically a Word
   document workflow.
 - Use **Work IQ Word** for reading, creating, commenting on, and replying to
-  comments on Word documents — this is the current production path for that
-  workflow, not the legacy Graph comment API.
+  comments on Word documents.
 - Use **Work IQ ODSP** for OneDrive/SharePoint metadata lookups and small
   text/binary reads when you're already working through the Work IQ
   provider boundary.
 
-## Security and bounds
+## Security and limits
 
 File content read through either path — direct Graph or Work IQ — is
-wrapped as external, model-facing content through the XPIA boundary before
-it reaches the model, the same treatment given to Teams and email content.
+wrapped in an authoritative external-content boundary before it reaches the
+model, so it's treated as data rather than trusted instructions. This is the
+same treatment given to Teams and email content.
 
 Direct Graph additionally enforces a site denylist and size limits on reads,
 and every write (comment, upload, share) is recorded through the audit
@@ -61,8 +60,16 @@ layer.
 If a direct Graph call fails because the Agent User is missing Files or
 Sites scopes, run:
 
+macOS/Linux:
+
 ```bash
-python3 scripts/grant_files_consent.py
+.venv/bin/python3 scripts/grant_files_consent.py
+```
+
+Windows (PowerShell):
+
+```powershell
+.\.venv\Scripts\python.exe scripts\grant_files_consent.py
 ```
 
 This PATCHes the existing consent grant to add the missing scopes without
@@ -71,9 +78,13 @@ re-running full provisioning. See the
 
 Work IQ requires its own setup step, run once per environment:
 
+macOS/Linux:
+
 ```bash
 ./scripts/setup.sh --configure-a365-work-iq
 ```
+
+Windows (PowerShell):
 
 ```powershell
 .\scripts\setup-windows.ps1 -ConfigureA365WorkIq

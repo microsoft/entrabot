@@ -1,6 +1,6 @@
 # Identity Lifecycle and Deprovisioning
 
-This guide covers the resource chain EntraBot provisions in Entra, the
+This guide covers the resource chain Entrabot provisions in Entra, the
 runtime identity states the MCP server moves through, and how to inspect,
 rotate, and tear down that chain.
 
@@ -22,8 +22,7 @@ for the script that runs this chain.
 ## Runtime identity states
 
 The MCP server's identity state machine is not a strict linear progression
-— it defines a specific set of allowed transitions, enforced under an
-`asyncio.Lock`:
+— it defines a specific set of allowed transitions:
 
 | From | Allowed transitions to |
 |------|------------------------|
@@ -33,17 +32,24 @@ The MCP server's identity state machine is not a strict linear progression
 | `AGENT_USER` | `ERROR`, `UNAUTHENTICATED` |
 | `ERROR` | `DELEGATED`, `UNAUTHENTICATED` |
 
-Every transition acquires the lock, validates it's in this table, and runs
-an optional callback inside the lock. If the callback raises, the session
-state is rolled back to the snapshot taken when the lock was acquired —
-a failed transition doesn't leave partially-updated session state behind.
+Every transition is validated against this table and applied atomically. If
+the transition fails partway through, it rolls back cleanly and does not
+leave partial session state behind.
 
 To inspect the current state and health of the chain — Blueprint, Agent
 Identity, Agent User, sponsors, permissions, certificates, licenses, and
 storage configuration — run:
 
+macOS/Linux:
+
 ```bash
-python3 scripts/show_agent_status.py
+.venv/bin/python3 scripts/show_agent_status.py
+```
+
+Windows (PowerShell):
+
+```powershell
+.\.venv\Scripts\python.exe scripts\show_agent_status.py
 ```
 
 See the
@@ -85,20 +91,39 @@ and
 To remove a single Agent User chain, first run a dry run — the target UPN is
 required:
 
+macOS/Linux:
+
 ```bash
-python3 scripts/deprovision_entra_agent_identity.py --agent-user-upn agent@tenant.onmicrosoft.com --dry-run
+.venv/bin/python3 scripts/deprovision_entra_agent_identity.py --agent-user-upn agent@tenant.onmicrosoft.com --dry-run
+```
+
+Windows (PowerShell):
+
+```powershell
+.\.venv\Scripts\python.exe scripts\deprovision_entra_agent_identity.py --agent-user-upn agent@tenant.onmicrosoft.com --dry-run
 ```
 
 Review the output, then run the same command without `--dry-run` to perform
-the deletion.
+the deletion:
 
-Before deleting anything, the script runs
-`ensure_blueprint_has_no_other_agent_identities` to check whether another
-Agent Identity references the same Blueprint. If one does, the script aborts
-without deleting the Agent User's licenses, the Agent User, the Agent
-Identity, or the Blueprint — nothing is removed, so other chains sharing that
-Blueprint are left intact. Otherwise, it removes, in order: the Agent User's
-directly assigned licenses, the Agent User itself, the Agent Identity service
+macOS/Linux:
+
+```bash
+.venv/bin/python3 scripts/deprovision_entra_agent_identity.py --agent-user-upn agent@tenant.onmicrosoft.com
+```
+
+Windows (PowerShell):
+
+```powershell
+.\.venv\Scripts\python.exe scripts\deprovision_entra_agent_identity.py --agent-user-upn agent@tenant.onmicrosoft.com
+```
+
+Before deleting anything, the script checks whether another Agent Identity
+references the same Blueprint. If one does, the script aborts without
+deleting the Agent User's licenses, the Agent User, the Agent Identity, or
+the Blueprint — nothing is removed, so other chains sharing that Blueprint
+are left intact. Otherwise, it removes, in order: the Agent User's directly
+assigned licenses, the Agent User itself, the Agent Identity service
 principal, and finally the Blueprint application.
 
 The script does not touch local on-disk state or Azure Blob storage — those

@@ -1,6 +1,6 @@
 # Teams and Chat Workflows
 
-EntraBot has no default group chat. Every operation on an existing Teams
+Entrabot has no default group chat. Every operation on an existing Teams
 conversation — sending, reading, watching for replies — requires an explicit
 `chat_id`. This guide covers where that ID comes from, how messages flow in
 both directions, and how outstanding commitments and delivery state are
@@ -21,8 +21,8 @@ A `chat_id` reaches the agent one of four ways:
    someone else and registers any that aren't already watched.
 
 Newly discovered chats (from `create_chat` or auto-discovery) are persisted
-immediately and picked up by the 5-second background poll on the next cycle
-— there's no separate "activation" step.
+immediately, and become active automatically: the 5-second background poll
+picks them up on its next cycle.
 
 ## Sending messages
 
@@ -31,9 +31,9 @@ immediately and picked up by the 5-second background poll on the next cycle
 recipients can tell agent-originated messages apart from the human's own.
 
 Substantive outbound DMs require a recent `post_thinking_placeholder` call
-for that `chat_id`. Skipping it returns `MissingPlaceholderError` with a
-remediation hint (`post_thinking_placeholder + retry`) rather than silently
-sending.
+for that `chat_id`. Skipping it causes the send to be rejected, with
+remediation guidance pointing at calling `post_thinking_placeholder` and
+retrying, rather than silently sending.
 
 What happens after the message is sent depends on the host:
 
@@ -41,10 +41,12 @@ What happens after the message is sent depends on the host:
   immediately. The sponsor's reply, when it arrives, is delivered on the next
   turn via `notifications/claude/channel` — there's nothing further to poll.
 - On Copilot CLI and other hosts without a channel-push mechanism,
-  `send_teams_message` automatically waits for a sponsor-gated reply in any
-  watched chat, not necessarily the chat just messaged, and returns it inline
-  as `sponsor_reply`. The caller is expected to continue the conversation by
-  replying to the `chat_id` returned with `sponsor_reply`.
+  `send_teams_message` blocks until a verified sponsor reply arrives in any
+  watched chat, then returns it inline as `sponsor_reply`, including the
+  originating `chat_id`. This means the reply may come from a different chat
+  than the one just messaged, so follow-up messages should use the `chat_id`
+  returned with `sponsor_reply` rather than assuming it matches the chat just
+  messaged.
 
 `wait_for_sponsor_dm` is a separate tool reserved for the case where an
 operator explicitly asks to block until a reply arrives mid-task. It is not
@@ -57,33 +59,28 @@ A background poll runs every 5 seconds across all watched chats. Each chat is
 polled independently, so a failure fetching one chat's messages doesn't
 starve delivery for the others.
 
-`watch_teams_replies` is a separate, tool-result-based fallback for polling a
-single chat with a timeout. It intentionally maintains its own delivery and
-deduplication state, distinct from the background poll's channel-push
-delivery — the two are not meant to be reconciled into a single cursor.
+`watch_teams_replies` is a tool-result fallback for polling a single chat
+with a timeout. It maintains its own delivery state, separate from the
+background poll's channel-push delivery.
 
 ## Promises: tracking commitments
 
-Outstanding commitments the agent makes in conversation ("I'll get back to
-you on this") are tracked durably in an append-only JSONL store, so they
-survive process restarts. Adding a promise appends an "open" entry; resolving
-it appends a new entry with the same ID and a "resolved" status — the store
-never rewrites history, it folds by ID and keeps the last entry per ID.
-Writes to a cloud backend use ETag-based optimistic concurrency.
+Promise tools durably store deferred commitments the agent makes in
+conversation ("I'll get back to you on this") and their resolution history,
+so they survive process restarts. The store is append-only: adding a promise
+appends an "open" entry, and resolving it appends a new entry with the same
+ID and a "resolved" status, keeping the full history rather than overwriting
+it. Writes to a cloud backend use ETag-based optimistic concurrency.
 
-Record a promise before using deferred-commitment language in a reply
-("I'll follow up," "let me check and get back to you") — that's the point at
-which the commitment should become durable state rather than something only
-implied in a chat transcript.
-
-## Cursors and deduplication
+## Delivery state and deduplication
 
 Each watched chat tracks its own cursor: a last-seen timestamp plus a bounded
 set of recently seen message IDs, persisted through the configured Local or
-Blob storage backend. The background poll and `watch_teams_replies` keep
-separate cursor/dedup state by design, and a shared blob ETag claim prevents
-the same message from being delivered twice when more than one process is
-watching the same chat.
+Blob storage backend. The background poll's channel push and
+`watch_teams_replies` use separate delivery state, so one does not consume
+the other's messages. A shared blob ETag claim prevents the same message
+from being delivered twice when more than one process is watching the same
+chat.
 
 ## See also
 
