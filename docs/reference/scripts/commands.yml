@@ -1,0 +1,276 @@
+# Single source of truth for the 42 supported operator-facing commands
+# documented on the public site. See tests/docs/test_script_commands_manifest.py
+# for the validation this file must satisfy, and
+# docs/reference/scripts/index.md for the rendered landing page.
+#
+# Each entry declares: id, path (repo-root-relative), category (from the
+# known set), page (docs-dir-relative), platforms, and a summary that
+# describes the command's *current* behavior. Summaries were verified
+# against each script's source and help/docstring, not copied blindly
+# from the Phase 8 plan.
+commands:
+  # --- Operations (8) ---
+  - id: status-sh
+    path: status.sh
+    category: operations
+    page: reference/scripts/operations/status-sh.md
+    platforms: [macos, linux]
+    summary: Shell entry point that bootstraps the local Python venv if needed and delegates to show_agent_status.py for the consolidated Agent Identity status check.
+  - id: status-windows-ps1
+    path: status-windows.ps1
+    category: operations
+    page: reference/scripts/operations/status-windows-ps1.md
+    platforms: [windows]
+    summary: Windows PowerShell status wrapper — ensures the venv and deps exist, loads .env, and delegates to show_agent_status.py (supports -Json, -HealthOnly, -Strict).
+  - id: show-agent-status-py
+    path: scripts/show_agent_status.py
+    category: operations
+    page: reference/scripts/operations/show-agent-status-py.md
+    platforms: [macos, linux, windows]
+    summary: Shows consolidated Agent Identity status and health from local state and live Graph queries (Blueprint, Agent Identity, Agent User, Sponsors, Permissions, Certificates, Licenses, Storage). Supports --json and --health-only.
+  - id: health-check-py
+    path: scripts/health_check.py
+    category: operations
+    page: reference/scripts/operations/health-check-py.md
+    platforms: [macos, linux, windows]
+    summary: Compatibility wrapper that forwards to show_agent_status.py with --health-only for callers that still invoke the old health_check.py entry point.
+  - id: catch-up-py
+    path: scripts/catch_up.py
+    category: operations
+    page: reference/scripts/operations/catch-up-py.md
+    platforms: [macos, linux, windows]
+    summary: Pulls recent messages from all watched chats and the inbox, authenticated as the Agent User via the three-hop token, to see what arrived while the MCP server was not polling.
+  - id: dm-py
+    path: scripts/dm.py
+    category: operations
+    page: reference/scripts/operations/dm-py.md
+    platforms: [macos, linux, windows]
+    summary: Sends a one-off Teams message to a chat (by chat_id or a locally defined alias) using the Agent User's three-hop token, outside of an MCP session.
+  - id: read-email-py
+    path: scripts/read_email.py
+    category: operations
+    page: reference/scripts/operations/read-email-py.md
+    platforms: [macos, linux, windows]
+    summary: Fetches and prints the Agent User's most recent mailbox messages matching a subject substring, for a one-off check outside the MCP session.
+  - id: show-permissions-py
+    path: scripts/show_permissions.py
+    category: operations
+    page: reference/scripts/operations/show-permissions-py.md
+    platforms: [macos, linux, windows]
+    summary: Shows the delegated permission grants (oauth2PermissionGrants) scoped to the Agent Identity's service principal and Agent User. Supports --json.
+
+  # --- Setup (8) ---
+  - id: setup-sh
+    path: scripts/setup.sh
+    category: setup
+    page: reference/scripts/setup/setup-sh.md
+    platforms: [macos, linux]
+    summary: First-time or additional-device provisioning entry point — orchestrates the Python provisioning scripts to create or attach an Agent Identity chain, writes .env, and runs a post-setup token/Graph/Teams-scope smoke check (unless --skip-smoke). Operational storage stays local by default; pass --use-cloud-memory to opt into Azure Blob.
+  - id: setup-windows-ps1
+    path: scripts/setup-windows.ps1
+    category: setup
+    page: reference/scripts/setup/setup-windows-ps1.md
+    platforms: [windows]
+    summary: Windows PowerShell counterpart of setup.sh — refuses to run under WSL, probes prereqs, bootstraps the venv, provisions the Agent Identity chain, generates the Blueprint cert (TPM-first, software fallback), writes .env, and registers the MCP server.
+  - id: setup-windows-cmd
+    path: scripts/setup-windows.cmd
+    category: setup
+    page: reference/scripts/setup/setup-windows-cmd.md
+    platforms: [windows]
+    summary: cmd.exe one-liner wrapper that invokes setup-windows.ps1 with the right execution policy so users don't have to pass -ExecutionPolicy themselves.
+  - id: prereqs-macos-sh
+    path: scripts/prereqs-macos.sh
+    category: setup
+    page: reference/scripts/setup/prereqs-macos-sh.md
+    platforms: [macos]
+    summary: Installs macOS prerequisites via Homebrew (Xcode CLT, Python 3.12+, git, Azure CLI, and optionally the .NET SDK + Agent 365 a365 CLI + PowerShell 7) before running setup.sh. Safe to re-run.
+  - id: prereqs-windows-ps1
+    path: scripts/prereqs-windows.ps1
+    category: setup
+    page: reference/scripts/setup/prereqs-windows-ps1.md
+    platforms: [windows]
+    summary: Installs Windows prerequisites via winget (PowerShell 7+, Python 3.12+, git, Azure CLI, .NET SDK, Agent 365 a365 CLI, and VS Build Tools C++ workload) before running setup-windows.ps1. Runs from Windows PowerShell 5.1 and is safe to re-run.
+  - id: setup-delegated-sh
+    path: scripts/setup_delegated.sh
+    category: setup
+    page: reference/scripts/setup/setup-delegated-sh.md
+    platforms: [macos, linux]
+    summary: Signs in interactively with MSAL (browser localhost redirect) using ENTRABOT_CLIENT_ID and persists the MSAL cache through OS-encrypted persistence (Keychain on macOS / Secret Service on Linux when available) so the MCP server picks it up silently — for delegated mode instead of the full Agent User chain.
+  - id: setup-ado-credentials-sh
+    path: scripts/setup_ado_credentials.sh
+    category: setup
+    page: reference/scripts/setup/setup-ado-credentials-sh.md
+    platforms: [macos]
+    summary: Prompts for an Azure DevOps PAT and stores it in the macOS Keychain via git credential store (osxkeychain) so git push/pull to dev.azure.com authenticates without further prompts.
+  - id: deploy-windows-ps1
+    path: scripts/deploy-windows.ps1
+    category: setup
+    page: reference/scripts/setup/deploy-windows-ps1.md
+    platforms: [windows]
+    summary: Windows Blueprint certificate-rotation deploy wrapper around rotate_cert_windows.py — captures the current cert DER, generates a new cert, runs the transactional rotation, and deletes the old cert only after a smoke check passes. A -Status flag instead delegates to status-windows.ps1.
+
+  # --- Teardown (4) ---
+  - id: teardown-sh
+    path: scripts/teardown.sh
+    category: teardown
+    page: reference/scripts/teardown/teardown-sh.md
+    platforms: [macos, linux]
+    summary: Removes everything setup.sh creates — Agent User, Agent Identity, Blueprint (and its BlueprintPrincipal), the Provisioner app, and local state — with --dry-run, targeted --agent-user-upn, and --preserve-provisioner / --preserve-local-state flags.
+  - id: teardown-windows-ps1
+    path: scripts/teardown-windows.ps1
+    category: teardown
+    page: reference/scripts/teardown/teardown-windows-ps1.md
+    platforms: [windows]
+    summary: Local-only Windows teardown — removes the Blueprint cert(s) from the CurrentUser store, the entrabot data dir, the BLUEPRINT_CERT_* lines from .env, the MSAL cache, and the MCP registration. It does NOT delete the Entra app registrations; clean those up separately.
+  - id: deprovision-entra-agent-identity-py
+    path: scripts/deprovision_entra_agent_identity.py
+    category: teardown
+    page: reference/scripts/teardown/deprovision-entra-agent-identity-py.md
+    platforms: [macos, linux, windows]
+    summary: Targeted teardown of a single Agent User chain for a given UPN — removes licenses, then deletes the Agent User, its Agent Identity, and the parent Blueprint, but refuses to delete a Blueprint still shared by other Agent Identities. Leaves local state and blob storage untouched.
+  - id: cleanup-orphans-sh
+    path: scripts/cleanup-orphans.sh
+    category: teardown
+    page: reference/scripts/teardown/cleanup-orphans-sh.md
+    platforms: [macos, linux]
+    summary: Deletes orphaned Blueprint / Agent Identity resources by object ID using a Provisioner cert-auth Graph token, for cleanup after a teardown that failed because az CLI tokens are rejected by the Agent Identity APIs.
+
+  # --- Provisioning (6) ---
+  - id: create-entra-agent-ids-py
+    path: scripts/create_entra_agent_ids.py
+    category: provisioning
+    page: reference/scripts/provisioning/create-entra-agent-ids-py.md
+    platforms: [macos, linux, windows]
+    summary: Creates the Blueprint, BlueprintPrincipal, Agent Identity, and Agent User in Entra (via the Provisioner cert token, never az CLI tokens) and persists the resulting IDs to .entrabot-state.json; idempotent on re-run.
+  - id: add-agent-sponsor-py
+    path: scripts/add_agent_sponsor.py
+    category: provisioning
+    page: reference/scripts/provisioning/add-agent-sponsor-py.md
+    platforms: [macos, linux, windows]
+    summary: Resolves an email/UPN to a user and adds them as a sponsor on the configured Agent Identity — the fix for SponsorGate rejecting inbound messages when the operator is not in the sponsor list.
+  - id: remove-agent-sponsor-py
+    path: scripts/remove_agent_sponsor.py
+    category: provisioning
+    page: reference/scripts/provisioning/remove-agent-sponsor-py.md
+    platforms: [macos, linux, windows]
+    summary: Inverse of add_agent_sponsor.py — resolves an email/UPN and removes that user from the Agent Identity's sponsor list, then prints the remaining sponsors.
+  - id: assign-agent-user-licenses-py
+    path: scripts/assign_agent_user_licenses.py
+    category: provisioning
+    page: reference/scripts/provisioning/assign-agent-user-licenses-py.md
+    platforms: [macos, linux, windows]
+    summary: Standalone Agent User license management — auto-selects the best available Teams/Copilot SKUs, or assigns a specific --sku, and can --list-available SKUs.
+  - id: remove-agent-user-licenses-py
+    path: scripts/remove_agent_user_licenses.py
+    category: provisioning
+    page: reference/scripts/provisioning/remove-agent-user-licenses-py.md
+    platforms: [macos, linux, windows]
+    summary: Removes directly-assigned licenses from the Agent User (--all or a specific --sku-id); group-inherited licenses are reported but cannot be removed here.
+  - id: ensure-a365-work-iq-permissions-py
+    path: scripts/ensure_a365_work_iq_permissions.py
+    category: provisioning
+    page: reference/scripts/provisioning/ensure-a365-work-iq-permissions-py.md
+    platforms: [macos, linux, windows]
+    summary: Materializes the Microsoft Agent 365 Work IQ MCP first-party resource service principals and Blueprint-wide OAuth grants using the Provisioner token, working around the A365 CLI's silent OAuth2-grants-failed exit.
+
+  # --- Auth and Certificates (9) ---
+  - id: grant-consent-py
+    path: scripts/grant_consent.py
+    category: auth-and-certs
+    page: reference/scripts/auth-and-certs/grant-consent-py.md
+    platforms: [macos, linux, windows]
+    summary: Creates or updates the oauth2PermissionGrant that lets the Agent Identity acquire delegated tokens with the specified --scopes (against Graph or another --resource-app-id) as the Agent User. The generalised CLI form of the consent logic in create_entra_agent_ids.py.
+  - id: grant-files-consent-py
+    path: scripts/grant_files_consent.py
+    category: auth-and-certs
+    page: reference/scripts/auth-and-certs/grant-files-consent-py.md
+    platforms: [macos, linux, windows]
+    summary: Adds the Files/Sites scopes to the Agent User's oauth2PermissionGrant (idempotently, adding only the missing scopes); use when a Files MCP tool call raises MissingPermissionError.
+  - id: revoke-consent-py
+    path: scripts/revoke_consent.py
+    category: auth-and-certs
+    page: reference/scripts/auth-and-certs/revoke-consent-py.md
+    platforms: [macos, linux, windows]
+    summary: Revokes specific --scopes from, or --all of (deleting), the oauth2PermissionGrant that lets the Agent Identity act as the Agent User. Inverse of grant_consent.py.
+  - id: provisioner-token-py
+    path: scripts/provisioner-token.py
+    category: auth-and-certs
+    page: reference/scripts/auth-and-certs/provisioner-token-py.md
+    platforms: [macos, linux, windows]
+    summary: Prints a Graph API access token minted with the Provisioner app's certificate (private key read from the OS keystore in memory only) for manual Graph calls during debugging. Token on stdout, errors on stderr.
+  - id: find-local-blueprint-cert-py
+    path: scripts/find_local_blueprint_cert.py
+    category: auth-and-certs
+    page: reference/scripts/auth-and-certs/find-local-blueprint-cert-py.md
+    platforms: [macos, linux]
+    summary: Recovers the registered Blueprint cert thumbprint (SHA-256 b64url) matching the local OS-keystore private key for a given Blueprint object ID, so setup.sh can reuse an existing cert instead of prompting to rotate.
+  - id: list-blueprint-certs-py
+    path: scripts/list_blueprint_certs.py
+    category: auth-and-certs
+    page: reference/scripts/auth-and-certs/list-blueprint-certs-py.md
+    platforms: [macos, linux]
+    summary: Prints the count of certificates registered on a Blueprint app (stdout) plus one human-readable detail line per cert (stderr); used by setup.sh to show what will be replaced before generating a new cert.
+  - id: verify-blueprint-cert-py
+    path: scripts/verify_blueprint_cert.py
+    category: auth-and-certs
+    page: reference/scripts/auth-and-certs/verify-blueprint-cert-py.md
+    platforms: [macos, linux]
+    summary: Checks whether an expected thumbprint is still present on a Blueprint app's keyCredentials, so setup.sh's cached-thumbprint fast path can detect a stale cache before it fails at Hop 1. Exit 0 present, 1 stale, 2 usage error.
+  - id: generate-windows-cert-py
+    path: scripts/generate_windows_cert.py
+    category: auth-and-certs
+    page: reference/scripts/auth-and-certs/generate-windows-cert-py.md
+    platforms: [windows]
+    summary: Generates the Blueprint cert on Windows by wrapping New-SelfSignedCertificate with locked crypto parameters (TPM-first, software-KSP fallback), returning the SHA-1 thumbprint, SHA-256 b64url JWT thumbprint, and public DER for upload to the Blueprint.
+  - id: rotate-cert-windows-py
+    path: scripts/rotate_cert_windows.py
+    category: auth-and-certs
+    page: reference/scripts/auth-and-certs/rotate-cert-windows-py.md
+    platforms: [windows]
+    summary: Transactional Windows Blueprint cert rotation extracted from deploy-windows.ps1 for testable rollback — PATCHes the new cert onto the Blueprint and, if the smoke check fails, restores the old DER, restores the previous .env thumbprints, and invalidates the MSAL cache.
+
+  # --- Storage (2) ---
+  - id: provision-blob-storage-py
+    path: scripts/provision_blob_storage.py
+    category: storage
+    page: reference/scripts/storage/provision-blob-storage-py.md
+    platforms: [macos, linux, windows]
+    summary: Idempotently provisions the resource group, storage account (deterministically named per tenant), per-Agent-User container, and Storage Blob Data Contributor RBAC for cloud-hosted operational memory. Requires az login.
+  - id: deprovision-blob-storage-py
+    path: scripts/deprovision_blob_storage.py
+    category: storage
+    page: reference/scripts/storage/deprovision-blob-storage-py.md
+    platforms: [macos, linux, windows]
+    summary: Removes cloud-memory resources created by provision_blob_storage.py — by default only the container, with --delete-account and --delete-resource-group to escalate. Requires az login.
+
+  # --- Diagnostics (5) ---
+  - id: entrabot-mcp-debug-sh
+    path: scripts/entrabot-mcp-debug.sh
+    category: diagnostics
+    page: reference/scripts/diagnostics/entrabot-mcp-debug-sh.md
+    platforms: [macos, linux]
+    summary: Debug wrapper around entrabot-mcp that tees the server's stderr to a log file (while still passing it through to the parent) for post-crash inspection; carries a self-reference marker so efferent-copy peer discovery skips it and avoids a duplicate-server spawn.
+  - id: diagnose-chat-py
+    path: scripts/diagnose-chat.py
+    category: diagnostics
+    page: reference/scripts/diagnostics/diagnose-chat-py.md
+    platforms: [macos, linux, windows]
+    summary: Tests Teams chat creation directly against the Graph API, bypassing the MCP server and logging every detail, to diagnose chat connectivity and permission problems.
+  - id: diagnose-sponsor-emails-py
+    path: scripts/diagnose_sponsor_emails.py
+    category: diagnostics
+    page: reference/scripts/diagnostics/diagnose-sponsor-emails-py.md
+    platforms: [macos, linux, windows]
+    summary: Read-only diagnostic that probes why an Agent Identity's sponsor email fields come back null (SponsorGate allowlist gaps), running eight Graph projections and token checks across the FIC and Agent User tokens.
+  - id: list-agent-identities-py
+    path: scripts/list_agent_identities.py
+    category: diagnostics
+    page: reference/scripts/diagnostics/list-agent-identities-py.md
+    platforms: [macos, linux, windows]
+    summary: Lists the Agent Identity service principals belonging to a Blueprint (from local state or an explicit --blueprint-app-id) via the Graph beta API.
+  - id: list-sponsors-py
+    path: scripts/list_sponsors.py
+    category: diagnostics
+    page: reference/scripts/diagnostics/list-sponsors-py.md
+    platforms: [macos, linux, windows]
+    summary: Lists the sponsors assigned to the configured (or --agent-object-id specified) Agent Identity via the Graph beta API. Supports --json.
