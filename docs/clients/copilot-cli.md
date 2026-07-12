@@ -8,7 +8,7 @@ Setup writes the same `entrabot` stdio server entry into `$COPILOT_HOME/mcp-conf
 
 Copilot CLI does not receive Entrabot's `notifications/claude/channel` push as a new model turn — it has no equivalent mechanism for a server to inject content into the conversation out of band. Background polling still runs; it just doesn't reach the model directly.
 
-For `send_teams_message`, server-side host detection (the connected client's `clientInfo.name`) auto-blocks the call after sending until a verified sponsor reply arrives in the same watched chat, then returns it inline as `sponsor_reply`, including the originating `chat_id`. Use that `chat_id` for any follow-up `send_teams_message` call — no separate wait call is needed, and the loop continues automatically each time you send and the sponsor replies.
+For `send_teams_message`, server-side host detection (the connected client's `clientInfo.name`) auto-blocks the call after sending until a verified sponsor reply arrives in any watched chat, then returns it inline as `sponsor_reply`, including the originating `chat_id`. Use that returned `chat_id` for any follow-up `send_teams_message` call — it may differ from the chat you just messaged — no separate wait call is needed, and the loop continues automatically each time you send and the sponsor replies.
 
 Lack of channel push changes only how a message reaches the model turn; the underlying Teams poll (5s) and, in Agent User mode, the email poll (60s) keep running exactly as they do on any other host. See [Clients Overview](overview.md) for how host detection decides between channel-push and auto-wait behavior.
 

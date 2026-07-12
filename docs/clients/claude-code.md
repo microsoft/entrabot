@@ -25,4 +25,4 @@ If a persona-sati MCP server is configured, call `bootstrap_session()` before an
 ## Related
 
 - [Configuration Reference](../guides/configuration.md)
-- Troubleshooting Teams and email delivery — planned; not yet published.
+- [Troubleshooting Teams and Email](../troubleshooting/teams-and-email.md)

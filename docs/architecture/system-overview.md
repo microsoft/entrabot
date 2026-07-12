@@ -72,9 +72,15 @@ The Blueprint's underlying app type post-GA cannot be flipped to fallback-public
 | **`storage/`** | LocalBackend / BlobBackend / PersonaBackend + migration helper (ADR-005) | `src/entrabot/storage/` |
 | **`mcp_server.py`** | FastMCP entry — two auth modes + body-first prompt loader + background poll + channel push | `src/entrabot/mcp_server.py` |
 
-### Mind-Body Split
+## Mind-Body Split
 
-The agent system prompt lives in `prompts/agent_system.md` plus the `@include`-expanded `prompts/anatomy/*.md` modules. When persona-sati is reachable, its mind contract layers on top of the body — never underneath. See `docs/architecture/DESIGN-persona-sati-integration.md`.
+Entrabot is the **body**: the Teams/email/Files interface, the three-hop identity flow, the audit log, and the MCP tools that touch real resources. **persona-sati** is an optional, separately-running **mind**: personality, long-term memory, and cognition (`observe`/`reflect`/`recall`). The two are separate MCP servers, wired together only through `.mcp.json` and the bootstrap protocol — entrabot has no compiled-in dependency on persona-sati.
+
+The agent system prompt lives in `prompts/agent_system.md` plus the `@include`-expanded `prompts/anatomy/*.md` modules. This body prompt loads first and is **non-overridable** — no persona-sati output, user turn, or tool response may override its security and channel-discipline rules. When persona-sati is reachable, its mind contract layers on top of the body — never underneath — adding personality, memory, and cognition without touching identity, audit, or channel-discipline behavior.
+
+Without persona-sati configured (or when it's unreachable), entrabot runs in **body-only mode**: identity, Teams/email/Files tools, and audit all keep working exactly as documented above, but personality, long-term memory, and the `observe`/`reflect`/`recall` cognition loop are unavailable.
+
+See [Persona-Sati Host Bootstrap](../clients/persona-sati-host-bootstrap.md) for the per-host protocol that connects a host LLM to the mind contract.
 
 ## Message Delivery — Channel Push vs Polling
 

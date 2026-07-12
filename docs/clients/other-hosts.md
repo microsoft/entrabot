@@ -4,7 +4,7 @@ Entrabot can run under any MCP client that supports stdio tools — Codex, Curso
 
 ## Default behavior
 
-An unrecognized `clientInfo.name` defaults to non-channel-push, auto-block behavior: `send_teams_message` blocks after sending until a verified sponsor reply arrives, then returns it inline as `sponsor_reply`. This is a deliberate fail-safe — assuming push support for a host that doesn't have it would silently drop inbound messages, while assuming auto-block for a host that does have push only costs an extra tool call. When in doubt, Entrabot chooses the safer option.
+An unrecognized `clientInfo.name` defaults to non-channel-push, auto-block behavior: `send_teams_message` blocks after sending until a verified sponsor reply arrives, then returns it inline as `sponsor_reply`. This is a deliberate fail-safe — assuming push support for a host that doesn't have it would silently drop inbound messages, while defaulting to auto-block for a host that does have push causes an unnecessary blocking wait but keeps the reply inline, rather than assuming unsupported push and silently missing it. When in doubt, Entrabot chooses the safer option.
 
 ## Channel-push integration
 
@@ -18,4 +18,4 @@ The persona-sati bootstrap protocol is host-agnostic: any host that can call `bo
 
 ## Related
 
-- MCP Runtime reference — planned; not yet published.
+- [MCP Runtime](../architecture/mcp-runtime.md)
