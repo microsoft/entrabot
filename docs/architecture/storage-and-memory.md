@@ -40,7 +40,7 @@ Keys are forward-slash-separated paths, e.g. `"interactions/2026-04-17.jsonl"`. 
 Not every piece of operational state goes through this abstraction. Modules that call `get_backend()`:
 
 - `tools/interaction_log.py` — appends to and reads `interactions/<YYYY-MM-DD>.jsonl`.
-- `tools/daily_summary.py` — reads the day's interaction log to build the 5pm summary.
+- `tools/daily_summary.py` — reads the day's interaction log to build the 17:00 (fixed UTC-7) summary.
 - `tools/promises.py` — reads/writes the single key `promises.jsonl`.
 - `tools/chat_cursors.py` — one key per chat under `chat_cursors/<url-quoted chat_id>.json`.
 

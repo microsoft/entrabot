@@ -2,7 +2,7 @@
 
 EntraBot is configured entirely through environment variables prefixed `ENTRABOT_`. There is no separate configuration-file schema — `.env` is just a plain `KEY=value` file that setup writes into the project root, and every value in it becomes a process environment variable.
 
-`src/entrabot/config.py` loads that `.env` on first import (`_load_dotenv()`), one `KEY=value` line at a time, skipping blanks and `#` comments. Critically, it **never overwrites a variable that is already set in the process environment** — so an operator can override any `.env` value for a single run with `ENTRABOT_MODE=delegated python -m entrabot` (or similar) without editing the file.
+`src/entrabot/config.py` loads that `.env` on first import (`_load_dotenv()`), one `KEY=value` line at a time, skipping blanks and `#` comments. Critically, it **never overwrites a variable that is already set in the process environment** — so an operator can override any `.env` value for a single run with `ENTRABOT_LOG_LEVEL=DEBUG python -m entrabot` (or similar) without editing the file.
 
 Configuration is not a value frozen once at boot. `get_config()` calls `EntraBotConfig.from_env()` fresh every time it's invoked, building a new immutable `EntraBotConfig` dataclass instance from whatever is in `os.environ` **at that moment**. In practice this means:
 
@@ -50,8 +50,8 @@ Precedence and list rules:
 
 | Variable | Description |
 |---|---|
-| `ENTRABOT_MODE` | Selects the auth mode. Valid values: `auto` (default), `delegated`, `agent_user`. The historical `bot` mode was removed (Bot Framework gateway bypassed the Agent Identity model) and setting `ENTRABOT_MODE=bot` now fails loudly with `RemovedModeError` rather than silently falling back. Any other unrecognized value falls back to `auto`. |
-| `ENTRABOT_SKIP_PROVISIONING` | Truthy values `true`, `1`, or `yes` (case-insensitive) skip the provisioning check at boot. |
+| `ENTRABOT_MODE` | Validated but **not currently consumed by `_init_auth`** — it does not select the auth path (credential presence and `ENTRABOT_SKIP_PROVISIONING` do that). Valid values: `auto` (default), `delegated`, `agent_user`. The historical `bot` mode was removed (Bot Framework gateway bypassed the Agent Identity model) and setting `ENTRABOT_MODE=bot` now fails loudly with `RemovedModeError` rather than silently falling back. Any other unrecognized value falls back to `auto`. |
+| `ENTRABOT_SKIP_PROVISIONING` | Truthy values `true`, `1`, or `yes` (case-insensitive) bypass the Agent User three-hop fast path at boot. MSAL delegated auth is then attempted instead when `ENTRABOT_CLIENT_ID` is configured. |
 | `ENTRABOT_LOG_LEVEL` | Python logging level name. Defaults to `INFO`. |
 | `ENTRABOT_XPIA_WRAP_ENABLE` | Enabled by default — external content (Teams, email, Files, Work IQ) is wrapped through the XPIA boundary. Set to `false`, `0`, `no`, or `off` (case-insensitive) to disable the wrap as a rollback path. See [Security Boundaries](../architecture/security-boundaries.md). |
 

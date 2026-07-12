@@ -66,7 +66,7 @@ Two independent mechanisms in `mcp_server.py` keep the active token usable witho
 
 ## Delegated mode
 
-`ENTRABOT_MODE=delegated` (or `auto` falling back after the three-hop fast path fails) uses `MsalDelegatedAuth` in `src/entrabot/auth/delegated.py`. It tries silent token acquisition from an OS-encrypted MSAL cache first, then interactive sign-in via a localhost redirect (port 8400, 120s timeout), falling back to the device-code flow if the redirect can't complete. The resulting token belongs to the signed-in human — there is no Agent User attribution in this mode. The state machine records `attribution_type = "delegated-human"`, and outbound Teams messages are prefixed `[EntraBot]` so the human can tell which messages the agent sent.
+The delegated path — reached when the three-hop fast path is skipped or fails and `ENTRABOT_CLIENT_ID` is set — uses `MsalDelegatedAuth` in `src/entrabot/auth/delegated.py`. It tries silent token acquisition from an OS-encrypted MSAL cache first, then interactive sign-in via a localhost redirect (port 8400, 120s timeout), falling back to the device-code flow if the redirect can't complete. The resulting token belongs to the signed-in human — there is no Agent User attribution in this mode. The state machine records `attribution_type = "delegated-human"`, and outbound Teams messages are prefixed `[EntraBot]` so the human can tell which messages the agent sent. `ENTRABOT_MODE` is validated but does not currently select this path. See [Delegated Auth](../platform-docs/delegated-auth.md) for detail.
 
 ## Identity state machine
 

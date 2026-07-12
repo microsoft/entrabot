@@ -49,8 +49,10 @@ interaction log, which the daily summary later reads.
 ## Daily summaries
 
 The daily summary scheduler, like the email poll, starts only in Agent User
-mode. It wakes once a day at 5:00 PM at a fixed UTC-7 offset (PDT) and
-triages the interaction log into three buckets:
+mode. It wakes once a day at 17:00 at a fixed UTC-7 offset and triages the
+interaction log into three buckets. This trigger is not DST-adjusted — it
+stays pinned to UTC-7 year-round, so the local wall-clock time shifts by an
+hour across the DST boundary.
 
 - **Needs you** — inbound messages without a same-thread reply from the
   agent yet.

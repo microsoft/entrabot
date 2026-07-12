@@ -33,8 +33,8 @@ The body prompt (`prompts/agent_system.md` plus `prompts/anatomy/*.md`) loads be
 
 entrabot is the device-side glue for a set of platform primitives Microsoft shipped at GA.
 
-- **Entra Agent ID** — the four-object hierarchy: Agent Identity Blueprint → BlueprintPrincipal → Agent Identity → Agent User. Confidential clients only; no public-client flows; tokens carry `idtyp=user` for the Agent User leaf. ([platform learning](docs/platform-learnings/agent-id-blueprints-and-users.md))
-- **Microsoft Agent 365** — the control plane: admin-center inventory, OTel observability, Work IQ MCP servers (Mail, Calendar, Teams, SharePoint, OneDrive, Word, User, Copilot, Dataverse), AI-teammate lifecycle. GA 2026-05-01. ([platform learning](docs/platform-learnings/microsoft-agent-365.md))
+- **Entra Agent ID** — the four-object hierarchy: Agent Identity Blueprint → BlueprintPrincipal → Agent Identity → Agent User. Confidential clients only; no public-client flows; tokens carry `idtyp=user` for the Agent User leaf. ([platform docs](docs/platform-docs/agent-id-blueprints-and-users.md))
+- **Microsoft Agent 365** — the control plane: admin-center inventory, OTel observability, Work IQ MCP servers (Mail, Calendar, Teams, SharePoint, OneDrive, Word, User, Copilot, Dataverse), AI-teammate lifecycle. GA 2026-05-01. ([platform docs](docs/platform-docs/microsoft-agent-365.md))
 - **Conditional Access for agents** — GA. Apply CA policies to Agent Identity sign-ins the same way you apply them to users.
 - **ID Protection for agents** — GA. Risk scoring and remediation against the agent's own object.
 - **FastMCP** — the Python MCP server framework. entrabot registers every Teams, Outlook, Files, Word, audit, and identity tool through it.
@@ -151,7 +151,7 @@ Direct pointers:
 - [Script reference](docs/reference/scripts/operations.md) — status, health, DM, email, setup, teardown, and diagnostic scripts
 - [Token flows](docs/reference/token-flows.md) — the three hops, annotated
 - [System overview](docs/architecture/system-overview.md) — how the modules fit together
-- [Platform learnings](docs/platform-learnings/) — Entra Agent ID constraints, Agent 365, MSAL, OS-specific notes
+- [Platform docs](docs/platform-docs/) — Entra Agent ID constraints, Agent 365, delegated auth, OS-specific notes
 - [Hard-won learnings](docs/runbooks/hard-won-learnings.md) — non-obvious gotchas; read before changing auth or Teams code
 - [Current status](docs/project/status.md) — what's shipped, what's open, what's next
 - [Changelog](CHANGELOG.md) — release history
@@ -164,10 +164,10 @@ This is a research repo, not a production service. It runs reliably on a develop
 
 **Shipped:**
 
-- Two auth modes: `agent_user` (full three-hop), `delegated` (MSAL interactive for demos without an E5)
-- Teams: 1:1 DMs, group chats, cross-tenant B2B group chats with federated home-tenant resolution
-- Outlook: background email poll with Purview-encrypted detection, daily summary at 5pm PT
-- Files: SharePoint / OneDrive read, write, upload, share — two-gate sponsor authorization on share
+- Two authenticated session types: `agent_user` (full three-hop), `delegated` (MSAL interactive for demos or environments without a provisioned Agent User)
+- Teams: 1:1 DMs, group chats, cross-tenant B2B chats with federated home-tenant resolution
+- Outlook: background email poll, Purview-encrypted detection, and a daily summary scheduler
+- Files: SharePoint / OneDrive read, write, upload, share — three-stage sponsor authorization on share (sponsor allowlist, active-channel binding, Graph chat membership)
 - Microsoft Agent 365 Work IQ Word: create, read, comment, reply-to-comment
 - Storage: `LocalBackend` (default) and `BlobBackend` (Azure Blob Storage, opt-in via `setup.sh --use-cloud-memory`)
 - Body-first prompt architecture with optional persona layer from a separate MCP (`persona-sati`)

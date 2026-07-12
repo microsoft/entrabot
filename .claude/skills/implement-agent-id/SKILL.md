@@ -7,9 +7,9 @@ description: Guide for Microsoft Entra Agent ID and Agent User integration. Cove
 
 Read these repository sources before changing identity or token code:
 
-- `docs/platform-learnings/agent-id-blueprints-and-users.md`
-- `docs/platform-learnings/entra-agent-users.md`
-- `docs/platform-learnings/msal-entra-agent-ids.md`
+- `docs/platform-docs/agent-id-blueprints-and-users.md`
+- `docs/platform-docs/entra-agent-users.md`
+- `docs/platform-docs/delegated-auth.md`
 - `docs/reference/token-flows.md`
 - `docs/runbooks/hard-won-learnings.md`
 
@@ -126,7 +126,7 @@ Agent User creation remains on Microsoft Graph beta:
 POST https://graph.microsoft.com/beta/users
 ```
 
-Use the current request shape in `scripts/create_entra_agent_ids.py` and `docs/platform-learnings/entra-agent-users.md`. License the resulting user before relying on Teams or Outlook.
+Use the current request shape in `scripts/create_entra_agent_ids.py` and `docs/platform-docs/entra-agent-users.md`. License the resulting user before relying on Teams or Outlook.
 
 ## Permissions and consent
 
@@ -197,7 +197,7 @@ Check every token response for an `error` key before reading `access_token`. Nev
 
 ## Delegated mode is separate
 
-`ENTRABOT_MODE=delegated` uses MSAL browser authentication with device-code fallback and represents the signed-in human. It does not provide Agent User attribution. Agent Blueprints are confidential clients and cannot be turned into OAuth public clients for PKCE or device-code flows; use a separate app registration when both patterns are required.
+Delegated auth uses MSAL browser authentication with device-code fallback and represents the signed-in human. It does not provide Agent User attribution. `_init_auth` uses it as the fallback path: when three-hop is skipped (`ENTRABOT_SKIP_PROVISIONING=true` or no Blueprint app ID + tenant ID) or fails, it authenticates with MSAL if `ENTRABOT_CLIENT_ID` is set. `ENTRABOT_MODE` is validated but does not currently select this path. Agent Blueprints are confidential clients and cannot be turned into OAuth public clients for PKCE or device-code flows; use a separate app registration when both patterns are required.
 
 ## Implementation checklist
 

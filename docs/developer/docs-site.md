@@ -55,7 +55,7 @@ A `409 GitHub Pages is already enabled` response is safe to ignore.
 - `docs/reference/scripts/` — script categories.
 - `docs/reference/api/` — MCP and Python API surfaces.
 - `docs/runbooks/` — operational runbooks and hard-won learnings.
-- `docs/platform-learnings/` — vendor-platform research.
+- `docs/platform-docs/` — current vendor/platform reference (Entra Agent ID, Agent 365, Graph APIs, delegated auth, OS platform APIs).
 - `docs/developer/` — contributor documentation.
 
 Historical ADRs are archived at `engineering-history/decisions/` outside this tree and are not published on the docs site.

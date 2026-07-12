@@ -95,4 +95,4 @@ cat ~/.entrabot/audit/*.jsonl | jq 'select(.resource == "chat_19:abc...@unq.gbl.
 cat ~/.entrabot/audit/*.jsonl | jq 'select(.outcome == "failure")'
 ```
 
-`run_daily_summary` reads the audit log and the interaction log to build the 5pm PDT triage email — see `src/entrabot/tools/daily_summary.py`.
+`run_daily_summary` reads the audit log and the interaction log to build the 17:00 (fixed UTC-7) triage email — see `src/entrabot/tools/daily_summary.py`.

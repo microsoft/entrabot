@@ -134,15 +134,16 @@ Functions:
 - `_get_sponsor_records()` — reads the live sponsor list.
 - `_get_sponsor_allowlist()` — flattens into a normalized email set.
 
-## Auth modes
+## Authenticated session types
 
-`ENTRABOT_MODE` selects which identity path the MCP server runs:
+`_init_auth` selects the identity path by credential presence and `ENTRABOT_SKIP_PROVISIONING`, not by `ENTRABOT_MODE` (which is validated but not currently consumed): with a Blueprint app ID + tenant ID and provisioning enabled it tries three-hop first, then falls back to MSAL delegated when `ENTRABOT_CLIENT_ID` is set.
 
-| Mode | Description |
+| Session type | Description |
 |------|-------------|
-| `agent_user` | Three-hop cert flow. The Agent User authenticates autonomously. Default. |
+| `agent_user` | Three-hop cert flow. The Agent User authenticates autonomously. |
 | `delegated` | MSAL interactive auth with the human's token. Messages prefixed `[EntraBot]`. |
-| `auto` | Pick the best mode based on config. |
+
+See [Delegated Auth](../../platform-docs/delegated-auth.md) for detail.
 
 See `src/entrabot/config.py` for the env-var contract.
 
@@ -151,5 +152,5 @@ See `src/entrabot/config.py` for the env-var contract.
 - [Auth](auth.md) — token acquisition.
 - [Token Flows](../token-flows.md) — flow diagrams.
 - ADR-002: Agent User over OBO.
-- `docs/platform-learnings/entra-agent-users.md` — three-hop flow specifics.
+- `docs/platform-docs/entra-agent-users.md` — three-hop flow specifics.
 - Learning #20: Agent Identity sponsors require app-only auth.

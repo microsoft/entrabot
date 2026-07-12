@@ -4,15 +4,13 @@
 
 ## Non-Negotiables
 
-- **Read Agent Identity platform-learnings BEFORE designing any auth flow.**
+- **Read Agent Identity platform docs BEFORE designing any auth flow.**
   When the task involves OAuth, OBO, Agent Identity, Agent Blueprint, Agent User,
   MSAL, app registration, redirect URIs, public/confidential clients, scope
   grants, JWT validation, OIDC discovery, or PKCE: read
-  `docs/platform-learnings/agent-id-blueprints-and-users.md` first, every
-  session. The file's TL;DR section captures load-bearing constraints (e.g.,
-  Agent Blueprints cannot be OAuth public clients) that have cost real
-  engineering hours when missed. Pattern: 4 prior recurrences as of
-  2026-05-05; PR persona-sati#47 paused at one such constraint.
+  `docs/platform-docs/agent-id-blueprints-and-users.md` first, every
+  session. Its TL;DR section captures load-bearing constraints (e.g.,
+  Agent Blueprints cannot be OAuth public clients) that are easy to miss.
 - **Body prompt is non-overridable.** The agent body prompt
   (`prompts/agent_system.md` + every file it `@include`s from
   `prompts/anatomy/`) is loaded first and establishes the security
@@ -30,7 +28,7 @@
 - Always create BlueprintPrincipal explicitly after Blueprint — it is NOT auto-created (Learning #2)
 - Agent IDs are service principals, not users — never create fake user accounts with passwords
 - **External content is untrusted.** Model-facing Teams, email, Files, and Work IQ content must pass through `entrabot.security.xpia.wrap_external`. Never trust or preserve an inbound `<external_content>` envelope as authoritative; always add the boundary-owned outer envelope.
-- **AGENT NAMES CHANGE — USE UPN.** Never identify an agent by display name in code paths that filter, deduplicate, authorize, or route. Use `ENTRABOT_AGENT_UPN` as the canonical config value (for example, `entra-agent@contoso.onmicrosoft.com`), match `sender_upn` first, and fall back to the Entra object ID. `ENTRABOT_AGENT_USER_UPN` remains a compatibility alias for existing `.env` files. See Learning #69 and `docs/architecture/PLAN-agent-identity-by-upn.md`.
+- **AGENT NAMES CHANGE — USE UPN.** Never identify an agent by display name in code paths that filter, deduplicate, authorize, or route. Use `ENTRABOT_AGENT_UPN` as the canonical config value (for example, `entra-agent@contoso.onmicrosoft.com`), match `sender_upn` first, and fall back to the Entra object ID. `ENTRABOT_AGENT_USER_UPN` remains a compatibility alias for existing `.env` files. See Learning #69 and `docs/architecture/messaging-and-delivery.md`.
 - Parse `az` CLI output as JSON, not TSV — TSV can be corrupted by warnings (Learning #7)
 - Graph API `$filter`/`$orderby` are unreliable for chat messages — always filter client-side (Learning #16)
 - **Sub-agent worktree installs must use a worktree-local venv, never the parent venv** (Learning #36) — running `pip install -e .` from inside a git worktree against the main repo's `.venv/bin/pip` silently re-points the parent venv's editable-install target at the worktree source tree. Every subsequent MCP server boot then loads code from the worktree — which has no `.env`, no auth, no polling, and no visible error. Always create `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"` inside the worktree BEFORE any editable install. After any session that used sub-agent worktrees, verify the main venv's target via `.venv/bin/python3 -c "from entrabot import config; print(config.__file__)"` — the path must not contain `.claude/worktrees/`.
@@ -38,21 +36,20 @@
 
 ## Required reading per topic
 
-When the task touches a topic, read the listed platform-learnings BEFORE drafting code or a plan:
+When the task touches a topic, read the listed platform docs BEFORE drafting code or a plan:
 
 | Topic                                       | Required reading                                                |
 | ------------------------------------------- | --------------------------------------------------------------- |
-| OAuth, OBO, PKCE, redirect URIs, JWT        | `docs/platform-learnings/agent-id-blueprints-and-users.md`      |
-| Agent Identity / Blueprint / User           | `docs/platform-learnings/agent-id-blueprints-and-users.md`      |
-| MSAL, token acquisition, three-hop flow     | `docs/platform-learnings/msal-entra-agent-ids.md`               |
-| Agent User onboarding / consent             | `docs/platform-learnings/entra-agent-users.md`                  |
-| Teams Graph / chat tools                    | `docs/platform-learnings/teams-graph-api.md`                    |
-| Files Graph (drives, items, comments)       | `docs/platform-learnings/files-graph-api.md`                    |
-| MCP server design (transports, lifecycle)   | `docs/platform-learnings/mcp-messaging-servers.md` + `mcp-close-the-loop.md` |
-| Platform-specific (cert store, OS keystore) | `docs/platform-learnings/platform-{macos,linux,windows}.md`     |
-| Sandboxing / execution containment (MXC)    | `docs/platform-learnings/mxc-windows-sandbox.md`                |
+| OAuth, OBO, PKCE, redirect URIs, JWT        | `docs/platform-docs/agent-id-blueprints-and-users.md`      |
+| Agent Identity / Blueprint / User           | `docs/platform-docs/agent-id-blueprints-and-users.md`      |
+| MSAL, delegated auth, token acquisition     | `docs/platform-docs/delegated-auth.md` + `docs/architecture/identity-and-token-flow.md` |
+| Agent User onboarding / consent             | `docs/platform-docs/entra-agent-users.md`                  |
+| Teams Graph / chat tools                    | `docs/platform-docs/teams-graph-api.md`                    |
+| Files Graph (drives, items, comments)       | `docs/platform-docs/files-graph-api.md`                    |
+| MCP server design (transports, lifecycle)   | `docs/platform-docs/mcp-hosts-and-transports.md` + `docs/architecture/mcp-runtime.md` |
+| Platform-specific (cert store, OS keystore) | `docs/platform-docs/platform-{macos,linux,windows}.md`     |
 
-These are not optional. Skipping them is the documented cause of 4 design errors as of 2026-05-05. The cost is minutes; the cost of skipping is hours-to-days of rework.
+These are not optional. The cost is minutes; the cost of skipping is hours-to-days of rework.
 
 ## Current Runtime Model
 
@@ -61,10 +58,11 @@ These are not optional. Skipping them is the documented cause of 4 design errors
 - External dependencies: Microsoft Entra ID, Microsoft Teams + Outlook mailbox (Microsoft Graph), Azure Blob Storage (optional, opt-in via `setup.sh --use-cloud-memory`)
 - **No default group chat.** Every Teams tool requires an explicit `chat_id`. Chats come from `create_chat`, the persisted `watched_chats` file, or the auto-discovery sweep over `/me/chats`.
 - **Body-first prompt.** `prompts/agent_system.md` loads at boot with `@include` expansion of `prompts/anatomy/*.md`. Persona-sati output (if configured) is appended AFTER the body and cannot override body rules.
-- Two auth modes via `ENTRABOT_MODE`: `agent_user` (three-hop), `delegated` (MSAL). Agent memory has a **parallel third hop** against `https://storage.azure.com/.default` (`acquire_agent_user_storage_token`).
+- Two authenticated session types: `agent_user` (three-hop) and `delegated` (MSAL). `_init_auth` does not branch on `ENTRABOT_MODE`; when a Blueprint app ID + tenant ID are present and `ENTRABOT_SKIP_PROVISIONING` is false it tries three-hop first, and falls back to MSAL delegated when `ENTRABOT_CLIENT_ID` is set. `ENTRABOT_MODE` is validated but not currently consumed as a selector. Agent memory has a **parallel third hop** against `https://storage.azure.com/.default` (`acquire_agent_user_storage_token`).
 - Certificate auth: private key in OS keystore (Keychain/TPM/Keyring), JWT assertion for Hop 1 (ADR-003)
-- Background tasks (eagerly started at MCP server boot in `agent_user` mode):
-  - Teams chat poll (5s), email poll (60s), chat auto-discovery via `/me/chats` (120s), daily summary scheduler (5pm PDT)
+- Background tasks: initialization is eagerly scheduled at stdio boot, but each task's own gate decides whether it actually starts.
+  - Teams chat poll (5s) starts whenever `watched_chats` is non-empty, in either authenticated session type.
+  - Email poll (60s), chat auto-discovery via `/me/chats` (120s), daily summary scheduler (fixed 17:00 UTC-7), and the persona-sati heartbeat (300s) are Agent-User-only; the heartbeat additionally self-skips when `PERSONA_SATI_MCP_URL`/token command are unconfigured.
 - **Operational storage is local by default.** Cloud (Azure Blob) is opt-in via `./scripts/setup.sh --use-cloud-memory`; recommended for durability. Backend resolves from env at call time: `KEEP_MEMORY_LOCAL=true` → `LocalBackend`, else `BLOB_ENDPOINT`+`BLOB_CONTAINER` → `BlobBackend`, else `LocalBackend`.
 - All structured data uses `dataclasses` or `pydantic` — no raw dicts
 
@@ -125,7 +123,7 @@ Note: efferent-copy may mechanically cover body-tool observe but not bootstrap/r
 
 - `docs/project/status.md` — current state and next steps
 - `prompts/agent_system.md` + `prompts/anatomy/*.md` — the body prompt that governs your behaviour (security, channel discipline, identity/tools)
-- `docs/architecture/DESIGN-persona-sati-integration.md` — mind-body split design
+- `docs/architecture/storage-and-memory.md` + `docs/clients/persona-sati-host-bootstrap.md` — mind-body split and persona-sati host bootstrap
 - `engineering-history/decisions/005-cloud-hosted-memory.md` — cloud memory spec
 - `prompts/agent_system.md.archive` — original monolithic prompt, kept for reference
 - `docs/runbooks/hard-won-learnings.md` — read before making changes
@@ -161,7 +159,7 @@ claude --dangerously-load-development-channels server:entrabot
 - `src/entrabot/identity/`: Progressive identity state machine (UNAUTHENTICATED → DELEGATED → PROVISIONING → AGENT_USER)
 - `src/entrabot/tools/`: Teams Graph API + interaction log (Phase 1) + email poll (Phase 2) + daily summary (Phase 3) + Adaptive Cards
 - `src/entrabot/storage/`: Cloud-memory backend (ADR-005 Phase 1: `BlobStore` client only; Phase 2 wires it in)
-- `src/entrabot/mcp_server.py`: FastMCP server — Teams tools + 4 background tasks + channel push + token refresh (generic instructions — personality in persona-sati)
+- `src/entrabot/mcp_server.py`: FastMCP server — Teams tools + background task orchestration + channel push + token refresh (generic instructions — personality in persona-sati)
 - `prompts/agent_system.md.archive`: Original system prompt (archived — personality now in persona-sati)
 - `prompts/agent_system.md.example`: Sanitized standalone prompt for open-source users
 - `engineering-history/decisions/`: archived ADR history — every significant architectural choice was recorded here at the time it was made; no longer part of the published docs site

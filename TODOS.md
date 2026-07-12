@@ -1,7 +1,7 @@
 # Engineering TODOs
 
 **Last reviewed:** 2026-07-10
-**Current status:** [`docs/engineering-status.md`](docs/engineering-status.md)
+**Current status:** [`docs/project/status.md`](docs/project/status.md)
 
 Keep this file limited to actionable work. Completed design history belongs in ADRs, changelog entries, or architecture plans marked **Shipped**.
 
@@ -19,6 +19,7 @@ Keep this file limited to actionable work. Completed design history belongs in A
 - [ ] **Daily-summary scheduler fixes.** Make timezone/day-boundary behavior deterministic and keep retries idempotent.
 - [ ] **Email cursor precision.** Advance cursors without skipping same-timestamp messages or replaying already-delivered mail.
 - [ ] **Long-running persona-sati authentication.** Replace restart-based recovery after bearer expiry without trying to make an Agent Blueprint act as an OAuth public client.
+- [ ] **Reconcile `ENTRABOT_MODE` with auth selection.** `_init_auth` selects the auth path from credential presence and `ENTRABOT_SKIP_PROVISIONING`, not from `ENTRABOT_MODE`. Either make `ENTRABOT_MODE` drive session-type selection (with tests covering `agent_user`, `delegated`, and `auto`) or remove/deprecate the setting and its documentation.
 
 ## Platform and security follow-ups
 
@@ -38,4 +39,4 @@ Keep this file limited to actionable work. Completed design history belongs in A
 
 ## Maintenance rule
 
-When a change materially moves work between backlog, in progress, and shipped, update this file and `docs/engineering-status.md` in the same pull request. Avoid hard-coded total test or learning counts in evergreen instructions.
+When a change materially moves work between backlog, in progress, and shipped, update this file and `docs/project/status.md` in the same pull request. Avoid hard-coded total test or learning counts in evergreen instructions.

@@ -142,4 +142,4 @@ python scripts/ensure_a365_work_iq_permissions.py
 - Creates Blueprint-wide `oauth2PermissionGrants` for Work IQ scopes.
 - Runs before the `a365` CLI's permission step, which can fail silently with "OAuth2 grants failed" otherwise.
 
-See `docs/platform-learnings/microsoft-agent-365.md` for the A365 identity model.
+See `docs/platform-docs/microsoft-agent-365.md` for the A365 identity model.

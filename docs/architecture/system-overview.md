@@ -31,7 +31,7 @@ See [Identity and Token Flow](identity-and-token-flow.md) for the token exchange
 | `tools/` | The MCP tool implementations: Teams messaging and chat management, Files/Graph access, email polling, audit logging, Adaptive Cards, promises, and the daily summary. |
 | `a365/` | The Microsoft Agent 365 Work IQ MCP provider boundary and its Word document adapter. |
 | `storage/` | The operational `MemoryBackend` implementations (`LocalBackend` / `BlobBackend`) used for interaction logs, chat cursors, promises, and daily summaries — local by default, Azure Blob opt-in. `PersonaBackend` is a manual compatibility and migration utility, not a normal operational backend. |
-| `mcp_server.py` | The FastMCP entry point: registers every tool, drives the two auth modes, runs the background polling tasks, and pushes channel notifications to hosts that support them. |
+| `mcp_server.py` | The FastMCP entry point: registers every tool, drives the two authenticated session types, runs the background polling tasks, and pushes channel notifications to hosts that support them. |
 
 ## Runtime topology
 
@@ -68,14 +68,14 @@ The MCP server runs a small set of background tasks, each gated differently:
 
 See [MCP Runtime](mcp-runtime.md) and [Messaging and Delivery](messaging-and-delivery.md) for the full task inventory and the channel-push delivery mechanism.
 
-## Authentication modes
+## Authenticated session types
 
-Entrabot supports two auth modes, selected by `ENTRABOT_MODE`:
+Entrabot supports two authenticated session types. `_init_auth` selects between them by credential presence, not by `ENTRABOT_MODE`: when a Blueprint app ID + tenant ID are configured and `ENTRABOT_SKIP_PROVISIONING` is false it tries three-hop first, and falls back to MSAL delegated when `ENTRABOT_CLIENT_ID` is set. `ENTRABOT_MODE` is validated but not currently consumed as a selector.
 
-- **`agent_user`** — the three-hop flow described above. Every action is attributed to the Agent User's own identity; this is the mode audit and attribution are designed around.
+- **`agent_user`** — the three-hop flow described above. Every action is attributed to the Agent User's own identity; this is what audit and attribution are designed around.
 - **`delegated`** — MSAL interactive auth (browser redirect, device-code fallback) using the human's own token. Outbound Teams messages are prefixed `[EntraBot]` so the human can tell the agent sent them, but Graph sees the human's identity — there is no Agent User attribution in this mode.
 
-See [Identity](../reference/api/identity.md) for the state machine that governs mode transitions, and [Delegated Auth](../platform-docs/delegated-auth.md) (forthcoming) for setup details.
+See [Identity](../reference/api/identity.md) for the state machine that governs these transitions, and [Delegated Auth](../platform-docs/delegated-auth.md) for setup details.
 
 ## Security model
 

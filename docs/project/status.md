@@ -9,7 +9,7 @@
 
 ### Identity and authentication
 
-- Two runtime modes: certificate-backed Agent User mode and MSAL delegated mode.
+- Two authenticated session types: certificate-backed Agent User and MSAL delegated.
 - Autonomous four-resource provisioning chain: Agent Identity Blueprint → BlueprintPrincipal → Agent Identity → Agent User.
 - Blueprint, BlueprintPrincipal, and Agent Identity are created through the dedicated Microsoft Graph v1.0 subtype endpoints; Agent User creation uses Graph beta.
 - Certificate private keys are stored in the OS keystore (Keychain, Windows CNG (via the certificate store), or Linux Secret Service).
@@ -45,6 +45,7 @@
 - Windows end-to-end coverage is narrower than macOS and currently centered on Windows 11 ARM64.
 - Legacy Graph file comments are not the same as Word UI comments; use the Work IQ Word tools for document comments.
 - External-content wrapping is defense in depth. It reduces instruction-injection risk but is not proof against every possible model jailbreak.
+- `ENTRABOT_MODE` is validated but does not currently select the auth path in `_init_auth`; credential presence and `ENTRABOT_SKIP_PROVISIONING` determine which path (three-hop Agent User or MSAL delegated) is attempted.
 
 ## Project links
 

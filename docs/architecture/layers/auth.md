@@ -35,6 +35,6 @@ Two independent mechanisms keep the active token usable:
 
 ## Delegated mode
 
-`src/entrabot/auth/delegated.py` implements `MsalDelegatedAuth`, used only when `ENTRABOT_MODE=delegated`. It tries silent token acquisition from the OS-encrypted MSAL cache first, then interactive sign-in via a localhost redirect, falling back to the device-code flow if the redirect can't complete (port in use, no browser, timeout). MSAL is not removed from the runtime — it's the entire auth path for delegated mode, just not used by the Agent User three-hop flow, which never depends on it.
+`src/entrabot/auth/delegated.py` implements `MsalDelegatedAuth`, used on the delegated fallback path — when the three-hop fast path is skipped or fails and `ENTRABOT_CLIENT_ID` is set (`_init_auth` does not branch on `ENTRABOT_MODE`). It tries silent token acquisition from the OS-encrypted MSAL cache first, then interactive sign-in via a localhost redirect, falling back to the device-code flow if the redirect can't complete (port in use, no browser, timeout). MSAL is not removed from the runtime — it's the entire auth path for delegated sessions, just not used by the Agent User three-hop flow, which never depends on it.
 
 See [Identity and Token Flow](../identity-and-token-flow.md) for the wire-level request/response shapes, and [Delegated Auth](../../platform-docs/delegated-auth.md) for setup.

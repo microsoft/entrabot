@@ -56,25 +56,17 @@ nav:
           - Authentication: architecture/layers/auth.md
           - Teams: architecture/layers/teams.md
           - Audit: architecture/layers/audit.md
-  - Platform Learnings:
-      - Microsoft Agent 365: platform-learnings/microsoft-agent-365.md
-      - Agent ID Blueprints and Users: platform-learnings/agent-id-blueprints-and-users.md
-      - Agent Users: platform-learnings/entra-agent-users.md
-      - MSAL and Agent IDs (Historical): platform-learnings/msal-entra-agent-ids.md
-      - Teams Graph API: platform-learnings/teams-graph-api.md
-      - Files Graph API: platform-learnings/files-graph-api.md
-      - Agent Memory Systems: platform-learnings/agent-memory-systems.md
-      - Copilot Extensibility: platform-learnings/copilot-extensibility.md
-      - GitHub Copilot Extensions: platform-learnings/github-copilot-extensions.md
-      - Teams Toolkit: platform-learnings/teams-toolkit.md
-      - MCP Messaging Servers: platform-learnings/mcp-messaging-servers.md
-      - MCP Close the Loop: platform-learnings/mcp-close-the-loop.md
-      - MXC Windows Sandbox: platform-learnings/mxc-windows-sandbox.md
-      - macOS: platform-learnings/platform-macos.md
-      - Linux: platform-learnings/platform-linux.md
-      - Windows: platform-learnings/platform-windows.md
-      - GitHub CLI: platform-learnings/github-cli.md
-      - Teams Bot Framework (Historical): platform-learnings/teams-bot-framework.md
+  - Platform Docs:
+      - Microsoft Entra Agent ID: platform-docs/agent-id-blueprints-and-users.md
+      - Agent Users: platform-docs/entra-agent-users.md
+      - Delegated Authentication: platform-docs/delegated-auth.md
+      - Microsoft Agent 365: platform-docs/microsoft-agent-365.md
+      - Teams Graph API: platform-docs/teams-graph-api.md
+      - Files Graph API: platform-docs/files-graph-api.md
+      - MCP Hosts and Transports: platform-docs/mcp-hosts-and-transports.md
+      - macOS Platform APIs: platform-docs/platform-macos.md
+      - Linux Platform APIs: platform-docs/platform-linux.md
+      - Windows Platform APIs: platform-docs/platform-windows.md
   - Reference:
       - Token Flows: reference/token-flows.md
       - Scripts:

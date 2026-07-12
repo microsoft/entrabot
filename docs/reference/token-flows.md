@@ -1,6 +1,6 @@
 # Token flows
 
-Entrabot has two authentication modes. `agent_user` uses the autonomous three-hop Agent User flow described below. `delegated` uses MSAL interactive authentication (localhost redirect with device-code fallback) and is intended for demos or environments without a provisioned Agent User.
+Entrabot has two authenticated session types. `agent_user` uses the autonomous three-hop Agent User flow described below. `delegated` uses MSAL interactive authentication (localhost redirect with device-code fallback) and is intended for demos or environments without a provisioned Agent User. `_init_auth` selects between them by credential presence and `ENTRABOT_SKIP_PROVISIONING`, not by `ENTRABOT_MODE`.
 
 ## Autonomous Agent User flow
 
@@ -102,11 +102,11 @@ Tokens and assertions must never be logged. Failures surface as typed errors tha
 
 ## Delegated mode
 
-`ENTRABOT_MODE=delegated` uses the regular Entrabot app registration and MSAL. The primary flow is localhost browser authentication; device code is a fallback for headless environments. Delegated tokens represent the signed-in human and therefore do not provide Agent User attribution. This mode is separate from the autonomous three-hop flow and does not turn a Blueprint into an OAuth public client.
+The delegated path uses the regular Entrabot app registration (`ENTRABOT_CLIENT_ID`) and MSAL. `_init_auth` takes it when the three-hop fast path is skipped or fails; `ENTRABOT_MODE` is validated but does not currently select it. The primary flow is localhost browser authentication; device code is a fallback for headless environments. Delegated tokens represent the signed-in human and therefore do not provide Agent User attribution. This path is separate from the autonomous three-hop flow and does not turn a Blueprint into an OAuth public client. See [Delegated Auth](../platform-docs/delegated-auth.md) for detail.
 
 ## Related
 
-- [Agent Identity platform constraints](../platform-learnings/agent-id-blueprints-and-users.md)
-- [Agent Users](../platform-learnings/entra-agent-users.md)
+- [Agent Identity platform constraints](../platform-docs/agent-id-blueprints-and-users.md)
+- [Agent Users](../platform-docs/entra-agent-users.md)
 - [Identity and Token Flow](../architecture/identity-and-token-flow.md)
 - [Auth API reference](api/auth.md)

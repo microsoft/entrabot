@@ -133,5 +133,5 @@ Every token response is checked for `"error"` BEFORE accessing `"access_token"` 
 - ADR-001: OBO Flows for Device Agents.
 - ADR-002: Agent User over OBO.
 - ADR-003: Certificate Auth over Client Secrets.
-- `docs/platform-learnings/msal-entra-agent-ids.md` — token acquisition specifics.
-- `docs/platform-learnings/entra-agent-users.md` — the three-hop user-FIC flow.
+- `docs/platform-docs/delegated-auth.md` — MSAL delegated auth specifics.
+- `docs/platform-docs/entra-agent-users.md` — the three-hop user-FIC flow.

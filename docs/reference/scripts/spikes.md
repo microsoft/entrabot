@@ -22,7 +22,7 @@ Set `ENTRABOT_A365_TOOLING_MANIFEST` to override the manifest path. Defaults: `T
 - Lists registered Work IQ MCP servers.
 - Confirms the Word tool surface is registered.
 
-Used to derisk the A365 Work IQ MCP integration before any wiring in production code. See `docs/platform-learnings/microsoft-agent-365.md` for the platform context.
+Used to derisk the A365 Work IQ MCP integration before any wiring in production code. See `docs/platform-docs/microsoft-agent-365.md` for the platform context.
 
 ## `spike_file_comments.py`
 
