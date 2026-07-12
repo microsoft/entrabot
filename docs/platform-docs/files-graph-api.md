@@ -209,15 +209,22 @@ audit trail; the recipient sees the file in their `sharedWithMe`. This is the
 right primitive for Entrabot.
 
 **Authorization model — the requester is sponsor-gated, not the recipient.**
-Entrabot's `share_file` enforces two checks before calling Graph `/invite`:
+Entrabot's `share_file` enforces three checks before calling Graph `/invite`:
 
 1. **The requester is a sponsor.** The human who directed the share
    (`requester_email`) must match a sponsor on the Agent Identity's Graph
    sponsors relationship (all email forms accepted: UPN, mail, otherMails,
    proxyAddresses, federated and decoded B2B addresses).
-2. **The requester is in the initiating chat.** The requester's user ID must
-   appear in the `chat_id` that initiated the request, binding the share to the
-   conversation the agent is actually in.
+2. **The requester has a recent active-channel binding for the supplied
+   `chat_id`.** The matched sponsor must have an active-channel binding — a
+   record that the server has recently pushed an inbound message from that
+   sponsor in that chat — and the bound chat must match the `chat_id`
+   supplied to `share_file`. This defends against an agent being tricked into
+   sharing a file under a different chat's authority than the one it's
+   actually in, even when the sponsor is a genuine member of both chats.
+3. **The requester is a member of the initiating chat, per Graph.** The
+   sponsor's user ID must also appear in the `chat_id`'s member list, as a
+   defense-in-depth check independent of the active-channel binding.
 
 The **recipient** is not sponsor-gated — a sponsor may share with anyone they
 choose, and the recipient is passed through to Graph `/invite`. Existing

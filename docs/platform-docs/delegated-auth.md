@@ -1,10 +1,10 @@
 # Delegated Authentication with MSAL
 
-Entrabot has two authentication modes. `agent_user` mode uses the autonomous
-three-hop Agent User flow, where every action is attributed to the Agent User.
-**Delegated mode** is the alternative: it authenticates the signed-in human with
-MSAL and acts with the human's token. Use it for demos and for environments
-without a provisioned Agent User.
+Entrabot supports two kinds of authenticated session. The **Agent User**
+session uses the autonomous three-hop flow, where every action is attributed
+to the Agent User. **Delegated mode** is the alternative: it authenticates the
+signed-in human with MSAL and acts with the human's token. Use it for demos and
+for environments without a provisioned Agent User.
 
 In delegated mode there is no Agent User attribution. Graph sees the human, so
 outbound Teams messages are prefixed `[EntraBot]` to make clear which messages
@@ -15,14 +15,22 @@ Delegated auth is implemented by `MsalDelegatedAuth` in
 
 ## When delegated mode runs
 
-Mode is controlled by `ENTRABOT_MODE`:
+Authentication is decided by `_init_auth`, not by branching on `ENTRABOT_MODE`.
+`ENTRABOT_MODE` validates to `agent_user`, `delegated`, or `auto`, but that
+value is not consulted as a gate at startup. The actual sequence is:
 
-- **`agent_user`** — three-hop Agent User flow only.
-- **`delegated`** — MSAL delegated auth only; acts as the signed-in human.
-- **`auto`** (default) — try the three-hop Agent User fast path first (when
-  Blueprint credentials and a tenant ID are configured); if it fails, fall back
-  to MSAL delegated auth. Delegated is also the only path when
-  `ENTRABOT_SKIP_PROVISIONING` is set.
+1. If `ENTRABOT_SKIP_PROVISIONING` is not set, and Blueprint credentials
+   (`ENTRABOT_BLUEPRINT_APP_ID`) and a tenant ID are configured, Entrabot first
+   tries the three-hop Agent User flow.
+2. If that fast path is skipped (via `ENTRABOT_SKIP_PROVISIONING`, or missing
+   Blueprint credentials/tenant) or it fails, Entrabot falls back to MSAL
+   delegated auth whenever `ENTRABOT_CLIENT_ID` is configured.
+3. If neither path succeeds, the identity state machine stays
+   `UNAUTHENTICATED`.
+
+To force delegated mode, set `ENTRABOT_SKIP_PROVISIONING` or simply omit the
+Blueprint credentials — the delegated client remains available as the fallback
+in either case.
 
 On successful delegated auth the identity state machine transitions to
 `DELEGATED` and records `attribution_type = "delegated-human"`.
@@ -71,9 +79,10 @@ missing `access_token`, raising `AuthCancelledError`, `AuthTimeoutError`, or
 The MSAL token cache is backed by OS-encrypted persistence via `msal-extensions`:
 
 - `build_encrypted_persistence()` wraps the OS keystore (Keychain on macOS,
-  DPAPI on Windows, Secret Service on Linux) around a cache file under a stable
-  per-user directory (`entrabot_msal_cache`). On Unix the parent directory is
-  created with `0o700` permissions.
+  DPAPI on Windows, Secret Service on Linux) around a cache file named
+  `entrabot_msal_cache`, stored under a stable per-user cache directory
+  resolved via `platformdirs.user_cache_dir("entrabot")`. On Unix the parent
+  directory is created with `0o700` permissions.
 - The cache is exposed to MSAL through `PersistedTokenCache`, so tokens survive
   across restarts and silent acquisition can succeed without re-prompting.
 - **In-memory fallback.** If persistent cache creation fails for any reason, the
@@ -86,9 +95,14 @@ The MSAL token cache is backed by OS-encrypted persistence via `msal-extensions`
 Because delegated tokens belong to the human, delegated mode cannot distinguish
 agent actions from human actions in Graph attribution. Entrabot compensates at
 the application layer: outbound Teams messages sent in delegated mode are
-prefixed with the literal `[EntraBot]`. The inbound poller also uses this prefix
-to skip the agent's own messages when deduplicating replies, so a restart does
-not re-process messages the agent already sent.
+prefixed with the literal `[EntraBot]`. This prefix is not a restart-safe
+dedup mechanism on its own — inbound message content is XPIA-wrapped before the
+literal-prefix check runs, so a wrapped agent message no longer starts with
+`[EntraBot]` by the time the filter sees it. Effective protection against
+reprocessing the agent's own messages instead comes from canonical sender
+identity (`sender_upn`/`sender_id` matched against the agent's own identity),
+the in-process set of sent-message IDs, and the persisted per-chat cursor that
+tracks the last-seen message.
 
 Adaptive Cards are an exception — they do not carry the `[EntraBot]` prefix
 because the card itself identifies the sender.
@@ -97,7 +111,7 @@ because the card itself identifies the sender.
 
 | Variable | Purpose |
 |---|---|
-| `ENTRABOT_MODE` | `agent_user`, `delegated`, or `auto` (default). |
+| `ENTRABOT_MODE` | Validated to `agent_user`, `delegated`, or `auto` (default); informational only — `_init_auth` selects the auth path from Blueprint credentials, `ENTRABOT_SKIP_PROVISIONING`, and `ENTRABOT_CLIENT_ID`, not from this value. |
 | `ENTRABOT_CLIENT_ID` | Public-client application (client) ID for delegated auth. |
 | `ENTRABOT_TENANT_ID` | Tenant for the authority; defaults to `common` when unset. |
 | `ENTRABOT_SKIP_PROVISIONING` | When set, forces delegated-only auth. |

@@ -82,9 +82,12 @@ so Graph can resolve the federated identity:
 }
 ```
 
-For a B2B guest, the chat is created as `group` and the guest is added by email
-plus their home `tenantId`, which resolves their real identity rather than the
-guest object. The member role is `owner`.
+For a B2B guest, the member is added by email plus their home `tenantId`,
+which resolves their real identity rather than the guest object, with role
+`owner`. Whether the resulting chat is `oneOnOne` or `group` depends on the
+number of humans being added, not on guest status: adding a single guest
+produces a `oneOnOne` chat, while adding multiple humans (guest or otherwise)
+produces a `group` chat.
 
 ### Send a message
 
@@ -133,8 +136,14 @@ client code:
   400 when `$orderby` is supplied. Fetch without it and sort client-side if
   ordering is needed.
 - **Deduplication is client-side.** Telling human messages apart from the
-  agent's own, and from already-seen messages, is done in client code (in
-  delegated mode, the `[EntraBot]` prefix is part of the self-message filter).
+  agent's own, and from already-seen messages, is done in client code by
+  matching canonical sender identity (`sender_upn`/`sender_id` against the
+  agent's own identity), tracking in-process sent-message IDs, and persisting
+  a per-chat cursor of the last-seen message. The `[EntraBot]` prefix used in
+  delegated mode is not restart-safe on its own: inbound content is
+  XPIA-wrapped before the literal-prefix check runs, so a wrapped copy of the
+  agent's own message no longer starts with `[EntraBot]` by the time the
+  filter inspects it.
 
 `$top`, cursor pagination via `@odata.nextLink`, and the messages `delta` query
 (`GET /chats/{chat-id}/messages/delta`) are supported and reliable.

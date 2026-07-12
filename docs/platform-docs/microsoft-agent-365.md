@@ -137,9 +137,9 @@ Entrabot never:
 - uses the signed-in human's delegated token in `agent_user` mode;
 - logs bearer tokens or complete Work IQ responses.
 
-`ENTRABOT_MODE=delegated` is a separate human-attributed MSAL mode and does
-not provide Agent User attribution. See
-[Delegated Authentication with MSAL](delegated-auth.md).
+A delegated MSAL session is human-attributed: Graph attributes calls to the
+signed-in human, not to the Agent User, so it does not provide Agent User
+attribution. See [Delegated Authentication with MSAL](delegated-auth.md).
 
 ## Setup and validation
 

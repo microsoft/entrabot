@@ -1277,7 +1277,7 @@ async def share_file(
     share files. A sponsor may share with anyone they choose. The
     recipient is passed straight through to Graph ``/invite``.
 
-    Two checks are enforced before the Graph call:
+    Three checks are enforced before the Graph call:
 
     1. **Requester is a sponsor.** ``requester_email`` is matched
        against the static sponsor allowlist (Entra-configured sponsors
@@ -1285,8 +1285,17 @@ async def share_file(
        UPN, mail, otherMails, proxyAddresses, federated identities, and
        decoded B2B EXT UPN home addresses.
 
-    2. **Requester is a member of ``chat_id``.** The sponsor's
-       ``user_id`` MUST appear in the chat's member list. This catches
+    2. **Requester's active channel binding matches ``chat_id``.** The
+       matched sponsor's ``user_id`` must have a live active-channel
+       binding, and that binding's ``chat_id`` must equal the supplied
+       ``chat_id``. This defends against a confused-deputy attack where
+       an attacker in one chat gets the agent to act with a sponsor's
+       authority in a different chat that sponsor is genuinely a member
+       of.
+
+    3. **Requester is a member of ``chat_id``.** The sponsor's
+       ``user_id`` MUST appear in the chat's member list (defense in
+       depth alongside the active-channel check above). This catches
        an LLM fabricating a sponsor email that doesn't match the
        conversation it's actually in. Both ``requester_email`` and
        ``chat_id`` are required parameters; the LLM cannot bypass the
@@ -1313,6 +1322,10 @@ async def share_file(
 
     Raises:
         RequesterNotSponsorError: ``requester_email`` not in sponsor allowlist.
+        NoActiveSponsorChannelError: matched sponsor has no active channel
+            binding for any chat.
+        SponsorChannelMismatchError: matched sponsor's active channel binding
+            points at a different chat than the supplied ``chat_id``.
         RequesterNotInChatError: requester is a sponsor but not a member of ``chat_id``.
         SiteNotAllowedError: (SharePoint only) site on operator denylist.
         GraphFilesError: 403 Forbidden, 5xx, or other Graph errors.
