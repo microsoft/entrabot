@@ -68,7 +68,7 @@ def all_nav_paths() -> set[str]:
 
 def all_public_markdown_files() -> set[str]:
     """Every ``*.md`` file under ``docs/``, relative to ``docs/``."""
-    return {str(p.relative_to(DOCS_DIR)) for p in DOCS_DIR.rglob("*.md")}
+    return {p.relative_to(DOCS_DIR).as_posix() for p in DOCS_DIR.rglob("*.md")}
 
 
 def load_commands_manifest() -> list[dict]:

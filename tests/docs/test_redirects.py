@@ -1,7 +1,6 @@
-"""Every mkdocs-redirects target must point at a page that is in the
-current nav, and the plugin config itself must be present once Phase 2
-adds it. Until Phase 2/11 land, this test fails on the missing plugin
-config, which is the correct red state.
+"""Every mkdocs-redirects target must point at a page in the current nav.
+
+The redirects plugin is configured with a non-empty redirect_maps table.
 """
 
 from tests.docs._helpers import all_nav_paths, redirect_map
@@ -10,7 +9,7 @@ from tests.docs._helpers import all_nav_paths, redirect_map
 def test_redirects_plugin_is_configured():
     assert redirect_map(), (
         "mkdocs.yml must configure the `redirects` plugin with a non-empty "
-        "redirect_maps table (see Phase 2 and Phase 11 of the implementation plan)"
+        "redirect_maps table"
     )
 
 
