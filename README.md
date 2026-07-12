@@ -127,7 +127,7 @@ While the agent is blocked waiting on a Teams reply (any host that calls `wait_f
 (•ᴗ•) zZz... listening for Teams DM [42s] (Ctrl+C to break)
 ```
 
-Frames cycle (`ʕ•ᴥ•ʔ waiting on sponsor`, `(´･ω･`) sponsor hasn't replied yet`, `(◕‿◕) still here, still waiting`, …) every ~30s with elapsed time. Ctrl+C breaks out cleanly. Full host-by-host protocol: [`docs/claude-copilot-cli-channel-port.md`](docs/claude-copilot-cli-channel-port.md) and [`prompts/anatomy/channel-discipline.md`](prompts/anatomy/channel-discipline.md). On Windows, use `pwsh -File status-windows.ps1` for the equivalent status surface.
+Frames cycle (`ʕ•ᴥ•ʔ waiting on sponsor`, `(´･ω･`) sponsor hasn't replied yet`, `(◕‿◕) still here, still waiting`, …) every ~30s with elapsed time. Ctrl+C breaks out cleanly. Full host-by-host protocol: [`docs/clients/overview.md#sponsor-dm-wait-pattern`](docs/clients/overview.md#sponsor-dm-wait-pattern) and [`prompts/anatomy/channel-discipline.md`](prompts/anatomy/channel-discipline.md). On Windows, use `pwsh -File status-windows.ps1` for the equivalent status surface.
 
 After setup, use `./status.sh` as the canonical health and identity check:
 

@@ -2,12 +2,12 @@
 
 > **Status: Shipped.** Windows setup, status, teardown, CNG signing, and certificate rotation are on `main`. This file is retained as the implementation design record; future-tense statements below describe the pre-implementation state.
 
-> Supersedes `docs/architecture/next-windows-dev-environment.md` (2026-04-05),
-> `docs/openai-windows-agent-identity-port.md` (2026-04-24), and
-> `docs/claude-windows-port.md` (2026-04-28). Those three docs were built off
-> each other and disagree on two axes (orchestrator language, keystore). This
-> plan picks one answer for each and frames the work as porting **the repo**
-> — both Copilot CLI and Claude Code are first-class hosts.
+> Consolidates `docs/architecture/next-windows-dev-environment.md`
+> (2026-04-05) and earlier exploratory Windows porting drafts. Those
+> drafts were built off each other and disagreed on two axes
+> (orchestrator language, keystore). This plan picks one answer for
+> each and frames the work as porting **the repo** — both Copilot CLI
+> and Claude Code are first-class hosts.
 >
 > **Scope decision (2026-04-28, /plan-eng-review D1):** ship Windows in ~6
 > files by writing `setup-windows.ps1` directly against the existing

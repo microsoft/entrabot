@@ -38,8 +38,11 @@ nav:
       - Storage Configuration: guides/storage-configuration.md
       - Customizing the Body Prompt: guides/customizing-the-body-prompt.md
   - Clients:
+      - Overview: clients/overview.md
+      - Claude Code: clients/claude-code.md
+      - GitHub Copilot CLI: clients/copilot-cli.md
+      - Other MCP Hosts: clients/other-hosts.md
       - Persona-Sati Host Bootstrap: clients/persona-sati-host-bootstrap.md
-      - Claude Code and Copilot CLI Channels: claude-copilot-cli-channel-port.md
   - Architecture:
       - System Overview: architecture/system-overview.md
       - Layers:

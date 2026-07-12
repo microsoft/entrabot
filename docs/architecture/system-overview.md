@@ -72,6 +72,8 @@ The Blueprint's underlying app type post-GA cannot be flipped to fallback-public
 | **`storage/`** | LocalBackend / BlobBackend / PersonaBackend + migration helper (ADR-005) | `src/entrabot/storage/` |
 | **`mcp_server.py`** | FastMCP entry — two auth modes + body-first prompt loader + background poll + channel push | `src/entrabot/mcp_server.py` |
 
+### Mind-Body Split
+
 The agent system prompt lives in `prompts/agent_system.md` plus the `@include`-expanded `prompts/anatomy/*.md` modules. When persona-sati is reachable, its mind contract layers on top of the body — never underneath. See `docs/architecture/DESIGN-persona-sati-integration.md`.
 
 ## Message Delivery — Channel Push vs Polling

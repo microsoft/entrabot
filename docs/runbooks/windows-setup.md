@@ -1,11 +1,9 @@
 # Windows setup runbook
 
-> Replaces (and supersedes) the three exploratory notes:
-> `docs/architecture/next-windows-dev-environment.md`,
-> `docs/claude-windows-port.md`, and
-> `docs/openai-windows-agent-identity-port.md`. The implementation
-> they discussed shipped via PR landing the `feat/windows-port`
-> branch — see `docs/architecture/PLAN-windows-port.md`.
+> This page supersedes earlier exploratory Windows porting drafts,
+> including `docs/architecture/next-windows-dev-environment.md`. The
+> implementation those drafts discussed shipped via PR landing the
+> `feat/windows-port` branch — see `docs/architecture/PLAN-windows-port.md`.
 
 ## Prerequisites
 
