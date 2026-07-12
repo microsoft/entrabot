@@ -26,6 +26,6 @@ Every token response is checked for the `"error"` key before accessing `"access_
 
 ## What Changed (from OBO)
 
-The previous design used MSAL's `PublicClientApplication` + `ConfidentialClientApplication` for device-code → OBO exchange. This was replaced because Agent Users authenticate autonomously — no human token needed. See [ADR-002](../../decisions/002-agent-user-over-obo.md).
+The previous design used MSAL's `PublicClientApplication` + `ConfidentialClientApplication` for device-code → OBO exchange. This was replaced because Agent Users authenticate autonomously — no human token needed. See [Identity and Token Flow](../identity-and-token-flow.md).
 
 Removed: `msal` runtime dependency, `PublicClientApplication`, `ConfidentialClientApplication`, `acquire_token_on_behalf_of`, human refresh token caching, `access_as_user` custom scope.

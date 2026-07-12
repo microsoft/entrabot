@@ -12,7 +12,7 @@
 - Two runtime modes: certificate-backed Agent User mode and MSAL delegated mode.
 - Autonomous four-resource provisioning chain: Agent Identity Blueprint → BlueprintPrincipal → Agent Identity → Agent User.
 - Blueprint, BlueprintPrincipal, and Agent Identity are created through the dedicated Microsoft Graph v1.0 subtype endpoints; Agent User creation uses Graph beta.
-- Certificate private keys are stored in the OS keystore (Keychain, Windows Certificate Store, or Linux Secret Service).
+- Certificate private keys are stored in the OS keystore (Keychain, Windows CNG (via the certificate store), or Linux Secret Service).
 
 ### Microsoft 365
 
@@ -51,4 +51,4 @@
 - Changelog: [`changelog.md`](changelog.md)
 - GitHub issues: <https://github.com/microsoft/entrabot/issues>
 - GitHub pull requests: <https://github.com/microsoft/entrabot/pulls>
-- [Security policy](../../SECURITY.md)
+- [Security policy](https://github.com/microsoft/entrabot/blob/main/SECURITY.md)

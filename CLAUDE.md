@@ -219,7 +219,7 @@ Two memory systems coexist in this project:
   the above with token-acquisition specifics and provisioning steps.
 - `docs/platform-learnings/entra-agent-users.md` — supplementary; the three-hop
   user-FIC flow.
-- `docs/project/status.md` — current state, test count, next steps
+- `docs/project/status.md` — current shipped capabilities, active development, and known limitations
 - `prompts/agent_system.md` + `prompts/anatomy/*.md` — the body prompt (security, channel discipline, identity/tools)
 - `docs/architecture/DESIGN-persona-sati-integration.md` — mind-body split design
 - `engineering-history/decisions/005-cloud-hosted-memory.md` — cloud memory spec (phase plan + open TODOs)

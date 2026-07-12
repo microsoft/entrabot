@@ -1,6 +1,6 @@
 # SPEC: Dual-Track Agent Identity — OBO Lightweight + Agent User Governed
 
-> **HISTORICAL — Apr 2026 draft synthesized into shipped implementation (three auth modes: `agent_user` / `delegated` / `bot`). Kept for design rationale. See [Engineering Status](../engineering-status.md).**
+> **HISTORICAL — Apr 2026 draft synthesized into shipped implementation (three auth modes: `agent_user` / `delegated` / `bot`). Kept for design rationale. See [Engineering Status](../project/status.md).**
 
 **Date:** 2026-04-08 (updated 2026-04-09 with late-night session additions)
 **Status:** Draft — synthesized from group chat debate, not yet reviewed

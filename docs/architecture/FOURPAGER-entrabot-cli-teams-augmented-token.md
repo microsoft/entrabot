@@ -1,6 +1,6 @@
 # Augmenting Delegated Tokens for AI Agent Identity in Teams
 
-> **HISTORICAL — Apr 2026 proposal; work landed in subsequent PRs. Kept for design rationale. See [Engineering Status](../engineering-status.md) for current state.**
+> **HISTORICAL — Apr 2026 proposal; work landed in subsequent PRs. Kept for design rationale. See [Engineering Status](../project/status.md) for current state.**
 
 **A four-page proposal**
 **From:** the user (Identity), with input from the Identity Division agent-identity engineering team

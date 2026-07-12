@@ -1,6 +1,6 @@
 # NEXT: Lightweight Teams Chat — Multi-Tenant App with Progressive Identity
 
-> **HISTORICAL — landed on `main` (commit `c8ec521`). Kept for design rationale. See [Engineering Status](../engineering-status.md).**
+> **HISTORICAL — landed on `main` (commit `c8ec521`). Kept for design rationale. See [Engineering Status](../project/status.md).**
 
 **Date:** 2026-04-08 (updated 2026-04-09 — architecture debate context added, plan unchanged)
 **Status:** Shipped on `main`; retained as historical design rationale
