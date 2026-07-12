@@ -29,6 +29,7 @@ dev = [
     "ruff>=0.4",
     "respx>=0.22.0",
     "azure-identity>=1.15.0",
+    "PyYAML>=6.0",
 ]
 docs = [
     "mkdocs-material>=9.5",
