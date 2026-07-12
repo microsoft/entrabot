@@ -68,8 +68,9 @@ nav:
       - Linux Platform APIs: platform-docs/platform-linux.md
       - Windows Platform APIs: platform-docs/platform-windows.md
   - Reference:
-      - Token Flows: reference/token-flows.md
       - MCP Tools: reference/mcp-tools.md
+      - Configuration: reference/configuration.md
+      - Token Flows: reference/token-flows.md
       - Scripts:
           - Overview: reference/scripts/index.md
           - Operations:
@@ -126,6 +127,7 @@ nav:
           - Authentication: reference/api/auth.md
           - Identity: reference/api/identity.md
           - Audit: reference/api/audit.md
+          - Security (XPIA): reference/api/security.md
           - Efferent Copy: reference/api/efferent-copy.md
           - Body Prompt: reference/api/body-prompt.md
   - Runbooks:

@@ -53,7 +53,7 @@ Precedence and list rules:
 | `ENTRABOT_MODE` | Validated but **not currently consumed by `_init_auth`** — it does not select the auth path (credential presence and `ENTRABOT_SKIP_PROVISIONING` do that). Valid values: `auto` (default), `delegated`, `agent_user`. The historical `bot` mode was removed (Bot Framework gateway bypassed the Agent Identity model) and setting `ENTRABOT_MODE=bot` now fails loudly with `RemovedModeError` rather than silently falling back. Any other unrecognized value falls back to `auto`. |
 | `ENTRABOT_SKIP_PROVISIONING` | Truthy values `true`, `1`, or `yes` (case-insensitive) bypass the Agent User three-hop fast path at boot. MSAL delegated auth is then attempted instead when `ENTRABOT_CLIENT_ID` is configured. |
 | `ENTRABOT_LOG_LEVEL` | Python logging level name. Defaults to `INFO`. |
-| `ENTRABOT_XPIA_WRAP_ENABLE` | Enabled by default — external content (Teams, email, Files, Work IQ) is wrapped through the XPIA boundary. Set to `false`, `0`, `no`, or `off` (case-insensitive) to disable the wrap as a rollback path. See [Security Boundaries](../architecture/security-boundaries.md). |
+| `ENTRABOT_XPIA_WRAP_ENABLE` | Enabled by default — external content (Teams, email, Files, Work IQ) is wrapped through the XPIA boundary. Set to `false`, `0`, `no`, or `off` (case-insensitive) to disable the wrap as a rollback path. See [Security Boundaries](../architecture/security-boundaries.md) and the [Security (XPIA) API Reference](../reference/api/security.md). |
 
 ## Local paths
 
@@ -61,7 +61,7 @@ Precedence and list rules:
 |---|---|
 | `ENTRABOT_LOG_DIR` | Directory for log files. |
 | `ENTRABOT_AUDIT_DIR` | Directory for audit-log output. |
-| `ENTRABOT_DATA_DIR` | Root directory for `LocalBackend` operational data (interactions, watched chats, email cursor). |
+| `ENTRABOT_DATA_DIR` | Root directory for `LocalBackend` operational data. Also the fixed location of the `watched_chats` registry and `email_cursor.txt`, which are always plain local files under this directory — they are never routed through `MemoryBackend`, even when `BlobBackend` is active. |
 
 If any of these is unset, it defaults to a platform-specific subdirectory:
 
@@ -82,5 +82,10 @@ If any of these is unset, it defaults to a platform-specific subdirectory:
 2. Both `ENTRABOT_BLOB_ENDPOINT` and `ENTRABOT_BLOB_CONTAINER` are set → `BlobBackend`, using the Agent User's storage-scope three-hop token.
 3. Neither is set → `LocalBackend` rooted at `ENTRABOT_DATA_DIR` (or its platform default).
 4. Exactly one of `ENTRABOT_BLOB_ENDPOINT` / `ENTRABOT_BLOB_CONTAINER` is set → **fails closed** with `BackendMisconfiguredError` rather than silently falling back to local. A half-configured cloud setup is treated as a misconfiguration that must be fixed, not tolerated.
+
+`MemoryBackend` is not the whole of Entrabot's operational state — only some of it routes through the resolved backend:
+
+- **Routed through `MemoryBackend`** (so it moves to Blob when configured): interaction logs and daily summaries (`tools/interaction_log.py`, `tools/daily_summary.py`), outstanding promises (`tools/promises.py`), and the per-chat Teams poll delivery cursor (`tools/chat_cursors.py`).
+- **Always local, regardless of backend**: the `watched_chats` registry and `email_cursor.txt`, both plain files under `ENTRABOT_DATA_DIR`. Neither is ever read from or written to Blob storage.
 
 See [Storage Configuration and Migration](storage-configuration.md) for backend selection and migration guidance, and [Reference: Configuration](../reference/configuration.md) for the compact lookup in the Reference section.
