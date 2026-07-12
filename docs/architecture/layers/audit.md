@@ -46,4 +46,4 @@ def log_event(
 
 Files tools route every Graph call through `_audit_graph_call()`, an async context manager that emits the `pending` event, runs the body, and emits `success` or `failure` based on whether it raised — one code path instead of a hand-written pair at every call site. Teams tools that gate on sponsor authorization (`add_member`, `share_file`) call `log_event()` directly so that a *rejected* request — one that never reaches Graph because a gate failed — still produces a `failure` audit record, not silence.
 
-See [Security Boundaries](../security-boundaries.md) for how audit fits into the wider fail-closed model, and [MCP Tools](../../reference/api/mcp-tools.md) for the tools that emit these events.
+See [Security Boundaries](../security-boundaries.md) for how audit fits into the wider fail-closed model, and [MCP Tools](../../reference/mcp-tools.md) for the tools that emit these events.

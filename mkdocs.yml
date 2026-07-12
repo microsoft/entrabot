@@ -69,6 +69,7 @@ nav:
       - Windows Platform APIs: platform-docs/platform-windows.md
   - Reference:
       - Token Flows: reference/token-flows.md
+      - MCP Tools: reference/mcp-tools.md
       - Scripts:
           - Overview: reference/scripts/index.md
           - Operations:
@@ -121,7 +122,6 @@ nav:
               - list_agent_identities.py: reference/scripts/diagnostics/list-agent-identities-py.md
               - list_sponsors.py: reference/scripts/diagnostics/list-sponsors-py.md
       - API:
-          - MCP Tools: reference/api/mcp-tools.md
           - Storage Backends: reference/api/storage-backends.md
           - Authentication: reference/api/auth.md
           - Identity: reference/api/identity.md

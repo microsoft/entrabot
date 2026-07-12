@@ -164,4 +164,4 @@ presentation vary by tenant.
 - [Files and Work IQ guide](../guides/files-and-work-iq.md)
 - [Files and SharePoint Graph API](files-graph-api.md)
 - [Token Flows reference](../reference/token-flows.md)
-- [MCP Tool reference](../reference/api/mcp-tools.md)
+- [MCP Tool reference](../reference/mcp-tools.md)

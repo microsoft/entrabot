@@ -45,4 +45,4 @@ How a new message reaches the LLM depends on the connected host. Claude Code sub
 - The Agent Identity/Agent User must have consented delegated scopes for chat creation, read/write, and message send.
 - For cross-tenant chats, the target user's home tenant ID must be available so Graph can route the invite.
 
-See [MCP Tools](../../reference/api/mcp-tools.md) for the full tool signatures, and [Token Flows](../../reference/token-flows.md) for the wire-level request shapes behind every call in this layer.
+See [MCP Tools](../../reference/mcp-tools.md) for the full tool signatures, and [Token Flows](../../reference/token-flows.md) for the wire-level request shapes behind every call in this layer.

@@ -113,7 +113,7 @@ See:
 
 ## Related
 
-- [MCP tools](mcp-tools.md) — the surface the body governs.
+- [MCP tools](../mcp-tools.md) — the surface the body governs.
 - [Identity](identity.md) — sponsor enforcement.
 - [Audit](audit.md) — fail-closed semantics referenced by the body.
 - `prompts/agent_system.md.example` — sanitized standalone example.
