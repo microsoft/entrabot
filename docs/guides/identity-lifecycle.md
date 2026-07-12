@@ -60,10 +60,11 @@ pwsh -File scripts/deploy-windows.ps1
 This wraps `rotate_cert_windows.py`: it captures the current certificate's
 public DER before generating a new one (the only chance to do so for
 non-exportable TPM-backed keys), PATCHes the new public certificate onto the
-Blueprint app, updates both the `x5t#S256` (SHA-256) and SHA-1 thumbprints
-used to locate the certificate on each platform, runs a smoke test against
-the new certificate, and rolls back the PATCH plus local state if the smoke
-test fails. See the
+Blueprint app, and updates both thumbprints it tracks: the `x5t#S256`
+(SHA-256) used in JWT assertion headers, and the 40-character SHA-1
+thumbprint Windows CNG uses to locate the private key in the certificate
+store. It then runs a smoke test against the new certificate, and rolls back
+the PATCH plus local state if the smoke test fails. See the
 [`deploy-windows.ps1` reference](../reference/scripts/setup/deploy-windows-ps1.md)
 and the
 [`rotate_cert_windows.py` reference](../reference/scripts/auth-and-certs/rotate-cert-windows-py.md).
@@ -91,11 +92,14 @@ python3 scripts/deprovision_entra_agent_identity.py --agent-user-upn agent@tenan
 Review the output, then run the same command without `--dry-run` to perform
 the deletion.
 
-The script removes, in order: the Agent User's directly assigned licenses,
-the Agent User itself, the Agent Identity service principal, and finally the
-Blueprint application — but **only if no other Agent Identity shares that
-Blueprint**. If other Agent Identities still reference it, the script
-refuses to delete the Blueprint rather than breaking those other chains.
+Before deleting anything, the script runs
+`ensure_blueprint_has_no_other_agent_identities` to check whether another
+Agent Identity references the same Blueprint. If one does, the script aborts
+without deleting the Agent User's licenses, the Agent User, the Agent
+Identity, or the Blueprint — nothing is removed, so other chains sharing that
+Blueprint are left intact. Otherwise, it removes, in order: the Agent User's
+directly assigned licenses, the Agent User itself, the Agent Identity service
+principal, and finally the Blueprint application.
 
 The script does not touch local on-disk state or Azure Blob storage — those
 are handled separately. See the

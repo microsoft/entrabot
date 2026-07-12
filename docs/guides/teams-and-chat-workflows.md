@@ -1,9 +1,10 @@
 # Teams and Chat Workflows
 
-EntraBot has no default group chat. Every Teams operation — sending, reading,
-watching for replies — requires an explicit `chat_id`. This guide covers where
-that ID comes from, how messages flow in both directions, and how outstanding
-commitments and delivery state are tracked across restarts.
+EntraBot has no default group chat. Every operation on an existing Teams
+conversation — sending, reading, watching for replies — requires an explicit
+`chat_id`. This guide covers where that ID comes from, how messages flow in
+both directions, and how outstanding commitments and delivery state are
+tracked across restarts.
 
 ## Chat identity: no default group chat
 
@@ -40,10 +41,10 @@ What happens after the message is sent depends on the host:
   immediately. The sponsor's reply, when it arrives, is delivered on the next
   turn via `notifications/claude/channel` — there's nothing further to poll.
 - On Copilot CLI and other hosts without a channel-push mechanism,
-  `send_teams_message` automatically waits for a sponsor-gated reply in the
-  same chat and returns it inline as `sponsor_reply`. The caller is expected
-  to continue the conversation in Teams by sending a follow-up reply that
-  addresses `sponsor_reply.content_text`.
+  `send_teams_message` automatically waits for a sponsor-gated reply in any
+  watched chat, not necessarily the chat just messaged, and returns it inline
+  as `sponsor_reply`. The caller is expected to continue the conversation by
+  replying to the `chat_id` returned with `sponsor_reply`.
 
 `wait_for_sponsor_dm` is a separate tool reserved for the case where an
 operator explicitly asks to block until a reply arrives mid-task. It is not

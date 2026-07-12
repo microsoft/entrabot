@@ -2,8 +2,8 @@
 
 EntraBot has two shipped paths for working with files in OneDrive and
 SharePoint: a direct Microsoft Graph integration, and a Microsoft Agent 365
-Work IQ provider. Both are in production use — this guide covers what each
-one does and when to reach for which.
+Work IQ provider. Both are implemented and available — this guide covers what
+each one does and when to reach for which.
 
 ## Two paths, not a proposal
 
@@ -16,9 +16,11 @@ operations:
 - Writing text files.
 - Uploading binary files, including chunked upload sessions for larger
   files.
-- Sharing a file to an allowlist of sponsors.
-- Adding and reading legacy Graph comments on SharePoint `.docx`/`.xlsx`
-  files.
+- Sharing a file, provided the requester is an Agent Identity sponsor and a
+  member of the initiating chat; the recipient can be anyone the sponsor
+  chooses.
+- Adding legacy Graph comments on SharePoint `.docx`/`.xlsx` files (no
+  read/list operation — see Work IQ Word for reading comments).
 
 **Work IQ (`src/entrabot/a365/`)** is a separate provider boundary — catalog,
 manifest, token acquisition, and MCP client — with two typed adapters on top:
