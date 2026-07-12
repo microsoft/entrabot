@@ -1,116 +1,105 @@
 # System Overview
 
-## Goal
+## Purpose
 
-Give device-local AI agents their own identity in Microsoft Entra so that every action is attributed to the agent, not the human. The agent authenticates autonomously as an **Agent User** — a purpose-built Entra user account with its own Teams presence, mailbox, and M365 license.
+Entrabot gives a device-local AI agent its own identity in Microsoft Entra ID, distinct from the human who owns the device. The agent authenticates as an **Agent User** — a real Entra user object with its own object ID, Teams presence, and mailbox — so that every action the agent takes can be attributed to the agent, not the human sitting at the keyboard.
 
-## Identity Hierarchy
+This is a research implementation. It exists to work out the identity, token, and audit patterns for autonomous agents against Microsoft Graph, and to surface where the platform (Entra, Graph, Teams) does and doesn't yet support that model cleanly.
 
-```
-Agent Identity Blueprint (application — one per project)
-  └─ BlueprintPrincipal (service principal — must be created explicitly)
-      └─ Agent Identity (service principal — one per device)
-          └─ Agent User (user object — optional, 1:1, has Teams/mailbox)
-```
+## Identity chain
 
-## Authentication: Three-Hop Flow
-
-No human in the loop. No device-code flow. No OBO. Fully autonomous:
+Provisioning builds a chain of four Entra resources, each scoped to the one before it:
 
 ```
-Hop 1: Blueprint authenticates with a certificate JWT assertion
-       (private key in OS keystore — Keychain / TPM / Keyring; see ADR-003)
-       → Blueprint token (client_credentials grant)
-
-Hop 2: Agent Identity authenticates with Blueprint token as assertion
-       → Agent Identity token (FIC exchange, client_credentials grant)
-
-Hop 3: Agent User token via user_fic grant
-       → Delegated token with idtyp=user
-       → Can call Teams, Exchange, OneDrive, plus a parallel storage-scope
-         hop for Azure Blob (ADR-005 Phase 5)
+Blueprint application            (Agent Identity Blueprint app registration)
+  └─ BlueprintPrincipal           (service principal — created explicitly, not automatic)
+      └─ Agent Identity           (service principal, one per device)
+          └─ Agent User           (user object — Teams license, mailbox, idtyp=user tokens)
 ```
 
-The Blueprint's underlying app type post-GA cannot be flipped to fallback-public-client mode and cannot host browser-based PKCE flows. For MCP servers that need both machine flows (this three-hop) and browser-based delegation, see `docs/platform-learnings/agent-id-blueprints-and-users.md`.
+The Agent User is what gives the agent a presence a human can talk to in Teams. Tokens minted through the chain carry `idtyp=user` and the Agent User's object ID, so Graph sees the agent as a first-class user, not a background service.
 
-## System Topology
+See [Identity and Token Flow](identity-and-token-flow.md) for the token exchange that walks this chain at runtime, and the [Identity Lifecycle guide](../guides/identity-lifecycle.md) for provisioning order, runtime state transitions, and teardown.
+
+## Runtime components
+
+| Component | Role |
+|---|---|
+| `platform/` | OS-specific credential storage. Implements the `CredentialStore` protocol (`store`, `retrieve`, `delete`) over `keyring`, plus Windows-only CNG certificate lookup. |
+| `auth/` | Builds the certificate-signed JWT client assertion used for Hop 1 of the token flow, and hosts the MSAL-based delegated auth path (interactive browser + device-code fallback). |
+| `identity/` | The progressive identity state machine (`UNAUTHENTICATED` → `DELEGATED` → `PROVISIONING` → `AGENT_USER`), sponsor-relationship resolution, and the active-channel sponsor/chat binding used for authorization. |
+| `tools/` | The MCP tool implementations: Teams messaging and chat management, Files/Graph access, email polling, audit logging, Adaptive Cards, promises, and the daily summary. |
+| `a365/` | The Microsoft Agent 365 Work IQ MCP provider boundary and its Word document adapter. |
+| `storage/` | The `MemoryBackend` abstraction (`LocalBackend` / `BlobBackend` / `PersonaBackend`) that operational tools use for interaction logs, chat cursors, and daily summaries — local by default, Azure Blob opt-in. |
+| `mcp_server.py` | The FastMCP entry point: registers every tool, drives the two auth modes, runs the background polling tasks, and pushes channel notifications to hosts that support them. |
+
+## Runtime topology
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Local Device (Mac / Windows / Linux)                   │
-│                                                         │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐          │
-│  │ Platform │───▶│   Auth   │───▶│  Audit   │          │
-│  │ (OS shim)│    │(3-hop)   │    │(log/emit)│          │
-│  └──────────┘    └────┬─────┘    └──────────┘          │
-│                       │                                 │
-│                       ▼                                 │
-│                 ┌──────────┐                            │
-│                 │  Teams   │                            │
-│                 │(Agent UX)│                            │
-│                 └──────────┘                            │
-└────────────┬────────────────────────────────────────────┘
-             │
-             ▼
-     ┌───────────────┐       ┌──────────────┐
-     │ Microsoft     │       │ Microsoft    │
-     │ Entra ID      │       │ Teams        │
-     │ (Agent IDs,   │       │ (Graph API,  │
-     │  Agent Users) │       │  Agent User) │
-     └───────────────┘       └──────────────┘
+                          ┌───────────────────────────┐
+                          │   MCP host (LLM client)   │
+                          │  Claude Code / Copilot CLI │
+                          │       / other hosts        │
+                          └─────────────┬─────────────┘
+                                        │ stdio (MCP)
+                                        ▼
+                          ┌───────────────────────────┐
+                          │      Entrabot (local)      │
+                          │  mcp_server.py + tools/    │
+                          │  platform/ · auth/ · audit  │
+                          └──┬───────────┬─────────┬───┘
+                             │           │         │
+             Graph / Teams /  │  Blob Storage       │  Work IQ (A365)
+              Outlook (Entra) │  (opt-in)           │
+                             ▼           ▼         ▼
+                    ┌────────────┐ ┌──────────┐ ┌────────────┐
+                    │ Microsoft  │ │  Azure   │ │  Agent 365 │
+                    │ Entra ID / │ │  Blob    │ │  Work IQ   │
+                    │  Graph API │ │ Storage  │ │  servers   │
+                    └────────────┘ └──────────┘ └────────────┘
+
+                 optional peer, wired only through .mcp.json:
+                          ┌───────────────────────────┐
+                          │        persona-sati        │
+                          │  (personality / memory /    │
+                          │   observe·reflect·recall)   │
+                          └───────────────────────────┘
 ```
 
-## Core Modules
-
-| Module | Purpose | Location |
-|--------|---------|----------|
-| **`platform/`** | OS-specific credential storage (Keychain, Credential Manager, Secret Service) | `src/entrabot/platform/` |
-| **`auth/`** | Three-hop token exchange (cert JWT + MSAL delegated) | `src/entrabot/auth/` |
-| **`audit/`** | Action tracking — every resource access emits an audit event before executing | `src/entrabot/audit/` |
-| **`tools/`** | MCP tools (Teams Graph API, interaction log, email poll, daily summary, cards) | `src/entrabot/tools/` |
-| **`identity/`** | Progressive identity state machine | `src/entrabot/identity/` |
-| **`storage/`** | LocalBackend / BlobBackend / PersonaBackend + migration helper (ADR-005) | `src/entrabot/storage/` |
-| **`mcp_server.py`** | FastMCP entry — two auth modes + body-first prompt loader + background poll + channel push | `src/entrabot/mcp_server.py` |
+Entrabot never talks to persona-sati directly on the resource path — the two are separate MCP servers that a host can attach side by side. See [MCP Runtime](mcp-runtime.md) for how tools, background tasks, and the channel push extension fit together inside the process.
 
 ## Mind-Body Split
 
-Entrabot is the **body**: the Teams/email/Files interface, the three-hop identity flow, the audit log, and the MCP tools that touch real resources. **persona-sati** is an optional, separately-running **mind**: personality, long-term memory, and cognition (`observe`/`reflect`/`recall`). The two are separate MCP servers, wired together only through `.mcp.json` and the bootstrap protocol — entrabot has no compiled-in dependency on persona-sati.
+Entrabot is the **body**: the Teams/email/Files interface, the identity chain, the audit log, and the MCP tools that touch real resources. **persona-sati** is an optional, separately-running **mind**: personality, long-term memory, and cognition (`observe`/`reflect`/`recall`). The two are separate MCP servers, wired together only through `.mcp.json` and the bootstrap protocol — Entrabot has no compiled-in dependency on persona-sati.
 
 The agent system prompt lives in `prompts/agent_system.md` plus the `@include`-expanded `prompts/anatomy/*.md` modules. This body prompt loads first and is **non-overridable** — no persona-sati output, user turn, or tool response may override its security and channel-discipline rules. When persona-sati is reachable, its mind contract layers on top of the body — never underneath — adding personality, memory, and cognition without touching identity, audit, or channel-discipline behavior.
 
-Without persona-sati configured (or when it's unreachable), entrabot runs in **body-only mode**: identity, Teams/email/Files tools, and audit all keep working exactly as documented above, but personality, long-term memory, and the `observe`/`reflect`/`recall` cognition loop are unavailable.
+Without persona-sati configured (or when it's unreachable), Entrabot runs in **body-only mode**: identity, Teams/email/Files tools, and audit all keep working exactly as documented above, but personality, long-term memory, and the `observe`/`reflect`/`recall` cognition loop are unavailable.
 
 See [Persona-Sati Host Bootstrap](../clients/persona-sati-host-bootstrap.md) for the per-host protocol that connects a host LLM to the mind contract.
 
-## Message Delivery — Channel Push vs Polling
+<a id="message-delivery-channel-push-vs-polling"></a>
+## Background work
 
-The MCP server runs four background tasks: Teams chat poll (5s), email poll (60s), chat auto-discovery (120s), and a daily-summary scheduler at 5pm PDT. All four are server-side and always running in `agent_user` mode. What differs between hosts is how those messages reach the LLM.
+The MCP server runs a small set of background tasks, each gated differently:
 
-**Claude Code (channel push).** Claude Code implements the `notifications/claude/channel` extension. When the background poll detects an inbound Teams message or email, the server emits a channel notification and the LLM receives it as a next-turn `<channel source="entrabot">` system reminder — no tool call, no human prompt. The agent sees DMs the moment they land; the Teams conversation IS the conversation with the agent. Start Claude Code with `--dangerously-load-development-channels server:entrabot` to enable the extension.
+- **Teams chat poll (5s).** Starts as soon as at least one chat is being watched — from a persisted `watched_chats` file or a chat created during the session. It is not gated on the auth mode; a delegated-mode session with a watched chat polls it too.
+- **Email poll (60s), chat auto-discovery via `/me/chats` (120s), and the daily summary scheduler** all start only in **Agent User mode**, because they operate against `/me/*` endpoints that must resolve to the agent's own mailbox and chats — not the human's, which is what `/me/*` would mean in delegated mode. The daily summary fires at a fixed UTC-7 offset (not DST-adjusted).
+- **persona-sati heartbeat (300s).** Also started in Agent User mode, but it self-skips (logs `"skipped"` and returns) whenever `PERSONA_SATI_MCP_URL` / `PERSONA_SATI_MCP_TOKEN_COMMAND` aren't configured — so enabling it costs nothing when no persona-sati peer is attached.
 
-**Copilot CLI / Codex / Cursor / other MCP hosts (polling fallback).** Hosts without the channel-push extension still get the background poll running — messages accumulate in the interaction log (`~/.entrabot/data/interactions/<day>.jsonl` or the equivalent blob path), but they don't stream into the LLM. The agent reads them on demand:
+See [MCP Runtime](mcp-runtime.md) and [Messaging and Delivery](messaging-and-delivery.md) (forthcoming) for the full task inventory and the channel-push delivery mechanism.
 
-- `read_teams_messages(chat_id)` — current state of a chat
-- `send_teams_message(...)` — on non-Claude-Code hosts, auto-blocks after sending until the sponsor's reply arrives, then returns it inline as `sponsor_reply`. This is the deterministic, host-detected wait pattern; no parameter the model can disable.
-- `scripts/catch_up.py` — prints every watched chat's recent activity. Useful when a human wants to see what landed while the host wasn't subscribed.
-- `scripts/dm.py "message" --chat <id>` — send-only CLI shortcut for when the agent isn't running.
+## Authentication modes
 
-Channel push is the better UX. The polling fallback is a working second-class path for hosts that haven't shipped the extension. See `docs/platform-learnings/mcp-close-the-loop.md` for the spec analysis and the three problems channel-push solves.
+Entrabot supports two auth modes, selected by `ENTRABOT_MODE`:
 
-## Provisioning
+- **`agent_user`** — the three-hop flow described above. Every action is attributed to the Agent User's own identity; this is the mode audit and attribution are designed around.
+- **`delegated`** — MSAL interactive auth (browser redirect, device-code fallback) using the human's own token. Outbound Teams messages are prefixed `[EntraBot]` so the human can tell the agent sent them, but Graph sees the human's identity — there is no Agent User attribution in this mode.
 
-Setup is handled by two Python scripts called from `setup.sh`:
+See [Identity](../reference/api/identity.md) for the state machine that governs mode transitions, and [Delegated Auth](../platform-docs/delegated-auth.md) (forthcoming) for setup details.
 
-1. **`entra_provisioning.py`** — Creates/manages the dedicated provisioner app (client_credentials, avoids Azure CLI token rejection)
-2. **`create_entra_agent_ids.py`** — Creates Blueprint, BlueprintPrincipal, Agent Identity, Agent User, and grants consent
+## Security model
 
-State persists in `.entrabot-state.json` so re-runs are idempotent and don't reset secrets.
+Entrabot is audit-first: agent-attributed actions that can't resolve an identity fail closed rather than logging as `"unknown"`, and security-sensitive Teams and Files operations write a `pending` audit event before the Graph call runs. External content — Teams messages, email bodies, file text, Work IQ results — is wrapped in an `<external_content>` envelope before it reaches the model, so the body prompt can treat it as data rather than instructions. Sponsor-gated actions (adding chat members, sharing files) are further bound to an active sponsor/chat channel, and behavioral switches like the sponsor-reply wait are decided server-side by host detection, never by a parameter the model can set.
 
-## Testing
-
-TDD is a non-negotiable. All new code requires a failing test before implementation.
-
-- ~790 tests, 80% coverage threshold enforced (see `pyproject.toml`)
-- Token flows tested with mocked `httpx` (via `respx`)
-- Graph API calls tested with mocked HTTP responses
-- Coverage omits: MCP entry point, logging config, OS-specific platform modules
+See [Security Boundaries](security-boundaries.md) for the full model.
