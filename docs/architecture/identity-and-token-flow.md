@@ -19,37 +19,15 @@ See [System Overview](system-overview.md) for how these four resources fit into 
 
 Implemented as `acquire_agent_user_token()` in `src/entrabot/tools/teams.py`. Every hop posts to the same tenant v2 token endpoint (`https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token`) over a plain `httpx.Client` with a 15-second timeout — no MSAL involved.
 
-```
-Blueprint (cert)                 Agent Identity                  Agent User
-     │                                 │                              │
-     │  Hop 1: client_credentials      │                              │
-     │  client_id=blueprint_app_id     │                              │
-     │  client_assertion=JWT(cert)     │                              │
-     │  fmi_path=agent_id              │                              │
-     ├────────────────────────────────>│                              │
-     │                          T1 (Agent Identity token)              │
-     │<─────────────────────────────────                              │
-     │                                 │                              │
-     │                                 │  Hop 2: client_credentials    │
-     │                                 │  client_id=agent_id           │
-     │                                 │  client_assertion=T1          │
-     │                                 ├─────────────────────────────>│
-     │                                 │                       T2 (self-assertion)
-     │                                 │<──────────────────────────────
-     │                                 │                              │
-     │                                 │  Hop 3: user_fic grant        │
-     │                                 │  client_id=agent_id           │
-     │                                 │  client_assertion=T1          │
-     │                                 │  user_id=agent_user_id        │
-     │                                 │  user_federated_identity_credential=T2
-     │                                 ├─────────────────────────────>│
-     │                                 │              resource token (idtyp=user)
-     │                                 │<──────────────────────────────
-```
+All three requests go to the tenant's `/oauth2/v2.0/token` endpoint:
 
-1. **Hop 1 — Blueprint `client_credentials`.** `client_id` is the Blueprint app ID. The request carries a certificate-signed `client_assertion` (built by `build_client_assertion()`), scope `api://AzureADTokenExchange/.default`, and `fmi_path=.../agentIdentityBlueprints/{blueprint_app_id}` binding the exchange to the target Agent Identity. Returns **T1**.
-2. **Hop 2 — Agent Identity FIC exchange.** `client_id` is now the Agent Identity's client ID. T1 is presented as the `client_assertion`, with `fmi_path=.../agentIdentities/{agent_identity_id}`. Entra validates T1's audience against the Agent Identity's parent Blueprint. Returns **T2**.
-3. **Hop 3 — Agent User `user_fic` grant.** `client_id` stays the Agent Identity. T1 is the `client_assertion`, T2 is passed as `user_token`/`user_federated_identity_credential`, and `user_id` is the Agent User's object ID. `grant_type=user_fic`. The `scope` here — and only here — selects the target resource; it defaults to `https://graph.microsoft.com/.default`.
+| Hop | Request fields | Result |
+|---|---|---|
+| **1 — Blueprint `client_credentials`** | `client_id` = Blueprint app ID; certificate-signed JWT as `client_assertion`; `scope=api://AzureADTokenExchange/.default`; `fmi_path=config.agent_id`; `grant_type=client_credentials`. | **T1** |
+| **2 — Agent Identity FIC exchange** | `client_id=config.agent_id`; T1 as `client_assertion`; `scope=api://AzureADTokenExchange/.default`; `grant_type=client_credentials`; **no `fmi_path`**. | **T2** |
+| **3 — Agent User `user_fic` grant** | `client_id=config.agent_id`; T1 as `client_assertion`; T2 as `user_federated_identity_credential`; `user_id=config.agent_user_id`; `requested_token_use=on_behalf_of`; `grant_type=user_fic`; target resource `scope`. | Resource token with `idtyp=user` |
+
+Hop 3's `scope` — and only Hop 3's — selects the target resource; it defaults to `https://graph.microsoft.com/.default`.
 
 The resulting token carries `idtyp=user` and the Agent User's object ID (`oid`). This is the load-bearing difference from human delegated auth: Graph sees a first-class user principal that happens to be the agent, not an app-only service principal and not the human sitting at the keyboard. Every Teams/email/Files call the agent makes in Agent User mode uses this token, so Graph attribution — and the audit trail built on top of it — points at the Agent User, never the human.
 

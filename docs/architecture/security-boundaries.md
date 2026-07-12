@@ -1,6 +1,6 @@
 # Security Boundaries
 
-This page collects the boundaries Entrabot enforces between the agent, the human, external content, and the tools it exposes. Each section names the source that implements it — read those files, not just this summary, before changing any of them.
+This page collects the boundaries Entrabot enforces between the agent, the human, external content, and the tools it exposes.
 
 ## Identity boundary: Agent User vs. delegated human
 
@@ -13,7 +13,7 @@ Every action the agent takes against Graph is attributed to one of two principal
 
 ## Certificate boundary (per OS)
 
-The Blueprint's private key never leaves its OS-native store, but *how* it never leaves differs by platform, and the two paths are not equivalent in strength:
+Certificate handling differs by platform, and the two paths are not equivalent in strength:
 
 - **macOS and Linux** — `_build_blueprint_assertion()` retrieves the PEM private key from the OS keystore (Keychain via `MacCredentialStore`, Secret Service/KWallet via `LinuxCredentialStore`) **into the process**, then signs the JWT in-process with `cryptography`'s `load_pem_private_key` and PyJWT. The key material is present in process memory for the duration of the signing call.
 - **Windows** — the private key is a non-exportable CNG key in `Cert:\CurrentUser\My`, backed by the Microsoft Platform Crypto Provider (TPM) when available or the Microsoft Software Key Storage Provider otherwise (`generate_windows_cert.py`, `auth/cncrypt_signer.py`). Signing happens through `ncrypt.dll`; only the signature crosses back into the process, never the key.
@@ -41,21 +41,21 @@ The properties that make this a real boundary, not just formatting:
 - **The outer envelope is always authoritative.** `wrap_external()` unconditionally wraps every call, even when the body already looks like an envelope. External text cannot forge the trusted `source`/`sender`/`received_at` metadata by embedding what looks like the wrapper prefix — the caller-supplied attributes always win because they're the ones written into the outer tag.
 - **Escape-on-collision.** Any literal `</external_content>` in the body — including case variants and whitespace-padded forms like `< / External_Content >` — is entity-escaped before wrapping, so embedded text can't break out of the envelope by closing it early.
 - **Attribute-safe.** `source`, `sender`, and `received_at` values are escaped for `&`, `<`, `>`, and `"`, so a hostile value like `source="teams:<script>"` can't open a new tag inside the attribute region.
-- **Content hash binds source and body.** `unwrap_external()` round-trips the escaped body byte-for-byte; the envelope's identity ties a specific `source` to the specific (escaped) content it wrapped — a downstream consumer can't quietly re-attribute a body to a different source.
+- **Round-trip support for tests and audit.** `unwrap_external()` reverses collision escaping and round-trips the body byte-for-byte while recovering the `source`, optional `sender`, and optional `received_at` attributes. The envelope has no `content_hash` attribute or cryptographic binding.
 - **Opt-out is an env flag, not a code path.** `ENTRABOT_XPIA_WRAP_ENABLE=false` short-circuits `wrap_external()` to the identity function for rollback, without touching call sites.
 
-This is a text-escaping and provenance boundary, not a cryptographic signature — read `security/xpia.py` directly before relying on any guarantee beyond what's described above.
+This is a text-escaping and provenance boundary, not a cryptographic signature.
 
 ## Sponsor authorization
 
 "Sponsor" is Entrabot's authorization concept for who may direct the agent to take mutating action on a human's behalf.
 
 - **Source of sponsors.** `identity/sponsors.py::fetch_agent_identity_sponsors()` reads the Agent Identity's `/sponsors` Graph relationship using an app-only, two-hop token (`acquire_agent_identity_token()` — stops after the FIC exchange, no `user_fic` grant). This has to be app-only: the Agent User's own delegated token cannot read its own `/sponsors` relationship.
-- **`SponsorGate`** (`identity/sponsors.py`) is the allowlist used to filter *inbound messages* for `wait_for_sponsor_dm` and the background poll: it matches on sponsor user ID, UPN, or email, extended with chat-member and cross-tenant B2B lookups. This is a read-filtering gate, not an authorization gate for mutations.
+- **`SponsorGate`** (`identity/sponsors.py`) decides whether an inbound message can satisfy an explicit `wait_for_sponsor_dm` or server-side auto-wait. It matches on sponsor user ID, UPN, or email, extended with chat-member and cross-tenant B2B lookups across watched chats.
 - **Active-channel binding** (`identity/active_channel.py::ActiveChannelBindings`) is the separate, TTL-scoped gate that authorizes *mutations*. A binding is minted only after a sponsor's inbound message has been **successfully pushed** to the model (via the channel-push notification path) — recording `(sponsor_user_id, chat_id, graph_sent_at)`. The TTL (120s) is enforced against the message's Graph-authored `sent_at`, not against when the server observed it, specifically so a stale message can't be replayed at bootstrap to mint a fresh authorization window. Bindings expire on read as well as on write, so a clock rewind can't resurrect one.
 - **Mutating tools require both.** `add_teams_member()` (`tools/teams.py`) and `share_file()` (`tools/files.py`) both gate on: (1) the requester matching a sponsor identity, (2) an active-channel binding for that sponsor whose `chat_id` matches the one supplied, and (3) — defense in depth — the sponsor actually being a Graph member of the target chat. `SponsorChannelMismatchError` is raised specifically to catch a confused-deputy pattern: an LLM in chat A being induced to act on chat B, where the sponsor is a genuine member of B but not actively engaged there right now.
 - **For `share_file`, only the requester is gated — not the recipient.** A sponsor may direct the agent to share a file with anyone; the recipient email is unrestricted. Do not describe `share_file` as gating both sides.
-- **`wait_for_sponsor_dm` and `SponsorGate` are a different mechanism than the active-channel binding.** `SponsorGate.accepts()` decides whether an *inbound* message is worth surfacing to the model at all across watched chats; it is not what authorizes `add_teams_member`/`share_file` mutations — the active-channel binding does that.
+- **Wait validation and mutation authorization are separate.** `SponsorGate.accepts()` decides whether an inbound message can satisfy a sponsor wait. The general background poll delivers human messages without using `SponsorGate` as its filter; sponsor lookup is used after successful delivery only to decide whether to mint an active-channel binding. That binding, not `SponsorGate`, authorizes `add_teams_member` and `share_file` mutations.
 
 ## Server-side auto-wait, not a model-facing switch
 

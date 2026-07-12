@@ -34,7 +34,7 @@ def log_event(
 | `resource` | What it targeted. |
 | `outcome` | `"pending"`, `"success"`, or `"failure"`. |
 | `attribution_type` | `"agent"`, `"delegated-human"`, or `"none"` — see below. |
-| `metadata` | Action-specific detail, JSON-safe and never containing raw secrets. |
+| `metadata` | Caller-supplied, action-specific JSON-serializable detail. |
 
 ## Attribution types
 

@@ -4,11 +4,11 @@
 
 Entrabot is a stdio [MCP](https://modelcontextprotocol.io/) server built on FastMCP. Every host-facing capability — Teams, email, Files, cards, promises, the daily summary, A365 Work IQ — is registered as an `@mcp.tool()` function in `src/entrabot/mcp_server.py`. Each tool wrapper does its work and returns a JSON string (`json.dumps(...)`), not a raw Python object, so every tool has the same wire shape regardless of what it does internally.
 
-`_run_stdio_with_write_stream()` is the process entry point: it opens the stdio transport, stashes the write stream in module state (`_state["_write_stream"]`) so background tasks can push notifications outside of a tool call, discovers efferent-copy sinks, and hands control to FastMCP's request loop.
+`_run_stdio_with_write_stream()` is the process entry point: it opens the stdio transport, stashes the write stream in module state (`_state["_write_stream"]`) so background tasks can push notifications outside of a tool call, discovers efferent-copy sinks, eagerly schedules `_initialize()`, and hands control to FastMCP's request loop.
 
 ## Initialization lifecycle
 
-`_initialize()` runs at the top of every `@mcp.tool()` wrapper and is idempotent — it does real work only on the first call, then short-circuits via `_state["initialized"]` on every subsequent one:
+`_initialize()` is eagerly scheduled by `_run_stdio_with_write_stream()` when the server starts, so auth, watched-chat loading, and background polling do not wait for the first tool call. Tool wrappers also call `_initialize()` as an idempotent fallback; once `_state["initialized"]` is set, later calls short-circuit.
 
 1. **`_init_auth()`** — resolves `ENTRABOT_MODE` (`agent_user`, `delegated`, or `auto`) and authenticates. In `auto` mode this tries the three-hop Agent User fast path first (unless `SKIP_PROVISIONING` is set), falling back to MSAL delegated auth if that fails, landing in `UNAUTHENTICATED` if both fail. See [Identity and Token Flow](identity-and-token-flow.md) for the flow itself and the state machine it drives.
 2. **`_init_poll()`** — loads any persisted `watched_chats` file and starts the Teams poll task if at least one chat is already watched; starts email poll, chat auto-discovery, and the daily summary scheduler only when the resolved auth mode is `agent_user`.
@@ -65,5 +65,5 @@ Without persona-sati configured (or with it unreachable), Entrabot runs in body-
 - [Identity and Token Flow](identity-and-token-flow.md) — the auth modes and token lifecycle this runtime drives.
 - [Messaging and Delivery](messaging-and-delivery.md) — background poll, channel push, and the sponsor-DM wait pattern in detail.
 - [Clients Overview](../clients/overview.md) — per-host behavior differences.
-- [Security Boundaries](security-boundaries.md) (forthcoming) — the fail-closed model the storage backend check and sponsor-channel binding both belong to.
+- [Security Boundaries](security-boundaries.md) — the fail-closed model the storage backend check and sponsor-channel binding both belong to.
 - [Storage Configuration guide](../guides/storage-configuration.md) — the `MemoryBackend` resolution this runtime validates at boot, and how operational memory differs from persona-sati's memory.

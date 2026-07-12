@@ -24,7 +24,7 @@ Implemented as `acquire_agent_user_token()` in `src/entrabot/tools/teams.py`, us
 
 ## Error handling
 
-Every token response is checked for an `"error"` key before `"access_token"` is read — Entra returns error bodies with HTTP 200, not exceptions. `TokenExchangeError` carries which hop failed (`hop1:blueprint`, `hop2:agent_identity`, `hop3:agent_user`) plus Entra's `error` and `error_description`, so a failure in the chain is immediately attributable to a specific hop.
+Every parsed token response is checked for an `"error"` key before `"access_token"` is read, regardless of transport status. `TokenExchangeError` carries which hop failed (`hop1:blueprint`, `hop2:agent_identity`, `hop3:agent_user`) plus Entra's `error` and `error_description`, so a failure in the chain is immediately attributable to a specific hop.
 
 ## Token lifecycle
 
@@ -37,4 +37,4 @@ Two independent mechanisms keep the active token usable:
 
 `src/entrabot/auth/delegated.py` implements `MsalDelegatedAuth`, used only when `ENTRABOT_MODE=delegated`. It tries silent token acquisition from the OS-encrypted MSAL cache first, then interactive sign-in via a localhost redirect, falling back to the device-code flow if the redirect can't complete (port in use, no browser, timeout). MSAL is not removed from the runtime — it's the entire auth path for delegated mode, just not used by the Agent User three-hop flow, which never depends on it.
 
-See [Identity and Token Flow](../identity-and-token-flow.md) for the wire-level request/response shapes, and [Delegated Auth](../../platform-docs/delegated-auth.md) (forthcoming) for setup.
+See [Identity and Token Flow](../identity-and-token-flow.md) for the wire-level request/response shapes, and [Delegated Auth](../../platform-docs/delegated-auth.md) for setup.

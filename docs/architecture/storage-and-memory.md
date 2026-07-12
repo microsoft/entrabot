@@ -2,7 +2,7 @@
 
 Entrabot has two separate things that could be called "memory," and they are owned by different systems:
 
-1. **Operational state** — interaction logs, daily summaries, watched-chat registrations, email/chat cursors, outstanding promises. This is the agent's own bookkeeping. It lives local by default, with Azure Blob Storage as an opt-in backend. This page is about that system.
+1. **Operational state** — the agent's own bookkeeping. Interaction logs, daily summaries, chat cursors, and promises route through `MemoryBackend` and may use local files or opt-in Azure Blob Storage. The watched-chat registration and email cursor remain runtime-local files under the data directory.
 2. **Persona / mind memory** — personality, relationships, running context, behavioral rules. When a `persona-sati` MCP server is attached, the host calls its tools (`write_memory_file`, `read_memory_file`, `bootstrap_session`, and related) for this. Entrabot is not that system; it does not read or write persona content as part of its normal operation.
 
 ## The `MemoryBackend` protocol
@@ -33,7 +33,7 @@ Keys are forward-slash-separated paths, e.g. `"interactions/2026-04-17.jsonl"`. 
 3. Neither set → `LocalBackend` (the default).
 4. **Exactly one** of `ENTRABOT_BLOB_ENDPOINT` / `ENTRABOT_BLOB_CONTAINER` set → raises `BackendMisconfiguredError`. This is deliberate: a half-configured cloud environment must fail loud rather than silently fall back to an empty local store — a fleet instance that quietly re-bootstraps against a fresh local store would look "up" while replaying every chat from scratch.
 
-`assert_backend_config()` calls `get_backend()` once at MCP server boot purely to surface a half-config error early and to log which backend resolved (`BlobBackend` + endpoint/container, or `LocalBackend` + root path). It never resolves a storage token itself — construction of `BlobBackend` is lazy, so this check is safe to run before any authentication has happened.
+`assert_backend_config()` calls `get_backend()` during MCP initialization to surface a half-config error and log which backend resolved (`BlobBackend` + endpoint/container, or `LocalBackend` + root path). In the current initialization order, this validation runs after authentication and poll setup.
 
 ### What actually routes through `MemoryBackend`
 
@@ -49,13 +49,13 @@ Two other pieces of operational state are **always** plain local files under `cf
 - The watched-chats registration (`data_dir/watched_chats`), read by `entrabot.identity.sponsors._watched_chat_ids()` and written directly by the MCP server.
 - The email poll cursor (`data_dir/email_cursor.txt`), read and written by `tools/email_poll.py`.
 
-Neither is wired through `get_backend()`, so neither participates in Blob storage or in the migration helper below. If you're auditing what actually ends up in a Blob container, this distinction matters.
+Neither is wired through `get_backend()` during normal runtime, so Blob-backed operation does not move ongoing reads and writes for these files into the backend. The setup migration does walk the whole data directory, however, so it can copy both files into Blob as migration artifacts.
 
 ## Blob authentication
 
 `BlobBackend` authenticates every request with an Agent-User-scoped OAuth token. `acquire_agent_user_storage_token()` (in `tools/teams.py`) is the same three-hop Blueprint → Agent Identity → Agent User flow used for Graph, with Hop 3's `scope` swapped to `https://storage.azure.com/.default` instead of Graph — Hops 1 and 2 are unchanged. See [Identity and Token Flow](identity-and-token-flow.md) for the full three-hop mechanics.
 
-`BlobStore` (`storage/blob.py`) checks every response for HTTP 401 before doing anything else and raises `TokenExpiredError` when it sees one — the same exception type the Graph token-retry path uses, so a single `_with_token_retry()`-style wrapper can refresh and retry a storage call exactly like it refreshes and retries a Graph call.
+`BlobStore` (`storage/blob.py`) checks every response for HTTP 401 before doing anything else and raises `TokenExpiredError` when it sees one. Storage call sites are not universally wrapped in `_with_token_retry()`, so this mapping does not imply that every storage operation is automatically refreshed and retried.
 
 ## Optimistic concurrency
 

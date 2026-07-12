@@ -20,8 +20,8 @@ Every Teams tool requires an explicit `chat_id` — there is no default group ch
 `_background_poll()` runs every 5 seconds, iterating every chat in `watched_chats`:
 
 - **Per-chat persisted cursors.** Each chat's poll state (`last_ts`, a bounded tail of `seen_ids`, and a `bootstrapped` flag) is persisted through the configured `MemoryBackend` via `src/entrabot/tools/chat_cursors.py`, keyed `chat_cursors/<chat_id>.json`. This survives MCP server restarts — without it, every restart would re-baseline "the newest message at boot" as if it were live, even days-old messages.
-- **Client-side filtering.** `filter_human_messages()` drops the agent's own messages (matched on `sender_upn`, falling back to the sender's AAD object ID — never display name, which is mutable), messages with `from == "unknown"` (system messages), messages already in the caller's `sent_message_ids` set, and any message whose content starts with `[EntraBot]` (the delegated-mode self-prefix, filtered as a restart-safe dedup net). Graph's `$filter`/`$orderby` are not reliable enough for chat messages to depend on for this.
-- **Sent-message echo prevention.** The delegated-mode `[EntraBot]`-prefix filter and the agent-UPN/object-ID match together prevent the poll from re-surfacing the agent's own outbound messages as if they were new inbound ones.
+- **Client-side filtering.** `filter_human_messages()` drops the agent's own messages by `sender_upn`, falling back to the sender's AAD object ID — never display name, which is mutable. It also drops system messages (`from == "unknown"`) and messages already present in the caller's `sent_message_ids` set. Graph `$filter` is not used for these identity and dedup decisions.
+- **Sent-message echo prevention.** Agent User mode reliably excludes the agent by UPN/object ID. Delegated mode additionally tracks outbound Graph message IDs in process and excludes those IDs on later polls. Message content is already XPIA-wrapped when `filter_human_messages()` receives it, so the literal `[EntraBot]` prefix is not a reliable restart-safe filter.
 - **XPIA wrapping before model exposure.** `read()` wraps every message body in the `<external_content>` envelope (`entrabot.security.xpia.wrap_external`) before it's returned — the body prompt instructs the model that anything inside the envelope is data, not instructions. Metadata (`message_id`, `sender_id`, timestamps) stays outside the envelope so filters and counts still work on it directly.
 
 ## Fleet-safe delivery
@@ -43,14 +43,14 @@ Claude Code subscribes to `notifications/claude/channel`. The background poll's 
 For hosts not in the small hardcoded channel-push set (Copilot CLI, Codex, and anything else `mcp_server.py` doesn't specifically recognize), `send_teams_message` auto-blocks after sending:
 
 - It runs the same sponsor-gated wait loop as `wait_for_sponsor_dm`, listening across **every currently watched chat**, not only the chat just sent to — the reply that satisfies the wait can come from any chat the sponsor is active in.
-- The **active sponsor** — resolved from the Agent Identity's `/sponsors` Graph relationship (`SponsorGate`) plus the active-channel binding — determines whose message is treated as a valid reply, not the recipient of the just-sent message.
+- `SponsorGate`, resolved from the Agent Identity's `/sponsors` Graph relationship and extended across watched chats, determines whether an inbound message can satisfy the wait. Active-channel binding is a separate mutation-authorization gate and is not part of wait reply validation.
 - If a reply arrives, the result's `sponsor_reply` includes that reply's own `chat_id`. The caller must reply in *that* chat, which may differ from the chat the outbound message was sent to — the tool docstring and the `_next_action` field both restate this so the model doesn't answer in the wrong conversation.
 
 `wait_for_sponsor_dm` is a separate, explicit tool for the same underlying wait mechanism, reserved for when the operator explicitly asks the agent to block until a reply arrives outside of a send. Never poll it in a loop, spawn a headless subprocess to watch for replies, or use `watch_teams_replies` as a substitute for this pattern — `watch_teams_replies` runs its own independent dedup state and exists as a fallback path, not a proactive-wait tool.
 
 ## Chat auto-discovery
 
-`_background_discover_chats()` runs every 120 seconds, in Agent User mode only (it targets `/me/chats`, which resolves to the human's chats in delegated mode — not what's wanted). It cannot use Graph's `$orderby` on this endpoint (it 400s there), so results are ordered and deduplicated against `watched_chats` client-side. Newly discovered chats are persisted to the `watched_chats` file immediately so a restart inherits them, and they pick up their cursor from the normal bootstrap path on the next poll cycle — no historical flood of old messages.
+`_background_discover_chats()` runs every 120 seconds, in Agent User mode only (it targets `/me/chats`, which resolves to the human's chats in delegated mode — not what's wanted). It cannot use Graph's `$orderby` on this endpoint (it 400s there); results are not sorted, but chat IDs are deduplicated against `watched_chats` client-side. Newly discovered chats are persisted to the `watched_chats` file immediately so a restart inherits them, and they pick up their cursor from the normal bootstrap path on the next poll cycle — no historical flood of old messages.
 
 ## `dispatch.py`: a naming safety net, not a router
 

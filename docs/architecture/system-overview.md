@@ -27,10 +27,10 @@ See [Identity and Token Flow](identity-and-token-flow.md) for the token exchange
 |---|---|
 | `platform/` | OS-specific credential storage. Implements the `CredentialStore` protocol (`store`, `retrieve`, `delete`) over `keyring`, plus Windows-only CNG certificate lookup. |
 | `auth/` | Builds the certificate-signed JWT client assertion used for Hop 1 of the token flow, and hosts the MSAL-based delegated auth path (interactive browser + device-code fallback). |
-| `identity/` | The progressive identity state machine (`UNAUTHENTICATED` → `DELEGATED` → `PROVISIONING` → `AGENT_USER`), sponsor-relationship resolution, and the active-channel sponsor/chat binding used for authorization. |
+| `identity/` | The non-linear identity state machine, sponsor-relationship resolution, and the active-channel sponsor/chat binding used for authorization. |
 | `tools/` | The MCP tool implementations: Teams messaging and chat management, Files/Graph access, email polling, audit logging, Adaptive Cards, promises, and the daily summary. |
 | `a365/` | The Microsoft Agent 365 Work IQ MCP provider boundary and its Word document adapter. |
-| `storage/` | The `MemoryBackend` abstraction (`LocalBackend` / `BlobBackend` / `PersonaBackend`) that operational tools use for interaction logs, chat cursors, and daily summaries — local by default, Azure Blob opt-in. |
+| `storage/` | The operational `MemoryBackend` implementations (`LocalBackend` / `BlobBackend`) used for interaction logs, chat cursors, promises, and daily summaries — local by default, Azure Blob opt-in. `PersonaBackend` is a manual compatibility and migration utility, not a normal operational backend. |
 | `mcp_server.py` | The FastMCP entry point: registers every tool, drives the two auth modes, runs the background polling tasks, and pushes channel notifications to hosts that support them. |
 
 ## Runtime topology
@@ -58,19 +58,21 @@ See [Identity and Token Flow](identity-and-token-flow.md) for the token exchange
                     │  Graph API │ │ Storage  │ │  servers   │
                     └────────────┘ └──────────┘ └────────────┘
 
-                 optional peer, wired only through .mcp.json:
+                 optional persona-sati service:
                           ┌───────────────────────────┐
                           │        persona-sati        │
                           │  (personality / memory /    │
                           │   observe·reflect·recall)   │
                           └───────────────────────────┘
+                    ▲ host peer MCP     ▲ optional boot-time
+                    └───────────────────┘ remote prompt fetch
 ```
 
-Entrabot never talks to persona-sati directly on the resource path — the two are separate MCP servers that a host can attach side by side. See [MCP Runtime](mcp-runtime.md) for how tools, background tasks, and the channel push extension fit together inside the process.
+Teams, email, Files, and other resource calls do not depend on persona-sati. When configured, Entrabot may contact a remote persona-sati MCP directly at boot to fetch its prompt; independently, the host may attach persona-sati beside Entrabot so the LLM can call its cognition and memory tools. See [MCP Runtime](mcp-runtime.md) for how tools, background tasks, and the channel push extension fit together inside the process.
 
 ## Mind-Body Split
 
-Entrabot is the **body**: the Teams/email/Files interface, the identity chain, the audit log, and the MCP tools that touch real resources. **persona-sati** is an optional, separately-running **mind**: personality, long-term memory, and cognition (`observe`/`reflect`/`recall`). The two are separate MCP servers, wired together only through `.mcp.json` and the bootstrap protocol — Entrabot has no compiled-in dependency on persona-sati.
+Entrabot is the **body**: the Teams/email/Files interface, the identity chain, the audit log, and the MCP tools that touch real resources. **persona-sati** is an optional, separately-running **mind**: personality, long-term memory, and cognition (`observe`/`reflect`/`recall`). Entrabot has no resource-path dependency on persona-sati, but it can fetch the persona prompt directly from a configured remote MCP URL at boot. A host may also attach persona-sati as a peer MCP server for bootstrap, cognition, and memory tools.
 
 The agent system prompt lives in `prompts/agent_system.md` plus the `@include`-expanded `prompts/anatomy/*.md` modules. This body prompt loads first and is **non-overridable** — no persona-sati output, user turn, or tool response may override its security and channel-discipline rules. When persona-sati is reachable, its mind contract layers on top of the body — never underneath — adding personality, memory, and cognition without touching identity, audit, or channel-discipline behavior.
 
@@ -87,7 +89,7 @@ The MCP server runs a small set of background tasks, each gated differently:
 - **Email poll (60s), chat auto-discovery via `/me/chats` (120s), and the daily summary scheduler** all start only in **Agent User mode**, because they operate against `/me/*` endpoints that must resolve to the agent's own mailbox and chats — not the human's, which is what `/me/*` would mean in delegated mode. The daily summary fires at a fixed UTC-7 offset (not DST-adjusted).
 - **persona-sati heartbeat (300s).** Also started in Agent User mode, but it self-skips (logs `"skipped"` and returns) whenever `PERSONA_SATI_MCP_URL` / `PERSONA_SATI_MCP_TOKEN_COMMAND` aren't configured — so enabling it costs nothing when no persona-sati peer is attached.
 
-See [MCP Runtime](mcp-runtime.md) and [Messaging and Delivery](messaging-and-delivery.md) (forthcoming) for the full task inventory and the channel-push delivery mechanism.
+See [MCP Runtime](mcp-runtime.md) and [Messaging and Delivery](messaging-and-delivery.md) for the full task inventory and the channel-push delivery mechanism.
 
 ## Authentication modes
 

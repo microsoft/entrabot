@@ -26,7 +26,7 @@ Every Teams tool requires an explicit `chat_id`. There is no default group chat 
 
 ## Reading messages
 
-`read()` fetches `GET /chats/{chat_id}/messages` with `$top` and `$orderby=createdDateTime desc`, then wraps every message body in the XPIA `<external_content>` envelope before returning it (see [Audit](audit.md) and [Security Boundaries](../security-boundaries.md) (forthcoming) for why). Identity and dedup filtering — telling human messages apart from the agent's own, and from already-seen messages — always happens client-side in `filter_human_messages()`, matching on `sender_upn` (falling back to the sender's object ID), never on the mutable display name. This client-side approach exists because Graph's `$filter`/`$orderby` support for chat messages isn't reliable enough to depend on for identity or ordering decisions (the `/me/chats` discovery sweep, for example, has to sort client-side because `$orderby` there returns an outright 400).
+`read()` fetches `GET /chats/{chat_id}/messages` with `$top` and `$orderby=createdDateTime desc`, then wraps every message body in the XPIA `<external_content>` envelope before returning it (see [Audit](audit.md) and [Security Boundaries](../security-boundaries.md) for why). Identity and dedup filtering — telling human messages apart from the agent's own, and from already-seen messages — happens client-side in `filter_human_messages()`, matching on `sender_upn` (falling back to the sender's object ID), never on the mutable display name or Graph `$filter`. The separate `/me/chats` discovery sweep omits `$orderby` because that endpoint rejects it.
 
 ## Background polling
 
@@ -37,7 +37,7 @@ Two tasks keep conversations current without the agent needing to ask:
 
 ## Delivery: channel push vs. auto-wait
 
-How a new message reaches the LLM depends on the connected host. Claude Code subscribes to the `notifications/claude/channel` push extension, so inbound messages surface as a next-turn system reminder with no tool call needed. Hosts that don't implement the extension (GitHub Copilot CLI and others) instead get the reply delivered inline: `send_teams_message` auto-blocks after sending and returns the sponsor's reply as `sponsor_reply`. See the [Clients Overview](../../clients/overview.md) and [Messaging and Delivery](../messaging-and-delivery.md) (forthcoming) for the full per-host behavior and the sponsor-DM wait pattern.
+How a new message reaches the LLM depends on the connected host. Claude Code subscribes to the `notifications/claude/channel` push extension, so inbound messages surface as a next-turn system reminder with no tool call needed. Hosts that don't implement the extension (GitHub Copilot CLI and others) instead get the reply delivered inline: `send_teams_message` auto-blocks after sending and returns the sponsor's reply as `sponsor_reply`. See the [Clients Overview](../../clients/overview.md) and [Messaging and Delivery](../messaging-and-delivery.md) for the full per-host behavior and the sponsor-DM wait pattern.
 
 ## Prerequisites
 
