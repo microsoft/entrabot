@@ -70,14 +70,56 @@ nav:
   - Reference:
       - Token Flows: reference/token-flows.md
       - Scripts:
-          - Setup: reference/scripts/setup.md
-          - Provisioning: reference/scripts/provisioning.md
-          - Auth and Certificates: reference/scripts/auth-and-certs.md
-          - Storage: reference/scripts/storage.md
-          - Operations: reference/scripts/operations.md
-          - Diagnostics: reference/scripts/diagnostics.md
-          - Teardown: reference/scripts/teardown.md
-          - Spikes: reference/scripts/spikes.md
+          - Overview: reference/scripts/index.md
+          - Operations:
+              - status.sh: reference/scripts/operations/status-sh.md
+              - status-windows.ps1: reference/scripts/operations/status-windows-ps1.md
+              - show_agent_status.py: reference/scripts/operations/show-agent-status-py.md
+              - health_check.py: reference/scripts/operations/health-check-py.md
+              - catch_up.py: reference/scripts/operations/catch-up-py.md
+              - dm.py: reference/scripts/operations/dm-py.md
+              - read_email.py: reference/scripts/operations/read-email-py.md
+              - show_permissions.py: reference/scripts/operations/show-permissions-py.md
+          - Setup:
+              - setup.sh: reference/scripts/setup/setup-sh.md
+              - setup-windows.ps1: reference/scripts/setup/setup-windows-ps1.md
+              - setup-windows.cmd: reference/scripts/setup/setup-windows-cmd.md
+              - prereqs-macos.sh: reference/scripts/setup/prereqs-macos-sh.md
+              - prereqs-windows.ps1: reference/scripts/setup/prereqs-windows-ps1.md
+              - setup_delegated.sh: reference/scripts/setup/setup-delegated-sh.md
+              - setup_ado_credentials.sh: reference/scripts/setup/setup-ado-credentials-sh.md
+              - deploy-windows.ps1: reference/scripts/setup/deploy-windows-ps1.md
+          - Teardown:
+              - teardown.sh: reference/scripts/teardown/teardown-sh.md
+              - teardown-windows.ps1: reference/scripts/teardown/teardown-windows-ps1.md
+              - deprovision_entra_agent_identity.py: reference/scripts/teardown/deprovision-entra-agent-identity-py.md
+              - cleanup-orphans.sh: reference/scripts/teardown/cleanup-orphans-sh.md
+          - Provisioning:
+              - create_entra_agent_ids.py: reference/scripts/provisioning/create-entra-agent-ids-py.md
+              - add_agent_sponsor.py: reference/scripts/provisioning/add-agent-sponsor-py.md
+              - remove_agent_sponsor.py: reference/scripts/provisioning/remove-agent-sponsor-py.md
+              - assign_agent_user_licenses.py: reference/scripts/provisioning/assign-agent-user-licenses-py.md
+              - remove_agent_user_licenses.py: reference/scripts/provisioning/remove-agent-user-licenses-py.md
+              - ensure_a365_work_iq_permissions.py: reference/scripts/provisioning/ensure-a365-work-iq-permissions-py.md
+          - Auth and Certificates:
+              - grant_consent.py: reference/scripts/auth-and-certs/grant-consent-py.md
+              - grant_files_consent.py: reference/scripts/auth-and-certs/grant-files-consent-py.md
+              - revoke_consent.py: reference/scripts/auth-and-certs/revoke-consent-py.md
+              - provisioner-token.py: reference/scripts/auth-and-certs/provisioner-token-py.md
+              - find_local_blueprint_cert.py: reference/scripts/auth-and-certs/find-local-blueprint-cert-py.md
+              - list_blueprint_certs.py: reference/scripts/auth-and-certs/list-blueprint-certs-py.md
+              - verify_blueprint_cert.py: reference/scripts/auth-and-certs/verify-blueprint-cert-py.md
+              - generate_windows_cert.py: reference/scripts/auth-and-certs/generate-windows-cert-py.md
+              - rotate_cert_windows.py: reference/scripts/auth-and-certs/rotate-cert-windows-py.md
+          - Storage:
+              - provision_blob_storage.py: reference/scripts/storage/provision-blob-storage-py.md
+              - deprovision_blob_storage.py: reference/scripts/storage/deprovision-blob-storage-py.md
+          - Diagnostics:
+              - entrabot-mcp-debug.sh: reference/scripts/diagnostics/entrabot-mcp-debug-sh.md
+              - diagnose-chat.py: reference/scripts/diagnostics/diagnose-chat-py.md
+              - diagnose_sponsor_emails.py: reference/scripts/diagnostics/diagnose-sponsor-emails-py.md
+              - list_agent_identities.py: reference/scripts/diagnostics/list-agent-identities-py.md
+              - list_sponsors.py: reference/scripts/diagnostics/list-sponsors-py.md
       - API:
           - MCP Tools: reference/api/mcp-tools.md
           - Storage Backends: reference/api/storage-backends.md

@@ -78,7 +78,7 @@ This script does **not** write `.env`, does **not** grant the Agent User's `user
 ## Exit behavior
 
 - **Exit 0** — provisioning completed; `BLOB_ENDPOINT` and `BLOB_CONTAINER` are printed to stdout.
-- **Exit 1** — an `az` command failed (surfaced as `ERROR: az ... failed: <az stderr>`) or a name/argument was invalid (e.g. an out-of-spec `--with-storage-account`/`--with-container` name, or a `ValueError` from combining `--with-storage-account` with `--create-new-storage`).
+- **Exit 1** — an `az` command failed (surfaced as `ERROR: az ... failed: <az stderr>`) or a name/argument was invalid (e.g. an out-of-spec `--with-storage-account`/`--with-container` name).
 - **Exit 2** — argparse usage error: a required argument (`--tenant-id`, `--agent-user-object-id`) is missing, or `--with-storage-account` and `--create-new-storage` were both passed on the command line.
 
 Common failure causes and recovery:

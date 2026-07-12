@@ -31,9 +31,11 @@ grant shape and how Hop 3 consumes it.
 - `.entrabot-state.json` must contain `AGENT_OBJECT_ID` (the Agent Identity
   service-principal object ID) and `AGENT_USER_ID` (the Agent User object ID).
   Run [`setup.sh`](../setup/setup-sh.md) first if either is missing.
-- The Provisioner app must already exist with its certificate private key in the
-  OS keystore. This command uses the existing-only token helper and never
-  bootstraps or repairs the Provisioner app.
+- The Provisioner app must already exist with its certificate available for
+  cert-auth — the private key lives in the OS keystore on macOS/Linux, or in
+  an ACL-locked file under `%LOCALAPPDATA%\entrabot\` on Windows. This command
+  uses the existing-only token helper and never bootstraps or repairs the
+  Provisioner app.
 - The Provisioner app needs `DelegatedPermissionGrant.ReadWrite.All` (to write
   the grant) plus directory read access to resolve the resource service
   principal.
@@ -61,8 +63,9 @@ python scripts/grant_consent.py \
 
 ## Effects
 
-1. Mints a Provisioner Graph token; the certificate private key is read from the
-   OS keystore in memory only.
+1. Mints a Provisioner Graph token; the certificate private key is read in
+   memory only — from the OS keystore on macOS/Linux, or from the Windows
+   file-backed store.
 2. Resolves the resource app ID to its service-principal object ID via
    `$filter=appId eq '<app-id>'`.
 3. Lists existing grants filtered by `clientId` (Agent Identity) and

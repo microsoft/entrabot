@@ -26,7 +26,7 @@ extracted so a license can be granted or repaired independently.
 ## Usage
 
 ```bash
-# Auto-select the best available Teams + Copilot SKUs
+# Auto-select the first available Teams + Copilot SKUs
 python scripts/assign_agent_user_licenses.py
 
 # List available Teams/Copilot SKUs and exit
@@ -62,11 +62,18 @@ python scripts/assign_agent_user_licenses.py --sku ENTERPRISEPACK
 ## Exit behavior
 
 - **Exit 0** — a license was assigned, the Agent User already had the requested
-  capability, or `--list-available` completed.
+  capability, `--list-available` completed, **or** (auto-select mode only) a
+  license assignment attempt failed after retries. Auto-select mode always
+  returns 0 at the end of its run: a failed `assignLicense` call prints a
+  `WARNING` and the affected SKU is simply not recorded to state, but the
+  script does not treat it as a run failure. Check the printed output for
+  `WARNING` lines, or re-run with `--list-available` / `--sku`, to confirm a
+  license actually landed.
 - **Exit 1** — the Provisioner token could not be obtained, `AGENT_USER_ID` is
   missing from state, the requested `--sku` has no available seats, no
-  subscribed SKUs are available, `usageLocation` could not be set, or the
-  `assignLicense` call failed after retries.
+  subscribed SKUs are available, or `usageLocation` could not be set. In
+  `--sku` mode only, a failed `assignLicense` call after retries also exits 1
+  (unlike auto-select mode).
 
 ## Common failures
 

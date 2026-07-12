@@ -107,7 +107,9 @@ you can run the script again. To remove the Provisioner too, run a full
 
 ## Related commands
 
-- [`teardown.sh`](teardown-sh.md) — full teardown; orphans arise when its token fallback is used.
+- [`teardown.sh`](teardown-sh.md) — full teardown; orphans arise when it has no
+  Provisioner token and warns that manual cleanup may be required for the
+  Agent Identity APIs.
 - [`deprovision_entra_agent_identity.py`](deprovision-entra-agent-identity-py.md) — targeted, shared-Blueprint-safe chain teardown.
 - [`provisioner-token.py`](../auth-and-certs/provisioner-token-py.md) — mints the certificate token this script uses.
 - [`show_agent_status.py`](../operations/show-agent-status-py.md) — inspect the chain and spot orphaned resources.

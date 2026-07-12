@@ -21,8 +21,10 @@ the grant is consumed at Hop 3.
 
 - `.entrabot-state.json` must contain `AGENT_OBJECT_ID` (Agent Identity
   service-principal object ID) and `AGENT_USER_ID` (Agent User object ID).
-- The Provisioner app must already exist with its certificate in the OS keystore;
-  this command uses the existing-only token helper and never bootstraps it.
+- The Provisioner app must already exist with its certificate available for
+  cert-auth — the private key lives in the OS keystore on macOS/Linux, or in
+  an ACL-locked file under `%LOCALAPPDATA%\entrabot\` on Windows; this command
+  uses the existing-only token helper and never bootstraps it.
 - The Provisioner needs `DelegatedPermissionGrant.ReadWrite.All`.
 
 ## Usage
@@ -41,18 +43,21 @@ python3 scripts/revoke_consent.py --all
 - `--all` — remove every current scope, which deletes the grant.
 - `--help`, `-h` — print usage and exit.
 
-Exactly one of `--scopes` or `--all` is required.
+Both `--scopes` and `--all` are accepted on the command line; at least one is
+required. If both are supplied, `--all` takes precedence — the command targets
+every current scope in the grant, ignoring the `--scopes` list.
 
 ## Effects
 
 1. Reads the Agent Identity and Agent User object IDs from state and mints a
-   Provisioner Graph token (certificate key read from the OS keystore in memory
-   only).
+   Provisioner Graph token (certificate key read from the OS keystore, or from
+   the Windows file-backed store, in memory only).
 2. Finds the matching grant by `clientId` and `principalId` (first match).
 3. Computes the change:
-   - With `--all`, targets every current scope.
-   - With `--scopes`, intersects the request with the grant's current scopes.
-     Scopes not present in the grant are ignored.
+   - With `--all`, targets every current scope, overriding any `--scopes` value
+     that was also supplied.
+   - With `--scopes` alone, intersects the request with the grant's current
+     scopes. Scopes not present in the grant are ignored.
 4. Applies the smallest change:
    - **No requested scope is actually present** → prints a no-op message, makes
      no change.

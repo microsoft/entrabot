@@ -83,13 +83,13 @@ commands:
     category: setup
     page: reference/scripts/setup/prereqs-macos-sh.md
     platforms: [macos]
-    summary: Installs macOS prerequisites via Homebrew (Xcode CLT, Python 3.12+, git, Azure CLI, and optionally the .NET SDK + Agent 365 a365 CLI + PowerShell 7) before running setup.sh. Safe to re-run.
+    summary: Installs macOS prerequisites (Python 3.12+, git, Azure CLI, and optionally the .NET SDK + Agent 365 a365 CLI + PowerShell 7 via Homebrew) before running setup.sh. Xcode Command Line Tools are triggered separately via `xcode-select --install`, not Homebrew. Safe to re-run.
   - id: prereqs-windows-ps1
     path: scripts/prereqs-windows.ps1
     category: setup
     page: reference/scripts/setup/prereqs-windows-ps1.md
     platforms: [windows]
-    summary: Installs Windows prerequisites via winget (PowerShell 7+, Python 3.12+, git, Azure CLI, .NET SDK, Agent 365 a365 CLI, and VS Build Tools C++ workload) before running setup-windows.ps1. Runs from Windows PowerShell 5.1 and is safe to re-run.
+    summary: Installs Windows prerequisites via winget (PowerShell 7+, Python 3.12+, git, Azure CLI, .NET SDK, and VS Build Tools C++ workload) before running setup-windows.ps1. The Agent 365 a365 CLI is installed with `dotnet tool install`, not winget. Runs from Windows PowerShell 5.1 and is safe to re-run.
   - id: setup-delegated-sh
     path: scripts/setup_delegated.sh
     category: setup
@@ -101,7 +101,7 @@ commands:
     category: setup
     page: reference/scripts/setup/setup-ado-credentials-sh.md
     platforms: [macos]
-    summary: Prompts for an Azure DevOps PAT and stores it in the macOS Keychain via git credential store (osxkeychain) so git push/pull to dev.azure.com authenticates without further prompts.
+    summary: Prompts for an Azure DevOps PAT and stores it via `git credential approve`, which hands it to whichever `credential.helper` is configured — the macOS Keychain only receives it if that helper is `osxkeychain` — so git push/pull to dev.azure.com authenticates without further prompts.
   - id: deploy-windows-ps1
     path: scripts/deploy-windows.ps1
     category: setup
@@ -127,7 +127,7 @@ commands:
     category: teardown
     page: reference/scripts/teardown/deprovision-entra-agent-identity-py.md
     platforms: [macos, linux, windows]
-    summary: Targeted teardown of a single Agent User chain for a given UPN — removes licenses, then deletes the Agent User, its Agent Identity, and the parent Blueprint, but refuses to delete a Blueprint still shared by other Agent Identities. Leaves local state and blob storage untouched.
+    summary: Targeted teardown of one or more Agent User chains, identified by repeated --agent-user-upn flags — removes licenses, then deletes the Agent User, its Agent Identity, and the parent Blueprint, but refuses to delete a Blueprint still shared by other Agent Identities. Leaves local state and blob storage untouched.
   - id: cleanup-orphans-sh
     path: scripts/cleanup-orphans.sh
     category: teardown
@@ -159,13 +159,13 @@ commands:
     category: provisioning
     page: reference/scripts/provisioning/assign-agent-user-licenses-py.md
     platforms: [macos, linux, windows]
-    summary: Standalone Agent User license management — auto-selects the best available Teams/Copilot SKUs, or assigns a specific --sku, and can --list-available SKUs.
+    summary: Standalone Agent User license management — auto-selects the first available Teams/Copilot SKU candidate in Graph's returned order, or assigns a specific --sku, and can --list-available SKUs.
   - id: remove-agent-user-licenses-py
     path: scripts/remove_agent_user_licenses.py
     category: provisioning
     page: reference/scripts/provisioning/remove-agent-user-licenses-py.md
     platforms: [macos, linux, windows]
-    summary: Removes directly-assigned licenses from the Agent User (--all or a specific --sku-id); group-inherited licenses are reported but cannot be removed here.
+    summary: Removes directly-assigned licenses from the Agent User (--all or a specific --sku-id). --all excludes group-inherited licenses from the removal set, but an explicit --sku-id is sent to Graph even if that SKU is group-inherited.
   - id: ensure-a365-work-iq-permissions-py
     path: scripts/ensure_a365_work_iq_permissions.py
     category: provisioning
@@ -185,7 +185,7 @@ commands:
     category: auth-and-certs
     page: reference/scripts/auth-and-certs/grant-files-consent-py.md
     platforms: [macos, linux, windows]
-    summary: Adds the Files/Sites scopes to the Agent User's oauth2PermissionGrant (idempotently, adding only the missing scopes); use when a Files MCP tool call raises MissingPermissionError.
+    summary: Ensures the Agent User's oauth2PermissionGrant carries the full default Agent User Graph scope set (Chat, User, Files, Sites, Mail — not only Files/Sites) by calling grant_agent_user_consent from create_entra_agent_ids.py, idempotently adding only the missing scopes via POST (new grant) or PATCH (existing grant); use when a Files MCP tool call raises MissingPermissionError.
   - id: revoke-consent-py
     path: scripts/revoke_consent.py
     category: auth-and-certs
@@ -197,7 +197,7 @@ commands:
     category: auth-and-certs
     page: reference/scripts/auth-and-certs/provisioner-token-py.md
     platforms: [macos, linux, windows]
-    summary: Prints a Graph API access token minted with the Provisioner app's certificate (private key read from the OS keystore in memory only) for manual Graph calls during debugging. Token on stdout, errors on stderr.
+    summary: Prints a Graph API access token minted with the Provisioner app's certificate (private key read in memory only — from the OS keystore on macOS/Linux, or from an ACL-locked file under %LOCALAPPDATA%\entrabot\ on Windows) for manual Graph calls during debugging. Token on stdout, errors on stderr.
   - id: find-local-blueprint-cert-py
     path: scripts/find_local_blueprint_cert.py
     category: auth-and-certs
@@ -221,7 +221,7 @@ commands:
     category: auth-and-certs
     page: reference/scripts/auth-and-certs/generate-windows-cert-py.md
     platforms: [windows]
-    summary: Generates the Blueprint cert on Windows by wrapping New-SelfSignedCertificate with locked crypto parameters (TPM-first, software-KSP fallback), returning the SHA-1 thumbprint, SHA-256 b64url JWT thumbprint, and public DER for upload to the Blueprint.
+    summary: Generates the Blueprint cert on Windows by wrapping New-SelfSignedCertificate with locked crypto parameters (TPM-first, software-KSP fallback). A bare invocation prints only the SHA-1 thumbprint and the KSP used; the SHA-256 b64url JWT thumbprint and the public DER for upload to the Blueprint are emitted only when `--export-der` is passed.
   - id: rotate-cert-windows-py
     path: scripts/rotate_cert_windows.py
     category: auth-and-certs
@@ -261,7 +261,7 @@ commands:
     category: diagnostics
     page: reference/scripts/diagnostics/diagnose-sponsor-emails-py.md
     platforms: [macos, linux, windows]
-    summary: Read-only diagnostic that probes why an Agent Identity's sponsor email fields come back null (SponsorGate allowlist gaps), running eight Graph projections and token checks across the FIC and Agent User tokens.
+    summary: Read-only diagnostic that probes why an Agent Identity's sponsor email fields come back null (SponsorGate allowlist gaps), running nine Graph projections and token checks across the FIC and Agent User tokens.
   - id: list-agent-identities-py
     path: scripts/list_agent_identities.py
     category: diagnostics

@@ -166,4 +166,3 @@ non-tolerated step also aborts with a non-zero status.
 - [`setup.sh`](../setup/setup-sh.md) — the provisioning entry point this reverses.
 - [Teardown reference index](../index.md#teardown)
 - [Identity Lifecycle and Deprovisioning](../../../guides/identity-lifecycle.md)
-- [Troubleshooting: Migrations and Upgrades](../../../troubleshooting/migrations-and-upgrades.md)

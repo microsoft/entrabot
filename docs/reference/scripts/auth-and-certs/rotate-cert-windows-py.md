@@ -70,7 +70,9 @@ Outcomes surface as typed errors that the wrapper maps to process exit codes:
 - `RotationFailed` — the initial `PATCH` failed; no rollback was needed and the
   old certificate is untouched.
 - `RotationRolledBack` — the `PATCH` succeeded but the smoke test failed; the
-  original certificate, `.env` thumbprints, and MSAL cache state were restored.
+  original certificate and `.env` thumbprints were restored, and the MSAL cache
+  was deleted (not restored) so a fresh cache is built on the next token
+  acquisition.
 - `ManualInterventionRequired` — both the initial `PATCH` and the rollback
   `PATCH` failed; `.env` and the MSAL cache are deliberately left untouched for
   manual triage, since the old DER is the only public material matching a working

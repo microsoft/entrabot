@@ -93,8 +93,16 @@ so a later stage can resume from a partially provisioned chain.
 
 ## Exit behavior
 
-- **Exit 0** — the chain exists and all consent and license stages completed (a
-  missing Storage service principal or missing SKUs is reported but non-fatal).
+- **Exit 0** — the Blueprint / Agent Identity / Agent User chain exists (created
+  or reused). This does **not** guarantee every downstream stage completed:
+  the Agent Identity app-role permission (`Application.Read.All`), the storage
+  delegated consent, and license assignment each print a warning and continue
+  on failure rather than stopping the run, so exit 0 can still leave one or
+  more of those stages incomplete. Only the core Graph delegated consent grant
+  (Chat/Mail/Files/Sites scopes) is treated as blocking on failure — it is what
+  causes an Exit 1 below. Check the printed `WARNING`/`ERROR` lines, or
+  [`show_agent_status.py`](../operations/show-agent-status-py.md), to confirm
+  which stages actually succeeded.
 - **Exit 1** — the Provisioner token could not be obtained
   (`ProvisionerBootstrapError`), the delegated Graph consent grant failed (a
   blocking error, because the third hop cannot mint an Agent User token without
