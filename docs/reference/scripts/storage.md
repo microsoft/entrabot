@@ -28,7 +28,7 @@ python scripts/provision_blob_storage.py --create-new-storage
 
 Detects already-provisioned resources and reuses them. Only missing pieces get created. Prints two `KEY=value` lines on stdout so the calling shell can read them.
 
-See ADR-005 for the full design.
+See [Storage and Memory](../../architecture/storage-and-memory.md) for the full design.
 
 ## `deprovision_blob_storage.py`
 
@@ -86,7 +86,7 @@ python3 scripts/claude_memory_sync.py push-one <PATH>
 
 Use cases now: one-off bulk migrations after switching machines, or manual recovery when persona-sati's sync state is broken.
 
-See ADR-005 Phase 6a and `docs/decisions/005-cloud-hosted-memory.md` for context.
+See [Storage and Memory](../../architecture/storage-and-memory.md) for context.
 
 ## `export-state.sh`
 

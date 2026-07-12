@@ -2,8 +2,6 @@
 
 Defined in `src/entrabot/storage/`. The `MemoryBackend` protocol hides whether a piece of agent state lives on the local filesystem or in Azure Blob Storage. Three implementations ship: `LocalBackend`, `BlobBackend`, `PersonaBackend`.
 
-Background: ADR-005 (`docs/decisions/005-cloud-hosted-memory.md`). Phases 1, 2, 5, 6a are shipped.
-
 ## `MemoryBackend` protocol
 
 ```python

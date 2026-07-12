@@ -24,11 +24,14 @@ markdown_extensions:
   - pymdownx.superfences
   - pymdownx.highlight:
       anchor_linenums: true
-  - pymdownx.snippets
+  - pymdownx.snippets:
+      base_path: ["."]
 
 nav:
   - Home: index.md
-  - Engineering Status: engineering-status.md
+  - Project:
+      - Current Status: project/status.md
+      - Changelog: project/changelog.md
   - Getting Started:
       - Quickstart: getting-started/quickstart.md
   - Guides:
@@ -58,13 +61,6 @@ nav:
           - Multi-Tenant Chat Plan: architecture/PLAN-multi-tenant-lightweight-chat.md
           - Identity Setup Notes: architecture/next-tenant-identity-setup.md
           - MCP Server Design Notes: architecture/next-mcp-server-design.md
-  - Decisions:
-      - Index: decisions/README.md
-      - ADR-001 OBO Flows: decisions/001-obo-flows-for-device-agents.md
-      - ADR-002 Agent User over OBO: decisions/002-agent-user-over-obo.md
-      - ADR-003 Certificate Auth: decisions/003-certificate-auth-over-client-secrets.md
-      - ADR-005 Cloud Memory: decisions/005-cloud-hosted-memory.md
-      - ADR-006 Remove Bot Gateway: decisions/006-remove-bot-gateway-mode.md
   - Platform Learnings:
       - Microsoft Agent 365: platform-learnings/microsoft-agent-365.md
       - Agent ID Blueprints and Users: platform-learnings/agent-id-blueprints-and-users.md

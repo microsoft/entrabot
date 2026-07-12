@@ -154,7 +154,7 @@ Easiest: pass `--keep-memory-local` to `setup.sh`, or remove `ENTRABOT_BLOB_ENDP
 
 ## See also
 
-- [`docs/decisions/005-cloud-hosted-memory.md`](../decisions/005-cloud-hosted-memory.md) — the ADR driving this design
+- [Storage and Memory](../architecture/storage-and-memory.md) — the architecture behind this design
 - [`src/entrabot/storage/backend.py`](https://github.com/microsoft/entrabot/blob/main/src/entrabot/storage/backend.py) — the backend protocol + factory
 - [`src/entrabot/storage/blob.py`](https://github.com/microsoft/entrabot/blob/main/src/entrabot/storage/blob.py) — the async BlobStore client
 - [`src/entrabot/storage/migration.py`](https://github.com/microsoft/entrabot/blob/main/src/entrabot/storage/migration.py) — the migrator used by setup.sh and callable by hand

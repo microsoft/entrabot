@@ -151,10 +151,10 @@ Direct pointers:
 - [Script reference](docs/reference/scripts/operations.md) — status, health, DM, email, setup, teardown, and diagnostic scripts
 - [Token flows](docs/reference/token-flows.md) — the three hops, annotated
 - [System overview](docs/architecture/system-overview.md) — how the modules fit together
-- [Architecture decisions](docs/decisions/README.md) — ADRs 001–006
 - [Platform learnings](docs/platform-learnings/) — Entra Agent ID constraints, Agent 365, MSAL, OS-specific notes
 - [Hard-won learnings](docs/runbooks/hard-won-learnings.md) — non-obvious gotchas; read before changing auth or Teams code
-- [Engineering status](docs/engineering-status.md) — what's shipped, what's open, what's next
+- [Current status](docs/project/status.md) — what's shipped, what's open, what's next
+- [Changelog](CHANGELOG.md) — release history
 
 ---
 
@@ -187,7 +187,6 @@ This is a research repo, not a production service. It runs reliably on a develop
 **Open:**
 
 - MXC/AppContainer sandbox integration is under review and is not part of the current `main` runtime.
-- Long-session MCP disconnect investigation and several scheduler/cursor precision fixes remain tracked in [`docs/engineering-status.md`](docs/engineering-status.md).
 
 ---
 

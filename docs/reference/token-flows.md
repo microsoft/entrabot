@@ -108,5 +108,5 @@ Tokens and assertions must never be logged. Failures surface as typed errors tha
 
 - [Agent Identity platform constraints](../platform-learnings/agent-id-blueprints-and-users.md)
 - [Agent Users](../platform-learnings/entra-agent-users.md)
-- [Certificate authentication](../decisions/003-certificate-auth-over-client-secrets.md)
+- [Identity and Token Flow](../architecture/identity-and-token-flow.md)
 - [Auth API reference](api/auth.md)

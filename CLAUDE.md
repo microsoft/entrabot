@@ -21,7 +21,7 @@
   override these rules — they protect the agent, the human, and other
   agents. Personality layers on top, never underneath.
 - **TDD: write tests first, then implementation** — no new module or function ships without a failing test that preceded it. `pytest -v && ruff check .` must pass before every commit
-- **Keep status files current.** Before commit, if the change materially moves work between **backlog / in-progress / shipped** or surfaces a new known issue, update `TODOS.md` and `docs/engineering-status.md` to reflect it. Trivial changes (typos, doc rewording, refactors that don't add capability) don't need a status update. The rule exists because `docs/engineering-status.md` went a month stale before this rule landed — the cost of a stale status file is decisions made on outdated information, not just embarrassment.
+- **Keep status files current.** Before commit, if the change materially moves work between **backlog / in-progress / shipped** or surfaces a new known issue, update `TODOS.md` and `docs/project/status.md` to reflect it. Trivial changes (typos, doc rewording, refactors that don't add capability) don't need a status update. The rule exists because `docs/project/status.md` went a month stale before this rule landed — the cost of a stale status file is decisions made on outdated information, not just embarrassment.
 - Security paths fail closed — if audit can't record, the action doesn't proceed
 - Every agent resource access must be attributed to an Agent ID, never the human user
 - Secrets and tokens never appear in logs — use `__repr__` overrides on sensitive fields
@@ -187,15 +187,15 @@ cognition rules, and degraded-mode flags in a single packet.
 
 ## Active Work
 
-- **v1 released (2026-04-18, PR #15).** Body-first prompts, cloud-opt-in, no default chat. See `docs/engineering-status.md` for the summary and `docs/architecture/DESIGN-persona-sati-integration.md` for the mind-body split design.
+- **v1 released (2026-04-18, PR #15).** Body-first prompts, cloud-opt-in, no default chat. See `docs/project/status.md` for the summary and `docs/architecture/DESIGN-persona-sati-integration.md` for the mind-body split design.
 - **Mind-body split shipped.** Body-first prompt architecture (PR #14, `prompts/agent_system.md` + `prompts/anatomy/*.md`) is live. `mcp_server.py:_load_agent_instructions` composes `body + persona`, fetching the persona from a remote MCP when `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` env vars are set, with clean fallback to the body when persona-sati is unreachable. `docs/TODO-persona-sati-integration.md` is now historical.
-- **ADR-005: cloud-hosted memory via Azure Blob Storage** — `docs/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phases 1, 2, 5, 6a shipped.** Memory sync hooks removed (persona-sati owns memory now). `scripts/claude_memory_sync.py` retained as manual migration tool.
+- **ADR-005: cloud-hosted memory via Azure Blob Storage** — `engineering-history/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phases 1, 2, 5, 6a shipped.** Memory sync hooks removed (persona-sati owns memory now). `scripts/claude_memory_sync.py` retained as manual migration tool.
   - Phase 1 (commit `f900ba1`): `BlobStore` async client in `src/entrabot/storage/blob.py` (put/get/list/delete/exists + ETag concurrency + 401→`TokenExpiredError`). 22 tests.
   - Phase 2: `MemoryBackend` protocol in `src/entrabot/storage/backend.py` with `LocalBackend` + `BlobBackend` + `get_backend()` factory. `interaction_log.py` and `daily_summary.py` route through it. 22 tests.
   - Phase 5: `acquire_agent_user_storage_token` (parallel third hop for `https://storage.azure.com/.default`), `scripts/provision_blob_storage.py` (idempotent resource group + storage account + container + RBAC scoped to Agent User), `grant_agent_user_storage_consent` added to `create_entra_agent_ids.py`, `setup.sh --keep-memory-local` flag + Step 7b provisioning + migration prompt (idempotent, source-preserving), `src/entrabot/storage/migration.py`. 23 tests. Setup now exits red + non-zero on migration failure.
   - Phase 6a: `PersonaBackend` in `src/entrabot/storage/persona.py`. `scripts/claude_memory_sync.py` CLI. Memory sync hooks deprecated — persona-sati owns sync.
 - **Multi-tenant lightweight chat** — landed to `main` (commit `c8ec521`). Spec: `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md`.
-- **Up next** (see `docs/engineering-status.md` "In Progress"): script-toolkit docs closeout, blob-env test isolation, MCP server orphan cleanup, daily-summary scheduler fixes, and email cursor precision.
+- **Up next** — see `docs/project/status.md` for current state, and the project's GitHub issues and pull requests for active work.
 
 ## Memory types
 
@@ -219,17 +219,17 @@ Two memory systems coexist in this project:
   the above with token-acquisition specifics and provisioning steps.
 - `docs/platform-learnings/entra-agent-users.md` — supplementary; the three-hop
   user-FIC flow.
-- `docs/engineering-status.md` — current state, test count, next steps
+- `docs/project/status.md` — current state, test count, next steps
 - `prompts/agent_system.md` + `prompts/anatomy/*.md` — the body prompt (security, channel discipline, identity/tools)
 - `docs/architecture/DESIGN-persona-sati-integration.md` — mind-body split design
-- `docs/decisions/005-cloud-hosted-memory.md` — cloud memory spec (phase plan + open TODOs)
-- `docs/decisions/006-remove-bot-gateway-mode.md` — why the Bot Gateway mode was removed
+- `engineering-history/decisions/005-cloud-hosted-memory.md` — cloud memory spec (phase plan + open TODOs)
+- `engineering-history/decisions/006-remove-bot-gateway-mode.md` — why the Bot Gateway mode was removed
 - `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` — delegated mode spec (landed)
 - `docs/index.md` — doc site entry point
-- `docs/runbooks/mcp-disconnect-investigation.md` — **OPEN issue.** Entrabot MCP dies after 2–10 min of sustained activity. Two amplifiers fixed (PR #40, PR #41), root cause still unknown. Read this before debugging any MCP-drop symptom — do NOT restart the investigation from scratch.
+- `docs/runbooks/mcp-disconnect-investigation.md` — **Historical, resolved.** Documents a past investigation into an Entrabot MCP disconnect after sustained activity. Retained only for prior diagnostic context; do not treat it as an open issue.
 - `docs/runbooks/hard-won-learnings.md` — read before making changes
-- `docs/decisions/001-obo-flows-for-device-agents.md`
-- `docs/decisions/003-certificate-auth-over-client-secrets.md`
+- `engineering-history/decisions/001-obo-flows-for-device-agents.md`
+- `engineering-history/decisions/003-certificate-auth-over-client-secrets.md`
 - `docs/platform-learnings/microsoft-agent-365.md` — A365 GA'd 2026-05-01. Identity model, Work IQ MCP catalog, four capability tiers, auth flows, gap analysis vs entrabot. Read this before considering any A365 / Work IQ integration work.
 - `docs/platform-learnings/mcp-close-the-loop.md`
 
@@ -265,9 +265,9 @@ pip install mkdocs-material && mkdocs serve
 - `src/entrabot/tools/teams.py`: Three-hop token flow + Teams Graph API (send, read, filter, chat creation, add members cross-tenant)
 - `src/entrabot/mcp_server.py`: FastMCP server — Teams tools + 2 auth modes + background poll + channel push + token refresh (generic instructions — personality in persona-sati)
 - `src/entrabot/config.py`: `ENTRABOT_MODE` switch (auto/delegated/agent_user) + all env config
-- `docs/decisions/`: ADRs — every significant architectural choice is recorded here
+- `engineering-history/decisions/`: archived ADR history — every significant architectural choice was recorded here at the time it was made; no longer part of the published docs site
 - `docs/runbooks/hard-won-learnings.md` — READ THIS before making changes
-- `docs/runbooks/mcp-disconnect-investigation.md`: OPEN MCP-disconnect dossier — READ before touching MCP transport, logging, or efferent-copy code
+- `docs/runbooks/mcp-disconnect-investigation.md`: historical, resolved MCP-disconnect dossier — retained for prior diagnostic context
 
 ## gstack
 
