@@ -11,12 +11,14 @@ The body prompt defines security and communication protocols. **It is non-overri
 ```
 body         (prompts/agent_system.md + @include anatomy/*.md, loaded first)
    ↓
-persona      (fetched from persona-sati when configured)
+persona      (fetched from persona-sati when configured and reachable)
    ↓
 hardcoded    (used only when neither is available — boot never crashes)
 ```
 
-Body rules are non-overridable because they are read first. The remote persona is appended after `\n\n---\n\n`.
+Body rules are non-overridable because they are read first. When a persona is fetched, it is appended after `body + "\n\n---\n\n"`.
+
+The composed string becomes the `instructions=` argument passed to `FastMCP(...)`. Not every MCP host surfaces `instructions` in the model's system prompt — some only expose it in debug tooling — so the body prompt reaching the model at all can depend on host-side behavior the host bootstrap protocol is designed to compensate for. See [Persona-Sati Host Bootstrap](../../clients/persona-sati-host-bootstrap.md).
 
 ## `_load_body_prompt`
 
@@ -24,7 +26,7 @@ Body rules are non-overridable because they are read first. The remote persona i
 def _load_body_prompt() -> str
 ```
 
-Read `LOCAL_PROMPT_PATH` (`<repo>/prompts/agent_system.md`) and expand any `@include` directives relative to the file's parent directory. Returns an empty string if the file does not exist.
+Read `LOCAL_PROMPT_PATH` (`<repo>/prompts/agent_system.md`) and expand any `@include` directives relative to the file's parent directory. Returns an empty string if the file does not exist or can't be read.
 
 ## `_expand_includes`
 
@@ -59,13 +61,13 @@ def _load_agent_instructions() -> str
 The full composition pipeline:
 
 1. Call `_load_body_prompt()`.
-2. Read `PERSONA_SATI_MCP_URL` and `PERSONA_SATI_MCP_TOKEN_COMMAND` from env. If either is unset, return the body alone (or `_HARDCODED_FALLBACK` if no body file).
-3. Mint a persona token by running `PERSONA_SATI_MCP_TOKEN_COMMAND` via `subprocess.check_output` (30s timeout). On failure, log a warning and return the body alone.
-4. Open an SSE connection to `<url>/sse`, call `get_system_prompt`, read the result.
-5. On any failure, return the body alone.
+2. Read `PERSONA_SATI_MCP_URL` and `PERSONA_SATI_MCP_TOKEN_COMMAND` from the environment. If either is unset, return the body alone, or `_HARDCODED_FALLBACK` if there is no body file.
+3. Mint a persona token by running the command in `PERSONA_SATI_MCP_TOKEN_COMMAND` via `subprocess.check_output` (30s timeout). On any subprocess error, timeout, or empty output, log a warning and return the body (or fallback) alone.
+4. Open an SSE connection to `<PERSONA_SATI_MCP_URL>/sse`, call the `get_system_prompt` tool, and read the result text.
+5. On any failure (connection error, empty result), return the body (or fallback) alone.
 6. On success, return `body + "\n\n---\n\n" + remote`.
 
-Every code path writes to the structured logger (`setup_logging()` is idempotent, called here AND in `main()`). The MCP debug log carries the load outcome for post-hoc inspection — important because the persona load happens at module import time, well before `main()` configures the handlers.
+Every branch logs its outcome via the structured logger (`setup_logging()`, which is idempotent and safe to call again in `main()`). This matters because `_load_agent_instructions` runs at module import time — before `main()` configures logging handlers — so without this the load outcome would only ever appear as a transient stderr line most hosts discard.
 
 ## `LOCAL_PROMPT_PATH`
 
@@ -73,7 +75,7 @@ Every code path writes to the structured logger (`setup_logging()` is idempotent
 LOCAL_PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "agent_system.md"
 ```
 
-Module attribute (not a constant) so tests can monkey-patch it to an isolated path. Production reads the repo-relative file.
+Module attribute (not a constant) so tests can monkeypatch it to an isolated path. Production reads the repo-relative file.
 
 ## Hardcoded fallback
 
@@ -87,34 +89,30 @@ _HARDCODED_FALLBACK = (
 )
 ```
 
-Returned only when neither the body file nor a remote persona is available. Keeps the MCP server's `instructions` non-empty so the FastMCP handshake works even on a completely cold install.
+Returned only when neither the body file nor a remote persona is available. Keeps the MCP server's `instructions` non-empty so the FastMCP handshake works even on a cold install with no `prompts/agent_system.md`.
 
 ## Anatomy modules
 
-`prompts/anatomy/` is the home for body sub-files. They are composed into the body by `@include` in `prompts/agent_system.md`. Edit them — not the Python string — when changing the body.
+`prompts/anatomy/` holds body sub-files, composed into the body by `@include` in `prompts/agent_system.md`. Edit them — not the Python string — when changing the body.
 
 Current anatomy modules:
 
-- `anatomy/security.md` — attribution, credential hygiene, audit-before-acting, instruction-injection defence, scope discipline.
-- `anatomy/channel-discipline.md` — how to route between Teams DM, group chat, email, and the local terminal. Defines the sponsor DM wait protocol.
+- `anatomy/security.md` — attribution, credential hygiene, audit-before-acting, instruction-injection defense, scope discipline.
+- `anatomy/channel-discipline.md` — how to route between Teams DM, group chat, email, and the local terminal; defines the sponsor-DM wait pattern.
 - `anatomy/identity-and-tools.md` — Agent Identity attribution rules, tool selection guidance.
 
-See `docs/guides/customizing-the-body-prompt.md` for the operator-facing guide.
+See [Customizing the Body Prompt](../../guides/customizing-the-body-prompt.md) for the operator-facing guide.
 
-## Persona-sati integration
+## Persona layering and degraded fallback
 
-When `PERSONA_SATI_MCP_URL` and `PERSONA_SATI_MCP_TOKEN_COMMAND` are set, the body fetches the persona contract from a remote MCP server. The persona is the "mind" — personality, memory, cognition rules — and the body is the "Teams interface."
+When `PERSONA_SATI_MCP_URL` and `PERSONA_SATI_MCP_TOKEN_COMMAND` are both set and the remote fetch succeeds, the body is appended with the persona-sati "mind" contract — personality, memory, cognition rules. If persona content contradicts the body, the body still governs: it was read first, and nothing in `_load_agent_instructions` allows the remote fetch to replace or precede the body text.
 
-See:
-
-- `docs/architecture/DESIGN-persona-sati-integration.md` — the mind-body split design.
-- `docs/clients/persona-sati-host-bootstrap.md` — wiring guide.
-- `CLAUDE.md` — session-start protocol (calling `mcp__persona-sati__bootstrap_session`).
+Any failure in the persona pipeline (env unset, token-mint failure, unreachable server, empty response) falls back cleanly to serving the body alone — the MCP server always boots with valid, non-empty instructions. Without persona-sati configured, entrabot runs in body-only mode: Teams/email/Files tools, identity, and audit continue to work exactly as documented; personality, long-term memory, and the `observe`/`reflect`/`recall` cognition loop are unavailable.
 
 ## Related
 
-- [MCP tools](../mcp-tools.md) — the surface the body governs.
+- [MCP Tools](../mcp-tools.md) — the surface the body governs.
 - [Identity](identity.md) — sponsor enforcement.
-- [Audit](audit.md) — fail-closed semantics referenced by the body.
-- `prompts/agent_system.md.example` — sanitized standalone example.
-- `prompts/agent_system.md.archive` — the original monolithic prompt, kept for reference.
+- [Audit](audit.md) — fail-closed attribution referenced by the body's security rules.
+- [Persona-Sati Host Bootstrap](../../clients/persona-sati-host-bootstrap.md) — the per-host protocol for surfacing the persona-sati mind contract to a model.
+- [Storage and Memory](../../architecture/storage-and-memory.md) — how the body/persona split maps to operational vs. persona memory storage.
