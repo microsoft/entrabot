@@ -180,7 +180,7 @@ class TestAuditLogEvent:
         monkeypatch.delenv("ENTRABOT_BLUEPRINT_APP_ID", raising=False)
         monkeypatch.setattr("entrabot.platform.get_credential_store", lambda: Store())
         identity = IdentityStateMachine()
-        identity.update_session(user_id="human-user-oid")
+        await identity.update_session(user_id="human-user-oid")
         await identity.transition(IdentityState.DELEGATED)
         set_active_identity_state(identity)
 
@@ -189,7 +189,8 @@ class TestAuditLogEvent:
 
         assert event["agent_id"] == "config-agent-id"
 
-    def test_unauthenticated_stale_user_id_does_not_override_agent_config(
+    @pytest.mark.asyncio
+    async def test_unauthenticated_stale_user_id_does_not_override_agent_config(
         self, audit_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Unauthenticated sessions can carry stale user_id; do not attribute to it."""
@@ -205,7 +206,7 @@ class TestAuditLogEvent:
         monkeypatch.delenv("ENTRABOT_BLUEPRINT_APP_ID", raising=False)
         monkeypatch.setattr("entrabot.platform.get_credential_store", lambda: Store())
         identity = IdentityStateMachine()
-        identity.update_session(user_id="stale-human-user-oid")
+        await identity.update_session(user_id="stale-human-user-oid")
         set_active_identity_state(identity)
 
         with patch("entrabot.tools.audit._audit_dir", return_value=audit_dir):
