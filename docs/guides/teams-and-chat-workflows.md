@@ -15,7 +15,8 @@ A `chat_id` reaches the agent one of four ways:
 2. **Channel notification metadata** — every inbound message pushed through
    `notifications/claude/channel` carries the originating chat's ID.
 3. **Persisted `watched_chats`** — chats registered in a previous session are
-   written to the configured storage backend and reloaded at boot.
+   written to the local `ENTRABOT_DATA_DIR/watched_chats` file and reloaded at
+   boot. This registry remains local even when Blob storage is configured.
 4. **`/me/chats` auto-discovery** — a background sweep, running every 120
    seconds in Agent User mode, finds chats the Agent User was added to by
    someone else and registers any that aren't already watched.

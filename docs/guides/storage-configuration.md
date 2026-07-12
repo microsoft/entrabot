@@ -1,6 +1,6 @@
 # Storage configuration
 
-EntraBot writes *operational* data — interactions log, watched chats, email cursor — to a pluggable backend. This guide explains the two backends, how to choose between them, and how to migrate.
+EntraBot writes selected *operational* data to a pluggable backend. Interaction logs, daily summaries, promises, and per-chat delivery cursors use `MemoryBackend`. The watched-chat registry and email cursor always remain local under `ENTRABOT_DATA_DIR`.
 
 ## TL;DR
 
@@ -25,21 +25,25 @@ if cfg.keep_memory_local:                      # explicit opt-out
     return LocalBackend(cfg.data_dir)
 if cfg.blob_endpoint and cfg.blob_container:   # fully configured cloud
     return BlobBackend(BlobStore(...))
-return LocalBackend(cfg.data_dir)              # safe fallback
+if cfg.blob_endpoint or cfg.blob_container:    # exactly one is configured
+    raise BackendMisconfiguredError(...)
+return LocalBackend(cfg.data_dir)              # neither is configured
 ```
 
-A half-configured cloud (endpoint without container, or vice versa) falls through to local rather than raising — the hot path can't afford a startup failure over a missing env var.
+A half-configured cloud environment is a hard failure. Exactly one of `ENTRABOT_BLOB_ENDPOINT` or `ENTRABOT_BLOB_CONTAINER` raises `BackendMisconfiguredError` instead of silently selecting an empty local store. Set both variables for Blob, neither for the default local backend, or set `ENTRABOT_KEEP_MEMORY_LOCAL=true` to force local storage.
 
 ## What gets stored
 
-| Key | Written by | Read by |
-|------|-----------|---------|
-| `interactions/<YYYY-MM-DD>.jsonl` | every inbound/outbound Teams or email tool call | daily summary generator |
-| `watched_chats` | `create_chat`, auto-discovery poll | MCP boot (rehydrates chat list) |
-| `email_cursor.txt` | email poll | email poll (resumes after restart) |
-| `chat_id` *(legacy)* | older code, pre-PR #11 | nothing active; safe to delete |
+| State | Storage location |
+|------|-----------|
+| `interactions/<YYYY-MM-DD>.jsonl` | selected `MemoryBackend` |
+| Daily-summary archives | selected `MemoryBackend` |
+| `promises.jsonl` | selected `MemoryBackend` |
+| `chat_cursors/<encoded-chat-id>.json` | selected `MemoryBackend` |
+| `watched_chats` | always `ENTRABOT_DATA_DIR/watched_chats` |
+| `email_cursor.txt` | always `ENTRABOT_DATA_DIR/email_cursor.txt` |
 
-No persona memory, no behavioral rules, no secrets. Tokens live in the OS keystore; the blob container holds plain operational JSON/JSONL.
+The local-to-Blob migration walks the data directory, so it may copy `watched_chats` and `email_cursor.txt` as migration artifacts. Normal runtime reads and writes for those two files remain local. No persona memory, behavioral rules, or secrets are stored through this operational backend.
 
 ## Choosing local
 
@@ -110,7 +114,10 @@ Near the end, the script will prompt you to migrate `~/.entrabot/data` into the 
 
 - Is **non-destructive** — nothing is deleted from local. You end up with two copies.
 - Is **idempotent** — running twice skips keys already present in the blob.
-- Logs any per-file errors to the console rather than aborting the whole run.
+- Treats cloud as authoritative on rerun — an existing target key is not overwritten.
+- Collects per-file errors while continuing other files.
+
+When selected migration errors occur inside `setup.sh`, setup reports `Setup INCOMPLETE` and exits with code 2. Fix the reported problem and re-run the same setup command; successful copies remain in Blob and local sources remain untouched.
 
 To migrate manually (outside of `setup.sh`):
 
@@ -135,22 +142,7 @@ asyncio.run(main())
 
 ## Troubleshooting
 
-### Writes are still going to local after I switched `.env` to cloud
-
-Your MCP server is still running the process that booted with the old config. Restart the MCP client (`/mcp` in Claude Code) to spin up a fresh server that reads the new `.env`. Look for multiple `entrabot-mcp` processes in `ps aux | grep entrabot` — kill any stale ones.
-
-### `403 This request is not authorized to perform this operation`
-
-Most common cause: **Azure RBAC propagation delay.** After `setup.sh --use-cloud-memory` grants `Storage Blob Data Contributor`, the role can take 1–5 minutes to take effect. Retry after a short wait.
-
-Less common causes:
-
-- The Agent User has the wrong (or no) `user_impersonation` consent on Azure Storage. Re-run `setup.sh --use-cloud-memory` which calls `grant_agent_user_storage_consent`.
-- You're trying to read/write from a different principal (e.g. your `az login` user doesn't have a role on the container). `az storage blob list --auth-mode login` will hit this; the agent won't.
-
-### I want to kill the cloud backend entirely
-
-Easiest: pass `--keep-memory-local` to `setup.sh`, or remove `ENTRABOT_BLOB_ENDPOINT`/`ENTRABOT_BLOB_CONTAINER` from `.env` and set `ENTRABOT_KEEP_MEMORY_LOCAL=true`. Restart the MCP server. The existing blob stays around until you `az storage container delete` it manually.
+See [Storage troubleshooting](../troubleshooting/storage.md) for backend selection, half-configured environments, storage-scope 401s, RBAC/consent 403s, migration recovery, and ETag cursor behavior.
 
 ## See also
 

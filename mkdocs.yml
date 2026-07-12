@@ -130,12 +130,14 @@ nav:
           - Security (XPIA): reference/api/security.md
           - Efferent Copy: reference/api/efferent-copy.md
           - Body Prompt: reference/api/body-prompt.md
-  - Runbooks:
-      - Hard-Won Learnings: runbooks/hard-won-learnings.md
-      - MCP Disconnect Investigation: runbooks/mcp-disconnect-investigation.md
-      - Windows Setup: runbooks/windows-setup.md
-      - Certificate Auth Migration: runbooks/cert-auth-migration.md
-      - Provisioner Credential Migration: SECURITY-DEBT-PROVISIONER-SECRET.md
+  - Troubleshooting:
+      - Overview: troubleshooting/index.md
+      - Setup and Authentication: troubleshooting/setup-and-authentication.md
+      - Teams and Email: troubleshooting/teams-and-email.md
+      - Windows: troubleshooting/windows.md
+      - Storage: troubleshooting/storage.md
+      - MCP Connectivity: troubleshooting/mcp-connectivity.md
+      - Migrations and Upgrades: troubleshooting/migrations-and-upgrades.md
   - Developer:
       - Docs Site: developer/docs-site.md
       - QA Log: developer/qa-log.md
