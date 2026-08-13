@@ -298,18 +298,47 @@ class TestGetBackend:
     ) -> None:
         """When blob_endpoint and blob_container are both set and
         keep_memory_local is False, get_backend() returns a BlobBackend.
+
+        Construction never touches the network — BlobStore.token_provider
+        is only invoked lazily on the first actual request — so no
+        storage-token stub is needed here.
         """
         monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
         monkeypatch.setenv("ENTRABOT_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net")
         monkeypatch.setenv("ENTRABOT_BLOB_CONTAINER", "agent-abc-123")
         monkeypatch.delenv("ENTRABOT_KEEP_MEMORY_LOCAL", raising=False)
-        # Stub the storage-token acquisition so this doesn't hit Entra
-        monkeypatch.setattr(
-            "entrabot.storage.backend.acquire_agent_user_storage_token",
-            lambda cfg: "fake-storage-token",
-        )
         backend = get_backend()
         assert isinstance(backend, BlobBackend)
+
+    @pytest.mark.asyncio
+    async def test_blob_backend_token_provider_is_shared_cache(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Each get_backend() call builds a fresh BlobStore, but the
+        token_provider it's wired to must be the module-level
+        StorageTokenCache so repeated blob calls across backends don't
+        each re-run the three-hop exchange (the bug behind -32001)."""
+        from unittest.mock import MagicMock
+
+        import entrabot.storage.storage_token as storage_token_mod
+
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net")
+        monkeypatch.setenv("ENTRABOT_BLOB_CONTAINER", "agent-abc-123")
+        monkeypatch.delenv("ENTRABOT_KEEP_MEMORY_LOCAL", raising=False)
+
+        mock_acquire = MagicMock(return_value="shared-storage-token")
+        monkeypatch.setattr(storage_token_mod, "acquire_agent_user_storage_token", mock_acquire)
+        monkeypatch.setattr(storage_token_mod, "_cache", storage_token_mod.StorageTokenCache())
+
+        backend_one = get_backend()
+        backend_two = get_backend()
+
+        token_one = await backend_one._store._token_provider()
+        token_two = await backend_two._store._token_provider()
+
+        assert token_one == token_two == "shared-storage-token"
+        mock_acquire.assert_called_once()
 
     def test_half_configured_blob_endpoint_without_container_raises(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -388,10 +417,8 @@ class TestAssertBackendConfig:
         monkeypatch.setenv("ENTRABOT_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net")
         monkeypatch.setenv("ENTRABOT_BLOB_CONTAINER", "agent-abc-123")
         monkeypatch.delenv("ENTRABOT_KEEP_MEMORY_LOCAL", raising=False)
-        monkeypatch.setattr(
-            "entrabot.storage.backend.acquire_agent_user_storage_token",
-            lambda cfg: "fake-storage-token",
-        )
+        # No storage-token stub needed: assert_backend_config() never
+        # resolves the token — construction is lazy (see its docstring).
         summary = assert_backend_config()
         assert summary["backend"] == "BlobBackend"
         assert summary["container"] == "agent-abc-123"

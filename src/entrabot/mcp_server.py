@@ -503,8 +503,10 @@ async def _ensure_valid_token() -> None:
         if current_state == IdentityState.AGENT_USER:
             if logger:
                 logger.info("Token near expiry — refreshing via three-hop flow")
+            import asyncio
+
             config = _state.get("config")
-            token = acquire_agent_user_token(config)
+            token = await asyncio.to_thread(acquire_agent_user_token, config)
             await _identity.update_session(token=token, token_acquired_at=time.monotonic())
             _state["token"] = token
 
@@ -855,7 +857,9 @@ async def _init_auth() -> None:
     # Fast path: try three-hop with existing creds (unless SKIP_PROVISIONING)
     if not config.skip_provisioning and config.blueprint_app_id and config.tenant_id:
         try:
-            token = acquire_agent_user_token(config)
+            import asyncio
+
+            token = await asyncio.to_thread(acquire_agent_user_token, config)
             await _identity.update_session(
                 token=token,
                 token_acquired_at=time.monotonic(),
@@ -3689,12 +3693,14 @@ async def wait_for_sponsor_dm(
     chat_type = chat_type_cache.get(chat_id_str, "")
     if not chat_type and chat_id_str:
         try:
+            import asyncio
+
             from entrabot.tools.teams import (
                 acquire_agent_user_token,
                 fetch_chat_type,
             )
 
-            tok = acquire_agent_user_token(config)
+            tok = await asyncio.to_thread(acquire_agent_user_token, config)
             chat_type = await fetch_chat_type(chat_id=chat_id_str, token=tok)
             if chat_type:
                 chat_type_cache[chat_id_str] = chat_type

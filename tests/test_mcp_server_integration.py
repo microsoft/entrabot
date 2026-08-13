@@ -16,6 +16,7 @@ The four persona-sati instruction-loading cases are documented in
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -632,6 +633,56 @@ class TestTokenRefreshDispatch:
 
             assert sm.session.token == "three-hop-token"
             mock_acquire.assert_called_once_with(mock_config)
+        finally:
+            mcp_server._state.clear()
+            mcp_server._state.update(old_state)
+            mcp_server._identity = old_identity
+
+    @pytest.mark.asyncio
+    async def test_agent_user_refresh_does_not_block_event_loop(self) -> None:
+        """The three-hop refresh is synchronous httpx (three blocking
+        network round-trips); it must run off the event loop via
+        asyncio.to_thread. Regression for the MCP stdio handshake timing
+        out (-32001): eager init's chat-cursor rehydration triggered one
+        three-hop exchange per watched chat, each blocking the loop and
+        starving the initialize response.
+        """
+        from entrabot import mcp_server
+        from entrabot.identity.state_machine import IdentityStateMachine
+        from entrabot.models import IdentityState
+
+        def _blocking_acquire(config):
+            time.sleep(0.2)
+            return "three-hop-token"
+
+        mock_config = MagicMock()
+        old_state = mcp_server._state.copy()
+        old_identity = mcp_server._identity
+        try:
+            sm = IdentityStateMachine()
+            await sm.transition(IdentityState.AGENT_USER)
+            await sm.update_session(token="expired", token_acquired_at=time.monotonic() - 4000)
+            mcp_server._identity = sm
+            mcp_server._state["config"] = mock_config
+
+            async def _ticker() -> None:
+                # Pure-async work that only makes progress if the loop is
+                # free to schedule it. If the three-hop call blocks the
+                # loop directly, this can't start running until the
+                # blocking call returns, so gather()'s total wall time
+                # becomes additive (~0.4s) instead of overlapping (~0.2s).
+                await asyncio.sleep(0.2)
+
+            start = time.monotonic()
+            with patch("entrabot.mcp_server.acquire_agent_user_token", _blocking_acquire):
+                await asyncio.gather(mcp_server._ensure_valid_token(), _ticker())
+            elapsed = time.monotonic() - start
+
+            assert elapsed < 0.35, (
+                f"event loop was starved by the blocking token acquisition (took {elapsed:.3f}s, "
+                "expected the concurrent ticker to overlap with the three-hop call)"
+            )
+            assert sm.session.token == "three-hop-token"
         finally:
             mcp_server._state.clear()
             mcp_server._state.update(old_state)

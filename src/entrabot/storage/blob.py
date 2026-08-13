@@ -9,8 +9,9 @@ flow); tests pass a stub.
 
 from __future__ import annotations
 
+import inspect
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import httpx
 
@@ -54,7 +55,7 @@ class BlobStore:
         *,
         endpoint: str,
         container: str,
-        token_provider: Callable[[], str],
+        token_provider: Callable[[], str] | Callable[[], Awaitable[str]],
     ) -> None:
         self._endpoint = endpoint.rstrip("/")
         self._container = container
@@ -63,9 +64,12 @@ class BlobStore:
     def _url(self, path: str) -> str:
         return f"{self._endpoint}/{self._container}/{path}"
 
-    def _headers(self) -> dict[str, str]:
+    async def _headers(self) -> dict[str, str]:
+        token = self._token_provider()
+        if inspect.isawaitable(token):
+            token = await token
         return {
-            "Authorization": f"Bearer {self._token_provider()}",
+            "Authorization": f"Bearer {token}",
             "x-ms-version": _API_VERSION,
         }
 
@@ -83,7 +87,7 @@ class BlobStore:
         which we translate to ``ConcurrencyError`` so callers can retry
         with the fresh version.
         """
-        headers = {**self._headers(), "x-ms-blob-type": "BlockBlob"}
+        headers = {**(await self._headers()), "x-ms-blob-type": "BlockBlob"}
         if if_match is not None:
             headers["If-Match"] = if_match
         async with httpx.AsyncClient() as client:
@@ -97,7 +101,7 @@ class BlobStore:
     async def get(self, path: str) -> bytes:
         """Download *path*. Raises ``KeyError`` if the blob doesn't exist."""
         async with httpx.AsyncClient() as client:
-            resp = await client.get(self._url(path), headers=self._headers())
+            resp = await client.get(self._url(path), headers=await self._headers())
             _check_auth(resp)
             if resp.status_code == 404:
                 raise KeyError(path)
@@ -113,7 +117,7 @@ class BlobStore:
         (fleet-safe cursor writes — design F5).
         """
         async with httpx.AsyncClient() as client:
-            resp = await client.get(self._url(path), headers=self._headers())
+            resp = await client.get(self._url(path), headers=await self._headers())
             _check_auth(resp)
             if resp.status_code == 404:
                 raise KeyError(path)
@@ -123,7 +127,7 @@ class BlobStore:
     async def exists(self, path: str) -> bool:
         """Probe whether *path* exists. HEAD request — doesn't pull the body."""
         async with httpx.AsyncClient() as client:
-            resp = await client.head(self._url(path), headers=self._headers())
+            resp = await client.head(self._url(path), headers=await self._headers())
             _check_auth(resp)
             if resp.status_code == 404:
                 return False
@@ -140,7 +144,7 @@ class BlobStore:
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 f"{self._endpoint}/{self._container}",
-                headers=self._headers(),
+                headers=await self._headers(),
                 params=params,
             )
             _check_auth(resp)
@@ -150,7 +154,7 @@ class BlobStore:
     async def delete(self, path: str) -> None:
         """Delete *path*. 404 is silently accepted (idempotent delete)."""
         async with httpx.AsyncClient() as client:
-            resp = await client.delete(self._url(path), headers=self._headers())
+            resp = await client.delete(self._url(path), headers=await self._headers())
             _check_auth(resp)
             if resp.status_code == 404:
                 return

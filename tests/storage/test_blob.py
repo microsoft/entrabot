@@ -89,6 +89,26 @@ class TestBlobGet:
             await store.get("x")
             assert route.calls.last.request.headers["authorization"] == "Bearer stub-token"
 
+    @pytest.mark.asyncio
+    async def test_async_token_provider_is_awaited(self) -> None:
+        """token_provider may be an async callable (e.g. a caching provider
+        that offloads the blocking three-hop exchange via asyncio.to_thread
+        — see storage_token.StorageTokenCache). BlobStore must await a
+        coroutine result rather than stringifying it into the header."""
+        with respx.mock:
+            route = respx.get(f"{BLOB_URL}/x").mock(return_value=httpx.Response(200, content=b""))
+
+            async def _async_provider() -> str:
+                return "async-stub-token"
+
+            store = BlobStore(
+                endpoint=ENDPOINT,
+                container=CONTAINER,
+                token_provider=_async_provider,
+            )
+            await store.get("x")
+            assert route.calls.last.request.headers["authorization"] == "Bearer async-stub-token"
+
 
 class TestBlobGetWithEtag:
     @pytest.mark.asyncio

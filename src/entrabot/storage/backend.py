@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from entrabot.config import get_config
 from entrabot.errors import BackendMisconfiguredError
 from entrabot.storage.blob import BlobStore, ConcurrencyError
-from entrabot.tools.teams import acquire_agent_user_storage_token
+from entrabot.storage.storage_token import get_storage_token_provider
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
@@ -237,7 +237,7 @@ def get_backend() -> MemoryBackend:
         store = BlobStore(
             endpoint=cfg.blob_endpoint,
             container=cfg.blob_container,
-            token_provider=lambda: acquire_agent_user_storage_token(get_config()),
+            token_provider=get_storage_token_provider(),
         )
         return BlobBackend(store)
     if cfg.blob_endpoint or cfg.blob_container:
