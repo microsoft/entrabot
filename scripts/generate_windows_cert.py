@@ -87,9 +87,13 @@ def _build_command(*, subject: str, days_valid: int, ksp: str) -> list[str]:
     # user profile either way. We add it on TPM because the plan's threat
     # model assumes the TPM key is the strongest baseline.
     extra = "-KeyExportPolicy NonExportable " if ksp == KSP_TPM else ""
+    
+    # Escape single quotes for PowerShell single-quoted strings to prevent RCE
+    safe_subject = subject.replace("'", "''")
+    
     pwsh_block = (
         "$ErrorActionPreference = 'Stop'; "
-        f"$cert = New-SelfSignedCertificate -Subject '{subject}' "
+        f"$cert = New-SelfSignedCertificate -Subject '{safe_subject}' "
         f"-CertStoreLocation Cert:\\CurrentUser\\My "
         f"-Provider '{provider}' "
         f"{extra}"
@@ -146,10 +150,16 @@ def generate(*, subject: str, days_valid: int, ksp: str) -> GenerateResult:
 
 def export_der(thumbprint: str, dest: Path) -> Path:
     """Export the public cert DER bytes for upload to the Blueprint app."""
+    # Security fix: Validate thumbprint format and escape single quotes in dest
+    # to prevent arbitrary PowerShell command injection.
+    if not THUMBPRINT_RE.match(thumbprint):
+        raise ThumbprintValidationError(f"Invalid thumbprint format: {thumbprint!r}")
+    
+    safe_dest = str(dest).replace("'", "''")
     pwsh = (
         "$ErrorActionPreference = 'Stop'; "
         f"$c = Get-Item Cert:\\CurrentUser\\My\\{thumbprint}; "
-        f"[IO.File]::WriteAllBytes('{dest}', $c.GetRawCertData())"
+        f"[IO.File]::WriteAllBytes('{safe_dest}', $c.GetRawCertData())"
     )
     result = _run_pwsh(pwsh)
     if result.returncode != 0:
