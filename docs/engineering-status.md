@@ -1,7 +1,7 @@
 # Engineering Status
 
-**Last updated:** 2026-06-24
-**Status:** v1 released. Two auth modes (Agent User / Delegated) running locally on macOS, Linux, and ARM64 Windows 11. **~1,640 passing tests** across the suite (7 skipped, 0 failing), ruff clean. Body-first prompt architecture loads at boot; persona-sati MCP wires personality and memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped — blob storage is opt-in via `setup.sh --use-cloud-memory`. Work IQ Word migration landed (PR #75) and now emits fail-closed audit events for every Work IQ MCP tool call. The `send_teams_message` auto-wait pattern is host-gated and deterministic. Confused-deputy authorization fix in `add_teams_member` / `share_file` shipped via active-sponsor-channel binding (Gate 3) on 2026-06-04. The Teams Bot Gateway mode was removed on 2026-06-08 (ADR-006) — it bypassed Agent Identity and was superseded by Microsoft Agent 365's managed AI teammate. README, docs site, and GitHub Pages auto-deploy refreshed 2026-05-21.
+**Last updated:** 2026-09-15
+**Status:** v1 released. Two auth modes (Agent User / Delegated) running locally on macOS, Linux, and ARM64 Windows 11. **~1,800 passing tests** across the suite (7 skipped, 0 failing), ruff clean. Body-first prompt architecture loads at boot; persona-sati MCP wires personality and memory when configured. ADR-005 cloud-memory Phases 1, 2, 5, 6a shipped — blob storage is opt-in via `setup.sh --use-cloud-memory`. Work IQ Word migration landed (PR #75) and now emits fail-closed audit events for every Work IQ MCP tool call. The `send_teams_message` auto-wait pattern is host-gated and deterministic. Confused-deputy authorization fix in `add_teams_member` / `share_file` shipped via active-sponsor-channel binding (Gate 3) on 2026-06-04. The Teams Bot Gateway mode was removed on 2026-06-08 (ADR-006) — it bypassed Agent Identity and was superseded by Microsoft Agent 365's managed AI teammate. README, docs site, and GitHub Pages auto-deploy refreshed 2026-05-21.
 
 ---
 
@@ -10,6 +10,25 @@
 Source of truth for detail: `TODOS.md` in the repository root. One line each below.
 
 - **Follow-up: two-phase sponsor confirmation flow** — Gate 3 closes Chain A. Chain B (prompt injection from `read_file` content where sponsor is genuinely active in target chat) needs explicit per-action sponsor approval. See `TODOS.md` P1.
+- **Harness A365 observability** (`harness-a365-observability`) — explicit content-suppressed `InvokeAgent` lifecycle spans, delegated observability-token refresh, per-agent authorization flags, shared tenant/Blueprint reuse, and idempotent Windows certificate registration are implemented. Tool/inference/output spans remain a separate follow-up. Live Defender validation is pending for the new test tenant.
+- **A365 bootstrap portability audit (2026-09-14)** — corrected primary-UPN/export inheritance,
+  certificate-generation mixing, ignored Blueprint selection, and fresh Unix dependency order.
+  Shared config saves only tenant/Blueprint/certificate fields and rejects conflicts before
+  provisioning. Windows certificate registration preserves existing public keys. Startup and
+  doctor fail on identity-loading errors; existing-provisioner authentication no longer consults
+  the Azure CLI's ambient tenant. Exported invocation errors suppress provider content.
+  Public-cloud tenants are supported; sovereign-cloud endpoint support is not implemented.
+- **A365 maintainability pass (2026-09-15)** — runtime and onboarding share per-agent config
+  composition; the init wizard reuses shared persistence and the agent writer. Unix setup
+  installs dependencies once, and additional-agent provisioning no longer changes private
+  module globals to select its UPN policy. The existing Graph escaping helper is reused;
+  corrupt provisioning state stops setup instead of triggering fresh-install behavior.
+- **Harness lifetime/permission boundaries (2026-09-15)** — reload releases the previous SDK
+  session and invocation without creating another scheduler or A365 refresher; startup and
+  concurrent Teams token acquisition are guarded. Scheduled work preserves caller/chat
+  provenance after reload; legacy schedules without a creator are retained but paused.
+  Teams and scheduled turns are interruptible, and individual skill policy matches the
+  requested skill rather than the generic invoker.
 - **Follow-up: `read_file` content spotlighting** — broader prompt-injection mitigation than the Gate 3 fix. See `TODOS.md` P1.
 - **Script-toolkit docs closeout** — `./status.sh` is the canonical entry; finish the remaining script-reference polish and smoke verification. See `TODOS.md` P1.
 - **Test isolation: blob env leakage** — `tmp_data_dir` fixture in `tests/tools/test_interaction_log.py` doesn't clear `ENTRABOT_BLOB_ENDPOINT`; 10 tests fail on any machine with blob env configured. Partially addressed: `test_interaction_log.py`, `test_daily_summary.py`, and `test_email_poll.py` fixtures now unset blob env; session-scoped autouse fixture still open.

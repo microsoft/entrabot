@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -20,7 +22,9 @@ from .spec import ScheduleSpec, parse_schedule
 _TICK_SECONDS = 5
 _SCHEDULES_FILE = os.path.join(".entrabot", "harness.schedules.json")
 
-# (prompt, caller_id, chat_id) — scheduled prompts have no caller/chat (operator/system).
+logger = logging.getLogger(__name__)
+
+# (prompt, caller_id, chat_id) — retain the creator's authorization context.
 InjectFn = Callable[[str, str | None, str | None], Awaitable[None]]
 
 
@@ -31,15 +35,21 @@ class ScheduledTask:
     spec: ScheduleSpec
     next_due: datetime
     last_run: datetime | None = None
+    caller_id: str | None = None
+    chat_id: str | None = None
+    creator_recorded: bool = True
 
     def to_json(self) -> dict:
-        return {
+        row = {
             "id": self.id,
             "prompt": self.prompt,
             "schedule": self.spec.raw,
             "nextDue": self.next_due.isoformat(),
             "lastRun": self.last_run.isoformat() if self.last_run else None,
         }
+        if self.creator_recorded:
+            row.update(callerId=self.caller_id, chatId=self.chat_id)
+        return row
 
 
 class SelfScheduler:
@@ -52,12 +62,18 @@ class SelfScheduler:
         self._load()
 
     # ---- public API ------------------------------------------------------------------
-    def add(self, prompt: str, schedule: str) -> ScheduledTask:
+    def add(
+        self, prompt: str, schedule: str, *,
+        caller_id: str | None = None, chat_id: str | None = None,
+    ) -> ScheduledTask:
         spec = parse_schedule(schedule)
         due = spec.next_due(datetime.now())
         if due is None:
             raise ValueError(f"could not compute next run for {schedule!r}")
-        task = ScheduledTask(id=uuid.uuid4().hex[:8], prompt=prompt, spec=spec, next_due=due)
+        task = ScheduledTask(
+            id=uuid.uuid4().hex[:8], prompt=prompt, spec=spec, next_due=due,
+            caller_id=caller_id, chat_id=chat_id,
+        )
         self._tasks[task.id] = task
         self._persist()
         return task
@@ -74,12 +90,16 @@ class SelfScheduler:
 
     def start(self) -> None:
         if self._task is None:
+            self._stop.clear()
             self._task = asyncio.create_task(self._run())
 
     async def stop(self) -> None:
         self._stop.set()
         if self._task:
-            self._task.cancel()
+            task, self._task = self._task, None
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
     # ---- loop ------------------------------------------------------------------------
     async def _run(self) -> None:
@@ -88,7 +108,7 @@ class SelfScheduler:
             await asyncio.sleep(_TICK_SECONDS)
             now = datetime.now()
             for task in list(self._tasks.values()):
-                if task.next_due <= now:
+                if task.creator_recorded and task.next_due <= now:
                     await self._fire(task, now)
 
     def _bump_overdue(self, now: datetime) -> None:
@@ -98,14 +118,17 @@ class SelfScheduler:
                 task.next_due = now
 
     async def _fire(self, task: ScheduledTask, now: datetime) -> None:
+        if not task.creator_recorded:
+            logger.warning("Schedule %s has no recorded creator; recreate it before use.", task.id)
+            return
         task.last_run = now
         if not self._reschedule(task, now):
             self._tasks.pop(task.id, None)
         self._persist()
         try:
-            await self._inject(_frame(task), None, None)
-        except Exception:
-            pass
+            await self._inject(_frame(task), task.caller_id, task.chat_id)
+        except Exception as error:
+            logger.warning("Schedule %s injection failed (%s).", task.id, type(error).__name__)
 
     @staticmethod
     def _reschedule(task: ScheduledTask, now: datetime) -> bool:
@@ -137,6 +160,10 @@ class SelfScheduler:
         for row in rows:
             task = self._task_from_row(row)
             if task is not None:
+                if not task.creator_recorded:
+                    logger.warning(
+                        "Schedule %s has no recorded creator; recreate it before use.", task.id,
+                    )
                 self._tasks[task.id] = task
 
     @staticmethod
@@ -148,6 +175,9 @@ class SelfScheduler:
                 spec=parse_schedule(row["schedule"]),
                 next_due=datetime.fromisoformat(row["nextDue"]),
                 last_run=datetime.fromisoformat(row["lastRun"]) if row.get("lastRun") else None,
+                caller_id=row.get("callerId"),
+                chat_id=row.get("chatId"),
+                creator_recorded="callerId" in row and "chatId" in row,
             )
         except (KeyError, ValueError):
             return None

@@ -8,10 +8,19 @@ panels, sponsors, scheduling) lives in the mixins this class is composed from.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
+from contextlib import AsyncExitStack, suppress
 from typing import Any
 
 import copilot
 
+from ...config import get_config
+from ...observability import tokens as observability_tokens
+from ...observability.context import (
+    InvocationContext,
+    finish_invocation,
+    record_invocation_error,
+)
 from ..config import HarnessConfig
 from ..scheduler import SelfScheduler
 from ..teams import TeamsBridge, TokenProvider, TurnContext, build_teams_tools
@@ -50,6 +59,7 @@ class InteractiveSession(
         self_id: str | None = None,
     ):
         self._config = config
+        self._observability_config = get_config()
         self._root = root
         self._ui = ui
         self._yolo = yolo
@@ -60,11 +70,15 @@ class InteractiveSession(
 
         self._client: copilot.CopilotClient | None = None
         self._session: copilot.CopilotSession | None = None
+        self._unsubscribe_session: Callable[[], None] | None = None
+        self._start_lock = asyncio.Lock()
         self._bridge: TeamsBridge | None = None
         self._scheduler: SelfScheduler | None = None
         self._policy = ToolPolicy.from_config(config.permissions)
         self._sponsors: set = set()  # Agent-ID sponsor user ids; loaded async in _start()
         self._catalog: list = []  # every tool/skill the session exposes (for /permissions)
+        self._invocation_scope: InvocationContext | None = None
+        self._observability_refresh_task: asyncio.Task[None] | None = None
 
         self._idle = asyncio.Event()
         self._idle.set()
@@ -96,6 +110,30 @@ class InteractiveSession(
             self._ui.append_line("⏹ interrupted", UiStyle.WARN)
 
     async def _start(self) -> None:
+        async with self._start_lock:
+            if self._client is not None:
+                return
+            started = False
+            try:
+                if (
+                    self._observability_config.a365_observability_enabled
+                    and self._observability_config.a365_export_enabled
+                    and self._observability_refresh_task is None
+                ):
+                    self._observability_refresh_task = asyncio.create_task(
+                        observability_tokens.run_observability_token_refresh(
+                            self._observability_config, on_error=self._warn_observability,
+                        ),
+                        name="a365-observability-token-refresh",
+                    )
+                await self._connect()
+                started = True
+            finally:
+                # The TUI keeps running after displaying startup failures.
+                if not started:
+                    await self._dispose()
+
+    async def _connect(self) -> None:
         self._ui.banner(banner.render())
         self._ui.set_identity(self._config.name)
 
@@ -117,7 +155,7 @@ class InteractiveSession(
 
         self._ui.update_spinner("starting session…")
         self._session = await self._establish(tools or None, mcp, gate)
-        self._session.on(self._on_event)
+        self._unsubscribe_session = self._session.on(self._on_event)
         self._ui.update_spinner("discovering commands…")
         await self._discover_slash_commands()
         self._ui.update_spinner("enumerating tools…")
@@ -197,8 +235,8 @@ class InteractiveSession(
     def _system_message(self) -> dict:
         teams = (
             "New Microsoft Teams messages are delivered to you as steering updates prefixed with "
-            "'[teams]'. Reply to people using the entrabot_send tool — the active chat is the one the "
-            "current message came from. "
+            "'[teams]'. Reply to people using the entrabot_send tool — the active chat is the one "
+            "the current message came from. "
             if self._bridge
             else "Teams is not configured this run, so you are talking to your operator locally. "
         )
@@ -210,8 +248,9 @@ class InteractiveSession(
         return {
             "mode": "append",
             "content": (
-                f"You are {self._config.name}, an agent running in the ENTRABOT harness. You are NOT "
-                f"operating as an MCP server and do not need one connected. {teams}{cli}"
+                f"You are {self._config.name}, an agent running in the ENTRABOT harness. "
+                "You are NOT operating as an MCP server and do not need one connected. "
+                f"{teams}{cli}"
                 "Be concise and helpful."
             ),
         }
@@ -233,17 +272,61 @@ class InteractiveSession(
         self._ui.append_line("● ready", UiStyle.SUCCESS)
 
     async def _dispose(self) -> None:
-        if self._bridge:
-            await self._bridge.stop()
-        if self._scheduler:
-            await self._scheduler.stop()
-        if self._session:
+        refresh_task = self._observability_refresh_task
+        self._observability_refresh_task = None
+        try:
+            if refresh_task is not None:
+                refresh_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await refresh_task
+        finally:
+            await self._dispose_resources()
+
+    async def _release_session(self) -> None:
+        """Release one SDK session and its invocation, without stopping harness-owned workers."""
+        session, self._session = self._session, None
+        unsubscribe, self._unsubscribe_session = self._unsubscribe_session, None
+        try:
+            if unsubscribe is not None:
+                unsubscribe()
+            if session is not None and not self._idle.is_set():
+                await session.abort()
+        finally:
+            self._finish_active_invocation()
             try:
-                await self._session.disconnect()
-            except Exception:
-                pass
-        if self._client:
+                if session is not None:
+                    await session.disconnect()
+            finally:
+                self._injected.clear()
+                self._ctx.caller = self._ctx.chat = None
+                self._idle.set()
+                self._ui.set_working(False)
+
+    def _finish_active_invocation(self) -> None:
+        invocation = self._invocation_scope
+        self._invocation_scope = None
+        if invocation is not None:
             try:
-                await self._client.stop()
-            except Exception:
-                pass
+                record_invocation_error(
+                    invocation,
+                    RuntimeError("Harness stopped before the invocation became idle"),
+                )
+            except Exception as error:
+                self._warn_observability(error)
+            try:
+                finish_invocation(invocation)
+            except Exception as error:
+                self._warn_observability(error)
+
+    async def _dispose_resources(self) -> None:
+        bridge, self._bridge = self._bridge, None
+        scheduler, self._scheduler = self._scheduler, None
+        client, self._client = self._client, None
+        async with AsyncExitStack() as cleanup:
+            if client:
+                cleanup.push_async_callback(client.stop)
+            cleanup.push_async_callback(self._release_session)
+            if scheduler:
+                cleanup.push_async_callback(scheduler.stop)
+            if bridge:
+                await bridge.stop()

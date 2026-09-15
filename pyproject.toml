@@ -19,6 +19,7 @@ dependencies = [
     "PyJWT>=2.8.0",
     "pypdf>=4.0",
     "click>=8.1.0",
+    "microsoft-opentelemetry>=1.3.8",
     # ENTRABOT harness: drives a Copilot agent session (sessions, streaming, tools,
     # MCP, per-call permission hook). Sibling of the .NET GitHub.Copilot.SDK.
     "github-copilot-sdk>=1.0.2",

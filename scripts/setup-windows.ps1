@@ -59,6 +59,13 @@
   Deprecated compatibility parameter. Work IQ setup now uses the existing
   Entrabot Blueprint ID from .entrabot-state.json.
 
+.PARAMETER ConfigureA365Observability
+  Standalone authorized onboarding: apply approved observability grants to
+  the existing Blueprint and agent, then enable export for this agent only.
+
+.PARAMETER AgentRoot
+  Agent directory for either observability stage. Defaults to this clone.
+
 .PARAMETER Status
     Skip setup and run the consolidated status command via status-windows.ps1.
 
@@ -90,6 +97,8 @@ param(
     [string]$WithContainer = "",
     [switch]$CreateNewStorage,
     [switch]$ConfigureA365WorkIq,
+    [switch]$ConfigureA365Observability,
+    [string]$AgentRoot = "",
     [string]$A365AgentName = "EntraBot Code Agent",
     [switch]$Migrate,
     [switch]$Status,
@@ -133,6 +142,28 @@ Set-StrictMode -Version Latest
 if ($Help) {
     Get-Help $PSCommandPath -Detailed
     exit 0
+}
+
+if ($ConfigureA365Observability) {
+    foreach ($key in $PSBoundParameters.Keys) {
+        if ($key -notin @('ConfigureA365Observability', 'AgentRoot')) {
+            Write-Error "A365 observability stages cannot be combined with -$key."
+            exit 2
+        }
+    }
+    $ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
+    $VenvPython = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
+    if (-not (Test-Path $VenvPython)) {
+        Write-Error "No installed .venv found. Complete Entrabot setup first."
+        exit 2
+    }
+    if (-not $AgentRoot) { $AgentRoot = $ProjectRoot }
+    & $VenvPython (Join-Path $ProjectRoot 'scripts' 'configure_a365_observability.py') '--authorize' '--agent-root' $AgentRoot
+    exit $LASTEXITCODE
+}
+if ($AgentRoot) {
+    Write-Error "-AgentRoot requires an A365 observability stage."
+    exit 2
 }
 
 if ($Status) {
@@ -195,6 +226,18 @@ function Update-EnvFile {
         if (-not $seen.ContainsKey($k) -and $null -ne $Values[$k]) { $out += "$k=$($Values[$k])" }
     }
     Set-Content -Path $Path -Value $out -Encoding utf8
+}
+function Read-EnvValue {
+    param([string]$Path, [string]$Key)
+    if (-not (Test-Path $Path)) { return "" }
+    foreach ($line in Get-Content -Path $Path) {
+        $match = [regex]::Match(
+            $line,
+            "^\s*$([regex]::Escape($Key))\s*=(.*)$"
+        )
+        if ($match.Success) { return $match.Groups[1].Value.Trim() }
+    }
+    return ""
 }
 function Ensure-A365ToolingManifest {
     $manifestPath = Join-Path $ProjectRoot 'ToolingManifest.json'
@@ -270,7 +313,7 @@ function Configure-A365WorkIq {
     a365 develop add-mcp-servers $A365WorkIqMcpServers --project-path $ProjectRoot
     if ($LASTEXITCODE -ne 0) { Fail "a365 develop add-mcp-servers failed" }
 
-    & $VenvPython (Join-Path $ScriptDir 'ensure_a365_work_iq_permissions.py') '--blueprint-app-id', $BlueprintAppId
+    & $VenvPython (Join-Path $ScriptDir 'ensure_a365_work_iq_permissions.py') '--blueprint-app-id' $BlueprintAppId
     if ($LASTEXITCODE -ne 0) { Fail "ensure_a365_work_iq_permissions.py failed" }
 
     $permissionsOutput = a365 setup permissions mcp 2>&1
@@ -292,15 +335,18 @@ function Configure-A365WorkIq {
 Step 1 "Probing prerequisites"
 
 $missing = @()
-foreach ($tool in 'python', 'az', 'git', 'pwsh', 'a365') {
+foreach ($tool in 'python', 'az', 'git', 'pwsh') {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
         $missing += $tool
     }
 }
+if ($ConfigureA365WorkIq -and -not (Get-Command 'a365' -ErrorAction SilentlyContinue)) {
+    $missing += 'a365'
+}
 if ($missing) {
     Fail "Missing tools: $($missing -join ', '). Run scripts\prereqs-windows.ps1 and retry."
 }
-Success "Found: python, az, git, pwsh, a365"
+Success "Found: python, az, git, pwsh$(if ($ConfigureA365WorkIq) { ', a365' })"
 
 $pyVer = & python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
 if ([version]$pyVer -lt [version]'3.12') {
@@ -354,16 +400,48 @@ if (-not $account) {
     Fail "Not logged in to az. Run 'az login' and retry."
 }
 Success "Logged in as $($account.user.name) (tenant $($account.tenantId))"
+$env:ENTRABOT_TENANT_ID = $account.tenantId
 
 Step 5 "Provisioning Entra Agent Identity"
 
+if ($NewChain -and $UseBlueprint) { Fail "-NewChain and -UseBlueprint are mutually exclusive." }
+
+$validateSharedConfig = @'
+import sys
+from entrabot.harness.config import globalcfg
+
+try:
+    globalcfg.validate_setup_context(
+        tenant_id=sys.argv[1], new_chain=sys.argv[2].lower() == "true",
+        blueprint_app_id=sys.argv[3] if len(sys.argv) > 3 else "",
+    )
+except ValueError as error:
+    raise SystemExit(f"ERROR: {error}")
+'@
+& $VenvPython -c $validateSharedConfig $account.tenantId ([string][bool]$NewChain) $UseBlueprint
+if ($LASTEXITCODE -ne 0) { Fail "Shared configuration conflicts with requested setup" }
+
+# Each invocation is parameter-driven. Clear values left in the parent PowerShell process by
+# an earlier setup attempt before applying this run's requested identity mode.
+Remove-Item Env:ENTRABOT_NEW_CHAIN -ErrorAction SilentlyContinue
+Remove-Item Env:ENTRABOT_AGENT_USER_UPN -ErrorAction SilentlyContinue
+Remove-Item Env:_ENTRABOT_UPN_SUFFIX -ErrorAction SilentlyContinue
+Remove-Item Env:_ENTRABOT_USE_BLUEPRINT -ErrorAction SilentlyContinue
+
 $args = @()
-if ($NewChain)             { $args += '--new' }
-if ($UseBlueprint)         { $args += "--use-blueprint=$UseBlueprint" }
+if ($NewChain) {
+    if (-not $UpnSuffix) { Fail "-UpnSuffix is required with -NewChain." }
+    $env:ENTRABOT_NEW_CHAIN = '1'
+    $args += '--new'
+}
+if ($UseBlueprint) {
+    $env:_ENTRABOT_USE_BLUEPRINT = $UseBlueprint
+    $args += "--use-blueprint=$UseBlueprint"
+}
 if ($UpnSuffix)            { $args += "--with-upn-suffix=$UpnSuffix" }
 if ($AgentUserUpn) {
     $env:ENTRABOT_AGENT_USER_UPN = $AgentUserUpn
-} elseif ($UseBlueprint -and $UpnSuffix) {
+} elseif ($UpnSuffix) {
     $env:_ENTRABOT_UPN_SUFFIX = $UpnSuffix
 }
 if ($ConfigureA365WorkIq) {
@@ -383,13 +461,17 @@ $statePath = Join-Path $ProjectRoot '.entrabot-state.json'
 $BlueprintAppId = ""
 $BlueprintObjectId = ""
 $AgentId = ""
+$AgentObjectId = ""
 $AgentUserId = ""
+$AgentUserUpn = ""
 if (Test-Path $statePath) {
     $state = Get-Content $statePath -Raw | ConvertFrom-Json
     $BlueprintAppId = if ($state.PSObject.Properties['BLUEPRINT_APP_ID']) { $state.BLUEPRINT_APP_ID } else { "" }
     $BlueprintObjectId = if ($state.PSObject.Properties['BLUEPRINT_OBJECT_ID']) { $state.BLUEPRINT_OBJECT_ID } else { "" }
     $AgentId = if ($state.PSObject.Properties['AGENT_ID']) { $state.AGENT_ID } else { "" }
+    $AgentObjectId = if ($state.PSObject.Properties['AGENT_OBJECT_ID']) { $state.AGENT_OBJECT_ID } else { "" }
     $AgentUserId = if ($state.PSObject.Properties['AGENT_USER_ID']) { $state.AGENT_USER_ID } else { "" }
+    $AgentUserUpn = if ($state.PSObject.Properties['AGENT_USER_UPN']) { $state.AGENT_USER_UPN } else { "" }
 }
 
 if ($ConfigureA365WorkIq) {
@@ -401,37 +483,83 @@ if ($ConfigureA365WorkIq) {
 # ═══════════════════════════════════════════════════════════════════════════
 Step 6 "Generating Blueprint cert (TPM-first / software-fallback)"
 
+$envPath = Join-Path $ProjectRoot '.env'
 $derPath = Join-Path $env:TEMP "entrabot-blueprint-$(Get-Random).cer"
-$certOutput = & $VenvPython (Join-Path $ScriptDir 'generate_windows_cert.py') `
-    --subject "CN=entrabot-blueprint" `
-    --days 365 `
-    --export-der $derPath
-if ($LASTEXITCODE -ne 0) { Fail "generate_windows_cert.py failed" }
+$cachedTenant = Read-EnvValue $envPath 'ENTRABOT_TENANT_ID'
+$cachedBlueprint = Read-EnvValue $envPath 'ENTRABOT_BLUEPRINT_APP_ID'
+$cachedSha1 = Read-EnvValue $envPath 'ENTRABOT_BLUEPRINT_CERT_SHA1'
+$cachedX5t = Read-EnvValue $envPath 'ENTRABOT_BLUEPRINT_CERT_THUMBPRINT'
+$cachedKsp = Read-EnvValue $envPath 'ENTRABOT_BLUEPRINT_KSP'
+$cachedCertPath = if ($cachedSha1) { "Cert:\CurrentUser\My\$cachedSha1" } else { "" }
+$cachedCert = if ($cachedCertPath -and (Test-Path $cachedCertPath)) {
+    Get-Item $cachedCertPath
+} else {
+    $null
+}
+$cachedCertMatches = (
+    $cachedTenant -eq $account.tenantId -and
+    $cachedBlueprint -eq $BlueprintAppId -and
+    $cachedSha1 -and $cachedX5t -and $cachedKsp -and
+    $cachedCert -and $cachedCert.NotAfter -gt (Get-Date)
+)
+$uploadCertificate = $false
 
-$thumbprint = ($certOutput | Select-String '^thumbprint=(.+)$').Matches[0].Groups[1].Value
-$ksp        = ($certOutput | Select-String '^ksp=(.+)$').Matches[0].Groups[1].Value
-$x5tS256    = ($certOutput | Select-String '^x5t_s256=(.+)$').Matches[0].Groups[1].Value
+if ($cachedCertMatches) {
+    & $VenvPython (Join-Path $ScriptDir 'verify_blueprint_cert.py') `
+        $BlueprintObjectId $cachedX5t
+    if ($LASTEXITCODE -eq 0) {
+        $thumbprint = $cachedSha1
+        $x5tS256 = $cachedX5t
+        $ksp = $cachedKsp
+        Success "Reusing registered local Blueprint certificate"
+    } else {
+        [IO.File]::WriteAllBytes($derPath, $cachedCert.GetRawCertData())
+        $thumbprint = $cachedSha1
+        $x5tS256 = $cachedX5t
+        $ksp = $cachedKsp
+        $uploadCertificate = $true
+        Success "Repairing Blueprint registration with existing local certificate"
+    }
+} else {
+    $certOutput = & $VenvPython (Join-Path $ScriptDir 'generate_windows_cert.py') `
+        --subject "CN=entrabot-blueprint" `
+        --days 365 `
+        --export-der $derPath
+    if ($LASTEXITCODE -ne 0) { Fail "generate_windows_cert.py failed" }
 
-Success "Cert generated — thumbprint=$thumbprint ksp=$ksp"
+    $thumbprint = ($certOutput | Select-String '^thumbprint=(.+)$').Matches[0].Groups[1].Value
+    $ksp        = ($certOutput | Select-String '^ksp=(.+)$').Matches[0].Groups[1].Value
+    $x5tS256    = ($certOutput | Select-String '^x5t_s256=(.+)$').Matches[0].Groups[1].Value
+    $uploadCertificate = $true
+    Success "Cert generated — thumbprint=$thumbprint ksp=$ksp"
+}
 
-# Caller needs to PATCH the public DER to the Blueprint app via Graph.
-# We delegate that to a small Python one-liner that reuses
-# create_entra_agent_ids.py's helpers. Skipped here because that file
-# already publishes the cert during provisioning when invoked with the
-# right flags; this branch only kicks in for the rotation path
-# (deploy-windows.ps1 calls rotate_cert_windows.py instead).
+if ($uploadCertificate) {
+    & $VenvPython (Join-Path $ScriptDir 'upload_blueprint_cert.py') `
+        '--blueprint-object-id' $BlueprintObjectId `
+        '--der-path' $derPath
+    $uploadExit = $LASTEXITCODE
+    Remove-Item $derPath -Force -ErrorAction SilentlyContinue
+    if ($uploadExit -ne 0) { Fail "Blueprint certificate upload failed" }
+    Success "Blueprint public certificate registered in Entra"
+}
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 8. Write .env with strict ACLs (icacls -M, D10)
 # ═══════════════════════════════════════════════════════════════════════════
 Step 7 "Writing .env"
 
-$envPath = Join-Path $ProjectRoot '.env'
 Update-EnvFile $envPath @{
     ENTRABOT_TENANT_ID                 = $account.tenantId
+    ENTRABOT_BLUEPRINT_APP_ID          = $BlueprintAppId
+    ENTRABOT_BLUEPRINT_OBJECT_ID       = $BlueprintObjectId
     ENTRABOT_BLUEPRINT_CERT_THUMBPRINT = $x5tS256
     ENTRABOT_BLUEPRINT_CERT_SHA1       = $thumbprint
     ENTRABOT_BLUEPRINT_KSP             = $ksp
+    ENTRABOT_AGENT_ID                  = $AgentId
+    ENTRABOT_AGENT_OBJECT_ID           = $AgentObjectId
+    ENTRABOT_AGENT_USER_ID             = $AgentUserId
+    ENTRABOT_AGENT_USER_UPN            = $AgentUserUpn
 }
 
 # icacls :M (modify) — NOT :R (read-only). :R would self-brick: setup
@@ -439,6 +567,16 @@ Update-EnvFile $envPath @{
 $user = "$env:USERDOMAIN\$env:USERNAME"
 icacls $envPath /inheritance:r /grant:r "${user}:M" | Out-Null
 Success ".env locked to $user (modify, per D10)"
+
+$persistSharedConfig = @'
+import sys
+from entrabot.harness.config import globalcfg
+
+globalcfg.persist_global_from_env(sys.argv[1])
+'@
+& $VenvPython -c $persistSharedConfig $envPath
+if ($LASTEXITCODE -ne 0) { Fail "Could not save shared tenant + Blueprint configuration" }
+Success "Shared tenant + Blueprint configuration saved for additional agents"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 8. Cloud memory — Azure Blob Storage provisioning (ADR-005, Phase 5)

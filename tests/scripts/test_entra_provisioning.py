@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -72,6 +74,58 @@ def test_existing_local_cert_is_uploaded_when_provisioner_app_is_recreated(
         )
     ]
     assert state["PROVISIONER_CERT_THUMBPRINT"] == "thumb"
+
+
+def test_explicit_tenant_switch_clears_tenant_scoped_provisioner_state(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state: dict[str, str] = {
+        "TENANT_ID": "old-tenant",
+        "PROVISIONER_CLIENT_ID": "old-client-id",
+        "PROVISIONER_CERT_THUMBPRINT": "old-thumb",
+    }
+    pem_bundle = (
+        "-----BEGIN CERTIFICATE-----\ncert\n-----END CERTIFICATE-----\n"
+        "-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n"
+    )
+    requested_keychain_tenants: list[str] = []
+
+    monkeypatch.setenv("ENTRABOT_TENANT_ID", "new-tenant")
+    monkeypatch.setattr(provisioning_module, "get_state", lambda key: state.get(key))
+    monkeypatch.setattr(provisioning_module, "set_state", state.__setitem__)
+    monkeypatch.setattr(provisioning_module, "clear_state", lambda key: state.pop(key, None))
+    monkeypatch.setattr(
+        provisioning_module,
+        "_keychain_get_cert",
+        lambda tenant: requested_keychain_tenants.append(tenant) or pem_bundle,
+    )
+    monkeypatch.setattr(
+        provisioning_module,
+        "_application_exists",
+        lambda client_id: pytest.fail("old provisioner app must not be reused"),
+    )
+    monkeypatch.setattr(
+        provisioning_module,
+        "run_az",
+        lambda args, capture=True: (0, "new-client-id", "")
+        if args[:4] == ["ad", "app", "list", "--display-name"]
+        else pytest.fail(f"unexpected az call: {args}"),
+    )
+    monkeypatch.setattr(provisioning_module, "_ensure_permissions_and_consent", lambda *a: False)
+    monkeypatch.setattr(provisioning_module, "_remove_legacy_password_credentials", lambda *a: 0)
+    monkeypatch.setattr(provisioning_module, "_thumbprint_from_cert_pem", lambda cert: "new-thumb")
+    monkeypatch.setattr(provisioning_module, "_upload_cert_to_app", lambda *a: None)
+
+    client_id, _, tenant_id = provisioning_module.ensure_app_registration(
+        ["Application.ReadWrite.All"], wait_for_propagation=False
+    )
+
+    assert tenant_id == "new-tenant"
+    assert client_id == "new-client-id"
+    assert state["TENANT_ID"] == "new-tenant"
+    assert state["PROVISIONER_CLIENT_ID"] == "new-client-id"
+    assert state["PROVISIONER_CERT_THUMBPRINT"] == "new-thumb"
+    assert requested_keychain_tenants == ["new-tenant"]
 
 
 def test_wait_for_propagation_skips_sleep_when_permissions_unchanged(
@@ -319,3 +373,68 @@ def test_load_existing_app_registration_does_not_repair_permissions(
     assert client_id == "client-id"
     assert returned_pem == pem_bundle
     assert tenant_id == "tenant-id"
+
+
+def test_existing_token_does_not_depend_on_ambient_azure_cli_tenant(
+    provisioning_module, monkeypatch,
+):
+    state = {"TENANT_ID": "selected-tenant", "PROVISIONER_CLIENT_ID": "selected-provisioner"}
+    monkeypatch.setenv("ENTRABOT_TENANT_ID", "selected-tenant")
+    monkeypatch.setattr(provisioning_module, "get_state", state.get)
+    cli_lookup = Mock(side_effect=AssertionError("Azure CLI is signed into another tenant"))
+    monkeypatch.setattr(provisioning_module, "_application_exists", cli_lookup)
+    cert = Mock(return_value="fixture-certificate-bundle")
+    monkeypatch.setattr(provisioning_module, "_keychain_get_cert", cert)
+    credential = Mock()
+    credential.get_token.return_value = SimpleNamespace(token="fixture-token")
+    credential_factory = Mock(return_value=credential)
+    monkeypatch.setattr("azure.identity.CertificateCredential", credential_factory)
+
+    assert provisioning_module.get_existing_graph_token() == "fixture-token"
+    cli_lookup.assert_not_called()
+    cert.assert_called_once_with("selected-tenant")
+    assert credential_factory.call_args.kwargs["tenant_id"] == "selected-tenant"
+    assert credential_factory.call_args.kwargs["client_id"] == "selected-provisioner"
+
+
+def test_existing_token_rejects_cross_tenant_provisioner_state(provisioning_module, monkeypatch):
+    state = {"TENANT_ID": "old-tenant", "PROVISIONER_CLIENT_ID": "old-provisioner"}
+    monkeypatch.setenv("ENTRABOT_TENANT_ID", "selected-tenant")
+    monkeypatch.setattr(provisioning_module, "get_state", state.get)
+    cli_lookup = Mock(side_effect=AssertionError("must not query ambient Azure CLI"))
+    cert = Mock(side_effect=AssertionError("must not use mismatched credentials"))
+    monkeypatch.setattr(provisioning_module, "_application_exists", cli_lookup)
+    monkeypatch.setattr(provisioning_module, "_keychain_get_cert", cert)
+
+    with pytest.raises(provisioning_module.ProvisionerBootstrapError, match="tenant"):
+        provisioning_module.load_existing_app_registration()
+    cert.assert_not_called()
+    cli_lookup.assert_not_called()
+
+
+@pytest.mark.parametrize("text", ["{broken-json", "[]"])
+def test_invalid_saved_state_does_not_masquerade_as_new_installation(
+    provisioning_module, monkeypatch, tmp_path, text,
+):
+    state_path = tmp_path / ".entrabot-state.json"
+    state_path.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(provisioning_module, "_STATE_FILE", state_path)
+
+    with pytest.raises(provisioning_module.ProvisionerBootstrapError, match="state"):
+        provisioning_module.get_state("BLUEPRINT_APP_ID")
+    assert state_path.read_text(encoding="utf-8") == text
+
+
+def test_unreadable_saved_state_does_not_trigger_provisioner_creation(
+    provisioning_module, monkeypatch, tmp_path,
+):
+    state_path = tmp_path / ".entrabot-state.json"
+    state_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(provisioning_module, "_STATE_FILE", state_path)
+    monkeypatch.setattr(Path, "read_text", Mock(side_effect=PermissionError("unreadable")))
+    cli = Mock(side_effect=AssertionError("must not create or find a replacement provisioner"))
+    monkeypatch.setattr(provisioning_module, "run_az", cli)
+
+    with pytest.raises(provisioning_module.ProvisionerBootstrapError, match="state"):
+        provisioning_module.ensure_app_registration([], wait_for_propagation=False)
+    cli.assert_not_called()

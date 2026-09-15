@@ -4,8 +4,7 @@ import pytest
 
 pytest.importorskip("textual")  # the TUI is the default UI but tests skip if textual is absent
 
-from entrabot.harness.ui import banner  # noqa: E402
-from entrabot.harness.ui import UiStyle  # noqa: E402
+from entrabot.harness.ui import UiStyle, banner  # noqa: E402
 from entrabot.harness.ui.tui import TextualUI  # noqa: E402
 
 

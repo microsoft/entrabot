@@ -138,7 +138,7 @@ def _entrabot_home() -> Path:
     return entrabot_home()
 
 
-def _dotenv_candidates() -> "list[Path]":
+def _dotenv_candidates() -> list[Path]:
     """Per-agent ``.env`` locations in precedence order (first found wins).
 
     Repo-independent: a wheel-installed bot keeps its creds under ``~/.entrabot`` (or
@@ -158,18 +158,22 @@ def _dotenv_candidates() -> "list[Path]":
 def _overlay(env_path: Path, *, force: bool = False) -> bool:
     """Load KEY=VALUE pairs from ``env_path`` into ``os.environ``. ``force`` overwrites existing
     values; otherwise pre-existing env vars win. Returns True if the file was read."""
+    from entrabot.harness.config import globalcfg
+
     try:
         if not env_path.is_file():
             return False
-        text = env_path.read_text()
+        values = globalcfg.read_env(str(env_path), strict=True)
     except OSError:
         return False
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key, value = key.strip(), value.strip()
+    cert_key = "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT"
+    if force and values.get(cert_key):
+        for key in globalcfg.BLUEPRINT_CERT_KEYS:
+            os.environ.pop(key, None)
+    elif not force and os.environ.get(cert_key) and values.get(cert_key) != os.environ[cert_key]:
+        for key in globalcfg.BLUEPRINT_CERT_KEYS:
+            values.pop(key, None)
+    for key, value in values.items():
         if force or key not in os.environ:
             os.environ[key] = value
     return True
@@ -188,7 +192,17 @@ def _load_dotenv() -> None:
 def apply_agent_env(root: str) -> bool:
     """Overlay ``<root>/.entrabot/.env`` for an explicitly chosen agent, overriding any ambient
     agent identity already loaded. Called by the harness once it has resolved its root."""
-    return _overlay(Path(root) / ".entrabot" / ".env", force=True)
+    from entrabot.harness.config import globalcfg
+
+    path = Path(globalcfg.agent_env_path(root))
+    if not path.is_file():
+        return False
+    agent_env = globalcfg.read_env(str(path), strict=True)
+    resolved = globalcfg.resolve_agent_env(dict(os.environ), agent=agent_env)
+    for key in (*globalcfg.AGENT_KEYS, *globalcfg.SHARED_CONFIG_KEYS):
+        os.environ.pop(key, None)
+    os.environ.update(resolved)
+    return True
 
 
 # Load .env on first import so all downstream code sees the values.
@@ -253,6 +267,10 @@ class EntraBotConfig:
     blob_endpoint: str | None = field(default=None)
     blob_container: str | None = field(default=None)
     keep_memory_local: bool = field(default=False)
+    a365_observability_enabled: bool = False
+    a365_export_enabled: bool = False
+    a365_console_enabled: bool = False
+    a365_service_namespace: str | None = None
 
     @classmethod
     def from_env(cls) -> EntraBotConfig:
@@ -278,9 +296,7 @@ class EntraBotConfig:
                 os.environ.get("ENTRABOT_HUMAN_USER_TENANT_IDS")
             ),
             human_user_mails=_parse_csv(os.environ.get("ENTRABOT_HUMAN_USER_MAILS")),
-            human_user_types=_parse_csv_preserve_empty(
-                os.environ.get("ENTRABOT_HUMAN_USER_TYPES")
-            ),
+            human_user_types=_parse_csv_preserve_empty(os.environ.get("ENTRABOT_HUMAN_USER_TYPES")),
             log_dir=_path_from_env("ENTRABOT_LOG_DIR", "logs"),
             audit_dir=_path_from_env("ENTRABOT_AUDIT_DIR", "audit"),
             data_dir=_path_from_env("ENTRABOT_DATA_DIR", "data"),
@@ -296,6 +312,16 @@ class EntraBotConfig:
             blob_container=os.environ.get("ENTRABOT_BLOB_CONTAINER"),
             keep_memory_local=os.environ.get("ENTRABOT_KEEP_MEMORY_LOCAL", "").lower()
             in ("true", "1", "yes"),
+            a365_observability_enabled=os.environ.get(
+                "ENTRABOT_A365_OBSERVABILITY_ENABLED", ""
+            ).lower()
+            in ("true", "1", "yes"),
+            a365_export_enabled=os.environ.get("ENTRABOT_A365_EXPORT_ENABLED", "").lower()
+            in ("true", "1", "yes"),
+            a365_console_enabled=os.environ.get("ENTRABOT_A365_CONSOLE_ENABLED", "").lower()
+            in ("true", "1", "yes"),
+            a365_service_namespace=os.environ.get("ENTRABOT_A365_SERVICE_NAMESPACE", "").strip()
+            or None,
         )
 
 

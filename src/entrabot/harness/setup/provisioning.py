@@ -46,6 +46,8 @@ def _run_add_agent(name: str, suffix: str) -> dict[str, str] | None:
     child_env["_ENTRABOT_UPN_SUFFIX"] = suffix
     child_env["ENTRABOT_AGENT_DISPLAY_NAME"] = name
     child_env.pop("ENTRABOT_NEW_CHAIN", None)  # must reuse the Blueprint, not fork a new chain
+    for key in globalcfg.AGENT_KEYS:
+        child_env.pop(key, None)
     _say(ansi.dim(f"  $ python {os.path.basename(script)}  (suffix={suffix})"))
     try:
         result = subprocess.run(
@@ -68,31 +70,24 @@ def _run_add_agent(name: str, suffix: str) -> dict[str, str] | None:
 def _write_agent_env(root: str, name: str, agent_ids: dict[str, str]) -> None:
     """Write the per-agent .env (identity only; global supplies tenant/Blueprint) and apply it to
     the current process for the connection test."""
+    from entrabot.config import apply_agent_env
+
     agent_path = globalcfg.agent_env_path(root)
     globalcfg.write_env(
         agent_path, agent_ids,
         header=f"ENTRABOT agent identity for '{name}'. Reuses the global Blueprint. Do not commit.",
     )
     _say(ansi.green(f"  ✓ wrote agent identity → {agent_path}"))
-    for key, value in agent_ids.items():
-        os.environ[key] = value
+    apply_agent_env(root)
 
 
-def _run_setup(platform_name: str, suffix: str, reuse: bool) -> bool:
-    if reuse:
-        blueprint_id = globalcfg.blueprint_app_id()
-        _say(f"  provisioning a new Agent User under the existing Blueprint ({blueprint_id}).")
-        if platform_name == "windows":
-            cmd = _ps("setup-windows.ps1", "-UseBlueprint", blueprint_id, "-UpnSuffix", suffix)
-        else:
-            cmd = _sh("setup.sh", f"--use-blueprint={blueprint_id}", f"--with-upn-suffix={suffix}")
+def _run_setup(platform_name: str, suffix: str) -> bool:
+    _say("  provisioning a new chain: Blueprint, certificate, Agent Identity + User, grants, "
+         "license.")
+    if platform_name == "windows":
+        cmd = _ps("setup-windows.ps1", "-NewChain", "-UpnSuffix", suffix)
     else:
-        _say("  provisioning a new chain: Blueprint, certificate, Agent Identity + User, grants, "
-             "license.")
-        if platform_name == "windows":
-            cmd = _ps("setup-windows.ps1", "-NewChain", "-UpnSuffix", suffix)
-        else:
-            cmd = _sh("setup.sh", "--new", f"--with-upn-suffix={suffix}")
+        cmd = _sh("setup.sh", "--new", f"--with-upn-suffix={suffix}")
     exit_code = _run(cmd)
     if exit_code != 0:
         _say(ansi.red(f"  setup failed (exit {exit_code}). See {LINKS['troubleshoot']}"))
@@ -103,42 +98,29 @@ def _persist_split(root: str, name: str) -> bool:
     """Read the combined ``.env`` the setup script just wrote, split it into the shared global
     config (written once) and this directory's per-agent ``.env``, and apply both to the current
     process for the connection test. Returns True if an agent identity was captured."""
-    generated = globalcfg.read_env(os.path.join(_clone_root(), ".env"))
+    source = os.path.join(_clone_root(), ".env")
+    generated = globalcfg.read_env(source, strict=True)
     global_env, agent_env = globalcfg.split(generated)
     if not agent_env.get("ENTRABOT_AGENT_USER_UPN"):
         _say(ansi.red("  couldn't read the provisioned agent identity from the generated .env."))
         return False
 
-    if not globalcfg.global_exists() and global_env:
-        globalcfg.write_env(
-            globalcfg.global_env_path(),
-            global_env,
-            header="ENTRABOT global config — shared tenant + Blueprint (provision once).\n"
-            "All agents on this device reuse these. Do not commit.",
-        )
-        _say(ansi.green(f"  ✓ wrote shared global config → {globalcfg.global_env_path()}"))
-    else:
-        _say(ansi.dim(f"  reusing existing global config at {globalcfg.global_env_path()}"))
-
-    agent_path = globalcfg.agent_env_path(root)
-    globalcfg.write_env(
-        agent_path,
-        agent_env,
-        header=f"ENTRABOT agent identity for '{name}'. Reuses the global Blueprint. Do not commit.",
-    )
-    _say(ansi.green(f"  ✓ wrote agent identity → {agent_path}"))
-
-    # apply to the current process so the connection test sees the new agent
-    for key, value in {**global_env, **agent_env}.items():
+    global_path = globalcfg.persist_global_from_env(source)
+    _say(ansi.dim(f"  shared config available at {global_path}"))
+    for key, value in global_env.items():
         os.environ[key] = value
+    _write_agent_env(root, name, agent_env)
     return True
 
 
 def _prepare_new_chain(platform_name: str, step) -> bool:
-    """First-time prep before provisioning a brand-new chain: tenant confirm → az login → prereqs."""
+    """Prepare tenant, Azure login, and prerequisites for a brand-new chain."""
     _say(ansi.dim("\n  No global config yet — setting up the shared tenant + Blueprint first."))
     step("Tenant")
-    _say("  You need an Entra tenant where you can create app registrations (a test tenant is ideal).")
+    _say(
+        "  You need an Entra tenant where you can create app registrations "
+        "(a test tenant is ideal)."
+    )
     if not _yes("Do you have a tenant to use?", default=True):
         _say(ansi.yellow(f"  Get a free test tenant: {LINKS['tenant']}"))
         _say("  Re-run `entrabot init` once you have one.")
@@ -154,16 +136,6 @@ def _provision_identity(platform_name: str, root: str, name: str, step) -> bool:
     """First-time setup (tenant + Blueprint + cert + Agent) or, when the global config already
     exists, a new Agent User under the existing Blueprint. Writes this dir's per-agent .env and
     applies it to the process. ``step`` numbers the progress. Returns True on success."""
-    reuse = globalcfg.global_exists()
-    if reuse:
-        global_env = globalcfg.read_global()
-        _say(ansi.green(
-            f"\n  Found global config: tenant {global_env.get('ENTRABOT_TENANT_ID')} · "
-            f"Blueprint {global_env.get('ENTRABOT_BLUEPRINT_APP_ID')}"))
-        _say(ansi.dim("  Reusing it — skipping tenant, sign-in, and prerequisites."))
-    elif not _prepare_new_chain(platform_name, step):
-        return False
-
     if not _provisioning_available():
         # Wheel install (no scripts). The runtime is repo-independent; provisioning is one-time
         # from a clone.
@@ -176,6 +148,16 @@ def _provision_identity(platform_name: str, root: str, name: str, step) -> bool:
         _say(f"  {LINKS['install']}")
         return False
 
+    reuse = globalcfg.global_exists()
+    if reuse:
+        global_env = globalcfg.read_global()
+        _say(ansi.green(
+            f"\n  Found global config: tenant {global_env.get('ENTRABOT_TENANT_ID')} · "
+            f"Blueprint {global_env.get('ENTRABOT_BLUEPRINT_APP_ID')}"))
+        _say(ansi.dim("  Reusing it — skipping tenant, sign-in, and prerequisites."))
+    elif not _prepare_new_chain(platform_name, step):
+        return False
+
     suffix = _derive_suffix(name)
     step(f"Provisioning agent '{name}'")
     if reuse:
@@ -186,7 +168,7 @@ def _provision_identity(platform_name: str, root: str, name: str, step) -> bool:
             return False
         _write_agent_env(root, name, agent_ids)
     else:
-        if not _run_setup(platform_name, suffix, reuse):
+        if not _run_setup(platform_name, suffix):
             return False
         if not _persist_split(root, name):
             return False

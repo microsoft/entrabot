@@ -40,6 +40,8 @@ WITH_CONTAINER=""
 CREATE_NEW_STORAGE=false
 WITH_A365_WORK_IQ=false
 CONFIGURE_A365_WORK_IQ=false
+CONFIGURE_A365_OBSERVABILITY=false
+OBSERVABILITY_AGENT_ROOT=""
 A365_AGENT_NAME="EntraBot Code Agent"
 A365_WORK_IQ_MCP_SERVERS=(mcp_WordServer mcp_ODSPRemoteServer)
 
@@ -54,6 +56,14 @@ for arg in "$@"; do
 done
 
 if [ "$SETUP_STATUS" = true ]; then
+    for arg in "${STATUS_ARGS[@]}"; do
+        case "$arg" in
+            --configure-a365-observability|--agent-root=*)
+                echo "ERROR: --status cannot be combined with A365 observability stages." >&2
+                exit 2
+                ;;
+        esac
+    done
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
     exec "$PROJECT_ROOT/status.sh" "${STATUS_ARGS[@]}"
@@ -107,6 +117,12 @@ for arg in "$@"; do
         --a365-agent-name=*)
             A365_AGENT_NAME="${arg#--a365-agent-name=}"
             ;;
+        --configure-a365-observability)
+            CONFIGURE_A365_OBSERVABILITY=true
+            ;;
+        --agent-root=*)
+            OBSERVABILITY_AGENT_ROOT="${arg#--agent-root=}"
+            ;;
         --diagnose)
             DIAGNOSE=true
             ;;
@@ -125,6 +141,19 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+# These are standalone stages on an existing installation, never combined with provisioning.
+if [ "$CONFIGURE_A365_OBSERVABILITY" = true ]; then
+    for arg in "$@"; do
+        case "$arg" in
+            --configure-a365-observability|--agent-root=*|--help|-h) ;;
+            *) echo "ERROR: A365 observability stages cannot be combined with $arg." >&2; exit 2 ;;
+        esac
+    done
+elif [ -n "$OBSERVABILITY_AGENT_ROOT" ]; then
+    echo "ERROR: --agent-root requires an A365 observability stage." >&2
+    exit 2
+fi
 
 # Mutex: --create-new-storage and --with-storage-account both pin the
 # storage account name; only one can win.
@@ -219,6 +248,11 @@ if [ "$SHOW_HELP" = true ]; then
     echo "                         uses the existing Entrabot Blueprint from state."
     echo "  --help, -h             Show this help"
     echo ""
+    echo "  A365 observability (existing installation; no identity provisioning):"
+    echo "  --configure-a365-observability"
+    echo "                         Apply approved observability grants and enable this agent."
+    echo "  --agent-root=DIR       Target agent directory (default: this clone)."
+    echo ""
     echo "Diagnostics:"
     echo "  --status               Skip setup and run ./status.sh. Extra args are"
     echo "                         forwarded to show_agent_status.py, e.g."
@@ -254,6 +288,14 @@ fail()    { echo -e "  ${RED}❌ $1${NC}"; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [ "$CONFIGURE_A365_OBSERVABILITY" = true ]; then
+    OBSERVABILITY_PYTHON="$PROJECT_ROOT/.venv/bin/python"
+    if [ ! -x "$OBSERVABILITY_PYTHON" ]; then
+        fail "No installed .venv found. Complete Entrabot setup first."
+    fi
+    exec "$OBSERVABILITY_PYTHON" "$SCRIPT_DIR/configure_a365_observability.py" \
+        --authorize --agent-root "${OBSERVABILITY_AGENT_ROOT:-$PROJECT_ROOT}"
+fi
 cd "$PROJECT_ROOT"
 
 echo -e "${GREEN}╔══════════════════════════════════════════════╗${NC}"
@@ -518,6 +560,7 @@ if ! az account show &>/dev/null; then
 fi
 
 TENANT_ID=$(az account show --query "tenantId" -o tsv)
+export ENTRABOT_TENANT_ID="$TENANT_ID"
 ACCOUNT_NAME=$(az account show --query "name" -o tsv)
 HUMAN_UPN=$(az account show --query "user.name" -o tsv || echo "")
 HUMAN_USER_ID=$(az ad signed-in-user show --query "id" -o tsv || echo "")
@@ -675,17 +718,30 @@ success "Account:    $ACCOUNT_NAME"
 # ════════════════════════════════════════════════════════════════════════════
 step 3 "Ensuring Python dependencies for provisioning scripts"
 
-if [ -d "$PROJECT_ROOT/.venv" ]; then
-    SCRIPT_PYTHON="$PROJECT_ROOT/.venv/bin/python3"
-    if [ ! -f "$SCRIPT_PYTHON" ]; then
-        SCRIPT_PYTHON="$PYTHON"
-    fi
-else
-    SCRIPT_PYTHON="$PYTHON"
+if [ ! -d "$PROJECT_ROOT/.venv" ]; then
+    "$PYTHON" -m venv "$PROJECT_ROOT/.venv"
 fi
+SCRIPT_PYTHON="$PROJECT_ROOT/.venv/bin/python3"
+"$SCRIPT_PYTHON" -m pip install --quiet --upgrade pip setuptools wheel
+"$SCRIPT_PYTHON" -m pip install --quiet -e "$PROJECT_ROOT[dev,provisioning]"
+success "Entrabot and provisioning dependencies available in the local venv"
 
-"$SCRIPT_PYTHON" -m pip install --quiet azure-identity requests 2>&1 | tail -1 || true
-success "azure-identity and requests available"
+unset ENTRABOT_NEW_CHAIN ENTRABOT_AGENT_USER_UPN _ENTRABOT_UPN_SUFFIX _ENTRABOT_USE_BLUEPRINT
+
+if ! "$SCRIPT_PYTHON" - "$TENANT_ID" "$NEW_CHAIN" "$USE_BLUEPRINT" <<'PY'
+import sys
+from entrabot.harness.config import globalcfg
+
+try:
+    globalcfg.validate_setup_context(
+        tenant_id=sys.argv[1], new_chain=sys.argv[2] == "true", blueprint_app_id=sys.argv[3],
+    )
+except ValueError as error:
+    raise SystemExit(f"ERROR: {error}")
+PY
+then
+    fail "Shared configuration conflicts with requested setup"
+fi
 
 # ── Validate identity mode ────────────────────────────────────────────────
 if [ "$NEW_CHAIN" = true ] && [ -n "$USE_BLUEPRINT" ]; then
@@ -719,6 +775,7 @@ fi
 #       fresh discovery against the new Blueprint. Keep PROVISIONER_* (the
 #       helper app is machine-scoped, unaffected by the switch).
 if [ -n "$USE_BLUEPRINT" ] && [ "$NEW_CHAIN" = false ]; then
+    export _ENTRABOT_USE_BLUEPRINT="$USE_BLUEPRINT"
     STATE_FILE="$PROJECT_ROOT/.entrabot-state.json"
     CURRENT_BP=$(read_state "BLUEPRINT_APP_ID")
 
@@ -779,7 +836,7 @@ import json, pathlib
 sf = pathlib.Path('$STATE_FILE')
 data = json.loads(sf.read_text()) if sf.is_file() else {}
 # Keep provisioner app — it's a helper, not part of the agent identity
-keep = {k: v for k, v in data.items() if k.startswith('PROVISIONER')}
+keep = {k: v for k, v in data.items() if k.startswith('PROVISIONER') or k == 'TENANT_ID'}
 sf.write_text(json.dumps(keep, indent=2))
 print('  Cleared identity state (kept provisioner app)')
 "
@@ -862,17 +919,9 @@ fi
 # ════════════════════════════════════════════════════════════════════════════
 step 6 "Managing Blueprint certificate"
 
-# Ensure venv + deps are available (cryptography + keyring needed for cert generation)
-if [ ! -d ".venv" ]; then
-    "$PYTHON" -m venv .venv
-fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
-# Python 3.12+ venv no longer seeds setuptools/wheel; editable install from
-# pyproject.toml needs both. Seed them before the editable install.
-pip install --quiet --upgrade pip setuptools wheel
-pip install --quiet -e ".[dev]" 2>/dev/null || pip install --quiet -e "." 2>/dev/null
-VENV_PY="$PROJECT_ROOT/.venv/bin/python3"
+VENV_PY="$SCRIPT_PYTHON"
 
 # The Blueprint authenticates with a certificate, not a client secret.
 # Private key is stored in the OS credential store (Keychain/TPM/Keyring).
@@ -1066,25 +1115,9 @@ print(thumbprint)
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# Step 7: Python venv + dependencies + .env
+# Step 7: Write .env
 # ════════════════════════════════════════════════════════════════════════════
-step 7 "Setting up Python virtual environment and writing .env"
-
-if [ ! -d ".venv" ]; then
-    "$PYTHON" -m venv .venv
-    success "Created .venv"
-else
-    success "Virtual environment .venv already exists"
-fi
-
-# shellcheck disable=SC1091
-source .venv/bin/activate
-
-# Python 3.12+ venv no longer seeds setuptools/wheel; editable install from
-# pyproject.toml needs both. Seed them before the editable install.
-pip install --quiet --upgrade pip setuptools wheel
-pip install --quiet -e ".[dev]"
-success "Installed dependencies (including dev)"
+step 7 "Writing .env"
 
 cat > .env << EOF
 # EntraBot Identity Research — generated by scripts/setup.sh
@@ -1113,6 +1146,13 @@ EOF
 
 chmod 600 .env
 success ".env file created (chmod 600)"
+
+if ! "$VENV_PY" -c \
+    'import sys; from entrabot.harness.config import globalcfg; globalcfg.persist_global_from_env(sys.argv[1])' \
+    "$PROJECT_ROOT/.env"; then
+    fail "Could not save shared tenant + Blueprint configuration"
+fi
+success "Shared tenant + Blueprint configuration saved for additional agents"
 
 # ════════════════════════════════════════════════════════════════════════════
 # Step 7b: Azure Blob Storage provisioning (ADR-005)

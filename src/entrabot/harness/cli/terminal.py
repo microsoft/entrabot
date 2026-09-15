@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from contextlib import suppress
 
 from .. import config as cfgmod
 from ..ui import UI
@@ -52,7 +53,5 @@ def _confirm(prompt: str, default: bool = True) -> bool:
 
 def _force_utf8() -> None:
     for stream in (sys.stdout, sys.stderr):
-        try:
+        with suppress(Exception):
             stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
-        except Exception:
-            pass

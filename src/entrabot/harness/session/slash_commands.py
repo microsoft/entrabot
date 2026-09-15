@@ -3,6 +3,7 @@ commands to the Copilot SDK's runtime command registry (skills + client commands
 
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import Any
 
 from copilot.rpc import CommandsInvokeRequest, CommandsListRequest
@@ -85,10 +86,8 @@ class _SlashCommandsMixin:
             names.add("/" + getattr(command, "name", ""))
             for alias in getattr(command, "aliases", None) or []:
                 names.add("/" + alias)
-        try:
+        with suppress(Exception):
             self._ui.set_commands(sorted(name for name in names if name != "/"))
-        except Exception:
-            pass
 
     async def _forward_command(self, cmd: str, args: list[str]) -> None:
         known = {getattr(c, "name", "").lower() for c in self._runtime_cmds}

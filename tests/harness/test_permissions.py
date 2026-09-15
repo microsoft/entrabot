@@ -1,3 +1,5 @@
+import pytest
+
 from entrabot.harness.session import permissions
 
 
@@ -72,7 +74,8 @@ async def test_gate_allows_and_denies_per_class():
     assert (await gate_g(_shell_input("edit")))["permissionDecision"] == "deny"
     # two-arg call (SDK passes context) + local operator (None -> cli, fully trusted by default)
     gate_local = permissions.build_tool_gate(p, lambda: None)
-    assert (await gate_local(_shell_input("edit"), {"session_id": "s"}))["permissionDecision"] == "allow"
+    result = await gate_local(_shell_input("edit"), {"session_id": "s"})
+    assert result["permissionDecision"] == "allow"
 
 
 async def test_gate_always_allow_locks_reply_path_for_every_caller():
@@ -99,3 +102,11 @@ async def test_gate_passthrough_when_no_tool_name():
     p = permissions.ToolPolicy()
     gate = permissions.build_tool_gate(p, lambda: "guest")
     assert await gate({"toolArgs": {}}) is None  # no toolName -> don't intervene
+
+
+@pytest.mark.parametrize("skill,allowed", [("docx", True), ("xlsx", False), ("", False)])
+async def test_skill_permissions_apply_to_selected_skill_not_generic_tool(skill, allowed):
+    policy = permissions.ToolPolicy(cli_all=False, cli={"docx", "skill"})
+    gate = permissions.build_tool_gate(policy, lambda: "cli")
+    decision = await gate({"toolName": "skill", "toolArgs": {"skill": skill}})
+    assert decision["permissionDecision"] == ("allow" if allowed else "deny")

@@ -9,8 +9,8 @@
     2. Python 3.12+ (winget install Python.Python.3.12)
     3. Git (winget install Git.Git)
     4. Azure CLI (winget install Microsoft.AzureCLI)
-    5. .NET SDK (needed for the Microsoft Agent 365 DevTools CLI)
-    6. Microsoft Agent 365 DevTools CLI (`a365`)
+    5. Optionally, with -WithA365WorkIq: .NET SDK and the Microsoft
+       Agent 365 DevTools CLI (`a365`)
     7. Visual Studio Build Tools with C++ workload (needed for native Python
        packages like cffi/cryptography that compile C extensions)
     8. Windows SDK (included with VS Build Tools C++ workload)
@@ -23,10 +23,14 @@
 
 .EXAMPLE
   .\scripts\prereqs-windows.ps1
+
+.EXAMPLE
+  .\scripts\prereqs-windows.ps1 -WithA365WorkIq
 #>
 
 [CmdletBinding()]
 param(
+    [switch]$WithA365WorkIq,
     [switch]$SkipBuildTools,
     [switch]$Help
 )
@@ -181,6 +185,7 @@ if (Test-CommandExists 'az') {
 # ═══════════════════════════════════════════════════════════════════════════
 # 5. .NET SDK (required for the Microsoft Agent 365 DevTools CLI)
 # ═══════════════════════════════════════════════════════════════════════════
+if ($WithA365WorkIq) {
 Write-Step ".NET SDK"
 
 if (Test-CommandExists 'dotnet') {
@@ -228,6 +233,9 @@ if (-not (Test-CommandExists 'dotnet')) {
     } else {
         $failed += "Agent 365 DevTools CLI"
     }
+}
+} else {
+    Write-Skip "Skipping .NET SDK and a365 CLI (pass -WithA365WorkIq to install)"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -297,10 +305,14 @@ $checks = @(
     @{ Name = "pwsh";   Cmd = "pwsh";   MinVer = $null },
     @{ Name = "python"; Cmd = "python"; MinVer = "3.12" },
     @{ Name = "git";    Cmd = "git";    MinVer = $null },
-    @{ Name = "az";     Cmd = "az";     MinVer = $null },
-    @{ Name = "dotnet"; Cmd = "dotnet"; MinVer = $null },
-    @{ Name = "a365";   Cmd = "a365";   MinVer = $null }
+    @{ Name = "az";     Cmd = "az";     MinVer = $null }
 )
+if ($WithA365WorkIq) {
+    $checks += @(
+        @{ Name = "dotnet"; Cmd = "dotnet"; MinVer = $null },
+        @{ Name = "a365";   Cmd = "a365";   MinVer = $null }
+    )
+}
 
 foreach ($check in $checks) {
     if (Test-CommandExists $check.Cmd) {
@@ -346,7 +358,7 @@ if ($failed) {
     Write-Ok "All prerequisites ready!"
     Write-Host ""
     Write-Host "  Next step:" -ForegroundColor White
-    Write-Host "    .\scripts\setup-windows.ps1 -NewChain -UpnSuffix <yourname>" -ForegroundColor White
+    Write-Host "    .\scripts\setup-windows.ps1 -NewChain -UpnSuffix my-agent" -ForegroundColor White
     Write-Host ""
     exit 0
 }

@@ -17,6 +17,16 @@ Claude Code v2.1.152 now does MCP OAuth 2.1 discovery and ignores `.mcp.json` `h
 
 ## P1
 
+### Expand harness A365 observability beyond invocation spans
+The `harness-a365-observability` branch explicitly emits content-suppressed
+`InvokeAgent` lifecycle spans and maintains its delegated exporter token. It does
+not yet explicitly create `ExecuteToolScope`, `InferenceScope`, or `OutputScope`
+spans from Copilot SDK lifecycle events.
+
+- **Effort:** M
+- **Depends on:** live validation of invocation telemetry in Defender
+- **Source:** full branch integration audit, 2026-09-14
+
 ### Follow-up: two-phase sponsor confirmation flow for mutating tools
 The active-sponsor-channel binding shipped in PR `fix/msrc-active-sponsor-channel-binding` closes Chain A from the security confused-deputy report (attacker in low-priv chat manipulating action on a chat where sponsor is passive) but does NOT close the residual window where a sponsor IS actively engaged in the target chat. An attacker who gets a sponsor to read an injected SharePoint doc (Chain B) can still trigger a malicious `add_member` / `share_file` because all binding checks pass.
 

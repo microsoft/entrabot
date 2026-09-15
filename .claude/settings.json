@@ -55,7 +55,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 scripts/hooks/inject_body_prompt.py",
+            "command": "python scripts/hooks/inject_body_prompt.py",
             "timeout": 5
           }
         ]
@@ -67,7 +67,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 scripts/hooks/block_local_memory_write.py",
+            "command": "python scripts/hooks/block_local_memory_write.py",
             "timeout": 5
           }
         ]
@@ -77,7 +77,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 scripts/hooks/require_body_prompt.py",
+            "command": "python scripts/hooks/require_body_prompt.py",
             "timeout": 5
           }
         ]

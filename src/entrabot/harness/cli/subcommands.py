@@ -8,20 +8,15 @@ from datetime import UTC, datetime
 
 from .. import config as cfgmod
 from ..config import HarnessConfig
-from ..session import InteractiveSession
-from ..teams import make_token_provider
 from .terminal import _confirm, _pick_ui, _resolve_root
 
 
 def _apply_agent_identity(root: str) -> None:
     """Layer this agent's identity (root/.entrabot/.env) over the global tenant/blueprint base so
-    get_config()/token-minting see the right creds. Best-effort — absent config is fine."""
-    try:
-        from entrabot import config as entracfg
+    get_config()/token-minting see the right creds. Unreadable/invalid config must stop startup."""
+    from entrabot import config as entracfg
 
-        entracfg.apply_agent_env(root)
-    except Exception:
-        pass
+    entracfg.apply_agent_env(root)
 
 
 def _cmd_init(positionals: list[str], flags: set) -> int:
@@ -65,7 +60,8 @@ def _cmd_migrate(positionals: list[str], flags: set) -> int:
         print("  (use --force to overwrite). Leaving it untouched.")
     else:
         globalcfg.write_env(
-            global_path, global_env,
+            global_path,
+            global_env,
             header="ENTRABOT global config — shared tenant + Blueprint (migrated). Do not commit.",
         )
         print(f"  ✓ tenant + Blueprint → {global_path}")
@@ -76,7 +72,8 @@ def _cmd_migrate(positionals: list[str], flags: set) -> int:
             print(f"  default agent already exists: {agent_path} (use --force to overwrite).")
         else:
             globalcfg.write_env(
-                agent_path, agent_env,
+                agent_path,
+                agent_env,
                 header="ENTRABOT default agent identity (migrated). Do not commit.",
             )
             print(f"  ✓ existing agent ({agent_env['ENTRABOT_AGENT_USER_UPN']}) → {agent_path}")
@@ -103,7 +100,8 @@ def _cmd_users(args: list[str], flags: set) -> int:
 
     try:
         records = fetch_agent_identity_sponsors(
-            get_config(), user_token_provider=acquire_agent_user_token)
+            get_config(), user_token_provider=acquire_agent_user_token
+        )
     except ValueError:
         records = []  # no sponsors
     except Exception as error:
@@ -123,6 +121,10 @@ async def _cmd_run(flags: set, root: str) -> int:
     # before anything reads creds (token provider, self_id).
     _apply_agent_identity(root)
 
+    from entrabot.config import get_config
+    from entrabot.observability.runtime import initialize_observability
+    from entrabot.observability.tokens import refresh_observability_token
+
     harness_config = cfgmod.try_load(root)
     if harness_config is None:
         # Just-run-it: scaffold a sensible default config rather than erroring.
@@ -134,10 +136,20 @@ async def _cmd_run(flags: set, root: str) -> int:
         )
         harness_config.ensure_identity()
         cfgmod.save(root, harness_config)
-        print(f"(no config at {cfgmod.config_path(root)} — created a default agent '{name}'; "
-              f"run `entrabot init` for guided setup)")
+        print(
+            f"(no config at {cfgmod.config_path(root)} — created a default agent '{name}'; "
+            f"run `entrabot init` for guided setup)"
+        )
     elif harness_config.ensure_identity():
         cfgmod.save(root, harness_config)
+
+    observability_config = get_config()
+    initialize_observability(observability_config, agent_name=harness_config.name)
+    await refresh_observability_token(observability_config)
+
+    # Instrumentation must be initialized before importing the session/Copilot SDK.
+    from ..session import InteractiveSession
+    from ..teams import make_token_provider
 
     session = InteractiveSession(
         harness_config,
@@ -154,12 +166,19 @@ async def _cmd_run(flags: set, root: str) -> int:
 
 
 async def _cmd_doctor(root: str) -> int:
+    _apply_agent_identity(root)
+
     import copilot
+
+    from ..teams import make_token_provider
 
     print("ENTRABOT — doctor\n")
     token_provider = make_token_provider()
-    teams_status = "available" if token_provider \
+    teams_status = (
+        "available"
+        if token_provider
         else "none → console-only (set ENTRABOT_GRAPH_TOKEN or run `entrabot init`)"
+    )
     print(f"  Teams token: {teams_status}")
 
     client = copilot.CopilotClient(working_directory=root, log_level="error")

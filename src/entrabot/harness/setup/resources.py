@@ -16,7 +16,7 @@ import os
 REPO_URL = "https://github.com/microsoft/entrabot"
 
 
-def _repo_root() -> str:
+def repo_root() -> str:
     """Candidate cloned-repo root: this module lives at <repo>/src/entrabot/harness/setup/."""
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
@@ -31,7 +31,7 @@ def _has_setup_scripts(directory: str) -> bool:
 def scripts_dir() -> str | None:
     """Directory holding the platform setup/provisioning scripts, or ``None`` if unavailable
     (e.g. installed from a wheel without a clone). A clear sentinel beats a path that 404s."""
-    candidate_scripts_dir = os.path.join(_repo_root(), "scripts")
+    candidate_scripts_dir = os.path.join(repo_root(), "scripts")
     if _has_setup_scripts(candidate_scripts_dir):
         return candidate_scripts_dir
     return None
@@ -39,7 +39,7 @@ def scripts_dir() -> str | None:
 
 def doc_url(anchor: str = "") -> str:
     """Link to a doc — a local INSTALL.md when running from a clone, else the GitHub URL."""
-    local = os.path.join(_repo_root(), "INSTALL.md")
+    local = os.path.join(repo_root(), "INSTALL.md")
     if os.path.isfile(local):
         if anchor:
             return f"{local} § {anchor}"

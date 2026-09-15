@@ -32,7 +32,9 @@ class _SchedulingMixin:
             schedule = arguments.get("schedule") if isinstance(arguments, dict) \
                 else getattr(arguments, "schedule", "")
             try:
-                task = self._scheduler.add(prompt, schedule)
+                task = self._scheduler.add(
+                    prompt, schedule, caller_id=self._ctx.caller, chat_id=self._ctx.chat,
+                )
             except ValueError as error:
                 return f"error: {error}"
             return f"scheduled {task.id}: {schedule}"
@@ -78,7 +80,11 @@ class _SchedulingMixin:
             self._ui.append_line("(no schedules)", UiStyle.DIM)
             return
         for task in tasks:
+            summary = (
+                f"  {task.id}  {task.spec.raw}  → {task.next_due:%Y-%m-%d %H:%M}  "
+                f"{task.prompt[:50]}"
+            )
             self._ui.append_line(
-                f"  {task.id}  {task.spec.raw}  → {task.next_due:%Y-%m-%d %H:%M}  {task.prompt[:50]}",
+                summary,
                 UiStyle.INFO,
             )

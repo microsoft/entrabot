@@ -89,20 +89,39 @@ provisioning, then "copy the generated `.env` to `~/.entrabot/.env`". `.env` loo
 ```json
 {
   "permissions": {
-    "default": { "mode": "ask", "deny": ["shell:rm*", "shell:sudo*"] },
-    "callers": {
-      "boss@contoso.com": { "mode": "allow" },
-      "guest@partner.com": { "mode": "deny", "allow": ["read", "mcp:docs.*"] }
-    }
+    "cli_all": true,
+    "sponsor_all": false,
+    "guest_all": false,
+    "cli": [],
+    "sponsor": ["view", "docx"],
+    "guest": []
   }
 }
 ```
 
-The active Teams caller (resolved by `teams.TeamsBridge`) is matched against the
-policy in `permissions.py`, which feeds the SDK's `on_permission_request` hook. Tokens are
-`<kind>` (`shell`/`write`/`read`/`url`/`mcp`/`custom`) or `<kind>:<glob>`. An explicit
-`allow`/`deny` is authoritative; only the undecided ("ask") case is affected by `--yolo`
-(skips the prompt) — so `--yolo` can never blow past a caller the policy explicitly denies.
+The SDK's `on_pre_tool_use` hook checks the active caller's class (`cli`, `sponsor`,
+or `guest`). An `*_all` setting permits all tools for that class; otherwise only
+listed tool or skill names are allowed. Individual skill entries govern the requested
+skill, not every invocation of the generic `skill` tool. Teams reply tools remain
+locked on so the agent can respond. `--yolo` bypasses this policy and should only
+be used for explicitly trusted sessions.
+
+Scheduled work preserves its creator's caller/chat context across restart and is
+evaluated under that caller's current class when it fires. Legacy schedules that
+have no recorded creator remain on disk but are paused with a warning; recreate
+them from the intended caller context. Unknown provenance is never promoted to
+trusted CLI authority.
+
+## Runtime ownership
+
+One `InteractiveSession` owns its Copilot client, Teams bridge, scheduler and optional
+A365 refresh task. Repeated startup does not create another client. `/reload` closes
+the old SDK session and its active invocation before replacing it, without restarting
+those harness-owned workers. Cleanup removes the old event handler and awaits cancellation.
+All accepted CLI, Teams and scheduled turns enter the same busy/interruptible state.
+
+Concurrent Teams cache misses share one token acquisition. Graph and A365 tokens
+remain audience-separated; their caches are not interchangeable.
 
 ## Package map (port of the .NET harness)
 
@@ -148,8 +167,8 @@ Closed in this branch:
 7. ✅ **Windows UTF-8** — stdout/stderr are reconfigured to UTF-8 so the banner / `●` / em-dashes
    don't crash cp1252 consoles.
 
-Tests: `pytest tests/harness` — 26 unit tests (config, scheduler, permissions incl. the
-two-arg handler + yolo/ask/deny semantics, MCP loader, banner).
+Tests: `pytest tests/harness` covers configuration, scheduling provenance, per-caller
+tool/skill permissions, lifecycle cleanup, token acquisition concurrency, UI and MCP discovery.
 
 Still open:
 

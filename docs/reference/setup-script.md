@@ -14,8 +14,8 @@ The `./scripts/setup.sh` script provisions and configures an EntraBot agent end 
 
 | Flag | Purpose |
 |------|---------|
-| *(none)* | Reuse existing Blueprint / Agent Identity / Agent User from `.entrabot-state.json`. This is the common case on a machine that's already been set up. |
-| `--new` | Provision a brand-new identity chain (Blueprint + Agent Identity + Agent User). Does not touch the existing chain; the current `.env` is backed up. Must be paired with `--with-upn-suffix` or you'll be prompted. |
+| *(none)* | Unix setup requires an identity mode. For a rerun, select the existing Blueprint and the same Agent User UPN or suffix with `--use-blueprint`. |
+| `--new` | Provision a brand-new identity chain (Blueprint + Agent Identity + Agent User). Requires a config home without an existing shared Blueprint; use a separate `ENTRABOT_HOME` for another chain. Must be paired with `--with-upn-suffix` or you'll be prompted. |
 | `--use-blueprint=<app-id>` | Attach to an existing Blueprint from a different machine. Generates a new cert locally and uploads its public key to the Blueprint. Reuses the existing Agent Identity and Agent User. Also handles the "switch this machine to a different Blueprint" case — stale Agent Identity / User / cert thumbprint are wiped from local state. |
 | `--with-upn-suffix=<name>` | Required with `--new`; also supported with `--use-blueprint` to select an existing suffixed Agent User under the Blueprint. Example: `--with-upn-suffix=sati-agent` produces or selects `entrabot-agent-sati-agent@yourdomain.com`. |
 | `--agent-user-upn=<upn>` | Explicit Agent User UPN. With `--use-blueprint`, selects an existing Agent User to reuse, e.g. `entrabot-agent-sati-agent@yourtenant.onmicrosoft.com`. With `--new`, creates exactly that UPN, e.g. `entrabot-agent@yourtenant.onmicrosoft.com`. |
@@ -41,7 +41,12 @@ The `./scripts/setup.sh` script provisions and configures an EntraBot agent end 
 |------|---------|
 | `--with-a365-work-iq` | Install/update the Microsoft Agent 365 DevTools CLI prerequisite used for Work IQ setup. |
 | `--configure-a365-work-iq` | Configure Work IQ Word for the existing Entrabot Blueprint. Writes `a365.config.json`, adds `mcp_WordServer`, ensures the A365 resource service principals and OAuth grants exist, then runs `a365 setup permissions mcp`. |
+| `--configure-a365-observability` | Standalone authorized onboarding against existing identities; enables export for the selected agent only after grants and token acquisition succeed. |
+| `--agent-root=<directory>` | Select an additional agent directory for observability authorization. Omit it for the primary agent configured in this clone. Authorization cannot be combined with normal provisioning or Work IQ options. |
 | `--help`, `-h` | Show the built-in help. |
+
+See [A365 observability and ALM evidence](scripts/setup.md#a365-observability-and-alm-evidence)
+for the authorization workflow, ALM evidence model, and Windows equivalents.
 
 ## Examples
 
@@ -127,6 +132,16 @@ ENTRABOT_HUMAN_UPN=...
 ENTRABOT_PROVISIONER_APP_ID=...
 ENTRABOT_LOG_LEVEL=INFO
 ```
+
+Setup also writes the shared portion to `global.env` under the platform Entrabot config
+directory (`%LOCALAPPDATA%\entrabot` on Windows, `~/.entrabot` on macOS/Linux, or
+`ENTRABOT_HOME` when set). This happens automatically; a normal installation does not need
+`entrabot migrate`. The global file excludes `ENTRABOT_AGENT_*` and per-agent A365
+observability/export flags.
+
+If `global.env` already describes a different tenant or Blueprint, setup fails rather than
+overwriting it. Re-running setup for the same Blueprint refreshes the certificate metadata
+together and preserves unrelated global settings.
 
 Without `--use-cloud-memory` you'll also see:
 

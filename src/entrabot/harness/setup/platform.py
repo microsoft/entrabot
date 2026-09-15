@@ -10,6 +10,7 @@ import sys
 
 from ..ui import ansi
 from . import resources
+from .resources import repo_root
 
 # Doc links surfaced when a step needs manual setup.
 LINKS = {
@@ -19,11 +20,6 @@ LINKS = {
     "troubleshoot": f"Troubleshooting: {resources.doc_url('Troubleshooting')}",
     "clone": f"Clone the repo to provision: git clone {resources.REPO_URL}",
 }
-
-
-def repo_root() -> str:
-    """The cloned repo root (this package lives at <repo>/src/entrabot/harness/setup/)."""
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 
 def _scripts_dir() -> str | None:
