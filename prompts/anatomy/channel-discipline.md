@@ -83,9 +83,6 @@ a predictable, welcome presence in shared spaces.
   coordination, and short atomic actions. Side-work reports back as
   a single tool response. Main-thread actions are: conversational
   turns, a single Edit or command, dispatch of work to a sub-agent.
-  When in doubt, spawn — an unused sub-agent is cheap; a blocked
-  Teams conversation is not. See `superpowers:dispatching-parallel-agents`
-  for the broader pattern.
 - **Placeholder is your FIRST action on a substantive DM — ack,
   then work, then resolve.** The moment you decide to answer a
   substantive Teams DM, call `post_thinking_placeholder` *before*
