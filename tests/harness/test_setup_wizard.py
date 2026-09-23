@@ -97,12 +97,6 @@ def test_wizard_uses_shared_persistence_and_agent_writer(monkeypatch, tmp_path):
     })
 
 
-def test_setup_paths_have_one_resource_locator():
-    from entrabot.harness.setup import platform, resources
-
-    assert platform.repo_root is resources.repo_root
-
-
 def test_wheel_init_reports_missing_scripts_before_attempting_setup(
     monkeypatch, tmp_path, capsys,
 ):

@@ -2,9 +2,9 @@
 
 Every caller falls in one of three classes: **cli** (the local terminal operator), **sponsor**
 (a configured/elevated human on Teams), or **guest** (everyone else). Each individual tool
-(native / MCP / skill — see :mod:`entrabot.harness.session.toolcatalog`) is independently
-enabled per class. The YOLO row is three independent toggles — ``cli_all`` / ``sponsor_all`` /
-``guest_all`` — that grant *all* tools to that class.
+(native / MCP / skill — see :mod:`entrabot.harness.session.toolcatalog`) is independently enabled per
+class. The YOLO row is three independent toggles — ``cli_all`` / ``sponsor_all`` / ``guest_all``
+— that grant *all* tools to that class.
 
 Enforced via the SDK ``on_pre_tool_use`` hook, which fires for EVERY tool call (unlike
 ``on_permission_request``, which only fires for permission-gated tools). The hook gets a dict
@@ -91,26 +91,11 @@ def build_tool_gate(
         if not name:
             return None
         caller_class = resolve_class() or "cli"  # no caller bound → local operator
-        policy_key = name
-        if name == "skill":
-            arguments = (
-                hook_input.get("toolArgs", hook_input.get("tool_args"))
-                if isinstance(hook_input, dict)
-                else getattr(hook_input, "toolArgs", getattr(hook_input, "tool_args", None))
-            )
-            policy_key = arguments.get("skill") if isinstance(arguments, dict) else None
-            if not isinstance(policy_key, str) or not policy_key.strip():
-                return copilot.PreToolUseHookOutput(
-                    permissionDecision="deny",
-                    permissionDecisionReason="ENTRABOT policy: a named skill is required.",
-                )
-        if name in locked or force_yolo or policy.allowed(caller_class, policy_key):
+        if name in locked or force_yolo or policy.allowed(caller_class, name):
             return copilot.PreToolUseHookOutput(permissionDecision="allow")
         return copilot.PreToolUseHookOutput(
             permissionDecision="deny",
-            permissionDecisionReason=(
-                f"ENTRABOT policy: a {caller_class} may not use '{policy_key}'."
-            ),
+            permissionDecisionReason=f"ENTRABOT policy: a {caller_class} may not use '{name}'.",
         )
 
     return hook

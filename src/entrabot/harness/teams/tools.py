@@ -21,16 +21,12 @@ TEAMS_TOOL_NAMES = ("entrabot_send", "entrabot_read", "entrabot_list_chats")
 
 class SendArgs(BaseModel):
     message: str = Field(description="The message to send (HTML by default).")
-    chat_id: str | None = Field(
-        default=None, description="Target chat; defaults to the active chat."
-    )
+    chat_id: str | None = Field(default=None, description="Target chat; defaults to the active chat.")
     content_type: str = Field(default="html", description='"html" (default) or "text".')
 
 
 class ReadArgs(BaseModel):
-    chat_id: str | None = Field(
-        default=None, description="Chat to read; defaults to the active chat."
-    )
+    chat_id: str | None = Field(default=None, description="Chat to read; defaults to the active chat.")
     count: int = Field(default=5, description="How many recent messages to return.")
 
 
@@ -55,8 +51,7 @@ def build_teams_tools(bridge: TeamsBridge, ctx: TurnContext) -> list[Any]:
         message = _arg(arguments, "message", "")
         if not message:
             return "error: message is empty."
-        content_type = _arg(arguments, "content_type", "html")
-        result = await bridge.send(chat, message, content_type=content_type)
+        result = await bridge.send(chat, message, content_type=_arg(arguments, "content_type", "html"))
         return f"sent to {chat} (message id {result.get('id', '?')})"
 
     async def _read(_ctx: Any, inv: copilot.ToolInvocation) -> str:

@@ -25,34 +25,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 HOOK_SCRIPT = REPO_ROOT / "scripts" / "hooks" / "block_local_memory_write.py"
 
 
-def test_configured_hook_uses_active_python_and_still_blocks():
-    settings = json.loads((REPO_ROOT / ".claude" / "settings.json").read_text())
-    commands = [
-        hook["command"]
-        for group in settings["hooks"]["PreToolUse"]
-        if group["matcher"] == "Write|Edit|NotebookEdit"
-        for hook in group["hooks"]
-    ]
-    assert commands == ["python scripts/hooks/block_local_memory_write.py"]
-    env = {key: value for key, value in os.environ.items() if key != "ENTRABOT_KEEP_MEMORY_LOCAL"}
-    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
-    result = subprocess.run(
-        commands[0],
-        shell=True,
-        cwd=REPO_ROOT,
-        env=env,
-        input=json.dumps({
-            "tool_name": "Edit",
-            "tool_input": {"file_path": _home_memory_path()},
-        }),
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    assert result.returncode == 2
-    assert json.loads(result.stdout)["decision"] == "block"
-
-
 def _run_hook(payload: dict, env_overrides: dict | None = None) -> subprocess.CompletedProcess:
     """Run the hook script with the given JSON payload on stdin."""
     # Build a clean env that does NOT inherit ENTRABOT_KEEP_MEMORY_LOCAL

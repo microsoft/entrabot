@@ -95,9 +95,6 @@ def group_sections(catalog: list[dict]) -> list[tuple]:
     """Group a catalog into ordered (section, [tool-dicts]): Native, MCP servers, then Skills."""
     grouped: dict = {}
     for item in catalog:
-        # Skill authorization uses the requested skill's name, not its generic invoker.
-        if item[KEY_NAME] == "skill" and item[KEY_KIND] == KIND_TOOL:
-            continue
         grouped.setdefault(item[KEY_SECTION], []).append(item)
 
     def rank(section: str) -> tuple:

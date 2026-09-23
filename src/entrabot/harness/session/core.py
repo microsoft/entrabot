@@ -71,7 +71,6 @@ class InteractiveSession(
         self._client: copilot.CopilotClient | None = None
         self._session: copilot.CopilotSession | None = None
         self._unsubscribe_session: Callable[[], None] | None = None
-        self._start_lock = asyncio.Lock()
         self._bridge: TeamsBridge | None = None
         self._scheduler: SelfScheduler | None = None
         self._policy = ToolPolicy.from_config(config.permissions)
@@ -110,28 +109,24 @@ class InteractiveSession(
             self._ui.append_line("⏹ interrupted", UiStyle.WARN)
 
     async def _start(self) -> None:
-        async with self._start_lock:
-            if self._client is not None:
-                return
-            started = False
-            try:
-                if (
-                    self._observability_config.a365_observability_enabled
-                    and self._observability_config.a365_export_enabled
-                    and self._observability_refresh_task is None
-                ):
-                    self._observability_refresh_task = asyncio.create_task(
-                        observability_tokens.run_observability_token_refresh(
-                            self._observability_config, on_error=self._warn_observability,
-                        ),
-                        name="a365-observability-token-refresh",
-                    )
-                await self._connect()
-                started = True
-            finally:
-                # The TUI keeps running after displaying startup failures.
-                if not started:
-                    await self._dispose()
+        started = False
+        try:
+            if (
+                self._observability_config.a365_observability_enabled
+                and self._observability_config.a365_export_enabled
+            ):
+                self._observability_refresh_task = asyncio.create_task(
+                    observability_tokens.run_observability_token_refresh(
+                        self._observability_config, on_error=self._warn_observability,
+                    ),
+                    name="a365-observability-token-refresh",
+                )
+            await self._connect()
+            started = True
+        finally:
+            # The TUI keeps running after displaying startup failures.
+            if not started:
+                await self._dispose()
 
     async def _connect(self) -> None:
         self._ui.banner(banner.render())
@@ -235,8 +230,8 @@ class InteractiveSession(
     def _system_message(self) -> dict:
         teams = (
             "New Microsoft Teams messages are delivered to you as steering updates prefixed with "
-            "'[teams]'. Reply to people using the entrabot_send tool — the active chat is the one "
-            "the current message came from. "
+            "'[teams]'. Reply to people using the entrabot_send tool — the active chat is the one the "
+            "current message came from. "
             if self._bridge
             else "Teams is not configured this run, so you are talking to your operator locally. "
         )
@@ -248,9 +243,8 @@ class InteractiveSession(
         return {
             "mode": "append",
             "content": (
-                f"You are {self._config.name}, an agent running in the ENTRABOT harness. "
-                "You are NOT operating as an MCP server and do not need one connected. "
-                f"{teams}{cli}"
+                f"You are {self._config.name}, an agent running in the ENTRABOT harness. You are NOT "
+                f"operating as an MCP server and do not need one connected. {teams}{cli}"
                 "Be concise and helpful."
             ),
         }

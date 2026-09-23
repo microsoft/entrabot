@@ -4,7 +4,8 @@ import pytest
 
 pytest.importorskip("textual")  # the TUI is the default UI but tests skip if textual is absent
 
-from entrabot.harness.ui import UiStyle, banner  # noqa: E402
+from entrabot.harness.ui import banner  # noqa: E402
+from entrabot.harness.ui import UiStyle  # noqa: E402
 from entrabot.harness.ui.tui import TextualUI  # noqa: E402
 
 
@@ -47,6 +48,39 @@ async def test_tui_mounts_renders_autocompletes_and_submits():
         await pilot.pause()
 
     assert submitted == ["hello there"]
+
+
+async def test_tui_teardown_allows_late_session_cleanup():
+    ui = TextualUI()
+    app = ui._App()
+    ui.app = app
+    async with app.run_test():
+        ui.set_working(True)
+        ui.start_spinner("fixture")
+        ui.begin_assistant()
+        ui.append_inline("partial response")
+
+    # InteractiveSession disposes after ui.run() exits; late callbacks must not query dead widgets.
+    ui.set_working(False)
+    ui.append_line("late cleanup warning", UiStyle.WARN)
+    ui.stop_spinner()
+    assert ui.app is None
+    assert ui._spin_timer is None
+    assert ui._working is False
+
+
+async def test_tui_run_releases_app_even_if_run_async_fails(monkeypatch):
+    from unittest.mock import AsyncMock, Mock
+
+    ui = TextualUI()
+    app = Mock(run_async=AsyncMock(side_effect=RuntimeError("UI failed")))
+    monkeypatch.setattr(ui, "_App", lambda: app)
+
+    with pytest.raises(RuntimeError, match="UI failed"):
+        await ui.run(AsyncMock())
+
+    assert ui.app is None
+    ui.set_working(False)
 
 
 async def test_tui_select_picker_returns_index():

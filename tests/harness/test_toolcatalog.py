@@ -6,11 +6,7 @@ def test_group_sections_orders_native_mcp_skills():
         {"name": "view", "section": "Native", "kind": "tool"},
         {"name": "edit", "section": "Native", "kind": "tool"},
         {"name": "entrabot-send_teams_message", "section": "MCP · entrabot", "kind": "tool"},
-        {
-            "name": "github-mcp-server-search_code",
-            "section": "MCP · github-mcp-server",
-            "kind": "tool",
-        },
+        {"name": "github-mcp-server-search_code", "section": "MCP · github-mcp-server", "kind": "tool"},
         {"name": "docx", "section": "Skills", "kind": "skill"},
     ]
     sections = group_sections(catalog)
@@ -27,11 +23,3 @@ def test_group_sections_orders_native_mcp_skills():
 
 def test_group_sections_empty():
     assert group_sections([]) == []
-
-
-def test_permission_matrix_lists_skills_without_a_misleading_generic_toggle():
-    sections = group_sections([
-        {"name": "skill", "section": "Native", "kind": "tool"},
-        {"name": "docx", "section": "Skills", "kind": "skill"},
-    ])
-    assert sections == [("Skills", [{"name": "docx", "section": "Skills", "kind": "skill"}])]

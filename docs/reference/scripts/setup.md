@@ -110,9 +110,6 @@ source .venv/bin/activate
 entrabot
 ```
 
-Start Claude Code/Copilot from this activated environment as well. The repository's hooks
-use its `python` command so the same hook configuration works across supported platforms.
-
 Both wrappers call `scripts/configure_a365_observability.py --authorize`. When the agent root is
 omitted, the target is the Entrabot clone, not whichever unrelated directory the shell happens
 to be in. Legacy clone-based primary agents do not need harness scaffolding; their Agent User
@@ -186,12 +183,6 @@ refresh task is cancelled and awaited during session disposal.
 | `observability/runtime.py`, `context.py`, `tokens.py` | SDK initialization, invocation scopes and token-cache/refresh lifetime, respectively. |
 | `upload_blueprint_cert.py` | Idempotent public certificate registration; preserve other registered keys. |
 
-`entrabot init` reuses the shared persistence and agent writer rather than implementing a
-second global-config writer. Additional-agent provisioning passes an explicit UPN policy to
-the existing identity helper instead of modifying that helper's module-level configuration.
-The setup resource locator is shared across platforms; wheel installations without setup
-scripts report that limitation before trying to run prerequisites.
-
 ## `setup_delegated.sh`
 
 Browser-sign-in setup for `delegated` mode. Caches an MSAL token in the OS keystore so the MCP server can pick it up silently — no device-code flow.
@@ -257,9 +248,6 @@ Installs the prerequisites needed by `setup-windows.ps1`. Safe to re-run.
 
 ```powershell
 .\scripts\prereqs-windows.ps1
-
-# Add only when configuring Agent 365 Work IQ tools:
-.\scripts\prereqs-windows.ps1 -WithA365WorkIq
 ```
 
 ### What it installs
@@ -268,12 +256,10 @@ Installs the prerequisites needed by `setup-windows.ps1`. Safe to re-run.
 - Python 3.12+
 - Git
 - Azure CLI
+- .NET SDK
+- Microsoft Agent 365 DevTools CLI (`a365`)
 - Visual Studio Build Tools with C++ workload
 - Windows SDK
-
-With `-WithA365WorkIq`, it also installs the .NET SDK and Microsoft Agent 365
-DevTools CLI (`a365`). Neither is required for normal Entrabot setup or A365
-observability.
 
 Runs from Windows PowerShell 5.1 so users do not need `pwsh` first.
 

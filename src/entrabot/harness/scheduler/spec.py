@@ -73,8 +73,7 @@ def parse_schedule(spec: str) -> ScheduleSpec:
             raise ValueError(f"invalid delay (min 10s): {spec!r}")
         return ScheduleSpec(kind="oneshot", interval=duration, raw=raw)
     if lowered.startswith("daily at "):
-        cron = _hhmm_to_cron(lowered[len("daily at "):], "*")
-        return ScheduleSpec(kind="cron", cron=cron, raw=raw)
+        return ScheduleSpec(kind="cron", cron=_hhmm_to_cron(lowered[len("daily at "):], "*"), raw=raw)
     if lowered.startswith("weekdays at "):
         return ScheduleSpec(
             kind="cron", cron=_hhmm_to_cron(lowered[len("weekdays at "):], "1-5"), raw=raw

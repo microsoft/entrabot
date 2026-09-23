@@ -6,7 +6,7 @@
                            shared tenant/Blueprint if already set up; only mints a new agent.
                            Idempotent — re-run to continue setup of an existing agent.
   entrabot users           list the agent's sponsors (Entra Agent-Identity relationship; read-only)
-  entrabot migrate [.env]  lift a combined .env into global config + the default agent
+  entrabot migrate [.env]  lift an existing combined .env into ~/.entrabot/global.env + default agent
   entrabot doctor          check the Copilot runtime + auth + Teams token
   entrabot --version | --help
 

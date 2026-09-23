@@ -76,11 +76,7 @@ def run_init(root: str) -> bool:
     verified = _connection_test(os.environ.get("ENTRABOT_AGENT_USER_UPN", name))
     if not verified:
         _say(ansi.yellow("  A new agent's Teams/mailbox can take 10-15 min to provision. The"))
-        _say(
-            ansi.yellow(
-                "  identity is created and saved — re-check later with `entrabot doctor`."
-            )
-        )
+        _say(ansi.yellow("  identity is created and saved — re-check later with `entrabot doctor`."))
 
     step("Harness config")
     _scaffold_config(root, name)

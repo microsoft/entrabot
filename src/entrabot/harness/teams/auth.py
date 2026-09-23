@@ -68,22 +68,20 @@ def _three_hop_provider() -> TokenProvider | None:
         return None
 
     cache: dict = {"token": None, "exp": 0.0}
-    refresh_lock = asyncio.Lock()
 
     async def _provider() -> str:
-        async with refresh_lock:
-            now = time.time()
-            if cache["token"] and now < cache["exp"] - _REFRESH_SKEW:
-                return cache["token"]
-            # acquire is sync (cert signing + network); run off the event loop
-            token = await asyncio.to_thread(acquire_agent_user_token, config)
-            cache["token"] = token
-            try:
-                claims = jwt.decode(token, options={"verify_signature": False})
-                cache["exp"] = float(claims.get("exp", now + 3000))
-            except Exception:
-                cache["exp"] = now + 3000
-            return token
+        now = time.time()
+        if cache["token"] and now < cache["exp"] - _REFRESH_SKEW:
+            return cache["token"]
+        # acquire is sync (cert signing + network); run off the event loop
+        token = await asyncio.to_thread(acquire_agent_user_token, config)
+        cache["token"] = token
+        try:
+            claims = jwt.decode(token, options={"verify_signature": False})
+            cache["exp"] = float(claims.get("exp", now + 3000))
+        except Exception:
+            cache["exp"] = now + 3000
+        return token
 
     return _provider
 

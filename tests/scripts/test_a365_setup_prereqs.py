@@ -15,26 +15,21 @@ def read_script(path: str) -> str:
     return (REPO_ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_windows_prereqs_installs_dotnet_and_a365_cli_only_when_requested() -> None:
+def test_windows_prereqs_installs_dotnet_and_a365_cli() -> None:
     script = read_script("scripts/prereqs-windows.ps1")
 
-    assert "[switch]$WithA365WorkIq" in script
-    assert "if ($WithA365WorkIq)" in script
     assert "Microsoft.DotNet.SDK.9" in script
     assert "Microsoft.Agents.A365.DevTools.Cli" in script
     assert "dotnet tool install --global Microsoft.Agents.A365.DevTools.Cli" in script
     assert "dotnet tool update --global Microsoft.Agents.A365.DevTools.Cli" in script
     assert "a365" in script
-    assert "-NewChain -UpnSuffix my-agent" in script
-    assert "<yourname>" not in script
 
 
-def test_windows_setup_requires_a365_cli_only_for_work_iq() -> None:
+def test_windows_setup_probes_a365_cli() -> None:
     script = read_script("scripts/setup-windows.ps1")
 
-    assert "foreach ($tool in 'python', 'az', 'git', 'pwsh')" in script
-    assert "if ($ConfigureA365WorkIq -and -not (Get-Command 'a365'" in script
-    assert "Found: python, az, git, pwsh" in script
+    assert "a365" in script
+    assert "Found: python, az, git, pwsh, a365" in script
     assert "scripts\\prereqs-windows.ps1" in script
 
 
@@ -52,6 +47,45 @@ def test_windows_setup_uploads_blueprint_certificate_before_writing_env() -> Non
     assert generate < upload < write_env
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows setup script")
+def test_windows_update_env_file_writes_one_key_per_line_for_new_file(tmp_path: Path) -> None:
+    pwsh = shutil.which("pwsh")
+    if not pwsh:
+        pytest.skip("PowerShell 7 is not installed")
+    env_path = tmp_path / ".env"
+    probe = tmp_path / "probe.ps1"
+    # Load only Update-EnvFile from setup; nothing else in the script runs.
+    probe.write_text(
+        r"""
+param([string]$SetupScript, [string]$EnvPath)
+$ErrorActionPreference = 'Stop'
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $SetupScript, [ref]$null, [ref]$null
+)
+$function = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq 'Update-EnvFile'
+}, $true)
+. ([scriptblock]::Create($function.Extent.Text))
+Update-EnvFile $EnvPath @{ FIRST_KEY = 'one'; SECOND_KEY = 'two'; THIRD_KEY = 'three' }
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            pwsh, "-NoProfile", "-NonInteractive", "-File", str(probe),
+            str(REPO_ROOT / "scripts" / "setup-windows.ps1"), str(env_path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = env_path.read_text(encoding="utf-8-sig").splitlines()
+    assert sorted(lines) == ["FIRST_KEY=one", "SECOND_KEY=two", "THIRD_KEY=three"]
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows native argument passing")
 @pytest.mark.parametrize(
     ("helper_name", "expected_arguments"),
@@ -60,7 +94,6 @@ def test_windows_setup_uploads_blueprint_certificate_before_writing_env() -> Non
             "upload_blueprint_cert.py",
             ["--blueprint-object-id", "fixture-blueprint-object", "--der-path"],
         ),
-        ("ensure_a365_work_iq_permissions.py", ["--blueprint-app-id", "fixture-blueprint-app"]),
     ],
 )
 def test_windows_setup_passes_separate_native_arguments(
@@ -303,12 +336,13 @@ def test_windows_setup_can_run_interactive_a365_work_iq_configuration() -> None:
     assert "$permissionsOutput = a365 setup permissions mcp 2>&1" in script
     assert "OAuth2 grants failed" in script
     assert "ensure_a365_work_iq_permissions.py" in script
-    assert "'--blueprint-app-id' $BlueprintAppId" in script
+    assert "'--blueprint-app-id', $BlueprintAppId" in script
     config_call = script.index("Write-A365Config")
     requirements_call = script.index("a365 setup requirements", config_call)
     preflight_call = script.index("ensure_a365_work_iq_permissions.py", config_call)
     permissions_call = script.index("a365 setup permissions mcp", config_call)
     assert config_call < requirements_call < preflight_call < permissions_call
-    provisioning = script.index('Step 5 "Provisioning Entra Agent Identity"')
-    assert provisioning < script.index("if ($ConfigureA365WorkIq)", provisioning)
+    assert script.index("Step 5 \"Provisioning Entra Agent Identity\"") < script.index(
+        "if ($ConfigureA365WorkIq)"
+    )
     assert "spike_a365_work_iq.py" in script

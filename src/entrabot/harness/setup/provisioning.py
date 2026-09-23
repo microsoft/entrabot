@@ -114,13 +114,10 @@ def _persist_split(root: str, name: str) -> bool:
 
 
 def _prepare_new_chain(platform_name: str, step) -> bool:
-    """Prepare tenant, Azure login, and prerequisites for a brand-new chain."""
+    """First-time prep before provisioning a brand-new chain: tenant confirm → az login → prereqs."""
     _say(ansi.dim("\n  No global config yet — setting up the shared tenant + Blueprint first."))
     step("Tenant")
-    _say(
-        "  You need an Entra tenant where you can create app registrations "
-        "(a test tenant is ideal)."
-    )
+    _say("  You need an Entra tenant where you can create app registrations (a test tenant is ideal).")
     if not _yes("Do you have a tenant to use?", default=True):
         _say(ansi.yellow(f"  Get a free test tenant: {LINKS['tenant']}"))
         _say("  Re-run `entrabot init` once you have one.")

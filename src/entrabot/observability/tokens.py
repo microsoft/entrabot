@@ -69,11 +69,6 @@ class ObservabilityTokenCache:
                 return None
             return cached.token
 
-    def clear(self) -> None:
-        """Remove all cached observability tokens."""
-        with self._lock:
-            self._tokens.clear()
-
     def refresh_delay(self, agent_id: str, tenant_id: str) -> float:
         """Schedule renewal before the resolver's cutoff, without evicting the token."""
         with self._lock:

@@ -25,8 +25,10 @@ class _StatusMixin:
     async def _handle_permissions(self) -> None:
         if not self._catalog:  # enumerate on demand if startup couldn't
             self._ui.start_spinner("enumerating tools…")
-            with suppress(Exception):
+            try:
                 self._catalog = await toolcatalog.enumerate_tools(self._session)
+            except Exception:
+                pass
             self._ui.stop_spinner()
         for item in self._catalog:  # mark the harness reply-path tools as locked ON
             item["locked"] = item["name"] in LOCKED_TOOLS

@@ -60,8 +60,7 @@ def _cmd_migrate(positionals: list[str], flags: set) -> int:
         print("  (use --force to overwrite). Leaving it untouched.")
     else:
         globalcfg.write_env(
-            global_path,
-            global_env,
+            global_path, global_env,
             header="ENTRABOT global config — shared tenant + Blueprint (migrated). Do not commit.",
         )
         print(f"  ✓ tenant + Blueprint → {global_path}")
@@ -72,8 +71,7 @@ def _cmd_migrate(positionals: list[str], flags: set) -> int:
             print(f"  default agent already exists: {agent_path} (use --force to overwrite).")
         else:
             globalcfg.write_env(
-                agent_path,
-                agent_env,
+                agent_path, agent_env,
                 header="ENTRABOT default agent identity (migrated). Do not commit.",
             )
             print(f"  ✓ existing agent ({agent_env['ENTRABOT_AGENT_USER_UPN']}) → {agent_path}")
@@ -100,8 +98,7 @@ def _cmd_users(args: list[str], flags: set) -> int:
 
     try:
         records = fetch_agent_identity_sponsors(
-            get_config(), user_token_provider=acquire_agent_user_token
-        )
+            get_config(), user_token_provider=acquire_agent_user_token)
     except ValueError:
         records = []  # no sponsors
     except Exception as error:
@@ -136,10 +133,8 @@ async def _cmd_run(flags: set, root: str) -> int:
         )
         harness_config.ensure_identity()
         cfgmod.save(root, harness_config)
-        print(
-            f"(no config at {cfgmod.config_path(root)} — created a default agent '{name}'; "
-            f"run `entrabot init` for guided setup)"
-        )
+        print(f"(no config at {cfgmod.config_path(root)} — created a default agent '{name}'; "
+              f"run `entrabot init` for guided setup)")
     elif harness_config.ensure_identity():
         cfgmod.save(root, harness_config)
 
@@ -174,11 +169,8 @@ async def _cmd_doctor(root: str) -> int:
 
     print("ENTRABOT — doctor\n")
     token_provider = make_token_provider()
-    teams_status = (
-        "available"
-        if token_provider
+    teams_status = "available" if token_provider \
         else "none → console-only (set ENTRABOT_GRAPH_TOKEN or run `entrabot init`)"
-    )
     print(f"  Teams token: {teams_status}")
 
     client = copilot.CopilotClient(working_directory=root, log_level="error")

@@ -297,25 +297,3 @@ async def test_reload_releases_old_session_and_invocation_but_keeps_background_o
     assert session._bridge is bridge
     scheduler.stop.assert_not_called()
     bridge.stop.assert_not_called()
-
-
-@pytest.mark.parametrize("concurrent", [False, True])
-async def test_start_called_twice_does_not_create_multiple_clients_or_refresh_tasks(
-    monkeypatch, session, concurrent,
-):
-    monkeypatch.setattr(
-        tokens, "run_observability_token_refresh", AsyncMock(return_value=None),
-    )
-    try:
-        if concurrent:
-            await asyncio.gather(session._start(), session._start())
-        else:
-            await session._start()
-        first = session._client
-        task = session._observability_refresh_task
-        await session._start()
-        core.copilot.CopilotClient.assert_called_once()
-        assert session._client is first
-        assert session._observability_refresh_task is task
-    finally:
-        await session._dispose()

@@ -210,7 +210,7 @@ function Update-EnvFile {
     param([string]$Path, [hashtable]$Values)
     $existing = if (Test-Path $Path) { @(Get-Content -Path $Path) } else { @() }
     $seen = @{}
-    $out = foreach ($line in $existing) {
+    $out = @(foreach ($line in $existing) {
         $m = [regex]::Match($line, '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=')
         if (-not $m.Success) { $line; continue }   # comments / blanks pass through
         $key = $m.Groups[1].Value
@@ -221,7 +221,7 @@ function Update-EnvFile {
         } else {
             $line                                    # keep unrelated keys as-is
         }
-    }
+    })
     foreach ($k in $Values.Keys) {                   # append keys not already in the file
         if (-not $seen.ContainsKey($k) -and $null -ne $Values[$k]) { $out += "$k=$($Values[$k])" }
     }
@@ -313,7 +313,7 @@ function Configure-A365WorkIq {
     a365 develop add-mcp-servers $A365WorkIqMcpServers --project-path $ProjectRoot
     if ($LASTEXITCODE -ne 0) { Fail "a365 develop add-mcp-servers failed" }
 
-    & $VenvPython (Join-Path $ScriptDir 'ensure_a365_work_iq_permissions.py') '--blueprint-app-id' $BlueprintAppId
+    & $VenvPython (Join-Path $ScriptDir 'ensure_a365_work_iq_permissions.py') '--blueprint-app-id', $BlueprintAppId
     if ($LASTEXITCODE -ne 0) { Fail "ensure_a365_work_iq_permissions.py failed" }
 
     $permissionsOutput = a365 setup permissions mcp 2>&1
@@ -335,18 +335,15 @@ function Configure-A365WorkIq {
 Step 1 "Probing prerequisites"
 
 $missing = @()
-foreach ($tool in 'python', 'az', 'git', 'pwsh') {
+foreach ($tool in 'python', 'az', 'git', 'pwsh', 'a365') {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
         $missing += $tool
     }
 }
-if ($ConfigureA365WorkIq -and -not (Get-Command 'a365' -ErrorAction SilentlyContinue)) {
-    $missing += 'a365'
-}
 if ($missing) {
     Fail "Missing tools: $($missing -join ', '). Run scripts\prereqs-windows.ps1 and retry."
 }
-Success "Found: python, az, git, pwsh$(if ($ConfigureA365WorkIq) { ', a365' })"
+Success "Found: python, az, git, pwsh, a365"
 
 $pyVer = & python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
 if ([version]$pyVer -lt [version]'3.12') {

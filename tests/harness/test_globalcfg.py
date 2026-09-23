@@ -47,8 +47,7 @@ def test_split_partitions_global_vs_agent():
 def test_env_roundtrip(tmp_path):
     p = str(tmp_path / "x.env")
     globalcfg.write_env(p, {"B": "2", "A": "1"}, header="hi")
-    with open(p) as handle:
-        text = handle.read()
+    text = open(p).read()
     assert text.splitlines()[0] == "# hi"
     assert globalcfg.read_env(p) == {"A": "1", "B": "2"}
 
@@ -99,10 +98,7 @@ def test_migrate_writes_under_entrabot_home(tmp_path, monkeypatch):
     assert rc == 0
     assert (home / "global.env").is_file()
     assert (home / ".env").is_file()  # default agent beside global, under ENTRABOT_HOME
-    assert (
-        globalcfg.read_env(str(home / ".env"))["ENTRABOT_AGENT_USER_UPN"]
-        == "bot@x.onmicrosoft.com"
-    )
+    assert globalcfg.read_env(str(home / ".env"))["ENTRABOT_AGENT_USER_UPN"] == "bot@x.onmicrosoft.com"
     assert "ENTRABOT_AGENT_ID" not in globalcfg.read_env(str(home / "global.env"))
 
 
@@ -319,6 +315,39 @@ def test_runtime_dotenv_does_not_reintroduce_old_certificate_metadata(tmp_path, 
     assert actual.blueprint_cert_thumbprint == "new-cert"
     assert actual.blueprint_cert_sha1 is None
     assert actual.blueprint_ksp is None
+
+
+@pytest.mark.parametrize("clone_blueprint,conflict", [
+    ("clone-blueprint", True),
+    ("shared-blueprint", False),
+])
+def test_runtime_rejects_clone_dotenv_from_a_different_chain(
+    tmp_path, monkeypatch, clone_blueprint, conflict,
+):
+    """_load_dotenv merges global.env with a clone's combined .env; a different chain there
+    must stop startup instead of silently pairing one agent with another Blueprint."""
+    from entrabot import config
+
+    monkeypatch.setattr(os, "environ", os.environ.copy())
+    monkeypatch.setattr(config, "_entrabot_home", lambda: tmp_path)
+    clone_env = tmp_path / "clone.env"
+    monkeypatch.setattr(config, "_dotenv_candidates", lambda: [clone_env])
+    globalcfg.write_env(str(tmp_path / "global.env"), {
+        "ENTRABOT_TENANT_ID": "tenant", "ENTRABOT_BLUEPRINT_APP_ID": "shared-blueprint",
+    })
+    globalcfg.write_env(str(clone_env), {
+        "ENTRABOT_TENANT_ID": "tenant", "ENTRABOT_BLUEPRINT_APP_ID": clone_blueprint,
+    })
+    agent_root = str(tmp_path / "agent")
+    globalcfg.write_env(globalcfg.agent_env_path(agent_root), {"ENTRABOT_AGENT_ID": "agent"})
+
+    if conflict:
+        with pytest.raises(ValueError, match="Conflicting ENTRABOT_BLUEPRINT_APP_ID"):
+            config.apply_agent_env(agent_root)
+        assert "ENTRABOT_AGENT_ID" not in os.environ
+    else:
+        assert config.apply_agent_env(agent_root)
+        assert os.environ["ENTRABOT_AGENT_ID"] == "agent"
 
 
 @pytest.mark.parametrize("tenant,blueprint,new_chain", [
