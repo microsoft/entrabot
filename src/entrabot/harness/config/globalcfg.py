@@ -22,7 +22,24 @@ AGENT_KEYS = (
     "ENTRABOT_AGENT_OBJECT_ID",
     "ENTRABOT_AGENT_USER_ID",
     "ENTRABOT_AGENT_USER_UPN",
+    # Export authorization is per identity, not inherited by every child of a Blueprint.
+    "ENTRABOT_A365_OBSERVABILITY_ENABLED",
+    "ENTRABOT_A365_EXPORT_ENABLED",
 )
+
+TENANT_BLUEPRINT_KEYS = (
+    "ENTRABOT_TENANT_ID",
+    "ENTRABOT_BLUEPRINT_APP_ID",
+    "ENTRABOT_BLUEPRINT_OBJECT_ID",
+)
+
+BLUEPRINT_CERT_KEYS = (
+    "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT",
+    "ENTRABOT_BLUEPRINT_CERT_SHA1",
+    "ENTRABOT_BLUEPRINT_KSP",
+)
+
+SHARED_CONFIG_KEYS = (*TENANT_BLUEPRINT_KEYS, *BLUEPRINT_CERT_KEYS)
 
 GLOBAL_ENV_FILENAME = "global.env"
 AGENT_ENV_FILENAME = ".env"
@@ -56,13 +73,17 @@ def _is_valid_env_line(line: str) -> bool:
     return bool(line) and not line.startswith("#") and "=" in line
 
 
-def read_env(path: str) -> dict[str, str]:
-    """Parse a KEY=VALUE ``.env`` file (ignores blanks/comments). Missing file → {}."""
+def read_env(path: str, *, strict: bool = False) -> dict[str, str]:
+    """Parse KEY=VALUE pairs. Missing file → {}; strict mode surfaces other I/O failures."""
     out: dict[str, str] = {}
     try:
         with open(path, encoding="utf-8") as handle:
             text = handle.read()
-    except (FileNotFoundError, OSError):
+    except FileNotFoundError:
+        return out
+    except OSError:
+        if strict:
+            raise
         return out
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -90,8 +111,103 @@ def write_env(path: str, mapping: dict[str, str], header: str = "") -> None:
         handle.write("\n".join(lines) + "\n")
 
 
+def resolve_shared_config(*mappings: dict[str, str]) -> dict[str, str]:
+    """Resolve shared identity settings in precedence order, rejecting mixed chains."""
+    for key in TENANT_BLUEPRINT_KEYS:
+        values = {mapping[key] for mapping in mappings if mapping.get(key)}
+        if len(values) > 1:
+            raise ValueError(
+                f"Conflicting {key} in shared and selected-agent configuration. "
+                "Select the correct ENTRABOT_HOME and agent root."
+            )
+
+    resolved: dict[str, str] = {}
+    for key in TENANT_BLUEPRINT_KEYS:
+        for mapping in mappings:
+            value = mapping.get(key, "").strip()
+            if value:
+                resolved[key] = value
+                break
+    # The chosen certificate's SHA-1/KSP must never come from a different generation.
+    for mapping in mappings:
+        if mapping.get("ENTRABOT_BLUEPRINT_CERT_THUMBPRINT", "").strip():
+            resolved.update(
+                (key, mapping[key].strip())
+                for key in BLUEPRINT_CERT_KEYS if mapping.get(key, "").strip()
+            )
+            break
+    return resolved
+
+
+def resolve_agent_env(*bases: dict[str, str], agent: dict[str, str]) -> dict[str, str]:
+    """Compose one selected identity over shared bases (highest precedence first).
+
+    Only ``agent`` supplies agent IDs/export flags. Shared-chain conflicts fail instead of
+    overriding; the highest-precedence certificate supplies its complete metadata tuple.
+    """
+    shared = resolve_shared_config(*bases, agent)
+    resolved: dict[str, str] = {}
+    for base in reversed(bases):
+        resolved.update(
+            (key, value) for key, value in base.items()
+            if key not in AGENT_KEYS and key not in SHARED_CONFIG_KEYS
+        )
+    resolved.update((key, value) for key, value in agent.items() if key not in SHARED_CONFIG_KEYS)
+    resolved.update(shared)
+    return resolved
+
+
+def persist_global_from_env(source: str, *, target: str | None = None) -> str:
+    """Persist only tenant/Blueprint/cert settings; leave existing shared preferences intact."""
+    source_env = read_env(source, strict=True)
+    source_global = {key: source_env[key] for key in SHARED_CONFIG_KEYS if source_env.get(key)}
+    required = (*TENANT_BLUEPRINT_KEYS, "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT")
+    missing = [key for key in required if not source_global.get(key, "").strip()]
+    if missing:
+        raise ValueError(
+            "Cannot persist incomplete shared configuration; missing: " + ", ".join(missing)
+        )
+
+    destination = target or global_env_path()
+    existing = read_env(destination, strict=True)
+    resolve_shared_config(source_global, existing)
+
+    merged = {key: value for key, value in existing.items() if key not in AGENT_KEYS}
+    # Certificate metadata describes one credential generation. If setup rotates or changes
+    # platform, fields absent from the new generation must not survive from the old one.
+    for key in BLUEPRINT_CERT_KEYS:
+        merged.pop(key, None)
+    merged.update(source_global)
+    if merged == existing:
+        return destination
+    write_env(
+        destination,
+        merged,
+        header="ENTRABOT global config — shared tenant + Blueprint. Do not commit.",
+    )
+    return destination
+
+
+def validate_setup_context(
+    *, tenant_id: str, blueprint_app_id: str = "", new_chain: bool = False,
+) -> None:
+    """Reject a conflicting shared home before setup makes any remote changes."""
+    if not tenant_id.strip():
+        raise ValueError("A tenant must be selected before setup.")
+    existing = read_env(global_env_path(), strict=True)
+    if new_chain and existing.get("ENTRABOT_BLUEPRINT_APP_ID"):
+        raise ValueError(
+            "ENTRABOT_HOME already has a shared Blueprint. Use a separate ENTRABOT_HOME "
+            "for a new chain, or omit -NewChain/--new to reuse the existing chain."
+        )
+    resolve_shared_config(existing, {
+        "ENTRABOT_TENANT_ID": tenant_id,
+        "ENTRABOT_BLUEPRINT_APP_ID": blueprint_app_id,
+    })
+
+
 def split(env: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
-    """Partition a combined env into (global, per-agent). Per-agent = the agent identity keys;
+    """Partition a combined env into (global, per-agent). Per-agent = identity + export flags;
     global = everything else (tenant/blueprint/cert, shared HUMAN_*, and any runtime prefs), so
     no key is ever dropped on the round-trip."""
     agent = {key: value for key, value in env.items() if key in AGENT_KEYS and value}

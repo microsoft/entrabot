@@ -233,3 +233,46 @@ class TestBlobStorageConfig:
             with patch.dict(os.environ, {"ENTRABOT_KEEP_MEMORY_LOCAL": val}, clear=False):
                 cfg = EntraBotConfig.from_env()
             assert cfg.keep_memory_local is False, f"Expected False for '{val}'"
+
+
+class TestA365ObservabilityConfig:
+    def test_observability_and_export_default_to_false(self, monkeypatch) -> None:
+        for name in (
+            "ENTRABOT_A365_OBSERVABILITY_ENABLED",
+            "ENTRABOT_A365_EXPORT_ENABLED",
+            "ENTRABOT_A365_SERVICE_NAMESPACE",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        cfg = EntraBotConfig.from_env()
+
+        assert cfg.a365_observability_enabled is False
+        assert cfg.a365_export_enabled is False
+        assert cfg.a365_service_namespace is None
+        assert EntraBotConfig().a365_service_namespace is None
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [("", None), (" \t ", None), ("example.support", "example.support"),
+         ("  example.support  ", "example.support")],
+    )
+    def test_service_namespace(self, value: str, expected: str | None) -> None:
+        with patch.dict(os.environ, {"ENTRABOT_A365_SERVICE_NAMESPACE": value}):
+            cfg = EntraBotConfig.from_env()
+
+        assert cfg.a365_service_namespace == expected
+
+    def test_console_defaults_to_false(self) -> None:
+        cfg = EntraBotConfig()
+
+        assert cfg.a365_console_enabled is False
+
+    @pytest.mark.parametrize("value", ["true", "True", "1", "yes", "YeS"])
+    def test_console_truthy_values(self, value: str) -> None:
+        with patch.dict(
+            os.environ,
+            {"ENTRABOT_A365_CONSOLE_ENABLED": value},
+            clear=False,
+        ):
+            cfg = EntraBotConfig.from_env()
+
+        assert cfg.a365_console_enabled is True

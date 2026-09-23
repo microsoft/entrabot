@@ -38,10 +38,6 @@ def main() -> int:
         print("ERROR: ENTRABOT_NEW_CHAIN must NOT be set — this reuses the existing Blueprint.",
               file=sys.stderr)
         return 2
-    # An inherited ENTRABOT_AGENT_USER_UPN (the *other* agent's, from a loaded .env) would make
-    # _agent_user_upn() reuse it and collide. A new agent's UPN must derive from the suffix.
-    os.environ.pop("ENTRABOT_AGENT_USER_UPN", None)
-
     print("=" * 60)
     print(f"EntraBot — additional agent '{suffix}' (reusing existing Blueprint)")
     print("=" * 60)
@@ -63,7 +59,7 @@ def main() -> int:
     try:
         blueprint_app_id, _ = C.create_blueprint(token)  # non-force → reuse existing
         agent_id, agent_obj_id = C.create_agent_identity(token, blueprint_app_id)  # unique → new
-        agent_user_id, agent_user_upn = C.create_agent_user(token, agent_obj_id)  # new → new user
+        agent_user_id, agent_user_upn = C.create_agent_user(token, agent_obj_id, explicit_upn="")
 
         C.grant_agent_identity_app_permissions(token, agent_obj_id)
         C.grant_agent_user_consent(token, agent_obj_id, agent_user_id)
@@ -72,16 +68,22 @@ def main() -> int:
     finally:
         if state_snapshot is not None:
             state_file.write_bytes(state_snapshot)
+        else:
+            state_file.unlink(missing_ok=True)
 
     result = {
         "ENTRABOT_AGENT_ID": agent_id,
         "ENTRABOT_AGENT_OBJECT_ID": agent_obj_id,
         "ENTRABOT_AGENT_USER_ID": agent_user_id,
         "ENTRABOT_AGENT_USER_UPN": agent_user_upn,
+        "ENTRABOT_A365_OBSERVABILITY_ENABLED": "false",
+        "ENTRABOT_A365_EXPORT_ENABLED": "false",
     }
     print("\n--- Additional agent ready ---")
     print(f"  Display name: {os.environ.get('ENTRABOT_AGENT_DISPLAY_NAME') or '(default)'}")
     print(f"  UPN:          {agent_user_upn}")
+    print("  A365 observability is not enabled for this agent. After approval, run "
+          "configure_a365_observability.py --authorize --agent-root <agent-directory>.")
     print("AGENT_JSON=" + json.dumps(result))
     return 0
 

@@ -78,6 +78,11 @@ def build_app(ui):
             if ui._on_start is not None:
                 self.run_worker(_boot(), exclusive=False)
 
+        def on_unmount(self) -> None:
+            # Session teardown can emit status updates after Textual removes its widgets.
+            ui.app = None
+            ui.stop_spinner()
+
         def on_input_changed(self, event) -> None:  # type: ignore[no-untyped-def]
             ui._update_suggest(event.value)
 

@@ -40,6 +40,16 @@ def _isolate_memory_backend_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_agent_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep ``apply_agent_env`` from reading a developer's real clone ``.env`` (CI has none).
+
+    Its shared-chain conflict check compares the first ``.env`` candidate with the test's
+    own global/agent fixtures. Tests that exercise candidates patch them in-body.
+    """
+    monkeypatch.setattr("entrabot.config._dotenv_candidates", lambda: [])
+
+
+@pytest.fixture(autouse=True)
 def reset_active_identity_state() -> Iterator[None]:
     """Keep the process-wide identity accessor isolated between tests."""
     from entrabot.identity import set_active_identity_state

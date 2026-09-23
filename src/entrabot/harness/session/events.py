@@ -6,6 +6,11 @@ from typing import Any
 
 import copilot
 
+from ...observability.context import (
+    finish_invocation,
+    record_invocation_error,
+    start_invocation,
+)
 from ..ui import UiStyle
 
 _ET = copilot.SessionEventType
@@ -19,6 +24,12 @@ def _short(args: Any) -> str:
 
 class _EventsMixin:
     """Routes operator/Teams input into turns and renders the session's event stream."""
+
+    def _warn_observability(self, error: Exception) -> None:
+        self._ui.append_line(
+            f"A365 observability failed: {type(error).__name__}: {error}",
+            UiStyle.WARN,
+        )
 
     async def _handle_input(self, line: str) -> None:
         if line.startswith("/"):
@@ -58,9 +69,12 @@ class _EventsMixin:
         The caller + chat travel with the prompt so the session can bind them to the turn
         that the message kicks off (see USER_MESSAGE handling in _on_event).
         """
-        if not self._session:
-            return
         async with self._inject_lock:
+            if not self._session:
+                self._ui.append_line(
+                    "Cannot inject a message without an active session.", UiStyle.WARN,
+                )
+                return
             self._injected[prompt] = (caller, chat)
             try:
                 await self._session.send(prompt, mode="immediate", agent_mode=self._mode)
@@ -95,14 +109,40 @@ class _EventsMixin:
                 self._ui.append_line(f"  ✗ {err}", UiStyle.ERROR)
         elif event_type == _ET.SESSION_ERROR:
             message = getattr(data, "message", "session error") or "session error"
+            if self._invocation_scope is not None:
+                try:
+                    record_invocation_error(self._invocation_scope, RuntimeError(message))
+                except Exception as error:
+                    self._warn_observability(error)
             self._ui.append_line(message, UiStyle.ERROR)
         elif event_type == _ET.USER_MESSAGE:
+            self._idle.clear()
+            self._ui.set_working(True)
             content = getattr(data, "content", "") or ""
             if content in self._injected:
                 # our own injected steering echo: bind its caller/chat to this turn + swallow
                 caller, chat = self._injected.pop(content)
                 self._ctx.caller, self._ctx.chat = caller, chat
+            if self._invocation_scope is None:
+                try:
+                    self._invocation_scope = start_invocation(
+                        config=self._observability_config,
+                        agent_name=self._config.name,
+                        session_id=self._config.agent_id,
+                        conversation_id=self._ctx.chat or self._config.agent_id,
+                        channel="msteams" if self._ctx.chat else "entrabot-cli",
+                        caller_id=self._ctx.caller,
+                    )
+                except Exception as error:
+                    self._warn_observability(error)
         elif event_type == _ET.SESSION_IDLE:
+            invocation = self._invocation_scope
+            self._invocation_scope = None
+            if invocation is not None:
+                try:
+                    finish_invocation(invocation)
+                except Exception as error:
+                    self._warn_observability(error)
             self._ui.append_line("")
             self._ctx.caller = self._ctx.chat = None  # turn over; back to operator/no caller
             self._ui.set_working(False)

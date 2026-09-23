@@ -114,7 +114,8 @@ def _apply_existing_env(root: str) -> None:
     """Load this dir's already-provisioned identity into the process for an idempotent re-run:
     the shared global (tenant/blueprint/cert) as the base, then this agent's .env overlaid, so
     the connection re-test and recipient edits operate on the real agent."""
-    for key, value in globalcfg.read_global().items():
+    from entrabot.config import apply_agent_env
+
+    for key, value in globalcfg.read_env(globalcfg.global_env_path(), strict=True).items():
         os.environ[key] = value
-    for key, value in globalcfg.read_env(globalcfg.agent_env_path(root)).items():
-        os.environ[key] = value
+    apply_agent_env(root)

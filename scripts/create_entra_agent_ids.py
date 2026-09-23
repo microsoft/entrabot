@@ -31,6 +31,10 @@ import requests
 _FORCE_NEW = os.environ.get("ENTRABOT_NEW_CHAIN") == "1"
 _ASSIGN_TEAMS_LICENSE = os.environ.get("ENTRABOT_ASSIGN_TEAMS_LICENSE", "1") == "1"
 _ASSIGN_WORK_IQ_LICENSE = os.environ.get("ENTRABOT_ASSIGN_WORK_IQ_LICENSE") == "1"
+# Capture the wrapper's explicit override before importing entrabot.preflight, which imports
+# config.py and loads the legacy combined clone .env. A stale primary-agent UPN in that file
+# must not override suffix-based provisioning in another tenant.
+_EXPLICIT_AGENT_USER_UPN = os.environ.get("ENTRABOT_AGENT_USER_UPN", "").strip()
 
 # entra_provisioning.py lives in the same directory
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
@@ -58,6 +62,27 @@ BLUEPRINT_DISPLAY_NAME = "EntraBot Code Agent"
 
 def find_existing_blueprint(token: str) -> dict | None:
     """Find an existing Blueprint by stored IDs, then by display name."""
+    selected_app_id = os.environ.get("_ENTRABOT_USE_BLUEPRINT", "").strip()
+    if selected_app_id:
+        resp = graph_request(
+            "GET",
+            f"/applications?$filter=appId eq '{odata_escape(selected_app_id)}'",
+            token,
+        )
+        if resp.status_code != 200:
+            raise ProvisionerBootstrapError(
+                f"Cannot read the selected Blueprint ({resp.status_code}); no fallback attempted."
+            )
+        matches = [
+            app for app in resp.json().get("value", [])
+            if app.get("appId") == selected_app_id and app.get("id")
+        ]
+        if len(matches) != 1:
+            raise ProvisionerBootstrapError(
+                "The selected Blueprint was not uniquely found in this tenant; "
+                "check -UseBlueprint/--use-blueprint."
+            )
+        return matches[0]
     # Try stored object ID first
     stored_obj_id = get_state("BLUEPRINT_OBJECT_ID")
     if stored_obj_id:
@@ -365,7 +390,7 @@ AZURE_STORAGE_APP_ID = "e406a681-f3d4-42a8-90b6-c2b029497af1"
 AZURE_STORAGE_SCOPE = "user_impersonation"
 
 
-def _agent_user_upn(token: str) -> str:
+def _agent_user_upn(token: str, *, explicit_upn: str | None = None) -> str:
     """Generate the UPN for the Agent User.
 
     Queries the tenant's verified domains via Graph API (using the Provisioner
@@ -375,7 +400,8 @@ def _agent_user_upn(token: str) -> str:
     accounts like user@example.com — the domain is outlook.com, not the
     tenant's verified domain.
     """
-    explicit_upn = os.environ.get("ENTRABOT_AGENT_USER_UPN", "").strip()
+    if explicit_upn is None:
+        explicit_upn = _EXPLICIT_AGENT_USER_UPN
     if explicit_upn:
         print(f"  Using explicit Agent User UPN: {explicit_upn}")
         return explicit_upn
@@ -507,8 +533,10 @@ def _servicePrincipal_by_object_id(token: str, obj_id: str) -> dict | None:
 def create_agent_user(
     token: str,
     agent_identity_obj_id: str,
+    *,
+    explicit_upn: str | None = None,
 ) -> tuple[str, str]:
-    """Create or find the Agent User. Returns (user_object_id, user_upn)."""
+    """Create or find the Agent User. An empty explicit_upn derives a suffix-based UPN."""
     print("\n--- Creating Agent User ---\n")
 
     if _FORCE_NEW:
@@ -524,7 +552,7 @@ def create_agent_user(
         set_state("AGENT_USER_UPN", upn)
         return user_id, upn
 
-    upn = _agent_user_upn(token)
+    upn = _agent_user_upn(token, explicit_upn=explicit_upn)
     upn_suffix = os.environ.get("_ENTRABOT_UPN_SUFFIX", "")
     mail_nick = f"entrabot-agent-{upn_suffix}" if upn_suffix else "entrabot-agent"
     # Prefer an explicit friendly name (e.g. "Nemo") for the Teams display name; fall back to the
@@ -1097,11 +1125,10 @@ def main() -> int:
 
     try:
         token = get_existing_graph_token()
+        blueprint_app_id, blueprint_obj_id = create_blueprint(token)
     except ProvisionerBootstrapError as exc:
         print(f"ERROR: {exc}")
         return 1
-
-    blueprint_app_id, blueprint_obj_id = create_blueprint(token)
 
     # Check tenant-wide for an existing Agent User by UPN BEFORE provisioning
     # anything new. If the UPN already exists (from a prior run on another
@@ -1127,6 +1154,12 @@ def main() -> int:
         agent_obj_id = existing_user.get("identityParentId", "")
         sp = _servicePrincipal_by_object_id(token, agent_obj_id) if agent_obj_id else None
         agent_id = sp.get("appId", "") if sp else ""
+        if not sp or not agent_id or sp.get("agentIdentityBlueprintId") != blueprint_app_id:
+            print(
+                "ERROR: The existing Agent User does not belong to the selected Blueprint. "
+                "Choose that user's Blueprint or a different Agent User UPN/suffix."
+            )
+            return 1
         parent_name = sp.get("displayName", "?") if sp else "?"
         print("\n--- Reusing existing Agent User ---\n")
         print(f"  UPN:            {agent_user_upn}")

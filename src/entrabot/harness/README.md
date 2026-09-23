@@ -104,6 +104,14 @@ policy in `permissions.py`, which feeds the SDK's `on_permission_request` hook. 
 `allow`/`deny` is authoritative; only the undecided ("ask") case is affected by `--yolo`
 (skips the prompt) — so `--yolo` can never blow past a caller the policy explicitly denies.
 
+## Runtime ownership
+
+One `InteractiveSession` owns its Copilot client, Teams bridge, scheduler and optional
+A365 refresh task. `/reload` closes
+the old SDK session and its active invocation before replacing it, without restarting
+those harness-owned workers. Cleanup removes the old event handler and awaits cancellation.
+All accepted CLI, Teams and scheduled turns enter the same busy/interruptible state.
+
 ## Package map (port of the .NET harness)
 
 Every concern lives in a subpackage (the package root holds only `__init__.py` + `__main__.py`);
@@ -148,8 +156,8 @@ Closed in this branch:
 7. ✅ **Windows UTF-8** — stdout/stderr are reconfigured to UTF-8 so the banner / `●` / em-dashes
    don't crash cp1252 consoles.
 
-Tests: `pytest tests/harness` — 26 unit tests (config, scheduler, permissions incl. the
-two-arg handler + yolo/ask/deny semantics, MCP loader, banner).
+Tests: `pytest tests/harness` covers configuration, scheduling, per-caller permissions,
+lifecycle cleanup, UI and MCP discovery.
 
 Still open:
 

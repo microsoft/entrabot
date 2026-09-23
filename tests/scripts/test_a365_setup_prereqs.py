@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -25,6 +31,132 @@ def test_windows_setup_probes_a365_cli() -> None:
     assert "a365" in script
     assert "Found: python, az, git, pwsh, a365" in script
     assert "scripts\\prereqs-windows.ps1" in script
+
+
+def test_windows_setup_uploads_blueprint_certificate_before_writing_env() -> None:
+    script = read_script("scripts/setup-windows.ps1")
+
+    assert "function Read-EnvValue" in script
+    assert "'verify_blueprint_cert.py'" in script
+    assert "GetRawCertData()" in script
+    assert "Reusing registered local Blueprint certificate" in script
+    assert "Repairing Blueprint registration with existing local certificate" in script
+    generate = script.index("'generate_windows_cert.py'")
+    upload = script.index("'upload_blueprint_cert.py'", generate)
+    write_env = script.index("Update-EnvFile $envPath", upload)
+    assert generate < upload < write_env
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows setup script")
+def test_windows_update_env_file_writes_one_key_per_line_for_new_file(tmp_path: Path) -> None:
+    pwsh = shutil.which("pwsh")
+    if not pwsh:
+        pytest.skip("PowerShell 7 is not installed")
+    env_path = tmp_path / ".env"
+    probe = tmp_path / "probe.ps1"
+    # Load only Update-EnvFile from setup; nothing else in the script runs.
+    probe.write_text(
+        r"""
+param([string]$SetupScript, [string]$EnvPath)
+$ErrorActionPreference = 'Stop'
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $SetupScript, [ref]$null, [ref]$null
+)
+$function = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq 'Update-EnvFile'
+}, $true)
+. ([scriptblock]::Create($function.Extent.Text))
+Update-EnvFile $EnvPath @{ FIRST_KEY = 'one'; SECOND_KEY = 'two'; THIRD_KEY = 'three' }
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            pwsh, "-NoProfile", "-NonInteractive", "-File", str(probe),
+            str(REPO_ROOT / "scripts" / "setup-windows.ps1"), str(env_path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = env_path.read_text(encoding="utf-8-sig").splitlines()
+    assert sorted(lines) == ["FIRST_KEY=one", "SECOND_KEY=two", "THIRD_KEY=three"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows native argument passing")
+@pytest.mark.parametrize(
+    ("helper_name", "expected_arguments"),
+    [
+        (
+            "upload_blueprint_cert.py",
+            ["--blueprint-object-id", "fixture-blueprint-object", "--der-path"],
+        ),
+    ],
+)
+def test_windows_setup_passes_separate_native_arguments(
+    tmp_path: Path, helper_name: str, expected_arguments: list[str]
+) -> None:
+    pwsh = shutil.which("pwsh")
+    if not pwsh:
+        pytest.skip("PowerShell 7 is not installed")
+    scripts = tmp_path / "fixture scripts"
+    scripts.mkdir()
+    (scripts / helper_name).write_text(
+        "import json, sys\nprint(json.dumps(sys.argv[1:]))\n", encoding="utf-8"
+    )
+    probe = tmp_path / "probe.ps1"
+    # Execute only the native invocation from setup, against an argv recorder. No provisioning,
+    # certificate-store access, or imports of Entrabot's live configuration can run.
+    probe.write_text(
+        r"""
+param([string]$SetupScript, [string]$VenvPython, [string]$ScriptDir, [string]$HelperName)
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$BlueprintObjectId = 'fixture-blueprint-object'
+$BlueprintAppId = 'fixture-blueprint-app'
+$derPath = Join-Path $ScriptDir 'fixture cert.cer'
+$parseErrors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $SetupScript, [ref]$null, [ref]$parseErrors
+)
+if ($parseErrors.Count) { throw 'Setup script has parse errors' }
+$commands = @($ast.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.CommandAst] -and
+    $node.InvocationOperator -eq [System.Management.Automation.Language.TokenKind]::Ampersand -and
+    $node.CommandElements[0].Extent.Text -eq '$VenvPython' -and
+    $node.Extent.Text.Contains("'$HelperName'")
+}, $true))
+if ($commands.Count -ne 1) { throw 'Expected exactly one helper invocation' }
+& ([scriptblock]::Create($commands[0].Extent.Text))
+exit $LASTEXITCODE
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            pwsh,
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            str(probe),
+            str(REPO_ROOT / "scripts" / "setup-windows.ps1"),
+            sys.executable,
+            str(scripts),
+            helper_name,
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    if helper_name == "upload_blueprint_cert.py":
+        expected_arguments = [*expected_arguments, str(scripts / "fixture cert.cer")]
+    assert json.loads(result.stdout) == expected_arguments
 
 
 def test_unix_setup_can_install_a365_cli_when_requested() -> None:
@@ -111,8 +243,12 @@ def test_unix_setup_can_run_interactive_a365_work_iq_configuration() -> None:
 def test_create_entra_agent_ids_allows_explicit_agent_user_upn() -> None:
     script = read_script("scripts/create_entra_agent_ids.py")
 
-    assert "ENTRABOT_AGENT_USER_UPN" in script
-    assert 'explicit_upn = os.environ.get("ENTRABOT_AGENT_USER_UPN", "").strip()' in script
+    capture = script.index(
+        '_EXPLICIT_AGENT_USER_UPN = os.environ.get("ENTRABOT_AGENT_USER_UPN", "").strip()'
+    )
+    config_loading_import = script.index("from entrabot.preflight import")
+    assert capture < config_loading_import
+    assert "explicit_upn = _EXPLICIT_AGENT_USER_UPN" in script
     assert "Using explicit Agent User UPN" in script
 
 
@@ -130,6 +266,48 @@ def test_windows_setup_assigns_work_iq_license_only_for_a365_configuration() -> 
 
     assert "ENTRABOT_ASSIGN_WORK_IQ_LICENSE" in script
     assert "if ($ConfigureA365WorkIq)" in script
+
+
+def test_windows_setup_pins_active_tenant_and_enables_new_chain_mode() -> None:
+    script = read_script("scripts/setup-windows.ps1")
+
+    account_check = script.index("$account = az account show")
+    tenant_export = script.index("$env:ENTRABOT_TENANT_ID = $account.tenantId", account_check)
+    provisioner_call = script.index("'entra_provisioning.py'", tenant_export)
+    assert account_check < tenant_export < provisioner_call
+    assert "Remove-Item Env:ENTRABOT_NEW_CHAIN -ErrorAction SilentlyContinue" in script
+    assert "Remove-Item Env:ENTRABOT_AGENT_USER_UPN -ErrorAction SilentlyContinue" in script
+    assert "Remove-Item Env:_ENTRABOT_UPN_SUFFIX -ErrorAction SilentlyContinue" in script
+    assert "if ($NewChain) {" in script
+    assert "$env:ENTRABOT_NEW_CHAIN = '1'" in script
+    assert "$env:_ENTRABOT_UPN_SUFFIX = $UpnSuffix" in script
+    assert "$env:_ENTRABOT_USE_BLUEPRINT = $UseBlueprint" in script
+
+
+def test_unix_setup_installs_local_package_before_importing_provisioning() -> None:
+    script = read_script("scripts/setup.sh")
+    install = script.index('pip install --quiet -e "$PROJECT_ROOT[dev,provisioning]"')
+    assert 'SCRIPT_PYTHON="$PROJECT_ROOT/.venv/bin/python3"' in script[:install]
+    assert install < script.index('"$SCRIPT_DIR/entra_provisioning.py"')
+    assert 'export ENTRABOT_TENANT_ID="$TENANT_ID"' in script
+    assert 'export _ENTRABOT_USE_BLUEPRINT="$USE_BLUEPRINT"' in script
+
+
+def test_unix_setup_bootstraps_environment_and_dependencies_once() -> None:
+    script = read_script("scripts/setup.sh")
+    assert script.count("-m venv ") == 1
+    assert script.count("pip install --quiet -e ") == 1
+    assert script.count("pip setuptools wheel") == 1
+    assert 'VENV_PY="$SCRIPT_PYTHON"' in script
+
+
+@pytest.mark.parametrize("path,provisioner_call", [
+    ("scripts/setup.sh", '"$SCRIPT_DIR/entra_provisioning.py"'),
+    ("scripts/setup-windows.ps1", "'entra_provisioning.py'"),
+])
+def test_setup_rejects_config_conflicts_before_live_provisioning(path, provisioner_call):
+    script = read_script(path)
+    assert script.index("validate_setup_context") < script.index(provisioner_call)
 
 
 def test_windows_setup_can_run_interactive_a365_work_iq_configuration() -> None:

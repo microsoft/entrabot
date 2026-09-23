@@ -263,7 +263,11 @@ class TextualUI(UI):
         self._on_interrupt = on_interrupt
         self._on_start = on_start
         self.app = self._App()
-        await self.app.run_async()
+        try:
+            await self.app.run_async()
+        finally:
+            self.app = None
+            self.stop_spinner()
 
     def request_stop(self) -> None:
         if self.app:

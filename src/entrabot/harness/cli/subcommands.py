@@ -8,20 +8,15 @@ from datetime import UTC, datetime
 
 from .. import config as cfgmod
 from ..config import HarnessConfig
-from ..session import InteractiveSession
-from ..teams import make_token_provider
 from .terminal import _confirm, _pick_ui, _resolve_root
 
 
 def _apply_agent_identity(root: str) -> None:
     """Layer this agent's identity (root/.entrabot/.env) over the global tenant/blueprint base so
-    get_config()/token-minting see the right creds. Best-effort — absent config is fine."""
-    try:
-        from entrabot import config as entracfg
+    get_config()/token-minting see the right creds. Unreadable/invalid config must stop startup."""
+    from entrabot import config as entracfg
 
-        entracfg.apply_agent_env(root)
-    except Exception:
-        pass
+    entracfg.apply_agent_env(root)
 
 
 def _cmd_init(positionals: list[str], flags: set) -> int:
@@ -123,6 +118,10 @@ async def _cmd_run(flags: set, root: str) -> int:
     # before anything reads creds (token provider, self_id).
     _apply_agent_identity(root)
 
+    from entrabot.config import get_config
+    from entrabot.observability.runtime import initialize_observability
+    from entrabot.observability.tokens import refresh_observability_token
+
     harness_config = cfgmod.try_load(root)
     if harness_config is None:
         # Just-run-it: scaffold a sensible default config rather than erroring.
@@ -139,6 +138,14 @@ async def _cmd_run(flags: set, root: str) -> int:
     elif harness_config.ensure_identity():
         cfgmod.save(root, harness_config)
 
+    observability_config = get_config()
+    initialize_observability(observability_config, agent_name=harness_config.name)
+    await refresh_observability_token(observability_config)
+
+    # Instrumentation must be initialized before importing the session/Copilot SDK.
+    from ..session import InteractiveSession
+    from ..teams import make_token_provider
+
     session = InteractiveSession(
         harness_config,
         root,
@@ -154,7 +161,11 @@ async def _cmd_run(flags: set, root: str) -> int:
 
 
 async def _cmd_doctor(root: str) -> int:
+    _apply_agent_identity(root)
+
     import copilot
+
+    from ..teams import make_token_provider
 
     print("ENTRABOT — doctor\n")
     token_provider = make_token_provider()

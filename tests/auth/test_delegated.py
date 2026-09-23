@@ -249,29 +249,26 @@ class TestTokenCache:
     """Tests for the _build_token_cache helper."""
 
     def test_cache_location_uses_stable_user_cache_dir(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """Cache path comes from platformdirs and does not depend on cwd."""
         from entrabot.auth import delegated
 
-        scratch = Path.cwd() / ".pytest-scratch" / "delegated-cache-stable"
+        scratch = tmp_path / "delegated-cache-stable"
         cwd_one = scratch / "cwd-one"
         cwd_two = scratch / "cwd-two"
         cwd_one.mkdir(parents=True)
         cwd_two.mkdir(parents=True)
 
-        try:
-            monkeypatch.chdir(cwd_one)
-            first = delegated.CACHE_LOCATION
-            monkeypatch.chdir(cwd_two)
-            second = delegated.CACHE_LOCATION
+        monkeypatch.chdir(cwd_one)
+        first = delegated.CACHE_LOCATION
+        monkeypatch.chdir(cwd_two)
+        second = delegated.CACHE_LOCATION
 
-            assert first == second
-            assert first.parent == Path(delegated.platformdirs.user_cache_dir("entrabot"))
-            assert first.name == "entrabot_msal_cache"
-            assert not os.fspath(first).startswith("entrabot_msal_cache")
-        finally:
-            shutil.rmtree(scratch, ignore_errors=True)
+        assert first == second
+        assert first.parent == Path(delegated.platformdirs.user_cache_dir("entrabot"))
+        assert first.name == "entrabot_msal_cache"
+        assert not os.fspath(first).startswith("entrabot_msal_cache")
 
     def test_cache_location_parent_created_when_missing(
         self,

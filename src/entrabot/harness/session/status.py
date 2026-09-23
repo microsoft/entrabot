@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
+
 from .. import config as cfgmod
 from ..ui import UiStyle
 from . import mcp_loader, toolcatalog
@@ -67,12 +69,13 @@ class _StatusMixin:
         gate = self._build_gate()
         tools = self._build_tools()
         mcp = mcp_loader.load(self._root)
-        self._fresh = True
-        self._session = await self._establish(tools or None, mcp, gate)
-        self._session.on(self._on_event)
-        await self._discover_slash_commands()
-        try:
-            self._catalog = await toolcatalog.enumerate_tools(self._session)
-        except Exception:
-            pass
+        async with self._inject_lock:
+            await self._release_session()
+            self._fresh = True
+            self._session = await self._establish(tools or None, mcp, gate)
+            self._unsubscribe_session = self._session.on(self._on_event)
+            await self._discover_slash_commands()
+            self._catalog = []
+            with suppress(Exception):
+                self._catalog = await toolcatalog.enumerate_tools(self._session)
         self._ui.append_line("reloaded.", UiStyle.SUCCESS)
