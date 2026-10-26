@@ -146,6 +146,7 @@ class TestCLIArgs:
         assert rc == 2
 
     def test_missing_upn(self, _patch_provisioning, capsys):
+        _patch_provisioning.get_state.side_effect = None
         _patch_provisioning.get_state.return_value = None
         rc = lic_mod.main(["prog", "--all"])
         assert rc == 1

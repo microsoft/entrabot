@@ -92,18 +92,6 @@
           }
         ]
       }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "mcp__entrabot__send_teams_message",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Teams message sent. The background channel will push any replies automatically — no need to call watch_teams_replies unless you want to block and wait.\"}}'",
-            "timeout": 5
-          }
-        ]
-      }
     ]
   }
 }

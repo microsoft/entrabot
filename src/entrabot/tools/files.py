@@ -654,7 +654,7 @@ async def read_file(
     - ``.md`` / ``.txt`` / ``.html`` / ``.htm`` → fetch raw, decode, return text
     - ``.docx`` → ``GET /content?format=pdf``, extract via ``pypdf``
     - ``.pdf`` → fetch raw, extract via ``pypdf`` (size-checked first, P1)
-    - ``.xlsx`` / ``.xls`` → reject (use ``read_workbook_range`` — PR3)
+    - ``.xlsx`` / ``.xls`` → reject (no Excel reader yet; paste content into chat)
     - ``.pptx`` / ``.ppt`` → reject (paste content into chat instead)
     - everything else → reject
 
@@ -669,7 +669,9 @@ async def read_file(
     resource = f"{file_ref.drive_id}:{file_ref.item_id}"
 
     if ext in _EXCEL_EXTENSIONS:
-        raise UnsupportedReadFormatError(ext, "Use read_workbook_range for Excel data (PR3).")
+        raise UnsupportedReadFormatError(
+            ext, "Excel files are not supported yet; paste the relevant cells into chat."
+        )
     if ext in _PPT_EXTENSIONS:
         raise UnsupportedReadFormatError(
             ext,

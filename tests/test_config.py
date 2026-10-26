@@ -61,6 +61,9 @@ class TestEntraBotConfig:
             "ENTRABOT_AUTHORITY": "https://login.microsoftonline.com/my-tenant",
         }
         with patch.dict(os.environ, env, clear=False):
+            # The canonical ENTRABOT_AGENT_UPN outranks the legacy alias
+            # under test; a host .env value must not leak in.
+            os.environ.pop("ENTRABOT_AGENT_UPN", None)
             cfg = EntraBotConfig.from_env()
         assert cfg.tenant_id == "my-tenant"
         assert cfg.blueprint_app_id == "my-blueprint"

@@ -111,7 +111,7 @@ behavioral rules) is served by a separate MCP server: **persona-sati**.
 - Both MCPs are listed in `.mcp.json` (see `.mcp.json.example` for the dual-server config)
 - If persona-sati is not configured, entrabot works standalone as a generic Teams tool
 - Memory operations go through persona-sati's tools, not through local blob sync hooks
-- The system prompt comes from persona-sati, not from this repo
+- The body prompt (`prompts/agent_system.md`) comes from this repo and loads first; persona-sati supplies the persona layered on top
 
 **Connecting to persona-sati:**
 - Local: `cd /path/to/persona-sati && .venv/bin/persona-sati --transport sse --port 8100`
@@ -216,15 +216,7 @@ cognition rules, and degraded-mode flags in a single packet.
 
 ## Active Work
 
-- **v1 released (2026-04-18, PR #15).** Body-first prompts, cloud-opt-in, no default chat. See `docs/project/status.md` for the summary and `docs/architecture/storage-and-memory.md` for the mind-body split design.
-- **Mind-body split shipped.** Body-first prompt architecture (PR #14, `prompts/agent_system.md` + `prompts/anatomy/*.md`) is live. `mcp_server.py:_load_agent_instructions` composes `body + persona`, fetching the persona from a remote MCP when `PERSONA_SATI_MCP_URL` + `PERSONA_SATI_MCP_TOKEN_COMMAND` env vars are set, with clean fallback to the body when persona-sati is unreachable. The completed TODO was removed; current host protocol is `docs/clients/persona-sati-host-bootstrap.md`; archived design is `engineering-history/architecture/DESIGN-persona-sati-integration.md`.
-- **ADR-005: cloud-hosted memory via Azure Blob Storage** — `engineering-history/decisions/005-cloud-hosted-memory.md`. Status: **Accepted, Phases 1, 2, 5, 6a shipped.** Memory sync hooks removed (persona-sati owns memory now). `scripts/claude_memory_sync.py` retained as manual migration tool.
-  - Phase 1 (commit `f900ba1`): `BlobStore` async client in `src/entrabot/storage/blob.py` (put/get/list/delete/exists + ETag concurrency + 401→`TokenExpiredError`). 22 tests.
-  - Phase 2: `MemoryBackend` protocol in `src/entrabot/storage/backend.py` with `LocalBackend` + `BlobBackend` + `get_backend()` factory. `interaction_log.py` and `daily_summary.py` route through it. 22 tests.
-  - Phase 5: `acquire_agent_user_storage_token` (parallel third hop for `https://storage.azure.com/.default`), `scripts/provision_blob_storage.py` (idempotent resource group + storage account + container + RBAC scoped to Agent User), `grant_agent_user_storage_consent` added to `create_entra_agent_ids.py`, `setup.sh --keep-memory-local` flag + Step 7b provisioning + migration prompt (idempotent, source-preserving), `src/entrabot/storage/migration.py`. 23 tests. Setup now exits red + non-zero on migration failure.
-  - Phase 6a: `PersonaBackend` in `src/entrabot/storage/persona.py`. `scripts/claude_memory_sync.py` CLI. Memory sync hooks deprecated — persona-sati owns sync.
-- **Multi-tenant lightweight chat** — landed to `main` (commit `c8ec521`). See `docs/platform-docs/delegated-auth.md` and `docs/architecture/messaging-and-delivery.md`.
-- **Up next** — see `docs/project/status.md` for current state, and the project's GitHub issues and pull requests for active work.
+Current state lives in `docs/project/status.md`; actionable backlog lives in GitHub issues. Design references: `docs/architecture/storage-and-memory.md` (mind-body split, storage backends), `docs/clients/persona-sati-host-bootstrap.md` (host protocol), `engineering-history/decisions/005-cloud-hosted-memory.md` (cloud memory). `scripts/claude_memory_sync.py` is a manual migration tool only; persona-sati owns memory sync.
 
 ## Memory types
 

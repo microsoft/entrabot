@@ -2197,18 +2197,14 @@ async def send_teams_message(
     ``content_type`` defaults to ``"html"`` per the channel-discipline
     rule in ``prompts/anatomy/channel-discipline.md`` ("Always HTML in
     Teams — no exceptions"). Wrap paragraphs in ``<p>…</p>``; escape
-    literal ``<``, ``>``, ``&`` as ``&lt;``, ``&gt;``, ``&amp;``. Pass
-    ``content_type="text"`` only when plain text is genuinely required.
+    literal ``<``, ``>``, ``&`` as ``&lt;``, ``&gt;``, ``&amp;``. Keep
+    the ``"html"`` default for every Teams message.
 
     To @mention someone, put ``<at id="N">Display Name</at>`` tags in
     the HTML body and pass a mentions list. Each mention dict needs:
       - id: int matching the at-tag id
       - name: display name
       - user_id: their Entra user GUID (get from chat members via read_teams_messages)
-
-    Example — DM someone:
-      chat_id = await create_chat(target_email="alice@example.com")
-      await send_teams_message("<p>Hey Alice</p>", chat_id=chat_id)
 
     Example — @mention in a chat:
       message: '<p><at id="0">Alice Example</at> check this out</p>'
@@ -3214,11 +3210,6 @@ async def create_chat(target_email: str, target_tenant_id: str = "") -> str:
     For cross-tenant users (different org), the target_tenant_id is
     auto-resolved from the email domain. Just pass the email.
 
-    Example:
-      result = await create_chat(target_email="alice@example.com")
-      chat_id = json.loads(result)["chat_id"]
-      await send_teams_message("Hey Alice, private note", chat_id=chat_id)
-
     Args:
         target_email: The user's email address (e.g., 'alice@example.com').
         target_tenant_id: Optional home tenant GUID override. Usually
@@ -3497,10 +3488,10 @@ async def wait_for_sponsor_dm(
     addresses what they said. A 1:1 DM is a direct conversation: the
     Sponsor is waiting in Teams, not watching your terminal. Treat
     the returned ``content_text`` as the user's next turn — read it,
-    answer it, send the answer to ``chat_id``. After sending the
-    reply, call ``wait_for_sponsor_dm`` again to wait for their next
-    message. End the loop only when the Sponsor explicitly says they
-    are done, or the original task is fully complete.
+    answer it, send the answer to ``chat_id``. From there the normal
+    ``send_teams_message`` reply handling applies (auto-wait on
+    non-channel-push hosts, channel push on Claude Code); call this
+    tool again only if the operator asked you to keep blocking.
 
     For group chats (``chat_type == "group"`` or ``"meeting"``), do
     NOT auto-reply. A group message is informational unless the
@@ -3514,9 +3505,8 @@ async def wait_for_sponsor_dm(
     longer ``timeout_seconds``, or ask the operator in the host CLI
     what to do next.
 
-    Why this exists: Copilot CLI (and Claude Code) do not auto-display
-    asynchronous Teams notifications in the operator's terminal. This
-    tool turns the wait into a tool call so the next sponsor DM is
+    Why this exists: when the operator wants the session held until the
+    sponsor answers, this tool turns the wait into a tool call so the next sponsor DM is
     handled in-session — no spawned daemon, no PTY hijack, no screen
     blanking. Ctrl+C in the host CLI cancels cleanly.
 
@@ -3743,8 +3733,8 @@ def audit_log(
     outcome: str = "success",
     metadata: str = "{}",
 ) -> str:
-    """Record an audit event. Call this BEFORE performing any action on the
-    user's behalf. No credentials needed — works immediately.
+    """Record an audit event before performing an action as the agent.
+    No credentials needed — works immediately.
 
     The audit trail proves the agent (not the human) performed the action.
     Events are written to ~/.entrabot/audit/ as daily JSONL files.
@@ -4123,9 +4113,10 @@ async def read_interactions(
     without re-hitting Graph.
 
     Default window is the last 24 h; ``since`` may reach back up to 7
-    days. Use BEFORE every outbound send (``send_teams_message``,
-    ``send_email``, ``send_card``, ``share_file``) with
-    ``chat_id=<target>`` to avoid repeating yourself.
+    days. Use it for a specific factual question ("did I already
+    promise X to this chat?") and pull only the entry you need; it is
+    not a pre-send sweep of recent history, because ingesting raw
+    message text makes outbound replies echo the other person's phrasing.
 
     Args:
         chat_id: Teams chat ID. For outbound entries this matches
@@ -4408,9 +4399,9 @@ async def read_file(
       than ``ENTRABOT_FILES_MAX_PDF_BYTES`` (default 50 MiB) are
       refused BEFORE download.
 
-    Excel and PowerPoint are intentionally rejected — use
-    ``read_workbook_range`` (PR3) for Excel, or paste slide content
-    into chat for PowerPoint.
+    Excel and PowerPoint are intentionally rejected. No Excel reader is
+    available yet; for either format, ask the human to paste the
+    relevant content into chat.
 
     Args:
         drive_id, item_id, name, mime_type, kind, site_id, web_url,
@@ -4570,7 +4561,17 @@ async def read_word_document(url: str) -> str:
 
 @mcp.tool()
 async def create_word_document(file_name: str, content_html: str) -> str:
-    """Create a Word document through Agent 365 Work IQ Word."""
+    """Create a Word document through Agent 365 Work IQ Word.
+
+    Args:
+        file_name: Name for the new document, including ``.docx``.
+        content_html: Initial body as HTML; Work IQ converts it to Word
+            formatting.
+
+    Returns:
+        JSON with the new document's URL and name, or
+        ``{"error": ..., "error_type": ...}`` on a Work IQ failure.
+    """
     await _initialize()
     from entrabot.a365.errors import A365Error
     from entrabot.a365.word import create_document
@@ -4597,7 +4598,20 @@ async def create_word_document(file_name: str, content_html: str) -> str:
 
 @mcp.tool()
 async def add_word_comment(drive_id: str, document_id: str, content: str) -> str:
-    """Create a top-level Word comment through Agent 365 Work IQ Word."""
+    """Create a top-level Word comment through Agent 365 Work IQ Word.
+
+    For a reply inside an existing thread use ``reply_to_word_comment``.
+
+    Args:
+        drive_id: Document library (drive) ID, e.g. ``document_library_id``
+            from ``get_a365_file_metadata_by_url``.
+        document_id: The document's item ID from the same metadata call.
+        content: Comment text.
+
+    Returns:
+        JSON with the new ``comment_id`` and content, or
+        ``{"error": ..., "error_type": ...}``.
+    """
     await _initialize()
     from entrabot.a365.errors import A365Error
     from entrabot.a365.word import create_comment
@@ -4629,7 +4643,19 @@ async def reply_to_word_comment(
     comment_id: str,
     content: str,
 ) -> str:
-    """Reply inside an existing Word comment thread through Agent 365 Work IQ Word."""
+    """Reply inside an existing Word comment thread through Agent 365 Work IQ Word.
+
+    Args:
+        drive_id: Document library (drive) ID, e.g. ``document_library_id``
+            from ``get_a365_file_metadata_by_url``.
+        document_id: The document's item ID from the same metadata call.
+        comment_id: ID of the thread's top-level comment, as returned by
+            ``read_word_document`` or ``add_word_comment``.
+        content: Reply text.
+
+    Returns:
+        JSON describing the reply, or ``{"error": ..., "error_type": ...}``.
+    """
     await _initialize()
     from entrabot.a365.errors import A365Error
     from entrabot.a365.word import reply_to_comment
@@ -4657,7 +4683,19 @@ async def reply_to_word_comment(
 
 @mcp.tool()
 async def get_a365_file_metadata_by_url(url: str) -> str:
-    """Read OneDrive/SharePoint file metadata by URL through Agent 365 Work IQ."""
+    """Read OneDrive/SharePoint file metadata by URL through Agent 365 Work IQ.
+
+    Use this first to get the IDs that ``read_a365_text_file``,
+    ``read_a365_binary_file``, ``add_word_comment`` and
+    ``reply_to_word_comment`` take.
+
+    Args:
+        url: Full OneDrive or SharePoint URL of a file or folder.
+
+    Returns:
+        JSON with ``item_id``, ``name``, ``web_url`` and
+        ``document_library_id``, or ``{"error": ..., "error_type": ...}``.
+    """
     await _initialize()
     from entrabot.a365.errors import A365Error
     from entrabot.a365.odsp import get_file_or_folder_metadata_by_url
@@ -4684,7 +4722,18 @@ async def get_a365_file_metadata_by_url(url: str) -> str:
 
 @mcp.tool()
 async def read_a365_text_file(document_library_id: str, file_id: str) -> str:
-    """Read a small text file from OneDrive/SharePoint through Agent 365 Work IQ."""
+    """Read a small text file from OneDrive/SharePoint through Agent 365 Work IQ.
+
+    Work IQ only serves small files; for large files or ``.docx``/``.pdf``
+    text extraction use ``read_file``.
+
+    Args:
+        document_library_id: From ``get_a365_file_metadata_by_url``.
+        file_id: The ``item_id`` from the same call.
+
+    Returns:
+        JSON with the file content, or ``{"error": ..., "error_type": ...}``.
+    """
     await _initialize()
     from entrabot.a365.errors import A365Error
     from entrabot.a365.odsp import read_small_text_file
@@ -4709,7 +4758,18 @@ async def read_a365_text_file(document_library_id: str, file_id: str) -> str:
 
 @mcp.tool()
 async def read_a365_binary_file(document_library_id: str, file_id: str) -> str:
-    """Read a small binary file from OneDrive/SharePoint through Agent 365 Work IQ."""
+    """Read a small binary file from OneDrive/SharePoint through Agent 365 Work IQ.
+
+    Work IQ only serves small files. Content comes back base64-encoded.
+
+    Args:
+        document_library_id: From ``get_a365_file_metadata_by_url``.
+        file_id: The ``item_id`` from the same call.
+
+    Returns:
+        JSON with ``content`` and its ``encoding``, or
+        ``{"error": ..., "error_type": ...}``.
+    """
     await _initialize()
     from entrabot.a365.errors import A365Error
     from entrabot.a365.odsp import read_small_binary_file

@@ -1,11 +1,9 @@
 """String-match guards for canonical prompt doctrine.
 
-These tests pin the doctrine that every host-injected prompt file
-(``AGENTS.md``, ``CLAUDE.md``, ``.github/copilot-instructions.md``) and
-the body's ``channel-discipline.md`` mention the ``wait_for_sponsor_dm``
-tool by name. Per Learning #48, this is the only injection vector that
-reliably reaches the LLM in Copilot CLI / Claude Code, so the rule must
-live in all three host files plus the canonical anatomy fragment.
+These tests pin the doctrine in the canonical ``AGENTS.md`` file and the
+body's ``channel-discipline.md``. ``CLAUDE.md`` delegates to ``AGENTS.md``
+instead of duplicating it, and the retired Copilot-specific file must stay
+absent so host instructions cannot drift apart.
 
 The wait-tool's own ``@mcp.tool()`` docstring also has to carry the
 operational rule, because tool descriptions ARE injected into the model's
@@ -22,15 +20,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 DOCTRINE_FILES = [
     "AGENTS.md",
-    "CLAUDE.md",
-    ".github/copilot-instructions.md",
     "prompts/anatomy/channel-discipline.md",
 ]
 
 BOOTSTRAP_DOCTRINE_FILES = [
     "AGENTS.md",
-    "CLAUDE.md",
-    ".github/copilot-instructions.md",
     "docs/clients/persona-sati-host-bootstrap.md",
     "README.md",
     "scripts/setup.sh",
@@ -57,7 +51,7 @@ def test_doctrine_file_mentions_wait_for_sponsor_dm(relpath: str) -> None:
     )
 
 
-@pytest.mark.parametrize("relpath", ["AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.md"])
+@pytest.mark.parametrize("relpath", ["AGENTS.md"])
 def test_host_injected_files_forbid_polling_alternatives(relpath: str) -> None:
     """Ensure host files name the forbidden alternatives so the LLM sees them."""
     text = (REPO_ROOT / relpath).read_text(encoding="utf-8")
@@ -69,6 +63,11 @@ def test_host_injected_files_forbid_polling_alternatives(relpath: str) -> None:
         f"{relpath} must call out at least one forbidden alternative "
         f"(any of {forbidden_markers}) in the wait-tool doctrine."
     )
+
+
+def test_host_instruction_files_delegate_to_agents_md() -> None:
+    assert (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8").strip() == "@AGENTS.md"
+    assert not (REPO_ROOT / ".github/copilot-instructions.md").exists()
 
 
 def test_wait_tool_docstring_reaches_model_via_tool_description() -> None:
