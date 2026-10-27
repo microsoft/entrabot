@@ -10,11 +10,14 @@ Supports two identity modes:
 
 from __future__ import annotations
 
+import base64
 import html
 import json
 import logging
 import re
 import sys
+import threading
+import time
 from typing import Any
 
 import httpx
@@ -221,15 +224,67 @@ def acquire_agent_user_token(
     return resource_token
 
 
+# Storage-token cache (#128). Every blob operation asks for a token; without a
+# cache each one ran the full three-hop flow (~1-2s). Keyed by agent identity so
+# a config change never reuses another identity's token.
+STORAGE_TOKEN_REFRESH_MARGIN = 5 * 60  # refetch this many seconds before ``exp``
+STORAGE_TOKEN_FALLBACK_TTL = 55 * 60  # lifetime assumed when ``exp`` is unreadable
+_storage_token_lock = threading.Lock()
+_storage_token_cache: dict[tuple[str | None, ...], tuple[str, float]] = {}
+
+
+def _storage_token_key(config: EntraBotConfig) -> tuple[str | None, ...]:
+    return (config.tenant_id, config.agent_id, config.agent_user_id)
+
+
+def _token_expiry(token: str) -> float:
+    """Return the JWT ``exp`` claim, or a conservative fallback.
+
+    The token was just issued to us by Entra over TLS, so the payload is read
+    without signature validation — it only sets the cache lifetime. A wrong
+    guess is corrected by the blob 401 → invalidate → retry path.
+    """
+    try:
+        payload = token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        return float(claims["exp"])
+    except (IndexError, KeyError, TypeError, ValueError):
+        return time.time() + STORAGE_TOKEN_FALLBACK_TTL
+
+
 def acquire_agent_user_storage_token(config: EntraBotConfig) -> str:
-    """Three-hop variant for Azure Blob Storage (ADR-005).
+    """Three-hop variant for Azure Blob Storage (ADR-005), cached.
 
     Same first two hops as :func:`acquire_agent_user_token`; Hop 3 swaps
     the resource scope from Graph to ``https://storage.azure.com/.default``.
     Requires the Agent Identity to have been consented for Storage during
     ``setup.sh``.
+
+    The token is reused until :data:`STORAGE_TOKEN_REFRESH_MARGIN` before its
+    ``exp``. The lock is held across the fetch so concurrent cold callers (boot
+    resolves cursors in parallel) share one three-hop exchange. Failures are
+    not cached.
     """
-    return acquire_agent_user_token(config, resource_scope=STORAGE_RESOURCE_SCOPE)
+    key = _storage_token_key(config)
+    with _storage_token_lock:
+        cached = _storage_token_cache.get(key)
+        if cached is not None and time.time() < cached[1] - STORAGE_TOKEN_REFRESH_MARGIN:
+            return cached[0]
+        token = acquire_agent_user_token(config, resource_scope=STORAGE_RESOURCE_SCOPE)
+        _storage_token_cache[key] = (token, _token_expiry(token))
+        return token
+
+
+def invalidate_agent_user_storage_token(config: EntraBotConfig) -> None:
+    """Drop the cached storage token so the next call re-runs the three-hop flow."""
+    with _storage_token_lock:
+        _storage_token_cache.pop(_storage_token_key(config), None)
+
+
+def clear_storage_token_cache() -> None:
+    """Drop every cached storage token (test isolation)."""
+    with _storage_token_lock:
+        _storage_token_cache.clear()
 
 
 def acquire_agent_identity_token(

@@ -382,3 +382,75 @@ class TestBlobRoundTrip:
             got = await store.get("manifest.json")
 
             assert got == payload
+
+
+class TestBlobUnauthorizedRetry:
+    """#128: with a cached storage token, a 401 must invalidate the cache and
+    retry exactly once with a freshly acquired token."""
+
+    @staticmethod
+    def _store_with_rotation() -> tuple[BlobStore, list[str]]:
+        tokens = ["stale-token", "fresh-token"]
+        invalidations: list[str] = []
+        current = {"i": 0}
+
+        def provider() -> str:
+            return tokens[current["i"]]
+
+        def on_unauthorized() -> None:
+            invalidations.append("x")
+            current["i"] = min(current["i"] + 1, len(tokens) - 1)
+
+        store = BlobStore(
+            endpoint=ENDPOINT,
+            container=CONTAINER,
+            token_provider=provider,
+            on_unauthorized=on_unauthorized,
+        )
+        return store, invalidations
+
+    @pytest.mark.asyncio
+    async def test_401_invalidates_and_retries_once(self) -> None:
+        store, invalidations = self._store_with_rotation()
+        with respx.mock:
+            route = respx.get(f"{BLOB_URL}/k").mock(
+                side_effect=[httpx.Response(401), httpx.Response(200, content=b"ok")]
+            )
+            assert await store.get("k") == b"ok"
+        assert invalidations == ["x"]
+        assert route.calls[0].request.headers["Authorization"] == "Bearer stale-token"
+        assert route.calls[1].request.headers["Authorization"] == "Bearer fresh-token"
+
+    @pytest.mark.asyncio
+    async def test_put_retry_keeps_request_headers(self) -> None:
+        store, _ = self._store_with_rotation()
+        with respx.mock:
+            route = respx.put(f"{BLOB_URL}/k").mock(
+                side_effect=[httpx.Response(401), httpx.Response(201, headers={"ETag": '"e2"'})]
+            )
+            assert await store.put("k", b"data", if_match='"e1"') == '"e2"'
+        retry = route.calls[1].request
+        assert retry.headers["x-ms-blob-type"] == "BlockBlob"
+        assert retry.headers["If-Match"] == '"e1"'
+        assert retry.content == b"data"
+
+    @pytest.mark.asyncio
+    async def test_second_401_raises_token_expired(self) -> None:
+        from entrabot.errors import TokenExpiredError
+
+        store, invalidations = self._store_with_rotation()
+        with respx.mock:
+            respx.get(f"{BLOB_URL}/k").mock(return_value=httpx.Response(401))
+            with pytest.raises(TokenExpiredError):
+                await store.get("k")
+        assert invalidations == ["x"]
+
+    @pytest.mark.asyncio
+    async def test_without_hook_401_raises_without_retry(self) -> None:
+        from entrabot.errors import TokenExpiredError
+
+        with respx.mock:
+            route = respx.get(f"{BLOB_URL}/k").mock(return_value=httpx.Response(401))
+            with pytest.raises(TokenExpiredError):
+                await _make_store().get("k")
+        assert route.call_count == 1

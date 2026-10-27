@@ -67,3 +67,14 @@ def _attach_caplog_to_entrabot(caplog: pytest.LogCaptureFixture) -> None:
         yield
     finally:
         entrabot_logger.removeHandler(caplog.handler)
+
+
+@pytest.fixture(autouse=True)
+def _clear_storage_token_cache() -> Iterator[None]:
+    """The storage-token cache (#128) is process-global; never leak a token
+    cached by one test into another that expects a fresh three-hop exchange."""
+    from entrabot.tools.teams import clear_storage_token_cache
+
+    clear_storage_token_cache()
+    yield
+    clear_storage_token_cache()

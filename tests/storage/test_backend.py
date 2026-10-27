@@ -311,6 +311,26 @@ class TestGetBackend:
         backend = get_backend()
         assert isinstance(backend, BlobBackend)
 
+    def test_blob_backend_invalidates_cached_storage_token_on_401(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#128: the BlobStore built by get_backend() must drop the cached
+        storage token when Azure answers 401, so the retry gets a fresh one."""
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("ENTRABOT_BLOB_ENDPOINT", "https://entclaw.blob.core.windows.net")
+        monkeypatch.setenv("ENTRABOT_BLOB_CONTAINER", "agent-abc-123")
+        monkeypatch.delenv("ENTRABOT_KEEP_MEMORY_LOCAL", raising=False)
+        invalidated: list[object] = []
+        monkeypatch.setattr(
+            "entrabot.storage.backend.invalidate_agent_user_storage_token",
+            invalidated.append,
+        )
+        backend = get_backend()
+        assert isinstance(backend, BlobBackend)
+        assert backend._store._on_unauthorized is not None
+        backend._store._on_unauthorized()
+        assert len(invalidated) == 1
+
     def test_half_configured_blob_endpoint_without_container_raises(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

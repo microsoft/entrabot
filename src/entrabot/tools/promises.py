@@ -154,13 +154,17 @@ def _get_conditional_store() -> Any | None:
         return None
     if cfg.blob_endpoint and cfg.blob_container:
         from entrabot.storage.blob import BlobStore
-        from entrabot.tools.teams import acquire_agent_user_storage_token
+        from entrabot.tools.teams import (
+            acquire_agent_user_storage_token,
+            invalidate_agent_user_storage_token,
+        )
 
         return _ConditionalBlobAdapter(
             BlobStore(
                 endpoint=cfg.blob_endpoint,
                 container=cfg.blob_container,
                 token_provider=lambda: acquire_agent_user_storage_token(get_config()),
+                on_unauthorized=lambda: invalidate_agent_user_storage_token(get_config()),
             )
         )
     return None

@@ -2192,3 +2192,153 @@ class TestTeamsReadWrapsExternalContent:
         result = await read(chat_id="c1", token="tok", count=5)
         assert result[0]["content"] == "hi agent"
         assert result[0]["content_text"] == "hi agent"
+
+
+class TestStorageTokenCache:
+    """#128: the storage-scope token is cached until shortly before expiry.
+
+    Every blob operation used to run the full three-hop flow (~1-2s).
+    """
+
+    @staticmethod
+    def _jwt(exp: float) -> str:
+        import base64
+        import json as _json
+
+        def seg(obj: dict) -> str:
+            raw = _json.dumps(obj).encode()
+            return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+        return f"{seg({'alg': 'none'})}.{seg({'exp': int(exp)})}.sig"
+
+    @staticmethod
+    def _config(agent_user_id: str = "au-1") -> object:
+        from types import SimpleNamespace
+
+        return SimpleNamespace(tenant_id="t-1", agent_id="ai-1", agent_user_id=agent_user_id)
+
+    def _counting_fetch(self, tokens: list[str]) -> tuple[list[str], object]:
+        calls: list[str] = []
+
+        def fake(config: object, *, resource_scope: str) -> str:
+            from entrabot.tools.teams import STORAGE_RESOURCE_SCOPE
+
+            assert resource_scope == STORAGE_RESOURCE_SCOPE
+            calls.append(resource_scope)
+            return tokens[len(calls) - 1]
+
+        return calls, fake
+
+    def test_second_call_within_lifetime_uses_cache(self) -> None:
+        import time
+
+        from entrabot.tools import teams
+
+        tok = self._jwt(time.time() + 3600)
+        calls, fake = self._counting_fetch([tok, "unexpected"])
+        with patch.object(teams, "acquire_agent_user_token", side_effect=fake):
+            cfg = self._config()
+            assert teams.acquire_agent_user_storage_token(cfg) == tok
+            assert teams.acquire_agent_user_storage_token(cfg) == tok
+        assert len(calls) == 1
+
+    def test_token_inside_refresh_margin_is_refetched(self) -> None:
+        import time
+
+        from entrabot.tools import teams
+
+        near = self._jwt(time.time() + 60)  # inside the 5-minute margin
+        fresh = self._jwt(time.time() + 3600)
+        calls, fake = self._counting_fetch([near, fresh])
+        with patch.object(teams, "acquire_agent_user_token", side_effect=fake):
+            cfg = self._config()
+            assert teams.acquire_agent_user_storage_token(cfg) == near
+            assert teams.acquire_agent_user_storage_token(cfg) == fresh
+        assert len(calls) == 2
+
+    def test_invalidate_forces_refetch(self) -> None:
+        import time
+
+        from entrabot.tools import teams
+
+        a = self._jwt(time.time() + 3600)
+        b = self._jwt(time.time() + 3601)
+        calls, fake = self._counting_fetch([a, b])
+        with patch.object(teams, "acquire_agent_user_token", side_effect=fake):
+            cfg = self._config()
+            assert teams.acquire_agent_user_storage_token(cfg) == a
+            teams.invalidate_agent_user_storage_token(cfg)
+            assert teams.acquire_agent_user_storage_token(cfg) == b
+        assert len(calls) == 2
+
+    def test_cache_is_keyed_by_agent_identity(self) -> None:
+        import time
+
+        from entrabot.tools import teams
+
+        a = self._jwt(time.time() + 3600)
+        b = self._jwt(time.time() + 3601)
+        calls, fake = self._counting_fetch([a, b])
+        with patch.object(teams, "acquire_agent_user_token", side_effect=fake):
+            assert teams.acquire_agent_user_storage_token(self._config("au-1")) == a
+            assert teams.acquire_agent_user_storage_token(self._config("au-2")) == b
+        assert len(calls) == 2
+
+    def test_non_jwt_token_is_cached_with_fallback_lifetime(self) -> None:
+        from entrabot.tools import teams
+
+        calls, fake = self._counting_fetch(["opaque-token", "unexpected"])
+        with patch.object(teams, "acquire_agent_user_token", side_effect=fake):
+            cfg = self._config()
+            assert teams.acquire_agent_user_storage_token(cfg) == "opaque-token"
+            assert teams.acquire_agent_user_storage_token(cfg) == "opaque-token"
+        assert len(calls) == 1
+
+    def test_concurrent_cold_callers_fetch_once(self) -> None:
+        import threading
+        import time
+        from concurrent.futures import ThreadPoolExecutor
+
+        from entrabot.tools import teams
+
+        tok = self._jwt(time.time() + 3600)
+        calls: list[int] = []
+        lock = threading.Lock()
+
+        def slow_fetch(config: object, *, resource_scope: str) -> str:
+            with lock:
+                calls.append(1)
+            time.sleep(0.1)
+            return tok
+
+        with patch.object(teams, "acquire_agent_user_token", side_effect=slow_fetch):
+            cfg = self._config()
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                futures = [ex.submit(teams.acquire_agent_user_storage_token, cfg) for _ in range(8)]
+                results = [f.result() for f in futures]
+        assert results == [tok] * 8
+        assert len(calls) == 1
+
+    def test_failed_fetch_is_not_cached(self) -> None:
+        import time
+
+        from entrabot.errors import TokenExchangeError
+        from entrabot.tools import teams
+
+        tok = self._jwt(time.time() + 3600)
+        outcomes: list[object] = [
+            TokenExchangeError("hop3:agent_user", "temporarily_unavailable", "retry"),
+            tok,
+        ]
+
+        def flaky(config: object, *, resource_scope: str) -> str:
+            nxt = outcomes.pop(0)
+            if isinstance(nxt, Exception):
+                raise nxt
+            return nxt  # type: ignore[return-value]
+
+        with patch.object(teams, "acquire_agent_user_token", side_effect=flaky):
+            cfg = self._config()
+            with pytest.raises(TokenExchangeError):
+                teams.acquire_agent_user_storage_token(cfg)
+            assert teams.acquire_agent_user_storage_token(cfg) == tok
