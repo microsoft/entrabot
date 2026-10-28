@@ -55,19 +55,49 @@ class BlobStore:
         endpoint: str,
         container: str,
         token_provider: Callable[[], str],
+        on_unauthorized: Callable[[str], None] | None = None,
     ) -> None:
         self._endpoint = endpoint.rstrip("/")
         self._container = container
         self._token_provider = token_provider
+        self._on_unauthorized = on_unauthorized
 
     def _url(self, path: str) -> str:
         return f"{self._endpoint}/{self._container}/{path}"
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, token: str | None = None) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {self._token_provider()}",
+            "Authorization": f"Bearer {token if token is not None else self._token_provider()}",
             "x-ms-version": _API_VERSION,
         }
+
+    async def _send(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        **kwargs: object,
+    ) -> httpx.Response:
+        """Send one request with a provider token; on 401, retry once.
+
+        The token provider may serve a cached token (#128). When Azure rejects
+        it, ``on_unauthorized`` is told which token was rejected so it can drop
+        that cache entry, and the request is re-sent with a freshly acquired
+        token. A second 401 (or no hook) raises ``TokenExpiredError`` via
+        :func:`_check_auth`.
+        """
+        for attempt in range(2):
+            token = self._token_provider()
+            request_headers = {**self._headers(token), **(headers or {})}
+            async with httpx.AsyncClient() as client:
+                resp = await client.request(method, url, headers=request_headers, **kwargs)
+            if resp.status_code == 401 and attempt == 0 and self._on_unauthorized is not None:
+                self._on_unauthorized(token)
+                continue
+            _check_auth(resp)
+            return resp
+        raise AssertionError("unreachable")  # pragma: no cover
 
     async def put(
         self,
@@ -83,26 +113,22 @@ class BlobStore:
         which we translate to ``ConcurrencyError`` so callers can retry
         with the fresh version.
         """
-        headers = {**self._headers(), "x-ms-blob-type": "BlockBlob"}
+        headers = {"x-ms-blob-type": "BlockBlob"}
         if if_match is not None:
             headers["If-Match"] = if_match
-        async with httpx.AsyncClient() as client:
-            resp = await client.put(self._url(path), headers=headers, content=data)
-            _check_auth(resp)
-            if resp.status_code == 412:
-                raise ConcurrencyError(f"put({path!r}) refused: If-Match={if_match!r} is stale")
-            resp.raise_for_status()
-            return resp.headers.get("ETag", "")
+        resp = await self._send("PUT", self._url(path), headers=headers, content=data)
+        if resp.status_code == 412:
+            raise ConcurrencyError(f"put({path!r}) refused: If-Match={if_match!r} is stale")
+        resp.raise_for_status()
+        return resp.headers.get("ETag", "")
 
     async def get(self, path: str) -> bytes:
         """Download *path*. Raises ``KeyError`` if the blob doesn't exist."""
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(self._url(path), headers=self._headers())
-            _check_auth(resp)
-            if resp.status_code == 404:
-                raise KeyError(path)
-            resp.raise_for_status()
-            return resp.content
+        resp = await self._send("GET", self._url(path))
+        if resp.status_code == 404:
+            raise KeyError(path)
+        resp.raise_for_status()
+        return resp.content
 
     async def get_with_etag(self, path: str) -> tuple[bytes, str]:
         """Download *path* and its current ETag.
@@ -112,23 +138,19 @@ class BlobStore:
         do a later ``put(..., if_match=etag)`` for optimistic concurrency
         (fleet-safe cursor writes — design F5).
         """
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(self._url(path), headers=self._headers())
-            _check_auth(resp)
-            if resp.status_code == 404:
-                raise KeyError(path)
-            resp.raise_for_status()
-            return resp.content, resp.headers.get("ETag", "")
+        resp = await self._send("GET", self._url(path))
+        if resp.status_code == 404:
+            raise KeyError(path)
+        resp.raise_for_status()
+        return resp.content, resp.headers.get("ETag", "")
 
     async def exists(self, path: str) -> bool:
         """Probe whether *path* exists. HEAD request — doesn't pull the body."""
-        async with httpx.AsyncClient() as client:
-            resp = await client.head(self._url(path), headers=self._headers())
-            _check_auth(resp)
-            if resp.status_code == 404:
-                return False
-            resp.raise_for_status()
-            return True
+        resp = await self._send("HEAD", self._url(path))
+        if resp.status_code == 404:
+            return False
+        resp.raise_for_status()
+        return True
 
     async def list(self, prefix: str = "") -> list[str]:
         """Return blob names in the container under *prefix*."""
@@ -137,21 +159,13 @@ class BlobStore:
             "comp": "list",
             "prefix": prefix,
         }
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{self._endpoint}/{self._container}",
-                headers=self._headers(),
-                params=params,
-            )
-            _check_auth(resp)
-            resp.raise_for_status()
-            return _BLOB_NAME_RE.findall(resp.text)
+        resp = await self._send("GET", f"{self._endpoint}/{self._container}", params=params)
+        resp.raise_for_status()
+        return _BLOB_NAME_RE.findall(resp.text)
 
     async def delete(self, path: str) -> None:
         """Delete *path*. 404 is silently accepted (idempotent delete)."""
-        async with httpx.AsyncClient() as client:
-            resp = await client.delete(self._url(path), headers=self._headers())
-            _check_auth(resp)
-            if resp.status_code == 404:
-                return
-            resp.raise_for_status()
+        resp = await self._send("DELETE", self._url(path))
+        if resp.status_code == 404:
+            return
+        resp.raise_for_status()
