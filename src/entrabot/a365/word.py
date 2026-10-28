@@ -7,7 +7,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from entrabot.a365.catalog import WORD_SERVER_NAME
+from entrabot.a365.errors import A365McpCallError
 from entrabot.a365.provider import WorkIqProvider
+
+_MAX_TOOL_ERROR_DETAIL = 500
 
 
 @dataclass(frozen=True)
@@ -71,6 +74,28 @@ def _first_mcp_text(result: dict[str, Any]) -> str:
     return ""
 
 
+def _raise_for_tool_error(result: dict[str, Any], tool_name: str) -> None:
+    """Raise with Work IQ's own error text when a tool call reports ``isError``.
+
+    Without this, callers fell through to "malformed response: missing ..."
+    and the real cause (e.g. ``BadDocument``) was lost.
+
+    The detail is Work IQ-supplied text that reaches the model, so it is
+    truncated first and then wrapped in the XPIA envelope — truncating after
+    wrapping would cut off the closing tag.
+    """
+    from entrabot.security.xpia import wrap_external
+
+    if result.get("isError") is not True:
+        return
+    detail = _first_mcp_text(result).strip() or "Work IQ reported isError with no error detail"
+    wrapped = wrap_external(
+        detail[:_MAX_TOOL_ERROR_DETAIL],
+        source=f"a365:{WORD_SERVER_NAME}.{tool_name}",
+    )
+    raise A365McpCallError(WORD_SERVER_NAME, tool_name, wrapped)
+
+
 def _parse_word_comment_info(result: dict[str, Any]) -> tuple[str, str]:
     text = _first_mcp_text(result)
     match = re.search(r"WordCommentInfo \[CommentId=([^,\]]+), Content=(.*)\]", text)
@@ -106,6 +131,7 @@ async def get_document_content(
         tool_name="GetDocumentContent",
         arguments={"url": clean_url},
     )
+    _raise_for_tool_error(result, "GetDocumentContent")
     comments = result.get("comments")
     raw_html = str(result.get("content") or result.get("contentInHtml") or "")
     # XPIA envelope: the document body is external content; wrap it so
@@ -139,6 +165,7 @@ async def create_document(
             "contentInHtml": _required(content_html, "content_html"),
         },
     )
+    _raise_for_tool_error(result, "CreateDocument")
     document_url = _first_nested_string(
         result,
         ("url",),
@@ -181,6 +208,7 @@ async def create_comment(
             "newComment": _required(content, "content"),
         },
     )
+    _raise_for_tool_error(result, "AddComment")
     parsed_comment_id, parsed_content = _parse_word_comment_info(result)
     comment_id = str(result.get("id") or result.get("commentId") or parsed_comment_id or "")
     if not comment_id.strip() and not _is_successful_mcp_text_result(result):
@@ -211,6 +239,7 @@ async def reply_to_comment(
             "newComment": _required(content, "content"),
         },
     )
+    _raise_for_tool_error(result, "ReplyToComment")
     parsed_reply_id, parsed_content = _parse_word_comment_info(result)
     reply_id = str(result.get("id") or result.get("replyId") or parsed_reply_id or "")
     if not reply_id.strip():

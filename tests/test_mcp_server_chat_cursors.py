@@ -618,3 +618,96 @@ class TestScheduleCursorSaveSyncFallback:
         assert "chat-syncfb" not in dirty
         # And the write itself must have landed.
         assert chat_cursors.load_cursor("chat-syncfb") is not None
+
+
+# ---------------------------------------------------------------------------
+# Boot latency: cursor rehydration must not block the event loop
+# ---------------------------------------------------------------------------
+# Each blob cursor read does a full three-hop storage-token acquisition plus a
+# blob GET (~1.3-2s). Resolving 14-50 watched chats serially ON the event loop
+# starved the MCP ``initialize`` handshake past Claude Code's 30s connect
+# timeout. _init_poll must resolve cursors concurrently in worker threads.
+class TestInitPollDoesNotBlockLoop:
+    @pytest.mark.asyncio
+    async def test_cursors_resolved_concurrently_off_loop(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        import threading
+        import time
+        from unittest.mock import MagicMock
+
+        chat_ids = [f"19:chat-{i}@thread.v2" for i in range(6)]
+        (tmp_path / "watched_chats").write_text("\n".join(chat_ids) + "\n")
+        fake_config = MagicMock()
+        fake_config.data_dir = tmp_path
+        mcp_server._state["config"] = fake_config
+        monkeypatch.setattr(mcp_server, "_identity", None)
+
+        loop_thread = threading.get_ident()
+        resolve_threads: list[int] = []
+
+        def slow_resolve(chat_id: str) -> chat_cursors.CursorResolution:
+            resolve_threads.append(threading.get_ident())
+            time.sleep(0.3)  # simulate a blocking blob read
+            return chat_cursors.CursorResolution(
+                chat_cursors.CursorOutcome.PRESENT,
+                {"last_ts": "2026-10-01T00:00:00Z", "seen_ids_tail": [chat_id]},
+            )
+
+        monkeypatch.setattr(chat_cursors, "resolve_cursor", slow_resolve)
+        monkeypatch.setattr(mcp_server, "_ensure_poll_task_running", lambda: None)
+
+        ticks = 0
+
+        async def heartbeat() -> None:
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.05)
+                ticks += 1
+
+        hb = asyncio.create_task(heartbeat())
+        start = time.monotonic()
+        try:
+            await mcp_server._init_poll()
+        finally:
+            hb.cancel()
+        elapsed = time.monotonic() - start
+
+        # Serial would be 6 * 0.3 = 1.8s; concurrent is ~0.3s.
+        assert elapsed < 1.0, f"cursor reads ran serially ({elapsed:.2f}s)"
+        assert ticks >= 3, "event loop was blocked during cursor resolution"
+        assert loop_thread not in resolve_threads, "resolve_cursor ran on the loop thread"
+
+        watched = mcp_server._state["watched_chats"]
+        assert set(watched) == set(chat_ids)
+        for cid in chat_ids:
+            assert watched[cid]["bootstrapped"] is True
+            assert watched[cid]["seen_ids"] == {cid}
+            assert watched[cid]["last_ts"] == "2026-10-01T00:00:00Z"
+
+    @pytest.mark.asyncio
+    async def test_concurrent_initialize_runs_init_once(self, monkeypatch) -> None:
+        """A tool call arriving while eager init is awaiting must not start a
+        second init (which would reset ``watched_chats`` mid-load)."""
+        calls = {"auth": 0, "poll": 0}
+
+        async def fake_auth() -> None:
+            calls["auth"] += 1
+            await asyncio.sleep(0.05)
+
+        async def fake_poll() -> None:
+            calls["poll"] += 1
+            await asyncio.sleep(0.05)
+
+        monkeypatch.setattr(mcp_server, "_init_auth", fake_auth)
+        monkeypatch.setattr(mcp_server, "_init_poll", fake_poll)
+        monkeypatch.setattr(
+            "entrabot.storage.backend.assert_backend_config", lambda **_: None
+        )
+        mcp_server._state.pop("initialized", None)
+        try:
+            await asyncio.gather(mcp_server._initialize(), mcp_server._initialize())
+        finally:
+            mcp_server._state.pop("initialized", None)
+
+        assert calls == {"auth": 1, "poll": 1}
