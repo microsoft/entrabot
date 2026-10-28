@@ -35,7 +35,7 @@ The resulting token carries `idtyp=user` and the Agent User's object ID (`oid`).
 
 `acquire_agent_user_storage_token()` (also in `tools/teams.py`) is the same three-hop function with Hop 3's `scope` swapped from Graph to `https://storage.azure.com/.default`. Hops 1 and 2 are unchanged — only the resource requested at the last hop differs. This is what backs the Azure Blob Storage memory backend when cloud memory is enabled.
 
-The storage token is cached in-process, keyed by tenant, Agent Identity, and Agent User, and reused until 5 minutes before its `exp` claim (55 minutes if `exp` can't be read). A lock is held across the exchange, so concurrent cold callers — such as boot-time cursor rehydration — share one three-hop exchange, and failed exchanges are not cached. `BlobStore` takes an `on_unauthorized` hook: on a 401 the backend calls `invalidate_agent_user_storage_token()` and retries the request once with a fresh token; a second 401 raises `TokenExpiredError`.
+The storage token is cached in-process, keyed by tenant, Agent Identity, and Agent User, and reused until 5 minutes before its `exp` claim (55 minutes if `exp` can't be read). A lock is held across the exchange, so concurrent cold callers — such as boot-time cursor rehydration — share one three-hop exchange, and failed exchanges are not cached. `BlobStore` takes an `on_unauthorized` hook that receives the rejected token: on a 401 the backend calls `invalidate_agent_user_storage_token(rejected_token=...)`, which evicts the cache entry only if it still holds that token (so a late 401 can't discard a replacement other requests are already using), and retries the request once with a fresh token; a second 401 raises `TokenExpiredError`.
 
 ### Two-hop Agent Identity flow (sponsor reads)
 

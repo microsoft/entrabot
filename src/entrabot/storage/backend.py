@@ -241,7 +241,9 @@ def get_backend() -> MemoryBackend:
             endpoint=cfg.blob_endpoint,
             container=cfg.blob_container,
             token_provider=lambda: acquire_agent_user_storage_token(get_config()),
-            on_unauthorized=lambda: invalidate_agent_user_storage_token(get_config()),
+            on_unauthorized=lambda rejected: invalidate_agent_user_storage_token(
+                get_config(), rejected_token=rejected
+            ),
         )
         return BlobBackend(store)
     if cfg.blob_endpoint or cfg.blob_container:

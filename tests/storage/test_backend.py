@@ -323,13 +323,13 @@ class TestGetBackend:
         invalidated: list[object] = []
         monkeypatch.setattr(
             "entrabot.storage.backend.invalidate_agent_user_storage_token",
-            invalidated.append,
+            lambda cfg, *, rejected_token: invalidated.append(rejected_token),
         )
         backend = get_backend()
         assert isinstance(backend, BlobBackend)
         assert backend._store._on_unauthorized is not None
-        backend._store._on_unauthorized()
-        assert len(invalidated) == 1
+        backend._store._on_unauthorized("rejected-tok")
+        assert invalidated == ["rejected-tok"]
 
     def test_half_configured_blob_endpoint_without_container_raises(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

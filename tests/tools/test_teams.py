@@ -2342,3 +2342,22 @@ class TestStorageTokenCache:
             with pytest.raises(TokenExchangeError):
                 teams.acquire_agent_user_storage_token(cfg)
             assert teams.acquire_agent_user_storage_token(cfg) == tok
+
+    def test_stale_401_does_not_evict_already_refreshed_token(self) -> None:
+        """Copilot review on #130: two requests rejected with token A; the
+        first refreshes to B. The second's invalidation names A, so B stays."""
+        import time
+
+        from entrabot.tools import teams
+
+        a = self._jwt(time.time() + 3600)
+        b = self._jwt(time.time() + 3601)
+        calls, fake = self._counting_fetch([a, b, "unexpected"])
+        with patch.object(teams, "acquire_agent_user_token", side_effect=fake):
+            cfg = self._config()
+            assert teams.acquire_agent_user_storage_token(cfg) == a
+            teams.invalidate_agent_user_storage_token(cfg, rejected_token=a)
+            assert teams.acquire_agent_user_storage_token(cfg) == b
+            teams.invalidate_agent_user_storage_token(cfg, rejected_token=a)  # late 401
+            assert teams.acquire_agent_user_storage_token(cfg) == b
+        assert len(calls) == 2

@@ -397,8 +397,8 @@ class TestBlobUnauthorizedRetry:
         def provider() -> str:
             return tokens[current["i"]]
 
-        def on_unauthorized() -> None:
-            invalidations.append("x")
+        def on_unauthorized(rejected: str) -> None:
+            invalidations.append(rejected)
             current["i"] = min(current["i"] + 1, len(tokens) - 1)
 
         store = BlobStore(
@@ -417,7 +417,7 @@ class TestBlobUnauthorizedRetry:
                 side_effect=[httpx.Response(401), httpx.Response(200, content=b"ok")]
             )
             assert await store.get("k") == b"ok"
-        assert invalidations == ["x"]
+        assert invalidations == ["stale-token"], "hook receives the rejected token"
         assert route.calls[0].request.headers["Authorization"] == "Bearer stale-token"
         assert route.calls[1].request.headers["Authorization"] == "Bearer fresh-token"
 
@@ -443,7 +443,7 @@ class TestBlobUnauthorizedRetry:
             respx.get(f"{BLOB_URL}/k").mock(return_value=httpx.Response(401))
             with pytest.raises(TokenExpiredError):
                 await store.get("k")
-        assert invalidations == ["x"]
+        assert invalidations == ["stale-token"]
 
     @pytest.mark.asyncio
     async def test_without_hook_401_raises_without_retry(self) -> None:

@@ -275,10 +275,23 @@ def acquire_agent_user_storage_token(config: EntraBotConfig) -> str:
         return token
 
 
-def invalidate_agent_user_storage_token(config: EntraBotConfig) -> None:
-    """Drop the cached storage token so the next call re-runs the three-hop flow."""
+def invalidate_agent_user_storage_token(
+    config: EntraBotConfig, *, rejected_token: str | None = None
+) -> None:
+    """Drop the cached storage token so the next call re-runs the three-hop flow.
+
+    With ``rejected_token``, evict only if the cache still holds that token: a
+    late 401 for an already-replaced token must not discard the fresh one that
+    concurrent requests are sharing.
+    """
+    key = _storage_token_key(config)
     with _storage_token_lock:
-        _storage_token_cache.pop(_storage_token_key(config), None)
+        cached = _storage_token_cache.get(key)
+        if cached is None:
+            return
+        if rejected_token is not None and cached[0] != rejected_token:
+            return
+        del _storage_token_cache[key]
 
 
 def clear_storage_token_cache() -> None:

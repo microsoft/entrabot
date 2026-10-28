@@ -55,7 +55,7 @@ class BlobStore:
         endpoint: str,
         container: str,
         token_provider: Callable[[], str],
-        on_unauthorized: Callable[[], None] | None = None,
+        on_unauthorized: Callable[[str], None] | None = None,
     ) -> None:
         self._endpoint = endpoint.rstrip("/")
         self._container = container
@@ -65,9 +65,9 @@ class BlobStore:
     def _url(self, path: str) -> str:
         return f"{self._endpoint}/{self._container}/{path}"
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, token: str | None = None) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {self._token_provider()}",
+            "Authorization": f"Bearer {token if token is not None else self._token_provider()}",
             "x-ms-version": _API_VERSION,
         }
 
@@ -82,16 +82,18 @@ class BlobStore:
         """Send one request with a provider token; on 401, retry once.
 
         The token provider may serve a cached token (#128). When Azure rejects
-        it, ``on_unauthorized`` drops the cache and the request is re-sent with
-        a freshly acquired token. A second 401 (or no hook) raises
-        ``TokenExpiredError`` via :func:`_check_auth`.
+        it, ``on_unauthorized`` is told which token was rejected so it can drop
+        that cache entry, and the request is re-sent with a freshly acquired
+        token. A second 401 (or no hook) raises ``TokenExpiredError`` via
+        :func:`_check_auth`.
         """
         for attempt in range(2):
-            request_headers = {**self._headers(), **(headers or {})}
+            token = self._token_provider()
+            request_headers = {**self._headers(token), **(headers or {})}
             async with httpx.AsyncClient() as client:
                 resp = await client.request(method, url, headers=request_headers, **kwargs)
             if resp.status_code == 401 and attempt == 0 and self._on_unauthorized is not None:
-                self._on_unauthorized()
+                self._on_unauthorized(token)
                 continue
             _check_auth(resp)
             return resp

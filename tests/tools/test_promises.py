@@ -465,7 +465,8 @@ class TestConditionalBlobAdapterUnauthorizedRetry:
         current = {"tok": next(tokens)}
         invalidations: list[int] = []
 
-        def on_unauthorized() -> None:
+        def on_unauthorized(rejected: str) -> None:
+            assert rejected == "stale-token"
             invalidations.append(1)
             current["tok"] = next(tokens)
 
