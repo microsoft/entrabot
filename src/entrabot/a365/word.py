@@ -79,11 +79,21 @@ def _raise_for_tool_error(result: dict[str, Any], tool_name: str) -> None:
 
     Without this, callers fell through to "malformed response: missing ..."
     and the real cause (e.g. ``BadDocument``) was lost.
+
+    The detail is Work IQ-supplied text that reaches the model, so it is
+    truncated first and then wrapped in the XPIA envelope — truncating after
+    wrapping would cut off the closing tag.
     """
+    from entrabot.security.xpia import wrap_external
+
     if result.get("isError") is not True:
         return
     detail = _first_mcp_text(result).strip() or "Work IQ reported isError with no error detail"
-    raise A365McpCallError(WORD_SERVER_NAME, tool_name, detail[:_MAX_TOOL_ERROR_DETAIL])
+    wrapped = wrap_external(
+        detail[:_MAX_TOOL_ERROR_DETAIL],
+        source=f"a365:{WORD_SERVER_NAME}.{tool_name}",
+    )
+    raise A365McpCallError(WORD_SERVER_NAME, tool_name, wrapped)
 
 
 def _parse_word_comment_info(result: dict[str, Any]) -> tuple[str, str]:
