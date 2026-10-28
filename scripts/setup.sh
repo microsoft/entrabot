@@ -797,10 +797,12 @@ print('  Cleared identity state (kept provisioner app)')
         echo ""
         echo "  Examples: sati-agent, dev-bot, test-agent"
         echo ""
-        printf "  Enter UPN suffix: "
-        read -r UPN_SUFFIX
+        if [ -t 0 ]; then
+            printf "  Enter UPN suffix: "
+            read -r UPN_SUFFIX
+        fi
         if [ -z "$UPN_SUFFIX" ]; then
-            echo "ERROR: UPN suffix is required with --new" >&2
+            echo "ERROR: UPN suffix is required with --new (or pass --with-upn-suffix=<suffix>)" >&2
             exit 1
         fi
         export _ENTRABOT_UPN_SUFFIX="$UPN_SUFFIX"
@@ -1202,8 +1204,13 @@ print(claude_code_memory_dir(Path('$PROJECT_ROOT')))
                     fi
                 fi
                 echo ""
-                echo -n "  Upload existing local memory (~${TOTAL_KB} KB, $DESC_PARTS) to blob? [y/N] "
-                read -r MIGRATE_REPLY
+                MIGRATE_REPLY=""
+                if [ -t 0 ]; then
+                    echo -n "  Upload existing local memory (~${TOTAL_KB} KB, $DESC_PARTS) to blob? [y/N] "
+                    read -r MIGRATE_REPLY
+                else
+                    echo -e "  ${BLUE}[non-interactive shell — not uploading existing local memory]${NC}"
+                fi
                 if [ "$MIGRATE_REPLY" = "y" ] || [ "$MIGRATE_REPLY" = "Y" ]; then
                     MIGRATION_RC=0
                     "$PYTHON" -c "
