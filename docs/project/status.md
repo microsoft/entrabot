@@ -51,7 +51,6 @@
 - Legacy Graph file comments are not the same as Word UI comments; use the Work IQ Word tools for document comments.
 - External-content wrapping is defense in depth. It reduces instruction-injection risk but is not proof against every possible model jailbreak.
 - Attaching an additional device with `setup.sh --use-blueprint` replaces the Blueprint's certificate list instead of appending, and proceeds without confirmation in non-interactive shells ([#124](https://github.com/microsoft/entrabot/issues/124)).
-- `provision_blob_storage.py` can only reuse storage accounts in the `entrabot-rg` resource group ([#125](https://github.com/microsoft/entrabot/issues/125)).
 - `ENTRABOT_MODE` is validated but does not currently select the auth path in `_init_auth`; credential presence and `ENTRABOT_SKIP_PROVISIONING` determine which path (three-hop Agent User or MSAL delegated) is attempted.
 
 ## Project links

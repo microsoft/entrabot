@@ -5,15 +5,17 @@ Already-provisioned resources are detected and reused; only missing pieces
 get created.
 
 What it does, in order:
-  1. Ensure resource group ``entrabot-rg`` exists (in the user's default
-     subscription, in a sensible region).
-  2. Ensure a Storage Account exists (one per tenant — name derived from
-     the tenant ID so multiple devs in the same tenant converge on the
-     same account without a global-unique-name race). Override with
-     ``--with-storage-account NAME`` to attach to an existing/external
-     account, or ``--create-new-storage`` to force a fresh
-     randomly-suffixed account even when the deterministic-name one
+  1. Find the Storage Account (one per tenant — name derived from the
+     tenant ID so multiple devs in the same tenant converge on the same
+     account without a global-unique-name race), in ``entrabot-rg`` or any
+     other resource group in the subscription, and reuse it where it is.
+     Override with ``--with-storage-account NAME`` to attach to an
+     existing/external account, or ``--create-new-storage`` to force a
+     fresh randomly-suffixed account even when the deterministic-name one
      already exists.
+  2. Only when the account must be created: ensure resource group
+     ``entrabot-rg`` exists (in the user's default subscription, in a
+     sensible region) and create the account there.
   3. Ensure a container exists for *this* Agent User (named with the
      Agent User's object ID per ADR §"Resolved decisions" #1). Override
      with ``--with-container NAME``.
@@ -36,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import re
 import secrets
 import shutil
@@ -134,14 +137,37 @@ def ensure_resource_group(name: str, location: str) -> None:
     _eprint("    ✓ created")
 
 
-def ensure_storage_account(name: str, resource_group: str, location: str) -> None:
+def find_storage_account_resource_group(name: str) -> str | None:
+    """Resource group of the storage account called *name* in the current subscription, or None."""
+    res = _run_az(
+        ["storage", "account", "list", "--query", f"[?name=='{name}'].resourceGroup", "-o", "json"]
+    )
+    if res.returncode != 0:
+        raise RuntimeError(f"az storage account list failed: {res.stderr.strip()}")
+    groups = json.loads(res.stdout or "[]")
+    return groups[0] if groups else None
+
+
+def ensure_storage_account(name: str, resource_group: str, location: str) -> str:
+    """Ensure the account exists and return the resource group it lives in.
+
+    Storage account names are global, so an account created under an earlier resource group
+    name (``entraclaw-rg``) is reused where it is instead of failing on create. *resource_group*
+    is only ensured when a new account must be created, so an operator who can manage an
+    existing account but cannot create resource groups is not blocked.
+    """
     _eprint(f"  • Ensuring storage account '{name}'...")
     res = _run_az(
         ["storage", "account", "show", "--name", name, "--resource-group", resource_group]
     )
     if res.returncode == 0:
         _eprint("    ✓ exists")
-        return
+        return resource_group
+    existing_group = find_storage_account_resource_group(name)
+    if existing_group:
+        _eprint(f"    ✓ exists (resource group '{existing_group}')")
+        return existing_group
+    ensure_resource_group(resource_group, location)
     res = _run_az(
         [
             "storage",
@@ -166,6 +192,7 @@ def ensure_storage_account(name: str, resource_group: str, location: str) -> Non
     if res.returncode != 0:
         raise RuntimeError(f"az storage account create failed: {res.stderr.strip()}")
     _eprint("    ✓ created")
+    return resource_group
 
 
 def ensure_container(account: str, container: str) -> None:
@@ -313,10 +340,9 @@ def provision(
     else:
         container_name = container_name_for_agent_user(agent_user_object_id)
 
-    ensure_resource_group(RESOURCE_GROUP, location)
-    ensure_storage_account(account, RESOURCE_GROUP, location)
+    account_group = ensure_storage_account(account, RESOURCE_GROUP, location)
     ensure_container(account, container_name)
-    assign_container_rbac(account, container_name, RESOURCE_GROUP, agent_user_object_id)
+    assign_container_rbac(account, container_name, account_group, agent_user_object_id)
 
     return blob_endpoint_for_account(account), container_name
 
