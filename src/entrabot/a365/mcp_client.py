@@ -9,6 +9,8 @@ import httpx
 
 from entrabot.a365.errors import A365ConsentMissingError, A365McpCallError
 
+_MAX_ERROR_DETAIL = 500
+
 
 def _parse_sse_message(text: str) -> dict[str, Any]:
     """Return the first JSON ``data:`` payload from an MCP SSE response."""
@@ -118,7 +120,15 @@ class WorkIqMcpClient:
                 "malformed MCP response: non-object body",
             )
         if "error" in body:
-            raise A365McpCallError(server_name, tool_name, str(body["error"]))
+            from entrabot.security.xpia import wrap_external
+
+            # The JSON-RPC error body is Work IQ-controlled text; it reaches the
+            # model, so truncate first (keeping the envelope closed) and wrap.
+            wrapped = wrap_external(
+                str(body["error"])[:_MAX_ERROR_DETAIL],
+                source=f"a365:{server_name}.{tool_name}",
+            )
+            raise A365McpCallError(server_name, tool_name, wrapped)
         result = body.get("result")
         if not isinstance(result, dict):
             raise A365McpCallError(server_name, tool_name, "malformed MCP response: missing result")
