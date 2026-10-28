@@ -447,3 +447,61 @@ class TestETagContention:
                 description="doomed",
                 backend=None,
             )
+
+
+class TestConditionalBlobAdapterUnauthorizedRetry:
+    """#128 review: promise reads must go through BlobStore's 401 → invalidate →
+    retry path, not a raw GET that keeps reusing a rejected cached token."""
+
+    @pytest.mark.asyncio
+    async def test_get_retries_with_fresh_token_after_401(self) -> None:
+        import httpx
+        import respx
+
+        from entrabot.storage.blob import BlobStore
+        from entrabot.tools.promises import _ConditionalBlobAdapter
+
+        tokens = iter(["stale-token", "fresh-token"])
+        current = {"tok": next(tokens)}
+        invalidations: list[int] = []
+
+        def on_unauthorized() -> None:
+            invalidations.append(1)
+            current["tok"] = next(tokens)
+
+        store = BlobStore(
+            endpoint="https://acct.blob.core.windows.net",
+            container="c",
+            token_provider=lambda: current["tok"],
+            on_unauthorized=on_unauthorized,
+        )
+        adapter = _ConditionalBlobAdapter(store)
+        with respx.mock:
+            route = respx.get("https://acct.blob.core.windows.net/c/promises.json").mock(
+                side_effect=[
+                    httpx.Response(401),
+                    httpx.Response(200, content=b"[]", headers={"ETag": '"e1"'}),
+                ]
+            )
+            assert await adapter.get("promises.json") == (b"[]", '"e1"')
+        assert invalidations == [1]
+        assert route.calls[1].request.headers["Authorization"] == "Bearer fresh-token"
+
+    @pytest.mark.asyncio
+    async def test_get_missing_blob_returns_empty(self) -> None:
+        import httpx
+        import respx
+
+        from entrabot.storage.blob import BlobStore
+        from entrabot.tools.promises import _ConditionalBlobAdapter
+
+        store = BlobStore(
+            endpoint="https://acct.blob.core.windows.net",
+            container="c",
+            token_provider=lambda: "t",
+        )
+        with respx.mock:
+            respx.get("https://acct.blob.core.windows.net/c/promises.json").mock(
+                return_value=httpx.Response(404)
+            )
+            assert await _ConditionalBlobAdapter(store).get("promises.json") == (b"", "")

@@ -182,22 +182,12 @@ class _ConditionalBlobAdapter:
         self._store = store
 
     async def get(self, path: str) -> tuple[bytes, str]:
-        # Use a HEAD-then-GET pattern? httpx's AsyncClient already returns
-        # the ETag on the GET response, but BlobStore.get drops it. Do one
-        # raw GET here to preserve it.
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            url = self._store._url(path)  # noqa: SLF001 — thin shim
-            resp = await client.get(url, headers=self._store._headers())  # noqa: SLF001
-            if resp.status_code == 404:
-                return b"", ""
-            if resp.status_code == 401:
-                from entrabot.errors import TokenExpiredError
-
-                raise TokenExpiredError("Storage token expired or missing scope")
-            resp.raise_for_status()
-            return resp.content, resp.headers.get("ETag", "")
+        # Delegate to BlobStore so reads share its 401 → invalidate → retry
+        # path (#128). A missing blob is an empty store, not an error.
+        try:
+            return await self._store.get_with_etag(path)
+        except KeyError:
+            return b"", ""
 
     async def put(
         self,
