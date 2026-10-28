@@ -11,6 +11,7 @@ configuration — just call the tools directly.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -37,6 +38,7 @@ from entrabot.errors import (
 from entrabot.identity import IdentityStateMachine, set_active_identity_state
 from entrabot.logging_config import setup_logging
 from entrabot.models import IdentityState
+from entrabot.tools.chat_cursors import CursorResolution
 from entrabot.tools.interaction_log import detect_channel, log_interaction
 from entrabot.tools.teams import acquire_agent_user_token
 from entrabot.url_safety import _is_graph_url
@@ -290,6 +292,7 @@ def _capture_host_from_context() -> str:
 
 # Module-level state populated by _initialize().
 _state: dict[str, object] = {"cached_host": "", "recent_placeholders": {}}
+_init_lock = asyncio.Lock()
 _identity: IdentityStateMachine | None = None
 
 # Commitment-language patterns for the outbound-discipline hook in
@@ -964,17 +967,32 @@ async def _init_poll() -> None:
     # auto-discovery) are watched. There is no default group chat.
     _state["watched_chats"] = {}
 
-    # Load persisted watched chats (DMs created via create_chat tool)
+    # Load persisted watched chats (DMs created via create_chat tool).
+    # Each cursor read is a blocking three-hop token + blob GET (~1-2s), so
+    # resolve them concurrently in worker threads. Run serially on the loop,
+    # 14+ chats starved the MCP ``initialize`` handshake past the host's 30s
+    # connect timeout.
     config = _state.get("config")
     if config:
         watched_file = config.data_dir / "watched_chats"
         if watched_file.is_file():
-            for line in watched_file.read_text().splitlines():
-                cid = line.strip()
-                if cid:
-                    _register_watched_chat(cid, persist=False)
-                    if logger:
-                        logger.info("Loaded persisted watched chat: %s", cid)
+            import asyncio
+
+            from entrabot.tools import chat_cursors
+
+            lines = (line.strip() for line in watched_file.read_text().splitlines())
+            chat_ids = [cid for cid in dict.fromkeys(lines) if cid]
+            sem = asyncio.Semaphore(CURSOR_RESOLVE_CONCURRENCY)
+
+            async def _resolve(cid: str) -> chat_cursors.CursorResolution:
+                async with sem:
+                    return await asyncio.to_thread(chat_cursors.resolve_cursor, cid)
+
+            resolutions = await asyncio.gather(*(_resolve(cid) for cid in chat_ids))
+            for cid, resolution in zip(chat_ids, resolutions, strict=True):
+                _register_watched_chat(cid, persist=False, resolution=resolution)
+                if logger:
+                    logger.info("Loaded persisted watched chat: %s", cid)
 
     # Start background polling unconditionally. Every client that
     # spawns entrabot (stdio) gets its own process and its own poll
@@ -1019,6 +1037,17 @@ async def _initialize() -> None:
     if _state.get("initialized"):
         return
 
+    # Init now yields to the loop (cursor reads run in threads), so a tool
+    # call can arrive mid-init. Serialize so it waits instead of re-running
+    # init and resetting watched_chats under the eager-init task.
+    async with _init_lock:
+        if _state.get("initialized"):
+            return
+        await _initialize_locked()
+
+
+async def _initialize_locked() -> None:
+    """Body of :func:`_initialize`; caller holds ``_init_lock``."""
     await _init_auth()
     await _init_poll()
 
@@ -1050,6 +1079,7 @@ async def _initialize() -> None:
 
 
 BACKGROUND_POLL_INTERVAL = 5  # seconds between polls
+CURSOR_RESOLVE_CONCURRENCY = 8  # parallel cursor reads at boot (each does a token fetch)
 EMAIL_POLL_INTERVAL = 60  # seconds between /me/messages polls
 CHAT_DISCOVER_INTERVAL = 120  # seconds between /me/chats auto-discovery sweeps
 PERSONA_SATI_HEARTBEAT_INTERVAL = 300  # 5 min smoke test against persona-sati
@@ -1207,7 +1237,12 @@ def _ensure_poll_task_running() -> None:
         logger.info("Started background Teams poll task")
 
 
-def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
+def _register_watched_chat(
+    chat_id: str,
+    *,
+    persist: bool = True,
+    resolution: CursorResolution | None = None,
+) -> None:
     """Register a chat for background polling.
 
     Each chat gets its own cursor and seen-set so message tracking is
@@ -1219,6 +1254,9 @@ def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
     If no background poll task is currently running (e.g. the MCP server
     booted with zero watched chats and this is the first chat being added
     via create_chat), lazily spins one up.
+
+    ``resolution`` lets a caller pass a cursor already resolved off the event
+    loop (see ``_init_poll``); when omitted the cursor is read synchronously.
     """
     watched = _state.get("watched_chats", {})
     if chat_id not in watched:
@@ -1238,7 +1276,8 @@ def _register_watched_chat(chat_id: str, *, persist: bool = True) -> None:
         #     new chat and trigger a bootstrap push of a weeks-old message.
         from entrabot.tools.chat_cursors import CursorOutcome, resolve_cursor
 
-        resolution = resolve_cursor(chat_id)
+        if resolution is None:
+            resolution = resolve_cursor(chat_id)
 
         if resolution.outcome is CursorOutcome.PRESENT:
             cursor = resolution.cursor or {}
