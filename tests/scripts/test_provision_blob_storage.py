@@ -113,9 +113,10 @@ class TestEndToEndProvisionAllNew:
 
     def test_creates_in_order_and_assigns_rbac(self) -> None:
         results = [
-            _err("not found"),  # group show
-            _ok(),  # group create
             _err("not found"),  # account show
+            _ok("[]"),  # account list: not in any other resource group either
+            _err("not found"),  # group show — only ensured because we must create
+            _ok(),  # group create
             _ok(),  # account create
             _err("not found"),  # container show
             _ok(),  # container create
@@ -142,7 +143,6 @@ class TestEndToEndProvisionAllNew:
 
     def test_idempotent_when_everything_exists(self) -> None:
         results = [
-            _ok(),  # group show
             _ok(),  # account show
             _ok(),  # container show
             _ok(
@@ -161,10 +161,62 @@ class TestEndToEndProvisionAllNew:
         assert not any(args[:3] == ["storage", "container", "create"] for args in all_calls)
 
 
+class TestExistingAccountInOtherResourceGroup:
+    """An account created under an older resource group name is reused, not re-created."""
+
+    def test_reuses_account_and_scopes_rbac_to_its_resource_group(self) -> None:
+        results = [
+            _err("ResourceNotFound"),  # account show in entrabot-rg
+            _ok('["entraclaw-rg"]'),  # account list: the name exists in another group
+            _ok(),  # container show
+            _ok(
+                "/subscriptions/sub/resourceGroups/entraclaw-rg/providers/Microsoft.Storage/storageAccounts/acct"
+            ),  # noqa: E501
+            _ok(),  # role assignment create
+        ]
+        with patch.object(provision_blob_storage, "_run_az", side_effect=results) as m:
+            endpoint, container = provision_blob_storage.provision(
+                tenant_id="tid-123",
+                agent_user_object_id="oid-abc",
+            )
+
+        all_calls = [c.args[0] for c in m.call_args_list]
+        assert not any(args[:3] == ["storage", "account", "create"] for args in all_calls)
+        id_lookup = all_calls[3]
+        assert id_lookup[:3] == ["storage", "account", "show"]
+        assert id_lookup[id_lookup.index("--resource-group") + 1] == "entraclaw-rg"
+        assert endpoint.endswith(".blob.core.windows.net")
+        assert container == provision_blob_storage.container_name_for_agent_user("oid-abc")
+
+    def test_never_touches_default_group_when_account_exists_elsewhere(self) -> None:
+        """Copilot review on #131: an operator who can manage the existing
+        account but cannot create resource groups must not be blocked by
+        ensuring entrabot-rg before discovery."""
+        results = [
+            _err("ResourceGroupNotFound"),  # account show in entrabot-rg (group absent)
+            _ok('["entraclaw-rg"]'),  # account list: found in another group
+            _ok(),  # container show
+            _ok("/subscriptions/sub/resourceGroups/entraclaw-rg/providers/x/acct"),  # id lookup
+            _ok(),  # role assignment create
+        ]
+        with patch.object(provision_blob_storage, "_run_az", side_effect=results) as m:
+            provision_blob_storage.provision(tenant_id="tid-123", agent_user_object_id="oid-abc")
+
+        all_calls = [c.args[0] for c in m.call_args_list]
+        assert not any(args[:1] == ["group"] for args in all_calls)
+
+    def test_account_list_failure_raises_runtime_error(self) -> None:
+        results = [_err("ResourceNotFound"), _err("auth blocked")]
+        with (
+            patch.object(provision_blob_storage, "_run_az", side_effect=results),
+            pytest.raises(RuntimeError, match="az storage account list failed"),
+        ):
+            provision_blob_storage.provision(tenant_id="tid-123", agent_user_object_id="oid-abc")
+
+
 class TestRoleAssignmentBenignErrors:
     def test_already_exists_treated_as_success(self) -> None:
         results = [
-            _ok(),  # group show
             _ok(),  # account show
             _ok(),  # container show
             _ok("/subscriptions/.../accounts/x"),  # show -o tsv
@@ -177,7 +229,12 @@ class TestRoleAssignmentBenignErrors:
 
 class TestFailures:
     def test_group_create_failure_raises_runtime_error(self) -> None:
-        results = [_err("not found"), _err("auth blocked")]
+        results = [
+            _err("not found"),  # account show
+            _ok("[]"),  # account list: must create
+            _err("not found"),  # group show
+            _err("auth blocked"),  # group create
+        ]
         with (
             patch.object(provision_blob_storage, "_run_az", side_effect=results),
             pytest.raises(RuntimeError, match="az group create failed"),
@@ -217,7 +274,6 @@ class TestOverrides:
 
     def test_with_storage_account_uses_provided_name(self) -> None:
         results = [
-            _ok(),  # group show
             _ok(),  # account show (the override name)
             _ok(),  # container show
             _ok("/subscriptions/sub/resourceGroups/entrabot-rg/providers/Microsoft.Storage/storageAccounts/myaccount"),  # noqa: E501
@@ -231,12 +287,11 @@ class TestOverrides:
             )
         assert endpoint == "https://myaccount.blob.core.windows.net"
         # Verify the override name was the one passed to az
-        account_show_args = m.call_args_list[1].args[0]
+        account_show_args = m.call_args_list[0].args[0]
         assert "myaccount" in account_show_args
 
     def test_with_container_uses_provided_name(self) -> None:
         results = [
-            _ok(),  # group show
             _ok(),  # account show
             _ok(),  # container show — should be using override name
             _ok("/subscriptions/.../accounts/x"),
@@ -249,14 +304,15 @@ class TestOverrides:
                 container="my-shared-container",
             )
         assert container == "my-shared-container"
-        container_show_args = m.call_args_list[2].args[0]
+        container_show_args = m.call_args_list[1].args[0]
         assert "my-shared-container" in container_show_args
 
     def test_create_new_storage_uses_random_name(self) -> None:
         results = [
+            _err("not found"),  # account show — random name doesn't exist yet
+            _ok("[]"),          # account list — not in any other resource group
             _err("not found"),  # group show
             _ok(),              # group create
-            _err("not found"),  # account show — random name doesn't exist yet
             _ok(),              # account create
             _err("not found"),  # container show
             _ok(),              # container create
