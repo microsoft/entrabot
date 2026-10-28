@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import re
 import secrets
 import shutil
@@ -134,14 +135,34 @@ def ensure_resource_group(name: str, location: str) -> None:
     _eprint("    ✓ created")
 
 
-def ensure_storage_account(name: str, resource_group: str, location: str) -> None:
+def find_storage_account_resource_group(name: str) -> str | None:
+    """Resource group of the storage account called *name* in the current subscription, or None."""
+    res = _run_az(
+        ["storage", "account", "list", "--query", f"[?name=='{name}'].resourceGroup", "-o", "json"]
+    )
+    if res.returncode != 0:
+        raise RuntimeError(f"az storage account list failed: {res.stderr.strip()}")
+    groups = json.loads(res.stdout or "[]")
+    return groups[0] if groups else None
+
+
+def ensure_storage_account(name: str, resource_group: str, location: str) -> str:
+    """Ensure the account exists and return the resource group it lives in.
+
+    Storage account names are global, so an account created under an earlier resource group
+    name (``entraclaw-rg``) is reused where it is instead of failing on create.
+    """
     _eprint(f"  • Ensuring storage account '{name}'...")
     res = _run_az(
         ["storage", "account", "show", "--name", name, "--resource-group", resource_group]
     )
     if res.returncode == 0:
         _eprint("    ✓ exists")
-        return
+        return resource_group
+    existing_group = find_storage_account_resource_group(name)
+    if existing_group:
+        _eprint(f"    ✓ exists (resource group '{existing_group}')")
+        return existing_group
     res = _run_az(
         [
             "storage",
@@ -166,6 +187,7 @@ def ensure_storage_account(name: str, resource_group: str, location: str) -> Non
     if res.returncode != 0:
         raise RuntimeError(f"az storage account create failed: {res.stderr.strip()}")
     _eprint("    ✓ created")
+    return resource_group
 
 
 def ensure_container(account: str, container: str) -> None:
@@ -314,9 +336,9 @@ def provision(
         container_name = container_name_for_agent_user(agent_user_object_id)
 
     ensure_resource_group(RESOURCE_GROUP, location)
-    ensure_storage_account(account, RESOURCE_GROUP, location)
+    account_group = ensure_storage_account(account, RESOURCE_GROUP, location)
     ensure_container(account, container_name)
-    assign_container_rbac(account, container_name, RESOURCE_GROUP, agent_user_object_id)
+    assign_container_rbac(account, container_name, account_group, agent_user_object_id)
 
     return blob_endpoint_for_account(account), container_name
 
