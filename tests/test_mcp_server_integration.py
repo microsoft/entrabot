@@ -1722,31 +1722,15 @@ class TestChatAutoDiscovery:
                     )
                 )
 
-                # Inline the sweep loop body: one iteration without the
-                # asyncio.sleep that makes the while-True task untestable.
-                import httpx as _httpx
-
                 await mcp_server._ensure_valid_token()
-                async with _httpx.AsyncClient() as client:
-                    resp = await client.get(
-                        "https://graph.microsoft.com/v1.0/me/chats",
-                        headers={"Authorization": "Bearer tok"},
-                        params={"$top": "50"},
-                    )
-                    watched = mcp_server._state["watched_chats"]
-                    for chat in resp.json().get("value", []):
-                        cid = chat.get("id")
-                        if cid and cid not in watched:
-                            mcp_server._register_watched_chat(cid, persist=True)
+                await mcp_server._discover_chats_once("tok")
 
             # In-memory: both chats now present, new one marked not-bootstrapped
             assert existing in mcp_server._state["watched_chats"]
             assert brand_new in mcp_server._state["watched_chats"]
             assert mcp_server._state["watched_chats"][brand_new]["bootstrapped"] is False
 
-            # File: new chat persisted so next server start inherits it. The write
-            # runs off the event loop now, so wait for it to land.
-            assert await mcp_server._persist_dirty_watched_chats() is True
+            # File: new chat persisted so next server start inherits it
             persisted = (tmp_path / "watched_chats").read_text().splitlines()
             assert brand_new in persisted
         finally:

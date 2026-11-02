@@ -16,10 +16,13 @@ import logging
 import threading
 import time
 from collections import deque
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 from entrabot import mcp_server
 from entrabot.config import get_config
@@ -526,3 +529,564 @@ class TestSendTeamsMessageGateLoading:
         gate = _gate()
         await self._send(lambda _config: gate)
         assert mcp_server._state["sponsor_gate"] is gate
+
+
+# ---------------------------------------------------------------------------
+# Auto-discovery
+# ---------------------------------------------------------------------------
+GRAPH_CHATS = "https://graph.microsoft.com/v1.0/me/chats"
+
+
+def _next_link(token: str) -> str:
+    return f"{GRAPH_CHATS}?$top=50&$skiptoken={token}"
+
+
+def _page(*chat_ids: str, next_token: str | None = None) -> httpx.Response:
+    body: dict = {"value": [{"id": cid} for cid in chat_ids]}
+    if next_token:
+        body["@odata.nextLink"] = _next_link(next_token)
+    return httpx.Response(200, json=body)
+
+
+def _writes_to_list(store_put_calls: list[str]) -> int:
+    return store_put_calls.count(WATCHED_CHATS_KEY)
+
+
+@pytest.fixture
+def list_writes(fake_cloud_store, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record the key of every write that reaches the store."""
+    keys: list[str] = []
+    real_put = fake_cloud_store.put
+
+    async def recording_put(path: str, data: bytes, **kwargs) -> str:
+        keys.append(path)
+        return await real_put(path, data, **kwargs)
+
+    monkeypatch.setattr(fake_cloud_store, "put", recording_put)
+    return keys
+
+
+class TestDiscoveryPagination:
+    async def test_follows_next_link_and_registers_every_page_in_one_write(
+        self, fake_cloud_store, list_writes, blob_calls_on_event_loop
+    ) -> None:
+        with respx.mock:
+            route = respx.get(GRAPH_CHATS).mock(
+                side_effect=[
+                    _page("19:p1a@thread.v2", "19:p1b@thread.v2", next_token="two"),
+                    _page("19:p2a@thread.v2", next_token="three"),
+                    _page("19:p3a@thread.v2"),
+                ]
+            )
+            count = await mcp_server._discover_chats_once("fake-token")
+
+        expected = {
+            "19:p1a@thread.v2",
+            "19:p1b@thread.v2",
+            "19:p2a@thread.v2",
+            "19:p3a@thread.v2",
+        }
+        assert count == 4
+        assert route.call_count == 3
+        assert set(mcp_server._state["watched_chats"]) == expected
+        assert set(_stored_list(fake_cloud_store)) == expected
+        assert _writes_to_list(list_writes) == 1, "one batched write for the whole sweep"
+        assert blob_calls_on_event_loop == []
+
+    async def test_first_page_asks_for_50_and_later_pages_use_the_link_as_given(
+        self, fake_cloud_store
+    ) -> None:
+        with respx.mock:
+            route = respx.get(GRAPH_CHATS).mock(
+                side_effect=[_page("19:a@thread.v2", next_token="tok-2"), _page("19:b@thread.v2")]
+            )
+            await mcp_server._discover_chats_once("fake-token")
+
+        first, second = (call.request.url.params for call in route.calls)
+        assert first["$top"] == "50"
+        assert second["$skiptoken"] == "tok-2"
+        for call in route.calls:
+            assert call.request.headers["Authorization"] == "Bearer fake-token"
+
+    async def test_respects_the_page_bound(
+        self, fake_cloud_store, monkeypatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A server that never stops paging can't keep a sweep running forever."""
+        caplog.set_level(logging.WARNING, logger="entrabot.mcp_server")
+        monkeypatch.setattr(mcp_server, "CHAT_DISCOVER_MAX_PAGES", 3)
+        counter = {"n": 0}
+
+        def endless(_request: httpx.Request) -> httpx.Response:
+            counter["n"] += 1
+            return _page(f"19:page-{counter['n']}@thread.v2", next_token=f"t{counter['n']}")
+
+        with respx.mock:
+            route = respx.get(GRAPH_CHATS).mock(side_effect=endless)
+            count = await mcp_server._discover_chats_once("fake-token")
+
+        assert route.call_count == 3
+        assert count == 3, "what was fetched before the bound is still registered"
+        assert "page" in caplog.text.lower()
+
+    def test_default_page_bound(self) -> None:
+        assert mcp_server.CHAT_DISCOVER_MAX_PAGES == 20
+
+    async def test_error_key_on_a_200_stops_but_keeps_earlier_pages(
+        self, fake_cloud_store, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger="entrabot.mcp_server")
+        error = httpx.Response(200, json={"error": {"code": "TooManyRequests"}})
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(side_effect=[_page(CHAT_A, next_token="x"), error])
+            count = await mcp_server._discover_chats_once("fake-token")
+
+        assert count == 1
+        assert read_watched_chats().chat_ids == (CHAT_A,)
+        assert "TooManyRequests" in caplog.text
+
+    async def test_error_key_on_the_first_page_registers_nothing(self, fake_cloud_store) -> None:
+        error = httpx.Response(200, json={"error": {"code": "Forbidden"}})
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(return_value=error)
+            assert await mcp_server._discover_chats_once("fake-token") == 0
+        assert mcp_server._state.get("watched_chats", {}) == {}
+
+    @pytest.mark.parametrize("status", [401, 403, 429, 500])
+    async def test_failure_status_stops_but_keeps_earlier_pages(
+        self, fake_cloud_store, status: int, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger="entrabot.mcp_server")
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(
+                side_effect=[_page(CHAT_A, next_token="x"), httpx.Response(status)]
+            )
+            assert await mcp_server._discover_chats_once("fake-token") == 1
+        assert str(status) in caplog.text
+
+    async def test_invalid_json_stops_but_keeps_earlier_pages(self, fake_cloud_store) -> None:
+        proxy_page = httpx.Response(200, text="<html>proxy</html>")
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(side_effect=[_page(CHAT_A, next_token="x"), proxy_page])
+            assert await mcp_server._discover_chats_once("fake-token") == 1
+
+    async def test_network_error_stops_but_keeps_earlier_pages(self, fake_cloud_store) -> None:
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(
+                side_effect=[_page(CHAT_A, next_token="x"), httpx.ConnectError("no route")]
+            )
+            assert await mcp_server._discover_chats_once("fake-token") == 1
+
+    @pytest.mark.parametrize(
+        "next_link",
+        [
+            "https://evil.example/v1.0/me/chats?$skiptoken=x",
+            "http://graph.microsoft.com/v1.0/me/chats?$skiptoken=x",
+            "https://graph.microsoft.com.evil.example/v1.0/me/chats",
+            "/v1.0/me/chats?$skiptoken=x",
+        ],
+    )
+    async def test_next_link_off_graph_is_not_sent_the_token(
+        self, fake_cloud_store, next_link: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """respx raises on any request it doesn't know, so following this would fail."""
+        caplog.set_level(logging.WARNING, logger="entrabot.mcp_server")
+        body = {"value": [{"id": CHAT_A}], "@odata.nextLink": next_link}
+        with respx.mock:
+            route = respx.get(GRAPH_CHATS).mock(return_value=httpx.Response(200, json=body))
+            assert await mcp_server._discover_chats_once("fake-token") == 1
+        assert route.call_count == 1
+        assert "nextLink" in caplog.text
+        assert next_link not in caplog.text
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"value": [{"id": None}, {}, "not-an-object"]},
+            {"value": "not-a-list"},
+            {},
+            [],
+        ],
+    )
+    async def test_unexpected_shapes_register_nothing(self, fake_cloud_store, body) -> None:
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(return_value=httpx.Response(200, json=body))
+            assert await mcp_server._discover_chats_once("fake-token") == 0
+
+    async def test_token_never_reaches_the_logs(
+        self, fake_cloud_store, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.DEBUG)
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(return_value=httpx.Response(500, text="boom"))
+            await mcp_server._discover_chats_once("super-secret-token")
+        assert "super-secret-token" not in caplog.text
+
+
+class TestDiscoveryRegistration:
+    async def test_rebuilds_the_full_list_from_an_empty_store(
+        self, fake_cloud_store, data_dir: Path
+    ) -> None:
+        """Nothing local survives in cloud mode, so a sweep must be able to rebuild."""
+        pages = [
+            _page(*[f"19:chat-{p}-{i}@thread.v2" for i in range(50)], next_token=f"t{p}")
+            for p in range(2)
+        ]
+        pages.append(_page(*[f"19:chat-2-{i}@thread.v2" for i in range(10)]))
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(side_effect=pages)
+            assert await mcp_server._discover_chats_once("fake-token") == 110
+
+        assert len(read_watched_chats().chat_ids) == 110
+        assert not (data_dir / "watched_chats").exists()
+
+    async def test_chats_on_two_pages_register_once(self, fake_cloud_store) -> None:
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(
+                side_effect=[_page(CHAT_A, next_token="x"), _page(CHAT_A, CHAT_B)]
+            )
+            assert await mcp_server._discover_chats_once("fake-token") == 2
+
+    async def test_chats_already_in_memory_are_not_reset(self, fake_cloud_store) -> None:
+        live = {"seen_ids": {"m1"}, "last_ts": "t", "bootstrapped": True}
+        mcp_server._state["watched_chats"] = {CHAT_A: live}
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(return_value=_page(CHAT_A))
+            assert await mcp_server._discover_chats_once("fake-token") == 0
+        assert mcp_server._state["watched_chats"][CHAT_A] is live
+
+    async def test_nothing_new_writes_nothing(self, fake_cloud_store, list_writes) -> None:
+        mcp_server._state["watched_chats"] = {CHAT_A: {"seen_ids": set()}}
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(return_value=_page(CHAT_A))
+            await mcp_server._discover_chats_once("fake-token")
+        assert list_writes == []
+
+    async def test_existing_cursor_rehydrates_off_the_loop(
+        self, fake_cloud_store, blob_calls_on_event_loop
+    ) -> None:
+        await asyncio.to_thread(
+            chat_cursors.save_cursor,
+            CHAT_A,
+            {"last_ts": "2026-11-01T00:00:00Z", "seen_ids_tail": ["m1"], "bootstrapped": True},
+        )
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(return_value=_page(CHAT_A))
+            await mcp_server._discover_chats_once("fake-token")
+        state = mcp_server._state["watched_chats"][CHAT_A]
+        assert state["bootstrapped"] is True
+        assert state["seen_ids"] == {"m1"}
+        assert blob_calls_on_event_loop == []
+
+    async def test_unresolved_cursor_fails_closed(self, fake_cloud_store, monkeypatch) -> None:
+        monkeypatch.setattr(
+            chat_cursors,
+            "resolve_cursor",
+            lambda _cid: CursorResolution(CursorOutcome.UNRESOLVED, None),
+        )
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(return_value=_page(CHAT_A))
+            await mcp_server._discover_chats_once("fake-token")
+        assert mcp_server._state["watched_chats"][CHAT_A]["needs_resolution"] is True
+
+    async def test_sibling_chats_not_on_this_sweep_survive(self, fake_cloud_store) -> None:
+        _seed_list(fake_cloud_store, CHAT_B)
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(return_value=_page(CHAT_A))
+            await mcp_server._discover_chats_once("fake-token")
+        assert _stored_list(fake_cloud_store) == [CHAT_A, CHAT_B]
+
+    async def test_a_new_chat_drops_the_cached_sponsor_gate(self, fake_cloud_store) -> None:
+        mcp_server._state["sponsor_gate"] = MagicMock(name="cached_gate")
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(return_value=_page(CHAT_A))
+            await mcp_server._discover_chats_once("fake-token")
+        assert mcp_server._state.get("sponsor_gate") is None
+
+
+class TestDiscoveryRetriesFailedWrites:
+    async def test_failed_write_is_retried_on_the_next_sweep(self, fake_cloud_store) -> None:
+        """The second sweep finds nothing new, since the chat is already in memory.
+        Only the dirty set gets it onto the list."""
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(return_value=_page(CHAT_A))
+            with patch.object(fake_cloud_store, "put", AsyncMock(side_effect=OSError("outage"))):
+                await mcp_server._discover_chats_once("fake-token")
+            assert WATCHED_CHATS_KEY not in fake_cloud_store.data
+
+            assert await mcp_server._discover_chats_once("fake-token") == 0
+
+        assert _stored_list(fake_cloud_store) == [CHAT_A]
+        assert not mcp_server._state["_dirty_watched_chats"]
+
+    async def test_exhausted_cas_is_retried_on_the_next_sweep(self, fake_cloud_store) -> None:
+        _seed_list(fake_cloud_store, CHAT_B)
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(return_value=_page(CHAT_A))
+            with patch.object(
+                fake_cloud_store, "put", AsyncMock(side_effect=ConcurrencyError("simulated 412"))
+            ):
+                await mcp_server._discover_chats_once("fake-token")
+            await mcp_server._discover_chats_once("fake-token")
+        assert _stored_list(fake_cloud_store) == [CHAT_A, CHAT_B]
+
+    async def test_graph_failure_does_not_stop_the_retry(self, fake_cloud_store) -> None:
+        mcp_server._state["_dirty_watched_chats"] = {CHAT_A}
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(return_value=httpx.Response(503))
+            await mcp_server._discover_chats_once("fake-token")
+        assert _stored_list(fake_cloud_store) == [CHAT_A]
+
+    async def test_retry_is_batched_with_new_chats(self, fake_cloud_store, list_writes) -> None:
+        mcp_server._state["_dirty_watched_chats"] = {CHAT_A}
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(return_value=_page(CHAT_B))
+            await mcp_server._discover_chats_once("fake-token")
+        assert _stored_list(fake_cloud_store) == [CHAT_A, CHAT_B]
+        assert _writes_to_list(list_writes) == 1
+
+
+class TestBackgroundDiscoverTask:
+    async def test_sweeps_with_the_current_token(self, fake_cloud_store, monkeypatch) -> None:
+        mcp_server._state["token"] = "fake-token"
+        monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock())
+
+        calls = {"n": 0}
+
+        async def stop_after_one(_seconds: float) -> None:
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise asyncio.CancelledError
+
+        with (
+            respx.mock,
+            patch.object(asyncio, "sleep", stop_after_one),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            respx.get(GRAPH_CHATS).mock(return_value=_page(CHAT_A))
+            await mcp_server._background_discover_chats()
+
+        assert read_watched_chats().chat_ids == (CHAT_A,)
+
+
+# ---------------------------------------------------------------------------
+# Old chats must not replay when they are first seen
+# ---------------------------------------------------------------------------
+def _message(message_id: str, sent_at: datetime) -> dict:
+    return {
+        "message_id": message_id,
+        "sent_at": sent_at.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        "from": "Alice Example",
+        "content": "<external_content>ship it</external_content>",
+    }
+
+
+class TestFirstSightDoesNotReplay:
+    """Paging reaches chats that were never polled before, and a chat with no cursor
+    looks brand new. Surfacing each one's newest message would replay up to a thousand
+    old imperative messages on upgrade: the flood the design doc treats as a security
+    problem. A chat first seen by discovery or on the shared list surfaces its newest
+    message only if it is recent, so a genuine new-chat intro still gets through.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _stubs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(mcp_server, "_ensure_valid_token", AsyncMock())
+        monkeypatch.setattr(mcp_server, "CURSOR_SAVE_DEBOUNCE_SECONDS", 0)
+        monkeypatch.setattr(
+            "entrabot.tools.teams.filter_human_messages",
+            lambda messages, **kwargs: messages,
+        )
+
+    def _messages_are(self, monkeypatch, messages: list[dict]) -> None:
+        async def fake_retry(fn, **kwargs):
+            return messages
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_retry)
+
+    async def _poll(self, chat_id: str) -> None:
+        await mcp_server._poll_watched_chat(
+            chat_id,
+            mcp_server._state["watched_chats"][chat_id],
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
+            agent_object_id="agent-oid",
+        )
+
+    def _record_pushes(self, monkeypatch) -> list[str]:
+        pushed: list[str] = []
+
+        async def record(msg: dict, chat_id: str) -> None:
+            pushed.append(msg["message_id"])
+
+        monkeypatch.setattr(mcp_server, "_push_channel_notification", record)
+        return pushed
+
+    async def test_discovered_chat_with_an_old_newest_message_is_silent(
+        self, fake_cloud_store, monkeypatch
+    ) -> None:
+        pushed = self._record_pushes(monkeypatch)
+        old = datetime.now(UTC) - timedelta(days=90)
+        self._messages_are(monkeypatch, [_message("m-old", old)])
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(return_value=_page(CHAT_A))
+            await mcp_server._discover_chats_once("fake-token")
+
+        await self._poll(CHAT_A)  # bootstrap
+        await self._poll(CHAT_A)  # first real cycle
+
+        assert pushed == []
+
+    async def test_discovered_chat_with_a_recent_message_surfaces_it_once(
+        self, fake_cloud_store, monkeypatch
+    ) -> None:
+        """A human adds the agent and posts an intro: that must not be swallowed."""
+        pushed = self._record_pushes(monkeypatch)
+        recent = datetime.now(UTC) - timedelta(minutes=2)
+        self._messages_are(monkeypatch, [_message("m-intro", recent)])
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(return_value=_page(CHAT_A))
+            await mcp_server._discover_chats_once("fake-token")
+
+        await self._poll(CHAT_A)
+        await self._poll(CHAT_A)
+        await self._poll(CHAT_A)
+
+        assert pushed == ["m-intro"]
+
+    async def test_message_arriving_after_a_silent_bootstrap_is_pushed(
+        self, fake_cloud_store, monkeypatch
+    ) -> None:
+        pushed = self._record_pushes(monkeypatch)
+        old = datetime.now(UTC) - timedelta(days=90)
+        self._messages_are(monkeypatch, [_message("m-old", old)])
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(return_value=_page(CHAT_A))
+            await mcp_server._discover_chats_once("fake-token")
+        await self._poll(CHAT_A)
+
+        new = _message("m-new", datetime.now(UTC))
+        self._messages_are(monkeypatch, [_message("m-old", old), new])
+        await self._poll(CHAT_A)
+
+        assert pushed == ["m-new"]
+
+    async def test_chat_from_the_shared_list_with_no_cursor_is_silent_when_old(
+        self, fake_cloud_store, monkeypatch
+    ) -> None:
+        pushed = self._record_pushes(monkeypatch)
+        _seed_list(fake_cloud_store, CHAT_A)
+        await mcp_server._init_poll()
+        old = datetime.now(UTC) - timedelta(days=90)
+        self._messages_are(monkeypatch, [_message("m-old", old)])
+
+        await self._poll(CHAT_A)
+        await self._poll(CHAT_A)
+
+        assert pushed == []
+
+    async def test_first_boot_on_a_fresh_container_does_not_flood(
+        self, fake_cloud_store, monkeypatch
+    ) -> None:
+        pushed = self._record_pushes(monkeypatch)
+        old = datetime.now(UTC) - timedelta(days=90)
+        self._messages_are(monkeypatch, [_message("m-old", old)])
+        chats = [f"19:chat-{i}@thread.v2" for i in range(120)]
+        pages = [
+            _page(*chats[:50], next_token="a"),
+            _page(*chats[50:100], next_token="b"),
+            _page(*chats[100:]),
+        ]
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(side_effect=pages)
+            await mcp_server._discover_chats_once("fake-token")
+
+        for chat_id in chats:
+            await self._poll(chat_id)
+            await self._poll(chat_id)
+
+        assert pushed == []
+
+    async def test_chat_created_by_the_agent_still_surfaces_its_newest(
+        self, fake_cloud_store, monkeypatch
+    ) -> None:
+        """create_chat keeps today's behaviour; the gate is only for first sight."""
+        pushed = self._record_pushes(monkeypatch)
+        mcp_server._register_watched_chat(CHAT_A, persist=False, resolution=ABSENT)
+        old = datetime.now(UTC) - timedelta(days=90)
+        self._messages_are(monkeypatch, [_message("m-old", old)])
+
+        await self._poll(CHAT_A)
+        await self._poll(CHAT_A)
+
+        assert pushed == ["m-old"]
+
+    async def test_chat_with_a_real_cursor_is_unaffected(
+        self, fake_cloud_store, monkeypatch
+    ) -> None:
+        pushed = self._record_pushes(monkeypatch)
+        recent = datetime.now(UTC) - timedelta(hours=1)
+        chat_cursors.save_cursor(
+            CHAT_A,
+            {
+                "last_ts": recent.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                "seen_ids_tail": ["m-seen"],
+                "bootstrapped": True,
+            },
+        )
+        with respx.mock:
+            respx.get(GRAPH_CHATS).mock(return_value=_page(CHAT_A))
+            await mcp_server._discover_chats_once("fake-token")
+        self._messages_are(monkeypatch, [_message("m-new", datetime.now(UTC))])
+
+        await self._poll(CHAT_A)
+
+        assert pushed == ["m-new"]
+
+    @pytest.mark.parametrize("quiet", [True, False])
+    async def test_failed_bootstrap_read_pushes_nothing_and_retries(
+        self, fake_cloud_store, monkeypatch, quiet: bool
+    ) -> None:
+        """With no watermark the steady-state gate calls everything new, so one
+        throttled read during a big sweep used to push up to 10 old messages from
+        the chat. A failed read must leave the chat un-bootstrapped."""
+        pushed = self._record_pushes(monkeypatch)
+        mcp_server._register_watched_chat(
+            CHAT_A, persist=False, resolution=ABSENT, quiet_bootstrap=quiet
+        )
+
+        async def throttled(fn, **kwargs):
+            raise httpx.HTTPStatusError(
+                "429",
+                request=httpx.Request("GET", "https://graph.invalid"),
+                response=httpx.Response(429),
+            )
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", throttled)
+        await self._poll(CHAT_A)
+
+        state = mcp_server._state["watched_chats"][CHAT_A]
+        assert state["bootstrapped"] is False
+        assert state["last_ts"] is None
+        assert chat_cursors.load_cursor(CHAT_A) is None, "no cursor written for a failed read"
+
+        now = datetime.now(UTC)
+        older = [_message(f"m-{i}", now - timedelta(days=91 + i)) for i in range(9)]
+        newest = _message("m-newest", now - timedelta(days=90))
+        self._messages_are(monkeypatch, [*older, newest])
+        await self._poll(CHAT_A)  # the retry bootstraps
+        await self._poll(CHAT_A)  # first real cycle
+
+        assert state["bootstrapped"] is True
+        assert pushed == ([] if quiet else ["m-newest"]), "at most the newest, never the history"
+
+    async def test_unparseable_timestamp_is_treated_as_old(
+        self, fake_cloud_store, monkeypatch
+    ) -> None:
+        mcp_server._register_watched_chat(
+            CHAT_A, persist=False, resolution=ABSENT, quiet_bootstrap=True
+        )
+        bad = {"message_id": "m-bad", "sent_at": "not-a-timestamp"}
+        self._messages_are(monkeypatch, [bad])
+
+        await self._poll(CHAT_A)
+
+        assert "m-bad" in mcp_server._state["watched_chats"][CHAT_A]["seen_ids"]

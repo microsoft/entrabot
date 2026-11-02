@@ -989,7 +989,7 @@ async def _load_persisted_watched_chats() -> bool:
     chat_ids = [cid for cid in listing.chat_ids if cid not in watched]
     resolutions = await _resolve_cursors_off_loop(chat_ids)
     for cid, resolution in zip(chat_ids, resolutions, strict=True):
-        _register_watched_chat(cid, persist=False, resolution=resolution)
+        _register_watched_chat(cid, persist=False, resolution=resolution, quiet_bootstrap=True)
         if logger:
             logger.info("Loaded persisted watched chat: %s", cid)
     return True
@@ -1137,6 +1137,8 @@ CURSOR_RESOLVE_CONCURRENCY = 8  # parallel cursor reads at boot (each does a tok
 EMAIL_POLL_INTERVAL = 60  # seconds between /me/messages polls
 PUSHED_EMAIL_MAX = 500  # per-session dedup bound for pushed email IDs
 CHAT_DISCOVER_INTERVAL = 120  # seconds between /me/chats auto-discovery sweeps
+CHAT_DISCOVER_MAX_PAGES = 20  # /me/chats pages per sweep, 1000 chats at $top=50
+GRAPH_ME_CHATS_URL = "https://graph.microsoft.com/v1.0/me/chats"
 WATCHED_LIST_RETRY_INTERVAL = 60  # seconds between retries after a failed list read at boot
 PERSONA_SATI_HEARTBEAT_INTERVAL = 300  # 5 min smoke test against persona-sati
 
@@ -1298,6 +1300,7 @@ def _register_watched_chat(
     *,
     persist: bool = True,
     resolution: CursorResolution | None = None,
+    quiet_bootstrap: bool = False,
 ) -> None:
     """Register a chat for background polling.
 
@@ -1314,7 +1317,11 @@ def _register_watched_chat(
     via create_chat), lazily spins one up.
 
     ``resolution`` lets a caller pass a cursor already resolved off the event
-    loop (see ``_init_poll``); when omitted the cursor is read synchronously.
+    loop (see ``_init_poll``); when omitted the cursor is read synchronously, which
+    only sync callers should rely on.
+
+    ``quiet_bootstrap`` is for a chat first seen through discovery or the shared
+    list, as opposed to one just created here. See :func:`_bootstrap_chat`.
     """
     watched = _state.get("watched_chats", {})
     if chat_id not in watched:
@@ -1358,6 +1365,7 @@ def _register_watched_chat(
                 "last_ts": None,
                 "bootstrapped": False,
                 "needs_resolution": True,
+                "quiet_bootstrap": quiet_bootstrap,
             }
             if logger:
                 logger.warning(
@@ -1371,6 +1379,7 @@ def _register_watched_chat(
                 "last_ts": None,
                 "bootstrapped": False,
                 "needs_resolution": False,
+                "quiet_bootstrap": quiet_bootstrap,
             }
             if logger:
                 logger.info("Registered chat for background polling: %s", chat_id)
@@ -1487,7 +1496,15 @@ async def _bootstrap_chat(chat_id: str) -> None:
     it gets pushed. All older messages are dropped as duplicates. A
     chat with exactly one pre-existing message behaves the same — that
     one message surfaces once.
+
+    A chat flagged ``quiet_bootstrap`` was first seen through discovery or the
+    shared list, so having no cursor doesn't make it new: it may just never have
+    been polled. Its newest message surfaces only if it is recent. Otherwise a first
+    sweep could replay up to a thousand old imperative messages as new, the replay
+    surface the fleet design doc treats as a security problem. The chat's history
+    stays readable through ``read_teams_messages``.
     """
+    from entrabot.tools.chat_cursors import is_stale
     from entrabot.tools.teams import read
 
     chat_state = _state["watched_chats"][chat_id]
@@ -1504,9 +1521,15 @@ async def _bootstrap_chat(chat_id: str) -> None:
                 mid = m.get("message_id")
                 if mid and mid != newest_id:
                     chat_state["seen_ids"].add(mid)
+            if newest_id and chat_state.get("quiet_bootstrap") and is_stale(newest["sent_at"]):
+                chat_state["seen_ids"].add(newest_id)
     except Exception as exc:
+        # Fail closed: stay un-bootstrapped and retry next cycle. With no watermark
+        # the steady-state gate treats a chat's whole history as new, so a throttled
+        # read during a large sweep would otherwise replay old messages.
         if logger:
             logger.warning("Bootstrap failed for chat %s: %s", chat_id, exc)
+        return
     chat_state["bootstrapped"] = True
     # Issue #17: persist the bootstrap watermark so a restart inherits it.
     # Without this, every restart re-baselines from "the newest message at
@@ -1838,6 +1861,101 @@ async def _background_poll_email() -> None:
             await asyncio.sleep(EMAIL_POLL_INTERVAL)
 
 
+async def _list_my_chat_ids(token: str) -> list[str]:
+    """Return the IDs on every page of ``GET /me/chats``, up to the page bound.
+
+    Discovery only adds chats, so a failure partway keeps what was already fetched
+    and the next sweep starts over. Failures log the status or error code, never the
+    token or the response body.
+    """
+    url = GRAPH_ME_CHATS_URL
+    # NOTE: $orderby on /me/chats 400s here, so results aren't sorted.
+    params: dict[str, str] | None = {"$top": "50"}
+    chat_ids: list[str] = []
+
+    async with httpx.AsyncClient() as client:
+        for _page in range(CHAT_DISCOVER_MAX_PAGES):
+            try:
+                resp = await client.get(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    params=params,
+                )
+                if resp.status_code != 200:
+                    if logger:
+                        logger.warning(
+                            "Chat auto-discovery: /me/chats returned %d",
+                            resp.status_code,
+                        )
+                    return chat_ids
+                payload = resp.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                if logger:
+                    logger.warning(
+                        "Chat auto-discovery: /me/chats request failed: %s",
+                        type(exc).__name__,
+                    )
+                return chat_ids
+
+            if not isinstance(payload, dict):
+                return chat_ids
+            # Graph can report an error on a 200, so check before reading the page.
+            if "error" in payload:
+                error = payload["error"]
+                code = error.get("code") if isinstance(error, dict) else None
+                if logger:
+                    logger.warning("Chat auto-discovery: /me/chats error: %s", code)
+                return chat_ids
+
+            value = payload.get("value")
+            if isinstance(value, list):
+                chat_ids.extend(
+                    chat["id"] for chat in value if isinstance(chat, dict) and chat.get("id")
+                )
+
+            next_link = payload.get("@odata.nextLink")
+            if not next_link:
+                return chat_ids
+            # The next request carries the bearer token, so it only goes to Graph.
+            if not str(next_link).startswith("https://graph.microsoft.com/"):
+                if logger:
+                    logger.warning(
+                        "Chat auto-discovery: ignoring a nextLink that isn't Graph; "
+                        "stopping this sweep"
+                    )
+                return chat_ids
+            url, params = next_link, None
+
+    if logger:
+        logger.warning(
+            "Chat auto-discovery: stopped at the %d-page bound, so the chat list may be "
+            "incomplete",
+            CHAT_DISCOVER_MAX_PAGES,
+        )
+    return chat_ids
+
+
+async def _discover_chats_once(token: str) -> int:
+    """Run one discovery sweep and return how many chats it newly registered.
+
+    Registers every chat on any page that isn't already in memory, resolving cursors
+    off the event loop, then writes the whole sweep to the shared list in one batch.
+    That batch includes chats whose earlier write failed: they are already in memory,
+    so they would never count as new again, and this is what gets them onto the list.
+    """
+    chat_ids = await _list_my_chat_ids(token)
+
+    watched = _state.get("watched_chats", {})
+    new_ids = [cid for cid in dict.fromkeys(chat_ids) if cid not in watched]
+    resolutions = await _resolve_cursors_off_loop(new_ids)
+    for cid, resolution in zip(new_ids, resolutions, strict=True):
+        _register_watched_chat(cid, persist=False, resolution=resolution, quiet_bootstrap=True)
+    _mark_watched_chats_dirty(new_ids)
+
+    await _persist_dirty_watched_chats()
+    return len(new_ids)
+
+
 async def _background_discover_chats() -> None:
     """Auto-discover new chats via ``GET /me/chats`` and register them.
 
@@ -1847,16 +1965,12 @@ async def _background_discover_chats() -> None:
     and chats created by OTHER humans adding the Agent User to a new
     conversation never trigger the registration code at all).
 
-    This task runs every ``CHAT_DISCOVER_INTERVAL`` seconds, enumerates
-    the Agent User's chats, and registers any chat_id not already in
-    ``_state["watched_chats"]``. Persists to file so restarts inherit.
-    New chats pick up their cursor on the next ``_bootstrap_chat`` — no
-    historical flood.
+    This task runs every ``CHAT_DISCOVER_INTERVAL`` seconds, enumerates every page
+    of the Agent User's chats, and registers any chat_id not already in
+    ``_state["watched_chats"]``, so a sweep can rebuild the shared list from scratch.
+    New chats pick up their cursor on the next ``_bootstrap_chat``, which doesn't
+    replay old messages. See :func:`_discover_chats_once`.
     """
-    import asyncio
-
-    import httpx
-
     if logger:
         logger.info(
             "Starting chat auto-discovery (interval=%ds)",
@@ -1878,29 +1992,7 @@ async def _background_discover_chats() -> None:
             if not token:
                 continue
 
-            new_count = 0
-            async with httpx.AsyncClient() as client:
-                # NOTE: $orderby on /me/chats 400s — just fetch and sort client-side if needed
-                resp = await client.get(
-                    "https://graph.microsoft.com/v1.0/me/chats",
-                    headers={"Authorization": f"Bearer {token}"},
-                    params={"$top": "50"},
-                )
-                if resp.status_code != 200:
-                    if logger:
-                        logger.warning(
-                            "Chat auto-discovery: /me/chats returned %d",
-                            resp.status_code,
-                        )
-                    continue
-
-                watched = _state.get("watched_chats", {})
-                for chat in resp.json().get("value", []):
-                    cid = chat.get("id")
-                    if not cid or cid in watched:
-                        continue
-                    _register_watched_chat(cid, persist=True)
-                    new_count += 1
+            new_count = await _discover_chats_once(str(token))
 
             if new_count and logger:
                 logger.info(
