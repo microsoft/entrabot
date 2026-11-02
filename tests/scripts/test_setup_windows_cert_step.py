@@ -16,6 +16,7 @@ import pytest
 from tests.scripts._blueprint_cert_helpers import REPO_ROOT
 
 SETUP_PS1 = REPO_ROOT / "scripts" / "setup-windows.ps1"
+SETUP_SH = REPO_ROOT / "scripts" / "setup.sh"
 TEXT = SETUP_PS1.read_text(encoding="utf-8-sig")
 REGISTER = "register_windows_blueprint_cert.py"
 HELPERS = ["verify_blueprint_cert.py", "generate_windows_cert.py", REGISTER]
@@ -37,7 +38,7 @@ def test_step_6_verifies_the_local_cert_and_registers_with_the_blueprint_object_
 
 
 def test_a_new_cert_is_registered_before_it_is_written_to_env() -> None:
-    env_write = TEXT.index('"ENTRABOT_BLUEPRINT_CERT_SHA1=$thumbprint"')
+    env_write = TEXT.index("Set-Content -Path $envPath")
     assert _call("generate_windows_cert.py") < TEXT.index("$generated = $true") < _call(REGISTER)
     assert _call(REGISTER) < env_write
 
@@ -86,18 +87,50 @@ def test_the_temporary_certificate_file_is_deleted_on_every_path() -> None:
     assert re.search(r"finally\s*\{[^}]*Remove-Item \$derPath", TEXT)
 
 
-def test_env_cert_lines_are_replaced_not_appended() -> None:
-    block = _between('Step 7 "Writing .env"', "icacls $envPath")
+def _env_block() -> str:
+    return _between('Step 7 "Writing .env"', "icacls $envPath")
+
+
+def test_env_holds_what_setup_sh_writes_for_the_runtime() -> None:
+    # config.py reads identity only from the environment and .env, never from the state
+    # file, so a key missing here is an identity the agent can't sign in with.
+    script = SETUP_SH.read_text(encoding="utf-8")
+    heredoc = script[script.index("cat > .env << EOF") :]
+    heredoc = heredoc[: heredoc.index("\nEOF\n")]
+    keys = set(re.findall(r"^(ENTRABOT_[A-Z_]+)=", heredoc, re.M)) - {"ENTRABOT_LOG_LEVEL"}
+    assert len(keys) > 10
+    block = _env_block()
+    assert [key for key in sorted(keys) if key not in block] == []
+
+
+@pytest.mark.parametrize(
+    "state_key",
+    ["BLUEPRINT_APP_ID", "AGENT_ID", "AGENT_OBJECT_ID", "AGENT_USER_ID", "AGENT_USER_UPN"],
+)
+def test_identity_values_come_from_the_state_file(state_key: str) -> None:
+    assert f"$state.{state_key}" in TEXT
+    assert TEXT.index(f"$state.{state_key}") < TEXT.index('Step 7 "Writing .env"')
+
+
+def test_env_is_written_on_every_run_and_replaces_earlier_lines() -> None:
+    block = _env_block()
     assert "-Append" not in block and "Set-Content" in block
-    assert "if ($generated)" in block  # reusing a registered cert leaves .env alone
+    # A machine set up before this fix has a registered cert to reuse and no identity in
+    # .env, so reusing a cert must not skip this.
+    assert "if ($generated)" not in block
     # config.py keeps the FIRST value of a repeated key, so a stale line left above a new
-    # one would leave the new certificate silently unused.
-    pattern = re.search(r"-notmatch '([^']+)'", block)
-    assert pattern is not None
-    lines = ["ENTRABOT_TENANT_ID=t", "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=old"]
-    lines += ["ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=older", "ENTRABOT_BLUEPRINT_CERT_SHA1=OLD"]
-    lines += ["ENTRABOT_BLUEPRINT_KSP=tpm", "ENTRABOT_KEEP_MEMORY_LOCAL=true", "# a comment"]
-    assert [x for x in lines if not re.match(pattern.group(1), x)] == lines[5:]
+    # one would win.
+    assert '$line.StartsWith("$_=")' in block
+
+
+def test_the_sponsor_is_defaulted_only_when_env_names_none() -> None:
+    # The account running setup isn't always the sponsor, so a re-run must not change it.
+    block = _env_block()
+    guard = "if ($envText -notmatch '(?m)^ENTRABOT_HUMAN_USER_ID=\\S')"
+    assert guard in block
+    assert block.index(guard) < block.index("ENTRABOT_HUMAN_USER_ID'")
+    assert "ENTRABOT_HUMAN" not in block[: block.index(guard)]
+    assert "az ad signed-in-user show --output json" in block  # JSON, never TSV (AGENTS.md)
 
 
 def test_the_script_no_longer_claims_provisioning_publishes_the_cert() -> None:

@@ -92,8 +92,7 @@ Install everything first with
   certificate (`ENTRABOT_BLUEPRINT_CERT_SHA1` and `ENTRABOT_BLUEPRINT_CERT_THUMBPRINT`)
   that is in `Cert:\CurrentUser\My`, it asks
   [`verify_blueprint_cert.py`](../auth-and-certs/verify-blueprint-cert-py.md):
-    - **Registered** — the certificate is reused. Nothing is generated and `.env`
-      isn't changed.
+    - **Registered** — the certificate is reused. Nothing is generated.
     - **Not registered** — the state of a machine set up before this step existed.
       That same certificate is registered, and nothing is generated.
     - **Couldn't check** — setup stops. A failed check says nothing about the
@@ -111,14 +110,18 @@ Install everything first with
   store again. If the write may have landed but couldn't be confirmed, the
   certificate is kept and recorded in `.env`, and setup stops so the next run
   checks the Blueprint again. The temporary `.cer` file is always deleted.
-- When it generated a certificate, writes `.env` with `ENTRABOT_TENANT_ID`,
-  `ENTRABOT_BLUEPRINT_CERT_THUMBPRINT` (the **SHA-256 base64url `x5t#S256`** JWT
-  thumbprint used for the client assertion), `ENTRABOT_BLUEPRINT_CERT_SHA1` (the
-  **SHA-1 hex** thumbprint that locates the cert in `Cert:\CurrentUser\My`), and
-  `ENTRABOT_BLUEPRINT_KSP`. Earlier lines for these keys are replaced rather than
-  appended to, because `.env` loading keeps the first value of a repeated key. The
-  file is locked with `icacls ... :M` (modify, not read-only) so re-runs and
-  rotation can still update it.
+- Writes `.env` on every run, since the runtime reads identity only from the
+  environment and `.env`, never from the state file: `ENTRABOT_TENANT_ID`, the
+  Blueprint, Agent Identity and Agent User IDs and UPN from the state file,
+  `ENTRABOT_PROVISIONER_APP_ID`, `ENTRABOT_BLUEPRINT_CERT_THUMBPRINT` (the **SHA-256
+  base64url `x5t#S256`** JWT thumbprint used for the client assertion),
+  `ENTRABOT_BLUEPRINT_CERT_SHA1` (the **SHA-1 hex** thumbprint that locates the cert
+  in `Cert:\CurrentUser\My`), and `ENTRABOT_BLUEPRINT_KSP`. Earlier lines for these
+  keys are replaced rather than appended to, because `.env` loading keeps the first
+  value of a repeated key. The sponsor (`ENTRABOT_HUMAN_*`) defaults to the signed-in
+  account only when `.env` doesn't already name one, so a re-run under another account
+  doesn't change it. The file is locked with `icacls ... :M` (modify, not read-only)
+  so re-runs and rotation can still update it.
 - With `-UseCloudMemory` and an Agent User present, provisions Azure Blob Storage
   via [`provision_blob_storage.py`](../storage/provision-blob-storage-py.md) and
   appends the blob endpoint/container to `.env`; falls back to local-only memory

@@ -13,8 +13,9 @@
        register it if it isn't, otherwise generate one (TPM-first, software-
        fallback) via generate_windows_cert.py and add it to the Blueprint with
        register_windows_blueprint_cert.py, which keeps every other machine's.
-    7. Write .env with both thumbprints (SHA-1 hex + SHA-256 b64url), replacing
-       any earlier ones.
+    7. Write .env with the Blueprint, agent and Agent User IDs, both thumbprints
+       (SHA-1 hex + SHA-256 b64url), and a default sponsor if none is set,
+       replacing any earlier lines.
        icacls -M (D10) — modify, NOT readonly. Setup re-runs need to
        update .env or rotation halts.
     8. Register the entrabot MCP server via mcp_config.py.
@@ -355,18 +356,24 @@ if ($LASTEXITCODE -ne 0) { Fail "entra_provisioning.py failed" }
 & $VenvPython (Join-Path $ScriptDir 'create_entra_agent_ids.py') @args
 if ($LASTEXITCODE -ne 0) { Fail "create_entra_agent_ids.py failed" }
 
-# Read back IDs from .entrabot-state.json — needed for cloud-memory step
+# Read back IDs from .entrabot-state.json — needed for .env and the cloud-memory step
 $statePath = Join-Path $ProjectRoot '.entrabot-state.json'
 $BlueprintAppId = ""
 $BlueprintObjectId = ""
 $AgentId = ""
+$AgentObjectId = ""
 $AgentUserId = ""
+$StateAgentUserUpn = ""
+$ProvisionerClientId = ""
 if (Test-Path $statePath) {
     $state = Get-Content $statePath -Raw | ConvertFrom-Json
     $BlueprintAppId = if ($state.PSObject.Properties['BLUEPRINT_APP_ID']) { $state.BLUEPRINT_APP_ID } else { "" }
     $BlueprintObjectId = if ($state.PSObject.Properties['BLUEPRINT_OBJECT_ID']) { $state.BLUEPRINT_OBJECT_ID } else { "" }
     $AgentId = if ($state.PSObject.Properties['AGENT_ID']) { $state.AGENT_ID } else { "" }
+    $AgentObjectId = if ($state.PSObject.Properties['AGENT_OBJECT_ID']) { $state.AGENT_OBJECT_ID } else { "" }
     $AgentUserId = if ($state.PSObject.Properties['AGENT_USER_ID']) { $state.AGENT_USER_ID } else { "" }
+    $StateAgentUserUpn = if ($state.PSObject.Properties['AGENT_USER_UPN']) { $state.AGENT_USER_UPN } else { "" }
+    $ProvisionerClientId = if ($state.PSObject.Properties['PROVISIONER_CLIENT_ID']) { $state.PROVISIONER_CLIENT_ID } else { "" }
 }
 
 if ($ConfigureA365WorkIq) {
@@ -451,19 +458,52 @@ try {
 # ═══════════════════════════════════════════════════════════════════════════
 Step 7 "Writing .env"
 
-if ($generated) {
-    # Replace the old lines instead of appending: config.py keeps the FIRST value of a
-    # repeated key, so a stale thumbprint above the new one would leave the new cert unused.
-    @(
-        if (Test-Path $envPath) {
-            Get-Content $envPath | Where-Object { $_ -notmatch '^ENTRABOT_(TENANT_ID|BLUEPRINT_(CERT_THUMBPRINT|CERT_SHA1|KSP))=' }
-        }
-        "ENTRABOT_TENANT_ID=$($account.tenantId)"
-        "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=$x5tS256"
-        "ENTRABOT_BLUEPRINT_CERT_SHA1=$thumbprint"
-        "ENTRABOT_BLUEPRINT_KSP=$ksp"
-    ) | Set-Content -Path $envPath -Encoding utf8
+# config.py reads identity only from the environment and .env, never from the state file, so
+# everything the runtime needs is written here on every run. A machine set up before this
+# step wrote it has a registered certificate to reuse and no identity in .env.
+$envValues = [ordered]@{
+    ENTRABOT_TENANT_ID                 = $account.tenantId
+    ENTRABOT_BLUEPRINT_APP_ID          = $BlueprintAppId
+    ENTRABOT_BLUEPRINT_OBJECT_ID       = $BlueprintObjectId
+    ENTRABOT_BLUEPRINT_CERT_THUMBPRINT = $x5tS256
+    ENTRABOT_BLUEPRINT_CERT_SHA1       = $thumbprint
+    ENTRABOT_BLUEPRINT_KSP             = $ksp
+    ENTRABOT_AGENT_ID                  = $AgentId
+    ENTRABOT_AGENT_OBJECT_ID           = $AgentObjectId
+    ENTRABOT_AGENT_USER_ID             = $AgentUserId
+    ENTRABOT_AGENT_USER_UPN            = $StateAgentUserUpn
+    ENTRABOT_PROVISIONER_APP_ID        = $ProvisionerClientId
 }
+
+# The sponsor defaults to the signed-in account, as in setup.sh, but only when .env names none:
+# the account running setup isn't always the sponsor, and a re-run must not silently change it.
+if ($envText -notmatch '(?m)^ENTRABOT_HUMAN_USER_ID=\S') {
+    $me = az ad signed-in-user show --output json | ConvertFrom-Json
+    if ($LASTEXITCODE -eq 0 -and $me) {
+        $envValues['ENTRABOT_HUMAN_USER_ID']         = $me.id
+        $envValues['ENTRABOT_HUMAN_UPN']             = $account.user.name
+        $envValues['ENTRABOT_HUMAN_USER_IDS']        = $me.id
+        $envValues['ENTRABOT_HUMAN_UPNS']            = $account.user.name
+        $envValues['ENTRABOT_HUMAN_USER_TENANT_IDS'] = ''
+        $envValues['ENTRABOT_HUMAN_USER_MAILS']      = $account.user.name
+        $envValues['ENTRABOT_HUMAN_USER_TYPES']      = 'Member'
+    } else {
+        Write-Host "  Could not look up the signed-in user, so no sponsor was written to .env." -ForegroundColor Yellow
+    }
+}
+
+# Replace earlier lines instead of appending: config.py keeps the FIRST value of a repeated
+# key, so a stale line above a new one would win. A key with no value keeps what's there.
+$written = @($envValues.Keys | Where-Object { $envValues[$_] })
+$kept = @(
+    if (Test-Path $envPath) {
+        Get-Content $envPath | Where-Object {
+            $line = $_
+            -not ($written | Where-Object { $line.StartsWith("$_=") })
+        }
+    }
+)
+@($kept) + @($written | ForEach-Object { "$_=$($envValues[$_])" }) | Set-Content -Path $envPath -Encoding utf8
 
 # icacls :M (modify) — NOT :R (read-only). :R would self-brick: setup
 # re-runs and rotation both need to update .env.
