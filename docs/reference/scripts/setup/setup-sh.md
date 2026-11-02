@@ -148,10 +148,10 @@ Diagnostics and control:
   offers an idempotent, source-preserving migration prompt that copies existing
   local data (interaction log, daily summaries, promises, per-chat delivery
   cursors) and Claude Code persona memory as a one-time artifact copy.
-  Provisioning failures fall back to local-only memory. The migration copies
-  the watched-chat registry and email-poll cursor as files too, but those two
-  stay local-file-only afterward — `MemoryBackend` never becomes their runtime
-  reader or writer.
+  Provisioning failures fall back to local-only memory. The migration doesn't
+  copy the watched-chat list or the email cursor, since a machine's copies may be
+  stale or another agent's: the cloud cursor starts at "now", and discovery rebuilds
+  the list from Graph about two minutes after boot.
 - Registers the `entrabot` MCP server in the project-local `.mcp.json` (Claude
   Code) and `~/.copilot/mcp-config.json` (Copilot CLI) via `mcp_config.py`; both
   entries are byte-identical.

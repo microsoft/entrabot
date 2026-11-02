@@ -16,10 +16,12 @@ Behavior per pair:
   user without Claude Code's memory directory still migrates cleanly.
 - Per-file errors are captured in ``report.errors`` rather than raised
   so one bad file doesn't abort the whole migration.
-- The local email cursor is not copied. A cloud backend starts its cursor at
-  "now" and never takes one from a local file: the value may be stale, or belong
-  to another agent's mailbox, and adopting it would replay old mail as new. See
+- Local poll state is not copied, because it may be stale or belong to another
+  agent. A cloud backend starts its email cursor at "now", since adopting a local
+  value could replay old mail as new, and discovery rebuilds the chat list from
+  Graph, since a wrong list in the shared store would never shrink. See
   :mod:`entrabot.tools.poll_state`.
+- The process-lock files are not copied. They only mean something on this machine.
 """
 
 from __future__ import annotations
@@ -29,10 +31,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from entrabot.storage.backend import MemoryBackend
-from entrabot.tools.poll_state import EMAIL_CURSOR_KEY
+from entrabot.tools.poll_state import (
+    EMAIL_CURSOR_KEY,
+    LEGACY_EMAIL_CURSOR_KEY,
+    WATCHED_CHATS_KEY,
+)
 
-# Keys that must never be carried from local disk into the target.
-_NOT_MIGRATED_KEYS = frozenset({EMAIL_CURSOR_KEY})
+# Keys that must never be carried from local disk into the target: state that may be
+# stale or another agent's, and files that only mean something on this machine.
+_NOT_MIGRATED_KEYS = frozenset(
+    {
+        EMAIL_CURSOR_KEY,
+        LEGACY_EMAIL_CURSOR_KEY,
+        WATCHED_CHATS_KEY,
+        ".singleton.lock",
+        ".singleton.lock.holder.pid",
+    }
+)
 
 
 @dataclass

@@ -117,7 +117,8 @@ On the first boot after upgrading:
   deliberate: the `email_cursor.txt` blob in your container is a stale copy from
   setup's migration, and reading it would replay up to 50 old emails as new.
 - **The watched list comes from the cloud copy plus discovery.** The starting point
-  is any `watched_chats` blob that setup's migration copied. In an Agent User session,
+  is any `watched_chats` blob already in your container from an earlier setup run; new
+  migrations no longer copy it. In an Agent User session,
   the first discovery sweep, about two minutes after boot, adds every other chat the
   Agent User belongs to. A chat found this way surfaces its newest message only if it
   is under 24 hours old.

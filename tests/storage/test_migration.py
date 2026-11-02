@@ -108,7 +108,7 @@ class TestMigrateMultipleSources:
     def test_second_pair_is_prefixed(self, tmp_path: Path) -> None:
         agent = tmp_path / "agent"
         agent.mkdir()
-        (agent / "email_cursor.txt").write_text("cursor=42")
+        (agent / "promises.jsonl").write_text("{}\n")
 
         persona = tmp_path / "persona"
         persona.mkdir()
@@ -118,7 +118,7 @@ class TestMigrateMultipleSources:
         target = LocalBackend(tmp_path / "dst")
         report = migrate_local_to_backend([(agent, ""), (persona, "claude_memory")], target)
 
-        assert target.read_text("email_cursor.txt") == "cursor=42"
+        assert target.read_text("promises.jsonl") == "{}\n"
         assert target.read_text("claude_memory/MEMORY.md") == "index"
         assert target.read_text("claude_memory/user_brandon_role.md") == "Brandon"
         assert report.copied == 3
@@ -181,16 +181,34 @@ class TestMigrationAndPollState:
         (data / "poll_state" / "email_cursor.txt").write_text("2026-05-02T00:00:00Z")
         return data
 
-    def test_watched_chats_migrate_to_the_key_runtime_reads(
+    def test_the_local_chat_list_is_not_carried_into_the_cloud(
         self, tmp_path: Path, fake_cloud_store
     ) -> None:
-        """A real local-to-cloud conversion keeps its chat list."""
+        """A machine's list may belong to another agent, and the shared list never
+        shrinks, so those chats would be polled forever. Discovery rebuilds the real
+        list from Graph about two minutes after boot."""
         from entrabot.storage.backend import get_backend
-        from entrabot.tools.poll_state import read_watched_chats
+        from entrabot.tools.poll_state import PollStateOutcome, read_watched_chats
 
-        migrate_local_to_backend([(self._local_install(tmp_path), "")], get_backend())
+        report = migrate_local_to_backend([(self._local_install(tmp_path), "")], get_backend())
 
-        assert read_watched_chats().chat_ids == ("19:a@thread.v2", "19:b@thread.v2")
+        assert read_watched_chats().outcome is PollStateOutcome.ABSENT
+        assert "watched_chats" not in report.keys_copied
+
+    def test_per_machine_files_are_not_carried_into_the_cloud(
+        self, tmp_path: Path, fake_cloud_store
+    ) -> None:
+        from entrabot.storage.backend import get_backend
+
+        data = self._local_install(tmp_path)
+        (data / ".singleton.lock").write_text("")
+        (data / ".singleton.lock.holder.pid").write_text("123")
+        (data / "promises.jsonl").write_text("{}\n")
+
+        report = migrate_local_to_backend([(data, "")], get_backend())
+
+        assert report.keys_copied == ["promises.jsonl"]
+        assert report.errors == []
 
     def test_no_local_cursor_can_become_the_cloud_cursor(
         self, tmp_path: Path, fake_cloud_store

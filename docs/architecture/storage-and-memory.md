@@ -107,7 +107,7 @@ def migrate_local_to_backend(
 Behavior:
 
 - **Source-preserving.** Files are copied, never deleted — the local copy remains as a rollback path if `ENTRABOT_KEEP_MEMORY_LOCAL` is set afterward.
-- **The email cursor is not copied.** The migration skips `poll_state/email_cursor.txt`, so a local value can't become the cloud cursor, and the cloud cursor starts at "now". A legacy `email_cursor.txt` may still be copied, but nothing reads that key. `watched_chats` is copied, which is correct for a real local-to-cloud conversion.
+- **Local poll state is not copied.** A machine's copies may be stale or belong to another agent. The migration skips `poll_state/email_cursor.txt` and the legacy `email_cursor.txt`, so the cloud cursor starts at "now", and it skips `watched_chats`, because the shared list never shrinks and discovery rebuilds it from Graph about two minutes after boot. The process-lock files are skipped too.
 - **Idempotent.** A key already present at the target is skipped, so re-running the migration only copies what's missing.
 - **Per-file error report, not an abort.** A file that fails to read or write is recorded in `report.errors` as `(key, message)`; one bad file does not stop the rest of the migration.
 - **Missing source roots are skipped silently** — a user with no Claude Code persona-memory directory still migrates their agent data cleanly.
