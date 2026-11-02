@@ -2,8 +2,8 @@
 """One-shot cursor migration for the 2026-07-09 UPN-identity fix.
 
 The pre-fix background Teams poll identified self-authored messages by
-display name. When the agent was renamed ("EntraBot Agent" →
-"EntraClaw Agent") the filter no-op'd, and every cursor whose ``last_ts``
+display name. When the agent's Entra display name changed,
+the filter no-op'd, and every cursor whose ``last_ts``
 sat just before a self-authored message became eligible to replay that
 message (and every later self-authored one) as fresh inbound.
 

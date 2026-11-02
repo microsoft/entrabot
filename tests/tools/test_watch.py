@@ -36,7 +36,7 @@ class TestFilterHumanMessages:
             },
             {
                 "message_id": "m2",
-                "from": "EntraClaw Agent",
+                "from": "Renamed Agent",
                 "sender_upn": "entra-agent@werner.ac",
                 "sender_id": "agent-oid",
                 "content": "hi back",
@@ -64,7 +64,7 @@ class TestFilterHumanMessages:
             },
             {
                 "message_id": "m2",
-                "from": "EntraClaw Agent",
+                "from": "Renamed Agent",
                 "sender_upn": "",
                 "sender_id": "agent-oid",
                 "content": "hi back",
@@ -83,7 +83,7 @@ class TestFilterHumanMessages:
         """Display name is NEVER an identity predicate.
 
         The 2026-07-09 rename incident: after "EntraBot Agent" was renamed to
-        "EntraClaw Agent", the filter's displayName match no-op'd and old
+        "Renamed Agent", the filter's displayName match no-op'd and old
         outbounds replayed as fresh inbound. Regression guard: even if the
         message's ``from`` displayName matches the old hard-coded string, if
         UPN and object-id do NOT match config, the message is NOT filtered.
@@ -114,7 +114,7 @@ class TestFilterHumanMessages:
         messages = [
             {
                 "message_id": "m1",
-                "from": "EntraClaw Agent",
+                "from": "Renamed Agent",
                 "sender_upn": "entra-agent@werner.ac",
                 "sender_id": "agent-oid",
                 "content": "self echo",
@@ -133,7 +133,7 @@ class TestFilterHumanMessages:
         messages = [
             {
                 "message_id": "m1",
-                "from": "EntraClaw Agent",
+                "from": "Renamed Agent",
                 "sender_upn": "entra-agent@werner.ac",
                 "sender_id": "agent-oid",
                 "content": "self",
@@ -166,7 +166,7 @@ class TestFilterHumanMessages:
         messages = [
             {
                 "message_id": "m1",
-                "from": "EntraClaw Agent",
+                "from": "Renamed Agent",
                 "sender_upn": "Entra-Agent@Werner.AC",
                 "sender_id": "agent-oid",
                 "content": "self",
@@ -717,7 +717,7 @@ class TestWatchTeamsReplies:
                                     "user": {
                                         # Agent renamed post-rollout — displayName
                                         # doesn't match config; identity is UPN.
-                                        "displayName": "EntraClaw Agent",
+                                        "displayName": "Renamed Agent",
                                         "id": "agent-oid",
                                         "userPrincipalName": "entra-agent@werner.ac",
                                     }

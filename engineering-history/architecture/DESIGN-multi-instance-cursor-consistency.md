@@ -32,7 +32,7 @@ replay surface. Fail-closed is a security requirement, not only a polish item.
 
 ## Symptom (observed 2026-07-02)
 
-A base `entrabot` instance on a dev PC, pointed at EntraClaw's blob container
+A base `entrabot` instance on a dev PC, pointed at the primary agent's blob container
 (`agent-2071f305-…`), received a continuous stream of `notifications/claude/
 channel` pushes for DMs dated **2026-05-28 / 05-29** (~5 weeks old) plus a few
 from June. Each push was a *different chat's newest message* — the signature of

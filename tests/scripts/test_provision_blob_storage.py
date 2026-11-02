@@ -167,10 +167,10 @@ class TestExistingAccountInOtherResourceGroup:
     def test_reuses_account_and_scopes_rbac_to_its_resource_group(self) -> None:
         results = [
             _err("ResourceNotFound"),  # account show in entrabot-rg
-            _ok('["entraclaw-rg"]'),  # account list: the name exists in another group
+            _ok('["earlier-rg"]'),  # account list: the name exists in another group
             _ok(),  # container show
             _ok(
-                "/subscriptions/sub/resourceGroups/entraclaw-rg/providers/Microsoft.Storage/storageAccounts/acct"
+                "/subscriptions/sub/resourceGroups/earlier-rg/providers/Microsoft.Storage/storageAccounts/acct"
             ),  # noqa: E501
             _ok(),  # role assignment create
         ]
@@ -184,7 +184,7 @@ class TestExistingAccountInOtherResourceGroup:
         assert not any(args[:3] == ["storage", "account", "create"] for args in all_calls)
         id_lookup = all_calls[3]
         assert id_lookup[:3] == ["storage", "account", "show"]
-        assert id_lookup[id_lookup.index("--resource-group") + 1] == "entraclaw-rg"
+        assert id_lookup[id_lookup.index("--resource-group") + 1] == "earlier-rg"
         assert endpoint.endswith(".blob.core.windows.net")
         assert container == provision_blob_storage.container_name_for_agent_user("oid-abc")
 
@@ -194,9 +194,9 @@ class TestExistingAccountInOtherResourceGroup:
         ensuring entrabot-rg before discovery."""
         results = [
             _err("ResourceGroupNotFound"),  # account show in entrabot-rg (group absent)
-            _ok('["entraclaw-rg"]'),  # account list: found in another group
+            _ok('["earlier-rg"]'),  # account list: found in another group
             _ok(),  # container show
-            _ok("/subscriptions/sub/resourceGroups/entraclaw-rg/providers/x/acct"),  # id lookup
+            _ok("/subscriptions/sub/resourceGroups/earlier-rg/providers/x/acct"),  # id lookup
             _ok(),  # role assignment create
         ]
         with patch.object(provision_blob_storage, "_run_az", side_effect=results) as m:
