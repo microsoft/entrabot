@@ -464,6 +464,22 @@ class TestVerifyAfterWrite:
         assert HOST_A not in str(caught.value)
         assert caught.value.missing == (HOST_B,)
 
+    def test_a_kept_cert_given_a_new_key_id_still_counts_as_kept(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Nothing documents that Graph keeps keyId when key is resent. The certificate
+        # surviving is what matters, so a reissued keyId must not be a false alarm.
+        graph = use_fake_graph(monkeypatch, FakeGraph(_entries()))
+        monkeypatch.setattr(
+            graph,
+            "_with_key_id",
+            lambda entry: {**entry, "keyId": f"reissued-{entry['displayName']}"},
+        )
+
+        result, _sleeps = _register(attempts=1)
+
+        assert result.thumbprint == CERT_NEW.thumbprint
+
     def test_a_new_cert_that_never_appears_raises_naming_it(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

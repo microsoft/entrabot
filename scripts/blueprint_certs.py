@@ -338,10 +338,18 @@ def _missing_after_write(
     required_prior: Sequence[KeyCredential],
 ) -> tuple[str, ...]:
     missing: list[str] = []
-    if not any(credential.thumbprint == new_entry.thumbprint for credential in current):
+    current_thumbprints = {credential.thumbprint for credential in current}
+    if new_entry.thumbprint not in current_thumbprints:
         missing.append(new_entry.display_name)
     current_ids = {credential.key_id for credential in current}
-    missing.extend(c.display_name for c in required_prior if c.key_id not in current_ids)
+    # A prior certificate is kept if its keyId survived or, since Graph may reissue keyId
+    # when key is resent, if the same certificate is still on the list.
+    missing.extend(
+        c.display_name
+        for c in required_prior
+        if c.key_id not in current_ids
+        and (c.thumbprint is None or c.thumbprint not in current_thumbprints)
+    )
     return tuple(missing)
 
 
@@ -358,7 +366,8 @@ def register_key_credential(
     """Fetch, merge, PATCH, then confirm the write by reading it back.
 
     Confirmation means the new certificate's thumbprint is on the list and, unless
-    ``remove_all_existing`` is set, so is every ``keyId`` that was there before.
+    ``remove_all_existing`` is set, so is every certificate that was there before,
+    matched by ``keyId`` or by thumbprint.
 
     Raises:
         KeyCredentialsReadError: the read before the write failed. Nothing was sent.
