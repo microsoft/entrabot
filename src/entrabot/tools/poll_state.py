@@ -56,6 +56,9 @@ logger = logging.getLogger("entrabot.tools.poll_state")
 WATCHED_CHATS_KEY = "watched_chats"
 EMAIL_CURSOR_KEY = "poll_state/email_cursor.txt"
 LEGACY_EMAIL_CURSOR_KEY = "email_cursor.txt"
+# A single-chat key from before chats were explicit. Nothing writes it any more, so a
+# copy is only ever as old as the install that held it.
+LEGACY_DEFAULT_CHAT_KEY = "chat_id"
 
 # Bounded compare-and-swap retries, matching chat_cursors.CLAIM_MAX_ATTEMPTS. Each
 # retry re-reads the list, so a handful covers realistic fleet contention. Running
@@ -230,7 +233,15 @@ def add_watched_chats(chat_ids: Iterable[str]) -> WatchedChatsWrite:
 
 
 def _now_cursor() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    """The current time as a cursor, to the millisecond.
+
+    Whole seconds would round down, so mail received earlier in the same second would
+    be newer than the cursor and a first boot could replay it. This is the format
+    :func:`entrabot.tools.email_poll.advance_cursor` produces
+    (``%Y-%m-%dT%H:%M:%S.mmmZ``), so a fresh cursor and an advanced one look alike.
+    """
+    now = datetime.now(UTC)
+    return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
 
 
 def _is_timestamp(value: str) -> bool:

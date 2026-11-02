@@ -12,6 +12,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import httpx
+import pytest
 
 from entrabot.config import EntraBotConfig
 from entrabot.identity import sponsors as sponsors_module
@@ -207,3 +208,51 @@ class TestGateOnReadFailure:
             tmp_path, {SPONSOR_CHAT: httpx.Response(200, json={"value": _SPONSOR_MEMBERS})}
         )
         assert gate.provisional is False
+
+    def test_gate_is_not_provisional_when_every_chat_returned_members(
+        self, tmp_path, fake_cloud_store
+    ) -> None:
+        BlobBackend(fake_cloud_store).write_text(
+            WATCHED_CHATS_KEY, f"{SPONSOR_CHAT}\n{ATTACKER_CHAT}\n"
+        )
+        gate = _load_gate_with_real_member_fetch(
+            tmp_path,
+            {
+                SPONSOR_CHAT: httpx.Response(200, json={"value": _SPONSOR_MEMBERS}),
+                ATTACKER_CHAT: httpx.Response(200, json={"value": _ATTACKER_MEMBERS}),
+            },
+        )
+        assert gate.provisional is False
+
+    @pytest.mark.parametrize(
+        "failed_chat_response",
+        [
+            pytest.param(httpx.Response(500, text="Graph is down"), id="server-error"),
+            pytest.param(httpx.Response(403, text="Forbidden"), id="forbidden"),
+            pytest.param(httpx.Response(200, text="<html>proxy page</html>"), id="not-json"),
+            pytest.param(httpx.Response(200, json={"value": []}), id="no-members"),
+        ],
+    )
+    def test_gate_is_provisional_when_one_chats_members_could_not_be_read(
+        self, tmp_path, fake_cloud_store, failed_chat_response
+    ) -> None:
+        """The member fetch records a failed chat with an empty list, which looks
+        complete to a gate that only checks whether any chat data came back. A real
+        chat always has at least the agent in it, so an empty list means "couldn't
+        read". Caching that gate would stop a federated sponsor in the failed chat from
+        matching for the rest of the session."""
+        BlobBackend(fake_cloud_store).write_text(
+            WATCHED_CHATS_KEY, f"{SPONSOR_CHAT}\n{ATTACKER_CHAT}\n"
+        )
+        gate = _load_gate_with_real_member_fetch(
+            tmp_path,
+            {
+                SPONSOR_CHAT: httpx.Response(200, json={"value": _SPONSOR_MEMBERS}),
+                ATTACKER_CHAT: failed_chat_response,
+            },
+        )
+
+        assert gate.provisional is True
+        # Still safe to use: the chat that did load is verified and promoted as before.
+        assert SPONSOR_HOME_OID in gate.user_ids
+        assert ATTACKER_HOME_OID not in gate.user_ids

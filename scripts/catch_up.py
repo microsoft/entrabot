@@ -3,7 +3,8 @@
 Run as Agent User to see what landed while we weren't polling. The chat list comes
 from the configured storage backend, the same one the MCP server uses. Importing
 ``entrabot.config`` loads ``.env``, which is usually where the blob settings that
-select that backend live.
+select that backend live. The pre-explicit-chats ``chat_id`` key is read from a
+local backend only, since a cloud container may hold a stale copy of it.
 """
 
 from __future__ import annotations
@@ -14,12 +15,14 @@ import sys
 import httpx
 
 from entrabot.config import get_config
-from entrabot.storage.backend import get_backend
-from entrabot.tools.poll_state import PollStateOutcome, is_chat_id, read_watched_chats
+from entrabot.storage.backend import LocalBackend, get_backend
+from entrabot.tools.poll_state import (
+    LEGACY_DEFAULT_CHAT_KEY,
+    PollStateOutcome,
+    is_chat_id,
+    read_watched_chats,
+)
 from entrabot.tools.teams import acquire_agent_user_token
-
-# A single-chat key from before chats were explicit. Nothing writes it any more.
-LEGACY_DEFAULT_CHAT_KEY = "chat_id"
 
 
 async def fetch(
@@ -38,6 +41,27 @@ async def fetch(
     return r.json()
 
 
+def _legacy_default_chat() -> str:
+    """Return the single-chat key from before chats were explicit, or ``""``.
+
+    Only a local backend is asked. Nothing writes this key any more, but a cloud
+    container may still hold a copy from an earlier migration, and that copy could
+    be another agent's chat. A failed read is reported and treated as absent, since
+    the key is optional.
+    """
+    try:
+        backend = get_backend()
+        if not isinstance(backend, LocalBackend):
+            return ""
+        return (backend.read_text(LEGACY_DEFAULT_CHAT_KEY) or "").strip()
+    except Exception as exc:  # noqa: BLE001 — optional key; the list is what matters.
+        print(
+            f"WARNING: could not read {LEGACY_DEFAULT_CHAT_KEY}: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return ""
+
+
 def load_chat_ids() -> tuple[list[str], bool]:
     """Return ``(chat_ids, resolved)`` from the configured backend.
 
@@ -54,14 +78,7 @@ def load_chat_ids() -> tuple[list[str], bool]:
         return [], False
 
     chat_ids = list(listing.chat_ids)
-    try:
-        legacy = (get_backend().read_text(LEGACY_DEFAULT_CHAT_KEY) or "").strip()
-    except Exception as exc:  # noqa: BLE001 — optional key; the list above is what matters.
-        print(
-            f"WARNING: could not read {LEGACY_DEFAULT_CHAT_KEY}: {type(exc).__name__}: {exc}",
-            file=sys.stderr,
-        )
-        legacy = ""
+    legacy = _legacy_default_chat()
     if is_chat_id(legacy) and legacy not in chat_ids:
         chat_ids.insert(0, legacy)
     return chat_ids, True

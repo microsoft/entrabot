@@ -229,6 +229,9 @@ class TestInitPollLoadsTheSharedList:
         loud first instead of spawning background tasks against nothing."""
         monkeypatch.setenv("ENTRABOT_BLOB_ENDPOINT", "https://fake-account.invalid")
         monkeypatch.delenv("ENTRABOT_BLOB_CONTAINER", raising=False)
+        # Local mode wins over a half-configured backend, and the Windows CI job runs
+        # the whole suite with it on. Don't depend on what the environment holds.
+        monkeypatch.delenv("ENTRABOT_KEEP_MEMORY_LOCAL", raising=False)
         monkeypatch.setattr(mcp_server, "_init_auth", AsyncMock())
         init_poll = AsyncMock()
         monkeypatch.setattr(mcp_server, "_init_poll", init_poll)
@@ -381,6 +384,137 @@ class TestPersistAndTheCachedSponsorGate:
         assert mcp_server._state.get("sponsor_gate") is gate
 
 
+def _generation() -> int:
+    return mcp_server._state.get("sponsor_gate_generation", 0)
+
+
+class TestSponsorGateGeneration:
+    """Every place that drops the cached gate also moves a generation counter.
+
+    Dropping the cache isn't enough on its own. A worker thread builds the gate while
+    the event loop keeps registering chats, so a worker that read the list BEFORE a
+    registration landed can finish AFTER the drop and cache its stale result. A
+    federated sponsor in the new chat would then never be matched. Callers cache only
+    if the generation they started under is still current.
+    """
+
+    def test_registering_a_new_chat_moves_the_generation(self) -> None:
+        before = _generation()
+        mcp_server._register_watched_chat(CHAT_A, persist=False, resolution=ABSENT)
+        assert _generation() > before
+
+    def test_registering_a_known_chat_leaves_the_generation_alone(self) -> None:
+        mcp_server._state["watched_chats"] = {CHAT_A: {"seen_ids": set()}}
+        before = _generation()
+        mcp_server._register_watched_chat(CHAT_A, persist=False)
+        assert _generation() == before
+
+    async def test_a_write_that_lands_a_chat_moves_the_generation(self, fake_cloud_store) -> None:
+        mcp_server._mark_watched_chats_dirty([CHAT_A])
+        before = _generation()
+        assert await mcp_server._persist_dirty_watched_chats() is True
+        assert _generation() > before
+
+    async def test_a_write_that_adds_nothing_leaves_the_generation_alone(
+        self, fake_cloud_store
+    ) -> None:
+        _seed_list(fake_cloud_store, CHAT_A)
+        mcp_server._mark_watched_chats_dirty([CHAT_A])
+        before = _generation()
+        assert await mcp_server._persist_dirty_watched_chats() is True
+        assert _generation() == before
+
+    def test_invalidating_reports_whether_a_gate_was_cached(self) -> None:
+        assert mcp_server._invalidate_sponsor_gate() is False
+        mcp_server._state["sponsor_gate"] = _gate()
+        assert mcp_server._invalidate_sponsor_gate() is True
+        assert "sponsor_gate" not in mcp_server._state
+
+
+class TestLoadSponsorGate:
+    """The one helper both gate load sites use."""
+
+    @staticmethod
+    async def _load(loader) -> SponsorGate:
+        with patch("entrabot.identity.sponsors.load_agent_identity_sponsor_gate", loader):
+            return await mcp_server._load_sponsor_gate(get_config())
+
+    async def test_complete_gate_is_cached_and_returned(self) -> None:
+        gate = _gate()
+        assert await self._load(lambda _config: gate) is gate
+        assert mcp_server._state["sponsor_gate"] is gate
+
+    async def test_provisional_gate_is_returned_but_not_cached(self) -> None:
+        gate = _gate(provisional=True)
+        assert await self._load(lambda _config: gate) is gate
+        assert "sponsor_gate" not in mcp_server._state
+
+    async def test_gate_invalidated_while_loading_is_returned_but_not_cached(self) -> None:
+        gate = _gate()
+
+        def loader(_config) -> SponsorGate:
+            mcp_server._invalidate_sponsor_gate()  # a registration lands mid-load
+            return gate
+
+        assert await self._load(loader) is gate
+        assert "sponsor_gate" not in mcp_server._state
+
+    async def test_a_real_registration_while_loading_is_not_overwritten_by_the_stale_gate(
+        self,
+    ) -> None:
+        """The race itself: the worker has read the list, then a chat is registered
+        and the cache dropped, then the worker finishes."""
+        gate = _gate()
+
+        def loader(_config) -> SponsorGate:
+            mcp_server._register_watched_chat(CHAT_B, persist=False, resolution=ABSENT)
+            return gate
+
+        assert await self._load(loader) is gate
+        assert "sponsor_gate" not in mcp_server._state
+
+    async def test_invalidation_before_the_load_started_does_not_block_caching(self) -> None:
+        mcp_server._invalidate_sponsor_gate()
+        gate = _gate()
+        assert await self._load(lambda _config: gate) is gate
+        assert mcp_server._state["sponsor_gate"] is gate
+
+    async def test_the_next_load_after_a_discarded_one_caches(self) -> None:
+        calls = {"n": 0}
+        gate = _gate()
+
+        def loader(_config) -> SponsorGate:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                mcp_server._invalidate_sponsor_gate()
+            return gate
+
+        await self._load(loader)
+        assert "sponsor_gate" not in mcp_server._state
+        await self._load(loader)
+        assert mcp_server._state["sponsor_gate"] is gate
+        assert calls["n"] == 2
+
+    async def test_load_failure_propagates_and_caches_nothing(self) -> None:
+        def loader(_config) -> SponsorGate:
+            raise RuntimeError("graph is down")
+
+        with pytest.raises(RuntimeError, match="graph is down"):
+            await self._load(loader)
+        assert "sponsor_gate" not in mcp_server._state
+
+    async def test_load_runs_off_the_loop(self) -> None:
+        loop_thread = threading.get_ident()
+        threads: list[int] = []
+
+        def loader(_config) -> SponsorGate:
+            threads.append(threading.get_ident())
+            return _gate()
+
+        await self._load(loader)
+        assert threads and loop_thread not in threads
+
+
 # ---------------------------------------------------------------------------
 # create_chat
 # ---------------------------------------------------------------------------
@@ -457,13 +591,15 @@ class TestWaitForSponsorDmGateLoading:
         mcp_server._state["wait_tool_dedup"] = deque()
         mcp_server._state["wait_tool_chat_type_cache"] = {CHAT_A: "oneOnOne"}
 
-    async def _wait(self, loader) -> None:
+    async def _wait(self, loader) -> AsyncMock:
+        wait_loop = AsyncMock(return_value=_PICKED)
         with (
             patch("entrabot.identity.sponsors.load_agent_identity_sponsor_gate", loader),
             patch("entrabot.tools.audit.log_event", MagicMock()),
-            patch("entrabot.tools.wait_tool.wait_loop", AsyncMock(return_value=_PICKED)),
+            patch("entrabot.tools.wait_tool.wait_loop", wait_loop),
         ):
             await mcp_server.wait_for_sponsor_dm(timeout_seconds=1)
+        return wait_loop
 
     async def test_gate_load_runs_off_the_loop(self) -> None:
         loop_thread = threading.get_ident()
@@ -487,6 +623,40 @@ class TestWaitForSponsorDmGateLoading:
         await self._wait(lambda _config: _gate(provisional=True))
         assert "sponsor_gate" not in mcp_server._state
 
+    async def test_gate_built_while_a_chat_was_registered_is_used_but_not_cached(self) -> None:
+        """The worker read the list, a chat was registered and the cache dropped, and
+        only then did the worker finish. Its gate is fine for this wait but is already
+        stale, so the next wait must rebuild rather than reuse it."""
+        gate = _gate()
+
+        def loader(_config) -> SponsorGate:
+            mcp_server._register_watched_chat(CHAT_B, persist=False, resolution=ABSENT)
+            return gate
+
+        wait_loop = await self._wait(loader)
+
+        assert wait_loop.call_args.kwargs["gate"] is gate
+        assert "sponsor_gate" not in mcp_server._state
+
+    async def test_load_failure_is_audited_and_raised(self) -> None:
+        def loader(_config) -> SponsorGate:
+            raise RuntimeError("graph is down")
+
+        log_event = MagicMock()
+        with (
+            patch("entrabot.identity.sponsors.load_agent_identity_sponsor_gate", loader),
+            patch("entrabot.tools.audit.log_event", log_event),
+            patch("entrabot.tools.wait_tool.wait_loop", AsyncMock(return_value=_PICKED)),
+            pytest.raises(RuntimeError, match="graph is down"),
+        ):
+            await mcp_server.wait_for_sponsor_dm(timeout_seconds=1)
+
+        reasons = [
+            call.kwargs.get("metadata", {}).get("reason") for call in log_event.call_args_list
+        ]
+        assert "sponsor_gate_load_failed" in reasons
+        assert "sponsor_gate" not in mcp_server._state
+
 
 class TestSendTeamsMessageGateLoading:
     @pytest.fixture(autouse=True)
@@ -503,12 +673,14 @@ class TestSendTeamsMessageGateLoading:
         mcp_server._state["watched_chats"] = {CHAT_A: {}}
         mcp_server._state["wait_tool_dedup"] = deque()
 
-    async def _send(self, loader) -> None:
+    async def _send(self, loader) -> AsyncMock:
+        wait_loop = AsyncMock(return_value=_PICKED)
         with (
             patch("entrabot.identity.sponsors.load_agent_identity_sponsor_gate", loader),
-            patch("entrabot.tools.wait_tool.wait_loop", AsyncMock(return_value=_PICKED)),
+            patch("entrabot.tools.wait_tool.wait_loop", wait_loop),
         ):
             await mcp_server.send_teams_message("hello", chat_id=CHAT_A)
+        return wait_loop
 
     async def test_gate_load_runs_off_the_loop(self) -> None:
         loop_thread = threading.get_ident()
@@ -529,6 +701,29 @@ class TestSendTeamsMessageGateLoading:
         gate = _gate()
         await self._send(lambda _config: gate)
         assert mcp_server._state["sponsor_gate"] is gate
+
+    async def test_gate_built_while_a_chat_was_registered_is_used_but_not_cached(self) -> None:
+        gate = _gate()
+
+        def loader(_config) -> SponsorGate:
+            mcp_server._register_watched_chat(CHAT_B, persist=False, resolution=ABSENT)
+            return gate
+
+        wait_loop = await self._send(loader)
+
+        assert wait_loop.call_args.kwargs["gate"] is gate
+        assert "sponsor_gate" not in mcp_server._state
+
+    async def test_load_failure_returns_the_send_result_without_waiting(self) -> None:
+        """The existing degrade-gracefully path survives the refactor."""
+
+        def loader(_config) -> SponsorGate:
+            raise RuntimeError("graph is down")
+
+        wait_loop = await self._send(loader)
+
+        wait_loop.assert_not_awaited()
+        assert "sponsor_gate" not in mcp_server._state
 
 
 # ---------------------------------------------------------------------------

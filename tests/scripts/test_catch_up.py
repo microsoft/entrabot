@@ -12,7 +12,7 @@ import pytest
 import respx
 
 import entrabot.config as config_module
-from entrabot.storage.backend import BlobBackend, get_backend
+from entrabot.storage.backend import BlobBackend, LocalBackend, get_backend
 from entrabot.tools.poll_state import WATCHED_CHATS_KEY
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "catch_up.py"
@@ -109,20 +109,43 @@ class TestChatsComeFromTheBackend:
         assert graph == []
 
     async def test_unreadable_legacy_default_chat_does_not_stop_the_script(
-        self, fake_cloud_store, graph, capsys
+        self, graph, capsys, monkeypatch, tmp_path
     ) -> None:
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
+        (tmp_path / "watched_chats").write_text(f"{CHAT_A}\n")
+        real_read_text = LocalBackend.read_text
+
+        def read_text(self: LocalBackend, key: str) -> str | None:
+            if key == "chat_id":
+                raise OSError("simulated disk failure")
+            return real_read_text(self, key)
+
+        monkeypatch.setattr(LocalBackend, "read_text", read_text)
+        await catch_up.main()
+        assert graph == [CHAT_A]
+        assert "chat_id" in capsys.readouterr().err
+
+    async def test_legacy_default_chat_is_never_read_from_a_cloud_backend(
+        self, fake_cloud_store, graph
+    ) -> None:
+        """A container can hold a stale copy of this key from an earlier migration, and
+        it would put another agent's chat on the list. Only a local install ever wrote
+        it, so only a local backend is asked for it."""
+        backend = BlobBackend(fake_cloud_store)
+        backend.write_text(WATCHED_CHATS_KEY, f"{CHAT_A}\n")
+        backend.write_text("chat_id", f"{OLD_CHAT}\n")
+        reads: list[str] = []
         real_get = fake_cloud_store.get
 
         async def get(path: str) -> bytes:
-            if path == "chat_id":
-                raise OSError("simulated blob outage")
+            reads.append(path)
             return await real_get(path)
 
-        BlobBackend(fake_cloud_store).write_text(WATCHED_CHATS_KEY, f"{CHAT_A}\n")
         with patch.object(fake_cloud_store, "get", get):
             await catch_up.main()
+
         assert graph == [CHAT_A]
-        assert "chat_id" in capsys.readouterr().err
+        assert "chat_id" not in reads
 
 
 class TestHomeDirectory:

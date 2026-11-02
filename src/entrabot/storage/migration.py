@@ -17,11 +17,18 @@ Behavior per pair:
 - Per-file errors are captured in ``report.errors`` rather than raised
   so one bad file doesn't abort the whole migration.
 - Local poll state is not copied, because it may be stale or belong to another
-  agent. A cloud backend starts its email cursor at "now", since adopting a local
-  value could replay old mail as new, and discovery rebuilds the chat list from
-  Graph, since a wrong list in the shared store would never shrink. See
+  agent: the watched-chat list, both email cursor files, the legacy single-chat
+  ``chat_id`` key, and every per-chat cursor under ``chat_cursors/``. A cloud
+  backend starts its email cursor at "now", since adopting a local value could
+  replay old mail as new, and discovery rebuilds the chat list from Graph, since
+  a wrong list in the shared store would never shrink. A chat with no cursor takes
+  the first-sight path, which surfaces its newest message only if it is under 24
+  hours old. A copied cursor would instead be rehydrated as present and bypass that
+  gate, so two agents sharing a group chat could replay old messages. See
   :mod:`entrabot.tools.poll_state`.
 - The process-lock files are not copied. They only mean something on this machine.
+- These exclusions match keys at the root of the target. A source copied under a
+  prefix such as ``claude_memory`` keeps every file, whatever its name.
 """
 
 from __future__ import annotations
@@ -33,6 +40,7 @@ from pathlib import Path
 from entrabot.storage.backend import MemoryBackend
 from entrabot.tools.poll_state import (
     EMAIL_CURSOR_KEY,
+    LEGACY_DEFAULT_CHAT_KEY,
     LEGACY_EMAIL_CURSOR_KEY,
     WATCHED_CHATS_KEY,
 )
@@ -44,10 +52,21 @@ _NOT_MIGRATED_KEYS = frozenset(
         EMAIL_CURSOR_KEY,
         LEGACY_EMAIL_CURSOR_KEY,
         WATCHED_CHATS_KEY,
+        LEGACY_DEFAULT_CHAT_KEY,
         ".singleton.lock",
         ".singleton.lock.holder.pid",
     }
 )
+
+# Everything under these prefixes is skipped too. ``chat_cursors/`` holds one delivery
+# cursor per chat (see ``chat_cursors.cursor_key``, whose prefix constant is private).
+# The migration tests build their keys with ``cursor_key``, so a change to the real
+# prefix fails there instead of silently letting cursors through.
+_NOT_MIGRATED_PREFIXES = ("chat_cursors/",)
+
+
+def _is_not_migrated(key: str) -> bool:
+    return key in _NOT_MIGRATED_KEYS or key.startswith(_NOT_MIGRATED_PREFIXES)
 
 
 @dataclass
@@ -98,7 +117,7 @@ def _migrate_one_source(
             continue
         rel = path.relative_to(local_root).as_posix()
         key = f"{key_prefix}{rel}"
-        if key in _NOT_MIGRATED_KEYS:
+        if _is_not_migrated(key):
             continue
         try:
             if target.exists(key):

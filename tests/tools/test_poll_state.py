@@ -9,8 +9,10 @@ instance's chats, and a stale cursor can never replay old mail.
 
 from __future__ import annotations
 
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 
 import pytest
@@ -18,6 +20,7 @@ import pytest
 from entrabot.storage.backend import BlobBackend, LocalBackend
 from entrabot.storage.blob import ConcurrencyError
 from entrabot.tools import poll_state
+from entrabot.tools.email_poll import advance_cursor
 from entrabot.tools.poll_state import (
     EMAIL_CURSOR_KEY,
     LEGACY_EMAIL_CURSOR_KEY,
@@ -367,6 +370,55 @@ class TestInitializeEmailCursorCloud:
 
         _use_backend(monkeypatch, _CloudWriteFails())
         assert initialize_email_cursor(NOW) is False
+
+
+class _Clock(datetime):
+    """``datetime`` with a fixed ``now()``: 750 ms into a second."""
+
+    @classmethod
+    def now(cls, tz: tzinfo | None = None) -> datetime:
+        return datetime(2026, 11, 2, 12, 0, 0, 750_000, tzinfo=UTC)
+
+
+def _instant(timestamp: str) -> datetime:
+    return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+
+
+class TestDefaultCursorPrecision:
+    """A fresh cursor starts at now. Whole seconds would round down, so mail received
+    earlier in the same second would be newer than the cursor and a first boot could
+    replay it. That is a replay of mail nobody has seen pushed, which is the failure
+    this module exists to prevent."""
+
+    @pytest.fixture(autouse=True)
+    def _freeze_clock(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(poll_state, "datetime", _Clock)
+
+    def test_default_cursor_is_stamped_to_the_millisecond(self, fake_cloud_store) -> None:
+        assert initialize_email_cursor() is True
+        assert read_email_cursor().cursor == "2026-11-02T12:00:00.750Z"
+
+    def test_default_cursor_has_the_format_advance_cursor_produces(self) -> None:
+        cursor = poll_state._now_cursor()
+        assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z", cursor)
+        # advance_cursor accepts it and keeps the same shape, so a fresh cursor and an
+        # advanced one are interchangeable to everything downstream.
+        assert advance_cursor(cursor) == "2026-11-02T12:00:00.751Z"
+
+    def test_mail_from_earlier_in_the_same_second_is_not_newer_than_the_cursor(
+        self, fake_cloud_store
+    ) -> None:
+        initialize_email_cursor()
+        cursor = read_email_cursor().cursor
+
+        for earlier in ("2026-11-02T12:00:00Z", "2026-11-02T12:00:00.400Z"):
+            assert _instant(earlier) <= _instant(cursor), earlier
+        # Mail that really arrives afterwards is still new.
+        assert _instant("2026-11-02T12:00:00.800Z") > _instant(cursor)
+
+    def test_default_cursor_is_accepted_by_the_read_path(self, fake_cloud_store) -> None:
+        initialize_email_cursor()
+        assert read_email_cursor().outcome is PollStateOutcome.PRESENT
 
 
 class TestInitializeEmailCursorLocal:

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -35,6 +36,8 @@ from entrabot.tools.teams import (
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
+
+logger = logging.getLogger("entrabot.storage.backend")
 
 
 def _content_etag(content: str) -> str:
@@ -52,6 +55,38 @@ def _check_write_conditions(if_match: str | None, if_absent: bool) -> None:
     """Refuse a contradictory write: exists-with-this-ETag AND does-not-exist."""
     if if_match is not None and if_absent:
         raise ValueError("write_text: if_match and if_absent are mutually exclusive")
+
+
+def _create_exclusively(path: Path, content: str, key: str) -> None:
+    """Create *path* holding *content*, refusing if it already exists.
+
+    The exclusive create publishes an empty file before any content is written. If
+    the write or the close then fails, the file this call created is removed and the
+    error re-raised, so a later attempt can create the key instead of every reader
+    finding an empty value that nothing can replace. A file that was already there is
+    never touched: that case raises ``ConcurrencyError`` before anything is created.
+    """
+    try:
+        # O_EXCL: atomic create-only. Closed below, because the create and the write
+        # fail differently and only the second may remove the file.
+        fh = open(path, "x")  # noqa: SIM115
+    except FileExistsError as exc:
+        raise ConcurrencyError(f"write_text({key!r}) refused: key exists") from exc
+    try:
+        with fh:
+            fh.write(content)
+    except BaseException:
+        try:
+            path.unlink()
+        except OSError as unlink_exc:
+            # Report it, because now the empty file stays and blocks later creates.
+            logger.warning(
+                "Could not remove the empty file left by a failed write of %r: %s: %s",
+                key,
+                type(unlink_exc).__name__,
+                unlink_exc,
+            )
+        raise
 
 
 @runtime_checkable
@@ -153,11 +188,7 @@ class LocalBackend:
                 )
         p.parent.mkdir(parents=True, exist_ok=True)
         if if_absent:
-            try:
-                with open(p, "x") as fh:  # O_EXCL: atomic create-only
-                    fh.write(content)
-            except FileExistsError as exc:
-                raise ConcurrencyError(f"write_text({key!r}) refused: key exists") from exc
+            _create_exclusively(p, content, key)
         else:
             p.write_text(content)
         return _content_etag(content)

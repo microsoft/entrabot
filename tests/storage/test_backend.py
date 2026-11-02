@@ -15,17 +15,49 @@ config (Phase 5 will wire the cloud branch — for Phase 2 it's local-only).
 
 from __future__ import annotations
 
+import errno
 import threading
 from pathlib import Path
 
 import pytest
 
+from entrabot.storage import backend as backend_module
 from entrabot.storage.backend import (
     BlobBackend,
     LocalBackend,
     MemoryBackend,
     get_backend,
 )
+
+
+def _fail_after_exclusive_create(monkeypatch: pytest.MonkeyPatch, fail_on: str) -> None:
+    """Let ``LocalBackend``'s create-only open succeed, then fail the write or the close.
+
+    This is what a full disk looks like: the file already exists on disk, empty, by
+    the time the error arrives. Shadowing ``open`` in the backend module leaves the
+    builtin alone for everything else.
+    """
+    real_open = open
+
+    class _FailingFile:
+        def __init__(self, path: Path, mode: str) -> None:
+            self._file = real_open(path, mode)
+
+        def __enter__(self) -> _FailingFile:
+            return self
+
+        def __exit__(self, *exc_info: object) -> bool:
+            self._file.close()
+            if fail_on == "close":
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return False
+
+        def write(self, text: str) -> int:
+            if fail_on == "write":
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return self._file.write(text)
+
+    monkeypatch.setattr(backend_module, "open", _FailingFile, raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -278,6 +310,35 @@ class TestLocalBackendEtag:
         backend = LocalBackend(tmp_path)
         with pytest.raises(ValueError):
             backend.write_text("c.txt", "v1", if_match="etag", if_absent=True)
+
+    @pytest.mark.parametrize("fail_on", ["write", "close"])
+    def test_if_absent_removes_the_empty_file_when_the_content_does_not_land(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_on: str
+    ) -> None:
+        """The exclusive create publishes an empty file before any content is written.
+        If the write or the close then fails, that file would stay behind, and every
+        later reader (an email cursor, say) would find an empty value that no retry
+        could replace, since the key now exists."""
+        backend = LocalBackend(tmp_path)
+
+        with monkeypatch.context() as patched:
+            _fail_after_exclusive_create(patched, fail_on)
+            with pytest.raises(OSError, match="No space left"):
+                backend.write_text("c.txt", "v1", if_absent=True)
+
+        assert not (tmp_path / "c.txt").exists()
+        backend.write_text("c.txt", "v1", if_absent=True)  # a later attempt can create it
+        assert backend.read_text("c.txt") == "v1"
+
+    def test_if_absent_conflict_leaves_the_winners_file_alone(self, tmp_path: Path) -> None:
+        """Only a file this call created is ever removed."""
+        from entrabot.storage.blob import ConcurrencyError
+
+        backend = LocalBackend(tmp_path)
+        backend.write_text("c.txt", "winner")
+        with pytest.raises(ConcurrencyError):
+            backend.write_text("c.txt", "loser", if_absent=True)
+        assert (tmp_path / "c.txt").read_text() == "winner"
 
 
 class TestBlobBackendEtag:

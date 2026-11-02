@@ -20,6 +20,7 @@ import re
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
@@ -28,7 +29,7 @@ from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage, JSONRPCNotification
 
 from entrabot import efferent_copy
-from entrabot.config import get_config
+from entrabot.config import EntraBotConfig, get_config
 from entrabot.errors import (
     AuthRefreshRequiredError,
     EntraBotError,
@@ -43,6 +44,9 @@ from entrabot.tools.chat_cursors import CursorResolution
 from entrabot.tools.interaction_log import detect_channel, log_interaction
 from entrabot.tools.teams import acquire_agent_user_token
 from entrabot.url_safety import _is_graph_url
+
+if TYPE_CHECKING:
+    from entrabot.identity.sponsors import SponsorGate
 
 logger: logging.Logger | None = None
 
@@ -1295,6 +1299,46 @@ def _ensure_poll_task_running() -> None:
         logger.info("Started background Teams poll task")
 
 
+def _sponsor_gate_generation() -> int:
+    """How many times the cached sponsor gate has been dropped. See :func:`_load_sponsor_gate`."""
+    value = _state.get("sponsor_gate_generation", 0)
+    return value if isinstance(value, int) else 0
+
+
+def _invalidate_sponsor_gate() -> bool:
+    """Drop the cached sponsor gate and move its generation. True if one was cached.
+
+    Every place that drops the gate goes through here. Dropping it is not enough on
+    its own: a worker that read the watched-chat list before the change can finish
+    after this call, and :func:`_load_sponsor_gate` uses the generation to see that
+    its result is already stale.
+    """
+    _state["sponsor_gate_generation"] = _sponsor_gate_generation() + 1
+    return _state.pop("sponsor_gate", None) is not None
+
+
+async def _load_sponsor_gate(config: EntraBotConfig) -> SponsorGate:
+    """Build the sponsor gate in a worker thread, caching it only when that is safe.
+
+    The build is blocking I/O: a read of the shared chat list plus a Graph call per
+    chat. Its result is cached only if it isn't provisional AND the generation hasn't
+    moved since the load began. If a chat was registered while the worker ran, the
+    worker may have read the list before that chat landed, so its gate is already
+    stale. It is still returned, which is fine for the call that asked, but it isn't
+    cached, so the next call rebuilds. Nothing awaits between the check and the
+    store, so on the event loop no registration can slip in between them.
+
+    Failures propagate. Each caller has its own handling for them.
+    """
+    from entrabot.identity.sponsors import load_agent_identity_sponsor_gate
+
+    generation = _sponsor_gate_generation()
+    gate = await asyncio.to_thread(load_agent_identity_sponsor_gate, config)
+    if not gate.provisional and _sponsor_gate_generation() == generation:
+        _state["sponsor_gate"] = gate
+    return gate
+
+
 def _register_watched_chat(
     chat_id: str,
     *,
@@ -1390,7 +1434,7 @@ def _register_watched_chat(
         # Copilot CLI session) is invisible to the gate's user_ids set —
         # federated B2B sponsors never get matched and wait hangs forever.
         # See Learning #52 in engineering-history/research/hard-won-learnings.md.
-        if _state.pop("sponsor_gate", None) is not None and logger:
+        if _invalidate_sponsor_gate() and logger:
             logger.info(
                 "Invalidated cached sponsor gate after new watched chat: %s",
                 chat_id,
@@ -1440,7 +1484,7 @@ async def _persist_dirty_watched_chats() -> bool:
             if result.added:
                 # A gate rebuilt while this write was in flight read a list without
                 # these chats, and its federated sponsors would never match.
-                _state.pop("sponsor_gate", None)
+                _invalidate_sponsor_gate()
                 if logger:
                     logger.info("Persisted %d watched chat(s)", len(result.added))
 
@@ -2603,10 +2647,6 @@ async def send_teams_message(
     import contextlib
     from collections import deque
 
-    from entrabot.identity.sponsors import (
-        SponsorGate,
-        load_agent_identity_sponsor_gate,
-    )
     from entrabot.tools.teams import filter_human_messages, read
     from entrabot.tools.wait_tool import (
         wait_listener_banner,
@@ -2618,10 +2658,7 @@ async def send_teams_message(
     gate: SponsorGate | None = _state.get("sponsor_gate")  # type: ignore[assignment]
     if gate is None:
         try:
-            # Blocking: a blob read for the chat list plus Graph calls per chat.
-            gate = await asyncio.to_thread(load_agent_identity_sponsor_gate, wait_config)
-            if not gate.provisional:
-                _state["sponsor_gate"] = gate
+            gate = await _load_sponsor_gate(wait_config)
             if logger:
                 logger.info(
                     "send_teams_message auto-wait: sponsor gate loaded ids=%s upns=%s mails=%s",
@@ -3833,10 +3870,6 @@ async def wait_for_sponsor_dm(
     import contextlib
     from collections import deque
 
-    from entrabot.identity.sponsors import (
-        SponsorGate,
-        load_agent_identity_sponsor_gate,
-    )
     from entrabot.tools.audit import log_event
     from entrabot.tools.teams import filter_human_messages, read
     from entrabot.tools.wait_tool import (
@@ -3868,10 +3901,7 @@ async def wait_for_sponsor_dm(
     gate: SponsorGate | None = _state.get("sponsor_gate")  # type: ignore[assignment]
     if gate is None:
         try:
-            # Blocking: a blob read for the chat list plus Graph calls per chat.
-            gate = await asyncio.to_thread(load_agent_identity_sponsor_gate, config)
-            if not gate.provisional:
-                _state["sponsor_gate"] = gate
+            gate = await _load_sponsor_gate(config)
             # Diagnostic: dump the loaded sponsor set once so operators
             # can correlate against rejection logs in wait_tool.
             logger.info(
