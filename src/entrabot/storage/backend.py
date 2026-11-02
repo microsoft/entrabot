@@ -48,6 +48,12 @@ def _content_etag(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+def _check_write_conditions(if_match: str | None, if_absent: bool) -> None:
+    """Refuse a contradictory write: exists-with-this-ETag AND does-not-exist."""
+    if if_match is not None and if_absent:
+        raise ValueError("write_text: if_match and if_absent are mutually exclusive")
+
+
 @runtime_checkable
 class MemoryBackend(Protocol):
     """Sync key→text store for agent state.
@@ -70,14 +76,24 @@ class MemoryBackend(Protocol):
         """
         ...
 
-    def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str | None:
+    def write_text(
+        self,
+        key: str,
+        content: str,
+        *,
+        if_match: str | None = None,
+        if_absent: bool = False,
+    ) -> str | None:
         """Replace *key*'s content with *content*. Creates parents as needed.
 
         When ``if_match`` is provided, the write is conditional: it succeeds
         only if *key*'s current ETag equals ``if_match``, otherwise it raises
-        :class:`entrabot.storage.blob.ConcurrencyError`. ``if_match=None``
-        (default) is an unconditional overwrite. Returns the new ETag (or
-        ``None`` for backends that don't track one).
+        :class:`entrabot.storage.blob.ConcurrencyError`. ``if_absent=True`` is
+        the compare-and-swap for a key that doesn't exist yet: it creates *key*
+        and raises ``ConcurrencyError`` if another writer got there first. The
+        two are mutually exclusive. With neither, the write is an unconditional
+        overwrite. Returns the new ETag (or ``None`` for backends that don't
+        track one).
         """
         ...
 
@@ -117,7 +133,15 @@ class LocalBackend:
         content = p.read_text()
         return content, _content_etag(content)
 
-    def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str | None:
+    def write_text(
+        self,
+        key: str,
+        content: str,
+        *,
+        if_match: str | None = None,
+        if_absent: bool = False,
+    ) -> str | None:
+        _check_write_conditions(if_match, if_absent)
         p = self._path(key)
         if if_match is not None:
             # Conditional write: current content hash must equal if_match.
@@ -128,7 +152,14 @@ class LocalBackend:
                     f"(current={current!r})"
                 )
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
+        if if_absent:
+            try:
+                with open(p, "x") as fh:  # O_EXCL: atomic create-only
+                    fh.write(content)
+            except FileExistsError as exc:
+                raise ConcurrencyError(f"write_text({key!r}) refused: key exists") from exc
+        else:
+            p.write_text(content)
         return _content_etag(content)
 
     def append_text(self, key: str, content: str) -> None:
@@ -198,10 +229,19 @@ class BlobBackend:
             return None, None
         return data.decode("utf-8"), etag
 
-    def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str | None:
-        return _run_sync(
-            self._store.put(key, content.encode("utf-8"), if_match=if_match or None)
-        )
+    def write_text(
+        self,
+        key: str,
+        content: str,
+        *,
+        if_match: str | None = None,
+        if_absent: bool = False,
+    ) -> str | None:
+        _check_write_conditions(if_match, if_absent)
+        data = content.encode("utf-8")
+        if if_absent:
+            return _run_sync(self._store.put(key, data, if_none_match="*"))
+        return _run_sync(self._store.put(key, data, if_match=if_match or None))
 
     def append_text(self, key: str, content: str) -> None:
         existing = self.read_text(key) or ""

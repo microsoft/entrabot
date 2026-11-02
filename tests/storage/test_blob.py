@@ -286,6 +286,38 @@ class TestBlobETag:
                 await store.put("manifest.json", b"x", if_match='"stale"')
 
     @pytest.mark.asyncio
+    async def test_put_with_if_none_match_sends_header(self) -> None:
+        store = _make_store()
+        with respx.mock:
+            route = respx.put(f"{BLOB_URL}/cursor.txt").mock(
+                return_value=httpx.Response(201, headers={"ETag": '"new"'})
+            )
+            etag = await store.put("cursor.txt", b"x", if_none_match="*")
+        assert etag == '"new"'
+        assert route.calls.last.request.headers["If-None-Match"] == "*"
+        assert "If-Match" not in route.calls.last.request.headers
+
+    @pytest.mark.parametrize("status", [409, 412])
+    async def test_put_if_none_match_conflict_raises_concurrency_error(self, status: int) -> None:
+        """Azure documents both shapes for "blob already exists" on a create-only
+        PUT: 412 for an unmet If-None-Match and 409 BlobAlreadyExists."""
+        from entrabot.storage.blob import ConcurrencyError
+
+        store = _make_store()
+        with respx.mock:
+            respx.put(f"{BLOB_URL}/cursor.txt").mock(return_value=httpx.Response(status))
+            with pytest.raises(ConcurrencyError):
+                await store.put("cursor.txt", b"x", if_none_match="*")
+
+    async def test_put_409_without_if_none_match_is_not_a_concurrency_error(self) -> None:
+        """A 409 on a plain PUT is a real failure (e.g. an immutability policy),
+        not a lost race: it must surface as an HTTP error."""
+        store = _make_store()
+        with respx.mock:
+            respx.put(f"{BLOB_URL}/cursor.txt").mock(return_value=httpx.Response(409))
+            with pytest.raises(httpx.HTTPStatusError):
+                await store.put("cursor.txt", b"x")
+
     async def test_put_without_if_match_sends_no_header(self) -> None:
         """Backwards compat: callers that don't care about concurrency
         can still call put(path, data) and get last-writer-wins."""

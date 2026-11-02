@@ -15,6 +15,7 @@ config (Phase 5 will wire the cloud branch — for Phase 2 it's local-only).
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -100,13 +101,17 @@ class _FakeBlobStore:
 
     Mirrors the real ``BlobStore`` API surface used by ``BlobBackend``:
     async ``get`` (raises KeyError on miss), ``get_with_etag``, ``put``
-    (honors ``if_match`` for optimistic concurrency), ``exists``, ``list``.
+    (honors ``if_match`` / ``if_none_match`` for optimistic concurrency),
+    ``exists``, ``list``. ``put`` is atomic across threads, like a real
+    conditional PUT, so two "instances" can share one store from worker
+    threads.
     """
 
     def __init__(self) -> None:
         self.data: dict[str, bytes] = {}
         self.etags: dict[str, str] = {}
         self._counter = 0
+        self._lock = threading.Lock()
 
     async def get(self, path: str) -> bytes:
         if path not in self.data:
@@ -118,16 +123,26 @@ class _FakeBlobStore:
             raise KeyError(path)
         return self.data[path], self.etags[path]
 
-    async def put(self, path: str, data: bytes, *, if_match: str | None = None) -> str:
+    async def put(
+        self,
+        path: str,
+        data: bytes,
+        *,
+        if_match: str | None = None,
+        if_none_match: str | None = None,
+    ) -> str:
         from entrabot.storage.blob import ConcurrencyError
 
-        if if_match is not None and self.etags.get(path) != if_match:
-            raise ConcurrencyError(f"put({path!r}) refused: If-Match={if_match!r} stale")
-        self._counter += 1
-        etag = f'"etag-{self._counter}"'
-        self.data[path] = data
-        self.etags[path] = etag
-        return etag
+        with self._lock:
+            if if_match is not None and self.etags.get(path) != if_match:
+                raise ConcurrencyError(f"put({path!r}) refused: If-Match={if_match!r} stale")
+            if if_none_match == "*" and path in self.data:
+                raise ConcurrencyError(f"put({path!r}) refused: blob already exists")
+            self._counter += 1
+            etag = f'"etag-{self._counter}"'
+            self.data[path] = data
+            self.etags[path] = etag
+            return etag
 
     async def exists(self, path: str) -> bool:
         return path in self.data
@@ -244,6 +259,26 @@ class TestLocalBackendEtag:
         backend.write_text("c.json", "v2", if_match=None)
         assert backend.read_text("c.json") == "v2"
 
+    def test_if_absent_creates_missing_key_and_parents(self, tmp_path: Path) -> None:
+        backend = LocalBackend(tmp_path)
+        etag = backend.write_text("nested/dir/c.txt", "v1", if_absent=True)
+        assert backend.read_text("nested/dir/c.txt") == "v1"
+        assert etag == backend.read_text_with_etag("nested/dir/c.txt")[1]
+
+    def test_if_absent_refuses_to_overwrite_existing_key(self, tmp_path: Path) -> None:
+        from entrabot.storage.blob import ConcurrencyError
+
+        backend = LocalBackend(tmp_path)
+        backend.write_text("c.txt", "winner")
+        with pytest.raises(ConcurrencyError):
+            backend.write_text("c.txt", "loser", if_absent=True)
+        assert backend.read_text("c.txt") == "winner"
+
+    def test_if_absent_and_if_match_are_mutually_exclusive(self, tmp_path: Path) -> None:
+        backend = LocalBackend(tmp_path)
+        with pytest.raises(ValueError):
+            backend.write_text("c.txt", "v1", if_match="etag", if_absent=True)
+
 
 class TestBlobBackendEtag:
     def test_read_with_etag_absent_returns_none_none(self) -> None:
@@ -268,6 +303,39 @@ class TestBlobBackendEtag:
         backend.write_text("c.json", "raced")  # bumps etag
         with pytest.raises(ConcurrencyError):
             backend.write_text("c.json", "v2", if_match=etag)
+
+    def test_if_absent_creates_missing_key(self) -> None:
+        backend = BlobBackend(_FakeBlobStore())
+        etag = backend.write_text("c.txt", "v1", if_absent=True)
+        assert backend.read_text_with_etag("c.txt") == ("v1", etag)
+
+    def test_if_absent_refuses_to_overwrite_existing_key(self) -> None:
+        from entrabot.storage.blob import ConcurrencyError
+
+        backend = BlobBackend(_FakeBlobStore())
+        backend.write_text("c.txt", "winner")
+        with pytest.raises(ConcurrencyError):
+            backend.write_text("c.txt", "loser", if_absent=True)
+        assert backend.read_text("c.txt") == "winner"
+
+    def test_if_absent_and_if_match_are_mutually_exclusive(self) -> None:
+        backend = BlobBackend(_FakeBlobStore())
+        with pytest.raises(ValueError):
+            backend.write_text("c.txt", "v1", if_match="etag", if_absent=True)
+
+    def test_unconditional_write_does_not_request_create_only(self) -> None:
+        """Stores predating ``if_none_match`` keep working: the kwarg is only
+        passed when a caller actually asks for a create-only write."""
+
+        class LegacyStore(_FakeBlobStore):
+            async def put(  # type: ignore[override]
+                self, path: str, data: bytes, *, if_match: str | None = None
+            ) -> str:
+                return await super().put(path, data, if_match=if_match)
+
+        backend = BlobBackend(LegacyStore())
+        backend.write_text("c.txt", "v1")
+        assert backend.read_text("c.txt") == "v1"
 
 
 # ---------------------------------------------------------------------------
