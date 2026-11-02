@@ -424,6 +424,11 @@ class TestClaimEmailWindow:
         assert claim_email_window(LATER, read_email_cursor().etag) is EmailClaim.WON
         assert read_email_cursor().cursor == LATER
 
+    def test_strips_whitespace_before_storing(self, fake_cloud_store) -> None:
+        initialize_email_cursor(NOW)
+        claim_email_window(f"  {LATER}  \n", read_email_cursor().etag)
+        assert fake_cloud_store.data[EMAIL_CURSOR_KEY].decode() == LATER
+
     def test_stale_etag_loses_and_leaves_the_cursor_alone(self, fake_cloud_store) -> None:
         initialize_email_cursor(NOW)
         stale_etag = read_email_cursor().etag

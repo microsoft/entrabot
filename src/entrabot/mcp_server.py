@@ -38,6 +38,7 @@ from entrabot.errors import (
 from entrabot.identity import IdentityStateMachine, set_active_identity_state
 from entrabot.logging_config import setup_logging
 from entrabot.models import IdentityState
+from entrabot.tools import poll_state
 from entrabot.tools.chat_cursors import CursorResolution
 from entrabot.tools.interaction_log import detect_channel, log_interaction
 from entrabot.tools.teams import acquire_agent_user_token
@@ -1081,6 +1082,7 @@ async def _initialize_locked() -> None:
 BACKGROUND_POLL_INTERVAL = 5  # seconds between polls
 CURSOR_RESOLVE_CONCURRENCY = 8  # parallel cursor reads at boot (each does a token fetch)
 EMAIL_POLL_INTERVAL = 60  # seconds between /me/messages polls
+PUSHED_EMAIL_MAX = 500  # per-session dedup bound for pushed email IDs
 CHAT_DISCOVER_INTERVAL = 120  # seconds between /me/chats auto-discovery sweeps
 PERSONA_SATI_HEARTBEAT_INTERVAL = 300  # 5 min smoke test against persona-sati
 
@@ -1592,36 +1594,98 @@ async def _background_poll() -> None:
             await asyncio.sleep(BACKGROUND_POLL_INTERVAL)
 
 
+async def _email_cursor_or_initialize() -> poll_state.EmailCursorRead:
+    """Read the shared email cursor off the event loop, creating it if absent.
+
+    ABSENT starts the cursor at "now" (a local install may adopt its legacy file
+    instead) so the agent isn't flooded with historical mail. UNRESOLVED changes
+    nothing: a failed read could be hiding a live cursor, so it never initializes
+    and never falls back to a local copy.
+    """
+    current = await asyncio.to_thread(poll_state.read_email_cursor)
+    if current.outcome is poll_state.PollStateOutcome.ABSENT:
+        await asyncio.to_thread(poll_state.initialize_email_cursor)
+    elif current.outcome is poll_state.PollStateOutcome.UNRESOLVED and logger:
+        logger.warning("Email cursor unresolved; skipping this cycle (no push, no write)")
+    return current
+
+
+async def _email_poll_cycle(*, pushed_email_ids: set[str], agent_self_upn: str) -> None:
+    """Run one fleet-safe email poll cycle.
+
+    The shared cursor is re-read with its ETag every cycle, because another
+    instance may have moved it. If Graph returned anything, the cursor is advanced
+    with a compare-and-swap BEFORE any push: that write is what claims the window,
+    so only the winner owns the batch. Losing the swap means another instance has
+    this window, and any other write failure pushes nothing either. The cursor
+    didn't move in that case, so the next cycle fetches the same window again.
+    """
+    from entrabot.tools.email_poll import poll_once
+
+    current = await _email_cursor_or_initialize()
+    if current.outcome is not poll_state.PollStateOutcome.PRESENT:
+        return
+
+    messages, new_cursor = await _with_token_retry(poll_once, cursor=current.cursor)
+
+    if not new_cursor or new_cursor == current.cursor:
+        return
+
+    claim = await asyncio.to_thread(poll_state.claim_email_window, new_cursor, current.etag)
+    if claim is poll_state.EmailClaim.LOST:
+        if logger:
+            logger.info("Email window claimed by another instance; dropping this batch")
+        return
+    if claim is not poll_state.EmailClaim.WON:
+        if logger:
+            logger.warning("Email window not claimed; pushing nothing, will retry next cycle")
+        return
+
+    for msg in messages:
+        msg_id = msg.get("id", "")
+        if msg_id and msg_id in pushed_email_ids:
+            continue
+        # Skip emails the agent itself sent (Sent Items folder
+        # echoes through /me/messages; would create a self-push loop).
+        sender_addr = (msg.get("from") or {}).get("emailAddress", {}).get("address", "").lower()
+        if agent_self_upn and sender_addr == agent_self_upn:
+            if msg_id:
+                pushed_email_ids.add(msg_id)  # mark seen so dedup works
+            continue
+        await _push_email_notification(msg)
+        if msg_id:
+            pushed_email_ids.add(msg_id)
+
+    # Bounded cleanup so the set doesn't grow unbounded over long-lived sessions.
+    if len(pushed_email_ids) > PUSHED_EMAIL_MAX:
+        keep = list(pushed_email_ids)[-100:]
+        pushed_email_ids.clear()
+        pushed_email_ids.update(keep)
+
+
 async def _background_poll_email() -> None:
     """Background poll of /me/messages for substantive inbound email.
 
     Pushes each substantive message as a ``notifications/claude/channel``
-    notification and appends an inbound entry to the interaction log.
-    Cursor (last receivedDateTime seen) persists across restarts in
-    ``<data_dir>/email_cursor.txt``; on first run we initialize it to
-    "now" so the agent isn't flooded with historical mail.
+    notification and appends an inbound entry to the interaction log. The cursor
+    (last receivedDateTime seen) lives in the configured backend under
+    ``poll_state/email_cursor.txt`` and is shared across instances; see
+    :func:`_email_poll_cycle`. Mail that arrives while no instance runs isn't
+    pushed on a cloud backend, but stays readable through ``read_email``.
     """
-    import asyncio
-
-    from entrabot.tools.email_poll import load_cursor, poll_once, save_cursor
-
     if logger:
         logger.info("Starting background email poll (interval=%ds)", EMAIL_POLL_INTERVAL)
 
-    cursor = load_cursor()
-    if cursor is None:
-        cursor = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        save_cursor(cursor)
+    # Before the first sleep, so mail arriving during the first interval is caught.
+    await _email_cursor_or_initialize()
 
     # Per-session dedup. Graph returns sub-second precision on
-    # receivedDateTime but the cursor file we save may end up truncated
-    # to second resolution, which causes the same email to be returned
-    # every poll cycle (observed 2026-04-17 with a teammate's "Ball
-    # game tonight" looping). Belt-and-suspenders: also track the
-    # Graph-side message IDs we've already pushed this session so we
-    # never double-push, regardless of cursor drift.
+    # receivedDateTime but a cursor may end up truncated to second resolution,
+    # which causes the same email to be returned every poll cycle (observed
+    # 2026-04-17 with a teammate's "Ball game tonight" looping).
+    # Belt-and-suspenders: also track the Graph-side message IDs we've already
+    # pushed this session so we never double-push, regardless of cursor drift.
     pushed_email_ids: set[str] = set()
-    _PUSHED_EMAIL_MAX = 500
 
     # Don't push our own outbound emails back as if they were inbound.
     # /me/messages returns the entire mailbox including the Sent Items
@@ -1643,36 +1707,10 @@ async def _background_poll_email() -> None:
 
             await _ensure_valid_token()
 
-            messages, new_cursor = await _with_token_retry(
-                poll_once,
-                cursor=cursor,
+            await _email_poll_cycle(
+                pushed_email_ids=pushed_email_ids,
+                agent_self_upn=agent_self_upn,
             )
-
-            if new_cursor and new_cursor != cursor:
-                cursor = new_cursor
-                save_cursor(cursor)
-
-            for msg in messages:
-                msg_id = msg.get("id", "")
-                if msg_id and msg_id in pushed_email_ids:
-                    continue
-                # Skip emails the agent itself sent (Sent Items folder
-                # echoes through /me/messages; would create a self-push loop).
-                sender_addr = (
-                    (msg.get("from") or {}).get("emailAddress", {}).get("address", "").lower()
-                )
-                if agent_self_upn and sender_addr == agent_self_upn:
-                    if msg_id:
-                        pushed_email_ids.add(msg_id)  # mark seen so dedup works
-                    continue
-                await _push_email_notification(msg)
-                if msg_id:
-                    pushed_email_ids.add(msg_id)
-
-            # Bounded cleanup so the set doesn't grow unbounded over
-            # long-lived sessions.
-            if len(pushed_email_ids) > _PUSHED_EMAIL_MAX:
-                pushed_email_ids = set(list(pushed_email_ids)[-100:])
 
         except Exception as exc:
             if logger:

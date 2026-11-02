@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from collections.abc import Iterator
@@ -63,6 +64,33 @@ def fake_cloud_store(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("ENTRABOT_KEEP_MEMORY_LOCAL", raising=False)
     monkeypatch.setattr("entrabot.storage.backend.BlobStore", lambda **_: store)
     return store
+
+
+@pytest.fixture
+def blob_calls_on_event_loop(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record every ``BlobBackend`` call that blocks a running event loop.
+
+    ``_run_sync`` hands off to a helper thread when a loop is running but then
+    waits on it, so a blob call made from a coroutine still stalls the loop. A
+    blocking read like this once starved the MCP ``initialize`` handshake past the
+    host's timeout. Assert this list is empty to prove the I/O stayed off the loop.
+    """
+    from entrabot.storage import backend as backend_module
+
+    calls: list[str] = []
+    real_run_sync = backend_module._run_sync
+
+    def recording_run_sync(coro):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            calls.append(coro.__qualname__)
+        return real_run_sync(coro)
+
+    monkeypatch.setattr(backend_module, "_run_sync", recording_run_sync)
+    return calls
 
 
 @pytest.fixture(autouse=True)
