@@ -90,11 +90,16 @@ a stdio server:
     "entrabot": {
       "type": "stdio",
       "command": ".venv/bin/entrabot-mcp",
-      "args": []
+      "args": [],
+      "env": {
+        "PERSONA_SATI_MCP_URL": "<your persona-sati base URL>",
+        "PERSONA_SATI_MCP_TOKEN_COMMAND": "<absolute path to your persona-sati token command>"
+      }
     },
     "persona-sati": {
-      "type": "sse",
-      "url": "http://localhost:8100/sse"
+      "type": "stdio",
+      "command": "<absolute path to the client launcher from your persona-sati install>",
+      "args": []
     }
   }
 }
@@ -105,6 +110,15 @@ this file. When persona-sati is listed, the host can call its tools directly
 alongside Entrabot's; when it is absent, Entrabot runs standalone as a generic
 Teams tool. See [Clients Overview](../clients/overview.md) for the per-host
 configuration paths setup writes.
+
+A hosted persona-sati is reached through the client launcher that your
+persona-sati install provides, so its entry is a `stdio` command, as above; get
+the launcher and token command from your install's own setup documentation. An
+`sse` entry with a `localhost` URL only works when you run persona-sati yourself
+for local development. If nothing is listening there, that says nothing about
+whether a hosted service is up. `./scripts/setup.sh --diagnose` includes an
+optional persona-sati check that reports on this wiring; see
+[MCP connectivity](../troubleshooting/mcp-connectivity.md#persona-sati-does-not-connect).
 
 ## Two side paths that are not the resource transport
 

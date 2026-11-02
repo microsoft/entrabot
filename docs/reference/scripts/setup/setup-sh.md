@@ -121,8 +121,11 @@ Diagnostics and control:
   forwarded to `show_agent_status.py` (for example `--json`, `--health-only`,
   `--strict`).
 - `--diagnose` — skip provisioning and run a full health check (state file,
-  certificate, three-hop token, Graph identity, Teams scope, MCP wiring). Exits
-  non-zero if any check fails.
+  certificate, three-hop token, Graph identity, Teams scope, MCP wiring, and the
+  optional `persona-sati` entry in `.mcp.json`). Exits non-zero if any check
+  fails. The persona-sati check is advisory: it can report `SKIP` or `WARN` but
+  never a failure, and it connects only to loopback addresses (see
+  [MCP connectivity](../../../troubleshooting/mcp-connectivity.md#persona-sati-does-not-connect)).
 - `--skip-smoke` — skip the post-setup smoke test (token + Graph identity +
   Teams scope).
 - `--help`, `-h` — print the full option matrix.
@@ -175,8 +178,8 @@ Diagnostics and control:
   can't yet authenticate end-to-end, most often because a just-assigned Teams
   license has not replicated). Re-run `./scripts/setup.sh --diagnose` after
   replication completes.
-- `--diagnose` exits with the diagnostics' own overall exit code (`0` when all
-  checks pass, non-zero otherwise).
+- `--diagnose` exits with the diagnostics' own overall exit code (`0` unless a
+  check fails; warnings and skips do not change it).
 
 ## Common failures
 
