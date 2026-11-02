@@ -19,6 +19,7 @@ Three entry points:
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import shutil
 import socket
@@ -589,12 +590,21 @@ def check_mcp_configs(
 
 
 _TOKEN_ENV = "PERSONA_SATI_MCP_TOKEN_COMMAND"
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+_URL_TRANSPORTS = frozenset({"sse", "http", "streamable-http", "streamable_http"})
 
 
 def _is_placeholder(value: object) -> bool:
     text = value.strip() if isinstance(value, str) else ""
     return text.startswith("<") and text.endswith(">")
+
+
+def _is_loopback(host: str) -> bool:
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback  # all of 127.0.0.0/8, and ::1
+    except ValueError:
+        return False
 
 
 def _is_executable(command: str, base: Path, env: object) -> bool:
@@ -630,9 +640,15 @@ def check_persona_sati_mcp(claude_path: Path) -> Check:
     env = entrabot.get("env") if isinstance(entrabot, dict) else None
     env = env if isinstance(env, dict) else {}
     url, command = entry.get("url"), entry.get("command")
+    # Follow the declared transport, as the runtime does, so an entry whose fields don't
+    # match it can't pass. Only an entry that declares nothing is inferred from its fields.
+    declared = entry.get("type") or entry.get("transport")
+    kind = str(declared).lower() if declared else ("sse" if isinstance(url, str) else "stdio")
     problems: list[str] = []
     ok = ""
-    if isinstance(url, str):  # sse / http
+    if kind in _URL_TRANSPORTS and not isinstance(url, str):
+        problems.append(f"{kind} entry has no url")
+    elif kind in _URL_TRANSPORTS:
         try:
             parts = urlsplit(url)
             scheme, host, port = parts.scheme, parts.hostname, parts.port
@@ -643,7 +659,7 @@ def check_persona_sati_mcp(claude_path: Path) -> Check:
         else:
             port = port or (443 if scheme == "https" else 80)
             shown = f"{scheme}://{f'[{host}]' if ':' in host else host}:{port}"
-            if host not in _LOOPBACK_HOSTS:
+            if not _is_loopback(host):
                 ok = f"{shown} is a remote host (not contacted)."
             else:
                 try:
@@ -655,15 +671,16 @@ def check_persona_sati_mcp(claude_path: Path) -> Check:
                     )
                 else:
                     ok = f"{shown} is accepting connections."
-    elif isinstance(command, str) and command:  # stdio; hosts exec it as written, unstripped
-        if _is_placeholder(command):
-            problems.append(f"command {command} is an unfilled placeholder")
-        elif not _is_executable(command, claude_path.parent, entry.get("env")):
-            problems.append(f"command {command} was not found or is not executable")
-        else:
-            ok = f"stdio launcher {command} is present and executable."
+    elif kind != "stdio":
+        problems.append("entry has an unsupported transport type")
+    elif not isinstance(command, str) or not command:
+        problems.append("stdio entry has no command")
+    elif _is_placeholder(command):  # hosts exec the command as written, unstripped
+        problems.append(f"command {command} is an unfilled placeholder")
+    elif not _is_executable(command, claude_path.parent, entry.get("env")):
+        problems.append(f"command {command} was not found or is not executable")
     else:
-        problems.append("entry has neither a command nor a url")
+        ok = f"stdio launcher {command} is present and executable."
 
     token = str(env.get(_TOKEN_ENV) or "").strip()  # run directly, so it must be runnable
     for var in ("PERSONA_SATI_MCP_URL", _TOKEN_ENV):

@@ -566,6 +566,57 @@ def closed_port() -> int:
 
 
 class TestCheckPersonaSatiMcp:
+    @pytest.mark.parametrize(
+        ("kind", "field"),
+        [("stdio", {"url": "https://persona.example/sse"}), ("sse", {"command": "launcher"})],
+        ids=["stdio-with-only-a-url", "sse-with-only-a-command"],
+    )
+    def test_fields_that_do_not_match_the_declared_type_warn(
+        self, tmp_path: Path, kind: str, field: dict[str, str]
+    ) -> None:
+        launcher = _launcher(tmp_path / "bin")
+        entry = {"type": kind, **field}
+        if "command" in entry:
+            entry["command"] = str(launcher)
+
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, entry))
+
+        assert result.status == "warn"
+        assert kind in result.detail
+
+    @pytest.mark.parametrize("kind", ["http", "streamable-http", "streamable_http"])
+    def test_every_http_transport_uses_the_url(self, tmp_path: Path, kind: str) -> None:
+        entry = {"type": kind, "url": "https://persona.example/mcp"}
+
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, entry))
+
+        assert result.status == "pass"
+
+    def test_a_missing_type_defaults_to_stdio_like_the_runtime(self, tmp_path: Path) -> None:
+        launcher = _launcher(tmp_path / "bin")
+
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, {"command": str(launcher)}))
+
+        assert result.status == "pass"
+
+    def test_every_ipv4_loopback_address_is_treated_as_local(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        contacted: list[tuple[str, int]] = []
+
+        def _refuse(address: tuple[str, int], *args: object, **kwargs: object) -> None:
+            contacted.append(address)
+            raise ConnectionRefusedError
+
+        monkeypatch.setattr(socket, "create_connection", _refuse)
+        entry = {"type": "sse", "url": "http://127.0.0.2:8100/sse"}
+
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, entry))
+
+        assert contacted == [("127.0.0.2", 8100)]
+        assert result.status == "warn"
+        assert "nothing is listening" in result.detail
+
     def test_bare_commands_use_the_path_their_own_entry_sets(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -644,8 +695,8 @@ class TestCheckPersonaSatiMcp:
         [
             ({"type": "stdio", "command": PLACEHOLDER_CMD}, "unfilled placeholder"),
             ({"type": "stdio", "command": "/no/such/launcher"}, "not found"),
-            ({"type": "stdio"}, "neither a command nor a url"),
-            ({"type": "sse"}, "neither a command nor a url"),
+            ({"type": "stdio"}, "stdio entry has no command"),
+            ({"type": "sse"}, "sse entry has no url"),
         ],
         ids=["placeholder", "missing-file", "no-command", "no-url"],
     )
