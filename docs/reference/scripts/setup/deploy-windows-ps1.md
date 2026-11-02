@@ -25,8 +25,10 @@ rotation entirely and delegates to
   `.venv\Scripts\python.exe` must exist, and `.env` must contain
   `ENTRABOT_BLUEPRINT_CERT_SHA1` identifying the certificate currently in
   `Cert:\CurrentUser\My`.
-- Network access to Microsoft Graph for the `keyCredentials` `PATCH` and for
-  the post-rotation smoke test's three-hop token acquisition.
+- Network access to Microsoft Graph for reading and updating `keyCredentials`
+  and for the post-rotation smoke test's three-hop token acquisition. The Graph
+  token this wrapper uses must be able to read the Blueprint application as well as
+  update it; if the read fails, the rotation stops before anything is written.
 
 ## Usage
 
@@ -62,7 +64,10 @@ rotation entirely and delegates to
    exporting its public DER to a second temporary `.cer` file and capturing
    its SHA-1 thumbprint and `x5t#S256` JWT thumbprint from stdout.
 4. Builds a Python driver script inline and runs it under the project venv,
-   wiring a Graph `PATCH` callable, a smoke-test callable (a fresh
+   wiring a Graph callable (which keeps other machines' certificates by swapping
+   only this machine's old and new ones, through
+   [`blueprint_certs.swap_key_credential`](../auth-and-certs/blueprint-certs-py.md)),
+   a smoke-test callable (a fresh
    `acquire_agent_user_token` call), and a certificate-deletion callable to
    [`rotate_cert_windows.rotate()`](../auth-and-certs/rotate-cert-windows-py.md),
    which performs the actual transactional rotation: `PATCH` the new DER,
@@ -103,14 +108,15 @@ rotation entirely and delegates to
 - **`ENTRABOT_BLUEPRINT_CERT_SHA1 missing from .env`** — the machine has not
   completed initial setup, or `.env` was hand-edited; re-run
   [`setup-windows.ps1`](setup-windows-ps1.md).
-- **Rotation failed with no rollback needed** — the initial Graph `PATCH`
-  itself failed; the old certificate is untouched and still active.
+- **Rotation failed with no rollback needed** — reading the Blueprint's
+  certificates or the initial Graph `PATCH` failed; the old certificate is still in
+  the local store and `.env` still points at it.
 - **Rotation rolled back** — the new certificate's smoke test failed after
   the `PATCH` succeeded; the original certificate, `.env` thumbprints, and
   MSAL cache were restored automatically. Re-run once the underlying issue
   (for example, license replication delay) clears.
-- **`ManualInterventionRequired`** — both the initial and rollback `PATCH`
-  calls failed; `.env` and the MSAL cache are deliberately left as-is for
+- **`ManualInterventionRequired`** — the smoke test failed and then the rollback
+  (its read or its `PATCH`) failed too; `.env` and the MSAL cache are deliberately left as-is for
   manual triage, since the old DER may be the only public material matching
   a still-working private key.
 

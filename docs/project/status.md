@@ -1,6 +1,6 @@
 # Current Status
 
-**Last updated:** October 25, 2026
+**Last updated:** November 2, 2026
 
 !!! note "Research implementation"
     Entrabot is a research implementation, not a hosted production service. Run it against an isolated development tenant, and review every permission it requests before granting consent.
@@ -13,6 +13,7 @@
 - Autonomous four-resource provisioning chain: Agent Identity Blueprint → BlueprintPrincipal → Agent Identity → Agent User.
 - Blueprint, BlueprintPrincipal, and Agent Identity are created through the dedicated Microsoft Graph v1.0 subtype endpoints; Agent User creation uses Graph beta.
 - Certificate private keys are stored in the OS keystore (Keychain, Windows CNG (via the certificate store), or Linux Secret Service).
+- Several machines can share a Blueprint: attaching one adds its certificate and keeps the others. `setup.sh --remove-all-existing-certs` is the only way to replace them all.
 
 ### Microsoft 365
 
@@ -35,7 +36,7 @@
 
 ### Documentation and operations
 
-- Public site with nine task-oriented sections and source-audited references for all registered MCP tools and all 42 supported operator commands.
+- Public site with nine task-oriented sections and source-audited references for all registered MCP tools and all 44 supported operator commands.
 - Legacy URLs redirect to current pages; plans, specs, investigations, and research are retained only under non-published `engineering-history/`.
 
 ## Active development
@@ -50,7 +51,7 @@
 - Windows end-to-end coverage is narrower than macOS and currently centered on Windows 11 ARM64.
 - Legacy Graph file comments are not the same as Word UI comments; use the Work IQ Word tools for document comments.
 - External-content wrapping is defense in depth. It reduces instruction-injection risk but is not proof against every possible model jailbreak.
-- Attaching an additional device with `setup.sh --use-blueprint` replaces the Blueprint's certificate list instead of appending, and proceeds without confirmation in non-interactive shells ([#124](https://github.com/microsoft/entrabot/issues/124)).
+- Adding a Blueprint certificate reads the list and then writes it, and those two steps aren't atomic. Two machines attaching in the same moment can lose one of the new certificates; the affected machine's setup reports it, and re-running setup there adds it again.
 - `ENTRABOT_MODE` is validated but does not currently select the auth path in `_init_auth`; credential presence and `ENTRABOT_SKIP_PROVISIONING` determine which path (three-hop Agent User or MSAL delegated) is attempted.
 
 ## Project links

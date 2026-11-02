@@ -10,7 +10,8 @@ Part of the [auth-and-certs command reference](../index.md#auth-and-certs).
 
 Performs an all-or-nothing rotation of the Blueprint certificate: it registers
 the new certificate on the Blueprint app, smoke-tests token acquisition, and
-either commits (removing the old certificate) or rolls everything back. It is a
+either commits (removing the old certificate) or rolls everything back. Other
+machines' certificates on the Blueprint are kept in both directions. It is a
 module invoked by [`deploy-windows.ps1`](../setup/deploy-windows-ps1.md), not a
 standalone CLI entry point. See
 [Windows Platform APIs → Two thumbprints, two purposes](../../../platform-docs/platform-windows.md#two-thumbprints-two-purposes)
@@ -48,7 +49,10 @@ The rotation runs as an ordered transaction:
 
 1. Read the original `x5t#S256` and SHA-1 thumbprints from `.env`.
 2. Acquire a Graph token.
-3. `PATCH` the new certificate DER onto the Blueprint's `keyCredentials`.
+3. Swap the new certificate DER into the Blueprint's `keyCredentials`, through the
+   wrapper's callable: read the list, drop only the entries whose key material matches
+   the old or new certificate, add the new one, and `PATCH`. If the read fails, nothing
+   is sent.
 4. Rewrite the `BLUEPRINT_CERT_*` lines in `.env` to the new thumbprints (the
    single source of truth for the next run).
 5. Run the smoke test (acquire a fresh Agent User token end to end).
@@ -56,7 +60,7 @@ The rotation runs as an ordered transaction:
    - **Smoke passes** → delete the old certificate from `Cert:\CurrentUser\My`
      by its SHA-1 thumbprint. The old certificate is removed **only** after the
      new one is proven to work.
-   - **Smoke fails** → roll back in order: re-`PATCH` the old DER onto the
+   - **Smoke fails** → roll back in order: swap the old DER back onto the
      Blueprint, restore the original thumbprints in `.env`, and delete the MSAL
      cache so the next call does not present a token signed by the now-invalid
      new key.
@@ -67,14 +71,14 @@ Outcomes surface as typed errors that the wrapper maps to process exit codes:
 
 - **Success** — returns without error; the new certificate is live and the old
   one removed.
-- `RotationFailed` — the initial `PATCH` failed; no rollback was needed and the
-  old certificate is untouched.
+- `RotationFailed` — the initial read or `PATCH` failed; no rollback was attempted
+  and the old certificate is still in the local store.
 - `RotationRolledBack` — the `PATCH` succeeded but the smoke test failed; the
   original certificate and `.env` thumbprints were restored, and the MSAL cache
   was deleted (not restored) so a fresh cache is built on the next token
   acquisition.
-- `ManualInterventionRequired` — both the initial `PATCH` and the rollback
-  `PATCH` failed; `.env` and the MSAL cache are deliberately left untouched for
+- `ManualInterventionRequired` — the smoke test failed and then the rollback (its
+  read or its `PATCH`) failed too; `.env` and the MSAL cache are deliberately left untouched for
   manual triage, since the old DER is the only public material matching a working
   private key.
 

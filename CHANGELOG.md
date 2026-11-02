@@ -17,6 +17,9 @@
 
 ### Fixed
 
+- Attaching a machine with `setup.sh --use-blueprint` no longer removes other machines' Blueprint certificates: it adds to the list, and `--remove-all-existing-certs` is the only way to replace it. That flag removes certificates only and does not delete the Blueprint. `deploy-windows.ps1` rotation also keeps other machines' certificates ([#124](https://github.com/microsoft/entrabot/issues/124)).
+- A failed Graph read can no longer look like an empty certificate list. `verify_blueprint_cert.py` and `find_local_blueprint_cert.py` exit `3` for "could not check", `list_blueprint_certs.py` exits non-zero and prints no count, and setup stops instead of regenerating.
+- A new Blueprint private key stays under a temporary keystore entry until its certificate is confirmed on the Blueprint, so a failed upload no longer strands the machine.
 - Self-authored Teams messages remain filtered after an Agent User display-name change.
 - Forged `<external_content>` text can no longer bypass the authoritative XPIA boundary.
 - A UTC-midnight-dependent test no longer fails intermittently on Windows CI.

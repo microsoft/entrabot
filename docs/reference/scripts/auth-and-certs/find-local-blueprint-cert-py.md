@@ -2,7 +2,7 @@
 
 Recover the registered Blueprint certificate thumbprint that matches this
 machine's local private key, so setup can reuse an existing certificate instead
-of prompting to rotate. macOS and Linux only.
+of registering another. macOS and Linux only.
 
 Part of the [auth-and-certs command reference](../index.md#auth-and-certs).
 
@@ -13,7 +13,7 @@ the machine already holds the Blueprint private key in the OS keystore and the
 matching public certificate is still registered on the Blueprint app. This
 command finds the registered certificate whose public key matches the local
 private key and prints its SHA-256 base64url thumbprint, letting
-[`setup.sh`](../setup/setup-sh.md) reuse it rather than rotating.
+[`setup.sh`](../setup/setup-sh.md) reuse it rather than adding another.
 
 The private key is stored on macOS Keychain and the Linux Secret Service; see
 [macOS Platform APIs](../../../platform-docs/platform-macos.md) and
@@ -58,9 +58,15 @@ This command is read-only; it makes no changes to Entra or local state.
 ## Exit behavior
 
 - `0` — a matching certificate was found; its thumbprint is printed to stdout.
-- `1` — no local private key in the keystore, the Blueprint fetch failed, or no
-  registered certificate matches the local key. Diagnostics go to stderr.
+- `1` — checked: no usable local private key in the keystore, or no registered
+  certificate matches the local key. Diagnostics go to stderr.
 - `2` — usage error (missing or extra positional argument).
+- `3` — could not check: a keystore, Graph, or token failure, a malformed response, or
+  a certificate whose key material couldn't be read. Setup stops and does not generate
+  a certificate.
+
+Anything other than `0` or `1`, including a crash, is treated by setup as "could not
+check".
 
 ## Security
 
@@ -72,8 +78,10 @@ is emitted.
 
 - **No local key** — this machine has never generated the Blueprint key; run
   [`setup.sh`](../setup/setup-sh.md).
-- **No match** — the local key predates the currently registered certificate
-  (someone rotated it elsewhere); regenerate via setup.
+- **No match** — the certificate for the local key was removed from the Blueprint;
+  [`setup.sh`](../setup/setup-sh.md) adds a new one.
+- **Exit `3`** — usually a transient Graph failure or a locked keystore; the message on
+  stderr has the cause. Fix it and re-run.
 
 ## Related commands
 
