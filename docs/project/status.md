@@ -1,6 +1,6 @@
 # Current Status
 
-**Last updated:** October 25, 2026
+**Last updated:** November 2, 2026
 
 !!! note "Research implementation"
     Entrabot is a research implementation, not a hosted production service. Run it against an isolated development tenant, and review every permission it requests before granting consent.
@@ -30,6 +30,7 @@
 ### Storage and platforms
 
 - Local operational storage by default, with Azure Blob Storage available as an opt-in.
+- With Blob Storage, all shared operational state, including the watched-chat list and email cursor, lives in the container. Instances on one container share it, and exactly one instance pushes a given email.
 - Setup and teardown flows for macOS, Linux, and Windows.
 - Windows support is acceptance-tested on Windows 11 ARM64.
 
@@ -50,6 +51,7 @@
 - Windows end-to-end coverage is narrower than macOS and currently centered on Windows 11 ARM64.
 - Legacy Graph file comments are not the same as Word UI comments; use the Work IQ Word tools for document comments.
 - External-content wrapping is defense in depth. It reduces instruction-injection risk but is not proof against every possible model jailbreak.
+- On a cloud backend, mail that arrives while no instance is running isn't pushed afterward; it stays readable through `read_email`. See [Upgrading to shared poll state](../troubleshooting/migrations-and-upgrades.md#upgrading-to-shared-poll-state).
 - Attaching an additional device with `setup.sh --use-blueprint` replaces the Blueprint's certificate list instead of appending, and proceeds without confirmation in non-interactive shells ([#124](https://github.com/microsoft/entrabot/issues/124)).
 - `ENTRABOT_MODE` is validated but does not currently select the auth path in `_init_auth`; credential presence and `ENTRABOT_SKIP_PROVISIONING` determine which path (three-hop Agent User or MSAL delegated) is attempted.
 

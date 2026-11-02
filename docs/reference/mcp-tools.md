@@ -508,7 +508,7 @@ Return a single operational-continuity packet at session start.
 async def bootstrap_body_state() -> str
 ```
 
-Returns counts for today's activity, top chats, open promises, watched-chat count, and cursor freshness. It is an index, not message content; use `read_interactions` for the underlying entries.
+Returns counts for today's activity, top chats, open promises, watched-chat count, and cursor freshness. It is an index, not message content; use `read_interactions` for the underlying entries. `watched_chat_count` is `null` if the list can't be read, which is different from `0` chats.
 
 ### `run_daily_summary`
 

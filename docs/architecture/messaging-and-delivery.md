@@ -5,7 +5,7 @@
 Every Teams tool requires an explicit `chat_id` — there is no default group chat or fallback conversation. A `chat_id` comes from one of three places:
 
 1. **`create_chat`** (the MCP tool, wrapping `create_or_find_chat()` / `create_one_on_one_chat()` in `src/entrabot/tools/teams.py`) when the agent creates a new 1:1 or group chat.
-2. **The persisted `watched_chats` file** under the config data directory, loaded at boot by `_init_poll()`.
+2. **The persisted `watched_chats` list** in the configured storage backend, loaded at boot by `_init_poll()`. See [Poll state](storage-and-memory.md#poll-state).
 3. **Chat auto-discovery** (`_background_discover_chats`, Agent User mode only) — sweeps `GET /me/chats` every 120 seconds and registers any chat_id not already watched, so chats another human starts with the Agent User still get picked up.
 
 ## Outbound path
@@ -34,6 +34,16 @@ Every Teams tool requires an explicit `chat_id` — there is no default group ch
 
 This guarantees no duplicate claims are made **before** a message reaches a host's push mechanism. It does not extend to what happens after a claim succeeds — if the `notifications/claude/channel` write itself fails partway (a broken pipe, a host that dropped the connection), that specific delivery attempt can still be lost; `claim_delivery` only prevents two instances from both believing they're the one delivering a given message.
 
+Email has its own version of this, because a mailbox has one cursor rather than one per chat. Each 60-second cycle of `_email_poll_cycle()`:
+
+1. Reads the shared cursor with its ETag, off the event loop. Absent starts it at "now". Unresolved logs a warning and skips the cycle, without initializing the cursor or falling back to a local copy.
+2. Fetches mail newer than the cursor from Graph.
+3. If anything newer came back, advances the cursor with a compare-and-swap **before pushing anything**. That write is the claim.
+4. On a `ConcurrencyError`, another instance has claimed that window, so it drops the batch and pushes nothing. Any other write failure also pushes nothing, and because the cursor didn't move, the next cycle fetches the same window again.
+5. Pushes the batch, still applying the per-session ID dedup and the filter for the agent's own sent mail.
+
+Losing a race drops a batch, not the mail: anything the winner didn't see is past its cursor, so a later cycle fetches it. The same limit applies as for chats: a push that fails after the claim is not retried, though the message stays readable through `read_email`.
+
 ## Channel-push hosts
 
 Claude Code subscribes to `notifications/claude/channel`. The background poll's notification emitter sends this push unconditionally regardless of which client is connected — the emitter itself doesn't check the host. What differs by host is whether that push reaches the model: Claude Code injects it as a next-turn system reminder; hosts that don't understand the method ignore it per the MCP spec, silently. Because of that gap, `send_teams_message`'s auto-wait behavior (below) is what actually guarantees delivery on non-push hosts — the notification firing is necessary but not sufficient.
@@ -50,7 +60,11 @@ For hosts not in the small hardcoded channel-push set (Copilot CLI, Codex, and a
 
 ## Chat auto-discovery
 
-`_background_discover_chats()` runs every 120 seconds, in Agent User mode only (it targets `/me/chats`, which resolves to the human's chats in delegated mode — not what's wanted). It cannot use Graph's `$orderby` on this endpoint (it 400s there); results are not sorted, but chat IDs are deduplicated against `watched_chats` client-side. Newly discovered chats are persisted to the `watched_chats` file immediately so a restart inherits them, and they pick up their cursor from the normal bootstrap path on the next poll cycle — no historical flood of old messages.
+`_background_discover_chats()` runs every 120 seconds, in Agent User mode only (it targets `/me/chats`, which resolves to the human's chats in delegated mode — not what's wanted). It cannot use Graph's `$orderby` on this endpoint (it 400s there); results are not sorted, but chat IDs are deduplicated against `watched_chats` client-side.
+
+Each sweep follows `@odata.nextLink` through every page, up to 20 pages (1,000 chats), so it can rebuild the whole list from nothing. A failure partway keeps the pages already fetched. All the new chats go to the shared `watched_chats` list in one write, along with any chat whose earlier write failed.
+
+**First sight doesn't replay.** A chat first seen through discovery or the shared list may simply never have been polled, so having no cursor doesn't make it new. Its newest message surfaces only if it is under 24 hours old, and a chat's older history stays readable through `read_teams_messages`. A genuine new-chat intro still gets through, while a first sweep can't replay a page of old imperative messages. If the bootstrap's Graph read fails, the chat stays un-bootstrapped and retries next cycle. Chats from `create_chat` keep surfacing their newest message regardless of age.
 
 ## See also
 

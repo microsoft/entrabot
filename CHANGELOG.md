@@ -14,9 +14,15 @@
 - Blueprint, BlueprintPrincipal, and Agent Identity creation now use the dedicated Microsoft Graph v1.0 subtype endpoints; Agent User creation remains on beta.
 - The public docs site was reorganized into nine task-oriented sections; plans, specs, and investigations were moved to non-published `engineering-history/`; source-audited MCP and script references were added; and legacy URLs redirect to current pages.
 - GitHub Pages builds run in strict mode.
+- With cloud memory, the watched-chat list and email cursor now live in the storage container instead of local files, so instances on one container share them and a machine moved to another container can't carry over stale values. **Upgrading a cloud deployment:** on first boot the email cursor starts at "now", so mail received while no instance was running isn't pushed but stays readable through `read_email`. The watched list comes from the cloud copy plus auto-discovery, and old local `watched_chats` and `email_cursor.txt` files are ignored and can be removed by hand. Upgrade every instance on a container together. See "Upgrading to shared poll state" in Migrations and upgrades.
+- Chat auto-discovery reads every page of `/me/chats`, up to 20 pages. A chat first seen through discovery or the shared list surfaces its newest message only if it is under 24 hours old.
 
 ### Fixed
 
+- Two instances on one container can no longer push the same email: each poll claims its window of mail with a compare-and-swap before pushing.
+- A failed Graph read during a chat's bootstrap no longer leaves it with no watermark, which could push up to 10 old messages on the next cycle.
+- `bootstrap_body_state` reports the real watched-chat count on a cloud backend, and `null` rather than `0` if the list can't be read ([#64](https://github.com/microsoft/entrabot/issues/64)).
+- `scripts/catch_up.py` reads the configured backend instead of a hardcoded home-directory path.
 - Self-authored Teams messages remain filtered after an Agent User display-name change.
 - Forged `<external_content>` text can no longer bypass the authoritative XPIA boundary.
 - A UTC-midnight-dependent test no longer fails intermittently on Windows CI.

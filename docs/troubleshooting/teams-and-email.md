@@ -6,12 +6,12 @@ Entrabot has no default chat. Pass an explicit `chat_id` from:
 
 - `create_chat`
 - an inbound channel notification's metadata
-- the local `ENTRABOT_DATA_DIR/watched_chats` registry
+- the `watched_chats` list in the configured storage backend
 - Agent User chat auto-discovery
 
 The Teams poll runs every 5 seconds once at least one watched chat exists.
 Agent User mode also discovers `/me/chats` every 120 seconds. Newly discovered
-chats are saved locally and join the next polling cycle.
+chats are saved to that list and join the next polling cycle.
 
 ## A message was sent but the reply did not appear
 
@@ -60,15 +60,22 @@ Auto-discovery runs only in Agent User mode and can take up to 120 seconds.
 Delegated sessions do not run the discovery task. Register the chat by using
 `create_chat`, or add its ID to the normal watched-chat flow.
 
-The registry is always local:
+The list lives in the configured storage backend under the key `watched_chats`.
+With a local backend, that is `ENTRABOT_DATA_DIR/watched_chats`. With Blob Storage,
+machines sharing a container share one list, and any local copy is ignored. Each
+instance reads the list at startup and picks up later additions through its own
+discovery sweep.
 
-```text
-ENTRABOT_DATA_DIR/watched_chats
-```
+Discovery reads up to 20 pages of `/me/chats`, or 1,000 chats, and logs a warning
+if it stops at that bound.
 
-It is not read from Blob Storage. If multiple machines use the same Agent User,
-each machine needs its own local watched-chat registry or must discover the
-chat independently.
+## A discovered chat's message did not surface
+
+A chat first seen through discovery or the shared list surfaces its newest message
+only if it is under 24 hours old. Older messages are deliberately not pushed, so
+that finding a chat for the first time can't replay old instructions as if they
+were new. Later messages in that chat are pushed normally. Read earlier history with
+`read_teams_messages`.
 
 ## Messages repeat, disappear, or stop after a cursor error
 
@@ -91,10 +98,24 @@ The background email poll:
 - Reads `/me/messages`.
 - Initializes a missing cursor to the current time, so first startup does not
   replay historical mail.
-- Stores its cursor locally at `ENTRABOT_DATA_DIR/email_cursor.txt`.
+- Stores its cursor in the configured storage backend at
+  `poll_state/email_cursor.txt`, shared by every instance on a cloud backend.
+- Claims each window of mail by advancing that cursor before pushing, so only one
+  instance pushes a given email.
 
 Check `whoami` for `auth_mode: agent_user`, then confirm the Agent User has a
 mailbox, mail permissions, and completed license provisioning.
+
+If logs repeat `Email cursor unresolved`, the cursor can't be read or isn't a
+timestamp, and nothing is pushed until it can be. Check storage health first; see
+[Storage troubleshooting](storage.md). If the storage is healthy and the stored
+value is corrupt, delete `poll_state/email_cursor.txt`. The next cycle restarts the
+cursor at the current time, and any mail in between stays readable through
+`read_email`. In local mode, delete a legacy `email_cursor.txt` too, or that value
+gets adopted instead.
+
+On a cloud backend, mail that arrives while no instance is running isn't pushed
+afterward. Read it with `read_email`.
 
 The poll filters Teams/Microsoft 365 notification domains, common no-reply
 senders, and messages sent by the Agent User from Sent Items. Filtered mail

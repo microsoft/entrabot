@@ -17,7 +17,7 @@ restart the MCP host.
 
 ## Data appears in different places
 
-Not all operational state uses `MemoryBackend`:
+Almost all operational state uses `MemoryBackend`:
 
 | State | Location |
 |---|---|
@@ -25,12 +25,14 @@ Not all operational state uses `MemoryBackend`:
 | Daily summaries | Selected `MemoryBackend` |
 | Promises | Selected `MemoryBackend` |
 | Per-chat delivery cursors | Selected `MemoryBackend` |
-| `watched_chats` registry | Always `ENTRABOT_DATA_DIR/watched_chats` |
-| Email cursor | Always `ENTRABOT_DATA_DIR/email_cursor.txt` |
+| `watched_chats` list | Selected `MemoryBackend` |
+| Email cursor (`poll_state/email_cursor.txt`) | Selected `MemoryBackend` |
+| `.singleton.lock` | Always local under `ENTRABOT_DATA_DIR` |
 
-The local-to-Blob migration walks the data directory and may copy
-`watched_chats` and `email_cursor.txt` as artifacts, but runtime reads and
-writes for those two files remain local.
+With a cloud backend, `watched_chats` and `email_cursor.txt` files under
+`ENTRABOT_DATA_DIR` are ignored, and startup logs an info line naming any that
+exist. They can be removed by hand. An `email_cursor.txt` blob in the container
+is also ignored: it is a stale copy from setup's migration.
 
 ## Blob requests return 401
 
@@ -92,6 +94,20 @@ ETag retries fail closed: no message is pushed. This prevents duplicate or
 historical delivery. Restore backend health first; deleting cursors can cause a
 bootstrap or replay and should not be the first recovery step.
 
+The watched-chat list and email cursor behave the same way during an outage:
+
+- If the list can't be read at startup, the instance starts with no chats and logs
+  `Watched-chat list unreadable at startup`. It retries every 60 seconds, and
+  discovery can still register chats in the meantime. Neither can overwrite the
+  stored list, because every write is a merge.
+- If a list write fails, the chat keeps polling and the write is retried on the
+  next discovery sweep.
+- If the email cursor can't be read, the poll logs `Email cursor unresolved` and
+  skips the cycle. See
+  [Email notifications do not arrive](teams-and-email.md#email-notifications-do-not-arrive).
+- If the list can't be read while a sponsor wait is starting, the sponsor gate is
+  narrowed to the Agent Identity's own sponsors for that wait. It is never widened.
+
 ## I need to switch back to local storage
 
 Set:
@@ -102,6 +118,13 @@ ENTRABOT_KEEP_MEMORY_LOCAL=true
 
 Restart the MCP host. Existing Blob data is left intact. Switching the runtime
 backend does not automatically copy newer cloud state back to local.
+
+Before restarting, delete `email_cursor.txt` and `poll_state/email_cursor.txt`
+under `ENTRABOT_DATA_DIR` if they exist. Cloud mode doesn't update those files, so
+they are as old as your last local run. Local mode would use one of them, and its
+first poll could push up to 50 emails that had already arrived as if they were new.
+With both gone, the cursor starts at the current time. Any mail in between stays
+readable through the `read_email` tool.
 
 See [Storage Configuration](../guides/storage-configuration.md),
 [Storage and Memory](../architecture/storage-and-memory.md), and
