@@ -1,11 +1,12 @@
 """Verify a locally-cached Blueprint cert thumbprint is still registered.
 
 setup.sh's cached-thumbprint fast path (Step 6) skips cert regeneration
-when BLUEPRINT_CERT_THUMBPRINT is in the state file. But if a teammate
-or another machine ran setup.sh since, that thumbprint may have been
-replaced on the Blueprint app, and the local Keychain private key no
-longer has a matching public key on the Entra side. Result: cryptic
-``invalid_client`` at Hop 1 instead of a clear "re-run setup.sh" signal.
+when BLUEPRINT_CERT_THUMBPRINT is in the state file. But that certificate
+may have been removed from the Blueprint since (by an admin, or by
+``setup.sh --remove-all-existing-certs`` on another machine), and then the
+local private key has no matching public key on the Entra side. Result:
+cryptic ``invalid_client`` at Hop 1 instead of a clear "re-run setup.sh"
+signal.
 
 This script checks the claim before we trust the cache.
 
@@ -14,29 +15,56 @@ Usage:
 
 Exit codes:
     0 — thumbprint is present on the Blueprint's keyCredentials (cache is valid)
-    1 — thumbprint NOT present (cache is stale; setup.sh should regenerate)
+    1 — checked: thumbprint is NOT present (cache is stale; setup.sh adds a new cert)
     2 — usage error
+    3 — could not check (Graph or token failure, or a certificate whose key material
+        couldn't be read). This says nothing about whether the thumbprint is
+        registered, so setup.sh must stop rather than regenerate.
 """
 
 from __future__ import annotations
 
-import base64
 import contextlib
-import hashlib
 import sys
 
-import requests
-from cryptography import x509
-from cryptography.hazmat.primitives import serialization
-from entra_provisioning import get_existing_graph_token
+try:
+    from blueprint_certs import fetch_key_credentials, unreadable_certificates
+    from entra_provisioning import get_existing_graph_token
+except ImportError as exc:
+    # A traceback would exit 1, which means "checked: not registered".
+    print(f"  [could-not-check] Missing dependency: {exc}", file=sys.stderr)
+    sys.exit(3)
+
+EXIT_REGISTERED = 0
+EXIT_NOT_REGISTERED = 1
+EXIT_USAGE = 2
+EXIT_COULD_NOT_CHECK = 3
 
 
-def _thumbprint_of(der_key_b64: str) -> str:
-    """Compute SHA-256 base64url-no-pad thumbprint from a base64-DER cert."""
-    der = base64.b64decode(der_key_b64)
-    cert = x509.load_der_x509_certificate(der)
-    der_cert = cert.public_bytes(serialization.Encoding.DER)
-    return base64.urlsafe_b64encode(hashlib.sha256(der_cert).digest()).rstrip(b"=").decode()
+def _check(blueprint_obj_id: str, expected: str) -> int:
+    with contextlib.redirect_stdout(sys.stderr):
+        token = get_existing_graph_token()
+
+    credentials = fetch_key_credentials(blueprint_obj_id, token)
+    if any(credential.thumbprint == expected for credential in credentials):
+        return EXIT_REGISTERED
+
+    unreadable = unreadable_certificates(credentials)
+    if unreadable:
+        print(
+            f"  [could-not-check] Thumbprint {expected[:16]}... wasn't found, but the key "
+            f"material of {len(unreadable)} certificate(s) couldn't be read, so it may "
+            "still be registered.",
+            file=sys.stderr,
+        )
+        return EXIT_COULD_NOT_CHECK
+
+    print(
+        f"  [cache-desync] cached thumbprint {expected[:16]}... is NOT on the Blueprint "
+        f"(found {len(credentials)} other cert(s)).",
+        file=sys.stderr,
+    )
+    return EXIT_NOT_REGISTERED
 
 
 def main() -> int:
@@ -45,41 +73,13 @@ def main() -> int:
             "usage: verify_blueprint_cert.py <BLUEPRINT_OBJECT_ID> <EXPECTED_THUMBPRINT>",
             file=sys.stderr,
         )
-        return 2
+        return EXIT_USAGE
 
-    blueprint_obj_id, expected = sys.argv[1], sys.argv[2]
-
-    with contextlib.redirect_stdout(sys.stderr):
-        token = get_existing_graph_token()
-
-    resp = requests.get(
-        f"https://graph.microsoft.com/v1.0/applications/{blueprint_obj_id}?$select=keyCredentials",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    if not resp.ok:
-        print(
-            f"  [warn] Blueprint fetch failed ({resp.status_code}); assuming cache stale",
-            file=sys.stderr,
-        )
-        return 1
-
-    creds = resp.json().get("keyCredentials", []) or []
-    for c in creds:
-        der_b64 = c.get("key")
-        if not der_b64:
-            continue
-        try:
-            if _thumbprint_of(der_b64) == expected:
-                return 0
-        except Exception:
-            continue
-
-    print(
-        f"  [cache-desync] cached thumbprint {expected[:16]}... is NOT on the Blueprint "
-        f"(found {len(creds)} other cert(s) — someone else re-ran setup.sh since).",
-        file=sys.stderr,
-    )
-    return 1
+    try:
+        return _check(sys.argv[1], sys.argv[2])
+    except Exception as exc:  # a traceback would exit 1, "checked: not registered"
+        print(f"  [could-not-check] Could not read the Blueprint: {exc}", file=sys.stderr)
+        return EXIT_COULD_NOT_CHECK
 
 
 if __name__ == "__main__":
