@@ -16,6 +16,10 @@ Behavior per pair:
   user without Claude Code's memory directory still migrates cleanly.
 - Per-file errors are captured in ``report.errors`` rather than raised
   so one bad file doesn't abort the whole migration.
+- The local email cursor is not copied. A cloud backend starts its cursor at
+  "now" and never takes one from a local file: the value may be stale, or belong
+  to another agent's mailbox, and adopting it would replay old mail as new. See
+  :mod:`entrabot.tools.poll_state`.
 """
 
 from __future__ import annotations
@@ -25,6 +29,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from entrabot.storage.backend import MemoryBackend
+from entrabot.tools.poll_state import EMAIL_CURSOR_KEY
+
+# Keys that must never be carried from local disk into the target.
+_NOT_MIGRATED_KEYS = frozenset({EMAIL_CURSOR_KEY})
 
 
 @dataclass
@@ -75,6 +83,8 @@ def _migrate_one_source(
             continue
         rel = path.relative_to(local_root).as_posix()
         key = f"{key_prefix}{rel}"
+        if key in _NOT_MIGRATED_KEYS:
+            continue
         try:
             if target.exists(key):
                 report.skipped += 1

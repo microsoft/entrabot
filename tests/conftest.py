@@ -45,6 +45,26 @@ def _isolate_memory_backend_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path / "data"))
 
 
+@pytest.fixture
+def fake_cloud_store(monkeypatch: pytest.MonkeyPatch):
+    """Put the process in cloud-memory mode against an in-memory blob store.
+
+    ``get_backend()`` takes its real path to a real :class:`BlobBackend`, so the
+    mode selection under test is the production one. Only ``BlobStore`` is
+    swapped, for a fake with real ETag behaviour, so nothing reaches Azure and
+    no storage token is ever acquired. Sharing the returned store between calls
+    is how a test models several instances on one container.
+    """
+    from tests.storage.test_backend import _FakeBlobStore
+
+    store = _FakeBlobStore()
+    monkeypatch.setenv("ENTRABOT_BLOB_ENDPOINT", "https://fake-account.invalid")
+    monkeypatch.setenv("ENTRABOT_BLOB_CONTAINER", "fake-container")
+    monkeypatch.delenv("ENTRABOT_KEEP_MEMORY_LOCAL", raising=False)
+    monkeypatch.setattr("entrabot.storage.backend.BlobStore", lambda **_: store)
+    return store
+
+
 @pytest.fixture(autouse=True)
 def reset_active_identity_state() -> Iterator[None]:
     """Keep the process-wide identity accessor isolated between tests."""

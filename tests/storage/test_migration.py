@@ -168,3 +168,52 @@ class TestMigrateMultipleSources:
 
         assert target.read_text("README.md") == "A"
         assert target.read_text("claude_memory/README.md") == "B"
+
+
+class TestMigrationAndPollState:
+    """Setup's migration walks the whole data directory, poll state included."""
+
+    def _local_install(self, tmp_path: Path) -> Path:
+        data = tmp_path / "local-data"
+        (data / "poll_state").mkdir(parents=True)
+        (data / "watched_chats").write_text("19:a@thread.v2\n19:b@thread.v2\n")
+        (data / "email_cursor.txt").write_text("2026-05-01T00:00:00Z")
+        (data / "poll_state" / "email_cursor.txt").write_text("2026-05-02T00:00:00Z")
+        return data
+
+    def test_watched_chats_migrate_to_the_key_runtime_reads(
+        self, tmp_path: Path, fake_cloud_store
+    ) -> None:
+        """A real local-to-cloud conversion keeps its chat list."""
+        from entrabot.storage.backend import get_backend
+        from entrabot.tools.poll_state import read_watched_chats
+
+        migrate_local_to_backend([(self._local_install(tmp_path), "")], get_backend())
+
+        assert read_watched_chats().chat_ids == ("19:a@thread.v2", "19:b@thread.v2")
+
+    def test_no_local_cursor_can_become_the_cloud_cursor(
+        self, tmp_path: Path, fake_cloud_store
+    ) -> None:
+        """Cloud starts its cursor at now, and never consults a local file. Copying
+        the local cursor across would break that the moment setup runs, and a
+        machine's local value may be stale or belong to another agent's mailbox."""
+        from entrabot.storage.backend import get_backend
+        from entrabot.tools.poll_state import PollStateOutcome, read_email_cursor
+
+        report = migrate_local_to_backend([(self._local_install(tmp_path), "")], get_backend())
+
+        assert read_email_cursor().outcome is PollStateOutcome.ABSENT
+        assert "poll_state/email_cursor.txt" not in report.keys_copied
+        assert report.errors == []
+
+    def test_only_the_exact_cursor_key_is_excluded(self, tmp_path: Path) -> None:
+        """The persona source can hold any file name; don't reach into its prefix."""
+        persona = tmp_path / "persona"
+        (persona / "poll_state").mkdir(parents=True)
+        (persona / "poll_state" / "email_cursor.txt").write_text("a note")
+
+        target = LocalBackend(tmp_path / "dst")
+        migrate_local_to_backend([(persona, "claude_memory")], target)
+
+        assert target.read_text("claude_memory/poll_state/email_cursor.txt") == "a note"
