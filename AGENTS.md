@@ -74,7 +74,7 @@ Read the listed documentation before drafting code or a plan that touches the to
 - Python 3.12+ research project — no deployed service yet
 - Core runtime components: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `a365/` (Work IQ MCP provider + Word adapter) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `identity/` (state machine) → `storage/` (`LocalBackend`/`BlobBackend`/`PersonaBackend` + `migration` helper — ADR-005 Phases 1, 2, 5, 6a shipped) → `mcp_server.py` (FastMCP + background channel)
 - External dependencies: Microsoft Entra ID (identity), Microsoft Teams + Outlook mailbox (Graph API), Azure Blob Storage (optional, opt-in via `setup.sh --use-cloud-memory`)
-- **No default group chat.** Every Teams tool requires an explicit `chat_id`. Chats come from `create_chat`, the persisted `watched_chats` file, or the auto-discovery sweep over `/me/chats`.
+- **No default group chat.** Every Teams tool requires an explicit `chat_id`. Chats come from `create_chat`, the persisted `watched_chats` list, or the auto-discovery sweep over `/me/chats`.
 - **Body-first prompt.** `prompts/agent_system.md` loads at boot with `@include` expansion of `prompts/anatomy/*.md`. Persona-sati output (if configured) is appended AFTER the body and cannot override body rules. See the "Body prompt is non-overridable" rule above.
 - Two authenticated session types (selected by credential presence, not by `ENTRABOT_MODE`):
   - `agent_user` — three-hop Agent User flow (Blueprint cert → Agent Identity FIC → Agent User `user_fic`)

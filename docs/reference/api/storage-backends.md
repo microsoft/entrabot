@@ -131,7 +131,7 @@ class MigrationReport:
 Behavior:
 
 - **Idempotent and source-preserving** — a key already present at the target is skipped (`skipped` +1); local files are never deleted.
-- **The email cursor is not copied** — `poll_state/email_cursor.txt` is skipped and not counted, so a local value can't become the cloud cursor. A legacy `email_cursor.txt` may still be copied, but nothing reads that key.
+- **Local poll state is not copied** — `poll_state/email_cursor.txt`, the legacy `email_cursor.txt`, `watched_chats`, and the process-lock files are skipped and not counted, since a machine's copies may be stale or another agent's. The cloud cursor starts at "now" and discovery rebuilds the list.
 - **Missing source roots are skipped silently** — a user with no Claude Code persona-memory directory still migrates their agent data cleanly.
 - **Per-file errors are recorded, not raised** — a file that fails to read or write is appended to `errors` as `(key, message)`; one bad file doesn't abort the rest.
 
