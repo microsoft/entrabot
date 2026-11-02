@@ -9,9 +9,12 @@
     3. Bootstrap venv + pip install.
     4. Run config.py migration helper (one-shot move of legacy ~/.entrabot).
     5. Call entra_provisioning.py + create_entra_agent_ids.py via az login.
-    6. Generate the Blueprint cert (TPM-first, software-fallback) via
-       generate_windows_cert.py and PATCH it into the Blueprint.
-    7. Write .env with both thumbprints (SHA-1 hex + SHA-256 b64url).
+    6. Make sure this machine's Blueprint cert is registered: reuse it if it is,
+       register it if it isn't, otherwise generate one (TPM-first, software-
+       fallback) via generate_windows_cert.py and add it to the Blueprint with
+       register_windows_blueprint_cert.py, which keeps every other machine's.
+    7. Write .env with both thumbprints (SHA-1 hex + SHA-256 b64url), replacing
+       any earlier ones.
        icacls -M (D10) — modify, NOT readonly. Setup re-runs need to
        update .env or rotation halts.
     8. Register the entrabot MCP server via mcp_config.py.
@@ -371,48 +374,106 @@ if ($ConfigureA365WorkIq) {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 7. Generate Blueprint cert (TPM-first / software-fallback)
+# 7. Blueprint cert: reuse, repair, or generate (TPM-first / software-fallback), and register it
 # ═══════════════════════════════════════════════════════════════════════════
-Step 6 "Generating Blueprint cert (TPM-first / software-fallback)"
+Step 6 "Blueprint cert (reuse, register, or generate; TPM-first / software-fallback)"
 
-$derPath = Join-Path $env:TEMP "entrabot-blueprint-$(Get-Random).cer"
-$certOutput = & $VenvPython (Join-Path $ScriptDir 'generate_windows_cert.py') `
-    --subject "CN=entrabot-blueprint" `
-    --days 365 `
-    --export-der $derPath
-if ($LASTEXITCODE -ne 0) { Fail "generate_windows_cert.py failed" }
+if (-not $BlueprintObjectId) {
+    Fail "BLUEPRINT_OBJECT_ID is missing from .entrabot-state.json, so a certificate can't be registered on the Blueprint. Re-run setup once provisioning completes."
+}
 
-$thumbprint = ($certOutput | Select-String '^thumbprint=(.+)$').Matches[0].Groups[1].Value
-$ksp        = ($certOutput | Select-String '^ksp=(.+)$').Matches[0].Groups[1].Value
-$x5tS256    = ($certOutput | Select-String '^x5t_s256=(.+)$').Matches[0].Groups[1].Value
+# Each Python helper below answers through its exit code, so a non-zero exit must not throw.
+$PSNativeCommandUseErrorActionPreference = $false
 
-Success "Cert generated — thumbprint=$thumbprint ksp=$ksp"
+# Is there a cert in .env that is also in the local store? The first line wins when a key
+# repeats, as in config.py.
+$envPath    = Join-Path $ProjectRoot '.env'
+$envText    = if (Test-Path $envPath) { (Get-Content $envPath) -join "`n" } else { "" }
+$thumbprint = [regex]::Match($envText, '(?m)^ENTRABOT_BLUEPRINT_CERT_SHA1=(.*?)\s*$').Groups[1].Value
+$x5tS256    = [regex]::Match($envText, '(?m)^ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=(.*?)\s*$').Groups[1].Value
+$ksp        = [regex]::Match($envText, '(?m)^ENTRABOT_BLUEPRINT_KSP=(.*?)\s*$').Groups[1].Value
+$haveLocalCert = ($thumbprint -match '^[0-9A-F]{40}$') -and ($x5tS256 -match '^[A-Za-z0-9_-]{43}$') -and
+                 (Test-Path "Cert:\CurrentUser\My\$thumbprint")
 
-# Caller needs to PATCH the public DER to the Blueprint app via Graph.
-# We delegate that to a small Python one-liner that reuses
-# create_entra_agent_ids.py's helpers. Skipped here because that file
-# already publishes the cert during provisioning when invoked with the
-# right flags; this branch only kicks in for the rotation path
-# (deploy-windows.ps1 calls rotate_cert_windows.py instead).
+$derPath     = Join-Path $env:TEMP "entrabot-blueprint-$(Get-Random).cer"
+$register    = $true    # false once the local cert is known to be on the Blueprint
+$generated   = $false   # true when this run made a new cert, so .env needs its thumbprints
+$unconfirmed = $false   # true when the write may have landed but could not be confirmed
+try {
+    if ($haveLocalCert) {
+        & $VenvPython (Join-Path $ScriptDir 'verify_blueprint_cert.py') $BlueprintObjectId $x5tS256
+        $verifyExit = $LASTEXITCODE
+        if ($verifyExit -eq 0) {
+            $register = $false
+            Success "Using the registered certificate (thumbprint=$thumbprint)"
+        } elseif ($verifyExit -eq 1) {
+            # Not on the Blueprint, as on every machine set up before this step registered certificates.
+            Write-Host "  This machine's certificate is not on the Blueprint. Registering it." -ForegroundColor Yellow
+            [IO.File]::WriteAllBytes($derPath, (Get-Item "Cert:\CurrentUser\My\$thumbprint").GetRawCertData())
+        } else {
+            # A failed check says nothing about the Blueprint, so nothing is generated.
+            Fail "Could not check whether the certificate is registered (exit $verifyExit, see above). Nothing was generated or changed. Fix the error and re-run setup."
+        }
+    } else {
+        $certOutput = & $VenvPython (Join-Path $ScriptDir 'generate_windows_cert.py') `
+            --subject "CN=entrabot-blueprint" `
+            --days 365 `
+            --export-der $derPath
+        if ($LASTEXITCODE -ne 0) { Fail "generate_windows_cert.py failed" }
+        $certText   = $certOutput -join "`n"
+        $thumbprint = [regex]::Match($certText, '(?m)^thumbprint=([0-9A-F]{40})\s*$').Groups[1].Value
+        $ksp        = [regex]::Match($certText, '(?m)^ksp=(tpm|software)\s*$').Groups[1].Value
+        $x5tS256    = [regex]::Match($certText, '(?m)^x5t_s256=([A-Za-z0-9_-]{43})\s*$').Groups[1].Value
+        if (-not ($thumbprint -and $ksp -and $x5tS256)) { Fail "generate_windows_cert.py printed output setup can't read: $certText" }
+        $generated = $true
+        Success "Cert generated — thumbprint=$thumbprint ksp=$ksp"
+    }
+
+    if ($register) {
+        & $VenvPython (Join-Path $ScriptDir 'register_windows_blueprint_cert.py') --blueprint-object-id $BlueprintObjectId --der $derPath
+        $registerExit = $LASTEXITCODE
+        if ($registerExit -eq 0) {
+            Success "Certificate registered on the Blueprint"
+        } elseif ($registerExit -eq 3) {
+            $unconfirmed = $true   # the write may have landed: keep the cert and record it in .env
+        } else {
+            # Nothing was written to the Blueprint, so a cert generated for it is useless.
+            if ($generated) { Remove-Item "Cert:\CurrentUser\My\$thumbprint" -Force }
+            Fail "The certificate was not registered on the Blueprint (exit $registerExit, see above). Nothing was changed. Fix the error and re-run setup."
+        }
+    }
+} finally {
+    if (Test-Path $derPath) { Remove-Item $derPath -Force }
+}
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 8. Write .env with strict ACLs (icacls -M, D10)
 # ═══════════════════════════════════════════════════════════════════════════
 Step 7 "Writing .env"
 
-$envPath = Join-Path $ProjectRoot '.env'
-@(
-    "ENTRABOT_TENANT_ID=$($account.tenantId)",
-    "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=$x5tS256",
-    "ENTRABOT_BLUEPRINT_CERT_SHA1=$thumbprint",
-    "ENTRABOT_BLUEPRINT_KSP=$ksp"
-) | Out-File -FilePath $envPath -Encoding utf8 -Append
+if ($generated) {
+    # Replace the old lines instead of appending: config.py keeps the FIRST value of a
+    # repeated key, so a stale thumbprint above the new one would leave the new cert unused.
+    @(
+        if (Test-Path $envPath) {
+            Get-Content $envPath | Where-Object { $_ -notmatch '^ENTRABOT_(TENANT_ID|BLUEPRINT_(CERT_THUMBPRINT|CERT_SHA1|KSP))=' }
+        }
+        "ENTRABOT_TENANT_ID=$($account.tenantId)"
+        "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=$x5tS256"
+        "ENTRABOT_BLUEPRINT_CERT_SHA1=$thumbprint"
+        "ENTRABOT_BLUEPRINT_KSP=$ksp"
+    ) | Set-Content -Path $envPath -Encoding utf8
+}
 
 # icacls :M (modify) — NOT :R (read-only). :R would self-brick: setup
 # re-runs and rotation both need to update .env.
 $user = "$env:USERDOMAIN\$env:USERNAME"
 icacls $envPath /inheritance:r /grant:r "${user}:M" | Out-Null
 Success ".env locked to $user (modify, per D10)"
+
+if ($unconfirmed) {
+    Fail "Could not confirm the certificate is on the Blueprint (see above); it may be. Its thumbprints are in .env, so re-run setup: it checks again and registers the certificate if it is missing."
+}
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 8. Cloud memory — Azure Blob Storage provisioning (ADR-005, Phase 5)

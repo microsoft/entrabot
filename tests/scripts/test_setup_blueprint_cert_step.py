@@ -31,6 +31,7 @@ from tests.scripts._blueprint_cert_helpers import (
 )
 
 SETUP_SH = REPO_ROOT / "scripts" / "setup.sh"
+SETUP_PS1 = REPO_ROOT / "scripts" / "setup-windows.ps1"
 DEPLOY_PS1 = REPO_ROOT / "scripts" / "deploy-windows.ps1"
 TEARDOWN_SH = REPO_ROOT / "scripts" / "teardown.sh"
 
@@ -105,7 +106,7 @@ class TestSetupScriptArguments:
 
 
 class TestNothingReplacesTheListByAccident:
-    @pytest.mark.parametrize("path", [SETUP_SH, DEPLOY_PS1], ids=lambda p: p.name)
+    @pytest.mark.parametrize("path", [SETUP_SH, SETUP_PS1, DEPLOY_PS1], ids=lambda p: p.name)
     def test_no_one_element_key_credentials_literal_remains(self, path: Path) -> None:
         assert ONE_ELEMENT_LITERAL.search(_read(path)) is None
 

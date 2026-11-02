@@ -8,10 +8,12 @@ Platforms: Windows.
 [`setup.sh`](setup-sh.md). It provisions the Agent Identity chain on a Windows
 host: it refuses to run under WSL, probes prerequisites, bootstraps the venv,
 runs the legacy data-directory migration, provisions the Blueprint / Agent
-Identity / Agent User, generates the Blueprint certificate with a TPM-backed CNG
-key (software fallback), writes `.env` with both certificate thumbprints, and
+Identity / Agent User, makes sure this machine's Blueprint certificate exists and
+is registered on the Blueprint (generating one with a TPM-backed CNG key, software
+fallback, when it has none), writes `.env` with both certificate thumbprints, and
 registers the `entrabot` MCP server. It writes state to `.entrabot-state.json`
-and is safe to re-run.
+and is safe to re-run: re-running it also repairs a machine whose certificate was
+never registered.
 
 ## Requirements
 
@@ -84,18 +86,39 @@ Install everything first with
 - Verifies the Azure login, then provisions the identity chain via
   `entra_provisioning.py` and
   [`create_entra_agent_ids.py`](../provisioning/create-entra-agent-ids-py.md).
-- Generates the Blueprint certificate via
-  [`generate_windows_cert.py`](../auth-and-certs/generate-windows-cert-py.md):
-  it probes the TPM and uses the *Microsoft Platform Crypto Provider* (a
+- Stops before touching any certificate if `BLUEPRINT_OBJECT_ID` is missing from
+  `.entrabot-state.json`.
+- Makes sure this machine's certificate is on the Blueprint. If `.env` names a
+  certificate (`ENTRABOT_BLUEPRINT_CERT_SHA1` and `ENTRABOT_BLUEPRINT_CERT_THUMBPRINT`)
+  that is in `Cert:\CurrentUser\My`, it asks
+  [`verify_blueprint_cert.py`](../auth-and-certs/verify-blueprint-cert-py.md):
+    - **Registered** — the certificate is reused. Nothing is generated and `.env`
+      isn't changed.
+    - **Not registered** — the state of a machine set up before this step existed.
+      That same certificate is registered, and nothing is generated.
+    - **Couldn't check** — setup stops. A failed check says nothing about the
+      Blueprint, so no certificate is generated.
+- With no usable certificate, it generates one via
+  [`generate_windows_cert.py`](../auth-and-certs/generate-windows-cert-py.md): it
+  probes the TPM and uses the *Microsoft Platform Crypto Provider* (a
   non-exportable CNG/TPM key) when the TPM is ready, otherwise the *Microsoft
   Software Key Storage Provider*. The chosen key-storage provider is recorded as
   `ksp`.
-- Writes `.env` (appended) with `ENTRABOT_TENANT_ID`,
+- Registers the certificate with
+  [`register_windows_blueprint_cert.py`](../auth-and-certs/register-windows-blueprint-cert-py.md),
+  which adds it to the Blueprint and keeps every other machine's certificate. If
+  nothing could be written, a certificate generated in this run is removed from the
+  store again. If the write may have landed but couldn't be confirmed, the
+  certificate is kept and recorded in `.env`, and setup stops so the next run
+  checks the Blueprint again. The temporary `.cer` file is always deleted.
+- When it generated a certificate, writes `.env` with `ENTRABOT_TENANT_ID`,
   `ENTRABOT_BLUEPRINT_CERT_THUMBPRINT` (the **SHA-256 base64url `x5t#S256`** JWT
   thumbprint used for the client assertion), `ENTRABOT_BLUEPRINT_CERT_SHA1` (the
   **SHA-1 hex** thumbprint that locates the cert in `Cert:\CurrentUser\My`), and
-  `ENTRABOT_BLUEPRINT_KSP`. The file is locked with `icacls ... :M` (modify, not
-  read-only) so re-runs and rotation can still update it.
+  `ENTRABOT_BLUEPRINT_KSP`. Earlier lines for these keys are replaced rather than
+  appended to, because `.env` loading keeps the first value of a repeated key. The
+  file is locked with `icacls ... :M` (modify, not read-only) so re-runs and
+  rotation can still update it.
 - With `-UseCloudMemory` and an Agent User present, provisions Azure Blob Storage
   via [`provision_blob_storage.py`](../storage/provision-blob-storage-py.md) and
   appends the blob endpoint/container to `.env`; falls back to local-only memory
@@ -110,7 +133,8 @@ Install everything first with
   finished.
 - `1` — launched from Windows PowerShell 5.1, invoked under WSL or a non-Windows
   host, or any `Fail` step (missing tools, no `az` login, a failed provisioning /
-  cert / `mcp_config` step). `Set-StrictMode`/`$ErrorActionPreference = 'Stop'`
+  cert / `mcp_config` step, a certificate that couldn't be checked or registered
+  on the Blueprint). `Set-StrictMode`/`$ErrorActionPreference = 'Stop'`
   turn unexpected errors into non-zero terminating failures.
 - `2` — `-CreateNewStorage` and `-WithStorageAccount` were both supplied.
 - `-Status` — exits with the underlying `status-windows.ps1` exit code.
@@ -125,6 +149,15 @@ Install everything first with
 - **`Missing tools`** — run [`prereqs-windows.ps1`](prereqs-windows-ps1.md), open
   a new terminal, and retry.
 - **`Not logged in to az`** — run `az login` and retry.
+- **`Could not check whether the certificate is registered`** — the Graph or token
+  failure is printed above it. Nothing was generated or changed; fix the cause and
+  re-run.
+- **`The certificate was not registered on the Blueprint`** — Graph refused the
+  update or the Blueprint couldn't be read, and nothing was changed. Fix the cause
+  (often Provisioner permissions) and re-run.
+- **`Could not confirm the certificate is on the Blueprint`** — the write may have
+  landed. Re-run setup: it checks the Blueprint for the certificate recorded in `.env`
+  and registers it only if it is missing.
 
 ## Related commands
 
@@ -134,8 +167,13 @@ Install everything first with
   prerequisites.
 - [`generate_windows_cert.py`](../auth-and-certs/generate-windows-cert-py.md) —
   the TPM-first certificate generator used here.
+- [`register_windows_blueprint_cert.py`](../auth-and-certs/register-windows-blueprint-cert-py.md) —
+  adds the certificate to the Blueprint.
+- [`verify_blueprint_cert.py`](../auth-and-certs/verify-blueprint-cert-py.md) —
+  checks whether the certificate in `.env` is already registered.
 - [`deploy-windows.ps1`](deploy-windows-ps1.md) — certificate rotation on
-  Windows.
+  Windows. It can't repair a certificate that was never registered; re-run
+  `setup-windows.ps1` for that.
 - [`create_entra_agent_ids.py`](../provisioning/create-entra-agent-ids-py.md) —
   the underlying identity-chain provisioner.
 - [`status-windows.ps1`](../operations/status-windows-ps1.md) — status/health
