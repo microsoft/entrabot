@@ -656,8 +656,7 @@ class TestCheckPersonaSatiMcp:
         entry = {"type": "http", "url": "https://persona.example/sse"}
         result = check_persona_sati_mcp(_write_mcp(tmp_path, entry))
         assert result.status == "pass"
-        assert "https://persona.example:443" in result.detail
-        assert "not contacted" in result.detail
+        assert result.detail == "https://persona.example:443 is a remote host (not contacted)."
 
     @pytest.mark.parametrize("host", ["persona.example", "127.0.0.1"], ids=["remote", "loopback"])
     def test_details_never_leak_userinfo_query_headers_or_env(
