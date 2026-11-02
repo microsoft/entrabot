@@ -42,9 +42,11 @@ Passing it does not change today's output.
   `watched_chats` list the running MCP server uses. With a local backend
   that is `ENTRABOT_DATA_DIR/watched_chats`. With Blob, any local copy is
   ignored.
-- Also checks the backend for a legacy `chat_id` single-chat key and prepends
-  its value to the chat list if present. No current code path writes this
-  key (there is no default chat), so it is normally absent.
+- With a local backend, also checks for a legacy `chat_id` single-chat key and
+  prepends its value to the chat list if present. No current code path writes
+  this key (there is no default chat), so it is normally absent. A Blob backend
+  is never asked for it, because a container can hold a stale copy from an
+  earlier migration.
 - For each chat ID, GETs `/chats/{id}/messages` (`$top=15`,
   `$orderby=createdDateTime desc`) and prints the sender, timestamp, and a
   300-character body preview for each message.

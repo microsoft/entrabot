@@ -51,7 +51,10 @@
 - Windows end-to-end coverage is narrower than macOS and currently centered on Windows 11 ARM64.
 - Legacy Graph file comments are not the same as Word UI comments; use the Work IQ Word tools for document comments.
 - External-content wrapping is defense in depth. It reduces instruction-injection risk but is not proof against every possible model jailbreak.
-- On a cloud backend, mail that arrives while no instance is running isn't pushed afterward; it stays readable through `read_email`. See [Upgrading to shared poll state](../troubleshooting/migrations-and-upgrades.md#upgrading-to-shared-poll-state).
+- On a cloud backend, the email cursor starts at "now" when its key is first created (the first boot on a container, or after the key is deleted), so mail received before then isn't pushed; it stays readable through `read_email`. Once the key exists, a restart reuses it and mail received during downtime is pushed as normal. See [Upgrading to shared poll state](../troubleshooting/migrations-and-upgrades.md#upgrading-to-shared-poll-state).
+- An instance on a host that ignores channel notifications can still claim Teams and email deliveries, so with mixed hosts on one container an item can go to the host that can't show it.
+- Two emails with the same timestamp, where the second arrives after the cursor has moved past it, won't be pushed. Both stay readable through `read_email`.
+- Delegated sessions have no discovery sweep, so with a cloud backend their chat list only grows through `create_chat`.
 - Attaching an additional device with `setup.sh --use-blueprint` replaces the Blueprint's certificate list instead of appending, and proceeds without confirmation in non-interactive shells ([#124](https://github.com/microsoft/entrabot/issues/124)).
 - `ENTRABOT_MODE` is validated but does not currently select the auth path in `_init_auth`; credential presence and `ENTRABOT_SKIP_PROVISIONING` determine which path (three-hop Agent User or MSAL delegated) is attempted.
 

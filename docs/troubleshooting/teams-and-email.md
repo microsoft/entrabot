@@ -114,8 +114,11 @@ cursor at the current time, and any mail in between stays readable through
 `read_email`. In local mode, delete a legacy `email_cursor.txt` too, or that value
 gets adopted instead.
 
-On a cloud backend, mail that arrives while no instance is running isn't pushed
-afterward. Read it with `read_email`.
+The cursor starts at the current time only when its key is first created: the first
+boot on a container, or after you delete the key. Mail from before then isn't
+pushed; read it with `read_email`. Once the key exists, a restart reuses it, and
+mail that arrived while no instance was running is fetched and pushed on the next
+poll (a poll fetches the 50 newest).
 
 The poll filters Teams/Microsoft 365 notification domains, common no-reply
 senders, and messages sent by the Agent User from Sent Items. Filtered mail

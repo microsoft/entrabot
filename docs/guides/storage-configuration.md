@@ -117,7 +117,7 @@ Near the end, the script will prompt you to migrate `~/.entrabot/data` into the 
 - Is **idempotent** — running twice skips keys already present in the blob.
 - Treats cloud as authoritative on rerun — an existing target key is not overwritten.
 - Collects per-file errors while continuing other files.
-- Copies your `watched_chats` list but not your email cursor. The cloud cursor starts at "now", so mail that arrived since your last local run isn't pushed, but stays readable through the `read_email` tool. A local cursor could be stale, or belong to another agent's mailbox, and adopting it could replay old mail as new.
+- Leaves local poll state behind: your `watched_chats` list, both email cursor files, the legacy `chat_id` key, and the per-chat cursors under `chat_cursors/`. A machine's copies could be stale or belong to another agent, and adopting them could replay old mail or messages as new. The cloud email cursor starts at "now", so mail that arrived before the first boot on the container isn't pushed, but stays readable through the `read_email` tool. Discovery rebuilds the chat list from Graph about two minutes after boot, and a chat with no cursor surfaces its newest message only if it is under 24 hours old.
 
 When selected migration errors occur inside `setup.sh`, setup reports `Setup INCOMPLETE` and exits with code 2. Fix the reported problem and re-run the same setup command; successful copies remain in Blob and local sources remain untouched.
 

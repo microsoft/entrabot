@@ -1857,8 +1857,10 @@ async def _background_poll_email() -> None:
     notification and appends an inbound entry to the interaction log. The cursor
     (last receivedDateTime seen) lives in the configured backend under
     ``poll_state/email_cursor.txt`` and is shared across instances; see
-    :func:`_email_poll_cycle`. Mail that arrives while no instance runs isn't
-    pushed on a cloud backend, but stays readable through ``read_email``.
+    :func:`_email_poll_cycle`. A missing cursor starts at "now", so mail from before
+    the key was first created isn't pushed, but stays readable through ``read_email``.
+    Once the key exists a restart reuses it, and qualifying mail received while no
+    instance ran is fetched and pushed as normal.
     """
     if logger:
         logger.info("Starting background email poll (interval=%ds)", EMAIL_POLL_INTERVAL)

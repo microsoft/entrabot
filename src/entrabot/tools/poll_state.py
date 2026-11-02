@@ -17,8 +17,10 @@ Keys:
   Reading that key would replay up to a full page of old mail on upgrade, and the
   design doc explains why replayed imperative messages are a security problem. So
   a cloud backend starts this cursor at "now" and consults neither the old key nor
-  any local file. Mail that arrives while no instance runs isn't pushed, but stays
-  readable through the ``read_email`` tool.
+  any local file. That happens only when the key is first initialized: mail from
+  before then isn't pushed, but stays readable through the ``read_email`` tool. Once
+  the key exists a restart reuses it, and qualifying mail received while no instance
+  ran is fetched and pushed as normal.
 
 The rules that keep this fleet-safe:
 
