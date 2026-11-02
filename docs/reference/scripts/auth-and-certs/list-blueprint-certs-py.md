@@ -68,8 +68,8 @@ public certificate metadata (display name and expiry) is printed.
 
 - [`find_local_blueprint_cert.py`](find-local-blueprint-cert-py.md) — recover the
   thumbprint that matches this machine's private key.
-- [`verify_blueprint_cert.py`](verify-blueprint-cert-py.md) — confirm a specific
-  cached thumbprint is still registered.
+- [`verify_blueprint_cert.py`](verify-blueprint-cert-py.md) — confirm a given
+  thumbprint is still registered.
 - [`register_blueprint_cert.py`](register-blueprint-cert-py.md) — adds this machine's
   certificate to the list.
 - [`setup.sh`](../setup/setup-sh.md) — the provisioning entry point.

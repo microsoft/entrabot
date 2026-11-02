@@ -128,6 +128,13 @@ class TestNothingReplacesTheListByAccident:
         assert "requests.patch" not in text
         assert "rsa.generate_private_key" not in text
 
+    def test_step_6_does_not_call_the_verify_script(self) -> None:
+        # A cached thumbprint says nothing about whether this machine's key matches it, so
+        # setup relies on find_local_blueprint_cert.py alone. verify_blueprint_cert.py is
+        # an operator tool.
+        code = [line for line in _read(SETUP_SH).splitlines() if not line.lstrip().startswith("#")]
+        assert [line for line in code if "verify_blueprint_cert" in line] == []
+
     def test_windows_wrapper_goes_through_the_helper(self) -> None:
         text = _read(DEPLOY_PS1)
         assert "swap_key_credential" in text
@@ -181,14 +188,23 @@ class TestNothingReplacesTheListByAccident:
 # Logs one line per call: the script's file name (or -c), the argument count, and the
 # remaining arguments up to the first newline. The count catches broken quoting, and
 # the fake root's path has a space in it, as a real checkout's can.
+#
+# find_local_blueprint_cert.py exits 1 whenever a pending key exists (that is tested in
+# test_blueprint_cert_checks.py), so FAKE_PENDING stands in for the keyring entry here.
+# The program passed to -c is kept, to show which thumbprint setup tried to save.
+# A call to verify_blueprint_cert.py is logged and then fails: setup no longer makes one.
 _FAKE_PYTHON = r"""#!/bin/bash
 rest="${*:2}"
 printf '%s %s %s\n' "${1##*/}" "$#" "${rest%%$'\n'*}" >> "$FAKE_CALLS"
 case "$1" in
-    *verify_blueprint_cert.py)   printf '%s' "$FAKE_VERIFY_OUT";   exit "$FAKE_VERIFY_RC" ;;
-    *find_local_blueprint_cert.py) printf '%s' "$FAKE_FIND_OUT";   exit "$FAKE_FIND_RC" ;;
+    *find_local_blueprint_cert.py)
+        if [ -n "$FAKE_PENDING" ]; then
+            echo "  A new private key is waiting to be confirmed." >&2
+            exit 1
+        fi
+        printf '%s' "$FAKE_FIND_OUT"; exit "$FAKE_FIND_RC" ;;
     *register_blueprint_cert.py) printf '%s' "$FAKE_REGISTER_OUT"; exit "$FAKE_REGISTER_RC" ;;
-    -c) exit 0 ;;
+    -c) printf '%s\n' "$2" > "$FAKE_ROOT/state-write.py"; exit 0 ;;
     *) echo "unexpected interpreter call: $*" >&2; exit 99 ;;
 esac
 """
@@ -226,6 +242,7 @@ class StepRun:
     stdout: str
     stderr: str
     calls: list[str]
+    state_write: str | None = None
 
     @property
     def scripts(self) -> list[str]:
@@ -252,7 +269,7 @@ def _run_step(
     *,
     cached: str = "",
     flag: bool = False,
-    verify: tuple[int, str] = (0, ""),
+    pending: bool = False,
     find: tuple[int, str] = (1, ""),
     register: tuple[int, str] = (0, REGISTERED),
 ) -> StepRun:
@@ -275,8 +292,7 @@ def _run_step(
         "FAKE_CALLS": str(calls_file),
         "FAKE_CACHED": cached,
         "FAKE_FLAG": "true" if flag else "false",
-        "FAKE_VERIFY_RC": str(verify[0]),
-        "FAKE_VERIFY_OUT": verify[1],
+        "FAKE_PENDING": "1" if pending else "",
         "FAKE_FIND_RC": str(find[0]),
         "FAKE_FIND_OUT": find[1],
         "FAKE_REGISTER_RC": str(register[0]),
@@ -291,11 +307,13 @@ def _run_step(
         env=env,
         cwd=root,
     )
+    state_write = root / "state-write.py"
     return StepRun(
         result.returncode,
         result.stdout,
         result.stderr,
         calls_file.read_text().splitlines(),
+        state_write.read_text() if state_write.exists() else None,
     )
 
 
@@ -310,21 +328,32 @@ class TestStepSixDecisions:
         offenders = [line for line in code if side_effect.search(line)]
         assert offenders == [], "these would run for real in these tests"
 
-    def test_a_valid_cached_cert_is_used_and_nothing_else_runs(self, tmp_path: Path) -> None:
-        run = _run_step(tmp_path, cached=CACHED, verify=(0, ""))
+    def test_a_cached_cert_the_local_key_matches_is_used_without_being_saved_again(
+        self, tmp_path: Path
+    ) -> None:
+        run = _run_step(tmp_path, cached=CACHED, find=(0, CACHED + "\n"))
+
         assert run.returncode == 0, run.stdout + run.stderr
-        assert run.scripts == ["verify_blueprint_cert"]
+        assert run.scripts == ["find_local_blueprint_cert"]
         assert run.thumbprint == CACHED
+        assert run.state_write is None
 
-    def test_a_stale_cache_tries_recovery_then_adds_without_the_flag(self, tmp_path: Path) -> None:
-        run = _run_step(tmp_path, cached=CACHED, verify=(1, ""), find=(1, ""))
+    def test_a_different_registered_cert_replaces_the_cached_one_and_is_saved(
+        self, tmp_path: Path
+    ) -> None:
+        run = _run_step(tmp_path, cached=CACHED, find=(0, RECOVERED + "\n"))
 
         assert run.returncode == 0, run.stdout + run.stderr
-        assert run.scripts == [
-            "verify_blueprint_cert",
-            "find_local_blueprint_cert",
-            "register_blueprint_cert",
-        ]
+        assert run.scripts == ["find_local_blueprint_cert", "state-write"]
+        assert run.thumbprint == RECOVERED
+        assert f"data['BLUEPRINT_CERT_THUMBPRINT'] = '{RECOVERED}'" in run.state_write
+        assert CACHED not in run.state_write
+
+    def test_a_stale_cache_adds_without_the_flag(self, tmp_path: Path) -> None:
+        run = _run_step(tmp_path, cached=CACHED, find=(1, ""))
+
+        assert run.returncode == 0, run.stdout + run.stderr
+        assert run.scripts == ["find_local_blueprint_cert", "register_blueprint_cert"]
         assert FLAG not in run.calls[-1]
         assert run.argument_count(-1) == 7  # the script, then three name/value pairs
         assert f"--blueprint-object-id {FAKE_OBJECT_ID}" in run.calls[-1]
@@ -332,34 +361,30 @@ class TestStepSixDecisions:
         assert ".entrabot-state.json" in run.calls[-1]
         assert run.thumbprint == REGISTERED
 
-    @pytest.mark.parametrize("code", [2, 3, 4, 127, 137, 139])
-    def test_verify_could_not_check_stops_and_never_regenerates(
-        self, tmp_path: Path, code: int
-    ) -> None:
-        run = _run_step(tmp_path, cached=CACHED, verify=(code, ""))
+    def test_a_cached_cert_is_not_trusted_while_a_new_key_is_pending(self, tmp_path: Path) -> None:
+        # The cached thumbprint used to be accepted without asking register_blueprint_cert.py,
+        # the one script that reconciles a pending key. After an unconfirmed
+        # --remove-all-existing-certs that credential is revoked once the removal shows.
+        run = _run_step(tmp_path, cached=CACHED, pending=True)
 
-        assert run.returncode != 0
-        assert run.scripts == ["verify_blueprint_cert"]
-        assert "FAIL:" in run.stdout
-        assert "Could not check" in run.stdout
-        assert run.thumbprint is None
+        assert run.returncode == 0, run.stdout + run.stderr
+        assert run.scripts == ["find_local_blueprint_cert", "register_blueprint_cert"]
+        assert FLAG not in run.calls[-1]
+        assert run.thumbprint == REGISTERED
+        assert run.state_write is None
 
+    @pytest.mark.parametrize("cached", ["", CACHED], ids=["no-cache", "cached"])
     @pytest.mark.parametrize("code", [2, 3, 4, 127, 137, 139])
     def test_find_could_not_check_stops_and_never_regenerates(
-        self, tmp_path: Path, code: int
+        self, tmp_path: Path, cached: str, code: int
     ) -> None:
-        run = _run_step(tmp_path, find=(code, ""))
+        run = _run_step(tmp_path, cached=cached, find=(code, ""))
 
         assert run.returncode != 0
         assert run.scripts == ["find_local_blueprint_cert"]
+        assert "FAIL:" in run.stdout
         assert "Could not check" in run.stdout
         assert run.thumbprint is None
-
-    def test_find_could_not_check_after_a_stale_cache_also_stops(self, tmp_path: Path) -> None:
-        run = _run_step(tmp_path, cached=CACHED, verify=(1, ""), find=(3, ""))
-
-        assert run.returncode != 0
-        assert "register_blueprint_cert" not in run.scripts
 
     def test_a_recovered_cert_is_recorded_and_reused(self, tmp_path: Path) -> None:
         run = _run_step(tmp_path, find=(0, RECOVERED + "\n"))
@@ -377,7 +402,7 @@ class TestStepSixDecisions:
         assert run.thumbprint == REGISTERED
 
     def test_the_flag_regenerates_even_when_the_cached_cert_is_valid(self, tmp_path: Path) -> None:
-        run = _run_step(tmp_path, cached=CACHED, flag=True, verify=(0, ""), find=(0, RECOVERED))
+        run = _run_step(tmp_path, cached=CACHED, flag=True, find=(0, RECOVERED))
 
         assert run.returncode == 0, run.stdout + run.stderr
         assert run.scripts == ["register_blueprint_cert"]

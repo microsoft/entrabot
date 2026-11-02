@@ -76,16 +76,18 @@ the PATCH plus local state if the smoke test fails. See the
 and the
 [`rotate_cert_windows.py` reference](../reference/scripts/auth-and-certs/rotate-cert-windows-py.md).
 
-**macOS and Linux** operators use two diagnostic scripts rather than an
-automated rotation flow: `find_local_blueprint_cert.py` recovers a
-registered certificate thumbprint matching the local private key when local
-state is missing it, and `verify_blueprint_cert.py` checks whether a cached
-thumbprint is still registered on the Blueprint app. If either script
-reports a stale or missing certificate (exit `1`), re-run setup to add a new one.
-If either reports that it could not check (exit `3`), fix the cause first. Setup
-stops in that case rather than generating a certificate. See the auth-and-certs
-reference pages for
-[`find_local_blueprint_cert.py`](../reference/scripts/auth-and-certs/find-local-blueprint-cert-py.md)
+**macOS and Linux** have no automated rotation flow. Setup checks the certificate on
+every run instead. `find_local_blueprint_cert.py` tests whether this machine's private
+key matches a certificate registered on the Blueprint, and setup reuses that certificate
+if so, correcting a stale thumbprint in local state. Otherwise, and whenever a new key
+from an unfinished run is still pending, setup runs `register_blueprint_cert.py` to add
+one. It never trusts the cached thumbprint on its own. If the check itself fails
+(exit `3`), setup stops rather than generating a certificate, so fix the cause first. To
+ask whether one particular thumbprint, such as the one in `.env`, is still on the
+Blueprint, use `verify_blueprint_cert.py`; setup does not call it. See the
+auth-and-certs reference pages for
+[`find_local_blueprint_cert.py`](../reference/scripts/auth-and-certs/find-local-blueprint-cert-py.md),
+[`register_blueprint_cert.py`](../reference/scripts/auth-and-certs/register-blueprint-cert-py.md),
 and
 [`verify_blueprint_cert.py`](../reference/scripts/auth-and-certs/verify-blueprint-cert-py.md).
 

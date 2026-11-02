@@ -174,6 +174,11 @@ def _spki(cert: x509.Certificate) -> bytes:
     )
 
 
+def _keyring_writes(env: Env) -> list[str]:
+    """Every keyring write or delete the run attempted, in order."""
+    return [event for event in env.events if event.startswith(("set:", "delete:"))]
+
+
 class TestAddByDefault:
     def test_keeps_every_existing_certificate_and_prints_only_the_thumbprint(
         self, env: Env, capsys: pytest.CaptureFixture[str]
@@ -348,6 +353,47 @@ class TestStateFile:
 
         assert capsys.readouterr().out == ""
         assert env.real_key != OLD_REAL_KEY  # registered and promoted; only the record failed
+
+    @pytest.mark.parametrize(
+        "landed_earlier", [False, True], ids=["registered-now", "landed-earlier"]
+    )
+    def test_a_state_write_failure_keeps_the_pending_key_until_a_later_run_records_it(
+        self, env: Env, capsys: pytest.CaptureFixture[str], landed_earlier: bool
+    ) -> None:
+        # The new key is already the active one. The pending entry is what lets the next run
+        # find its certificate and record the thumbprint; deleting it first would strand the
+        # key beside the old thumbprint.
+        if landed_earlier:
+            env.keyring.entries[PENDING] = RETAINED.private_key_pem
+            graph = env.graph(
+                *_existing(), graph_entry(RETAINED, key_id="k-retained", display_name=HOST_A)
+            )
+        else:
+            graph = env.graph(*_existing())
+        env.state_file.unlink()
+        env.state_file.mkdir()  # the write fails: a directory is in the way
+
+        assert env.run() == EXIT_UNCONFIRMED
+
+        assert capsys.readouterr().out == ""
+        assert env.real_key != OLD_REAL_KEY
+        assert env.pending_key == env.real_key
+        key_after_failure = env.real_key
+        patches_after_failure = len(graph.patches)
+
+        env.state_file.rmdir()
+        assert env.run() == EXIT_OK
+
+        assert len(graph.patches) == patches_after_failure  # recovered without another write
+        assert env.real_key == key_after_failure
+        assert env.pending_key is None
+        match = blueprint_certs.find_credential_for_public_key(
+            [blueprint_certs.KeyCredential(raw=entry) for entry in graph.entries],
+            blueprint_certs.public_key_of_private_pem(env.real_key),
+        )
+        assert match is not None
+        assert capsys.readouterr().out == match.thumbprint + "\n"
+        assert env.state["BLUEPRINT_CERT_THUMBPRINT"] == match.thumbprint
 
 
 class TestStdout:
@@ -647,20 +693,79 @@ class TestRecoveryFromAnEarlierRun:
         assert env.pending_key is None
         assert env.real_key not in (OLD_REAL_KEY, "not a pem")
 
-    def test_retained_key_whose_cert_landed_is_promoted_before_a_remove_all(self, env: Env) -> None:
+    def _landed(self, env: Env, **graph_kwargs: Any) -> FakeGraph:
+        """A retained pending key whose certificate is already on the Blueprint."""
         self._retain(env)
-        graph = env.graph(
-            *_existing(), graph_entry(RETAINED, key_id="k-retained", display_name=HOST_A)
+        return env.graph(
+            *_existing(),
+            graph_entry(RETAINED, key_id="k-retained", display_name=HOST_A),
+            **graph_kwargs,
         )
+
+    def test_a_remove_all_that_is_declined_leaves_a_landed_retained_key_alone(
+        self, env: Env, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Promoting the key before the prompt would pair it with the old thumbprint.
+        before = env.state_file.read_text()
+        env.stdin(tty=True, answer="n\n")
+        env.monkeypatch.setattr(
+            reg.rsa, "generate_private_key", raising(AssertionError("generated a key"))
+        )
+        graph = self._landed(env)
+
+        assert env.run(FLAG) == EXIT_NOT_REGISTERED
+
+        assert graph.patches == []
+        assert env.real_key == OLD_REAL_KEY
+        assert env.pending_key == RETAINED.private_key_pem
+        assert env.state_file.read_text() == before
+        assert _keyring_writes(env) == []
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "nothing was changed" in captured.err.lower()
+
+    @pytest.mark.parametrize("status", [403, 409])
+    def test_a_remove_all_that_is_rejected_leaves_a_landed_retained_key_alone(
+        self, env: Env, capsys: pytest.CaptureFixture[str], status: int
+    ) -> None:
+        before = env.state_file.read_text()
+        graph = self._landed(env, patch_outcome=status, patch_applies=False)
+        listed = [dict(entry) for entry in graph.entries]
+
+        assert env.run(FLAG) == EXIT_NOT_REGISTERED
+
+        assert len(graph.patches) == 1
+        assert graph.entries == listed
+        assert env.real_key == OLD_REAL_KEY
+        assert env.pending_key == RETAINED.private_key_pem
+        assert env.state_file.read_text() == before
+        assert _keyring_writes(env) == []
+        assert capsys.readouterr().out == ""
+
+    def test_a_remove_all_reuses_a_landed_retained_key_for_the_replacement(
+        self, env: Env, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        env.monkeypatch.setattr(
+            reg.rsa, "generate_private_key", raising(AssertionError("generated a key"))
+        )
+        graph = self._landed(env)
 
         assert env.run(FLAG) == EXIT_OK
 
+        # Nothing is promoted until the replacement is on the Blueprint.
+        assert env.events.index("PATCH") < env.events.index("set:blueprint-private-key")
         assert len(graph.patch_bodies) == 1
         assert len(graph.entries) == 1
-        cert = _cert_from(graph.entries[0])
-        assert blueprint_certs.public_key_of_private_pem(env.real_key) == _spki(cert)
-        assert env.real_key != RETAINED.private_key_pem
+        replacement = graph.entries[0]
+        assert _spki(_cert_from(replacement)) == blueprint_certs.public_key_of_private_pem(
+            RETAINED.private_key_pem
+        )
+        thumbprint = capsys.readouterr().out.strip()
+        assert thumbprint == blueprint_certs.thumbprint_of_der(base64.b64decode(replacement["key"]))
+        assert thumbprint != RETAINED.thumbprint  # a new certificate, for the same key
+        assert env.real_key == RETAINED.private_key_pem
         assert env.pending_key is None
+        assert env.state["BLUEPRINT_CERT_THUMBPRINT"] == thumbprint
 
 
 class TestRemoveAll:

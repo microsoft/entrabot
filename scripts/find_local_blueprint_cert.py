@@ -1,9 +1,15 @@
-"""Recover the registered Blueprint cert thumbprint for this local private key.
+"""Find the registered Blueprint cert thumbprint for this local private key.
 
-Worktree-local setup state can miss BLUEPRINT_CERT_THUMBPRINT even when the
-machine already has the private key in the OS credential store and the matching
-public cert is still registered on the Blueprint app. In that case setup.sh
-should reuse the cert instead of registering another one.
+This is how setup.sh decides whether to reuse a certificate. It never trusts the
+thumbprint cached in the state file: that can be stale, or can belong to an earlier key
+(after an unconfirmed ``--remove-all-existing-certs``, or a failed state write). Only a
+match between the local private key and a certificate registered on the Blueprint counts,
+and the thumbprint printed is that certificate's, so setup.sh can reuse it instead of
+registering another one and correct a stale cache at the same time.
+
+A private key waiting under ``blueprint-private-key.pending`` is checked for first. It
+means an earlier run didn't finish, and register_blueprint_cert.py is the one place that
+reconciles it, so this script exits 1 without asking Graph anything and setup.sh goes there.
 
 Usage:
     python scripts/find_local_blueprint_cert.py <BLUEPRINT_OBJECT_ID>
@@ -14,7 +20,8 @@ Output:
 
 Exit codes:
     0 — a registered cert matches the local key; its thumbprint is on stdout
-    1 — checked: no usable local key, or the local key matches no registered cert
+    1 — checked: a pending private key exists, there is no usable local key, or the local
+        key matches no registered cert
     2 — usage error
     3 — could not check (keystore, Graph, or token failure, or a certificate whose
         key material couldn't be read). setup.sh must stop rather than regenerate.
@@ -29,6 +36,7 @@ try:
     import keyring
     from blueprint_certs import (
         KEYRING_SERVICE,
+        PENDING_PRIVATE_KEY_ACCOUNT,
         PRIVATE_KEY_ACCOUNT,
         fetch_key_credentials,
         find_credential_for_public_key,
@@ -48,6 +56,25 @@ EXIT_COULD_NOT_CHECK = 3
 
 
 def _find(blueprint_obj_id: str) -> int:
+    # First, before the real key or Graph: a pending key is unfinished business that only
+    # register_blueprint_cert.py reconciles. Failing to read the entry is not the same as
+    # there being none.
+    try:
+        pending = keyring.get_password(KEYRING_SERVICE, PENDING_PRIVATE_KEY_ACCOUNT)
+    except Exception as exc:
+        print(
+            f"  Could not check for a pending private key ({type(exc).__name__}: {exc}).",
+            file=sys.stderr,
+        )
+        return EXIT_COULD_NOT_CHECK
+    if pending is not None:
+        print(
+            f"  A private key is waiting under '{PENDING_PRIVATE_KEY_ACCOUNT}' from a run that "
+            "didn't finish; register_blueprint_cert.py reconciles it.",
+            file=sys.stderr,
+        )
+        return EXIT_NOT_REGISTERED
+
     private_key_pem = keyring.get_password(KEYRING_SERVICE, PRIVATE_KEY_ACCOUNT)
     if not private_key_pem:
         print("  No local blueprint-private-key found in OS credential store.", file=sys.stderr)

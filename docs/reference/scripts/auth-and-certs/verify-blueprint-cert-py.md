@@ -1,20 +1,25 @@
 # verify_blueprint_cert.py
 
-Check whether an expected certificate thumbprint is still registered on a
-Blueprint application, so setup's cached-thumbprint fast path can detect a stale
-cache before it fails at Hop 1. macOS and Linux only.
+Check whether a given certificate thumbprint is still registered on a Blueprint
+application. An operator tool: [`setup.sh`](../setup/setup-sh.md) does not call it.
+macOS and Linux only.
 
 Part of the [auth-and-certs command reference](../index.md#auth-and-certs).
 
 ## Purpose
 
-[`setup.sh`](../setup/setup-sh.md) skips certificate regeneration when
-`BLUEPRINT_CERT_THUMBPRINT` is present in the state file. But if that certificate
-has since been removed from the Blueprint, the cached thumbprint no longer matches
-any registered public key, and the local private key fails at Hop 1 with a
-cryptic `invalid_client`. This command verifies the cached thumbprint is still
-registered so setup can act on a clear answer instead. See
-[Token flows](../../token-flows.md) for the certificate-to-token exchange.
+A certificate can be removed from a Blueprint after it was registered, by an admin or
+by `--remove-all-existing-certs` on another machine. The private key that was paired
+with it then fails at Hop 1 with a cryptic `invalid_client`. This command answers one
+question: is this thumbprint, for example the one in `.env` or in the state file, still
+on the Blueprint? See [Token flows](../../token-flows.md) for the certificate-to-token
+exchange.
+
+Setup used to call this command to vouch for the thumbprint cached in the state file. It
+no longer does. A thumbprint that is on the Blueprint does not show that this machine's
+private key matches it, and the cache can belong to an earlier key. Setup relies on
+[`find_local_blueprint_cert.py`](find-local-blueprint-cert-py.md) instead, which checks
+the local key against the registered certificates.
 
 ## Requirements
 
@@ -44,22 +49,21 @@ Positional arguments only:
 3. Computes the SHA-256 base64url (no padding) thumbprint of each registered
    certificate's DER and compares it to the expected value.
 
-This command is read-only. On a stale cache it prints a `[cache-desync]`
-diagnostic to stderr; on success it prints nothing — the exit code is the signal.
+This command is read-only. When the thumbprint is not on the Blueprint it prints a
+`[cache-desync]` diagnostic to stderr; on success it prints nothing — the exit code is
+the signal.
 
 ## Exit behavior
 
-- `0` — the expected thumbprint is present on the Blueprint's `keyCredentials`
-  (the cache is valid).
-- `1` — checked: the thumbprint is not present. The cache is stale, and setup adds a
-  new certificate for this machine.
+- `0` — the expected thumbprint is present on the Blueprint's `keyCredentials`.
+- `1` — checked: the thumbprint is not present. Run [`setup.sh`](../setup/setup-sh.md)
+  to add a certificate for this machine.
 - `2` — usage error (wrong number of positional arguments).
 - `3` — could not check: a Graph or token failure, a malformed response, or a
   certificate whose key material couldn't be read. This says nothing about whether the
-  thumbprint is registered, so setup stops and does not generate a certificate.
+  thumbprint is registered.
 
-Anything other than `0` or `1`, including a crash, is treated by setup as "could not
-check".
+Treat anything other than `0` or `1`, including a crash, as "could not check".
 
 ## Security
 
@@ -78,9 +82,10 @@ public thumbprints are compared.
 
 ## Related commands
 
-- [`find_local_blueprint_cert.py`](find-local-blueprint-cert-py.md) — recover the
-  thumbprint that matches this machine's private key.
+- [`find_local_blueprint_cert.py`](find-local-blueprint-cert-py.md) — find the
+  registered certificate that matches this machine's private key. This is the check
+  setup makes.
 - [`list_blueprint_certs.py`](list-blueprint-certs-py.md) — enumerate the
   certificates registered on a Blueprint.
-- [`setup.sh`](../setup/setup-sh.md) — the provisioning entry point that calls
-  this helper.
+- [`setup.sh`](../setup/setup-sh.md) — the provisioning entry point. It does not call
+  this command.

@@ -904,10 +904,15 @@ VENV_PY="$PROJECT_ROOT/.venv/bin/python3"
 # Only the public certificate is uploaded to the Blueprint app in Entra.
 # See ADR-003 for rationale.
 #
-# The check scripts below exit 0 (yes), 1 (checked: not registered), or anything
-# else (COULD NOT CHECK). Only an explicit 1 may lead to a new certificate: a failed
-# check says nothing about the Blueprint, so it stops setup here. Capturing the
-# status with `|| STATUS=$?` keeps `set -e` from ending the script before the message.
+# find_local_blueprint_cert.py exits 0 (this machine's key matches a registered
+# certificate), 1 (checked: it doesn't), or anything else (COULD NOT CHECK). Only an
+# explicit 1 may lead to a new certificate: a failed check says nothing about the
+# Blueprint, so it stops setup here. Capturing the status with `|| STATUS=$?` keeps
+# `set -e` from ending the script before the message.
+#
+# The thumbprint cached in the state file is never trusted on its own. It can be stale,
+# or can belong to an earlier key: after an unconfirmed --remove-all-existing-certs, or
+# a failed state write, the active key may no longer pair with it.
 CERT_THUMBPRINT=$(read_state "BLUEPRINT_CERT_THUMBPRINT")
 
 # Defense in depth: the thumbprint is SHA-256 DER base64url-no-padding (43 chars,
@@ -923,41 +928,22 @@ if [ "$REMOVE_ALL_EXISTING_CERTS" = true ]; then
     # Regenerate even if the cached certificate is still valid: the request is to
     # replace every certificate, this machine's current one included.
     CERT_THUMBPRINT=""
-elif [ -n "$CERT_THUMBPRINT" ]; then
-    # The state file has a thumbprint cached — but that's only trustworthy if the
-    # Blueprint on Entra still has it registered. If it was removed, trusting the
-    # cached thumbprint here would set up a silent runtime auth failure
-    # ("invalid_client" with no useful hint).
-    VERIFY_STATUS=0
-    PYTHONPATH="$PROJECT_ROOT/scripts" "$VENV_PY" \
-        "$PROJECT_ROOT/scripts/verify_blueprint_cert.py" \
-        "$BLUEPRINT_OBJECT_ID" "$CERT_THUMBPRINT" >/dev/null || VERIFY_STATUS=$?
-    case "$VERIFY_STATUS" in
-        0)
-            success "Using cached certificate (thumbprint: ${CERT_THUMBPRINT:0:16}...)"
-            ;;
-        1)
-            echo ""
-            echo -e "  ${YELLOW}Cached cert is no longer registered on the Blueprint.${NC}"
-            echo -e "  It was removed since the last run. Adding a new one for this machine."
-            echo ""
-            CERT_THUMBPRINT=""
-            ;;
-        *)
-            fail "Could not check whether the cached certificate is registered (exit $VERIFY_STATUS). No certificate was generated or changed. Fix the error above and re-run setup."
-            ;;
-    esac
-fi
-
-if [ -z "$CERT_THUMBPRINT" ] && [ "$REMOVE_ALL_EXISTING_CERTS" != true ]; then
+else
+    # find_local_blueprint_cert.py proves that the local private key matches a
+    # certificate registered on the Blueprint, and returns THAT certificate's thumbprint.
+    # It also exits 1 while a new key is waiting under the pending keystore account, so
+    # that register_blueprint_cert.py, the one place that reconciles a pending key,
+    # runs. (verify_blueprint_cert.py is an operator tool; setup does not call it.)
     FIND_STATUS=0
     RECOVERED_THUMBPRINT=$(PYTHONPATH="$PROJECT_ROOT/scripts" "$VENV_PY" \
         "$PROJECT_ROOT/scripts/find_local_blueprint_cert.py" "$BLUEPRINT_OBJECT_ID") || FIND_STATUS=$?
     case "$FIND_STATUS" in
         0)
             require_thumbprint_shape "$RECOVERED_THUMBPRINT"
-            CERT_THUMBPRINT="$RECOVERED_THUMBPRINT"
-            "$PYTHON" -c "
+            if [ "$RECOVERED_THUMBPRINT" != "$CERT_THUMBPRINT" ]; then
+                # The state file is missing the thumbprint or holds a stale one.
+                CERT_THUMBPRINT="$RECOVERED_THUMBPRINT"
+                "$PYTHON" -c "
 import json, pathlib
 state_file = pathlib.Path('$PROJECT_ROOT/.entrabot-state.json')
 data = json.loads(state_file.read_text()) if state_file.is_file() else {}
@@ -965,10 +951,13 @@ data['BLUEPRINT_CERT_THUMBPRINT'] = '$CERT_THUMBPRINT'
 data.pop('BLUEPRINT_SECRET', None)
 state_file.write_text(json.dumps(data, indent=2) + '\n')
 "
+            fi
             success "Using registered local certificate (thumbprint: ${CERT_THUMBPRINT:0:16}...)"
             ;;
         1)
-            # No local key matches a registered certificate: register one below.
+            # This machine's key matches no registered certificate, or a new key is
+            # waiting to be confirmed: register below, whatever thumbprint is cached.
+            CERT_THUMBPRINT=""
             ;;
         *)
             fail "Could not check whether this machine's key matches a registered certificate (exit $FIND_STATUS). No certificate was generated or changed. Fix the error above and re-run setup."

@@ -42,6 +42,7 @@ LOCAL_CERT = make_cert("this-machine")
 OTHER_CERT = make_cert("other-machine")
 
 KEY_ACCOUNT = ("entrabot", "blueprint-private-key")
+PENDING_ACCOUNT = ("entrabot", "blueprint-private-key.pending")
 
 GRAPH_FAILURES = [
     401,
@@ -228,6 +229,47 @@ class TestFindLocalBlueprintCert:
         graph = use_fake_graph(monkeypatch, FakeGraph([]))
         assert self._find(monkeypatch) == EXIT_COULD_NOT_CHECK
         assert graph.requests == []
+
+    @pytest.mark.parametrize(
+        "pem", [LOCAL_CERT.private_key_pem, None], ids=["with-a-local-key", "without"]
+    )
+    def test_a_pending_key_exits_1_before_anything_else_is_read(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        pem: str | None,
+    ) -> None:
+        # Only register_blueprint_cert.py reconciles a pending key, so setup must go there
+        # even when the active key matches a registered certificate.
+        fake = self._keyring(monkeypatch, pem=pem)
+        fake.entries[PENDING_ACCOUNT] = OTHER_CERT.private_key_pem
+        monkeypatch.setattr(
+            find_mod, "get_existing_graph_token", raising(AssertionError("asked for a token"))
+        )
+        graph = use_fake_graph(monkeypatch, FakeGraph([_entry(LOCAL_CERT)]))
+
+        assert self._find(monkeypatch) == EXIT_NOT_REGISTERED
+
+        captured = capsys.readouterr()
+        assert fake.events == ["get:blueprint-private-key.pending"]
+        assert graph.requests == []
+        assert captured.out == ""
+        assert len(captured.err.strip().splitlines()) == 1
+        assert "pending" in captured.err
+        assert "PRIVATE KEY" not in captured.err
+
+    def test_a_keyring_failure_reading_the_pending_key_exits_could_not_check(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Not knowing whether a pending key exists is not the same as there being none.
+        fake = self._keyring(monkeypatch, pem=LOCAL_CERT.private_key_pem)
+        fake.fail_on[("get", "blueprint-private-key.pending")] = RuntimeError("keychain locked")
+        graph = use_fake_graph(monkeypatch, FakeGraph([_entry(LOCAL_CERT)]))
+
+        assert self._find(monkeypatch) == EXIT_COULD_NOT_CHECK
+
+        assert graph.requests == []
+        assert capsys.readouterr().out == ""
 
     def test_unreadable_entry_with_no_match_exits_could_not_check(
         self, monkeypatch: pytest.MonkeyPatch

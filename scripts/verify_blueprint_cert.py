@@ -1,25 +1,25 @@
-"""Verify a locally-cached Blueprint cert thumbprint is still registered.
+"""Check whether a Blueprint certificate thumbprint is registered. An operator tool.
 
-setup.sh's cached-thumbprint fast path (Step 6) skips cert regeneration
-when BLUEPRINT_CERT_THUMBPRINT is in the state file. But that certificate
-may have been removed from the Blueprint since (by an admin, or by
-``setup.sh --remove-all-existing-certs`` on another machine), and then the
-local private key has no matching public key on the Entra side. Result:
-cryptic ``invalid_client`` at Hop 1 instead of a clear "re-run setup.sh"
-signal.
+setup.sh does not call this. It used to, to vouch for the thumbprint cached in the state
+file, but a thumbprint that is on the Blueprint says nothing about whether THIS machine's
+private key matches it, and the cache can be stale or belong to an earlier key. setup.sh
+relies on find_local_blueprint_cert.py instead, which proves the local key matches a
+registered certificate.
 
-This script checks the claim before we trust the cache.
+Use this for the narrower question: is a particular thumbprint (the one in .env or in the
+state file, say) still on the Blueprint? A certificate can be removed since by an admin,
+or by ``setup.sh --remove-all-existing-certs`` on another machine, and then the key paired
+with it fails at Hop 1 with a cryptic ``invalid_client``.
 
 Usage:
     python scripts/verify_blueprint_cert.py <BLUEPRINT_OBJECT_ID> <EXPECTED_THUMBPRINT>
 
 Exit codes:
-    0 — thumbprint is present on the Blueprint's keyCredentials (cache is valid)
-    1 — checked: thumbprint is NOT present (cache is stale; setup.sh adds a new cert)
+    0 — thumbprint is present on the Blueprint's keyCredentials
+    1 — checked: thumbprint is NOT present (re-run setup.sh to add a certificate)
     2 — usage error
     3 — could not check (Graph or token failure, or a certificate whose key material
-        couldn't be read). This says nothing about whether the thumbprint is
-        registered, so setup.sh must stop rather than regenerate.
+        couldn't be read). This says nothing about whether the thumbprint is registered.
 """
 
 from __future__ import annotations

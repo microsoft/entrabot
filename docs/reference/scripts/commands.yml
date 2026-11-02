@@ -203,7 +203,7 @@ commands:
     category: auth-and-certs
     page: reference/scripts/auth-and-certs/find-local-blueprint-cert-py.md
     platforms: [macos, linux]
-    summary: Recovers the registered Blueprint cert thumbprint (SHA-256 b64url) matching the local OS-keystore private key for a given Blueprint object ID, so setup.sh can reuse an existing cert instead of registering another. Exit 0 found, 1 checked and no match, 2 usage error, 3 could not check.
+    summary: Recovers the registered Blueprint cert thumbprint (SHA-256 b64url) matching the local OS-keystore private key for a given Blueprint object ID, so setup.sh can reuse an existing cert instead of registering another. Exits 1 without asking Graph while a pending key from an unfinished run exists, so setup.sh goes to register_blueprint_cert.py. Exit 0 found, 1 checked and no match (or a pending key), 2 usage error, 3 could not check.
   - id: list-blueprint-certs-py
     path: scripts/list_blueprint_certs.py
     category: auth-and-certs
@@ -215,7 +215,7 @@ commands:
     category: auth-and-certs
     page: reference/scripts/auth-and-certs/verify-blueprint-cert-py.md
     platforms: [macos, linux]
-    summary: Checks whether an expected thumbprint is still present on a Blueprint app's keyCredentials, so setup.sh's cached-thumbprint fast path can detect a stale cache before it fails at Hop 1. Exit 0 present, 1 checked and not present, 2 usage error, 3 could not check.
+    summary: Checks whether a given thumbprint is still present on a Blueprint app's keyCredentials. An operator tool; setup.sh does not call it. Exit 0 present, 1 checked and not present, 2 usage error, 3 could not check.
   - id: register-blueprint-cert-py
     path: scripts/register_blueprint_cert.py
     category: auth-and-certs

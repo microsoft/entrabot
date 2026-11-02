@@ -85,9 +85,11 @@ Identity mode (choose one):
   still valid. **It does not delete the Blueprint**, its Agent Identities, or its
   Agent Users. Every other machine stops authenticating until it runs setup again.
   It lists what will be removed (name and expiry only) and asks `y/N` on a terminal;
-  without a terminal the flag itself is the consent, and it says so loudly. This is
-  the only way setup removes a certificate. Mutually exclusive with `--new`, which
-  creates a Blueprint with no certificates.
+  without a terminal the flag itself is the consent, and it says so loudly. Nothing on
+  this machine changes until the replacement is confirmed, so declining, or Graph
+  refusing the update, leaves the active key, the state file, and any pending key as
+  they were. This is the only way setup removes a certificate. Mutually exclusive with
+  `--new`, which creates a Blueprint with no certificates.
 
 Agent User selection:
 
@@ -150,14 +152,21 @@ Diagnostics and control:
   reuses the Blueprint, Agent Identity, and Agent User via
   [`create_entra_agent_ids.py`](../provisioning/create-entra-agent-ids-py.md)
   (using the Provisioner certificate token, never `az` CLI tokens).
-- Reuses a cached or locally recoverable Blueprint certificate when one is still
-  registered. Otherwise
+- Reuses this machine's certificate only when
+  [`find_local_blueprint_cert.py`](../auth-and-certs/find-local-blueprint-cert-py.md)
+  shows that the local private key matches a certificate still registered on the
+  Blueprint. The thumbprint cached in the state file is never trusted on its own: setup
+  uses the thumbprint that check returns, and saves it if it differs from the cached
+  one. `verify_blueprint_cert.py` is an operator tool that setup does not call.
+- Otherwise, including whenever a new private key is still waiting under the pending
+  keystore entry from an earlier run,
   [`register_blueprint_cert.py`](../auth-and-certs/register-blueprint-cert-py.md)
-  generates an RSA-2048 self-signed certificate, keeps the private key under a
-  temporary keystore entry, and uploads only the public certificate. Because a Graph
-  `PATCH keyCredentials` replaces the whole list, it sends every existing certificate
-  back along with the new one, then reads the list back to confirm before making the
-  new key active. A normal run never removes a certificate.
+  generates an RSA-2048 self-signed certificate (or reuses the pending key), keeps the
+  private key under a temporary keystore entry, and uploads only the public certificate.
+  Because a Graph `PATCH keyCredentials` replaces the whole list, it sends every existing
+  certificate back along with the new one, then reads the list back to confirm before
+  making the new key active and recording the thumbprint. A normal run never removes a
+  certificate.
 - Creates `.venv`, installs the package with dev extras, and writes `.env`
   (`chmod 600`) with the resulting tenant, Blueprint, Agent Identity, Agent User,
   and human-user identifiers plus the certificate thumbprint.
@@ -206,9 +215,9 @@ Diagnostics and control:
 - **`No identity mode specified`** — pass `--new --with-upn-suffix=NAME` or
   `--use-blueprint=APP_ID`.
 - **`Could not check ...`** — setup couldn't read the Blueprint's certificates or the
-  OS credential store, so it doesn't know whether this machine is already registered.
-  It stops rather than generating a certificate, and nothing was changed. Fix the
-  error shown above the message and re-run.
+  OS credential store (the pending key entry included), so it doesn't know whether this
+  machine is already registered. It stops rather than generating a certificate, and
+  nothing was changed. Fix the error shown above the message and re-run.
 - **`Could not confirm the certificate update`** — the update may have landed but
   couldn't be read back. The new private key is kept; re-run setup and it picks up
   where it left off. See

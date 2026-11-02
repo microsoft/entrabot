@@ -9,14 +9,22 @@ The private key's route is what keeps a failure from locking anyone out:
 1. It's stored under ``blueprint-private-key.pending`` and read back.
 2. The certificate is registered on the Blueprint and confirmed by reading it back.
 3. Only then is the key promoted to ``blueprint-private-key``, the account the agent
-   signs with, and the pending entry removed.
+   signs with, and read back; then the thumbprint is written to the state file; and
+   only after that is the pending entry removed. The pending entry is how a later run
+   pairs the key with its certificate again, so it outlives every step that could fail.
 
 If nothing was written (the read failed, or Graph refused the update), a key this
 run generated is deleted and the real key and the Blueprint are unchanged. If a write
 may have landed but can't be confirmed, the pending key is KEPT: after a remove-all it
 could be the only key that still matches anything on the Blueprint. The next run
-promotes it if its certificate has appeared, and otherwise registers a certificate for
-that same key rather than overwriting it.
+promotes it if its certificate has appeared (and records the thumbprint), and otherwise
+registers a certificate for that same key rather than overwriting it. If the state file
+can't be written after the promotion, the pending key is kept for the same reason.
+
+A retained pending key is promoted on a normal run only. A remove-all run reuses it as
+the key of the replacement certificate and changes nothing (not the real key, not the
+state file, not the pending entry) until the replacement is confirmed, so declining the
+prompt, or Graph refusing the update, leaves everything as it was.
 
 Only the public certificate leaves this machine. Graph calls use the Provisioner token,
 not an az CLI token (Learning #1: those carry Directory.AccessAsUser.All, which Agent
@@ -36,7 +44,8 @@ Exit codes:
     1 — not registered, and nothing was changed: a read or token failure, Graph refused
         the update, or the operator declined at the prompt
     2 — usage error
-    3 — outcome not confirmed: the Blueprint may have changed; re-run setup
+    3 — outcome not confirmed: the Blueprint may have changed, or the thumbprint could
+        not be recorded; re-run setup
 """
 
 from __future__ import annotations
@@ -167,9 +176,10 @@ def _store_pending_key(private_key_pem: str) -> None:
 
 
 def _promote_pending_key(private_key_pem: str) -> None:
-    """Make the pending key the one the agent signs with.
+    """Store the key as the one the agent signs with, and read it back.
 
-    Any failure leaves the pending entry in place for the next run.
+    Does not touch the pending entry; see :func:`_activate_key`. Any failure leaves it in
+    place for the next run.
     """
     try:
         keyring.set_password(KEYRING_SERVICE, PRIVATE_KEY_ACCOUNT, private_key_pem)
@@ -184,7 +194,6 @@ def _promote_pending_key(private_key_pem: str) -> None:
             f"The certificate is registered, but the OS credential store did not return "
             f"'{PRIVATE_KEY_ACCOUNT}' intact."
         )
-    _delete_pending_key()
 
 
 def _write_state(state_file: Path, thumbprint: str) -> None:
@@ -192,6 +201,20 @@ def _write_state(state_file: Path, thumbprint: str) -> None:
     data["BLUEPRINT_CERT_THUMBPRINT"] = thumbprint
     data.pop("BLUEPRINT_SECRET", None)  # clean up old secret if present
     state_file.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def _activate_key(private_key_pem: str, thumbprint: str, state_file: Path) -> None:
+    """Make a key whose certificate is confirmed the active one, in a safe-to-interrupt order.
+
+    The key is promoted and read back, then the thumbprint is recorded, and only then is the
+    pending entry removed. The pending entry is how a later run finds this key's certificate
+    and pairs the two again, so a failure before the thumbprint is recorded must leave it
+    in place: otherwise the new active key would sit beside the old thumbprint with nothing
+    left to repair it.
+    """
+    _promote_pending_key(private_key_pem)
+    _write_state(state_file, thumbprint)
+    _delete_pending_key()
 
 
 def _usable_private_key(private_key_pem: str | None) -> Any | None:
@@ -281,15 +304,16 @@ def _run(args: argparse.Namespace, sleep: Callable[[float], None]) -> str:
         raise _NotRegistered(f"Could not prepare to register a certificate: {exc}") from exc
 
     retained_key = _usable_private_key(retained_pem)
-    if retained_key is not None:
+    if retained_key is not None and not remove_all:
+        # An earlier run registered this key's certificate and didn't finish: finish it. A
+        # remove-all run must not. Promoting here would pair this key with a thumbprint the
+        # replacement is about to remove, and a declined prompt or a rejected update would
+        # leave that pairing behind. It reuses the key for the replacement instead, below.
         match = find_credential_for_public_key(existing, public_key_of_private_pem(retained_pem))
         if match is not None:
             _say(f"  An earlier run's certificate is on the Blueprint: {match.display_name}")
-            _promote_pending_key(retained_pem)
-            _write_state(args.state_file, match.thumbprint)
-            if not remove_all:
-                return match.thumbprint
-            retained_key = None
+            _activate_key(retained_pem, match.thumbprint, args.state_file)
+            return match.thumbprint
 
     if remove_all:
         if not _confirm_remove_all(existing):
@@ -330,8 +354,7 @@ def _run(args: argparse.Namespace, sleep: Callable[[float], None]) -> str:
     # A RegistrationUnconfirmedError passes through to main() with the pending key still
     # in place: this write may have landed.
 
-    _promote_pending_key(certificate.private_key_pem)
-    _write_state(args.state_file, result.thumbprint)
+    _activate_key(certificate.private_key_pem, result.thumbprint, args.state_file)
     _report_success(result, remove_all)
     return result.thumbprint
 
