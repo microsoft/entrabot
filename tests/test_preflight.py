@@ -566,6 +566,45 @@ def closed_port() -> int:
 
 
 class TestCheckPersonaSatiMcp:
+    def test_bare_commands_use_the_path_their_own_entry_sets(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        launcher = _launcher(tmp_path / "bin")
+        monkeypatch.setenv("PATH", str(tmp_path / "elsewhere"))
+        persona = {"type": "stdio", "command": launcher.name, "env": {"PATH": str(launcher.parent)}}
+        env = {"PATH": str(launcher.parent), "PERSONA_SATI_MCP_TOKEN_COMMAND": launcher.name}
+
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, persona, env))
+
+        assert result.status == "pass"
+        assert str(tmp_path / "bin") not in result.detail  # env values stay out of the report
+
+    def test_a_command_only_on_this_process_path_warns_if_the_entry_overrides_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        launcher = _launcher(tmp_path / "bin")
+        monkeypatch.setenv("PATH", str(launcher.parent))
+        persona = {
+            "type": "stdio",
+            "command": launcher.name,
+            "env": {"PATH": str(tmp_path / "elsewhere")},
+        }
+
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, persona))
+
+        assert result.status == "warn"
+        assert str(tmp_path / "elsewhere") not in _text(result)
+
+    def test_remediation_says_to_remove_the_env_vars_too(self, tmp_path: Path) -> None:
+        # The server reads these on its own, so deleting only the entry isn't standalone.
+        result = check_persona_sati_mcp(
+            _write_mcp(tmp_path, {"type": "stdio", "command": str(tmp_path / "missing")})
+        )
+
+        assert result.status == "warn"
+        assert "PERSONA_SATI_MCP_URL" in result.remediation
+        assert "PERSONA_SATI_MCP_TOKEN_COMMAND" in result.remediation
+
     def test_example_file_is_valid_json_and_not_on_localhost(self) -> None:
         entry = json.loads(EXAMPLE_CONFIG.read_text())["mcpServers"]["persona-sati"]
         assert entry["type"] == "stdio"

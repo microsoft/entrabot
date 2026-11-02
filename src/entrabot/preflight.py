@@ -597,10 +597,17 @@ def _is_placeholder(value: object) -> bool:
     return text.startswith("<") and text.endswith(">")
 
 
-def _is_executable(command: str, base: Path) -> bool:
-    """True if ``command`` is a runnable file; relative paths resolve against ``base``."""
-    bare = "/" not in command and "\\" not in command  # bare names are looked up on PATH
-    return shutil.which(command if bare else str(base / command)) is not None
+def _is_executable(command: str, base: Path, env: object) -> bool:
+    """True if ``command`` is a runnable file.
+
+    Relative paths resolve against ``base``. Bare names are looked up on the ``PATH`` in
+    the entry's own ``env``, because that's what the host runs them with, or on this
+    process's ``PATH`` if the entry doesn't set one.
+    """
+    bare = "/" not in command and "\\" not in command
+    path = env.get("PATH") if isinstance(env, dict) else None
+    target = command if bare else str(base / command)
+    return shutil.which(target, path=path if isinstance(path, str) else None) is not None
 
 
 def check_persona_sati_mcp(claude_path: Path) -> Check:
@@ -651,7 +658,7 @@ def check_persona_sati_mcp(claude_path: Path) -> Check:
     elif isinstance(command, str) and command:  # stdio; hosts exec it as written, unstripped
         if _is_placeholder(command):
             problems.append(f"command {command} is an unfilled placeholder")
-        elif not _is_executable(command, claude_path.parent):
+        elif not _is_executable(command, claude_path.parent, entry.get("env")):
             problems.append(f"command {command} was not found or is not executable")
         else:
             ok = f"stdio launcher {command} is present and executable."
@@ -662,7 +669,7 @@ def check_persona_sati_mcp(claude_path: Path) -> Check:
     for var in ("PERSONA_SATI_MCP_URL", _TOKEN_ENV):
         if _is_placeholder(env.get(var)):
             problems.append(f"{var} in the entrabot env is an unfilled placeholder")
-    if token and not _is_placeholder(token) and not _is_executable(token, claude_path.parent):
+    if token and not _is_placeholder(token) and not _is_executable(token, claude_path.parent, env):
         problems.append(f"{_TOKEN_ENV} in the entrabot env was not found or is not executable")
 
     if not problems:
@@ -672,8 +679,10 @@ def check_persona_sati_mcp(claude_path: Path) -> Check:
         status="warn",
         detail="; ".join(problems) + ".",
         remediation=(
-            "persona-sati is optional: delete the entry to run standalone. If it is hosted, use "
-            "the client launcher from your persona-sati install, per its own setup documentation."
+            "persona-sati is optional: to run standalone, delete this entry and remove "
+            f"PERSONA_SATI_MCP_URL and {_TOKEN_ENV} from the entrabot entry's env. If it is "
+            "hosted, use the client launcher from your persona-sati install, per its own setup "
+            "documentation."
         ),
     )
 
