@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -187,8 +186,8 @@ class TestDotenvStillDrivesTheBackend:
 
         assert isinstance(get_backend(), BlobBackend)
 
-    def test_script_imports_config_before_using_the_backend(self) -> None:
+    def test_script_imports_config_and_hardcodes_no_path_to_the_list(self) -> None:
         """Importing entrabot.config is what loads ``.env``."""
         source = _SCRIPT.read_text()
         assert "from entrabot.config import get_config" in source
-        assert json.dumps("watched_chats") not in source, "no hardcoded path to the list"
+        assert '"watched_chats"' not in source

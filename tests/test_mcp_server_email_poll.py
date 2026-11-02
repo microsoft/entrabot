@@ -263,7 +263,7 @@ class TestTwoInstances:
         start = "2026-11-02T12:00:00Z"
         m1 = _mail("m1", _parse("2026-11-02T12:01:00Z"))
         m2 = _mail("m2", _parse("2026-11-02T12:02:00Z"))
-        _store_cursor(fake_cloud_store, start)
+        start_etag = _store_cursor(fake_cloud_store, start)
         both_fetched = asyncio.Barrier(2)
         batches = iter(
             [
@@ -276,7 +276,9 @@ class TestTwoInstances:
             batch = next(batches)
             await both_fetched.wait()
             if batch[0] == [m1, m2]:
-                await asyncio.sleep(0.05)  # B claims second, so A wins
+                # B returns only once A's claim has landed, so A wins every time.
+                while fake_cloud_store.etags[EMAIL_CURSOR_KEY] == start_etag:
+                    await asyncio.sleep(0.01)
             return batch
 
         monkeypatch.setattr("entrabot.tools.email_poll.poll_once", fetch)
