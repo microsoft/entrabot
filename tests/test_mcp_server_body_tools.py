@@ -113,3 +113,16 @@ class TestBootstrapBodyStateThroughMCP:
         assert parsed["today_counts"]["total"] == 1
         assert parsed["today_counts"]["outbound"] == 1
         assert parsed["today_counts"]["by_action"]["send_teams_message"] == 1
+
+
+class TestBootstrapBodyStateStaysOffTheLoop:
+    @pytest.mark.asyncio
+    async def test_no_blob_io_on_the_event_loop(
+        self, fake_cloud_store, blob_calls_on_event_loop
+    ) -> None:
+        """The packet reads every chat cursor plus the watched list from the backend,
+        so running it on the loop would stall everything else for that long."""
+        tool = mcp_server.mcp._tool_manager._tools["bootstrap_body_state"]
+        payload = json.loads(await tool.fn())
+        assert payload["watched_chat_count"] == 0
+        assert blob_calls_on_event_loop == []

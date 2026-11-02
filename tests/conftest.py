@@ -53,8 +53,10 @@ def fake_cloud_store(monkeypatch: pytest.MonkeyPatch):
     ``get_backend()`` takes its real path to a real :class:`BlobBackend`, so the
     mode selection under test is the production one. Only ``BlobStore`` is
     swapped, for a fake with real ETag behaviour, so nothing reaches Azure and
-    no storage token is ever acquired. Sharing the returned store between calls
-    is how a test models several instances on one container.
+    no storage token is ever acquired. Both places that construct one are covered:
+    ``storage.backend`` holds its own reference, and ``tools.promises`` imports the
+    class when called. Sharing the returned store between calls is how a test
+    models several instances on one container.
     """
     from tests.storage.test_backend import _FakeBlobStore
 
@@ -63,6 +65,7 @@ def fake_cloud_store(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ENTRABOT_BLOB_CONTAINER", "fake-container")
     monkeypatch.delenv("ENTRABOT_KEEP_MEMORY_LOCAL", raising=False)
     monkeypatch.setattr("entrabot.storage.backend.BlobStore", lambda **_: store)
+    monkeypatch.setattr("entrabot.storage.blob.BlobStore", lambda **_: store)
     return store
 
 

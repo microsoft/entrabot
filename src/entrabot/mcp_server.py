@@ -957,6 +957,62 @@ def _effective_user_id() -> str | None:
     return config.agent_user_id if config else None
 
 
+async def _resolve_cursors_off_loop(chat_ids: list[str]) -> list[CursorResolution]:
+    """Resolve each chat's persisted cursor concurrently in worker threads.
+
+    Each cursor read is a blocking three-hop token + blob GET (~1-2s). Run serially
+    on the loop, 14+ chats starved the MCP ``initialize`` handshake past the host's
+    30s connect timeout.
+    """
+    from entrabot.tools import chat_cursors
+
+    sem = asyncio.Semaphore(CURSOR_RESOLVE_CONCURRENCY)
+
+    async def _resolve(cid: str) -> CursorResolution:
+        async with sem:
+            return await asyncio.to_thread(chat_cursors.resolve_cursor, cid)
+
+    return await asyncio.gather(*(_resolve(cid) for cid in chat_ids))
+
+
+async def _load_persisted_watched_chats() -> bool:
+    """Register every chat on the shared list; False if the list couldn't be read.
+
+    Chats already registered keep their live state, since a retry can run after
+    discovery or ``create_chat`` has registered some of them.
+    """
+    listing = await asyncio.to_thread(poll_state.read_watched_chats)
+    if listing.outcome is poll_state.PollStateOutcome.UNRESOLVED:
+        return False
+
+    watched = _state.get("watched_chats") or {}
+    chat_ids = [cid for cid in listing.chat_ids if cid not in watched]
+    resolutions = await _resolve_cursors_off_loop(chat_ids)
+    for cid, resolution in zip(chat_ids, resolutions, strict=True):
+        _register_watched_chat(cid, persist=False, resolution=resolution)
+        if logger:
+            logger.info("Loaded persisted watched chat: %s", cid)
+    return True
+
+
+async def _background_retry_watched_list() -> None:
+    """Retry loading the shared list after a failed read at boot, until it loads."""
+    while True:
+        await asyncio.sleep(WATCHED_LIST_RETRY_INTERVAL)
+        try:
+            if await _load_persisted_watched_chats():
+                if logger:
+                    logger.info("Loaded the watched-chat list after an earlier read failure")
+                return
+        except Exception as exc:
+            if logger:
+                logger.warning(
+                    "Watched-chat list retry error: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
+
+
 async def _init_poll() -> None:
     """Phase 3: Initialize watched chats and start background polling."""
     _state["last_seen_timestamp"] = None
@@ -968,32 +1024,29 @@ async def _init_poll() -> None:
     # auto-discovery) are watched. There is no default group chat.
     _state["watched_chats"] = {}
 
-    # Load persisted watched chats (DMs created via create_chat tool).
-    # Each cursor read is a blocking three-hop token + blob GET (~1-2s), so
-    # resolve them concurrently in worker threads. Run serially on the loop,
-    # 14+ chats starved the MCP ``initialize`` handshake past the host's 30s
-    # connect timeout.
-    config = _state.get("config")
-    if config:
-        watched_file = config.data_dir / "watched_chats"
-        if watched_file.is_file():
-            import asyncio
-
-            from entrabot.tools import chat_cursors
-
-            lines = (line.strip() for line in watched_file.read_text().splitlines())
-            chat_ids = [cid for cid in dict.fromkeys(lines) if cid]
-            sem = asyncio.Semaphore(CURSOR_RESOLVE_CONCURRENCY)
-
-            async def _resolve(cid: str) -> chat_cursors.CursorResolution:
-                async with sem:
-                    return await asyncio.to_thread(chat_cursors.resolve_cursor, cid)
-
-            resolutions = await asyncio.gather(*(_resolve(cid) for cid in chat_ids))
-            for cid, resolution in zip(chat_ids, resolutions, strict=True):
-                _register_watched_chat(cid, persist=False, resolution=resolution)
-                if logger:
-                    logger.info("Loaded persisted watched chat: %s", cid)
+    # Load the persisted list through the backend. In cloud mode it is shared with
+    # other instances and any local copy is ignored. All of this is blocking I/O, so
+    # it runs in worker threads.
+    if _state.get("config"):
+        ignored = await asyncio.to_thread(poll_state.ignored_legacy_local_copies)
+        if ignored and logger:
+            logger.info(
+                "Cloud memory is active, so these legacy local files are being ignored "
+                "and can be removed: %s",
+                ", ".join(str(path) for path in ignored),
+            )
+        if not await _load_persisted_watched_chats():
+            # Never treated as an empty list and never read from a local copy. Chats
+            # discovered in the meantime are merged, so nothing here can overwrite it.
+            if logger:
+                logger.warning(
+                    "Watched-chat list unreadable at startup; starting with no chats and "
+                    "will retry every %ds",
+                    WATCHED_LIST_RETRY_INTERVAL,
+                )
+            _state["_watched_list_retry_task"] = asyncio.create_task(
+                _background_retry_watched_list()
+            )
 
     # Start background polling unconditionally. Every client that
     # spawns entrabot (stdio) gets its own process and its own poll
@@ -1005,8 +1058,6 @@ async def _init_poll() -> None:
     # (its own mailbox and outbound mail rights). In delegated mode /me/*
     # would target the human's mailbox — not what we want.
     if _identity and _identity.session and _identity.session.auth_mode == "agent_user":
-        import asyncio
-
         asyncio.get_event_loop().create_task(_background_poll_email())
         asyncio.get_event_loop().create_task(_background_daily_summary())
         asyncio.get_event_loop().create_task(_background_discover_chats())
@@ -1028,8 +1079,8 @@ async def _initialize() -> None:
     push on ``notifications/claude/channel``.
 
     There is no longer a default Teams chat. Callers must pass a chat_id to
-    any Teams tool; chats to watch come from the watched_chats file or the
-    create_chat tool at runtime.
+    any Teams tool; chats to watch come from the persisted watched_chats list or
+    the create_chat tool at runtime.
     """
     # Capture on every tool entry so background pushes can see the host
     # even after the one-shot init block below short-circuits.
@@ -1050,13 +1101,13 @@ async def _initialize() -> None:
 async def _initialize_locked() -> None:
     """Body of :func:`_initialize`; caller holds ``_init_lock``."""
     await _init_auth()
-    await _init_poll()
 
     # F2: resolve + validate the storage backend once at boot. A half-configured
     # blob env raises here (fail loud) instead of silently using an empty Local
     # store and re-bootstrapping every chat (the fleet replay-flood root cause).
     # Logs the resolved backend + container so operators can confirm fleet-wide
-    # agreement in production logs.
+    # agreement in production logs. This comes before poll setup, which reads
+    # through the backend, so a mis-enved instance starts no background tasks.
     try:
         from entrabot.storage.backend import assert_backend_config
 
@@ -1065,6 +1116,8 @@ async def _initialize_locked() -> None:
         if logger:
             logger.error("Storage backend misconfigured: %s", exc)
         raise
+
+    await _init_poll()
 
     # authorization fix: log the active-sponsor-channel binding TTL so operators
     # can verify the security configuration in production logs.
@@ -1084,6 +1137,7 @@ CURSOR_RESOLVE_CONCURRENCY = 8  # parallel cursor reads at boot (each does a tok
 EMAIL_POLL_INTERVAL = 60  # seconds between /me/messages polls
 PUSHED_EMAIL_MAX = 500  # per-session dedup bound for pushed email IDs
 CHAT_DISCOVER_INTERVAL = 120  # seconds between /me/chats auto-discovery sweeps
+WATCHED_LIST_RETRY_INTERVAL = 60  # seconds between retries after a failed list read at boot
 PERSONA_SATI_HEARTBEAT_INTERVAL = 300  # 5 min smoke test against persona-sati
 
 
@@ -1250,8 +1304,10 @@ def _register_watched_chat(
     Each chat gets its own cursor and seen-set so message tracking is
     independent. Safe to call multiple times — idempotent.
 
-    When ``persist`` is True (default), the chat ID is also appended to
-    ``data_dir/watched_chats`` so it survives MCP server restarts.
+    When ``persist`` is True (default), the chat ID is also merged into the
+    shared ``watched_chats`` list so it survives MCP server restarts. This function
+    is sync and the write is blocking I/O, so the write is scheduled on a worker
+    thread; see :func:`_schedule_watched_chats_persist`.
 
     If no background poll task is currently running (e.g. the MCP server
     booted with zero watched chats and this is the first chat being added
@@ -1333,22 +1389,86 @@ def _register_watched_chat(
 
     _ensure_poll_task_running()
 
-    if persist:
-        config = _state.get("config")
-        if config:
-            watched_file = config.data_dir / "watched_chats"
-            watched_file.parent.mkdir(parents=True, exist_ok=True)
-            # Read existing, add if not present
-            existing = set()
-            if watched_file.is_file():
-                existing = {
-                    line.strip() for line in watched_file.read_text().splitlines() if line.strip()
-                }
-            if chat_id not in existing:
-                existing.add(chat_id)
-                watched_file.write_text("\n".join(sorted(existing)) + "\n")
+    if persist and _state.get("config"):
+        _schedule_watched_chats_persist(chat_id)
+
+
+def _mark_watched_chats_dirty(chat_ids: list[str]) -> None:
+    """Record chats that still need to reach the shared list.
+
+    Discovery only registers chats not already in memory, so this set is the only
+    thing that remembers a chat whose write failed. It is retried on the next
+    discovery sweep and at shutdown.
+    """
+    dirty: set[str] = _state.setdefault("_dirty_watched_chats", set())
+    dirty.update(chat_ids)
+
+
+async def _persist_dirty_watched_chats() -> bool:
+    """Merge every dirty chat into the shared list off the event loop.
+
+    Returns True when none remain dirty. Writes are serialized within this process,
+    and chats that turn dirty during a write go out in the next pass of the loop, so
+    a burst of registrations coalesces. A failure logs and keeps the chats dirty, and
+    never raises: polling a chat doesn't depend on its being on the list.
+    """
+    lock = _state.setdefault("_watched_persist_lock", asyncio.Lock())
+    async with lock:
+        while True:
+            dirty = _state.get("_dirty_watched_chats")
+            if not dirty:
+                return True
+            batch = sorted(dirty)
+            result = await asyncio.to_thread(poll_state.add_watched_chats, batch)
+            if not result.persisted:
                 if logger:
-                    logger.info("Persisted watched chat: %s", chat_id)
+                    logger.warning(
+                        "Could not persist %d watched chat(s); will retry later",
+                        len(batch),
+                    )
+                return False
+            dirty.difference_update(batch)
+            if result.added:
+                # A gate rebuilt while this write was in flight read a list without
+                # these chats, and its federated sponsors would never match.
+                _state.pop("sponsor_gate", None)
+                if logger:
+                    logger.info("Persisted %d watched chat(s)", len(result.added))
+
+
+def _schedule_watched_chats_persist(chat_id: str) -> None:
+    """Mark *chat_id* dirty and write it without blocking the caller.
+
+    Mirrors ``_schedule_cursor_save``. With no running loop there is nothing to
+    block, so it writes synchronously.
+    """
+    _mark_watched_chats_dirty([chat_id])
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _flush_watched_chats()
+        return
+    tasks: set = _state.setdefault("_watched_persist_tasks", set())
+    task = loop.create_task(_persist_dirty_watched_chats())
+    tasks.add(task)  # hold a reference so the task can't be collected mid-write
+    task.add_done_callback(tasks.discard)
+
+
+def _flush_watched_chats() -> None:
+    """Synchronously write every dirty chat, for shutdown and the no-loop fallback.
+
+    Failures log and never propagate. The next process rediscovers these chats
+    anyway, so losing one here is not lasting.
+    """
+    dirty: set[str] = _state.get("_dirty_watched_chats") or set()
+    if not dirty:
+        return
+    batch = sorted(dirty)
+    result = poll_state.add_watched_chats(batch)
+    if result.persisted:
+        dirty.difference_update(batch)
+    elif logger:
+        logger.warning("Could not flush %d watched chat(s) to the list", len(batch))
 
 
 async def _bootstrap_chat(chat_id: str) -> None:
@@ -2406,8 +2526,10 @@ async def send_teams_message(
     gate: SponsorGate | None = _state.get("sponsor_gate")  # type: ignore[assignment]
     if gate is None:
         try:
-            gate = load_agent_identity_sponsor_gate(wait_config)
-            _state["sponsor_gate"] = gate
+            # Blocking: a blob read for the chat list plus Graph calls per chat.
+            gate = await asyncio.to_thread(load_agent_identity_sponsor_gate, wait_config)
+            if not gate.provisional:
+                _state["sponsor_gate"] = gate
             if logger:
                 logger.info(
                     "send_teams_message auto-wait: sponsor gate loaded ids=%s upns=%s mails=%s",
@@ -3317,10 +3439,20 @@ async def create_chat(target_email: str, target_tenant_id: str = "") -> str:
         agent_user_id=_effective_user_id(),
     )
 
-    # Auto-register the new chat for background polling
+    # Auto-register the new chat for background polling. Both the cursor read and
+    # the list write are blocking I/O, so neither runs on the event loop.
     new_chat_id = result.get("chat_id")
     if new_chat_id:
-        _register_watched_chat(new_chat_id)
+        from entrabot.tools.chat_cursors import resolve_cursor
+
+        resolution = None
+        if new_chat_id not in (_state.get("watched_chats") or {}):
+            resolution = await asyncio.to_thread(resolve_cursor, new_chat_id)
+        _register_watched_chat(new_chat_id, resolution=resolution)
+        # Wait for the write: the next call may rebuild the sponsor gate from this
+        # list, and a gate missing this chat never matches a federated sponsor
+        # (Learning #52). A failure leaves the chat dirty and doesn't fail the tool.
+        await _persist_dirty_watched_chats()
 
     return json.dumps(result, indent=2)
 
@@ -3644,8 +3776,10 @@ async def wait_for_sponsor_dm(
     gate: SponsorGate | None = _state.get("sponsor_gate")  # type: ignore[assignment]
     if gate is None:
         try:
-            gate = load_agent_identity_sponsor_gate(config)
-            _state["sponsor_gate"] = gate
+            # Blocking: a blob read for the chat list plus Graph calls per chat.
+            gate = await asyncio.to_thread(load_agent_identity_sponsor_gate, config)
+            if not gate.provisional:
+                _state["sponsor_gate"] = gate
             # Diagnostic: dump the loaded sponsor set once so operators
             # can correlate against rejection logs in wait_tool.
             logger.info(
@@ -4002,6 +4136,15 @@ async def _run_stdio_with_write_stream() -> None:
                         type(exc).__name__,
                         exc,
                     )
+            try:
+                _flush_watched_chats()
+            except Exception as exc:  # noqa: BLE001
+                if logger:
+                    logger.warning(
+                        "Watched-chat flush on shutdown failed: %s: %s",
+                        type(exc).__name__,
+                        exc,
+                    )
 
 
 @mcp.tool()
@@ -4247,7 +4390,8 @@ async def bootstrap_body_state() -> str:
     """
     from entrabot.tools.body_bootstrap import bootstrap_body_state as _bootstrap
 
-    return json.dumps(_bootstrap(), indent=2)
+    # Reads the watched list and every chat cursor from the backend.
+    return json.dumps(await asyncio.to_thread(_bootstrap), indent=2)
 
 
 @mcp.tool()

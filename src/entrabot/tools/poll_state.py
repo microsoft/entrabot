@@ -131,7 +131,8 @@ class EmailClaim(Enum):
     FAILED = "failed"
 
 
-def _is_chat_id(value: str) -> bool:
+def is_chat_id(value: str) -> bool:
+    """True when *value* is safe to treat as a chat ID (see the note on the regex)."""
     return bool(value) and not _UNSAFE_CHAT_ID_CHARS.search(value)
 
 
@@ -142,7 +143,7 @@ def _parse_watched_chats(raw: str) -> tuple[str, ...]:
         candidate = line.strip()
         if not candidate:
             continue
-        if _is_chat_id(candidate):
+        if is_chat_id(candidate):
             chat_ids[candidate] = None
         else:
             # Report only the length: the line is untrusted and could be anything.
@@ -186,7 +187,7 @@ def add_watched_chats(chat_ids: Iterable[str]) -> WatchedChatsWrite:
     nothing when every chat is already listed, and nothing after a failed read,
     which must never be mistaken for an empty list. Never raises.
     """
-    requested = {chat_id for chat_id in chat_ids if _is_chat_id(chat_id)}
+    requested = {chat_id for chat_id in chat_ids if is_chat_id(chat_id)}
     if not requested:
         return WatchedChatsWrite(persisted=True)
 

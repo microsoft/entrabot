@@ -15,10 +15,12 @@ from unittest.mock import patch
 
 import pytest
 
-from entrabot.tools import chat_cursors
+from entrabot.storage.backend import BlobBackend
+from entrabot.tools import chat_cursors, poll_state
 from entrabot.tools import interaction_log as il
 from entrabot.tools import promises as pr
 from entrabot.tools.body_bootstrap import bootstrap_body_state
+from entrabot.tools.poll_state import WATCHED_CHATS_KEY
 
 
 @pytest.fixture
@@ -380,6 +382,48 @@ class TestWatchedChatCount:
         (tmp_data_dir / "watched_chats").write_text("19:A@thread.v2\n\n19:B@thread.v2\n\n")
         result = bootstrap_body_state()
         assert result["watched_chat_count"] == 2
+
+
+class TestWatchedChatCountFollowsTheBackend:
+    """GitHub #64: on a cloud backend this used to read a local file and report 0."""
+
+    def test_counts_the_cloud_list(self, fake_cloud_store) -> None:
+        BlobBackend(fake_cloud_store).write_text(
+            WATCHED_CHATS_KEY, "19:A@thread.v2\n19:B@thread.v2\n"
+        )
+        result = bootstrap_body_state()
+        assert result["watched_chat_count"] == 2
+        assert result["cursor_freshness"]["watched_chat_count"] == 2
+
+    def test_stale_local_file_is_ignored_in_cloud_mode(
+        self, fake_cloud_store, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
+        (tmp_path / "watched_chats").write_text("19:old@thread.v2\n" * 68)
+        assert bootstrap_body_state()["watched_chat_count"] == 0
+
+    def test_unreadable_list_reports_unknown_rather_than_zero(self, monkeypatch) -> None:
+        """0 would tell the model it isn't watching anything."""
+        monkeypatch.setattr(
+            poll_state,
+            "read_watched_chats",
+            lambda: poll_state.WatchedChatsRead(poll_state.PollStateOutcome.UNRESOLVED),
+        )
+        result = bootstrap_body_state()
+        assert result["watched_chat_count"] is None
+        assert result["cursor_freshness"]["watched_chat_count"] is None
+
+    def test_list_is_read_once_per_packet(self, tmp_data_dir: Path, monkeypatch) -> None:
+        reads = {"n": 0}
+        real_read = poll_state.read_watched_chats
+
+        def counting_read() -> poll_state.WatchedChatsRead:
+            reads["n"] += 1
+            return real_read()
+
+        monkeypatch.setattr(poll_state, "read_watched_chats", counting_read)
+        bootstrap_body_state()
+        assert reads["n"] == 1
 
 
 # ---------------------------------------------------------------------------

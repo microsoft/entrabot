@@ -1744,7 +1744,9 @@ class TestChatAutoDiscovery:
             assert brand_new in mcp_server._state["watched_chats"]
             assert mcp_server._state["watched_chats"][brand_new]["bootstrapped"] is False
 
-            # File: new chat persisted so next server start inherits it
+            # File: new chat persisted so next server start inherits it. The write
+            # runs off the event loop now, so wait for it to land.
+            assert await mcp_server._persist_dirty_watched_chats() is True
             persisted = (tmp_path / "watched_chats").read_text().splitlines()
             assert brand_new in persisted
         finally:

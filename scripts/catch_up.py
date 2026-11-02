@@ -1,18 +1,25 @@
 """Pull recent messages from all watched chats + inbox.
 
-Run as Agent User to see what landed while we weren't polling.
+Run as Agent User to see what landed while we weren't polling. The chat list comes
+from the configured storage backend, the same one the MCP server uses. Importing
+``entrabot.config`` loads ``.env``, which is usually where the blob settings that
+select that backend live.
 """
 
 from __future__ import annotations
 
 import asyncio
 import sys
-from pathlib import Path
 
 import httpx
 
 from entrabot.config import get_config
+from entrabot.storage.backend import get_backend
+from entrabot.tools.poll_state import PollStateOutcome, is_chat_id, read_watched_chats
 from entrabot.tools.teams import acquire_agent_user_token
+
+# A single-chat key from before chats were explicit. Nothing writes it any more.
+LEGACY_DEFAULT_CHAT_KEY = "chat_id"
 
 
 async def fetch(
@@ -31,19 +38,40 @@ async def fetch(
     return r.json()
 
 
+def load_chat_ids() -> tuple[list[str], bool]:
+    """Return ``(chat_ids, resolved)`` from the configured backend.
+
+    ``resolved`` is False when the list couldn't be read, which is reported instead
+    of looking like "no chats". There is no fallback to a local copy.
+    """
+    listing = read_watched_chats()
+    if listing.outcome is PollStateOutcome.UNRESOLVED:
+        print(
+            "ERROR: could not read the watched-chat list from the configured "
+            "storage backend; showing the inbox only.",
+            file=sys.stderr,
+        )
+        return [], False
+
+    chat_ids = list(listing.chat_ids)
+    try:
+        legacy = (get_backend().read_text(LEGACY_DEFAULT_CHAT_KEY) or "").strip()
+    except Exception as exc:  # noqa: BLE001 — optional key; the list above is what matters.
+        print(
+            f"WARNING: could not read {LEGACY_DEFAULT_CHAT_KEY}: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        legacy = ""
+    if is_chat_id(legacy) and legacy not in chat_ids:
+        chat_ids.insert(0, legacy)
+    return chat_ids, True
+
+
 async def main() -> None:
     _hours = int(sys.argv[1]) if len(sys.argv) > 1 else 6  # noqa: F841 — reserved for future filtering
     token = acquire_agent_user_token(get_config())
 
-    watched = Path.home() / ".entrabot" / "data" / "watched_chats"
-    chat_ids: list[str] = []
-    if watched.exists():
-        chat_ids = [ln.strip() for ln in watched.read_text().splitlines() if ln.strip()]
-    default_chat = Path.home() / ".entrabot" / "data" / "chat_id"
-    if default_chat.exists():
-        cid = default_chat.read_text().strip()
-        if cid and cid not in chat_ids:
-            chat_ids.insert(0, cid)
+    chat_ids, resolved = await asyncio.to_thread(load_chat_ids)
 
     async with httpx.AsyncClient() as client:
         for cid in chat_ids:
@@ -87,6 +115,9 @@ async def main() -> None:
                 print(f"  [{ts}] {sender}{att}: {subj}")
                 if prev:
                     print(f"     {prev}")
+
+    if not resolved:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
