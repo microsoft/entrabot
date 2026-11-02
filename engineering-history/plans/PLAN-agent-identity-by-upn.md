@@ -14,7 +14,7 @@ The background Teams poll uses a **display-name string match** to identify the a
 - `src/entrabot/mcp_server.py:3324` — same hard-coded string
 - `src/entrabot/tools/teams.py:1411` — `filter_human_messages` predicate compares `sender_display_name` against the hard-coded string
 
-Graph now returns `"EntraClaw Agent"` in `message.from.user.displayName` because the agent was renamed. The self-authored filter therefore no-ops. Every outbound the agent has sent since the rename is eligible to be re-read as inbound. On 61 of 62 watched chats the cursor sits just before a self-authored message from the pre-rename window, so a normal poll pass picks those up as "new," pushes them via the channel notification path, and advances the cursor past them — one replay burst per chat.
+Graph now returns a new display name in `message.from.user.displayName` because the agent was renamed. The self-authored filter therefore no-ops. Every outbound the agent has sent since the rename is eligible to be re-read as inbound. On 61 of 62 watched chats the cursor sits just before a self-authored message from the pre-rename window, so a normal poll pass picks those up as "new," pushes them via the channel notification path, and advances the cursor past them — one replay burst per chat.
 
 **Root shape:** identifying an AAD principal by its display name is unsafe. Display names are user-mutable and change with rename. UPN and object-id are stable.
 

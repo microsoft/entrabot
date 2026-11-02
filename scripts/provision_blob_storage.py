@@ -152,7 +152,7 @@ def ensure_storage_account(name: str, resource_group: str, location: str) -> str
     """Ensure the account exists and return the resource group it lives in.
 
     Storage account names are global, so an account created under an earlier resource group
-    name (``entraclaw-rg``) is reused where it is instead of failing on create. *resource_group*
+    name is reused where it is instead of failing on create. *resource_group*
     is only ensured when a new account must be created, so an operator who can manage an
     existing account but cannot create resource groups is not blocked.
     """

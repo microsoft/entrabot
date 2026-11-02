@@ -19,8 +19,8 @@ def audit_identity_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
 
 
 @pytest.fixture(autouse=True)
-def _isolate_memory_backend_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Isolate the memory backend from ambient cloud configuration.
+def _isolate_memory_backend_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Isolate the memory backend from ambient configuration and real data.
 
     ``storage.get_backend()`` resolves to a :class:`BlobBackend` whenever
     ``ENTRABOT_BLOB_ENDPOINT`` and ``ENTRABOT_BLOB_CONTAINER`` are both set
@@ -34,9 +34,15 @@ def _isolate_memory_backend_env(monkeypatch: pytest.MonkeyPatch) -> None:
     exercise blob selection set the vars themselves in-body via the same
     function-scoped ``monkeypatch`` instance, so their explicit setup runs
     after this teardown-safe clear and still wins.
+
+    Point ``ENTRABOT_DATA_DIR`` at the test's own temp directory for the same
+    reason: without it, any test that logs through the local backend appends
+    to the developer's real ``~/.entrabot/data``, and setup's memory migration
+    can later upload those rows to the live agent's container.
     """
     monkeypatch.delenv("ENTRABOT_BLOB_ENDPOINT", raising=False)
     monkeypatch.delenv("ENTRABOT_BLOB_CONTAINER", raising=False)
+    monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path / "data"))
 
 
 @pytest.fixture(autouse=True)
