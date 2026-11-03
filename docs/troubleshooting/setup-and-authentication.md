@@ -88,13 +88,13 @@ Identity token exchanges.
 Verify the local and registered certificate metadata:
 
 ```bash
-.venv/bin/python scripts/verify_blueprint_cert.py
+.venv/bin/python scripts/verify_blueprint_cert.py <BLUEPRINT_OBJECT_ID> <EXPECTED_THUMBPRINT>
 ```
 
 On macOS or Linux, if local state lost the registered thumbprint:
 
 ```bash
-.venv/bin/python scripts/find_local_blueprint_cert.py
+.venv/bin/python scripts/find_local_blueprint_cert.py <BLUEPRINT_OBJECT_ID>
 ```
 
 If the private key is missing, re-run setup for the existing Blueprint. Do not

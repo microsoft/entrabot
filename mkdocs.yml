@@ -193,6 +193,8 @@ nav:
               - find_local_blueprint_cert.py: reference/scripts/auth-and-certs/find-local-blueprint-cert-py.md
               - list_blueprint_certs.py: reference/scripts/auth-and-certs/list-blueprint-certs-py.md
               - verify_blueprint_cert.py: reference/scripts/auth-and-certs/verify-blueprint-cert-py.md
+              - register_blueprint_cert.py: reference/scripts/auth-and-certs/register-blueprint-cert-py.md
+              - blueprint_certs.py: reference/scripts/auth-and-certs/blueprint-certs-py.md
               - generate_windows_cert.py: reference/scripts/auth-and-certs/generate-windows-cert-py.md
               - rotate_cert_windows.py: reference/scripts/auth-and-certs/rotate-cert-windows-py.md
           - Storage:

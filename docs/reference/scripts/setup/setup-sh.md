@@ -40,8 +40,14 @@ manager. See also [macOS / Linux installation](../../../getting-started/macos-li
 # Create an explicit Agent User UPN
 ./scripts/setup.sh --new --agent-user-upn=entrabot-agent@yourtenant.onmicrosoft.com
 
-# Attach this machine to an existing Blueprint (multi-device / re-install)
+# Attach this machine to an existing Blueprint (multi-device / re-install).
+# Adds a certificate for this machine; other machines' certificates are kept.
 ./scripts/setup.sh --use-blueprint=<BLUEPRINT_APP_ID> --agent-user-upn=<UPN>
+
+# Replace EVERY certificate on the Blueprint with a new one for this machine.
+# Other machines stop authenticating until they run setup again.
+# This does not delete the Blueprint itself.
+./scripts/setup.sh --use-blueprint=<BLUEPRINT_APP_ID> --remove-all-existing-certs
 
 # Opt in to cloud-hosted operational memory (Azure Blob Storage)
 ./scripts/setup.sh --new --with-upn-suffix=workstation --use-cloud-memory
@@ -67,11 +73,23 @@ Identity mode (choose one):
   suffix (`--with-upn-suffix`) or an explicit `--agent-user-upn`; if neither is
   given, the script prompts for a suffix.
 - `--use-blueprint=ID` — attach to an existing Blueprint by App ID. A new cert is
-  generated for this machine and added to the Blueprint; the existing Agent
-  Identity and Agent User are reused. If local state points at a *different*
-  Blueprint, the stale identity-derived state is wiped (after a timestamped
-  backup) so discovery re-runs cleanly against the new Blueprint. The old
-  machine's cert on the previous Blueprint is **not** revoked automatically.
+  generated for this machine and added to the Blueprint; existing certificates are
+  kept, so other machines keep working, and the existing Agent Identity and Agent
+  User are reused. If local state points at a *different* Blueprint, the stale
+  identity-derived state is wiped (after a timestamped backup) so discovery re-runs
+  cleanly against the new Blueprint. The old machine's cert on the previous
+  Blueprint is **not** revoked automatically.
+- `--remove-all-existing-certs` — used with `--use-blueprint`. Removes **every**
+  certificate on the Blueprint, including those of other machines, and replaces them
+  with a new one for this machine, even if this machine's current certificate is
+  still valid. **It does not delete the Blueprint**, its Agent Identities, or its
+  Agent Users. Every other machine stops authenticating until it runs setup again.
+  It lists what will be removed (name and expiry only) and asks `y/N` on a terminal;
+  without a terminal the flag itself is the consent, and it says so loudly. Nothing on
+  this machine changes until the replacement is confirmed, so declining, or Graph
+  refusing the update, leaves the active key, the state file, and any pending key as
+  they were. This is the only way setup removes a certificate. Mutually exclusive with
+  `--new`, which creates a Blueprint with no certificates.
 
 Agent User selection:
 
@@ -137,11 +155,22 @@ Diagnostics and control:
   reuses the Blueprint, Agent Identity, and Agent User via
   [`create_entra_agent_ids.py`](../provisioning/create-entra-agent-ids-py.md)
   (using the Provisioner certificate token, never `az` CLI tokens).
-- Generates an RSA-2048 self-signed Blueprint certificate, stores the private
-  key in the OS credential store, and uploads only the public certificate to the
-  Blueprint via a Graph `PATCH keyCredentials` (a list-replace, which warns
-  before overwriting existing certs). Reuses a cached or locally recoverable
-  certificate when one is already registered.
+- Reuses this machine's certificate only when
+  [`find_local_blueprint_cert.py`](../auth-and-certs/find-local-blueprint-cert-py.md)
+  shows that the local private key matches a certificate still registered on the
+  Blueprint that hasn't expired. The thumbprint cached in the state file is never
+  trusted on its own: setup uses the thumbprint that check returns, and saves it if it
+  differs from the cached one. `verify_blueprint_cert.py` is an operator tool that setup
+  does not call.
+- Otherwise, including whenever a new private key is still waiting under the pending
+  keystore entry from an earlier run,
+  [`register_blueprint_cert.py`](../auth-and-certs/register-blueprint-cert-py.md)
+  generates an RSA-2048 self-signed certificate (or reuses the pending key), keeps the
+  private key under a temporary keystore entry, and uploads only the public certificate.
+  Because a Graph `PATCH keyCredentials` replaces the whole list, it sends every existing
+  certificate back along with the new one, then reads the list back to confirm before
+  making the new key active and recording the thumbprint. A normal run never removes a
+  certificate.
 - Creates `.venv`, installs the package with dev extras, and writes `.env`
   (`chmod 600`) with the resulting tenant, Blueprint, Agent Identity, Agent User,
   and human-user identifiers plus the certificate thumbprint.
@@ -169,9 +198,11 @@ Diagnostics and control:
 - `0` — setup (or `--status` / `--help`) completed successfully; the smoke test
   either passed or was skipped.
 - `1` — a fatal setup error (for example a missing prerequisite, no Azure login,
-  a failed provisioning step, an aborted cert replacement, `--new` /
-  `--use-blueprint` conflict, or a missing required identity mode).
-- `2` — mutually exclusive storage flags, or setup completed provisioning but the
+  a failed provisioning step, a certificate check that couldn't complete, a declined
+  `--remove-all-existing-certs` prompt, `--new` / `--use-blueprint` conflict, or a
+  missing required identity mode).
+- `2` — mutually exclusive storage flags, `--new` with
+  `--remove-all-existing-certs`, or setup completed provisioning but the
   cloud-memory **migration failed** (cloud memory is not in sync with local
   disk; re-run after fixing the underlying consent error).
 - `3` — provisioning finished but the post-setup **smoke test failed** (the agent
@@ -187,9 +218,19 @@ Diagnostics and control:
   --switch-user`) and retry.
 - **`No identity mode specified`** — pass `--new --with-upn-suffix=NAME` or
   `--use-blueprint=APP_ID`.
-- **Cert replacement prompt** — the Blueprint already has registered
-  certificate(s); confirming replaces them (Graph `PATCH` list semantics), which
-  stops other machines authenticating until they re-run setup.
+- **`Could not check ...`** — setup couldn't read the Blueprint's certificates or the
+  OS credential store (the pending key entry included), so it doesn't know whether this
+  machine is already registered. It stops rather than generating a certificate, and
+  nothing was changed. Fix the error shown above the message and re-run.
+- **`Could not confirm the certificate update`** — the update may have landed but
+  couldn't be read back. The new private key is kept; re-run setup and it picks up
+  where it left off. See
+  [`register_blueprint_cert.py`](../auth-and-certs/register-blueprint-cert-py.md#what-happens-to-the-key-on-failure).
+- **Old certificates building up** — a normal run only adds, including when a
+  certificate has expired. Remove individual certificates in the Entra admin center,
+  or replace them all with `--remove-all-existing-certs`.
+- **Another machine stopped authenticating after `--remove-all-existing-certs`** — this
+  is what the flag does. Run setup on that machine to add its certificate back.
 - **Smoke test failed (exit 3)** — usually license replication latency; wait
   10–15 minutes and re-run with `--diagnose`.
 - **Migration failed (exit 2)** — most often missing storage consent for the
@@ -206,6 +247,10 @@ Diagnostics and control:
 - [`setup-windows.ps1`](setup-windows-ps1.md) — the Windows counterpart.
 - [`create_entra_agent_ids.py`](../provisioning/create-entra-agent-ids-py.md) —
   the underlying identity-chain provisioner.
+- [`register_blueprint_cert.py`](../auth-and-certs/register-blueprint-cert-py.md) —
+  generates and registers this machine's certificate.
+- [`list_blueprint_certs.py`](../auth-and-certs/list-blueprint-certs-py.md) — see which
+  certificates are on the Blueprint.
 - [`provision_blob_storage.py`](../storage/provision-blob-storage-py.md) —
   cloud-memory provisioning invoked by `--use-cloud-memory`.
 - [`status.sh`](../operations/status-sh.md) /

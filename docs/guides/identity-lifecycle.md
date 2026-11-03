@@ -65,8 +65,9 @@ pwsh -File scripts/deploy-windows.ps1
 
 This wraps `rotate_cert_windows.py`: it captures the current certificate's
 public DER before generating a new one (the only chance to do so for
-non-exportable TPM-backed keys), PATCHes the new public certificate onto the
-Blueprint app, and updates both thumbprints it tracks: the `x5t#S256`
+non-exportable TPM-backed keys), swaps the new public certificate onto the
+Blueprint app in place of the old one while keeping other machines'
+certificates, and updates both thumbprints it tracks: the `x5t#S256`
 (SHA-256) used in JWT assertion headers, and the 40-character SHA-1
 thumbprint Windows CNG uses to locate the private key in the certificate
 store. It then runs a smoke test against the new certificate, and rolls back
@@ -75,16 +76,37 @@ the PATCH plus local state if the smoke test fails. See the
 and the
 [`rotate_cert_windows.py` reference](../reference/scripts/auth-and-certs/rotate-cert-windows-py.md).
 
-**macOS and Linux** operators use two diagnostic scripts rather than an
-automated rotation flow: `find_local_blueprint_cert.py` recovers a
-registered certificate thumbprint matching the local private key when local
-state is missing it, and `verify_blueprint_cert.py` checks whether a cached
-thumbprint is still registered on the Blueprint app. If either script
-reports a stale or missing certificate, re-run setup to regenerate and
-re-register it. See the auth-and-certs reference pages for
-[`find_local_blueprint_cert.py`](../reference/scripts/auth-and-certs/find-local-blueprint-cert-py.md)
+**macOS and Linux** have no automated rotation flow. Setup checks the certificate on
+every run instead. `find_local_blueprint_cert.py` tests whether this machine's private
+key matches a certificate registered on the Blueprint that hasn't expired, and setup
+reuses that certificate if so, correcting a stale thumbprint in local state. Otherwise
+(an expired certificate counts as no match, so the next run adds a new one), and whenever a new
+key from an unfinished run is still pending, setup runs `register_blueprint_cert.py` to
+add one. It never trusts the cached thumbprint on its own. If the check itself fails
+(exit `3`), setup stops rather than generating a certificate, so fix the cause first. To
+ask whether one particular thumbprint, such as the one in `.env`, is still on the
+Blueprint, use `verify_blueprint_cert.py`; setup does not call it. See the
+auth-and-certs reference pages for
+[`find_local_blueprint_cert.py`](../reference/scripts/auth-and-certs/find-local-blueprint-cert-py.md),
+[`register_blueprint_cert.py`](../reference/scripts/auth-and-certs/register-blueprint-cert-py.md),
 and
 [`verify_blueprint_cert.py`](../reference/scripts/auth-and-certs/verify-blueprint-cert-py.md).
+
+### Several machines on one Blueprint
+
+A Blueprint holds one certificate per machine, and attaching a machine with
+`setup.sh --use-blueprint=<APP_ID>` adds to the list without removing any other
+machine's certificate. See which certificates are registered with
+[`list_blueprint_certs.py`](../reference/scripts/auth-and-certs/list-blueprint-certs-py.md).
+
+To start over, for example after losing a laptop,
+`setup.sh --use-blueprint=<APP_ID> --remove-all-existing-certs` removes **every**
+certificate on the Blueprint and replaces them with a new one for the machine you run
+it on. Every other machine stops authenticating until it runs setup again. The flag
+only removes certificates: it does not delete the Blueprint, its Agent Identities, or
+its Agent Users. To delete those, see [Targeted deprovisioning](#targeted-deprovisioning).
+See the
+[`register_blueprint_cert.py` reference](../reference/scripts/auth-and-certs/register-blueprint-cert-py.md).
 
 ## Targeted deprovisioning
 

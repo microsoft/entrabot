@@ -17,6 +17,11 @@
 
 ### Fixed
 
+- Attaching a machine with `setup.sh --use-blueprint` no longer removes other machines' Blueprint certificates: it adds to the list, and `--remove-all-existing-certs` is the only way to replace it. That flag removes certificates only and does not delete the Blueprint. `deploy-windows.ps1` rotation also keeps other machines' certificates ([#124](https://github.com/microsoft/entrabot/issues/124)).
+- A failed Graph read can no longer look like an empty certificate list. `verify_blueprint_cert.py` and `find_local_blueprint_cert.py` exit `3` for "could not check", `list_blueprint_certs.py` exits non-zero and prints no count, and setup stops instead of regenerating.
+- A new Blueprint private key stays under a temporary keystore entry until its certificate is confirmed on the Blueprint, so a failed upload no longer strands the machine.
+- `setup.sh` no longer trusts the thumbprint cached in the state file. It reuses a certificate only when this machine's private key matches one registered on the Blueprint, and it always runs `register_blueprint_cert.py` while a new key is still pending, so a re-run after an interrupted or unconfirmed certificate update recovers instead of carrying on with a credential that is about to be revoked. `--remove-all-existing-certs` changes nothing on the machine until the replacement is confirmed. `verify_blueprint_cert.py` is now an operator tool that setup does not call.
+- An expired Blueprint certificate is no longer reused: `find_local_blueprint_cert.py` and pending-key recovery treat it as no match, so setup registers a new one (the expired entry stays on the list). Two `register_blueprint_cert.py` runs by the same OS user can no longer overlap and clobber the shared pending key, and the state file is written atomically so a full disk can't leave it truncated.
 - Self-authored Teams messages remain filtered after an Agent User display-name change.
 - Forged `<external_content>` text can no longer bypass the authoritative XPIA boundary.
 - A UTC-midnight-dependent test no longer fails intermittently on Windows CI.

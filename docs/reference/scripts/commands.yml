@@ -1,4 +1,4 @@
-# Single source of truth for the 42 supported operator-facing commands
+# Single source of truth for the 44 supported operator-facing commands
 # documented on the public site. See tests/docs/test_script_commands_manifest.py
 # for the validation this file must satisfy, and
 # docs/reference/scripts/index.md for the rendered landing page.
@@ -173,7 +173,7 @@ commands:
     platforms: [macos, linux, windows]
     summary: Materializes the Microsoft Agent 365 Work IQ MCP first-party resource service principals and Blueprint-wide OAuth grants using the Provisioner token, working around the A365 CLI's silent OAuth2-grants-failed exit.
 
-  # --- Auth and Certificates (9) ---
+  # --- Auth and Certificates (11) ---
   - id: grant-consent-py
     path: scripts/grant_consent.py
     category: auth-and-certs
@@ -203,19 +203,31 @@ commands:
     category: auth-and-certs
     page: reference/scripts/auth-and-certs/find-local-blueprint-cert-py.md
     platforms: [macos, linux]
-    summary: Recovers the registered Blueprint cert thumbprint (SHA-256 b64url) matching the local OS-keystore private key for a given Blueprint object ID, so setup.sh can reuse an existing cert instead of prompting to rotate.
+    summary: Recovers the registered Blueprint cert thumbprint (SHA-256 b64url) matching the local OS-keystore private key for a given Blueprint object ID, so setup.sh can reuse an existing cert instead of registering another. Exits 1 without asking Graph while a pending key from an unfinished run exists, so setup.sh goes to register_blueprint_cert.py. Exit 0 found, 1 checked and no match (or a pending key), 2 usage error, 3 could not check.
   - id: list-blueprint-certs-py
     path: scripts/list_blueprint_certs.py
     category: auth-and-certs
     page: reference/scripts/auth-and-certs/list-blueprint-certs-py.md
     platforms: [macos, linux]
-    summary: Prints the count of certificates registered on a Blueprint app (stdout) plus one human-readable detail line per cert (stderr); used by setup.sh to show what will be replaced before generating a new cert.
+    summary: Prints the count of certificates registered on a Blueprint app (stdout) plus one human-readable detail line per cert (stderr). If the list can't be read, it exits non-zero and prints no count.
   - id: verify-blueprint-cert-py
     path: scripts/verify_blueprint_cert.py
     category: auth-and-certs
     page: reference/scripts/auth-and-certs/verify-blueprint-cert-py.md
     platforms: [macos, linux]
-    summary: Checks whether an expected thumbprint is still present on a Blueprint app's keyCredentials, so setup.sh's cached-thumbprint fast path can detect a stale cache before it fails at Hop 1. Exit 0 present, 1 stale, 2 usage error.
+    summary: Checks whether a given thumbprint is still present on a Blueprint app's keyCredentials. An operator tool; setup.sh does not call it. Exit 0 present, 1 checked and not present, 2 usage error, 3 could not check.
+  - id: register-blueprint-cert-py
+    path: scripts/register_blueprint_cert.py
+    category: auth-and-certs
+    page: reference/scripts/auth-and-certs/register-blueprint-cert-py.md
+    platforms: [macos, linux]
+    summary: Generates this machine's Blueprint certificate and registers it, keeping the private key under a pending keystore entry until the certificate is confirmed on the Blueprint. Adds to the existing certificates by default; --remove-all-existing-certs replaces them all (it does not delete the Blueprint). Called by setup.sh. Exit 0 registered, 1 nothing changed, 2 usage error, 3 outcome not confirmed.
+  - id: blueprint-certs-py
+    path: scripts/blueprint_certs.py
+    category: auth-and-certs
+    page: reference/scripts/auth-and-certs/blueprint-certs-py.md
+    platforms: [macos, linux, windows]
+    summary: Shared library behind the Blueprint certificate scripts and the Windows rotation. Reads keyCredentials (a failed read is never an empty list), merges without de-duplicating, and confirms each write by reading it back. Not a CLI.
   - id: generate-windows-cert-py
     path: scripts/generate_windows_cert.py
     category: auth-and-certs
@@ -227,7 +239,7 @@ commands:
     category: auth-and-certs
     page: reference/scripts/auth-and-certs/rotate-cert-windows-py.md
     platforms: [windows]
-    summary: Transactional Windows Blueprint cert rotation extracted from deploy-windows.ps1 for testable rollback — PATCHes the new cert onto the Blueprint and, if the smoke check fails, restores the old DER, restores the previous .env thumbprints, and invalidates the MSAL cache.
+    summary: Transactional Windows Blueprint cert rotation extracted from deploy-windows.ps1 for testable rollback — swaps the new cert onto the Blueprint, keeping other machines' certs, and, if the smoke check fails, restores the old DER, restores the previous .env thumbprints, and invalidates the MSAL cache.
 
   # --- Storage (2) ---
   - id: provision-blob-storage-py

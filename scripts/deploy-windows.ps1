@@ -8,7 +8,8 @@
   exportable TPM keys this is the only chance to grab it), generates
   a new cert, hands both DERs to rotate_cert_windows.rotate(), and
   deletes the old cert from Cert:\CurrentUser\My only after smoke
-  passes.
+  passes. Other machines' certs on the Blueprint are kept, forward and
+  on rollback.
 
 .PARAMETER Status
     Skip cert rotation and run the consolidated status command via
@@ -24,8 +25,9 @@
     With -Status, return non-zero when health checks fail.
 
   Failure modes:
-    - Initial PATCH fails → rotate raises RotationFailed; nothing
-      changed; old cert still in store; .env still points at old cert.
+    - Reading the Blueprint's certs or the initial PATCH fails → rotate
+      raises RotationFailed; old cert still in store; .env still points
+      at old cert.
     - Smoke fails → rotate triggers a rollback PATCH + .env restore +
       MSAL cache invalidation, raises RotationRolledBack.
     - Rollback PATCH fails → rotate raises ManualInterventionRequired;
@@ -111,9 +113,10 @@ $newX5tS256 = ($genOut | Select-String '^x5t_s256=(.+)$').Matches[0].Groups[1].V
 # graph_patch + smoke_test + delete_old callables to real Graph + a
 # fresh acquire_agent_user_token call.
 $driver = @"
-import sys, base64, httpx
+import sys
 from pathlib import Path
 sys.path.insert(0, r'$ScriptDir')
+import blueprint_certs
 import rotate_cert_windows as rcw
 from entrabot.config import get_config
 from entrabot.tools.teams import acquire_agent_identity_token, acquire_agent_user_token
@@ -127,19 +130,17 @@ state = rcw.RotationState(
 old_der = Path(r'$oldDerPath').read_bytes()
 new_der = Path(r'$newDerPath').read_bytes()
 
+# Swaps this machine's old and new certs and keeps every other machine's. A failed
+# read returns a status >= 400 and sends nothing, which rotate() treats as a failure.
 def graph_patch(*, token, der_bytes):
-    body = {'keyCredentials': [{
-        'type': 'AsymmetricX509Cert',
-        'usage': 'Verify',
-        'key': base64.b64encode(der_bytes).decode(),
-    }]}
-    r = httpx.patch(
-        f'https://graph.microsoft.com/v1.0/applications/{cfg.blueprint_object_id}',
-        headers={'Authorization': f'Bearer {token}'},
-        json=body,
-        timeout=15.0,
+    return blueprint_certs.swap_key_credential(
+        object_id=cfg.blueprint_object_id,
+        token=token,
+        der_bytes=der_bytes,
+        old_der=old_der,
+        new_der=new_der,
+        display_name=blueprint_certs.device_certificate_display_name(),
     )
-    return r.status_code
 
 def smoke_test():
     try:

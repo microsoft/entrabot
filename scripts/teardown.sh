@@ -347,7 +347,7 @@ CLEANUP_PY="${VENV_PY:-python3}"
 "$CLEANUP_PY" -c "
 import keyring
 cleared = []
-for key in ['blueprint-private-key', 'blueprint_secret', 'human_refresh_token', 'agent_password']:
+for key in ['blueprint-private-key', 'blueprint-private-key.pending', 'blueprint_secret', 'human_refresh_token', 'agent_password']:
     try:
         keyring.delete_password('entrabot', key)
         cleared.append(key)

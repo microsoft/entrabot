@@ -93,10 +93,11 @@ def rotate(
         new_thumbprint: SHA-1 hex of the new cert.
         new_x5t_s256: JWT ``x5t#S256`` of the new cert.
         new_der: public DER bytes of the new cert.
-        graph_patch: callable that PATCHes the Blueprint app's
-            ``keyCredentials`` with a given DER. Must accept
-            ``token`` and ``der_bytes`` kwargs and return an HTTP
-            status code.
+        graph_patch: callable that swaps a given DER into the Blueprint
+            app's ``keyCredentials``, keeping other machines' certificates
+            (see ``blueprint_certs.swap_key_credential``). Must accept
+            ``token`` and ``der_bytes`` kwargs and return an HTTP status
+            code, >= 400 on any failure, without raising.
         smoke_test: callable returning True iff a fresh agent-user
             token can be acquired.
         delete_old_cert: callable that removes the old cert from
