@@ -39,6 +39,11 @@ signs the JWT in-process with `cryptography` and PyJWT
 assertion header carries the base64url SHA-256 (`x5t#S256`) of the DER
 certificate and has a 10-minute lifetime.
 
+While a new certificate is being registered, its key sits under
+`blueprint-private-key.pending`, and it's only moved to `blueprint-private-key` once
+the certificate is confirmed on the Blueprint. See
+[`register_blueprint_cert.py`](../reference/scripts/auth-and-certs/register-blueprint-cert-py.md).
+
 As on macOS, this path is **not** hardware-backed and the key is **not**
 non-exportable: anything that can read the secret store under the agent's account
 can retrieve the PEM. See

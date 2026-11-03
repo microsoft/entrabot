@@ -1,9 +1,8 @@
 """Print registered certs on the Blueprint app.
 
-Used by setup.sh to show the user what will be replaced before generating
-a new cert. The shell reads the count from stdout; human-readable detail
-lines go to stderr so setup.sh can surface them regardless of whether the
-shell is capturing the count.
+An operator tool for seeing which machines hold a certificate. Scripts can read
+the count from stdout; human-readable detail lines go to stderr so they show up
+even when stdout is captured.
 
 Usage:
     python scripts/list_blueprint_certs.py <BLUEPRINT_OBJECT_ID>
@@ -11,6 +10,12 @@ Usage:
 Output:
     stdout: a single integer (count of registered keyCredentials)
     stderr: one line per cert — "    - <displayName>  expires <YYYY-MM-DD>"
+
+Exit codes:
+    0 — the list was read; the count on stdout is real (0 means really none)
+    2 — usage error
+    3 — could not read the list; nothing is printed on stdout, because a count
+        that isn't known must never look like one that is
 """
 
 from __future__ import annotations
@@ -18,8 +23,12 @@ from __future__ import annotations
 import contextlib
 import sys
 
-import requests
+from blueprint_certs import fetch_key_credentials
 from entra_provisioning import get_existing_graph_token
+
+EXIT_OK = 0
+EXIT_USAGE = 2
+EXIT_COULD_NOT_READ = 3
 
 
 def main() -> int:
@@ -28,26 +37,22 @@ def main() -> int:
             "usage: list_blueprint_certs.py <BLUEPRINT_OBJECT_ID>",
             file=sys.stderr,
         )
-        return 2
-    blueprint_obj_id = sys.argv[1]
+        return EXIT_USAGE
 
-    # get_existing_graph_token is noisy on stdout; redirect so only the count reaches
-    # the shell capture.
-    with contextlib.redirect_stdout(sys.stderr):
-        token = get_existing_graph_token()
+    try:
+        # get_existing_graph_token is noisy on stdout; redirect so only the count
+        # reaches a shell capture.
+        with contextlib.redirect_stdout(sys.stderr):
+            token = get_existing_graph_token()
+        credentials = fetch_key_credentials(sys.argv[1], token)
+    except Exception as exc:
+        print(f"  Could not read the Blueprint's certificates: {exc}", file=sys.stderr)
+        return EXIT_COULD_NOT_READ
 
-    resp = requests.get(
-        f"https://graph.microsoft.com/v1.0/applications/{blueprint_obj_id}?$select=keyCredentials",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    creds = resp.json().get("keyCredentials", []) if resp.ok else []
-
-    print(len(creds))
-    for c in creds:
-        name = c.get("displayName") or "?"
-        end = (c.get("endDateTime") or "?")[:10]
-        print(f"    - {name:50s}  expires {end}", file=sys.stderr)
-    return 0
+    print(len(credentials))
+    for credential in credentials:
+        print(credential.summary(), file=sys.stderr)
+    return EXIT_OK
 
 
 if __name__ == "__main__":

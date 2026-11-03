@@ -12,6 +12,12 @@ For an existing Blueprint on macOS or Linux:
 ./scripts/setup.sh --use-blueprint=<blueprint-app-id>
 ```
 
+On macOS and Linux, a re-run for the same Agent User keeps the sponsor
+(`ENTRABOT_HUMAN_*`) and any cloud-memory settings already in `.env`, so this
+command is safe on a configured machine. Pass `--teams-user` or `--switch-user` to
+change the sponsor, or `--keep-memory-local` to go back to local storage. Setup writes the
+rest of `.env` from scratch, so lines you added by hand are dropped.
+
 For Windows, use the native Windows launcher:
 
 ```powershell
@@ -88,13 +94,13 @@ Identity token exchanges.
 Verify the local and registered certificate metadata:
 
 ```bash
-.venv/bin/python scripts/verify_blueprint_cert.py
+.venv/bin/python scripts/verify_blueprint_cert.py <BLUEPRINT_OBJECT_ID> <EXPECTED_THUMBPRINT>
 ```
 
 On macOS or Linux, if local state lost the registered thumbprint:
 
 ```bash
-.venv/bin/python scripts/find_local_blueprint_cert.py
+.venv/bin/python scripts/find_local_blueprint_cert.py <BLUEPRINT_OBJECT_ID>
 ```
 
 If the private key is missing, re-run setup for the existing Blueprint. Do not

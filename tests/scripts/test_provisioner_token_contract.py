@@ -39,9 +39,12 @@ def test_teardown_uses_existing_provisioner_token_only() -> None:
     assert "get_existing_graph_token()" in script
 
 
-def test_setup_embedded_token_path_is_explicitly_bootstrap_capable() -> None:
-    script = (REPO_ROOT / "scripts" / "setup.sh").read_text(encoding="utf-8")
+def test_setup_certificate_registration_is_explicitly_bootstrap_capable() -> None:
+    """setup.sh Step 6 hands certificate registration to this script, so it's a setup path."""
+    setup = (REPO_ROOT / "scripts" / "setup.sh").read_text(encoding="utf-8")
+    script = (SCRIPTS_DIR / "register_blueprint_cert.py").read_text(encoding="utf-8")
 
+    assert "register_blueprint_cert.py" in setup
     assert "from entra_provisioning import get_bootstrap_graph_token" in script
     assert "get_bootstrap_graph_token(wait_for_propagation=False)" in script
 
