@@ -361,6 +361,106 @@ class TestFailedPersistIsRetried:
         mcp_server._flush_watched_chats()
 
 
+class _FakeStdio:
+    """``stdio_server()`` handing the runner two stand-in streams."""
+
+    async def __aenter__(self) -> tuple[object, object]:
+        return object(), object()
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        return None
+
+
+class TestShutdownPersist:
+    """The stdio runner saves the dirty watched chats on its way out, off the event loop.
+
+    The write is storage I/O, so on the loop it froze every other task for as long as a slow
+    backend took. It runs in a worker thread now, and the wait is bounded so a wedged backend
+    can't hold shutdown open.
+    """
+
+    @pytest.fixture
+    def runner(self, monkeypatch: pytest.MonkeyPatch):
+        """``_run_stdio_with_write_stream`` against stubs whose server exits at once."""
+        from entrabot import efferent_copy
+
+        monkeypatch.setattr(mcp_server, "stdio_server", lambda: _FakeStdio())
+        monkeypatch.setattr(efferent_copy, "discover_sinks", AsyncMock(return_value=[]))
+        monkeypatch.setattr(efferent_copy, "install_into_fastmcp", MagicMock())
+        monkeypatch.setattr(mcp_server, "_initialize", AsyncMock())
+        monkeypatch.setattr(mcp_server.mcp._mcp_server, "run", AsyncMock())
+        return mcp_server._run_stdio_with_write_stream
+
+    async def test_a_slow_persist_does_not_block_the_event_loop(self, runner, monkeypatch) -> None:
+        mcp_server._state["_dirty_watched_chats"] = {CHAT_A}
+        loop_ran = threading.Event()
+        loop_was_free: list[bool] = []
+
+        def slow_add_watched_chats(batch: list[str]) -> poll_state.WatchedChatsWrite:
+            # The probe below can only run during this wait if the event loop is free.
+            loop_was_free.append(loop_ran.wait(timeout=3))
+            return poll_state.WatchedChatsWrite(persisted=True, added=tuple(batch))
+
+        async def probe() -> None:
+            loop_ran.set()
+
+        monkeypatch.setattr(poll_state, "add_watched_chats", slow_add_watched_chats)
+        probe_task = asyncio.create_task(probe())
+
+        await runner()
+        await probe_task
+
+        assert loop_was_free == [True]
+        assert not mcp_server._state["_dirty_watched_chats"]
+
+    async def test_a_persist_that_outlasts_the_timeout_is_cut_off_with_a_warning(
+        self, runner, monkeypatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger="entrabot.mcp_server")
+        mcp_server._state["_dirty_watched_chats"] = {CHAT_A}
+        monkeypatch.setattr(mcp_server, "SHUTDOWN_PERSIST_TIMEOUT_SECONDS", 0.05)
+        release = threading.Event()
+        finished = threading.Event()
+
+        def wedged_add_watched_chats(batch: list[str]) -> poll_state.WatchedChatsWrite:
+            release.wait(timeout=3)
+            finished.set()
+            return poll_state.WatchedChatsWrite(persisted=False)
+
+        monkeypatch.setattr(poll_state, "add_watched_chats", wedged_add_watched_chats)
+        try:
+            await runner()  # returns although the write is still stuck
+            assert not finished.is_set(), "shutdown waited for the stuck write"
+        finally:
+            release.set()  # let the worker thread go
+
+        assert mcp_server._state["_dirty_watched_chats"] == {CHAT_A}, "still dirty, not lost"
+        assert any(
+            r.levelno == logging.WARNING and "shutdown" in r.getMessage() for r in caplog.records
+        )
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            pytest.param(RuntimeError("storage exploded"), id="error"),
+            pytest.param(asyncio.CancelledError(), id="cancelled"),
+        ],
+    )
+    async def test_a_failed_persist_does_not_stop_shutdown(
+        self, runner, monkeypatch, caplog: pytest.LogCaptureFixture, failure: BaseException
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger="entrabot.mcp_server")
+        persist = AsyncMock(side_effect=failure)
+        monkeypatch.setattr(mcp_server, "_persist_dirty_watched_chats", persist)
+
+        await runner()  # must not raise
+
+        persist.assert_awaited_once()
+        assert any(
+            r.levelno == logging.WARNING and "shutdown" in r.getMessage() for r in caplog.records
+        )
+
+
 class TestPersistAndTheCachedSponsorGate:
     """A rebuilt gate reads the stored list, so it must not be left caching a list
     that was missing a chat because the write hadn't landed (Learning #52)."""
@@ -1273,9 +1373,13 @@ class TestFirstSightDoesNotReplay:
         assert state["bootstrapped"] is True
         assert pushed == ([] if quiet else ["m-newest"]), "at most the newest, never the history"
 
-    async def test_unparseable_timestamp_is_treated_as_old(
+    async def test_unparseable_timestamp_leaves_the_chat_unbootstrapped(
         self, fake_cloud_store, monkeypatch
     ) -> None:
+        """A message with no usable timestamp can't give the chat a watermark. Treating it as
+        merely old used to finish the bootstrap without one, so nothing changes now and the
+        next cycle reads again."""
+        pushed = self._record_pushes(monkeypatch)
         mcp_server._register_watched_chat(
             CHAT_A, persist=False, resolution=ABSENT, quiet_bootstrap=True
         )
@@ -1283,5 +1387,11 @@ class TestFirstSightDoesNotReplay:
         self._messages_are(monkeypatch, [bad])
 
         await self._poll(CHAT_A)
+        await self._poll(CHAT_A)
 
-        assert "m-bad" in mcp_server._state["watched_chats"][CHAT_A]["seen_ids"]
+        state = mcp_server._state["watched_chats"][CHAT_A]
+        assert state["bootstrapped"] is False
+        assert state["last_ts"] is None
+        assert state["seen_ids"] == set()
+        assert pushed == []
+        assert chat_cursors.load_cursor(CHAT_A) is None, "no cursor written"

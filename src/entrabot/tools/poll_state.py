@@ -130,12 +130,17 @@ class EmailCursorRead:
     IDs of the latest claims stored with the cursor, newest first, and is empty for a
     plain cursor. A caller passes it back as ``prior_claims`` when it claims the next
     window, so the history carries forward.
+
+    ``corrupt`` is True only when the read succeeded and the stored value is unusable (it
+    isn't a timestamp). That is where deleting the key is the way out. A failed read says
+    nothing about what the key holds, so it is never ``corrupt``.
     """
 
     outcome: PollStateOutcome
     cursor: str | None = None
     etag: str | None = None
     recent_claims: tuple[str, ...] = ()
+    corrupt: bool = False
 
 
 class EmailClaim(Enum):
@@ -308,7 +313,8 @@ def read_email_cursor() -> EmailCursorRead:
 
     A failed read, a value that isn't a timestamp, and a value with no ETag are all
     UNRESOLVED. The last one matters because an ETag is what lets the cursor be
-    claimed, and an unclaimable window must not be pushed.
+    claimed, and an unclaimable window must not be pushed. Only the value that isn't a
+    timestamp is also ``corrupt``: the read worked and the key holds something unusable.
     """
     try:
         raw, etag = get_backend().read_text_with_etag(EMAIL_CURSOR_KEY)
@@ -330,7 +336,7 @@ def read_email_cursor() -> EmailCursorRead:
             "restart the cursor at now.",
             EMAIL_CURSOR_KEY,
         )
-        return EmailCursorRead(PollStateOutcome.UNRESOLVED)
+        return EmailCursorRead(PollStateOutcome.UNRESOLVED, corrupt=True)
     if not etag:
         logger.warning("Email cursor has no ETag and can't be claimed (UNRESOLVED)")
         return EmailCursorRead(PollStateOutcome.UNRESOLVED)

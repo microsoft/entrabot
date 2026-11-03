@@ -1146,6 +1146,7 @@ CHAT_DISCOVER_MAX_PAGES = 20  # /me/chats pages per sweep, 1000 chats at $top=50
 GRAPH_ME_CHATS_URL = "https://graph.microsoft.com/v1.0/me/chats"
 WATCHED_LIST_RETRY_INTERVAL = 60  # seconds between retries after a failed list read at boot
 PERSONA_SATI_HEARTBEAT_INTERVAL = 300  # 5 min smoke test against persona-sati
+SHUTDOWN_PERSIST_TIMEOUT_SECONDS = 10  # longest shutdown waits to save the watched-chat list
 
 
 async def _persona_sati_list_files(url: str, token: str) -> list[str]:
@@ -1509,7 +1510,7 @@ def _schedule_watched_chats_persist(chat_id: str) -> None:
 
 
 def _flush_watched_chats() -> None:
-    """Synchronously write every dirty chat, for shutdown and the no-loop fallback.
+    """Synchronously write every dirty chat, for the no-loop fallback.
 
     Failures log and never propagate. The next process rediscovers these chats
     anyway, so losing one here is not lasting.
@@ -1523,6 +1524,21 @@ def _flush_watched_chats() -> None:
         dirty.difference_update(batch)
     elif logger:
         logger.warning("Could not flush %d watched chat(s) to the list", len(batch))
+
+
+def _parse_sent_at(value: object) -> datetime | None:
+    """A message's ``sent_at`` as an aware datetime, or None when it isn't a usable timestamp.
+
+    It parses the way :func:`_overlap_timestamp` does, since a stored watermark has to get
+    through that on every later poll. A time with no zone is taken as UTC, as ``is_stale`` does.
+    """
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
 
 
 async def _bootstrap_chat(chat_id: str) -> None:
@@ -1548,6 +1564,13 @@ async def _bootstrap_chat(chat_id: str) -> None:
     sweep could replay up to a thousand old imperative messages as new, the replay
     surface the fleet design doc treats as a security problem. The chat's history
     stays readable through ``read_teams_messages``.
+
+    Only a message whose ``sent_at`` parses can set the watermark or be marked seen. A read
+    with none (an empty chat, or an error-shaped HTTP 200 that ``teams.read`` maps to ``[]``)
+    changes nothing: the chat stays un-bootstrapped and the next cycle reads again, rather
+    than finishing with no usable watermark and letting the next good poll take the chat's
+    whole history for new. A chat that really is empty bootstraps when its first message
+    arrives.
     """
     from entrabot.tools.chat_cursors import is_stale
     from entrabot.tools.teams import read
@@ -1556,18 +1579,6 @@ async def _bootstrap_chat(chat_id: str) -> None:
     try:
         await _ensure_valid_token()
         bootstrap_msgs = await _with_token_retry(read, chat_id=chat_id, count=10)
-        if bootstrap_msgs:
-            newest = max(bootstrap_msgs, key=lambda m: m.get("sent_at", ""))
-            chat_state["last_ts"] = newest["sent_at"]
-            # Mark every message EXCEPT the newest as seen. The newest
-            # must remain "unseen" so the first real poll pushes it.
-            newest_id = newest.get("message_id")
-            for m in bootstrap_msgs:
-                mid = m.get("message_id")
-                if mid and mid != newest_id:
-                    chat_state["seen_ids"].add(mid)
-            if newest_id and chat_state.get("quiet_bootstrap") and is_stale(newest["sent_at"]):
-                chat_state["seen_ids"].add(newest_id)
     except Exception as exc:
         # Fail closed: stay un-bootstrapped and retry next cycle. With no watermark
         # the steady-state gate treats a chat's whole history as new, so a throttled
@@ -1575,6 +1586,40 @@ async def _bootstrap_chat(chat_id: str) -> None:
         if logger:
             logger.warning("Bootstrap failed for chat %s: %s", chat_id, exc)
         return
+
+    # Fail closed the same way when the read gives nothing to take a watermark from.
+    # ``is_stale`` counts a missing or invalid timestamp as merely old, and ``teams.read``
+    # turns an error-shaped HTTP 200 into ``[]``, so bootstrapping on such a read would finish
+    # with no usable watermark. Change nothing and read again next cycle.
+    dated: list[tuple[datetime, dict]] = []
+    for m in bootstrap_msgs or []:
+        sent = _parse_sent_at(m.get("sent_at"))
+        if sent is not None:
+            dated.append((sent, m))
+    if not dated:
+        if logger:
+            if bootstrap_msgs:
+                logger.warning(
+                    "Bootstrap read for chat %s had %d message(s) but none with a usable "
+                    "timestamp; retrying next cycle",
+                    chat_id,
+                    len(bootstrap_msgs),
+                )
+            else:
+                logger.debug("Bootstrap read for chat %s had no messages; retrying", chat_id)
+        return
+    newest = max(dated, key=lambda pair: pair[0])[1]
+    chat_state["last_ts"] = newest["sent_at"]
+    # Mark every message EXCEPT the newest as seen. The newest
+    # must remain "unseen" so the first real poll pushes it.
+    newest_id = newest.get("message_id")
+    for _, m in dated:
+        mid = m.get("message_id")
+        if mid and mid != newest_id:
+            chat_state["seen_ids"].add(mid)
+    if newest_id and chat_state.get("quiet_bootstrap") and is_stale(newest["sent_at"]):
+        chat_state["seen_ids"].add(newest_id)
+
     chat_state["bootstrapped"] = True
     # Issue #17: persist the bootstrap watermark so a restart inherits it.
     # Without this, every restart re-baselines from "the newest message at
@@ -1799,10 +1844,12 @@ async def _email_cursor_or_initialize() -> poll_state.EmailCursorRead:
     ``_state`` until the cursor exists. A read can be slow or fail, and creation can fail
     for as long as storage is down. A start taken only after a read reports ABSENT, or
     afresh on every attempt, would move past all the mail that arrived meanwhile, which
-    would then never be pushed. The held time survives UNRESOLVED reads and is used only
+    would then never be pushed. The held time survives a failed read and is used only
     when a read reports ABSENT. It is dropped once creation succeeds (including by losing
-    the create race to another instance) and whenever a read finds the cursor, so a cursor
-    deleted later starts from its own time and not from a stale one.
+    the create race to another instance), whenever a read finds the cursor, and whenever a
+    read finds one that is corrupt, so a cursor deleted later starts from its own time and
+    not from a stale one. The last case is the operator's way out of a corrupt cursor (delete
+    the key to restart at now), and a start held from before it would replay the mail since.
     """
     # Lazy rather than ``setdefault(..., now_cursor())``, so a held start costs no clock read.
     if "_email_cursor_start" not in _state:
@@ -1814,9 +1861,14 @@ async def _email_cursor_or_initialize() -> poll_state.EmailCursorRead:
             _state.pop("_email_cursor_start", None)
     elif current.outcome is poll_state.PollStateOutcome.PRESENT:
         _state.pop("_email_cursor_start", None)
-    elif current.outcome is poll_state.PollStateOutcome.UNRESOLVED and logger:
-        # The held start is kept: the failed read may be hiding a live cursor.
-        logger.warning("Email cursor unresolved; skipping this cycle (no push, no write)")
+    elif current.outcome is poll_state.PollStateOutcome.UNRESOLVED:
+        if current.corrupt:
+            # The read worked and the cursor is unusable. The way out is to delete the key,
+            # which restarts the cursor at "now", so an older held start must not be used.
+            _state.pop("_email_cursor_start", None)
+        # Otherwise the held start is kept: a failed read may be hiding a live cursor.
+        if logger:
+            logger.warning("Email cursor unresolved; skipping this cycle (no push, no write)")
     return current
 
 
@@ -4380,12 +4432,17 @@ async def _run_stdio_with_write_stream() -> None:
                         type(exc).__name__,
                         exc,
                     )
+            # Off the loop and bounded: the write is storage I/O, and a slow or wedged backend
+            # must neither freeze the loop nor hold shutdown open. Giving up on the wait doesn't
+            # stop the worker thread. A chat that doesn't get saved is rediscovered next start.
             try:
-                _flush_watched_chats()
-            except Exception as exc:  # noqa: BLE001
+                await asyncio.wait_for(
+                    _persist_dirty_watched_chats(), timeout=SHUTDOWN_PERSIST_TIMEOUT_SECONDS
+                )
+            except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001
                 if logger:
                     logger.warning(
-                        "Watched-chat flush on shutdown failed: %s: %s",
+                        "Watched-chat persist on shutdown did not finish: %s: %s",
                         type(exc).__name__,
                         exc,
                     )

@@ -76,10 +76,11 @@ def _check_write_conditions(if_match: str | None, if_absent: bool) -> None:
 
 
 # A write goes to a temp file beside its key and is then moved into place (see
-# ``_publish_atomically``). The name is ``.{key name}.{16 hex digits}.tmp``.
+# ``_publish_atomically``). The name is ``.tmp-`` and 16 hex digits. It leaves the key's name
+# out on purpose: a key near the 255-byte file name limit would leave no room for it.
 # ``LocalBackend.list`` hides anything shaped like it, because a list taken during a write
 # can see the temp file in flight, and a process that dies mid-write leaves one behind.
-_TEMP_FILE_NAME = re.compile(r"\..+\.[0-9a-f]{16}\.tmp")
+_TEMP_FILE_NAME = re.compile(r"\.tmp-[0-9a-f]{16}")
 
 # Readers take no lock, and Python opens files without FILE_SHARE_DELETE, so on Windows a
 # replace fails with PermissionError while something is reading the file. Reads are short, so
@@ -114,20 +115,28 @@ def _publish_atomically(path: Path, content: str, key: str, *, create_only: bool
     written and synced to a temp file in the same directory, then moved into place:
 
     * Overwrite: ``os.replace``, which is atomic. The target's permission bits are copied
-      onto the temp file first, because a replacement is born with the default mode and
-      could widen a file the operator restricted.
+      onto the temp file first, once it is written, so a mode the operator chose (wider or
+      narrower than the temp file's own) survives the replacement.
     * Create-only: ``os.link``, which is atomic too and fails if the target exists. That
       ``FileExistsError`` becomes the ``ConcurrencyError`` callers expect. A volume
       without hard links raises another ``OSError``, and :func:`_create_exclusively`
       does the job there instead.
 
+    The temp file is created owner-only (0o600) rather than with the process umask, so a
+    value the operator restricted is never readable by others while it is being written, and a
+    crash can't leave a readable copy behind. A key created this way is 0o600 as well.
+
     The temp file is always removed, so a failed write leaves the old value (or no key)
     and nothing else behind. The caller holds ``_LOCAL_WRITE_LOCK``. The text encoding is
     the default one, exactly as ``Path.write_text`` used.
     """
-    temp = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    temp = path.with_name(f".tmp-{secrets.token_hex(8)}")
     try:
-        with open(temp, "x") as fh:
+        # Owner-only from the first byte, and exclusive so an existing name is refused. O_BINARY
+        # exists only on Windows, where it stops the C runtime translating newlines a second time
+        # under the text wrapper (``open`` adds it itself).
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+        with os.fdopen(fd, "w") as fh:
             fh.write(content)
             fh.flush()
             os.fsync(fh.fileno())

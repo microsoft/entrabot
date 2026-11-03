@@ -40,13 +40,14 @@ def _fail_after_exclusive_create(monkeypatch: pytest.MonkeyPatch, fail_on: str) 
 
     This is what a full disk looks like: the file already exists on disk, empty, by
     the time the error arrives. Shadowing ``open`` in the backend module leaves the
-    builtin alone for everything else.
+    builtin alone for everything else. The temp file is opened through ``os.fdopen``, which
+    is replaced as well, so a caller should undo both with ``monkeypatch.context()``.
     """
     real_open = open
 
     class _FailingFile:
-        def __init__(self, path: Path, mode: str) -> None:
-            self._file = real_open(path, mode)
+        def __init__(self, target: Path | int, mode: str) -> None:
+            self._file = real_open(target, mode)  # a path, or the temp file's descriptor
 
         def __enter__(self) -> _FailingFile:
             return self
@@ -69,6 +70,7 @@ def _fail_after_exclusive_create(monkeypatch: pytest.MonkeyPatch, fail_on: str) 
             return self._file.fileno()
 
     monkeypatch.setattr(backend_module, "open", _FailingFile, raising=False)
+    monkeypatch.setattr(os, "fdopen", _FailingFile)
 
 
 # ---------------------------------------------------------------------------
@@ -478,10 +480,85 @@ class TestLocalBackendAtomicPublish:
         during a write can see one in flight. Neither is a key."""
         backend = LocalBackend(tmp_path)
         backend.write_text("interactions/a.jsonl", "1")
-        (tmp_path / "interactions" / ".a.jsonl.0123456789abcdef.tmp").write_text("partial")
+        (tmp_path / "interactions" / ".tmp-0123456789abcdef").write_text("partial")
 
         assert backend.list() == ["interactions/a.jsonl"]
         assert backend.list("interactions/") == ["interactions/a.jsonl"]
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+    def test_the_temp_file_is_not_readable_by_others_while_it_is_written(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The temp file used to be created with the process umask and given the target's mode
+        only once it was full. With a 0o600 target and umask 022 the value was readable by
+        others for the whole write, and for good if the process died then."""
+        backend = LocalBackend(tmp_path)
+        backend.write_text("secret.json", "v1")
+        (tmp_path / "secret.json").chmod(0o600)
+        modes: list[int] = []
+        real_fsync = os.fsync
+
+        def record_mode_then_sync(fd: int) -> None:
+            modes.append(stat.S_IMODE(os.fstat(fd).st_mode))
+            real_fsync(fd)
+
+        monkeypatch.setattr(os, "fsync", record_mode_then_sync)
+        previous_umask = os.umask(0o022)
+        try:
+            backend.write_text("secret.json", "v2")
+        finally:
+            os.umask(previous_umask)
+
+        assert modes == [0o600]
+        assert backend.read_text("secret.json") == "v2"
+        assert stat.S_IMODE((tmp_path / "secret.json").stat().st_mode) == 0o600
+
+    @pytest.mark.parametrize("create_only", [False, True])
+    def test_the_temp_file_has_a_short_fixed_name_in_the_keys_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, create_only: bool
+    ) -> None:
+        """The key's own name is not part of it, so a long key can't make it too long, and
+        it is the shape ``list`` and the migration helper hide."""
+        moved: list[Path] = []
+        real_replace, real_link = os.replace, os.link
+
+        def replace(src: Path, dst: Path) -> None:
+            moved.append(Path(src))
+            real_replace(src, dst)
+
+        def link(src: Path, dst: Path, *args: object, **kwargs: object) -> None:
+            moved.append(Path(src))
+            real_link(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(os, "replace", replace)
+        monkeypatch.setattr(os, "link", link)
+
+        LocalBackend(tmp_path).write_text("nested/some-key.json", "v1", if_absent=create_only)
+
+        assert len(moved) == 1
+        temp = moved[0]
+        assert temp.parent == tmp_path / "nested"
+        assert temp.name.startswith(".tmp-")
+        digits = temp.name.removeprefix(".tmp-")
+        assert len(digits) == 16
+        assert set(digits) <= set("0123456789abcdef")
+        assert backend_module.is_temp_file_name(temp.name)
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="MAX_PATH bites before the name limit")
+    def test_a_key_near_the_file_name_limit_can_be_written(self, tmp_path: Path) -> None:
+        """The temp name used to contain the key's own, so a name near the 255-byte limit made
+        the write itself fail."""
+        backend = LocalBackend(tmp_path)
+        overwritten, created = "o" * 240, "c" * 240
+
+        backend.write_text(overwritten, "v1")
+        backend.write_text(overwritten, "v2")  # an overwrite goes through a temp file
+        backend.write_text(created, "v1", if_absent=True)  # and so does a create-only write
+
+        assert backend.read_text(overwritten) == "v2"
+        assert backend.read_text(created) == "v1"
+        assert sorted(backend.list()) == sorted([overwritten, created])
+        assert sorted(p.name for p in tmp_path.iterdir()) == sorted([overwritten, created])
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
     def test_overwrite_keeps_the_existing_files_mode(self, tmp_path: Path) -> None:

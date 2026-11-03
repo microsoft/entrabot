@@ -538,6 +538,52 @@ class TestFirstStartTimeSurvivesFailedCreation:
 
         assert read_email_cursor().cursor == FIRST_ATTEMPT
 
+    async def test_a_failed_read_keeps_the_held_start_for_as_long_as_it_lasts(
+        self, fake_cloud_store
+    ) -> None:
+        """Unlike a corrupt cursor, a failed read says nothing about the key: a live cursor
+        may be hiding behind it, so the start taken before the outage stays."""
+        with patch.object(fake_cloud_store, "put", AsyncMock(side_effect=OSError("outage"))):
+            await mcp_server._email_cursor_or_initialize()
+        with patch.object(
+            fake_cloud_store, "get_with_etag", AsyncMock(side_effect=OSError("outage"))
+        ):
+            first = await mcp_server._email_cursor_or_initialize()
+            await mcp_server._email_cursor_or_initialize()
+            await mcp_server._email_cursor_or_initialize()
+
+        assert first.outcome is PollStateOutcome.UNRESOLVED
+        assert first.corrupt is False
+        assert mcp_server._state["_email_cursor_start"] == FIRST_ATTEMPT
+
+        await mcp_server._email_cursor_or_initialize()  # storage is back and the key is absent
+
+        assert read_email_cursor().cursor == FIRST_ATTEMPT
+
+    async def test_a_corrupt_cursor_drops_the_held_start_so_deleting_the_key_restarts_at_now(
+        self, fake_cloud_store, clock: list[str]
+    ) -> None:
+        """The warning for a cursor that isn't a timestamp says to delete the key to restart
+        at now. If the start taken when an outage began, hours earlier, were still held, the
+        recreated cursor would start there and replay everything since."""
+        with patch.object(fake_cloud_store, "put", AsyncMock(side_effect=OSError("outage"))):
+            await mcp_server._email_cursor_or_initialize()
+        assert mcp_server._state["_email_cursor_start"] == FIRST_ATTEMPT
+        _store_cursor(fake_cloud_store, "<html>proxy error</html>")
+
+        corrupt = await mcp_server._email_cursor_or_initialize()
+        assert corrupt.outcome is PollStateOutcome.UNRESOLVED
+        assert corrupt.corrupt is True
+        assert "_email_cursor_start" not in mcp_server._state
+        await mcp_server._email_cursor_or_initialize()  # still corrupt, an hour later
+
+        del fake_cloud_store.data[EMAIL_CURSOR_KEY]  # the operator deletes it, as documented
+        del fake_cloud_store.etags[EMAIL_CURSOR_KEY]
+        await mcp_server._email_cursor_or_initialize()
+
+        assert clock == [FIRST_ATTEMPT, SECOND_ATTEMPT, "2026-11-02T14:00:00.000Z"]
+        assert read_email_cursor().cursor == clock[-1], "starts at the read that found it gone"
+
     async def test_the_start_is_taken_before_the_first_read_not_after_it_reports_absent(
         self, fake_cloud_store, monkeypatch: pytest.MonkeyPatch
     ) -> None:

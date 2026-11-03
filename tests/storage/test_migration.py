@@ -60,7 +60,7 @@ class TestMigrateLocalToBackend:
     def test_a_temp_file_left_by_a_crashed_write_is_not_migrated(
         self, src_root: Path, tmp_path: Path
     ) -> None:
-        leftover = ".watched_chats.0123456789abcdef.tmp"
+        leftover = ".tmp-0123456789abcdef"
         (src_root / "state" / leftover).write_text("half a wri")
         target = LocalBackend(tmp_path / "dst")
 

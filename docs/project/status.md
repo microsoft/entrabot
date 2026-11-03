@@ -55,6 +55,7 @@
 - An instance on a host that ignores channel notifications can still claim Teams and email deliveries, so with mixed hosts on one container an item can go to the host that can't show it.
 - Two emails with the same timestamp, where the second arrives after the cursor has moved past it, won't be pushed. Both stay readable through `read_email`.
 - A batch of email held because its claim couldn't be confirmed lives only in memory, so restarting before the claim settles loses it. The mail stays readable through `read_email`.
+- Chats are polled one at a time and each read sees the latest 10 messages, so a very busy chat can have messages pushed past that window between visits. They stay readable through `read_teams_messages`.
 - Delegated sessions have no discovery sweep, so with a cloud backend their chat list only grows through `create_chat`.
 - A wait keeps the sponsor gate it started with, so a gate built during a brief storage or Graph failure can miss a federated sponsor until the next wait.
 - Failed watched-list writes retry on the next discovery sweep and at shutdown, so in a delegated session a failed write can wait until shutdown. Discovery re-adds the chat in an Agent User session.

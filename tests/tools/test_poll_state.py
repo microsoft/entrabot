@@ -380,6 +380,37 @@ class TestReadEmailCursor:
         _use_backend(monkeypatch, _NoEtag(NOW))
         assert read_email_cursor().outcome is PollStateOutcome.UNRESOLVED
 
+    @pytest.mark.parametrize("value", ["", "cursor=42", "<html>proxy</html>", "2026-11-02"])
+    def test_a_value_that_was_read_but_is_unusable_is_corrupt(
+        self, fake_cloud_store, value: str
+    ) -> None:
+        """Corrupt means the read worked and the value didn't, which is where deleting the
+        key is the way out. A caller holding a start time for a missing cursor drops it then."""
+        BlobBackend(fake_cloud_store).write_text(EMAIL_CURSOR_KEY, value)
+        result = read_email_cursor()
+        assert result.outcome is PollStateOutcome.UNRESOLVED
+        assert result.corrupt is True
+
+    def test_a_failed_read_is_not_corrupt(self, monkeypatch) -> None:
+        """A failed read says nothing about what the key holds."""
+        _use_backend(monkeypatch, _ReadFails())
+        result = read_email_cursor()
+        assert result.outcome is PollStateOutcome.UNRESOLVED
+        assert result.corrupt is False
+
+    def test_a_valid_value_without_an_etag_is_not_corrupt(self, monkeypatch) -> None:
+        _use_backend(monkeypatch, _NoEtag(NOW))
+        result = read_email_cursor()
+        assert result.outcome is PollStateOutcome.UNRESOLVED
+        assert result.corrupt is False
+
+    def test_absent_and_present_cursors_are_not_corrupt(self, fake_cloud_store) -> None:
+        assert read_email_cursor().corrupt is False
+        BlobBackend(fake_cloud_store).write_text(EMAIL_CURSOR_KEY, NOW)
+        result = read_email_cursor()
+        assert result.outcome is PollStateOutcome.PRESENT
+        assert result.corrupt is False
+
     def test_never_reads_the_old_cloud_key(self, fake_cloud_store) -> None:
         BlobBackend(fake_cloud_store).write_text(LEGACY_EMAIL_CURSOR_KEY, STALE)
         result = read_email_cursor()
