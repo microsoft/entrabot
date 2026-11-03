@@ -52,6 +52,41 @@ Transport health and authentication health are separate:
 Run the status command, then call `whoami`. If both work but a specific tool
 fails, troubleshoot that resource rather than the stdio transport.
 
+## persona-sati does not connect
+
+persona-sati is optional; without it Entrabot runs standalone as a generic Teams
+tool. If you use it and its tools are missing, check how the `persona-sati` entry
+in `.mcp.json` reaches it:
+
+- **Hosted (the usual case).** The entry is a `stdio` entry whose `command` is
+  the absolute path of the client launcher from your persona-sati install, and
+  `PERSONA_SATI_MCP_URL` / `PERSONA_SATI_MCP_TOKEN_COMMAND` are set in the
+  `entrabot` entry's `env`. The launcher and token command come from your
+  persona-sati install's own setup documentation. `.mcp.json.example` in the
+  repository root shows the shape.
+- **Local development only.** An `sse` entry with a `localhost` URL works only
+  while you run persona-sati yourself on that port. Nothing listens there
+  otherwise, and a refused local connection says nothing about whether a hosted
+  service is up.
+
+On macOS or Linux, run the health check:
+
+```bash
+./scripts/setup.sh --diagnose
+```
+
+The `persona-sati MCP (optional)` line never fails the run:
+
+| Result | Meaning |
+|---|---|
+| `SKIP` | `.mcp.json` is missing, unreadable, or has no `persona-sati` entry, so Entrabot runs standalone. |
+| `PASS` | A `stdio` launcher exists and is executable, a loopback URL accepts connections, or a non-local URL is configured (it is not contacted). |
+| `WARN` | A `<...>` placeholder was never filled in (the launcher, or `PERSONA_SATI_MCP_URL` / `PERSONA_SATI_MCP_TOKEN_COMMAND`), a launcher or token command is missing or not executable, the URL is not a valid `http(s)` URL, or nothing is listening at a `localhost` URL. |
+
+The check reports only the launcher path and the URL's scheme, host, and port. It
+does not print headers, tokens, or other `env` values, and it connects only to
+loopback addresses.
+
 ## Claude Code receives no background Teams or email messages
 
 Launch with the channel flag:

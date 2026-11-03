@@ -21,6 +21,16 @@ pwsh -File status-windows.ps1 -HealthOnly -Strict
 
 A healthy Agent User token has `idtyp=user`, the Agent User's `oid`, and Microsoft Graph as its audience. The Agent Identity and Agent User are separate objects and should both appear in status output.
 
+## Check the MCP wiring
+
+On macOS or Linux, re-run the full diagnostics without provisioning anything:
+
+```bash
+./scripts/setup.sh --diagnose
+```
+
+It covers the state file, certificate, three-hop token, Graph identity, Teams scope, and the MCP configuration files, and ends with an optional `persona-sati MCP` line. That line reports `SKIP` when `.mcp.json` has no `persona-sati` entry, and never fails the run: a `WARN` means the entry still has an unfilled `<...>` placeholder, points at a launcher or token command that is missing or not executable, or points at a `localhost` address where nothing is listening. A failed local connection does not mean a hosted persona-sati service is down; connect through the client launcher from your persona-sati install, per its own setup documentation. See [MCP connectivity](../troubleshooting/mcp-connectivity.md#persona-sati-does-not-connect).
+
 ## Inspect status directly
 
 ```bash

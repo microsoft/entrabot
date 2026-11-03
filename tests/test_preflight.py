@@ -12,10 +12,14 @@ function boundary so we never hit Entra in tests.
 from __future__ import annotations
 
 import json
+import socket
+import sys
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
 
 import httpx
+import pytest
 import respx
 
 from entrabot.config import EntraBotConfig
@@ -26,9 +30,11 @@ from entrabot.preflight import (
     Check,
     check_copilot_license_availability,
     check_mcp_configs,
+    check_persona_sati_mcp,
     check_state_file,
     check_teams_license_availability,
     format_report,
+    overall_exit_code,
     run_diagnostics,
     run_smoke_checks,
 )
@@ -511,6 +517,296 @@ class TestCheckMcpConfigs:
         assert statuses["Copilot CLI MCP config"] == "warn"
 
 
+# ─── Optional persona-sati check ─────────────────────────────────────────────
+
+EXAMPLE_CONFIG = Path(__file__).resolve().parents[1] / ".mcp.json.example"
+PERSONA_CHECK = "persona-sati MCP (optional)"
+PLACEHOLDER_CMD = "<absolute path to the client launcher from your persona-sati install>"
+POSIX_ONLY = pytest.mark.skipif(sys.platform == "win32", reason="Windows has no executable bit")
+LEAKABLE = ("jdoe", "s3cret", "tok3n", "abc123", "hunter2")
+
+
+def _write_mcp(tmp_path: Path, persona: object, entrabot_env: dict[str, str] | None = None) -> Path:
+    servers: dict[str, object] = {
+        "entrabot": {"type": "stdio", "command": "entrabot-mcp", "env": entrabot_env or {}}
+    }
+    if persona is not None:
+        servers["persona-sati"] = persona
+    path = tmp_path / ".mcp.json"
+    path.write_text(json.dumps({"mcpServers": servers}))
+    return path
+
+
+def _launcher(directory: Path, mode: int = 0o755) -> Path:
+    """Stand-in launcher; the .cmd suffix keeps shutil.which happy on Windows too."""
+    directory.mkdir(exist_ok=True)
+    path = directory / "launcher.cmd"
+    path.write_text("#!/bin/sh\n")
+    path.chmod(mode)
+    return path
+
+
+def _text(check: Check) -> str:
+    return f"{check.detail} {check.remediation or ''}"
+
+
+@pytest.fixture
+def listening_port() -> Iterator[int]:
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        yield server.getsockname()[1]
+
+
+@pytest.fixture
+def closed_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]  # released on return, so nothing listens here
+
+
+class TestCheckPersonaSatiMcp:
+    @pytest.mark.parametrize(
+        ("kind", "field"),
+        [("stdio", {"url": "https://persona.example/sse"}), ("sse", {"command": "launcher"})],
+        ids=["stdio-with-only-a-url", "sse-with-only-a-command"],
+    )
+    def test_fields_that_do_not_match_the_declared_type_warn(
+        self, tmp_path: Path, kind: str, field: dict[str, str]
+    ) -> None:
+        launcher = _launcher(tmp_path / "bin")
+        entry = {"type": kind, **field}
+        if "command" in entry:
+            entry["command"] = str(launcher)
+
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, entry))
+
+        assert result.status == "warn"
+        assert kind in result.detail
+
+    @pytest.mark.parametrize("kind", ["http", "streamable-http", "streamable_http"])
+    def test_every_http_transport_uses_the_url(self, tmp_path: Path, kind: str) -> None:
+        entry = {"type": kind, "url": "https://persona.example/mcp"}
+
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, entry))
+
+        assert result.status == "pass"
+
+    def test_a_missing_type_defaults_to_stdio_like_the_runtime(self, tmp_path: Path) -> None:
+        launcher = _launcher(tmp_path / "bin")
+
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, {"command": str(launcher)}))
+
+        assert result.status == "pass"
+
+    def test_every_ipv4_loopback_address_is_treated_as_local(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        contacted: list[tuple[str, int]] = []
+
+        def _refuse(address: tuple[str, int], *args: object, **kwargs: object) -> None:
+            contacted.append(address)
+            raise ConnectionRefusedError
+
+        monkeypatch.setattr(socket, "create_connection", _refuse)
+        entry = {"type": "sse", "url": "http://127.0.0.2:8100/sse"}
+
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, entry))
+
+        assert contacted == [("127.0.0.2", 8100)]
+        assert result.status == "warn"
+        assert "nothing is listening" in result.detail
+
+    def test_bare_commands_use_the_path_their_own_entry_sets(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        launcher = _launcher(tmp_path / "bin")
+        monkeypatch.setenv("PATH", str(tmp_path / "elsewhere"))
+        persona = {"type": "stdio", "command": launcher.name, "env": {"PATH": str(launcher.parent)}}
+        env = {"PATH": str(launcher.parent), "PERSONA_SATI_MCP_TOKEN_COMMAND": launcher.name}
+
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, persona, env))
+
+        assert result.status == "pass"
+        assert str(tmp_path / "bin") not in result.detail  # env values stay out of the report
+
+    def test_a_command_only_on_this_process_path_warns_if_the_entry_overrides_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        launcher = _launcher(tmp_path / "bin")
+        monkeypatch.setenv("PATH", str(launcher.parent))
+        persona = {
+            "type": "stdio",
+            "command": launcher.name,
+            "env": {"PATH": str(tmp_path / "elsewhere")},
+        }
+
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, persona))
+
+        assert result.status == "warn"
+        assert str(tmp_path / "elsewhere") not in _text(result)
+
+    def test_remediation_says_to_remove_the_env_vars_too(self, tmp_path: Path) -> None:
+        # The server reads these on its own, so deleting only the entry isn't standalone.
+        result = check_persona_sati_mcp(
+            _write_mcp(tmp_path, {"type": "stdio", "command": str(tmp_path / "missing")})
+        )
+
+        assert result.status == "warn"
+        assert "PERSONA_SATI_MCP_URL" in result.remediation
+        assert "PERSONA_SATI_MCP_TOKEN_COMMAND" in result.remediation
+
+    def test_example_file_is_valid_json_and_not_on_localhost(self) -> None:
+        entry = json.loads(EXAMPLE_CONFIG.read_text())["mcpServers"]["persona-sati"]
+        assert entry["type"] == "stdio"
+        assert not any(h in json.dumps(entry) for h in ("localhost", "127.0.0.1", "::1", "8100"))
+
+    def test_unedited_example_warns_and_never_fails(self) -> None:
+        result = check_persona_sati_mcp(EXAMPLE_CONFIG)
+        assert (result.name, result.status) == (PERSONA_CHECK, "warn")
+        assert "placeholder" in result.detail
+        assert "PERSONA_SATI_MCP_URL" in result.detail
+        assert "PERSONA_SATI_MCP_TOKEN_COMMAND" in result.detail
+        assert overall_exit_code([result]) == 0
+
+    @pytest.mark.parametrize(
+        "content",
+        [None, "{not json", "[]", '{"mcpServers": {}}', '{"mcpServers": {"persona-sati": "x"}}'],
+        ids=["missing-file", "unparsable", "wrong-shape", "no-entry", "entry-not-an-object"],
+    )
+    def test_skip_when_there_is_no_usable_entry(self, tmp_path: Path, content: str | None) -> None:
+        path = tmp_path / ".mcp.json"
+        if content is not None:
+            path.write_text(content)
+        result = check_persona_sati_mcp(path)
+        assert (result.name, result.status) == (PERSONA_CHECK, "skip")
+        assert "optional" in result.detail
+
+    @pytest.mark.parametrize("relative", [False, True], ids=["absolute", "relative-to-config-dir"])
+    def test_stdio_launcher_passes(self, tmp_path: Path, relative: bool) -> None:
+        launcher = _launcher(tmp_path / "bin")
+        command = "bin/launcher.cmd" if relative else str(launcher)
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, {"type": "stdio", "command": command}))
+        assert result.status == "pass"
+        assert command in result.detail
+
+    @pytest.mark.parametrize(
+        ("entry", "expect"),
+        [
+            ({"type": "stdio", "command": PLACEHOLDER_CMD}, "unfilled placeholder"),
+            ({"type": "stdio", "command": "/no/such/launcher"}, "not found"),
+            ({"type": "stdio"}, "stdio entry has no command"),
+            ({"type": "sse"}, "sse entry has no url"),
+        ],
+        ids=["placeholder", "missing-file", "no-command", "no-url"],
+    )
+    def test_unusable_entry_warns(self, tmp_path: Path, entry: dict[str, str], expect: str) -> None:
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, entry))
+        assert result.status == "warn"
+        assert expect in result.detail
+
+    @POSIX_ONLY
+    @pytest.mark.parametrize("where", ["entry-command", "token-command"])
+    def test_non_executable_file_warns(self, tmp_path: Path, where: str) -> None:
+        dud = str(_launcher(tmp_path / "dud", mode=0o644))
+        good = str(_launcher(tmp_path / "good"))
+        entry = {"type": "stdio", "command": dud if where == "entry-command" else good}
+        env = {"PERSONA_SATI_MCP_TOKEN_COMMAND": dud} if where == "token-command" else None
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, entry, env))
+        assert result.status == "warn"
+        assert "not executable" in result.detail
+
+    @pytest.mark.parametrize("kind", ["sse", "http"])
+    def test_loopback_url_with_a_listener_passes(
+        self, tmp_path: Path, listening_port: int, kind: str
+    ) -> None:
+        entry = {"type": kind, "url": f"http://127.0.0.1:{listening_port}/sse"}
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, entry))
+        assert result.status == "pass"
+        assert f"127.0.0.1:{listening_port}" in result.detail
+
+    @pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "[::1]"])
+    def test_loopback_url_without_a_listener_warns_not_fails(
+        self, tmp_path: Path, closed_port: int, host: str
+    ) -> None:
+        entry = {"type": "sse", "url": f"http://{host}:{closed_port}/sse"}
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, entry))
+        assert result.status == "warn"
+        assert "nothing is listening" in result.detail
+        assert "does not mean a hosted" in result.detail
+        assert "client launcher" in result.remediation
+
+    def test_remote_url_passes_without_contacting_the_host(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _boom(*args: object, **kwargs: object) -> None:
+            raise AssertionError("a non-loopback host must never be contacted")
+
+        monkeypatch.setattr(socket, "create_connection", _boom)
+        entry = {"type": "http", "url": "https://persona.example/sse"}
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, entry))
+        assert result.status == "pass"
+        assert result.detail == "https://persona.example:443 is a remote host (not contacted)."
+
+    @pytest.mark.parametrize("host", ["persona.example", "127.0.0.1"], ids=["remote", "loopback"])
+    def test_details_never_leak_userinfo_query_headers_or_env(
+        self, tmp_path: Path, closed_port: int, host: str
+    ) -> None:
+        entry = {
+            "type": "sse",
+            "url": f"https://jdoe:s3cret@{host}:{closed_port}/sse/tok3n?key=abc123#hunter2",
+            "headers": {"Authorization": "Bearer abc123"},
+            "env": {"TOKEN": "hunter2"},
+        }
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, entry, {"OTHER": "s3cret"}))
+        assert f"{host}:{closed_port}" in result.detail
+        assert not [secret for secret in LEAKABLE if secret in _text(result)]
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "not a url",
+            "ftp://persona.example/sse",
+            "<your persona-sati base URL>",
+            "http://h:s3cret/",
+        ],
+        ids=["no-scheme", "wrong-scheme", "placeholder", "bad-port"],
+    )
+    def test_invalid_url_warns_without_echoing_it(self, tmp_path: Path, url: str) -> None:
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, {"type": "sse", "url": url}))
+        assert result.status == "warn"
+        assert url not in _text(result)
+        assert "s3cret" not in _text(result)
+
+    @pytest.mark.parametrize(
+        ("env", "reason"),
+        [
+            ({"PERSONA_SATI_MCP_URL": "<your persona-sati base URL>"}, "placeholder"),
+            ({"PERSONA_SATI_MCP_TOKEN_COMMAND": "<path to your token command>"}, "placeholder"),
+            ({"PERSONA_SATI_MCP_TOKEN_COMMAND": "/no/such/token-cmd"}, "not found"),
+        ],
+        ids=["url-placeholder", "token-placeholder", "token-missing"],
+    )
+    def test_entrabot_env_problems_warn(
+        self, tmp_path: Path, env: dict[str, str], reason: str
+    ) -> None:
+        entry = {"type": "stdio", "command": str(_launcher(tmp_path / "bin"))}
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, entry, env))
+        assert result.status == "warn"
+        assert next(iter(env)) in result.detail
+        assert reason in result.detail
+        assert "/no/such/token-cmd" not in _text(result)  # env values are never echoed
+
+    def test_filled_in_entrabot_env_passes(self, tmp_path: Path) -> None:
+        launcher = str(_launcher(tmp_path / "bin"))
+        env = {
+            "PERSONA_SATI_MCP_URL": "https://persona.example",
+            "PERSONA_SATI_MCP_TOKEN_COMMAND": launcher,
+        }
+        result = check_persona_sati_mcp(_write_mcp(tmp_path, {"command": launcher}, env))
+        assert result.status == "pass"
+
+
 class TestRunDiagnostics:
     def test_aggregates_all_checks(self, tmp_path: Path) -> None:
         # Just smoke-test that run_diagnostics returns a superset of smoke checks
@@ -566,6 +862,7 @@ class TestRunDiagnostics:
         assert "Graph /me identity" in names
         assert "Teams scope (/me/chats)" in names
         assert "Claude Code MCP config" in names
+        assert PERSONA_CHECK in names
 
 
 # ─── format_report rendering ─────────────────────────────────────────────────
