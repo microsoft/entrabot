@@ -318,7 +318,11 @@ class TestBlobETag:
 
     @pytest.mark.parametrize(
         "headers",
-        [{"x-ms-error-code": "BlobImmutableDueToPolicy"}, {"x-ms-error-code": "ContainerBeingDeleted"}, {}],
+        [
+            {"x-ms-error-code": "BlobImmutableDueToPolicy"},
+            {"x-ms-error-code": "ContainerBeingDeleted"},
+            {},
+        ],
     )
     async def test_put_if_none_match_other_409_is_a_real_failure(
         self, headers: dict[str, str]
