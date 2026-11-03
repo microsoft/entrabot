@@ -365,8 +365,10 @@ def _agent_user_upn(token: str) -> str:
     accounts like user@example.com — the domain is outlook.com, not the
     tenant's verified domain.
     """
+    # Setup sets a suffix only when no UPN was asked for, so a UPN alongside one is just what an
+    # earlier run left in .env, and the suffix is what this run wants.
     explicit_upn = os.environ.get("ENTRABOT_AGENT_USER_UPN", "").strip()
-    if explicit_upn:
+    if explicit_upn and not os.environ.get("_ENTRABOT_UPN_SUFFIX", "").strip():
         print(f"  Using explicit Agent User UPN: {explicit_upn}")
         return explicit_upn
 

@@ -9,9 +9,13 @@
     3. Bootstrap venv + pip install.
     4. Run config.py migration helper (one-shot move of legacy ~/.entrabot).
     5. Call entra_provisioning.py + create_entra_agent_ids.py via az login.
-    6. Generate the Blueprint cert (TPM-first, software-fallback) via
-       generate_windows_cert.py and PATCH it into the Blueprint.
-    7. Write .env with both thumbprints (SHA-1 hex + SHA-256 b64url).
+    6. Make sure this machine's Blueprint cert is registered: reuse it if it is,
+       register it if it isn't, otherwise generate one (TPM-first, software-
+       fallback) via generate_windows_cert.py and add it to the Blueprint with
+       register_windows_blueprint_cert.py, which keeps every other machine's.
+    7. Write .env with the Blueprint, agent and Agent User IDs, both thumbprints
+       (SHA-1 hex + SHA-256 b64url), and a default sponsor if none is set,
+       replacing any earlier lines.
        icacls -M (D10) — modify, NOT readonly. Setup re-runs need to
        update .env or rotation halts.
     8. Register the entrabot MCP server via mcp_config.py.
@@ -335,6 +339,8 @@ $args = @()
 if ($NewChain)             { $args += '--new' }
 if ($UseBlueprint)         { $args += "--use-blueprint=$UseBlueprint" }
 if ($UpnSuffix)            { $args += "--with-upn-suffix=$UpnSuffix" }
+# Run directly, setup leaves these in the PowerShell session, so clear the last run's choice first.
+Remove-Item Env:ENTRABOT_AGENT_USER_UPN, Env:_ENTRABOT_UPN_SUFFIX -ErrorAction SilentlyContinue
 if ($AgentUserUpn) {
     $env:ENTRABOT_AGENT_USER_UPN = $AgentUserUpn
 } elseif ($UseBlueprint -and $UpnSuffix) {
@@ -352,18 +358,24 @@ if ($LASTEXITCODE -ne 0) { Fail "entra_provisioning.py failed" }
 & $VenvPython (Join-Path $ScriptDir 'create_entra_agent_ids.py') @args
 if ($LASTEXITCODE -ne 0) { Fail "create_entra_agent_ids.py failed" }
 
-# Read back IDs from .entrabot-state.json — needed for cloud-memory step
+# Read back IDs from .entrabot-state.json — needed for .env and the cloud-memory step
 $statePath = Join-Path $ProjectRoot '.entrabot-state.json'
 $BlueprintAppId = ""
 $BlueprintObjectId = ""
 $AgentId = ""
+$AgentObjectId = ""
 $AgentUserId = ""
+$StateAgentUserUpn = ""
+$ProvisionerClientId = ""
 if (Test-Path $statePath) {
     $state = Get-Content $statePath -Raw | ConvertFrom-Json
     $BlueprintAppId = if ($state.PSObject.Properties['BLUEPRINT_APP_ID']) { $state.BLUEPRINT_APP_ID } else { "" }
     $BlueprintObjectId = if ($state.PSObject.Properties['BLUEPRINT_OBJECT_ID']) { $state.BLUEPRINT_OBJECT_ID } else { "" }
     $AgentId = if ($state.PSObject.Properties['AGENT_ID']) { $state.AGENT_ID } else { "" }
+    $AgentObjectId = if ($state.PSObject.Properties['AGENT_OBJECT_ID']) { $state.AGENT_OBJECT_ID } else { "" }
     $AgentUserId = if ($state.PSObject.Properties['AGENT_USER_ID']) { $state.AGENT_USER_ID } else { "" }
+    $StateAgentUserUpn = if ($state.PSObject.Properties['AGENT_USER_UPN']) { $state.AGENT_USER_UPN } else { "" }
+    $ProvisionerClientId = if ($state.PSObject.Properties['PROVISIONER_CLIENT_ID']) { $state.PROVISIONER_CLIENT_ID } else { "" }
 }
 
 if ($ConfigureA365WorkIq) {
@@ -371,42 +383,174 @@ if ($ConfigureA365WorkIq) {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 7. Generate Blueprint cert (TPM-first / software-fallback)
+# 7. Blueprint cert: reuse, repair, or generate (TPM-first / software-fallback), and register it
 # ═══════════════════════════════════════════════════════════════════════════
-Step 6 "Generating Blueprint cert (TPM-first / software-fallback)"
+Step 6 "Blueprint cert (reuse, register, or generate; TPM-first / software-fallback)"
 
-$derPath = Join-Path $env:TEMP "entrabot-blueprint-$(Get-Random).cer"
-$certOutput = & $VenvPython (Join-Path $ScriptDir 'generate_windows_cert.py') `
-    --subject "CN=entrabot-blueprint" `
-    --days 365 `
-    --export-der $derPath
-if ($LASTEXITCODE -ne 0) { Fail "generate_windows_cert.py failed" }
+if (-not $BlueprintObjectId) {
+    Fail "BLUEPRINT_OBJECT_ID is missing from .entrabot-state.json, so a certificate can't be registered on the Blueprint. Re-run setup once provisioning completes."
+}
 
-$thumbprint = ($certOutput | Select-String '^thumbprint=(.+)$').Matches[0].Groups[1].Value
-$ksp        = ($certOutput | Select-String '^ksp=(.+)$').Matches[0].Groups[1].Value
-$x5tS256    = ($certOutput | Select-String '^x5t_s256=(.+)$').Matches[0].Groups[1].Value
+# Each Python helper below answers through its exit code, so a non-zero exit must not throw.
+$PSNativeCommandUseErrorActionPreference = $false
 
-Success "Cert generated — thumbprint=$thumbprint ksp=$ksp"
+# .env is read the way config.py reads it, since that decides what the agent uses: keys and
+# values are trimmed, comments are skipped, and the first value of a repeated key wins.
+$envPath = Join-Path $ProjectRoot '.env'
+function Get-EnvKey {
+    param([string]$Line)
+    $text = $Line.Trim()
+    if ($text.StartsWith('#') -or -not $text.Contains('=')) { return '' }
+    return ($text -split '=', 2)[0].Trim()
+}
+function Get-EnvValue {
+    param([string]$Key)
+    if (-not (Test-Path $envPath)) { return '' }
+    foreach ($line in Get-Content $envPath) {
+        if ((Get-EnvKey $line) -eq $Key) { return ($line -split '=', 2)[1].Trim() }
+    }
+    return ''
+}
 
-# Caller needs to PATCH the public DER to the Blueprint app via Graph.
-# We delegate that to a small Python one-liner that reuses
-# create_entra_agent_ids.py's helpers. Skipped here because that file
-# already publishes the cert during provisioning when invoked with the
-# right flags; this branch only kicks in for the rotation path
-# (deploy-windows.ps1 calls rotate_cert_windows.py instead).
+# Is there a cert in .env that is also in the local store?
+$thumbprint = Get-EnvValue 'ENTRABOT_BLUEPRINT_CERT_SHA1'
+$x5tS256    = Get-EnvValue 'ENTRABOT_BLUEPRINT_CERT_THUMBPRINT'
+$ksp        = Get-EnvValue 'ENTRABOT_BLUEPRINT_KSP'
+$haveLocalCert = ($thumbprint -match '^[0-9A-F]{40}$') -and ($x5tS256 -match '^[A-Za-z0-9_-]{43}$') -and
+                 (Test-Path "Cert:\CurrentUser\My\$thumbprint")
+if ($haveLocalCert) {
+    # One that has expired or has no private key here can't sign, so reusing or registering it
+    # would report success while Hop 1 stays broken.
+    $localCert = Get-Item "Cert:\CurrentUser\My\$thumbprint"
+    $now = Get-Date
+    $haveLocalCert = $localCert.HasPrivateKey -and ($localCert.NotBefore -le $now) -and ($now -le $localCert.NotAfter)
+    if (-not $haveLocalCert) {
+        Write-Host "  The certificate in .env can't sign (not in date, or no private key here). Generating a new one." -ForegroundColor Yellow
+    }
+}
+
+$derPath     = Join-Path $env:TEMP "entrabot-blueprint-$(Get-Random).cer"
+$register    = $true    # false once the local cert is known to be on the Blueprint
+$generated   = $false   # true when this run made a new cert, so .env needs its thumbprints
+$unconfirmed = $false   # true when the write may have landed but could not be confirmed
+try {
+    if ($haveLocalCert) {
+        & $VenvPython (Join-Path $ScriptDir 'verify_blueprint_cert.py') $BlueprintObjectId $x5tS256
+        $verifyExit = $LASTEXITCODE
+        if ($verifyExit -eq 0) {
+            $register = $false
+            Success "Using the registered certificate (thumbprint=$thumbprint)"
+        } elseif ($verifyExit -eq 1) {
+            # Not on the Blueprint, as on every machine set up before this step registered certificates.
+            Write-Host "  This machine's certificate is not on the Blueprint. Registering it." -ForegroundColor Yellow
+            [IO.File]::WriteAllBytes($derPath, (Get-Item "Cert:\CurrentUser\My\$thumbprint").GetRawCertData())
+        } else {
+            # A failed check says nothing about the Blueprint, so nothing is generated.
+            Fail "Could not check whether the certificate is registered (exit $verifyExit, see above). Nothing was generated or changed. Fix the error and re-run setup."
+        }
+    } else {
+        $certOutput = & $VenvPython (Join-Path $ScriptDir 'generate_windows_cert.py') `
+            --subject "CN=entrabot-blueprint" `
+            --days 365 `
+            --export-der $derPath
+        if ($LASTEXITCODE -ne 0) { Fail "generate_windows_cert.py failed" }
+        $certText   = $certOutput -join "`n"
+        $thumbprint = [regex]::Match($certText, '(?m)^thumbprint=([0-9A-F]{40})\s*$').Groups[1].Value
+        $ksp        = [regex]::Match($certText, '(?m)^ksp=(tpm|software)\s*$').Groups[1].Value
+        $x5tS256    = [regex]::Match($certText, '(?m)^x5t_s256=([A-Za-z0-9_-]{43})\s*$').Groups[1].Value
+        if (-not ($thumbprint -and $ksp -and $x5tS256)) { Fail "generate_windows_cert.py printed output setup can't read: $certText" }
+        $generated = $true
+        Success "Cert generated — thumbprint=$thumbprint ksp=$ksp"
+    }
+
+    if ($register) {
+        & $VenvPython (Join-Path $ScriptDir 'register_windows_blueprint_cert.py') --blueprint-object-id $BlueprintObjectId --der $derPath
+        $registerExit = $LASTEXITCODE
+        if ($registerExit -eq 0) {
+            Success "Certificate registered on the Blueprint"
+        } elseif ($registerExit -eq 3) {
+            $unconfirmed = $true   # the write may have landed: keep the cert and record it in .env
+        } else {
+            # Nothing was written to the Blueprint, so a cert generated for it is useless.
+            if ($generated) { Remove-Item "Cert:\CurrentUser\My\$thumbprint" -Force }
+            Fail "The certificate was not registered on the Blueprint (exit $registerExit, see above). Nothing was changed. Fix the error and re-run setup."
+        }
+    }
+} finally {
+    if (Test-Path $derPath) { Remove-Item $derPath -Force }
+}
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 8. Write .env with strict ACLs (icacls -M, D10)
 # ═══════════════════════════════════════════════════════════════════════════
 Step 7 "Writing .env"
 
-$envPath = Join-Path $ProjectRoot '.env'
-@(
-    "ENTRABOT_TENANT_ID=$($account.tenantId)",
-    "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=$x5tS256",
-    "ENTRABOT_BLUEPRINT_CERT_SHA1=$thumbprint",
-    "ENTRABOT_BLUEPRINT_KSP=$ksp"
-) | Out-File -FilePath $envPath -Encoding utf8 -Append
+# config.py reads identity only from the environment and .env, never from the state file, so
+# everything the runtime needs is written here on every run. A machine set up before this
+# step wrote it has a registered certificate to reuse and no identity in .env.
+$envValues = [ordered]@{
+    ENTRABOT_TENANT_ID                 = $account.tenantId
+    ENTRABOT_BLUEPRINT_APP_ID          = $BlueprintAppId
+    ENTRABOT_BLUEPRINT_OBJECT_ID       = $BlueprintObjectId
+    ENTRABOT_BLUEPRINT_CERT_THUMBPRINT = $x5tS256
+    ENTRABOT_BLUEPRINT_CERT_SHA1       = $thumbprint
+    ENTRABOT_BLUEPRINT_KSP             = $ksp
+    ENTRABOT_AGENT_ID                  = $AgentId
+    ENTRABOT_AGENT_OBJECT_ID           = $AgentObjectId
+    ENTRABOT_AGENT_USER_ID             = $AgentUserId
+    ENTRABOT_AGENT_UPN                 = $StateAgentUserUpn
+    ENTRABOT_AGENT_USER_UPN            = $StateAgentUserUpn
+    ENTRABOT_PROVISIONER_APP_ID        = $ProvisionerClientId
+}
+
+# The sponsor and the blob store in .env belong to the agent they were set up for, so a run for a
+# different agent (-NewChain, or another -UseBlueprint) inherits neither. With no ID on one side
+# there's no telling, which counts as the same agent: a machine set up before this step wrote IDs
+# has none in .env.
+$previousAgentUserId = Get-EnvValue 'ENTRABOT_AGENT_USER_ID'
+$sameAgent = (-not $previousAgentUserId) -or (-not $AgentUserId) -or ($previousAgentUserId -eq $AgentUserId)
+
+# The sponsor defaults to the signed-in account, as in setup.sh, but only when .env names none:
+# the account running setup isn't always the sponsor, and a re-run must not silently change it.
+$namesSponsor = @('ENTRABOT_HUMAN_USER_ID', 'ENTRABOT_HUMAN_USER_IDS', 'ENTRABOT_HUMAN_UPN', 'ENTRABOT_HUMAN_UPNS') |
+    Where-Object { Get-EnvValue $_ }
+if (-not ($sameAgent -and $namesSponsor)) {
+    $me = az ad signed-in-user show --output json | ConvertFrom-Json
+    if ($LASTEXITCODE -eq 0 -and $me) {
+        $envValues['ENTRABOT_HUMAN_USER_ID']         = $me.id
+        $envValues['ENTRABOT_HUMAN_UPN']             = $account.user.name
+        $envValues['ENTRABOT_HUMAN_USER_IDS']        = $me.id
+        $envValues['ENTRABOT_HUMAN_UPNS']            = $account.user.name
+        $envValues['ENTRABOT_HUMAN_USER_TENANT_IDS'] = ''
+        $envValues['ENTRABOT_HUMAN_USER_MAILS']      = $account.user.name
+        $envValues['ENTRABOT_HUMAN_USER_TYPES']      = 'Member'
+    } else {
+        Write-Host "  Could not look up the signed-in user, so no sponsor was written to .env." -ForegroundColor Yellow
+    }
+}
+
+# Replace earlier lines instead of appending: config.py keeps the FIRST value of a repeated
+# key, so a stale line above a new one would win. A key with no value keeps what's there, except
+# a new sponsor's tenant IDs, which must not inherit the old sponsor's.
+$written = @($envValues.Keys | Where-Object { $envValues[$_] -or $_ -eq 'ENTRABOT_HUMAN_USER_TENANT_IDS' })
+
+# A different agent's sponsor and blob settings go now, whatever happens next: a failed lookup or
+# an unconfirmed certificate must not leave them looking like this agent's on the next run.
+$blobKeys  = @('ENTRABOT_BLOB_ENDPOINT', 'ENTRABOT_BLOB_CONTAINER')
+$inherited = @(
+    if (-not $sameAgent) {
+        'ENTRABOT_HUMAN_USER_ID', 'ENTRABOT_HUMAN_UPN', 'ENTRABOT_HUMAN_USER_IDS', 'ENTRABOT_HUMAN_UPNS',
+        'ENTRABOT_HUMAN_USER_TENANT_IDS', 'ENTRABOT_HUMAN_USER_MAILS', 'ENTRABOT_HUMAN_USER_TYPES',
+        'ENTRABOT_KEEP_MEMORY_LOCAL'
+        $blobKeys
+    }
+)
+$kept = @(
+    if (Test-Path $envPath) {
+        Get-Content $envPath | Where-Object { ($written + $inherited) -notcontains (Get-EnvKey $_) }
+    }
+)
+@($kept) + @($written | ForEach-Object { "$_=$($envValues[$_])" }) | Set-Content -Path $envPath -Encoding utf8
 
 # icacls :M (modify) — NOT :R (read-only). :R would self-brick: setup
 # re-runs and rotation both need to update .env.
@@ -414,20 +558,52 @@ $user = "$env:USERDOMAIN\$env:USERNAME"
 icacls $envPath /inheritance:r /grant:r "${user}:M" | Out-Null
 Success ".env locked to $user (modify, per D10)"
 
+if ($unconfirmed) {
+    Fail "Could not confirm the certificate is on the Blueprint (see above); it may be. Its thumbprints are in .env, so re-run setup: it checks again and registers the certificate if it is missing."
+}
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 8. Cloud memory — Azure Blob Storage provisioning (ADR-005, Phase 5)
 # ═══════════════════════════════════════════════════════════════════════════
 Step 8 "Cloud memory (Azure Blob Storage)"
 
+# Re-running setup is how a machine repairs its certificate, so a machine on cloud memory must
+# stay there: ENTRABOT_KEEP_MEMORY_LOCAL=true outranks the blob settings at runtime and would
+# leave the agent on an empty local store. config.py keeps the first value of a repeated key, so
+# these lines are replaced, never appended.
+$onCloudMemory = $sameAgent -and (Get-EnvValue 'ENTRABOT_BLOB_ENDPOINT') -and (Get-EnvValue 'ENTRABOT_BLOB_CONTAINER') -and
+                 ((Get-EnvValue 'ENTRABOT_KEEP_MEMORY_LOCAL') -notin 'true', '1', 'yes')
+
+function Set-MemoryLines {
+    param([string[]]$Replacing, [string[]]$Lines)
+    $kept = @(Get-Content $envPath | Where-Object { $Replacing -notcontains (Get-EnvKey $_) -and $_ -notmatch '^\s*# ADR-005:' })
+    @($kept) + $Lines | Set-Content -Path $envPath -Encoding utf8
+}
+function Use-LocalMemory {
+    Set-MemoryLines @('ENTRABOT_KEEP_MEMORY_LOCAL') @(
+        '# ADR-005: keep agent memory local (skip cloud sync)',
+        'ENTRABOT_KEEP_MEMORY_LOCAL=true'
+    )
+}
+function Skip-BlobStorage {
+    param([string]$Problem)
+    if ($onCloudMemory) {
+        Write-Host "  ⚠ $Problem — keeping the cloud memory already in .env" -ForegroundColor Yellow
+    } else {
+        Write-Host "  ⚠ $Problem — using local-only memory" -ForegroundColor Yellow
+        Use-LocalMemory
+    }
+}
+
 if (-not $UseCloudMemory) {
-    Add-Content -Path $envPath -Value ""
-    Add-Content -Path $envPath -Value "# ADR-005: keep agent memory local (skip cloud sync)"
-    Add-Content -Path $envPath -Value "ENTRABOT_KEEP_MEMORY_LOCAL=true"
-    Success "Memory mode: LOCAL (pass -UseCloudMemory to opt in)"
+    if ($onCloudMemory) {
+        Success "Memory mode: CLOUD (already set in .env)"
+    } else {
+        Use-LocalMemory
+        Success "Memory mode: LOCAL (pass -UseCloudMemory to opt in)"
+    }
 } elseif (-not $AgentUserId) {
-    Write-Host "  ⚠ Skipping blob storage — no Agent User ID found in state" -ForegroundColor Yellow
-    Add-Content -Path $envPath -Value ""
-    Add-Content -Path $envPath -Value "ENTRABOT_KEEP_MEMORY_LOCAL=true"
+    Skip-BlobStorage "Skipping blob storage, no Agent User ID found in state"
 } else {
     $provArgs = @(
         '--tenant-id', $account.tenantId,
@@ -444,22 +620,19 @@ if (-not $UseCloudMemory) {
     $provRc = $LASTEXITCODE
 
     if ($provRc -ne 0) {
-        Write-Host "  ⚠ Blob storage provisioning failed — falling back to local-only memory" -ForegroundColor Yellow
-        Add-Content -Path $envPath -Value ""
-        Add-Content -Path $envPath -Value "# ADR-005: provisioning failed, using local-only memory"
-        Add-Content -Path $envPath -Value "ENTRABOT_KEEP_MEMORY_LOCAL=true"
+        Skip-BlobStorage "Blob storage provisioning failed"
     } else {
-        $blobEndpoint  = ($provStdout | Select-String '^BLOB_ENDPOINT=(.+)$').Matches[0].Groups[1].Value
-        $blobContainer = ($provStdout | Select-String '^BLOB_CONTAINER=(.+)$').Matches[0].Groups[1].Value
+        $provText      = $provStdout -join "`n"
+        $blobEndpoint  = [regex]::Match($provText, '(?m)^BLOB_ENDPOINT=(.+?)\s*$').Groups[1].Value
+        $blobContainer = [regex]::Match($provText, '(?m)^BLOB_CONTAINER=(.+?)\s*$').Groups[1].Value
         if (-not $blobEndpoint -or -not $blobContainer) {
-            Write-Host "  ⚠ Provisioner returned no endpoint/container — using local-only memory" -ForegroundColor Yellow
-            Add-Content -Path $envPath -Value ""
-            Add-Content -Path $envPath -Value "ENTRABOT_KEEP_MEMORY_LOCAL=true"
+            Skip-BlobStorage "Provisioner returned no endpoint/container"
         } else {
-            Add-Content -Path $envPath -Value ""
-            Add-Content -Path $envPath -Value "# ADR-005: cloud-hosted agent memory (Azure Blob Storage)"
-            Add-Content -Path $envPath -Value "ENTRABOT_BLOB_ENDPOINT=$blobEndpoint"
-            Add-Content -Path $envPath -Value "ENTRABOT_BLOB_CONTAINER=$blobContainer"
+            Set-MemoryLines (@('ENTRABOT_KEEP_MEMORY_LOCAL') + $blobKeys) @(
+                '# ADR-005: cloud-hosted agent memory (Azure Blob Storage)',
+                "ENTRABOT_BLOB_ENDPOINT=$blobEndpoint",
+                "ENTRABOT_BLOB_CONTAINER=$blobContainer"
+            )
             Success "Blob storage ready: $blobEndpoint/$blobContainer"
         }
     }

@@ -94,6 +94,28 @@ every setup invocation.
 Do not merge cursor files blindly; replay protection depends on their current
 timestamps and message-ID tails.
 
+## The certificate isn't registered on the Blueprint
+
+Hop 1 fails with `invalid_client` even though `.env` has both thumbprints and the
+certificate is in `Cert:\CurrentUser\My`. Earlier versions of `setup-windows.ps1`
+generated the certificate locally but never registered it on the Blueprint, so Entra
+has never seen it.
+
+Re-run setup, not rotation:
+
+```powershell
+pwsh -File scripts\setup-windows.ps1 -UseBlueprint <blueprint-app-id>
+```
+
+Setup checks whether the certificate named in `.env` is on the Blueprint. If it isn't,
+setup registers that same certificate and generates nothing new. Other machines'
+certificates stay on the Blueprint, and a machine on cloud memory stays there without
+`-UseCloudMemory`.
+
+Don't run `deploy-windows.ps1` for this. Rotation authenticates with the registered
+certificate to get its Graph token, so it can't repair a certificate that was never
+registered.
+
 ## Certificate rotation failed
 
 Use the transactional rotation wrapper:
