@@ -139,6 +139,15 @@ def test_the_memory_step_replaces_env_lines_and_tolerates_missing_output() -> No
     assert ".Matches[0]" not in step  # throws on missing output under strict mode
 
 
+def test_a_direct_rerun_clears_upn_choices_left_in_the_powershell_session() -> None:
+    # Run directly, setup leaves these in the session. A suffix from an earlier run would then
+    # beat this run's -AgentUserUpn, because a suffix outranks a UPN taken from .env.
+    clear = "Remove-Item Env:ENTRABOT_AGENT_USER_UPN, Env:_ENTRABOT_UPN_SUFFIX"
+    assert clear in TEXT
+    assert TEXT.index(clear) < TEXT.index("$env:ENTRABOT_AGENT_USER_UPN = $AgentUserUpn")
+    assert TEXT.index(clear) < TEXT.index("$env:_ENTRABOT_UPN_SUFFIX = $UpnSuffix")
+
+
 def test_the_script_no_longer_claims_provisioning_publishes_the_cert() -> None:
     text = " ".join(TEXT.split())
     assert "already publishes the cert" not in text

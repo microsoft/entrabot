@@ -339,6 +339,8 @@ $args = @()
 if ($NewChain)             { $args += '--new' }
 if ($UseBlueprint)         { $args += "--use-blueprint=$UseBlueprint" }
 if ($UpnSuffix)            { $args += "--with-upn-suffix=$UpnSuffix" }
+# Run directly, setup leaves these in the PowerShell session, so clear the last run's choice first.
+Remove-Item Env:ENTRABOT_AGENT_USER_UPN, Env:_ENTRABOT_UPN_SUFFIX -ErrorAction SilentlyContinue
 if ($AgentUserUpn) {
     $env:ENTRABOT_AGENT_USER_UPN = $AgentUserUpn
 } elseif ($UseBlueprint -and $UpnSuffix) {
