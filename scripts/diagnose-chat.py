@@ -131,7 +131,7 @@ async def main() -> None:
     print("=" * 60)
     print("Done. Check your Teams client for the message.")
     print("If using a B2B guest account, make sure you've switched")
-    print("to the werner.ac organization in your Teams client.")
+    print("to the agent's organization in your Teams client.")
     print("=" * 60)
 
 
