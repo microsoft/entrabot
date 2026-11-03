@@ -80,7 +80,10 @@ def test_unix_setup_can_run_interactive_a365_work_iq_configuration() -> None:
     assert '"agentIdentityDisplayName": agent_identity_display_name' in script
     assert '"deploymentProjectPath": str(project_root)' in script
     assert "find_local_blueprint_cert.py" in script
-    assert 'A365_WORK_IQ_MCP_SERVERS=(mcp_WordServer mcp_ODSPRemoteServer)' in script
+    assert (
+        "A365_WORK_IQ_MCP_SERVERS=(mcp_WordServer mcp_ODSPRemoteServer mcp_ExcelServer)"
+        in script
+    )
     assert (
         'a365 develop add-mcp-servers "${A365_WORK_IQ_MCP_SERVERS[@]}" '
         '--project-path "$PROJECT_ROOT"'
@@ -145,7 +148,10 @@ def test_windows_setup_can_run_interactive_a365_work_iq_configuration() -> None:
     assert '$config["agentBlueprintId"] = $BlueprintAppId' in script
     assert '$config["agentIdentityDisplayName"] = $AgentIdentityDisplayName' in script
     assert '$config["deploymentProjectPath"] = $ProjectRoot' in script
-    assert '$A365WorkIqMcpServers = @("mcp_WordServer", "mcp_ODSPRemoteServer")' in script
+    assert (
+        '$A365WorkIqMcpServers = @("mcp_WordServer", "mcp_ODSPRemoteServer", "mcp_ExcelServer")'
+        in script
+    )
     assert (
         "a365 develop add-mcp-servers $A365WorkIqMcpServers "
         "--project-path $ProjectRoot"

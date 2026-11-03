@@ -9,6 +9,7 @@ from entrabot.a365.errors import A365ServerNotConfiguredError
 AGENT365_SERVER_BASE = "https://agent365.svc.cloud.microsoft/agents/servers"
 
 WORD_SERVER_NAME = "mcp_WordServer"
+EXCEL_SERVER_NAME = "mcp_ExcelServer"
 MAIL_SERVER_NAME = "mcp_MailTools"
 CALENDAR_SERVER_NAME = "mcp_CalendarTools"
 ODSP_SERVER_NAME = "mcp_ODSPRemoteServer"
@@ -45,6 +46,7 @@ def _server(server_name: str, display_name: str, scope: str, enabled: bool = Tru
 
 _SERVERS: dict[str, WorkIqServer] = {
     WORD_SERVER_NAME: _server(WORD_SERVER_NAME, "Work IQ Word", "McpServers.Word.All"),
+    EXCEL_SERVER_NAME: _server(EXCEL_SERVER_NAME, "Work IQ Excel", "McpServers.Excel.All"),
     MAIL_SERVER_NAME: _server(MAIL_SERVER_NAME, "Work IQ Mail", "McpServers.Mail.All"),
     CALENDAR_SERVER_NAME: _server(
         CALENDAR_SERVER_NAME,

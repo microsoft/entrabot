@@ -74,7 +74,7 @@ async def _audit_graph_call(
 ) -> AsyncIterator[None]
 ```
 
-Wraps a Graph Files call: emits `outcome="pending"` before the body runs, then `"success"` after it returns or `"failure"` (with `error` and `message` added to `metadata`) if it raised — the exception re-raises unchanged either way. `resolve_file_url`, `list_recent_files`, `read_file`, `add_file_comment`, `write_text_file`, `upload_file`, and `share_file` all route through this one context manager rather than hand-written `log_event` pairs.
+Wraps a Graph Files call: emits `outcome="pending"` before the body runs, then `"success"` after it returns or `"failure"` (with `error` and `message` added to `metadata`) if it raised — the exception re-raises unchanged either way. `resolve_file_url`, `list_recent_files`, `read_file`, `list_workbook_worksheets`, `read_workbook_range`, `add_file_comment`, `write_text_file`, `upload_file`, and `share_file` all route through this one context manager rather than hand-written `log_event` pairs.
 
 ## `teams.add_member` audit pattern
 

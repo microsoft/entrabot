@@ -18,7 +18,8 @@
 
 - Microsoft Teams messaging with explicit chat IDs, plus background chat discovery and polling.
 - Outlook read and send, background polling, and daily summaries.
-- Direct Microsoft Graph Files access alongside Agent 365 Work IQ integrations for Word and OneDrive/SharePoint (ODSP).
+- Direct Microsoft Graph Files access alongside Agent 365 Work IQ integrations for Word, Excel, and OneDrive/SharePoint (ODSP).
+- Bounded, read-only Excel worksheet and range reads through the Graph Workbook API (`list_workbook_worksheets`, `read_workbook_range`). Run against a live tenant on an `.xlsx` in the Agent User's own OneDrive; not yet exercised on a file shared by someone else or on `.xlsm`.
 
 ### Security and runtime
 
@@ -49,6 +50,8 @@
 - Live smoke tests provision real Entra, Azure, and Microsoft 365 resources and send a real Teams message, so they run manually rather than in CI until an isolated tenant and non-human CI identity are available.
 - Windows end-to-end coverage is narrower than macOS and currently centered on Windows 11 ARM64.
 - Legacy Graph file comments are not the same as Word UI comments; use the Work IQ Word tools for document comments.
+- Work IQ Excel (`mcp_ExcelServer`) is in the live Agent 365 catalog but not on Microsoft Learn, and the CLI warns of a "legacy ATG audience", so its tools may change. It requires `McpServers.Excel.All` on the Blueprint.
+- Excel writes, table reads, and workbook sessions aren't implemented ([#117](https://github.com/microsoft/entrabot/issues/117)).
 - External-content wrapping is defense in depth. It reduces instruction-injection risk but is not proof against every possible model jailbreak.
 - Attaching an additional device with `setup.sh --use-blueprint` replaces the Blueprint's certificate list instead of appending, and proceeds without confirmation in non-interactive shells ([#124](https://github.com/microsoft/entrabot/issues/124)).
 - `ENTRABOT_MODE` is validated but does not currently select the auth path in `_init_auth`; credential presence and `ENTRABOT_SKIP_PROVISIONING` determine which path (three-hop Agent User or MSAL delegated) is attempted.

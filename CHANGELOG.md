@@ -7,6 +7,8 @@
 - Rename-safe agent matching through canonical `ENTRABOT_AGENT_UPN` with object-ID fallback.
 - Boundary-owned XPIA envelopes for model-facing Teams, email, Files, and Work IQ content.
 - `read_email`, `read_interactions`, and `bootstrap_body_state`, bringing the MCP surface to 37 tools.
+- `list_workbook_worksheets` and `read_workbook_range` for bounded, read-only Excel access through Microsoft Graph, bringing the MCP surface to 39 tools.
+- Work IQ Excel adapter with `read_excel_workbook`, `create_excel_workbook`, `add_excel_comment`, and `reply_to_excel_comment`, bringing the MCP surface to 43 tools. Work IQ setup now adds `mcp_ExcelServer` and requests `McpServers.Excel.All`.
 - Windows status tooling and expanded Windows setup/teardown guidance.
 
 ### Changed

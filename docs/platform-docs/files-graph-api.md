@@ -15,8 +15,8 @@ Microsoft Graph exposes Microsoft 365 documents through three layered resources:
    model covers OneDrive (personal), OneDrive for Business, and SharePoint
    document libraries.
 2. **Workbook** (`/drives/{drive-id}/items/{item-id}/workbook/...`) — structured
-   Excel access on top of an `.xlsx` DriveItem: worksheets, ranges, tables,
-   formulas, named items, charts.
+   Excel access on top of an Office Open XML workbook DriveItem: worksheets,
+   ranges, tables, formulas, named items, charts.
 3. **Search and Sites** (`/search/query`, `/sites/{site-id}`) — discovery across
    the tenant.
 
@@ -115,7 +115,11 @@ Word document from Markdown, convert client-side and upload the resulting
 
 ## Excel / Workbook API
 
-The Workbook API is structured access on top of an `.xlsx` DriveItem.
+The Workbook API is structured access on top of a workbook DriveItem. It reads
+Office Open XML workbooks only, so legacy `.xls` files aren't supported, and it
+doesn't support workbooks on consumer OneDrive; they must be on OneDrive for
+Business or SharePoint. Entrabot exposes bounded reads of this API as
+`list_workbook_worksheets` and `read_workbook_range`. It doesn't expose writes.
 
 ```http
 GET   .../workbook/worksheets/{sheet}/range(address='A1:D4')
@@ -125,9 +129,17 @@ GET   .../workbook/tables/{name}/rows
 POST  .../workbook/tables/{name}/rows/add
 ```
 
-Range reads return both `values` (rendered) and `formulas` (original `=...`
-strings). Tables are first-class in Excel and auto-extend on append, so prefer
-table operations over raw range writes when a table exists.
+Range reads return `values` (raw values), `text` (the strings as displayed), and
+`formulas` (original `=...` strings). For a date cell, for example, `values` is
+the serial number and `text` is the formatted date. Tables are first-class in
+Excel and auto-extend on append, so prefer table operations over raw range writes
+when a table exists.
+
+Unbounded addresses such as `C:C` or `2:2` return `null` for cell-level
+properties such as `values`, `text`, and `formulas`, and large ranges can fail
+outright. `read_workbook_range` refuses unbounded addresses and caps each read at
+`ENTRABOT_FILES_MAX_WORKBOOK_CELLS` cells, so read large sheets in several
+smaller ranges.
 
 For atomic multi-write batches and performance, open a workbook session:
 
@@ -138,8 +150,15 @@ POST .../workbook/createSession
 
 Pass `Workbook-Session-Id: <session-id>` on subsequent requests and close the
 session with `POST .../workbook/closeSession`, or let it expire after 5 minutes
-idle. Workbook access uses the same `Files.ReadWrite` / `Files.ReadWrite.All` +
-`Sites.ReadWrite.All` scopes; no separate scope is needed.
+idle.
+
+No separate workbook scope is needed. Microsoft's
+[Excel overview](https://learn.microsoft.com/en-us/graph/api/resources/excel)
+lists `Files.Read` for read actions and `Files.ReadWrite` for writes, although
+some method pages, such as
+[`usedRange`](https://learn.microsoft.com/en-us/graph/api/worksheet-usedrange),
+list `Files.ReadWrite` as the least-privileged permission. The recommended
+baseline above (`Files.ReadWrite.All` + `Sites.ReadWrite.All`) covers both.
 
 ## Comments
 
@@ -259,6 +278,8 @@ lasts about 7 days.
 
 ## Limitations
 
+- **Excel.** `.xls` files and workbooks on consumer OneDrive can't be read through
+  the Workbook API. Entrabot's Excel tools are read-only.
 - **PowerPoint.** DriveItem operations (upload, download, share, `?format=pdf`)
   work, but there is no comment API for `.pptx`, no structured slide
   manipulation in Graph, and no "create blank presentation" endpoint. To author
@@ -283,6 +304,7 @@ Always honor `Retry-After`, and back off on `429`/`503`.
 - [DriveItem resource](https://learn.microsoft.com/en-us/graph/api/resources/driveitem)
 - [driveItem: sharedWithMe](https://learn.microsoft.com/en-us/graph/api/drive-sharedwithme)
 - [driveItem: createUploadSession](https://learn.microsoft.com/en-us/graph/api/driveitem-createuploadsession)
+- [Working with Excel in Microsoft Graph](https://learn.microsoft.com/en-us/graph/api/resources/excel)
 - [Workbook resource](https://learn.microsoft.com/en-us/graph/api/resources/workbook)
 - [Workbook: createSession](https://learn.microsoft.com/en-us/graph/api/workbook-createsession)
 - [comment resource (beta)](https://learn.microsoft.com/en-us/graph/api/resources/comment?view=graph-rest-beta)

@@ -55,6 +55,14 @@ Precedence and list rules:
 | `ENTRABOT_LOG_LEVEL` | Python logging level name. Defaults to `INFO`. |
 | `ENTRABOT_XPIA_WRAP_ENABLE` | Enabled by default — external content (Teams, email, Files, Work IQ) is wrapped through the XPIA boundary. Set to `false`, `0`, `no`, or `off` (case-insensitive) to disable the wrap as a rollback path. See [Security Boundaries](../architecture/security-boundaries.md) and the [Security (XPIA) API Reference](../reference/api/security.md). |
 
+## Files limits
+
+| Variable | Description |
+|---|---|
+| `ENTRABOT_FILES_MAX_TEXT_BYTES` | Caps the text a Files read returns, in bytes. Defaults to `200000`. Longer content is truncated and flagged with `truncated`. |
+| `ENTRABOT_FILES_MAX_PDF_BYTES` | Largest PDF `read_file` will download, in bytes. Defaults to `52428800` (50 MiB). |
+| `ENTRABOT_FILES_MAX_WORKBOOK_CELLS` | Most cells one `read_workbook_range` call can read. Defaults to `5000`. Larger requests fail with `WorkbookRangeTooLargeError` before any cell data is fetched. |
+
 ## Local paths
 
 | Variable | Description |

@@ -11,6 +11,7 @@ provider. This guide covers what each one does and when to reach for which.
 - Resolving a OneDrive/SharePoint share URL to a drive item.
 - Listing recent and shared files.
 - Reading text, PDF, and DOCX content.
+- Listing the worksheets in an Excel workbook and reading bounded cell ranges.
 - Writing text files.
 - Uploading binary files, including chunked upload sessions for larger
   files.
@@ -21,11 +22,13 @@ provider. This guide covers what each one does and when to reach for which.
   read/list operation — see Work IQ Word for reading comments).
 
 **Work IQ** is a separate provider boundary — catalog, manifest, token
-acquisition, and MCP client — with two typed adapters on top:
+acquisition, and MCP client — with three typed adapters on top:
 
 - **Word adapter** — get document content (with comments), create a new
   document, create a comment, and reply to a comment. It supports the full
   read/create/comment/reply workflow for Word documents.
+- **Excel adapter** — read a whole workbook and its comments from a sharing
+  URL, create a workbook from CSV, comment on a cell, and reply to a comment.
 - **ODSP adapter** — look up OneDrive/SharePoint file or folder metadata by
   URL, and read small text or binary files.
 
@@ -38,6 +41,13 @@ Word document workflows.
 - Use **direct Graph** for generic drive/item resolution, arbitrary file
   reads, uploads, and sharing — anything that isn't specifically a Word
   document workflow.
+- Use **direct Graph** for bounded Excel reads: call `list_workbook_worksheets`
+  to get the sheet names, then `read_workbook_range` to read cells, including
+  formulas. These read `.xlsx` and `.xlsm` files on OneDrive for Business or
+  SharePoint, not `.xls` files or consumer OneDrive.
+- Use **Work IQ Excel** to read a whole workbook as text from a sharing URL, to
+  read or add cell comments, or to create a workbook from CSV. See
+  [Work IQ Excel tools](../platform-docs/microsoft-agent-365.md#work-iq-excel-tools).
 - Use **Work IQ Word** for reading, creating, commenting on, and replying to
   comments on Word documents.
 - Use **Work IQ ODSP** for OneDrive/SharePoint metadata lookups and small
@@ -52,7 +62,8 @@ model, so it's treated as data rather than trusted instructions. This is the
 same treatment given to Teams and email content.
 
 Direct Graph additionally enforces a site denylist and size limits on reads,
-and every write (comment, upload, share) is recorded through the audit
+including a cell cap on Excel ranges (`ENTRABOT_FILES_MAX_WORKBOOK_CELLS`), and
+every write (comment, upload, share) is recorded through the audit
 layer.
 
 ## Consent and setup
