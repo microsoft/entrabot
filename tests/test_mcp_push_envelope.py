@@ -462,6 +462,33 @@ class TestEmailPush:
         assert content.endswith(CLOSE)
         assert 300 < content.count("z") <= 400
 
+    async def test_plain_text_in_angle_brackets_is_not_deleted(self, stream: AsyncMock) -> None:
+        # These fields are plain text, not HTML, so stripping "tags" would delete real words.
+        await mcp_server._push_email_notification(
+            _email(
+                subject="Deploy <release-123>",
+                bodyPreview="Alert when CPU < 50% and memory > 90%.",
+            )
+        )
+
+        params = _params(stream)
+        assert "Deploy \u2039release-123\u203a" in params["content"]
+        assert "Alert when CPU \u2039 50% and memory \u203a 90%." in params["content"]
+        _assert_no_angle_brackets(params)
+
+    async def test_the_rollback_switch_still_leaves_no_angle_brackets(
+        self, stream: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ENTRABOT_XPIA_WRAP_ENABLE", "false")
+
+        await mcp_server._push_email_notification(
+            _email(subject="Deploy <release-123> &lt;now&gt;", bodyPreview="a < b")
+        )
+
+        params = _params(stream)
+        assert "[external_content" not in params["content"]
+        _assert_no_angle_brackets(params)
+
     async def test_the_interaction_log_keeps_the_original_fields(
         self, stream: AsyncMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:

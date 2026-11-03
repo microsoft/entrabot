@@ -101,12 +101,20 @@ Wraps external text for a channel push, in the bracket form of the envelope:
 
 A channel push can't carry angle brackets, and the push sanitizer strips every tag, so the `<external_content>` form can't reach the model that way. The body prompt treats the two forms alike.
 
-- **The body can't forge a marker.** Square brackets in the body become parentheses, and the marker's name becomes `external content` however it's padded or split. Fullwidth brackets are covered too.
+- **The body can't forge a marker.** Square brackets in the body become parentheses, and the marker's name becomes `external content` however it's padded or split. Fullwidth brackets are covered too. Character references are fully decoded first, because the host's client can decode them, so an encoded marker can't survive either.
 - **No angle brackets.** Any in the body become their single-guillemet look-alikes, and `source` and `sender` lose anything that could end the value or the marker.
 - **One-way.** Unlike `wrap_external`, this isn't reversible. Pushes are notifications, and the original stays readable through the read tools.
 - **Cut to length first.** Truncate `body` before wrapping, so the close marker is never what gets cut.
 
 `ENTRABOT_XPIA_WRAP_ENABLE=false` makes this return `body` unchanged, as it does for `wrap_external`.
+
+## `channel_safe_text`
+
+```python
+def channel_safe_text(text: str) -> str
+```
+
+Makes plain text safe to carry in a channel push, wrapped or not. It's for fields that are plain text rather than HTML, such as an email subject, where stripping "tags" would delete real words: `Deploy <release-123>` keeps `release-123`. Character references are decoded and angle brackets become look-alikes, so none can reach the client.
 
 ## Minimal example
 

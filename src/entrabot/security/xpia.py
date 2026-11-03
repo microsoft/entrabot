@@ -40,6 +40,7 @@ fits alongside identity attribution, sponsor authorization, and audit.
 
 from __future__ import annotations
 
+import html
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -166,22 +167,25 @@ def wrap_external(
 # The bracket form of the envelope. See :func:`wrap_for_channel`.
 _CHANNEL_CLOSE = f"[/{_TAG_NAME}]"
 
-# In a channel envelope's body, square brackets become parentheses, so no marker can form
-# there at all. Angle brackets become their single-guillemet look-alikes, which keeps the
-# sense of "a < b" without a character the push can't carry. Fullwidth forms go too, because
-# a model reads them the same way.
+# Angle brackets become their single-guillemet look-alikes, which keeps the sense of "a < b"
+# without a character a push can't carry. Fullwidth forms go too, because a model reads them
+# the same way.
+_CHANNEL_ANGLES = {
+    "<": "\u2039",
+    ">": "\u203a",
+    "\uff1c": "\u2039",
+    "\uff1e": "\u203a",
+}
+_CHANNEL_ANGLE_CHARS = str.maketrans(_CHANNEL_ANGLES)
+
+# In a channel envelope's body, square brackets also become parentheses, so no marker can form
+# there at all.
 _CHANNEL_BODY_CHARS = str.maketrans(
-    {
-        "[": "(",
-        "]": ")",
-        "\uff3b": "(",
-        "\uff3d": ")",
-        "<": "\u2039",
-        ">": "\u203a",
-        "\uff1c": "\u2039",
-        "\uff1e": "\u203a",
-    }
+    {**_CHANNEL_ANGLES, "[": "(", "]": ")", "\uff3b": "(", "\uff3d": ")"}
 )
+
+# More than any real text nests. Past this, the leftover ampersands are replaced instead.
+_MAX_UNESCAPE_ROUNDS = 8
 
 # The marker's name, however it's padded or split. Removing it covers any delimiter the
 # character map above doesn't know about.
@@ -195,6 +199,35 @@ _CHANNEL_MARKER_NAME_RE = re.compile(
 _CHANNEL_ATTRIBUTE_DROP_RE = re.compile(r'["\[\]<>\uff3b\uff3d\uff1c\uff1e\x00-\x1f\x7f]')
 
 
+def _channel_attribute(value: str) -> str:
+    return _CHANNEL_ATTRIBUTE_DROP_RE.sub("", _fully_unescaped(value))
+
+
+def _fully_unescaped(text: str) -> str:
+    """Decode character references until none are left.
+
+    The host's client can decode them, so ``&#91;`` in a push could arrive as ``[``, and a
+    nested ``&amp;#91;`` could get there too. With nothing left to decode, whatever is
+    filtered next is what the model sees.
+    """
+    for _ in range(_MAX_UNESCAPE_ROUNDS):
+        decoded = html.unescape(text)
+        if decoded == text:
+            return text
+        text = decoded
+    return text.replace("&", "\uff06")
+
+
+def channel_safe_text(text: str) -> str:
+    """Make plain text safe to carry in a channel push, wrapped or not.
+
+    For fields that are plain text rather than HTML, such as an email subject, where stripping
+    "tags" would delete real words: ``Deploy <release-123>`` keeps ``release-123``. Character
+    references are decoded and angle brackets become look-alikes, so none can reach the client.
+    """
+    return _fully_unescaped(text).translate(_CHANNEL_ANGLE_CHARS)
+
+
 def wrap_for_channel(body: str, *, source: str, sender: str | None = None) -> str:
     """Wrap external text for a channel push, in the bracket form of the envelope.
 
@@ -205,9 +238,10 @@ def wrap_for_channel(body: str, *, source: str, sender: str | None = None) -> st
 
     The output is ``[external_content source="..." sender="..."]body[/external_content]``.
     The body can't forge a marker, because after this it holds no square bracket and no
-    marker name. It also holds no angle bracket, so a push stays safe even if the caller's
-    sanitizing missed one. Unlike :func:`wrap_external` this isn't reversible: it is
-    for one-way notifications, and the original stays readable through the read tools.
+    marker name, encoded or not. It also holds no angle bracket, so a push stays safe even
+    if the caller's sanitizing missed one. Unlike :func:`wrap_external` this isn't
+    reversible: it is for one-way notifications, and the original stays readable through
+    the read tools.
 
     Args:
         body: The external-source text, already cut to its length limit, so the close marker
@@ -222,10 +256,12 @@ def wrap_for_channel(body: str, *, source: str, sender: str | None = None) -> st
     if not _wrap_enabled():
         return body
 
-    safe_body = _CHANNEL_MARKER_NAME_RE.sub("external content", body).translate(_CHANNEL_BODY_CHARS)
-    attrs = [f'source="{_CHANNEL_ATTRIBUTE_DROP_RE.sub("", source)}"']
+    safe_body = _CHANNEL_MARKER_NAME_RE.sub("external content", _fully_unescaped(body)).translate(
+        _CHANNEL_BODY_CHARS
+    )
+    attrs = [f'source="{_channel_attribute(source)}"']
     if sender is not None:
-        attrs.append(f'sender="{_CHANNEL_ATTRIBUTE_DROP_RE.sub("", sender)}"')
+        attrs.append(f'sender="{_channel_attribute(sender)}"')
     return f"[{_TAG_NAME} {' '.join(attrs)}]{safe_body}{_CHANNEL_CLOSE}"
 
 
@@ -302,6 +338,7 @@ def unwrap_external(wrapped: str) -> ExternalContent:
 
 __all__ = [
     "ExternalContent",
+    "channel_safe_text",
     "unwrap_external",
     "wrap_external",
     "wrap_for_channel",

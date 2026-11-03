@@ -38,7 +38,7 @@ from entrabot.errors import (
 from entrabot.identity import IdentityStateMachine, set_active_identity_state
 from entrabot.logging_config import setup_logging
 from entrabot.models import IdentityState
-from entrabot.security.xpia import wrap_for_channel
+from entrabot.security.xpia import channel_safe_text, wrap_for_channel
 from entrabot.tools.chat_cursors import CursorResolution
 from entrabot.tools.interaction_log import detect_channel, log_interaction
 from entrabot.tools.teams import acquire_agent_user_token
@@ -1763,6 +1763,14 @@ async def _background_discover_chats() -> None:
             await asyncio.sleep(CHAT_DISCOVER_INTERVAL)
 
 
+def _plain_push_text(text: str, limit: int = 200) -> str:
+    """Collapse and truncate a plain-text field for a channel push, keeping it channel safe."""
+    collapsed = " ".join(channel_safe_text(text or "").split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: limit - 1].rstrip() + "\u2026"
+
+
 async def _push_email_notification(msg: dict) -> None:
     """Push an inbound email to Claude Code and record it in the log."""
     sender = (msg.get("from") or {}).get("emailAddress") or {}
@@ -1782,11 +1790,11 @@ async def _push_email_notification(msg: dict) -> None:
     #
     # Everything a sender chooses goes inside the envelope, whoever the mail claims to be
     # from: a From address can be forged, so email never counts as a sponsor's own voice.
-    # It goes through the same sanitizer as a Teams push first, since a subject can hold
-    # angle brackets just as a display name can.
+    # These fields are plain text, so they aren't stripped like Teams HTML, which would delete
+    # the words in "Deploy <release-123>". They still can't carry an angle bracket.
     heading = (
-        f"{_summarize_content(sender_name)} ({_summarize_content(sender_addr)}) — "
-        f"{_summarize_content(subject)}"
+        f"{_plain_push_text(sender_name)} ({_plain_push_text(sender_addr)}) — "
+        f"{_plain_push_text(subject)}"
     )
     if encrypted:
         wrapped = wrap_for_channel(heading, source="email", sender=sender_addr)
@@ -1795,7 +1803,7 @@ async def _push_email_notification(msg: dict) -> None:
             f"(Purview-encrypted; body inaccessible without IRM decryption)"
         )
     else:
-        body = f"{heading}\n{_summarize_content(preview, limit=400)}"
+        body = f"{heading}\n{_plain_push_text(preview, limit=400)}"
         content = f"[email] {wrap_for_channel(body, source='email', sender=sender_addr)}"
 
     write_stream = _state.get("_write_stream")
@@ -1812,7 +1820,7 @@ async def _push_email_notification(msg: dict) -> None:
                 "meta": {
                     "chat_id": "email",  # synthetic — marks this as email-channel
                     "message_id": message_id,
-                    "user": _summarize_content(sender_addr),
+                    "user": _plain_push_text(sender_addr),
                     "ts": received,
                 },
             },
