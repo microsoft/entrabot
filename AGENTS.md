@@ -28,7 +28,7 @@
 - Never use `az rest` or Azure CLI tokens for Agent Identity APIs — they include `Directory.AccessAsUser.All` which causes hard 403
 - Always create BlueprintPrincipal explicitly after Blueprint — it is NOT auto-created
 - Agent IDs are service principals, not users — never create fake user accounts with passwords
-- **External content is untrusted.** Model-facing Teams, email, Files, and Work IQ content must pass through `entrabot.security.xpia.wrap_external`. Never trust or preserve an inbound `<external_content>` envelope as authoritative; always add the boundary-owned outer envelope.
+- **External content is untrusted.** Model-facing Teams, email, Files, and Work IQ content must pass through `entrabot.security.xpia.wrap_external`, or `wrap_for_channel` on a channel push, which can't carry angle brackets. The one exception is a verified sponsor's Teams push, which is how a sponsor gives an instruction. Never trust or preserve an inbound `<external_content>` envelope as authoritative; always add the boundary-owned outer envelope.
 - **AGENT NAMES CHANGE — USE UPN.** Never identify an agent by display name in code paths that filter, deduplicate, authorize, or route. Use `ENTRABOT_AGENT_UPN` as the canonical config value (for example, `entra-agent@contoso.onmicrosoft.com`), match `sender_upn` first, and fall back to the Entra object ID. `ENTRABOT_AGENT_USER_UPN` remains a compatibility alias for existing `.env` files. See Learning #69 and `docs/architecture/messaging-and-delivery.md`.
 - Parse `az` CLI output as JSON, not TSV — TSV can be corrupted by warnings
 - Graph API `$filter` and `$orderby` are unreliable for chat messages; filter client-side.

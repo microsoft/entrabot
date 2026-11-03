@@ -17,6 +17,7 @@
 
 ### Fixed
 
+- Channel pushes now mark outside content as data. A Teams push lost the XPIA envelope to the push sanitizer and an email push never had one, so `wrap_for_channel` writes a bracket form a push can carry. A verified sponsor's Teams message stays outside the envelope, and all email is wrapped. Sender names and subjects on an email push also lose their angle brackets, as a Teams push already did.
 - Attaching a machine with `setup.sh --use-blueprint` no longer removes other machines' Blueprint certificates: it adds to the list, and `--remove-all-existing-certs` is the only way to replace it. That flag removes certificates only and does not delete the Blueprint. `deploy-windows.ps1` rotation also keeps other machines' certificates ([#124](https://github.com/microsoft/entrabot/issues/124)).
 - `setup-windows.ps1` now registers the Blueprint certificate it generates; before, a fresh Windows machine held a certificate Entra had never seen and failed at Hop 1. Re-running setup registers an existing local certificate the Blueprint lacks, other machines' certificates are kept, and the `.env` thumbprint lines are replaced instead of appended.
 - `setup-windows.ps1` now writes the Blueprint, agent and Agent User IDs and a default sponsor to `.env`. The runtime reads identity only from the environment and `.env`, so a machine set up with it before had no identity to sign in with.

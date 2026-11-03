@@ -25,6 +25,9 @@ This module owns the envelope: ``wrap_external`` produces it,
 - **Opt-out via env.** ``ENTRABOT_XPIA_WRAP_ENABLE=false`` short-circuits
   ``wrap_external`` to the identity function so a live rollback needs
   only a restart, not a code revert.
+- **A bracket form for channel pushes.** A push can't carry angle
+  brackets, so ``wrap_for_channel`` produces the same envelope as
+  ``[external_content ...]...[/external_content]``.
 
 This is a text-escaping and provenance boundary, not a cryptographic
 signature: it does not authenticate the body's origin, sanitize its
@@ -37,6 +40,7 @@ fits alongside identity attribution, sponsor authorization, and audit.
 
 from __future__ import annotations
 
+import html
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -160,6 +164,108 @@ def wrap_external(
     return f"<{_TAG_NAME} {' '.join(attrs)}>{safe_body}{_CLOSE_TAG}"
 
 
+# The bracket form of the envelope. See :func:`wrap_for_channel`.
+_CHANNEL_CLOSE = f"[/{_TAG_NAME}]"
+
+# Angle brackets become their single-guillemet look-alikes, which keeps the sense of "a < b"
+# without a character a push can't carry. Fullwidth forms go too, because a model reads them
+# the same way.
+_CHANNEL_ANGLES = {
+    "<": "\u2039",
+    ">": "\u203a",
+    "\uff1c": "\u2039",
+    "\uff1e": "\u203a",
+}
+_CHANNEL_ANGLE_CHARS = str.maketrans(_CHANNEL_ANGLES)
+
+# In a channel envelope's body, square brackets also become parentheses, so no marker can form
+# there at all.
+_CHANNEL_BODY_CHARS = str.maketrans(
+    {**_CHANNEL_ANGLES, "[": "(", "]": ")", "\uff3b": "(", "\uff3d": ")"}
+)
+
+# More than any real text nests. Past this, the leftover ampersands are replaced instead.
+_MAX_UNESCAPE_ROUNDS = 8
+
+# The marker's name, however it's padded or split. Removing it covers any delimiter the
+# character map above doesn't know about.
+_CHANNEL_MARKER_NAME_RE = re.compile(
+    r"external[\s_\-\u00ad\u200b-\u200f\u2060\ufeff]*content",
+    re.IGNORECASE,
+)
+
+# What can't appear in a channel envelope's attribute values: anything that could end the
+# value or the marker, or start a new line. Each becomes a space rather than being removed,
+# because closing up the gap could assemble a new character reference: &quo[]t; into &quot;.
+_CHANNEL_ATTRIBUTE_UNSAFE_RE = re.compile(r'["\[\]<>\uff3b\uff3d\uff1c\uff1e\x00-\x1f\x7f]')
+
+
+def _channel_attribute(value: str) -> str:
+    return _CHANNEL_ATTRIBUTE_UNSAFE_RE.sub(" ", _fully_unescaped(value))
+
+
+def _fully_unescaped(text: str) -> str:
+    """Decode character references until none are left.
+
+    The host's client can decode them, so ``&#91;`` in a push could arrive as ``[``, and a
+    nested ``&amp;#91;`` could get there too. With nothing left to decode, whatever is
+    filtered next is what the model sees.
+    """
+    for _ in range(_MAX_UNESCAPE_ROUNDS):
+        decoded = html.unescape(text)
+        if decoded == text:
+            return text
+        text = decoded
+    return text.replace("&", "\uff06")
+
+
+def channel_safe_text(text: str) -> str:
+    """Make plain text safe to carry in a channel push, wrapped or not.
+
+    For fields that are plain text rather than HTML, such as an email subject, where stripping
+    "tags" would delete real words: ``Deploy <release-123>`` keeps ``release-123``. Character
+    references are decoded and angle brackets become look-alikes, so none can reach the client.
+    """
+    return _fully_unescaped(text).translate(_CHANNEL_ANGLE_CHARS)
+
+
+def wrap_for_channel(body: str, *, source: str, sender: str | None = None) -> str:
+    """Wrap external text for a channel push, in the bracket form of the envelope.
+
+    A channel push can't carry angle brackets: the host's client has closed the MCP stream
+    on them (``engineering-history/investigations/mcp-disconnect-investigation.md``), so the
+    push sanitizer strips every tag, the ``<external_content>`` envelope included. This form
+    means the same thing without them, and the body prompt treats the two alike.
+
+    The output is ``[external_content source="..." sender="..."]body[/external_content]``.
+    The body can't forge a marker, because after this it holds no square bracket and no
+    marker name, encoded or not. It also holds no angle bracket, so a push stays safe even
+    if the caller's sanitizing missed one. Unlike :func:`wrap_external` this isn't
+    reversible: it is for one-way notifications, and the original stays readable through
+    the read tools.
+
+    Args:
+        body: The external-source text, already cut to its length limit, so the close marker
+            is never what gets truncated.
+        source: Where the text came from, such as ``"teams"`` or ``"email"``.
+        sender: The author's identity (UPN, email, or object ID), never a display name.
+            Omitted when ``None``.
+
+    Returns:
+        The wrapped body. When the env flag disables wrapping, returns ``body`` unchanged.
+    """
+    if not _wrap_enabled():
+        return body
+
+    safe_body = _CHANNEL_MARKER_NAME_RE.sub("external content", _fully_unescaped(body)).translate(
+        _CHANNEL_BODY_CHARS
+    )
+    attrs = [f'source="{_channel_attribute(source)}"']
+    if sender is not None:
+        attrs.append(f'sender="{_channel_attribute(sender)}"')
+    return f"[{_TAG_NAME} {' '.join(attrs)}]{safe_body}{_CHANNEL_CLOSE}"
+
+
 # Regex used by :func:`unwrap_external`. Matches the outermost envelope
 # only — the wrap function only ever emits one envelope; the escape-on-
 # collision rule keeps embedded close tags from confusing the parser.
@@ -233,6 +339,8 @@ def unwrap_external(wrapped: str) -> ExternalContent:
 
 __all__ = [
     "ExternalContent",
+    "channel_safe_text",
     "unwrap_external",
     "wrap_external",
+    "wrap_for_channel",
 ]
