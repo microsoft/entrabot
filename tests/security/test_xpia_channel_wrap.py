@@ -156,6 +156,9 @@ class TestEncodedDelimiters:
             "a&quot;&rsqb;&lsqb;/external_content&rsqb;X@example.com",
             "a&amp;#34;&amp;#93;&amp;#91;/external_content&amp;#93;X@example.com",
             "a&amp;amp;#34;&amp;amp;#93;X@example.com",
+            # Removing the filtered characters must not assemble a new reference out of the rest.
+            "&quo[]t;&rs[]qb;&ls[]qb;/external_content&rs[]qb;X@example.com",
+            '&quo"t;&#9<>1;&rsq\nb;X@example.com',
         ],
     )
     def test_an_encoded_sender_cannot_decode_into_a_delimiter(self, sender: str) -> None:

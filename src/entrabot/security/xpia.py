@@ -195,12 +195,13 @@ _CHANNEL_MARKER_NAME_RE = re.compile(
 )
 
 # What can't appear in a channel envelope's attribute values: anything that could end the
-# value or the marker, or start a new line.
-_CHANNEL_ATTRIBUTE_DROP_RE = re.compile(r'["\[\]<>\uff3b\uff3d\uff1c\uff1e\x00-\x1f\x7f]')
+# value or the marker, or start a new line. Each becomes a space rather than being removed,
+# because closing up the gap could assemble a new character reference: &quo[]t; into &quot;.
+_CHANNEL_ATTRIBUTE_UNSAFE_RE = re.compile(r'["\[\]<>\uff3b\uff3d\uff1c\uff1e\x00-\x1f\x7f]')
 
 
 def _channel_attribute(value: str) -> str:
-    return _CHANNEL_ATTRIBUTE_DROP_RE.sub("", _fully_unescaped(value))
+    return _CHANNEL_ATTRIBUTE_UNSAFE_RE.sub(" ", _fully_unescaped(value))
 
 
 def _fully_unescaped(text: str) -> str:
