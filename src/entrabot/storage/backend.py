@@ -180,13 +180,13 @@ def _create_exclusively(path: Path, content: str, key: str) -> None:
     never touched: that case raises ``ConcurrencyError`` before anything is created.
     """
     try:
-        # O_EXCL: atomic create-only. Closed below, because the create and the write
-        # fail differently and only the second may remove the file.
-        fh = open(path, "x")  # noqa: SIM115
+        # O_EXCL: atomic create-only, and owner-only like the temp file. Closed below, because
+        # the create and the write fail differently and only the second may remove the file.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
     except FileExistsError as exc:
         raise ConcurrencyError(f"write_text({key!r}) refused: key exists") from exc
     try:
-        with fh:
+        with os.fdopen(fd, "w") as fh:
             fh.write(content)
     except BaseException:
         try:

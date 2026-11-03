@@ -249,9 +249,7 @@ class TestLocalBackendEtag:
         assert content is None
         assert etag is None
 
-    def test_read_with_etag_present_returns_content_and_stable_etag(
-        self, tmp_path: Path
-    ) -> None:
+    def test_read_with_etag_present_returns_content_and_stable_etag(self, tmp_path: Path) -> None:
         backend = LocalBackend(tmp_path)
         backend.write_text("c.json", "hello")
         content, etag = backend.read_text_with_etag("c.json")
@@ -450,6 +448,22 @@ class TestLocalBackendAtomicPublish:
 
         assert backend.read_text("c.txt") == "winner"
         assert [p.name for p in tmp_path.iterdir()] == ["c.txt"]
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows has no POSIX file modes")
+    def test_the_fallback_create_is_owner_only_too(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def no_hard_links(_source: object, _target: object) -> None:
+            raise PermissionError(errno.EPERM, "no hard links here")
+
+        monkeypatch.setattr(backend_module.os, "link", no_hard_links)
+        previous = os.umask(0o022)
+        try:
+            LocalBackend(tmp_path).write_text("c.json", "v1", if_absent=True)
+        finally:
+            os.umask(previous)
+
+        assert stat.S_IMODE((tmp_path / "c.json").stat().st_mode) == 0o600
 
     def test_create_only_falls_back_to_an_exclusive_create_without_hard_links(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -817,9 +831,7 @@ class TestGetBackend:
 # assert_backend_config — boot-time uniform-backend assertion (F2)
 # ---------------------------------------------------------------------------
 class TestAssertBackendConfig:
-    def test_returns_local_summary(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_local_summary(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from entrabot.storage.backend import assert_backend_config
 
         monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))

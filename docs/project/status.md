@@ -55,6 +55,7 @@
 - On a cloud backend, the email cursor starts at "now" when its key is first created (the first boot on a container, or after the key is deleted), so mail received before then isn't pushed; it stays readable through `read_email`. Once the key exists, a restart reuses it and mail received during downtime is pushed as normal. See [Upgrading to shared poll state](../troubleshooting/migrations-and-upgrades.md#upgrading-to-shared-poll-state).
 - An instance on a host that ignores channel notifications can still claim Teams and email deliveries, so with mixed hosts on one container an item can go to the host that can't show it.
 - Two emails with the same timestamp, where the second arrives after the cursor has moved past it, won't be pushed. Both stay readable through `read_email`.
+- The shutdown save stops waiting after 10 seconds, but a storage call already in flight can still delay process exit until the storage client's own timeout.
 - A batch of email held because its claim couldn't be confirmed lives only in memory, so restarting before the claim settles loses it. The mail stays readable through `read_email`.
 - Chats are polled one at a time and each read sees the latest 10 messages, so a very busy chat can have messages pushed past that window between visits. They stay readable through `read_teams_messages`.
 - Delegated sessions have no discovery sweep, so with a cloud backend their chat list only grows through `create_chat`.

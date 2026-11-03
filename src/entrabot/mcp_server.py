@@ -1723,6 +1723,9 @@ async def _poll_watched_chat(
         agent_upn=agent_upn,
         agent_object_id=agent_object_id,
     )
+    # A timestamp that won't parse can't be ordered, and saved as the watermark it would fail
+    # every later poll. Graph doesn't send these, but a proxy's answer could.
+    human_msgs = [m for m in human_msgs if _parse_sent_at(m.get("sent_at")) is not None]
     new_msgs = _filter_new_messages(
         human_msgs,
         chat_state["last_ts"],

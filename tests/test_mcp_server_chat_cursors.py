@@ -235,6 +235,60 @@ class TestPollFailClosed:
         assert chat_state["bootstrapped"] is False
 
     @pytest.mark.asyncio
+    async def test_a_message_with_an_invalid_timestamp_is_never_pushed_or_saved(
+        self, monkeypatch
+    ) -> None:
+        # A string comparison lets "zzz..." through as newest, and saved as the watermark it
+        # would fail every later poll. Graph doesn't send these, but a proxy's answer could.
+        import entrabot.tools.chat_cursors as cc
+
+        good_ts = "2026-11-02T12:00:05Z"
+        messages = [
+            {
+                "message_id": "bad",
+                "from": "Alice",
+                "sender_id": "human-oid",
+                "content": "x",
+                "sent_at": "zzz-not-a-timestamp",
+            },
+            {
+                "message_id": "good",
+                "from": "Alice",
+                "sender_id": "human-oid",
+                "content": "y",
+                "sent_at": good_ts,
+            },
+        ]
+        chat_state = {
+            "seen_ids": set(),
+            "last_ts": "2026-11-02T12:00:00Z",
+            "bootstrapped": True,
+            "needs_resolution": False,
+        }
+
+        async def fake_read(*_args: object, **_kwargs: object) -> list[dict]:
+            return messages
+
+        pushed: list[str] = []
+
+        async def fake_push(message: dict, **_kwargs: object) -> None:
+            pushed.append(message["message_id"])
+
+        monkeypatch.setattr(mcp_server, "_with_token_retry", fake_read)
+        monkeypatch.setattr(mcp_server, "_push_channel_notification", fake_push)
+        monkeypatch.setattr(cc, "claim_delivery", lambda _chat, ids, _ts: ids)
+
+        await mcp_server._poll_watched_chat(
+            "19:chat@thread.v2",
+            chat_state,
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
+            agent_object_id="agent-oid",
+        )
+
+        assert pushed == ["good"]
+        assert chat_state["last_ts"] == good_ts
+
+    @pytest.mark.asyncio
     async def test_unresolved_chat_rehydrates_when_read_recovers(
         self, monkeypatch
     ) -> None:
