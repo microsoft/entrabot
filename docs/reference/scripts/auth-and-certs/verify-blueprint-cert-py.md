@@ -1,8 +1,9 @@
 # verify_blueprint_cert.py
 
 Check whether a given certificate thumbprint is still registered on a Blueprint
-application. An operator tool: [`setup.sh`](../setup/setup-sh.md) does not call it.
-macOS and Linux only.
+application. [`setup-windows.ps1`](../setup/setup-windows-ps1.md) uses it to decide whether
+to reuse a certificate; [`setup.sh`](../setup/setup-sh.md) does not call it. macOS, Linux,
+and Windows.
 
 Part of the [auth-and-certs command reference](../index.md#auth-and-certs).
 
@@ -15,17 +16,21 @@ question: is this thumbprint, for example the one in `.env` or in the state file
 on the Blueprint? See [Token flows](../../token-flows.md) for the certificate-to-token
 exchange.
 
-Setup used to call this command to vouch for the thumbprint cached in the state file. It
-no longer does. A thumbprint that is on the Blueprint does not show that this machine's
-private key matches it, and the cache can belong to an earlier key. Setup relies on
-[`find_local_blueprint_cert.py`](find-local-blueprint-cert-py.md) instead, which checks
-the local key against the registered certificates.
+`setup.sh` used to call this command to vouch for the thumbprint cached in the state file.
+It no longer does. On macOS and Linux a thumbprint that is on the Blueprint does not show
+that this machine's private key matches it, and the cache can belong to an earlier key, so
+setup relies on [`find_local_blueprint_cert.py`](find-local-blueprint-cert-py.md) instead,
+which checks the local key against the registered certificates.
+
+`setup-windows.ps1` does call it, for the certificate named in `.env` once that certificate
+is confirmed to be in `Cert:\CurrentUser\My`, where the certificate and its private key are
+held together.
 
 ## Requirements
 
-- The Provisioner app must already exist with its certificate in the OS keystore;
-  this command uses the existing-only token helper and never bootstraps it.
-- macOS or Linux.
+- The Provisioner app must already exist; this command uses the existing-only token
+  helper and never bootstraps it.
+- macOS, Linux, or Windows. On Windows the thumbprint is the `x5t#S256` value from `.env`.
 
 ## Usage
 
@@ -56,8 +61,10 @@ the signal.
 ## Exit behavior
 
 - `0` — the expected thumbprint is present on the Blueprint's `keyCredentials`.
-- `1` — checked: the thumbprint is not present. Run [`setup.sh`](../setup/setup-sh.md)
-  to add a certificate for this machine.
+- `1` — checked: the thumbprint is not present. Run setup to add a certificate for this
+  machine ([`setup.sh`](../setup/setup-sh.md), or on Windows
+  [`setup-windows.ps1`](../setup/setup-windows-ps1.md), which registers the one already in
+  the certificate store).
 - `2` — usage error (wrong number of positional arguments).
 - `3` — could not check: a Graph or token failure, a malformed response, or a
   certificate whose key material couldn't be read. This says nothing about whether the
@@ -87,5 +94,7 @@ public thumbprints are compared.
   setup makes.
 - [`list_blueprint_certs.py`](list-blueprint-certs-py.md) — enumerate the
   certificates registered on a Blueprint.
-- [`setup.sh`](../setup/setup-sh.md) — the provisioning entry point. It does not call
-  this command.
+- [`setup.sh`](../setup/setup-sh.md) — the provisioning entry point for macOS and Linux. It
+  does not call this command.
+- [`setup-windows.ps1`](../setup/setup-windows-ps1.md) — the Windows provisioning entry
+  point, which calls it.

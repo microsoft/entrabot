@@ -13,7 +13,7 @@
 - Autonomous four-resource provisioning chain: Agent Identity Blueprint → BlueprintPrincipal → Agent Identity → Agent User.
 - Blueprint, BlueprintPrincipal, and Agent Identity are created through the dedicated Microsoft Graph v1.0 subtype endpoints; Agent User creation uses Graph beta.
 - Certificate private keys are stored in the OS keystore (Keychain, Windows CNG (via the certificate store), or Linux Secret Service).
-- Several machines can share a Blueprint: attaching one adds its certificate and keeps the others. `setup.sh --remove-all-existing-certs` is the only way to replace them all.
+- Several machines can share a Blueprint: attaching one adds its certificate and keeps the others. `setup.sh --remove-all-existing-certs` is the only way to replace them all. Windows setup registers its certificate the same way, and re-running it registers a certificate an earlier version left unregistered.
 
 ### Microsoft 365
 
@@ -36,7 +36,7 @@
 
 ### Documentation and operations
 
-- Public site with nine task-oriented sections and source-audited references for all registered MCP tools and all 44 supported operator commands.
+- Public site with nine task-oriented sections and source-audited references for all registered MCP tools and all 45 supported operator commands.
 - Legacy URLs redirect to current pages; plans, specs, investigations, and research are retained only under non-published `engineering-history/`.
 
 ## Active development

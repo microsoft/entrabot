@@ -1,4 +1,4 @@
-# Single source of truth for the 44 supported operator-facing commands
+# Single source of truth for the 45 supported operator-facing commands
 # documented on the public site. See tests/docs/test_script_commands_manifest.py
 # for the validation this file must satisfy, and
 # docs/reference/scripts/index.md for the rendered landing page.
@@ -71,7 +71,7 @@ commands:
     category: setup
     page: reference/scripts/setup/setup-windows-ps1.md
     platforms: [windows]
-    summary: Windows PowerShell counterpart of setup.sh — refuses to run under WSL, probes prereqs, bootstraps the venv, provisions the Agent Identity chain, generates the Blueprint cert (TPM-first, software fallback), writes .env, and registers the MCP server.
+    summary: Windows PowerShell counterpart of setup.sh — refuses to run under WSL, probes prereqs, bootstraps the venv, provisions the Agent Identity chain, reuses, registers, or generates and registers (TPM-first, software fallback) the Blueprint cert on the Blueprint, writes .env, and registers the MCP server.
   - id: setup-windows-cmd
     path: scripts/setup-windows.cmd
     category: setup
@@ -173,7 +173,7 @@ commands:
     platforms: [macos, linux, windows]
     summary: Materializes the Microsoft Agent 365 Work IQ MCP first-party resource service principals and Blueprint-wide OAuth grants using the Provisioner token, working around the A365 CLI's silent OAuth2-grants-failed exit.
 
-  # --- Auth and Certificates (11) ---
+  # --- Auth and Certificates (12) ---
   - id: grant-consent-py
     path: scripts/grant_consent.py
     category: auth-and-certs
@@ -214,8 +214,8 @@ commands:
     path: scripts/verify_blueprint_cert.py
     category: auth-and-certs
     page: reference/scripts/auth-and-certs/verify-blueprint-cert-py.md
-    platforms: [macos, linux]
-    summary: Checks whether a given thumbprint is still present on a Blueprint app's keyCredentials. An operator tool; setup.sh does not call it. Exit 0 present, 1 checked and not present, 2 usage error, 3 could not check.
+    platforms: [macos, linux, windows]
+    summary: Checks whether a given thumbprint is still present on a Blueprint app's keyCredentials. setup-windows.ps1 uses it to decide whether to reuse a certificate; setup.sh does not call it. Exit 0 present, 1 checked and not present, 2 usage error, 3 could not check.
   - id: register-blueprint-cert-py
     path: scripts/register_blueprint_cert.py
     category: auth-and-certs
@@ -228,6 +228,12 @@ commands:
     page: reference/scripts/auth-and-certs/blueprint-certs-py.md
     platforms: [macos, linux, windows]
     summary: Shared library behind the Blueprint certificate scripts and the Windows rotation. Reads keyCredentials (a failed read is never an empty list), merges without de-duplicating, and confirms each write by reading it back. Not a CLI.
+  - id: register-windows-blueprint-cert-py
+    path: scripts/register_windows_blueprint_cert.py
+    category: auth-and-certs
+    page: reference/scripts/auth-and-certs/register-windows-blueprint-cert-py.md
+    platforms: [windows]
+    summary: Registers this machine's Windows Blueprint certificate (its public DER) on the Blueprint, adding to the existing certificates and keeping every other machine's, and confirms the write by reading it back. Called by setup-windows.ps1. Exit 0 registered, 1 nothing changed, 2 usage error, 3 outcome not confirmed.
   - id: generate-windows-cert-py
     path: scripts/generate_windows_cert.py
     category: auth-and-certs
