@@ -257,7 +257,7 @@ function Configure-A365WorkIq {
 
     & python (Join-Path $ScriptDir 'spike_a365_work_iq.py')
     if ($LASTEXITCODE -ne 0) { Fail "A365 Work IQ manifest validation failed" }
-    Success "A365 Work IQ Word manifest configured"
+    Success "A365 Work IQ Word and Excel manifest configured"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════

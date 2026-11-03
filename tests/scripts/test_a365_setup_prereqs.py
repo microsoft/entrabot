@@ -98,6 +98,7 @@ def test_unix_setup_can_run_interactive_a365_work_iq_configuration() -> None:
     assert "ensure_a365_work_iq_permissions.py" in script
     assert '"$SCRIPT_PYTHON" "$PROJECT_ROOT/scripts/ensure_a365_work_iq_permissions.py"' in script
     assert '"$SCRIPT_PYTHON" "$PROJECT_ROOT/scripts/spike_a365_work_iq.py"' in script
+    assert 'success "A365 Work IQ Word and Excel manifest configured"' in script
     assert '--blueprint-app-id "$BLUEPRINT_APP_ID"' in script
     config_call = script.index("write_a365_config")
     requirements_call = script.index("a365 setup requirements", config_call)
@@ -174,3 +175,4 @@ def test_windows_setup_can_run_interactive_a365_work_iq_configuration() -> None:
         "if ($ConfigureA365WorkIq)"
     )
     assert "spike_a365_work_iq.py" in script
+    assert 'Success "A365 Work IQ Word and Excel manifest configured"' in script

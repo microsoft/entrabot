@@ -2,8 +2,8 @@
 """Inspect local Agent 365 Work IQ setup for Entrabot.
 
 This script is a discovery helper, not runtime code. It prints the configured
-Work IQ server metadata from ToolingManifest.json and validates that Word is
-present before implementation begins.
+Work IQ server metadata from ToolingManifest.json and validates that Word and
+Excel are present with the scope and audience the runtime loader requires.
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ import os
 import sys
 from pathlib import Path
 from typing import Any
+
+REQUIRED_SERVERS = ("mcp_WordServer", "mcp_ExcelServer")
 
 
 def _manifest_candidates() -> list[Path]:
@@ -29,6 +31,24 @@ def _load_manifest() -> tuple[Path, dict[str, Any]]:
         if path.exists():
             return path, json.loads(path.read_text())
     raise FileNotFoundError("ToolingManifest.json not found")
+
+
+def _validate_server(servers: list[dict[str, Any]], name: str) -> int:
+    """Return 0 if ``name`` is usable, otherwise print why and return an exit code."""
+    matches = [
+        server
+        for server in servers
+        if server.get("mcpServerName") == name or server.get("mcpServerUniqueName") == name
+    ]
+    if not matches:
+        print(f"ERROR: {name} is not configured", file=sys.stderr)
+        return 3
+    missing = [field for field in ("scope", "audience") if not matches[0].get(field)]
+    if missing:
+        print(f"ERROR: {name} is missing {' and '.join(missing)}", file=sys.stderr)
+        return 4
+    print(f"{name} configured")
+    return 0
 
 
 async def smoke_read_word(url: str) -> int:
@@ -65,17 +85,10 @@ def main() -> int:
             f"scope={server.get('scope')} audience={server.get('audience')}"
         )
 
-    word = [
-        server
-        for server in servers
-        if server.get("mcpServerName") == "mcp_WordServer"
-        or server.get("mcpServerUniqueName") == "mcp_WordServer"
-    ]
-    if not word:
-        print("ERROR: mcp_WordServer is not configured", file=sys.stderr)
-        return 3
-
-    print("mcp_WordServer configured")
+    for name in REQUIRED_SERVERS:
+        code = _validate_server(servers, name)
+        if code:
+            return code
     return 0
 
 

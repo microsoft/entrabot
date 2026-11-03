@@ -500,7 +500,7 @@ configure_a365_work_iq() {
     if ! "$SCRIPT_PYTHON" "$PROJECT_ROOT/scripts/spike_a365_work_iq.py"; then
         fail "A365 Work IQ manifest validation failed"
     fi
-    success "A365 Work IQ Word manifest configured"
+    success "A365 Work IQ Word and Excel manifest configured"
 }
 
 # ════════════════════════════════════════════════════════════════════════════
