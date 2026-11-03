@@ -551,7 +551,14 @@ class TestRerunKeepsTheSponsor:
         hint = _script()[
             _script().index('if [ "$MIGRATION_FAILED" = true ]; then\n    echo -e "  ') :
         ]
-        assert "./scripts/setup.sh --use-cloud-memory" in hint[: hint.index("exit 2")]
+        # Step 3 refuses a run with neither --new nor --use-blueprint, so it needs both.
+        retry = "./scripts/setup.sh --use-blueprint=$BLUEPRINT_APP_ID --use-cloud-memory"
+        assert retry in hint[: hint.index("exit 2")]
+
+    def test_env_is_never_run_as_shell_code(self) -> None:
+        # Kept values come back out of .env verbatim, so sourcing it would execute a stored
+        # $(...) and break on a space or an apostrophe. entrabot.config reads it as data.
+        assert not re.search(r"(?m)^\s*(?:set -a;\s*)?(?:\.|source)\s+\S*\.env\b", _script())
 
     def test_teams_user_overrides_the_kept_sponsor(self, tmp_path: Path) -> None:
         run = _run(

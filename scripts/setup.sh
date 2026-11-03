@@ -307,10 +307,7 @@ if [ "$DIAGNOSE" = true ]; then
         fail "No .venv found. Run setup.sh once before --diagnose."
     fi
     set +e
-    # shellcheck disable=SC1091
-    if [ -f "$PROJECT_ROOT/.env" ]; then
-        set -a; . "$PROJECT_ROOT/.env"; set +a
-    fi
+    # entrabot.config reads .env as data. It is never sourced: a value could hold $(...).
     "$PROJECT_ROOT/.venv/bin/python" - <<PY
 import sys
 from pathlib import Path
@@ -1332,7 +1329,7 @@ elif [ -d "$PROJECT_ROOT/.venv" ] && [ -f "$PROJECT_ROOT/.env" ]; then
     echo ""
     echo -e "  ${BLUE}Running smoke test (token + Graph identity + Teams scope)...${NC}"
     set +e
-    set -a; . "$PROJECT_ROOT/.env"; set +a
+    # entrabot.config reads .env as data. It is never sourced: a value could hold $(...).
     "$PROJECT_ROOT/.venv/bin/python" - <<'PY'
 import sys
 from entrabot.config import EntraBotConfig
@@ -1424,7 +1421,7 @@ echo -e "  If ${BLUE}mind_contract_available=false${NC}: body-only mode; do not 
 echo ""
 
 if [ "$MIGRATION_FAILED" = true ]; then
-    echo -e "  ${RED}Re-run ${BLUE}./scripts/setup.sh --use-cloud-memory${RED} after fixing the migration error above.${NC}"
+    echo -e "  ${RED}Re-run ${BLUE}./scripts/setup.sh --use-blueprint=$BLUEPRINT_APP_ID --use-cloud-memory${RED} after fixing the migration error above.${NC}"
     echo ""
     exit 2
 fi
