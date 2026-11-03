@@ -1081,6 +1081,7 @@ async def _initialize_locked() -> None:
 
 BACKGROUND_POLL_INTERVAL = 5  # seconds between polls
 SPONSOR_GATE_RETRY_SECONDS = 60  # how long a failed sponsor lookup waits before trying again
+SPONSOR_GATE_MAX_AGE_SECONDS = 900  # how long a push may trust a cached sponsor list
 CURSOR_RESOLVE_CONCURRENCY = 8  # parallel cursor reads at boot (each does a token fetch)
 EMAIL_POLL_INTERVAL = 60  # seconds between /me/messages polls
 CHAT_DISCOVER_INTERVAL = 120  # seconds between /me/chats auto-discovery sweeps
@@ -2116,6 +2117,11 @@ async def _sender_is_sponsor(message: dict) -> bool:
     Any doubt counts as "no", so the message is wrapped and still delivered. The lookup
     is blocking Graph I/O, so it runs in a worker thread, and a failed one waits
     ``SPONSOR_GATE_RETRY_SECONDS`` so an outage doesn't slow every push.
+
+    The list is trusted for ``SPONSOR_GATE_MAX_AGE_SECONDS``, so someone removed as a
+    sponsor stops speaking outside the envelope within that time. A list cached by a wait
+    has no load time, so it counts as old. If a refresh fails the message is wrapped,
+    rather than trusting the old list indefinitely.
     """
     sender_id = str(message.get("sender_id") or "")
     if not (sender_id or message.get("sender")):
@@ -2127,12 +2133,17 @@ async def _sender_is_sponsor(message: dict) -> bool:
         return bool(sender_id) and sender_id.lower() == session_user_id.lower()
 
     gate = _state.get("sponsor_gate")
-    if gate is None:
+    loaded_at = _state.get("_sponsor_gate_loaded_at")
+    is_fresh = (
+        loaded_at is not None and time.monotonic() - loaded_at < SPONSOR_GATE_MAX_AGE_SECONDS
+    )
+    if gate is None or not is_fresh:
         if time.monotonic() < _state.get("_sponsor_gate_retry_at", 0.0):
             return False
         from entrabot.identity.sponsors import load_agent_identity_sponsor_gate
 
         config = _state.get("config") or get_config()
+        chats_before = frozenset(_state.get("watched_chats", ()))
         try:
             gate = await asyncio.to_thread(load_agent_identity_sponsor_gate, config)
         except Exception as exc:  # noqa: BLE001 — fail closed: wrapped, and still delivered.
@@ -2144,7 +2155,11 @@ async def _sender_is_sponsor(message: dict) -> bool:
                     exc,
                 )
             return False
-        _state["sponsor_gate"] = gate
+        # A chat registered during the lookup may be missing from this list. It still answers
+        # this message, but caching it would undo that registration's invalidation.
+        if frozenset(_state.get("watched_chats", ())) == chats_before:
+            _state["sponsor_gate"] = gate
+            _state["_sponsor_gate_loaded_at"] = time.monotonic()
     return gate.accepts(message)
 
 

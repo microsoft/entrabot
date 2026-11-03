@@ -615,7 +615,11 @@ def fetch_watched_chat_members_by_id(
 
 def load_agent_identity_sponsor_gate(config: EntraBotConfig) -> SponsorGate:
     """Build the sponsor gate from the Agent Identity's Graph sponsors."""
-    gate = SponsorGate.from_agent_identity_sponsors(fetch_agent_identity_sponsors(config))
+    # The Agent Identity token can't read /users/{id}. Without emails the gate can't match the
+    # ID a federated sponsor has in a group chat.
+    gate = SponsorGate.from_agent_identity_sponsors(
+        fetch_agent_identity_sponsors(config, user_token_provider=acquire_agent_user_token)
+    )
     members_by_id = fetch_watched_chat_members_by_id(config)
     flat_members = [member for members in members_by_id.values() for member in members]
     gate = gate.with_chat_members(flat_members)
