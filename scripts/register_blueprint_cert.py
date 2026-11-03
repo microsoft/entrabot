@@ -232,7 +232,7 @@ def _promote_pending_key(private_key_pem: str) -> None:
         )
 
 
-def _write_state(state_file: Path, thumbprint: str) -> None:
+def write_state(state_file: Path, thumbprint: str) -> None:
     data = json.loads(state_file.read_text()) if state_file.is_file() else {}
     data["BLUEPRINT_CERT_THUMBPRINT"] = thumbprint
     data.pop("BLUEPRINT_SECRET", None)  # clean up old secret if present
@@ -262,7 +262,7 @@ def _activate_key(private_key_pem: str, thumbprint: str, state_file: Path) -> No
     left to repair it.
     """
     _promote_pending_key(private_key_pem)
-    _write_state(state_file, thumbprint)
+    write_state(state_file, thumbprint)
     _delete_pending_key()
 
 

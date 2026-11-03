@@ -941,16 +941,12 @@ else
         0)
             require_thumbprint_shape "$RECOVERED_THUMBPRINT"
             if [ "$RECOVERED_THUMBPRINT" != "$CERT_THUMBPRINT" ]; then
-                # The state file is missing the thumbprint or holds a stale one.
+                # The state file is missing the thumbprint or holds a stale one. This is the
+                # registration path's writer, which can't leave invalid JSON behind.
                 CERT_THUMBPRINT="$RECOVERED_THUMBPRINT"
-                "$PYTHON" -c "
-import json, pathlib
-state_file = pathlib.Path('$PROJECT_ROOT/.entrabot-state.json')
-data = json.loads(state_file.read_text()) if state_file.is_file() else {}
-data['BLUEPRINT_CERT_THUMBPRINT'] = '$CERT_THUMBPRINT'
-data.pop('BLUEPRINT_SECRET', None)
-state_file.write_text(json.dumps(data, indent=2) + '\n')
-"
+                PYTHONPATH="$PROJECT_ROOT/scripts" "$VENV_PY" -c 'import pathlib, sys; from register_blueprint_cert import write_state; write_state(pathlib.Path(sys.argv[1]), sys.argv[2])' \
+                    "$PROJECT_ROOT/.entrabot-state.json" "$CERT_THUMBPRINT" \
+                    || fail "Could not save the certificate thumbprint to .entrabot-state.json (see above). Nothing on the Blueprint changed, so fix that and re-run setup."
             fi
             success "Using registered local certificate (thumbprint: ${CERT_THUMBPRINT:0:16}...)"
             ;;
