@@ -1421,7 +1421,11 @@ echo -e "  If ${BLUE}mind_contract_available=false${NC}: body-only mode; do not 
 echo ""
 
 if [ "$MIGRATION_FAILED" = true ]; then
-    echo -e "  ${RED}Re-run ${BLUE}./scripts/setup.sh --use-blueprint=$BLUEPRINT_APP_ID --use-cloud-memory${RED} after fixing the migration error above.${NC}"
+    # Name the store this run just provisioned: --use-cloud-memory alone picks the default one.
+    BLOB_ENDPOINT_ACCOUNT="${BLOB_ENDPOINT#https://}"
+    BLOB_ENDPOINT_ACCOUNT="${BLOB_ENDPOINT_ACCOUNT%%.*}"
+    echo -e "  ${RED}After fixing the migration error above, re-run:${NC}"
+    echo -e "  ${BLUE}./scripts/setup.sh --use-blueprint=$BLUEPRINT_APP_ID --use-cloud-memory --with-storage-account=${BLOB_ENDPOINT_ACCOUNT} --with-container=$BLOB_CONTAINER${NC}"
     echo ""
     exit 2
 fi

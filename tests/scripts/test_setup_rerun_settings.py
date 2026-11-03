@@ -548,12 +548,15 @@ class TestRerunKeepsTheSponsor:
     def test_a_failed_migration_says_how_to_retry_it(self) -> None:
         # Only --use-cloud-memory reaches the migration, and a plain re-run now keeps the
         # cloud settings and skips it, so the hint has to name the flag.
-        hint = _script()[
-            _script().index('if [ "$MIGRATION_FAILED" = true ]; then\n    echo -e "  ') :
-        ]
-        # Step 3 refuses a run with neither --new nor --use-blueprint, so it needs both.
-        retry = "./scripts/setup.sh --use-blueprint=$BLUEPRINT_APP_ID --use-cloud-memory"
+        hint = _script()[_script().index('if [ "$MIGRATION_FAILED" = true ]; then\n    # Name') :]
+        # Step 3 refuses a run with neither --new nor --use-blueprint. --use-cloud-memory also
+        # picks the default store unless it's told which one this run just provisioned.
+        retry = (
+            "./scripts/setup.sh --use-blueprint=$BLUEPRINT_APP_ID --use-cloud-memory "
+            "--with-storage-account=${BLOB_ENDPOINT_ACCOUNT} --with-container=$BLOB_CONTAINER"
+        )
         assert retry in hint[: hint.index("exit 2")]
+        assert 'BLOB_ENDPOINT_ACCOUNT="${BLOB_ENDPOINT_ACCOUNT%%.*}"' in hint
 
     def test_env_is_never_run_as_shell_code(self) -> None:
         # Kept values come back out of .env verbatim, so sourcing it would execute a stored
