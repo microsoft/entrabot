@@ -90,18 +90,29 @@ to `setup.sh`.
   Build Tools with the C++ workload (needed to compile native Python extensions
   such as `cryptography`'s). It runs from PowerShell 5.1 and is safe to re-run.
 - **`scripts/setup-windows.ps1`** (launched via `setup-windows.cmd`) is the
-  Windows equivalent of `setup.sh`: it provisions the same identity chain,
-  generates the Blueprint certificate, PATCHes it onto the Blueprint app, writes
-  both thumbprints into `.env`, and registers the Entrabot MCP server.
+  Windows equivalent of `setup.sh`: it provisions the same identity chain, makes
+  sure this machine's Blueprint certificate is registered on the Blueprint, writes
+  both thumbprints into `.env`, and registers the Entrabot MCP server. A
+  certificate named in `.env` that is already registered is reused; one that is in
+  the store but missing from the Blueprint is registered as it is; otherwise a new
+  one is generated and registered. Re-running it repairs a machine whose
+  certificate was never registered.
 - **`scripts/generate_windows_cert.py`** wraps `New-SelfSignedCertificate` with
   fixed crypto parameters, auto-detects TPM and falls back to the software KSP,
   and returns the SHA-1 thumbprint, the SHA-256 `x5t#S256` thumbprint, and the
   public DER bytes needed to register the cert.
-- **`scripts/rotate_cert_windows.py`** performs certificate rotation: it PATCHes
-  the new certificate onto the Blueprint, smoke-tests token acquisition, and on
-  failure rolls back in three steps — re-PATCH the old DER, restore the previous
-  thumbprints in `.env`, and invalidate the MSAL cache so a stale-signed token is
-  not presented after rollback.
+- **`scripts/register_windows_blueprint_cert.py`** adds that public DER to the
+  Blueprint's `keyCredentials` and keeps every other machine's certificate. Only
+  the public certificate leaves the machine; the key stays in the certificate
+  store.
+- **`scripts/rotate_cert_windows.py`** performs certificate rotation: it swaps
+  the new certificate onto the Blueprint (keeping other machines' certificates),
+  smoke-tests token acquisition, and on failure rolls back in three steps —
+  re-PATCH the old DER, restore the previous thumbprints in `.env`, and
+  invalidate the MSAL cache so a stale-signed token is not presented after
+  rollback. Rotation authenticates with the registered certificate, so it cannot
+  repair a machine whose certificate is not on the Blueprint; re-run
+  `setup-windows.ps1` for that.
 
 For step-by-step setup, see [Windows setup](../getting-started/windows.md) and
 [Prerequisites](../getting-started/prerequisites.md).

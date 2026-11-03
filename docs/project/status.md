@@ -13,6 +13,7 @@
 - Autonomous four-resource provisioning chain: Agent Identity Blueprint → BlueprintPrincipal → Agent Identity → Agent User.
 - Blueprint, BlueprintPrincipal, and Agent Identity are created through the dedicated Microsoft Graph v1.0 subtype endpoints; Agent User creation uses Graph beta.
 - Certificate private keys are stored in the OS keystore (Keychain, Windows CNG (via the certificate store), or Linux Secret Service).
+- Several machines can share a Blueprint: attaching one adds its certificate and keeps the others. `setup.sh --remove-all-existing-certs` is the only way to replace them all. Windows setup registers its certificate the same way, and re-running it registers a certificate an earlier version left unregistered.
 
 ### Microsoft 365
 
@@ -36,7 +37,7 @@
 
 ### Documentation and operations
 
-- Public site with nine task-oriented sections and source-audited references for all registered MCP tools and all 42 supported operator commands.
+- Public site with nine task-oriented sections and source-audited references for all registered MCP tools and all 45 supported operator commands.
 - Legacy URLs redirect to current pages; plans, specs, investigations, and research are retained only under non-published `engineering-history/`.
 
 ## Active development
@@ -59,7 +60,7 @@
 - Delegated sessions have no discovery sweep, so with a cloud backend their chat list only grows through `create_chat`.
 - A wait keeps the sponsor gate it started with, so a gate built during a brief storage or Graph failure can miss a federated sponsor until the next wait.
 - Failed watched-list writes retry on the next discovery sweep and at shutdown, so in a delegated session a failed write can wait until shutdown. Discovery re-adds the chat in an Agent User session.
-- Attaching an additional device with `setup.sh --use-blueprint` replaces the Blueprint's certificate list instead of appending, and proceeds without confirmation in non-interactive shells ([#124](https://github.com/microsoft/entrabot/issues/124)).
+- Adding a Blueprint certificate reads the list and then writes it, and those two steps aren't atomic. Two machines attaching in the same moment can lose one of the new certificates; the affected machine's setup reports it, and re-running setup there adds it again. A per-user lock keeps two setups on the same machine from overlapping, but it can't cover two machines.
 - `ENTRABOT_MODE` is validated but does not currently select the auth path in `_init_auth`; credential presence and `ENTRABOT_SKIP_PROVISIONING` determine which path (three-hop Agent User or MSAL delegated) is attempted.
 
 ## Project links

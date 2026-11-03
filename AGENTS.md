@@ -114,9 +114,9 @@ behavioral rules) is served by a separate MCP server: **persona-sati**.
 - The body prompt (`prompts/agent_system.md`) comes from this repo and loads first; persona-sati supplies the persona layered on top
 
 **Connecting to persona-sati:**
-- Local: `cd /path/to/persona-sati && .venv/bin/persona-sati --transport sse --port 8100`
-- Cloud (AKS): `kubectl port-forward svc/persona-sati-service 8100:8100 -n persona-sati`
-- Both expose `http://localhost:8100/sse` which `.mcp.json` connects to
+- Hosted (the default): connect through the client launcher your persona-sati install provides, per its own setup documentation. In `.mcp.json` it is a `stdio` entry whose `command` is that launcher, and `PERSONA_SATI_MCP_URL` / `PERSONA_SATI_MCP_TOKEN_COMMAND` go in the `entrabot` entry's `env`. `.mcp.json.example` shows the shape.
+- Local development only: run it yourself with `cd /path/to/persona-sati && .venv/bin/persona-sati --transport sse --port 8100` and point an `sse` entry at that local listener.
+- A failed connection to a local address does not mean a hosted service is down. `./scripts/setup.sh --diagnose` reports on this (it never contacts a non-local host).
 
 ## Efferent-Copy Dispatch
 

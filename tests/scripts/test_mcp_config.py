@@ -117,6 +117,42 @@ class TestUpsertMcpEntry:
         data = json.loads(target.read_text())
         assert data["mcpServers"]["entrabot"]["command"] == "/new/bin"
 
+    def test_update_keeps_operator_env(self, mcp_config, tmp_path: Path) -> None:
+        """Re-running setup rewrites the entry but must not erase env the operator set."""
+        target = tmp_path / "mcp-config.json"
+        target.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "entrabot": {
+                            "type": "stdio",
+                            "command": "/old/bin",
+                            "env": {"EXAMPLE_SETTING": "keep-me"},
+                        },
+                    }
+                }
+            )
+        )
+
+        mcp_config.upsert_mcp_entry(target, "entrabot", {"type": "stdio", "command": "/new/bin"})
+
+        entry = json.loads(target.read_text())["mcpServers"]["entrabot"]
+        assert entry["command"] == "/new/bin"
+        assert entry["env"] == {"EXAMPLE_SETTING": "keep-me"}
+
+    def test_env_on_new_entry_wins_over_existing(self, mcp_config, tmp_path: Path) -> None:
+        target = tmp_path / "mcp-config.json"
+        target.write_text(
+            json.dumps({"mcpServers": {"entrabot": {"command": "/old/bin", "env": {"A": "old"}}}})
+        )
+
+        mcp_config.upsert_mcp_entry(
+            target, "entrabot", {"command": "/new/bin", "env": {"A": "new"}}
+        )
+
+        entry = json.loads(target.read_text())["mcpServers"]["entrabot"]
+        assert entry["env"] == {"A": "new"}
+
     def test_preserves_top_level_keys(self, mcp_config, tmp_path: Path) -> None:
         """If Copilot's config has top-level keys other than ``mcpServers``
         (e.g. user settings), the upsert leaves them untouched."""

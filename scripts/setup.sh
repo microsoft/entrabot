@@ -26,13 +26,16 @@ TEAMS_USER_EMAIL=""
 SHOW_HELP=false
 DIAGNOSE=false
 SKIP_SMOKE=false
-# Local is the default for operational storage; users opt in to cloud
-# via --use-cloud-memory. The old --keep-memory-local flag is accepted as a
-# no-op alias so existing scripts keep working.
+# Local is the default for operational storage on a first run; users opt in to
+# cloud via --use-cloud-memory. MEMORY_FLAG_PASSED records whether either memory
+# flag was actually given. A re-run that gives neither keeps the memory settings
+# already in .env (Step 7); an explicit flag always wins.
 KEEP_MEMORY_LOCAL=true
 USE_CLOUD_MEMORY=false
+MEMORY_FLAG_PASSED=false
 NEW_CHAIN=false
 USE_BLUEPRINT=""
+REMOVE_ALL_EXISTING_CERTS=false
 UPN_SUFFIX=""
 AGENT_USER_UPN=""
 WITH_STORAGE_ACCOUNT=""
@@ -70,17 +73,22 @@ for arg in "$@"; do
         --use-cloud-memory)
             USE_CLOUD_MEMORY=true
             KEEP_MEMORY_LOCAL=false
+            MEMORY_FLAG_PASSED=true
             ;;
         --keep-memory-local)
-            # Kept for backwards compatibility; local is the default now.
+            # Local storage, even on a re-run whose .env already has cloud memory.
             KEEP_MEMORY_LOCAL=true
             USE_CLOUD_MEMORY=false
+            MEMORY_FLAG_PASSED=true
             ;;
         --new)
             NEW_CHAIN=true
             ;;
         --use-blueprint=*)
             USE_BLUEPRINT="${arg#--use-blueprint=}"
+            ;;
+        --remove-all-existing-certs)
+            REMOVE_ALL_EXISTING_CERTS=true
             ;;
         --with-upn-suffix=*)
             UPN_SUFFIX="${arg#--with-upn-suffix=}"
@@ -133,6 +141,15 @@ if [ "$CREATE_NEW_STORAGE" = true ] && [ -n "$WITH_STORAGE_ACCOUNT" ]; then
     exit 2
 fi
 
+# --new creates a Blueprint with no certificates, so there would be nothing to remove.
+# Accepting both could only leave someone believing an older Blueprint was cleaned.
+if [ "$REMOVE_ALL_EXISTING_CERTS" = true ] && [ "$NEW_CHAIN" = true ]; then
+    echo "ERROR: --new and --remove-all-existing-certs are mutually exclusive." >&2
+    echo "  To replace the certificates on an existing Blueprint, use:" >&2
+    echo "    --use-blueprint=APP_ID --remove-all-existing-certs" >&2
+    exit 2
+fi
+
 if [ "$SHOW_HELP" = true ]; then
     echo "Usage: ./scripts/setup.sh [OPTIONS]"
     echo ""
@@ -149,12 +166,24 @@ if [ "$SHOW_HELP" = true ]; then
     echo "                         The existing chain is NOT affected."
     echo "  --use-blueprint=ID     Attach to an existing Blueprint by App ID."
     echo "                         Generates a new cert for this machine and adds it"
-    echo "                         to the Blueprint. Reuses existing Agent Identity"
-    echo "                         and Agent User. Use when switching machines, OR"
+    echo "                         to the Blueprint. Existing certificates are kept, so"
+    echo "                         other machines keep working. Reuses existing Agent"
+    echo "                         Identity and Agent User. Use when adding a machine, OR"
     echo "                         when switching this machine to a different Blueprint"
     echo "                         (the stale Agent Identity / User / cert thumbprint"
     echo "                         are wiped from local state so create_entra_agent_ids.py"
     echo "                         rediscovers everything under the new Blueprint)."
+    echo "  --remove-all-existing-certs"
+    echo "                         Used with --use-blueprint. Removes EVERY certificate"
+    echo "                         on the Blueprint, including those of other machines,"
+    echo "                         and replaces them with a new one for this machine,"
+    echo "                         even if this machine's current one is still valid."
+    echo "                         This does NOT delete the Blueprint itself. Every other"
+    echo "                         machine stops authenticating until it runs setup"
+    echo "                         again. Lists what will be removed and asks y/N on a"
+    echo "                         terminal; without a terminal the flag itself is the"
+    echo "                         consent. Without this flag, setup never removes a"
+    echo "                         certificate."
     echo ""
     echo "  --with-upn-suffix=NAME Agent User UPN suffix (required with --new)."
     echo "                         e.g., --with-upn-suffix=sati-agent"
@@ -171,6 +200,9 @@ if [ "$SHOW_HELP" = true ]; then
     echo "  --teams-user=EMAIL     Set a different user as the Teams chat recipient."
     echo "                         The az CLI user remains the admin/provisioner."
     echo "                         e.g., --teams-user=user@yourtenant.onmicrosoft.com"
+    echo "                         Without it, a re-run for the same Agent User keeps"
+    echo "                         the recipient already in .env; with it, that"
+    echo "                         recipient is changed."
     echo "  --use-cloud-memory     Opt in to Azure Blob Storage for operational data"
     echo "                         (interactions log, watched chats, email cursor)."
     echo "                         Provisions a resource group, storage account, and"
@@ -179,10 +211,14 @@ if [ "$SHOW_HELP" = true ]; then
     echo "                         Also unsets ENTRABOT_KEEP_MEMORY_LOCAL so the"
     echo "                         PreToolUse hook blocks local Claude Code auto-memory"
     echo "                         writes — mind content routes through persona-sati."
-    echo "  --keep-memory-local    [default] Operational data stays on the local"
-    echo "                         filesystem (~/.entrabot/data). Kept as an explicit"
-    echo "                         flag for backwards compatibility; this is now the"
-    echo "                         default behavior. Pass --use-cloud-memory to override."
+    echo "                         A re-run without this flag keeps cloud memory that"
+    echo "                         is already set in .env for the same Agent User."
+    echo "  --keep-memory-local    Operational data stays on the local filesystem"
+    echo "                         (~/.entrabot/data). A first run with neither memory"
+    echo "                         flag does this too. On a re-run for the same Agent"
+    echo "                         User whose .env already has cloud memory, pass this"
+    echo "                         flag to switch back to local; without it the cloud"
+    echo "                         settings are kept. Pass --use-cloud-memory to override."
     echo "                         Also sets ENTRABOT_KEEP_MEMORY_LOCAL=true, which"
     echo "                         opts the PreToolUse hook out so Claude Code's local"
     echo "                         auto-memory directory is writable again."
@@ -271,10 +307,7 @@ if [ "$DIAGNOSE" = true ]; then
         fail "No .venv found. Run setup.sh once before --diagnose."
     fi
     set +e
-    # shellcheck disable=SC1091
-    if [ -f "$PROJECT_ROOT/.env" ]; then
-        set -a; . "$PROJECT_ROOT/.env"; set +a
-    fi
+    # entrabot.config reads .env as data. It is never sourced: a value could hold $(...).
     "$PROJECT_ROOT/.venv/bin/python" - <<PY
 import sys
 from pathlib import Path
@@ -319,6 +352,39 @@ val = data.get('$key', '')
 if val:
     print(val)
 " || echo ""
+}
+
+# ── Helper: read one value from the existing .env ──────────────────────────
+#
+# Step 7 writes .env from scratch, so it asks this what the old file said first.
+# Reads the file the way entrabot.config does: each line is trimmed, blank lines,
+# comments and lines with no "=" are skipped, the line is split at the FIRST "=",
+# key and value are trimmed (a value is not unquoted), and the FIRST value of a
+# repeated key wins. Prints nothing when the file or key is absent. A file that
+# exists but can't be read stops setup (set -e) before anything is rewritten.
+# The path and key go in as arguments, never into the program text.
+
+read_env_value() {
+    "$PYTHON" -c '
+import pathlib
+import sys
+
+path, wanted = pathlib.Path(sys.argv[1]), sys.argv[2]
+if not path.is_file():
+    sys.exit(0)
+try:
+    text = path.read_text(encoding="utf-8", errors="replace")
+except OSError as exc:
+    sys.exit(f"Could not read {path}: {exc}")
+for line in text.splitlines():
+    line = line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    key, _, value = line.partition("=")
+    if key.strip() == wanted:
+        print(value.strip())
+        break
+' "$PROJECT_ROOT/.env" "$1"
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -878,189 +944,98 @@ VENV_PY="$PROJECT_ROOT/.venv/bin/python3"
 # Private key is stored in the OS credential store (Keychain/TPM/Keyring).
 # Only the public certificate is uploaded to the Blueprint app in Entra.
 # See ADR-003 for rationale.
+#
+# find_local_blueprint_cert.py exits 0 (this machine's key matches a registered
+# certificate), 1 (checked: it doesn't), or anything else (COULD NOT CHECK). Only an
+# explicit 1 may lead to a new certificate: a failed check says nothing about the
+# Blueprint, so it stops setup here. Capturing the status with `|| STATUS=$?` keeps
+# `set -e` from ending the script before the message.
+#
+# The thumbprint cached in the state file is never trusted on its own. It can be stale,
+# or can belong to an earlier key: after an unconfirmed --remove-all-existing-certs, or
+# a failed state write, the active key may no longer pair with it.
 CERT_THUMBPRINT=$(read_state "BLUEPRINT_CERT_THUMBPRINT")
 
-if [ -n "$CERT_THUMBPRINT" ]; then
-    # The state file has a thumbprint cached — but that's only trustworthy if
-    # the Blueprint on Entra still has it registered. A teammate or another
-    # machine could have run setup.sh since, replacing the keyCredentials
-    # list. If so, trusting the cached thumbprint here would set up a silent
-    # runtime auth failure ("invalid_client" with no useful hint). Verify
-    # the cached thumbprint is still present; if not, clear it and fall
-    # through to the regeneration path (which already warns + confirms).
-    if PYTHONPATH="$PROJECT_ROOT/scripts" "$VENV_PY" \
-        "$PROJECT_ROOT/scripts/verify_blueprint_cert.py" \
-        "$BLUEPRINT_OBJECT_ID" "$CERT_THUMBPRINT" >/dev/null; then
-        success "Using cached certificate (thumbprint: ${CERT_THUMBPRINT:0:16}...)"
-    else
-        echo ""
-        echo -e "  ${YELLOW}Cached cert is no longer registered on the Blueprint.${NC}"
-        echo -e "  Another machine replaced it since last run. Regenerating here."
-        echo ""
-        CERT_THUMBPRINT=""
+# Defense in depth: the thumbprint is SHA-256 DER base64url-no-padding (43 chars,
+# [A-Za-z0-9_-]). If anything else lands here, the state and .env files are about to
+# be corrupted (Learning #29) — fail loudly instead of writing garbage.
+require_thumbprint_shape() {
+    if ! [[ "$1" =~ ^[A-Za-z0-9_-]{43}$ ]]; then
+        fail "Captured thumbprint doesn't look like a SHA-256 base64url digest: '$1'"
     fi
-fi
+}
 
-if [ -z "$CERT_THUMBPRINT" ]; then
-    if RECOVERED_THUMBPRINT=$(PYTHONPATH="$PROJECT_ROOT/scripts" "$VENV_PY" \
-        "$PROJECT_ROOT/scripts/find_local_blueprint_cert.py" "$BLUEPRINT_OBJECT_ID"); then
-        CERT_THUMBPRINT="$RECOVERED_THUMBPRINT"
-        "$PYTHON" -c "
-import json, pathlib
-state_file = pathlib.Path('$PROJECT_ROOT/.entrabot-state.json')
-data = json.loads(state_file.read_text()) if state_file.is_file() else {}
-data['BLUEPRINT_CERT_THUMBPRINT'] = '$CERT_THUMBPRINT'
-data.pop('BLUEPRINT_SECRET', None)
-state_file.write_text(json.dumps(data, indent=2) + '\n')
-"
-        success "Using registered local certificate (thumbprint: ${CERT_THUMBPRINT:0:16}...)"
-    fi
-fi
-
-if [ -z "$CERT_THUMBPRINT" ]; then
-    # Before generating — check if the Blueprint already has certs registered
-    # (e.g. from a teammate's machine or from a prior install on another
-    # laptop). setup.sh uploads the new cert via PATCH keyCredentials,
-    # which is a list REPLACE, not an append — so any existing certs on
-    # the Blueprint will be wiped. Warn loudly and confirm before proceeding;
-    # otherwise we'd silently lock out whatever machines those certs came
-    # from.
-    # stdout: the numeric count (shell reads it into EXISTING_COUNT)
-    # stderr: one human-readable line per cert (visible on the terminal, so
-    #         the user sees WHICH certs will be replaced before confirming)
-    EXISTING_COUNT=$(PYTHONPATH="$PROJECT_ROOT/scripts" "$VENV_PY" \
-        "$PROJECT_ROOT/scripts/list_blueprint_certs.py" "$BLUEPRINT_OBJECT_ID")
-
-    if [ "$EXISTING_COUNT" -gt 0 ] 2>/dev/null; then
-        echo ""
-        echo -e "  ${YELLOW}WARNING${NC}: Blueprint app already has ${YELLOW}$EXISTING_COUNT${NC} registered cert(s) (shown above)."
-        echo -e "  Generating a new cert here will ${YELLOW}REPLACE${NC} that list (Graph PATCH semantics)."
-        echo -e "  Any machine currently authenticating with one of those certs will stop"
-        echo -e "  working until it re-runs setup.sh. EntraBot is designed to run from one"
-        echo -e "  machine at a time, so this is usually what you want — but confirm."
-        echo ""
-        if [ -t 0 ]; then
-            read -r -p "  Replace existing cert(s) and bind the Blueprint to this machine? [y/N] " CONFIRM
-            if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-                fail "Cert replacement aborted by user"
+if [ "$REMOVE_ALL_EXISTING_CERTS" = true ]; then
+    # Regenerate even if the cached certificate is still valid: the request is to
+    # replace every certificate, this machine's current one included.
+    CERT_THUMBPRINT=""
+else
+    # find_local_blueprint_cert.py proves that the local private key matches a
+    # certificate registered on the Blueprint, and returns THAT certificate's thumbprint.
+    # It also exits 1 while a new key is waiting under the pending keystore account, so
+    # that register_blueprint_cert.py, the one place that reconciles a pending key,
+    # runs. (verify_blueprint_cert.py is an operator tool; setup does not call it.)
+    FIND_STATUS=0
+    RECOVERED_THUMBPRINT=$(PYTHONPATH="$PROJECT_ROOT/scripts" "$VENV_PY" \
+        "$PROJECT_ROOT/scripts/find_local_blueprint_cert.py" "$BLUEPRINT_OBJECT_ID") || FIND_STATUS=$?
+    case "$FIND_STATUS" in
+        0)
+            require_thumbprint_shape "$RECOVERED_THUMBPRINT"
+            if [ "$RECOVERED_THUMBPRINT" != "$CERT_THUMBPRINT" ]; then
+                # The state file is missing the thumbprint or holds a stale one. This is the
+                # registration path's writer, which can't leave invalid JSON behind.
+                CERT_THUMBPRINT="$RECOVERED_THUMBPRINT"
+                PYTHONPATH="$PROJECT_ROOT/scripts" "$VENV_PY" -c 'import pathlib, sys; from register_blueprint_cert import write_state; write_state(pathlib.Path(sys.argv[1]), sys.argv[2])' \
+                    "$PROJECT_ROOT/.entrabot-state.json" "$CERT_THUMBPRINT" \
+                    || fail "Could not save the certificate thumbprint to .entrabot-state.json (see above). Nothing on the Blueprint changed, so fix that and re-run setup."
             fi
-        else
-            echo -e "  ${BLUE}[non-interactive shell — proceeding]${NC}"
-        fi
-        echo ""
+            success "Using registered local certificate (thumbprint: ${CERT_THUMBPRINT:0:16}...)"
+            ;;
+        1)
+            # This machine's key matches no registered certificate, or a new key is
+            # waiting to be confirmed: register below, whatever thumbprint is cached.
+            CERT_THUMBPRINT=""
+            ;;
+        *)
+            fail "Could not check whether this machine's key matches a registered certificate (exit $FIND_STATUS). No certificate was generated or changed. Fix the error above and re-run setup."
+            ;;
+    esac
+fi
+
+if [ -z "$CERT_THUMBPRINT" ]; then
+    REGISTER_ARGS=(
+        --blueprint-object-id "$BLUEPRINT_OBJECT_ID"
+        --blueprint-app-id "$BLUEPRINT_APP_ID"
+        --state-file "$PROJECT_ROOT/.entrabot-state.json"
+    )
+    if [ "$REMOVE_ALL_EXISTING_CERTS" = true ]; then
+        REGISTER_ARGS+=(--remove-all-existing-certs)
     fi
 
-    echo "  Generating self-signed certificate for Blueprint..."
+    echo "  Registering a certificate for this machine..."
 
-    # Generate cert, store private key in keyring, upload public cert via
-    # Provisioner token (NOT az CLI — Learning #1: az CLI tokens include
-    # Directory.AccessAsUser.All which Agent Identity APIs reject).
-    CERT_THUMBPRINT=$("$VENV_PY" -c "
-import contextlib, socket, sys, json, hashlib, base64
-from cryptography import x509
-from cryptography.x509.oid import NameOID
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-from datetime import datetime, timedelta, timezone
-import keyring, requests, pathlib
-from entrabot.platform.keyring_backend import assert_allowed_keyring_backend
-
-# Fail closed BEFORE generating or storing the private key — if the active
-# keyring backend isn't OS-native, keyring.set_password() would otherwise
-# silently write the Blueprint private key to ~/.local/share/python_keyring/
-# keyring_pass.cfg in cleartext (most common on Linux containers / headless
-# CI without D-Bus). The runtime CredentialStore already enforces this for
-# the agent body; doing it here closes the provisioning-time gap so we never
-# write a secret to disk in the first place.
-assert_allowed_keyring_backend()
-
-# Hostname tag so Entra-side cert listing identifies which machine owns
-# each registered key (useful when rotating or revoking one device).
-_HOST = socket.gethostname().split('.')[0] or 'unknown'
-
-# --- Generate RSA 2048 key + self-signed cert ---
-key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-subject = issuer = x509.Name([
-    x509.NameAttribute(NameOID.COMMON_NAME, 'entrabot-blueprint-$BLUEPRINT_APP_ID'),
-    x509.NameAttribute(NameOID.ORGANIZATION_NAME, 'EntraBot Device Agent'),
-])
-cert = (x509.CertificateBuilder()
-    .subject_name(subject)
-    .issuer_name(issuer)
-    .public_key(key.public_key())
-    .serial_number(x509.random_serial_number())
-    .not_valid_before(datetime.now(timezone.utc))
-    .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
-    .sign(key, hashes.SHA256()))
-
-# --- Compute thumbprint (SHA-256 of DER, base64url no padding) ---
-der_bytes = cert.public_bytes(serialization.Encoding.DER)
-thumbprint = base64.urlsafe_b64encode(hashlib.sha256(der_bytes).digest()).rstrip(b'=').decode()
-
-# --- Store private key in OS credential store ---
-pem_key = key.private_bytes(
-    serialization.Encoding.PEM,
-    serialization.PrivateFormat.PKCS8,
-    serialization.NoEncryption(),
-).decode()
-keyring.set_password('entrabot', 'blueprint-private-key', pem_key)
-
-# --- Upload public cert to Blueprint app via Graph API ---
-# Uses Provisioner token (not az CLI) to avoid Directory.AccessAsUser.All rejection.
-# get_bootstrap_graph_token() prints diagnostic lines to stdout (provisioner permission
-# checks, admin-consent status, cached-secret notices). We redirect those to
-# stderr so the shell-level \$(...) capture only sees the final thumbprint
-# line — previously the diagnostic output leaked into .env as the literal
-# ENTRABOT_BLUEPRINT_CERT_THUMBPRINT value and broke Hop 1 auth until
-# manually repaired.
-sys.path.insert(0, '$PROJECT_ROOT/scripts')
-from entra_provisioning import get_bootstrap_graph_token
-with contextlib.redirect_stdout(sys.stderr):
-    token = get_bootstrap_graph_token(wait_for_propagation=False)
-
-# Graph API: PATCH /applications/{id} with keyCredentials
-# Dates MUST come from the cert itself and use Graph's 7-decimal-place format
-cert_b64 = base64.b64encode(der_bytes).decode()
-start_date = cert.not_valid_before_utc.strftime('%Y-%m-%dT%H:%M:%S.0000000Z')
-end_date = cert.not_valid_after_utc.strftime('%Y-%m-%dT%H:%M:%S.0000000Z')
-
-# Use v1.0 (not beta) for keyCredentials — more stable (Learning #15)
-resp = requests.patch(
-    'https://graph.microsoft.com/v1.0/applications/$BLUEPRINT_OBJECT_ID',
-    headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'},
-    json={'keyCredentials': [{
-        'type': 'AsymmetricX509Cert',
-        'usage': 'Verify',
-        'key': cert_b64,
-        'displayName': f'EntraBot Device Certificate — {_HOST}',
-        'startDateTime': start_date,
-        'endDateTime': end_date,
-    }]},
-)
-if resp.status_code >= 400:
-    print(f'ERROR: Failed to upload cert: {resp.status_code} {resp.text}', file=sys.stderr)
-    sys.exit(1)
-
-# --- Persist thumbprint in state file ---
-state_file = pathlib.Path('$PROJECT_ROOT/.entrabot-state.json')
-data = json.loads(state_file.read_text()) if state_file.is_file() else {}
-data['BLUEPRINT_CERT_THUMBPRINT'] = thumbprint
-data.pop('BLUEPRINT_SECRET', None)  # clean up old secret if present
-state_file.write_text(json.dumps(data, indent=2) + '\n')
-
-print(thumbprint)
-")
+    # Generates the key and certificate, stores the private key in the OS keyring, and
+    # adds the public certificate to the Blueprint without removing any other. Only the
+    # thumbprint goes to stdout; messages and any y/N prompt go to stderr and read the
+    # terminal directly, so they aren't swallowed by this capture.
+    REGISTER_STATUS=0
+    CERT_THUMBPRINT=$(PYTHONPATH="$PROJECT_ROOT/scripts" "$VENV_PY" \
+        "$PROJECT_ROOT/scripts/register_blueprint_cert.py" "${REGISTER_ARGS[@]}") || REGISTER_STATUS=$?
+    case "$REGISTER_STATUS" in
+        0)
+            ;;
+        3)
+            fail "Could not confirm the certificate update (see above). The Blueprint may have changed. Re-run setup: it picks up where this left off."
+            ;;
+        *)
+            fail "The Blueprint certificate was not registered (exit $REGISTER_STATUS, see above)."
+            ;;
+    esac
 
     if [ -z "$CERT_THUMBPRINT" ]; then
         fail "Could not generate Blueprint certificate"
     fi
-
-    # Defense in depth: the thumbprint is SHA-256 DER base64url-no-padding
-    # (43 chars, [A-Za-z0-9_-]). If anything else lands here, the .env file
-    # is about to be corrupted — fail loudly instead of writing garbage.
-    if ! [[ "$CERT_THUMBPRINT" =~ ^[A-Za-z0-9_-]{43}$ ]]; then
-        fail "Captured thumbprint doesn't look like a SHA-256 base64url digest: '$CERT_THUMBPRINT'"
-    fi
+    require_thumbprint_shape "$CERT_THUMBPRINT"
 
     success "Certificate generated, uploaded to Entra, private key stored in OS keyring"
 fi
@@ -1085,6 +1060,64 @@ source .venv/bin/activate
 pip install --quiet --upgrade pip setuptools wheel
 pip install --quiet -e ".[dev]"
 success "Installed dependencies (including dev)"
+
+# ── Keep what a re-run must not silently change ────────────────────────────
+#
+# .env is written from scratch below, so read the old one first, before it is
+# truncated. Two settings must survive a re-run that doesn't mention them, such
+# as the documented repair command ./scripts/setup.sh --use-blueprint=ID:
+#   - The sponsor (ENTRABOT_HUMAN_*). Without this it becomes whoever az is
+#     signed in as, which isn't always the sponsor.
+#   - Cloud memory. Without this an agent on Azure Blob moves to an empty local
+#     store, because ENTRABOT_KEEP_MEMORY_LOCAL beats the blob settings.
+# Both belong to ONE Agent User: the blob container is scoped to it and the
+# sponsor is that agent's. A run for a different one (--new, or another
+# --use-blueprint) carries nothing over. Other lines added to .env by hand are
+# not kept.
+OLD_AGENT_USER_ID=$(read_env_value ENTRABOT_AGENT_USER_ID)
+OLD_HUMAN_USER_ID=$(read_env_value ENTRABOT_HUMAN_USER_ID)
+OLD_HUMAN_UPN=$(read_env_value ENTRABOT_HUMAN_UPN)
+OLD_HUMAN_USER_IDS=$(read_env_value ENTRABOT_HUMAN_USER_IDS)
+OLD_HUMAN_UPNS=$(read_env_value ENTRABOT_HUMAN_UPNS)
+OLD_HUMAN_USER_TENANT_IDS=$(read_env_value ENTRABOT_HUMAN_USER_TENANT_IDS)
+OLD_HUMAN_USER_MAILS=$(read_env_value ENTRABOT_HUMAN_USER_MAILS)
+OLD_HUMAN_USER_TYPES=$(read_env_value ENTRABOT_HUMAN_USER_TYPES)
+OLD_BLOB_ENDPOINT=$(read_env_value ENTRABOT_BLOB_ENDPOINT)
+OLD_BLOB_CONTAINER=$(read_env_value ENTRABOT_BLOB_CONTAINER)
+OLD_KEEP_MEMORY_LOCAL=$(read_env_value ENTRABOT_KEEP_MEMORY_LOCAL)
+
+SAME_AGENT=false
+if [ -n "${AGENT_USER_ID:-}" ] && [ "${AGENT_USER_ID:-}" = "$OLD_AGENT_USER_ID" ]; then
+    SAME_AGENT=true
+fi
+
+# --teams-user and --switch-user both say who the sponsor is, so they win. Without
+# them, a sponsor the old file names is kept. All seven values come from it together,
+# because the lists are index-aligned.
+if [ "$SAME_AGENT" = true ] && [ -z "$TEAMS_USER_EMAIL" ] && [ "$SWITCH_USER" = false ] \
+    && [ -n "$OLD_HUMAN_USER_ID$OLD_HUMAN_USER_IDS$OLD_HUMAN_UPN$OLD_HUMAN_UPNS" ]; then
+    HUMAN_USER_ID="$OLD_HUMAN_USER_ID"
+    HUMAN_UPN="$OLD_HUMAN_UPN"
+    HUMAN_USER_IDS="$OLD_HUMAN_USER_IDS"
+    HUMAN_UPNS="$OLD_HUMAN_UPNS"
+    HUMAN_USER_TENANT_IDS="$OLD_HUMAN_USER_TENANT_IDS"
+    HUMAN_USER_MAILS="$OLD_HUMAN_USER_MAILS"
+    HUMAN_USER_TYPES="$OLD_HUMAN_USER_TYPES"
+    KEPT_SPONSOR="${OLD_HUMAN_UPNS:-${OLD_HUMAN_UPN:-${OLD_HUMAN_USER_IDS:-$OLD_HUMAN_USER_ID}}}"
+    success "Kept the sponsor already in .env: $KEPT_SPONSOR (pass --teams-user=EMAIL to change it)"
+fi
+
+# Cloud memory is already set when the old file has both blob settings and doesn't
+# switch to local. The runtime gives ENTRABOT_KEEP_MEMORY_LOCAL priority and reads
+# only true, 1 and yes (any case) as on, so this does too. Half a cloud config
+# doesn't count.
+ON_CLOUD_MEMORY=false
+if [ "$SAME_AGENT" = true ] && [ -n "$OLD_BLOB_ENDPOINT" ] && [ -n "$OLD_BLOB_CONTAINER" ]; then
+    case "$OLD_KEEP_MEMORY_LOCAL" in
+        [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]) ;;
+        *) ON_CLOUD_MEMORY=true ;;
+    esac
+fi
 
 cat > .env << EOF
 # EntraBot Identity Research — generated by scripts/setup.sh
@@ -1117,12 +1150,29 @@ success ".env file created (chmod 600)"
 # ════════════════════════════════════════════════════════════════════════════
 # Step 7b: Azure Blob Storage provisioning (ADR-005)
 # ════════════════════════════════════════════════════════════════════════════
-if [ "$KEEP_MEMORY_LOCAL" = true ]; then
+
+# Writes back the blob settings the old .env had, so a run that must not move an
+# agent on cloud memory to an empty local store doesn't: no memory flag was given,
+# or the provisioning it asked for failed.
+keep_existing_cloud_memory() {
+    {
+        echo ""
+        echo "# ADR-005: cloud-hosted agent memory (Azure Blob Storage), kept from the previous .env"
+        printf 'ENTRABOT_BLOB_ENDPOINT=%s\n' "$OLD_BLOB_ENDPOINT"
+        printf 'ENTRABOT_BLOB_CONTAINER=%s\n' "$OLD_BLOB_CONTAINER"
+    } >> .env
+}
+
+if [ "$MEMORY_FLAG_PASSED" = false ] && [ "$ON_CLOUD_MEMORY" = true ]; then
+    keep_existing_cloud_memory
+    success "Memory mode: CLOUD (already set in .env: $OLD_BLOB_ENDPOINT/$OLD_BLOB_CONTAINER). Pass --keep-memory-local to switch to local."
+elif [ "$KEEP_MEMORY_LOCAL" = true ]; then
     echo "" >> .env
     echo "# ADR-005: keep agent memory local (skip cloud sync)" >> .env
     echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> .env
     success "Memory mode: LOCAL (--keep-memory-local set)"
 elif [ -z "${AGENT_USER_ID:-}" ]; then
+    # ON_CLOUD_MEMORY needs an Agent User, so there is no cloud memory to keep here.
     warn "Skipping blob storage — no Agent User to scope RBAC against"
 else
     echo ""
@@ -1142,27 +1192,42 @@ else
         PROVISION_ARGS+=(--create-new-storage)
     fi
 
+    # A failure is handled below, so keep it from ending the script here: under
+    # set -e a failed command substitution exits before $? can be read, and the
+    # fallbacks below could never run.
+    PROVISION_RC=0
     PROVISION_OUT=$("$PYTHON" "$PROJECT_ROOT/scripts/provision_blob_storage.py" \
         "${PROVISION_ARGS[@]}" \
-        2>&1 1>/tmp/entrabot-provision-stdout.$$)
-    PROVISION_RC=$?
+        2>&1 1>/tmp/entrabot-provision-stdout.$$) || PROVISION_RC=$?
     PROVISION_STDOUT=$(cat /tmp/entrabot-provision-stdout.$$)
     rm -f /tmp/entrabot-provision-stdout.$$
     # Echo the provisioner's progress lines (it prints them to stderr)
     echo "$PROVISION_OUT" | sed 's/^/  /'
 
     if [ $PROVISION_RC -ne 0 ]; then
-        warn "Blob storage provisioning failed — falling back to local-only memory"
-        echo "" >> .env
-        echo "# ADR-005: provisioning failed, using local-only memory" >> .env
-        echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> .env
-    else
-        BLOB_ENDPOINT=$(echo "$PROVISION_STDOUT" | grep '^BLOB_ENDPOINT=' | cut -d= -f2-)
-        BLOB_CONTAINER=$(echo "$PROVISION_STDOUT" | grep '^BLOB_CONTAINER=' | cut -d= -f2-)
-        if [ -z "$BLOB_ENDPOINT" ] || [ -z "$BLOB_CONTAINER" ]; then
-            warn "Provisioner returned no endpoint/container — using local-only memory"
+        if [ "$ON_CLOUD_MEMORY" = true ]; then
+            warn "Blob storage provisioning failed — keeping the cloud memory already set in .env"
+            keep_existing_cloud_memory
+        else
+            warn "Blob storage provisioning failed — falling back to local-only memory"
             echo "" >> .env
+            echo "# ADR-005: provisioning failed, using local-only memory" >> .env
             echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> .env
+        fi
+    else
+        # grep exits 1 when a line is missing, which pipefail turns into a failed
+        # assignment; an empty value is handled by the check below.
+        BLOB_ENDPOINT=$(echo "$PROVISION_STDOUT" | grep '^BLOB_ENDPOINT=' | cut -d= -f2-) || BLOB_ENDPOINT=""
+        BLOB_CONTAINER=$(echo "$PROVISION_STDOUT" | grep '^BLOB_CONTAINER=' | cut -d= -f2-) || BLOB_CONTAINER=""
+        if [ -z "$BLOB_ENDPOINT" ] || [ -z "$BLOB_CONTAINER" ]; then
+            if [ "$ON_CLOUD_MEMORY" = true ]; then
+                warn "Provisioner returned no endpoint/container — keeping the cloud memory already set in .env"
+                keep_existing_cloud_memory
+            else
+                warn "Provisioner returned no endpoint/container — using local-only memory"
+                echo "" >> .env
+                echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> .env
+            fi
         else
             echo "" >> .env
             echo "# ADR-005: cloud-hosted agent memory (Azure Blob Storage)" >> .env
@@ -1264,7 +1329,7 @@ elif [ -d "$PROJECT_ROOT/.venv" ] && [ -f "$PROJECT_ROOT/.env" ]; then
     echo ""
     echo -e "  ${BLUE}Running smoke test (token + Graph identity + Teams scope)...${NC}"
     set +e
-    set -a; . "$PROJECT_ROOT/.env"; set +a
+    # entrabot.config reads .env as data. It is never sourced: a value could hold $(...).
     "$PROJECT_ROOT/.venv/bin/python" - <<'PY'
 import sys
 from entrabot.config import EntraBotConfig
@@ -1356,7 +1421,11 @@ echo -e "  If ${BLUE}mind_contract_available=false${NC}: body-only mode; do not 
 echo ""
 
 if [ "$MIGRATION_FAILED" = true ]; then
-    echo -e "  ${RED}Re-run ${BLUE}./scripts/setup.sh${RED} after fixing the migration error above.${NC}"
+    # Name the store this run just provisioned: --use-cloud-memory alone picks the default one.
+    BLOB_ENDPOINT_ACCOUNT="${BLOB_ENDPOINT#https://}"
+    BLOB_ENDPOINT_ACCOUNT="${BLOB_ENDPOINT_ACCOUNT%%.*}"
+    echo -e "  ${RED}After fixing the migration error above, re-run:${NC}"
+    echo -e "  ${BLUE}./scripts/setup.sh --use-blueprint=$BLUEPRINT_APP_ID --use-cloud-memory --with-storage-account=${BLOB_ENDPOINT_ACCOUNT} --with-container=$BLOB_CONTAINER${NC}"
     echo ""
     exit 2
 fi

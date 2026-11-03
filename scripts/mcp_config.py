@@ -69,7 +69,8 @@ def upsert_mcp_entry(target: Path, server_name: str, entry: dict) -> None:
     Idempotent: if ``server_name`` already exists with the same value,
     no-op; if it exists with a different value, overwrite. Other servers
     in the file are left alone. Top-level keys besides ``mcpServers``
-    (e.g. Copilot's user settings) are preserved.
+    (e.g. Copilot's user settings) are preserved. An ``env`` block the operator
+    set on the existing entry is kept unless the new entry supplies its own.
 
     If the target file is missing, creates it with only ``mcpServers``.
     If the target file is corrupt JSON, backs it up to
@@ -98,6 +99,9 @@ def upsert_mcp_entry(target: Path, server_name: str, entry: dict) -> None:
             )
             data = {"mcpServers": {}}
 
+    existing = data["mcpServers"].get(server_name)
+    if isinstance(existing, dict) and "env" in existing and "env" not in entry:
+        entry = {**entry, "env": existing["env"]}
     data["mcpServers"][server_name] = entry
 
     target.write_text(

@@ -40,8 +40,14 @@ manager. See also [macOS / Linux installation](../../../getting-started/macos-li
 # Create an explicit Agent User UPN
 ./scripts/setup.sh --new --agent-user-upn=entrabot-agent@yourtenant.onmicrosoft.com
 
-# Attach this machine to an existing Blueprint (multi-device / re-install)
+# Attach this machine to an existing Blueprint (multi-device / re-install).
+# Adds a certificate for this machine; other machines' certificates are kept.
 ./scripts/setup.sh --use-blueprint=<BLUEPRINT_APP_ID> --agent-user-upn=<UPN>
+
+# Replace EVERY certificate on the Blueprint with a new one for this machine.
+# Other machines stop authenticating until they run setup again.
+# This does not delete the Blueprint itself.
+./scripts/setup.sh --use-blueprint=<BLUEPRINT_APP_ID> --remove-all-existing-certs
 
 # Opt in to cloud-hosted operational memory (Azure Blob Storage)
 ./scripts/setup.sh --new --with-upn-suffix=workstation --use-cloud-memory
@@ -67,11 +73,23 @@ Identity mode (choose one):
   suffix (`--with-upn-suffix`) or an explicit `--agent-user-upn`; if neither is
   given, the script prompts for a suffix.
 - `--use-blueprint=ID` — attach to an existing Blueprint by App ID. A new cert is
-  generated for this machine and added to the Blueprint; the existing Agent
-  Identity and Agent User are reused. If local state points at a *different*
-  Blueprint, the stale identity-derived state is wiped (after a timestamped
-  backup) so discovery re-runs cleanly against the new Blueprint. The old
-  machine's cert on the previous Blueprint is **not** revoked automatically.
+  generated for this machine and added to the Blueprint; existing certificates are
+  kept, so other machines keep working, and the existing Agent Identity and Agent
+  User are reused. If local state points at a *different* Blueprint, the stale
+  identity-derived state is wiped (after a timestamped backup) so discovery re-runs
+  cleanly against the new Blueprint. The old machine's cert on the previous
+  Blueprint is **not** revoked automatically.
+- `--remove-all-existing-certs` — used with `--use-blueprint`. Removes **every**
+  certificate on the Blueprint, including those of other machines, and replaces them
+  with a new one for this machine, even if this machine's current certificate is
+  still valid. **It does not delete the Blueprint**, its Agent Identities, or its
+  Agent Users. Every other machine stops authenticating until it runs setup again.
+  It lists what will be removed (name and expiry only) and asks `y/N` on a terminal;
+  without a terminal the flag itself is the consent, and it says so loudly. Nothing on
+  this machine changes until the replacement is confirmed, so declining, or Graph
+  refusing the update, leaves the active key, the state file, and any pending key as
+  they were. This is the only way setup removes a certificate. Mutually exclusive with
+  `--new`, which creates a Blueprint with no certificates.
 
 Agent User selection:
 
@@ -84,7 +102,9 @@ Agent User selection:
   sponsors the agent.
 - `--teams-user=EMAIL` — set a different user (or comma-separated users) as the
   Teams recipient(s); the `az` CLI user remains the admin/provisioner. Guests
-  (B2B) are detected and resolved to their home tenant.
+  (B2B) are detected and resolved to their home tenant. Without it, a re-run for
+  the same Agent User keeps the sponsor already in `.env` (`ENTRABOT_HUMAN_*`);
+  with it, the sponsor is changed to the user(s) you name.
 
 Operational memory:
 
@@ -93,9 +113,13 @@ Operational memory:
   watched-chat list, and the email-poll cursor). Provisions a resource group,
   storage account, and container scoped to the Agent User, and unsets
   `ENTRABOT_KEEP_MEMORY_LOCAL`.
-- `--keep-memory-local` — the default. Operational data stays on the local
-  filesystem. Kept as an explicit, backwards-compatible flag; sets
-  `ENTRABOT_KEEP_MEMORY_LOCAL=true`.
+  A re-run without this flag keeps cloud memory that is already set in `.env`
+  for the same Agent User.
+- `--keep-memory-local` — operational data stays on the local filesystem; sets
+  `ENTRABOT_KEEP_MEMORY_LOCAL=true`. A first run with neither memory flag does
+  this too. On a re-run for the same Agent User whose `.env` already has cloud
+  memory, pass this flag to switch back to local; without it the cloud settings
+  are kept.
 - `--with-storage-account=NAME` — target a named storage account instead of the
   deterministic per-tenant default (used with `--use-cloud-memory`). Mutually
   exclusive with `--create-new-storage`.
@@ -121,8 +145,11 @@ Diagnostics and control:
   forwarded to `show_agent_status.py` (for example `--json`, `--health-only`,
   `--strict`).
 - `--diagnose` — skip provisioning and run a full health check (state file,
-  certificate, three-hop token, Graph identity, Teams scope, MCP wiring). Exits
-  non-zero if any check fails.
+  certificate, three-hop token, Graph identity, Teams scope, MCP wiring, and the
+  optional `persona-sati` entry in `.mcp.json`). Exits non-zero if any check
+  fails. The persona-sati check is advisory: it can report `SKIP` or `WARN` but
+  never a failure, and it connects only to loopback addresses (see
+  [MCP connectivity](../../../troubleshooting/mcp-connectivity.md#persona-sati-does-not-connect)).
 - `--skip-smoke` — skip the post-setup smoke test (token + Graph identity +
   Teams scope).
 - `--help`, `-h` — print the full option matrix.
@@ -134,21 +161,43 @@ Diagnostics and control:
   reuses the Blueprint, Agent Identity, and Agent User via
   [`create_entra_agent_ids.py`](../provisioning/create-entra-agent-ids-py.md)
   (using the Provisioner certificate token, never `az` CLI tokens).
-- Generates an RSA-2048 self-signed Blueprint certificate, stores the private
-  key in the OS credential store, and uploads only the public certificate to the
-  Blueprint via a Graph `PATCH keyCredentials` (a list-replace, which warns
-  before overwriting existing certs). Reuses a cached or locally recoverable
-  certificate when one is already registered.
+- Reuses this machine's certificate only when
+  [`find_local_blueprint_cert.py`](../auth-and-certs/find-local-blueprint-cert-py.md)
+  shows that the local private key matches a certificate still registered on the
+  Blueprint that hasn't expired. The thumbprint cached in the state file is never
+  trusted on its own: setup uses the thumbprint that check returns, and saves it if it
+  differs from the cached one. `verify_blueprint_cert.py` is an operator tool that setup
+  does not call.
+- Otherwise, including whenever a new private key is still waiting under the pending
+  keystore entry from an earlier run,
+  [`register_blueprint_cert.py`](../auth-and-certs/register-blueprint-cert-py.md)
+  generates an RSA-2048 self-signed certificate (or reuses the pending key), keeps the
+  private key under a temporary keystore entry, and uploads only the public certificate.
+  Because a Graph `PATCH keyCredentials` replaces the whole list, it sends every existing
+  certificate back along with the new one, then reads the list back to confirm before
+  making the new key active and recording the thumbprint. A normal run never removes a
+  certificate.
 - Creates `.venv`, installs the package with dev extras, and writes `.env`
   (`chmod 600`) with the resulting tenant, Blueprint, Agent Identity, Agent User,
   and human-user identifiers plus the certificate thumbprint.
+- Reads the existing `.env` before rewriting it. When this run is for the same
+  Agent User (`ENTRABOT_AGENT_USER_ID` is unchanged), it keeps the sponsor
+  (`ENTRABOT_HUMAN_*`) unless you pass `--teams-user` or `--switch-user`, and keeps the cloud-memory
+  settings (`ENTRABOT_BLOB_ENDPOINT` / `ENTRABOT_BLOB_CONTAINER`) unless you pass
+  `--keep-memory-local` or `--use-cloud-memory`. Cloud memory counts as set only
+  when both blob settings are present and `ENTRABOT_KEEP_MEMORY_LOCAL` is not
+  `true`, `1`, or `yes`. A run for a different Agent User (`--new`, or another
+  Blueprint or Agent User) carries nothing over. The rest of `.env` is written
+  fresh, so other lines you added by hand are dropped.
 - With `--use-cloud-memory` and an Agent User present, provisions Azure Blob
   Storage via [`provision_blob_storage.py`](../storage/provision-blob-storage-py.md)
   and appends `ENTRABOT_BLOB_ENDPOINT` / `ENTRABOT_BLOB_CONTAINER` to `.env`;
   offers an idempotent, source-preserving migration prompt that copies existing
   local data (interaction log, daily summaries, promises) and Claude Code persona
   memory as a one-time artifact copy.
-  Provisioning failures fall back to local-only memory. The migration doesn't
+  If provisioning fails, setup shows the provisioner's output and warns. It keeps
+  the cloud settings already in `.env` if there were any for this Agent User, and
+  otherwise falls back to local-only memory. The migration doesn't
   copy local poll state: the watched-chat list, the email cursor, the legacy
   `chat_id` key, or the per-chat delivery cursors under `chat_cursors/`. A machine's
   copies may be stale or another agent's. The cloud cursor starts at "now", discovery
@@ -168,17 +217,19 @@ Diagnostics and control:
 - `0` — setup (or `--status` / `--help`) completed successfully; the smoke test
   either passed or was skipped.
 - `1` — a fatal setup error (for example a missing prerequisite, no Azure login,
-  a failed provisioning step, an aborted cert replacement, `--new` /
-  `--use-blueprint` conflict, or a missing required identity mode).
-- `2` — mutually exclusive storage flags, or setup completed provisioning but the
+  a failed provisioning step, a certificate check that couldn't complete, a declined
+  `--remove-all-existing-certs` prompt, `--new` / `--use-blueprint` conflict, or a
+  missing required identity mode).
+- `2` — mutually exclusive storage flags, `--new` with
+  `--remove-all-existing-certs`, or setup completed provisioning but the
   cloud-memory **migration failed** (cloud memory is not in sync with local
   disk; re-run after fixing the underlying consent error).
 - `3` — provisioning finished but the post-setup **smoke test failed** (the agent
   can't yet authenticate end-to-end, most often because a just-assigned Teams
   license has not replicated). Re-run `./scripts/setup.sh --diagnose` after
   replication completes.
-- `--diagnose` exits with the diagnostics' own overall exit code (`0` when all
-  checks pass, non-zero otherwise).
+- `--diagnose` exits with the diagnostics' own overall exit code (`0` unless a
+  check fails; warnings and skips do not change it).
 
 ## Common failures
 
@@ -186,9 +237,19 @@ Diagnostics and control:
   --switch-user`) and retry.
 - **`No identity mode specified`** — pass `--new --with-upn-suffix=NAME` or
   `--use-blueprint=APP_ID`.
-- **Cert replacement prompt** — the Blueprint already has registered
-  certificate(s); confirming replaces them (Graph `PATCH` list semantics), which
-  stops other machines authenticating until they re-run setup.
+- **`Could not check ...`** — setup couldn't read the Blueprint's certificates or the
+  OS credential store (the pending key entry included), so it doesn't know whether this
+  machine is already registered. It stops rather than generating a certificate, and
+  nothing was changed. Fix the error shown above the message and re-run.
+- **`Could not confirm the certificate update`** — the update may have landed but
+  couldn't be read back. The new private key is kept; re-run setup and it picks up
+  where it left off. See
+  [`register_blueprint_cert.py`](../auth-and-certs/register-blueprint-cert-py.md#what-happens-to-the-key-on-failure).
+- **Old certificates building up** — a normal run only adds, including when a
+  certificate has expired. Remove individual certificates in the Entra admin center,
+  or replace them all with `--remove-all-existing-certs`.
+- **Another machine stopped authenticating after `--remove-all-existing-certs`** — this
+  is what the flag does. Run setup on that machine to add its certificate back.
 - **Smoke test failed (exit 3)** — usually license replication latency; wait
   10–15 minutes and re-run with `--diagnose`.
 - **Migration failed (exit 2)** — most often missing storage consent for the
@@ -205,6 +266,10 @@ Diagnostics and control:
 - [`setup-windows.ps1`](setup-windows-ps1.md) — the Windows counterpart.
 - [`create_entra_agent_ids.py`](../provisioning/create-entra-agent-ids-py.md) —
   the underlying identity-chain provisioner.
+- [`register_blueprint_cert.py`](../auth-and-certs/register-blueprint-cert-py.md) —
+  generates and registers this machine's certificate.
+- [`list_blueprint_certs.py`](../auth-and-certs/list-blueprint-certs-py.md) — see which
+  certificates are on the Blueprint.
 - [`provision_blob_storage.py`](../storage/provision-blob-storage-py.md) —
   cloud-memory provisioning invoked by `--use-cloud-memory`.
 - [`status.sh`](../operations/status-sh.md) /

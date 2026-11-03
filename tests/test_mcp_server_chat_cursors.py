@@ -224,7 +224,7 @@ class TestPollFailClosed:
         await mcp_server._poll_watched_chat(
             chat_id,
             chat_state,
-            agent_upn="entra-agent@werner.ac",
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
             agent_object_id="agent-oid",
         )
 
@@ -270,7 +270,7 @@ class TestPollFailClosed:
         await mcp_server._poll_watched_chat(
             chat_id,
             chat_state,
-            agent_upn="entra-agent@werner.ac",
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
             agent_object_id="agent-oid",
         )
 
@@ -451,7 +451,7 @@ class TestPollSteadyStateIdempotent:
         await mcp_server._poll_watched_chat(
             chat_id,
             chat_state,
-            agent_upn="entra-agent@werner.ac",
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
             agent_object_id="agent-oid",
         )
 
@@ -496,7 +496,7 @@ class TestPollSteadyStateIdempotent:
         await mcp_server._poll_watched_chat(
             chat_id,
             chat_state,
-            agent_upn="entra-agent@werner.ac",
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
             agent_object_id="agent-oid",
         )
 
