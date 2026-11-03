@@ -137,7 +137,8 @@ async def test_add_excel_comment_wrapper(use_provider: Any) -> None:
 
     body = json.loads(await server.add_excel_comment(DRIVE_ID, ITEM_ID, "Sheet1!A1", "Hi"))
 
-    assert body == {"comment_id": COMMENT_ID, "cell_address": "Sheet1!A1"}
+    # The caller has the address, and its sheet name is workbook-authored.
+    assert body == {"comment_id": COMMENT_ID}
     assert provider.calls[0]["tool_name"] == "CreateComment"
 
 

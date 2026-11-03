@@ -9,7 +9,6 @@ model or logs outside the fields below.
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,11 +16,10 @@ from entrabot.a365.catalog import EXCEL_SERVER_NAME
 from entrabot.a365.errors import A365McpCallError
 from entrabot.a365.provider import WorkIqProvider
 from entrabot.tools.text_limits import max_text_bytes, truncate_utf8
-from entrabot.tools.worksheet_names import is_valid_worksheet_name
+from entrabot.tools.worksheet_names import is_valid_cell_reference, is_valid_worksheet_name
 
 _MAX_TOOL_ERROR_DETAIL = 500
 _XLSX_EXTENSION = ".xlsx"
-_CELL_REFERENCE_RE = re.compile(r"[A-Za-z]{1,3}[1-9]\d{0,6}")
 
 
 @dataclass(frozen=True)
@@ -73,7 +71,7 @@ def _is_valid_cell_address(address: str) -> bool:
     that starts or ends with a quote, so an unbalanced quote can't be valid.
     """
     sheet, separator, reference = address.rpartition("!")
-    if not separator or not _CELL_REFERENCE_RE.fullmatch(reference):
+    if not separator or not is_valid_cell_reference(reference):
         return False
     if len(sheet) >= 2 and sheet.startswith("'") and sheet.endswith("'"):
         sheet = sheet[1:-1].replace("''", "'")

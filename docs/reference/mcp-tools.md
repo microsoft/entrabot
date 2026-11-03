@@ -321,7 +321,7 @@ async def list_workbook_worksheets(
 
 List the worksheets in an `.xlsx` or `.xlsm` file, including hidden ones, through the Graph Workbook API. Pass the `FileRef` fields returned from `resolve_file_url` or `list_recent_files`. The file must be on OneDrive for Business or SharePoint: `.xls`, other extensions, and consumer OneDrive are rejected with `UnsupportedReadFormatError` before any Graph call.
 
-Returns JSON with `drive_id`, `item_id`, `name`, `worksheet_count`, `truncated`, and `text`. `text` holds JSON `{"worksheets": [{"name", "position", "visibility"}]}` inside the external-content (XPIA) boundary, because worksheet names are authored by whoever wrote the file. It is truncated to `ENTRABOT_FILES_MAX_TEXT_BYTES`.
+Returns JSON with `drive_id`, `item_id`, `worksheet_count`, `truncated`, and `text`. `text` holds JSON `{"worksheets": [{"name", "position", "visibility"}]}` inside the external-content (XPIA) boundary, because worksheet names are authored by whoever wrote the file. It is truncated to `ENTRABOT_FILES_MAX_TEXT_BYTES`.
 
 `drive_id` and `item_id` are percent-encoded into the request, and a bare `.` or `..` is rejected with `InvalidWorkbookRangeError`. When `ENTRABOT_FILES_DENIED_SITES` is set, the tool also asks Graph for the item's real site before reading and raises `SiteNotAllowedError` if it's listed, so a blank `site_id` can't skip the denylist. A bare site GUID and the `{host},{site},{web}` form match each other. If Graph can't confirm the site, the read is refused. With no denylist, this adds no Graph call.
 
@@ -349,9 +349,9 @@ Failures that happen before any Graph call:
 - `InvalidWorkbookRangeError` — an invalid worksheet name, or an address that is unbounded (`C:C`, `2:2`), sheet-qualified (`Sheet1!A1`), or reversed (`D4:A1`).
 - `WorkbookRangeTooLargeError` — an explicit address covering more than `ENTRABOT_FILES_MAX_WORKBOOK_CELLS` cells (default 5,000).
 
-With a blank `address`, the tool requests the used range's dimensions first and raises `WorkbookRangeTooLargeError` without fetching its cells if it is over the cap. Pass smaller addresses to read a larger sheet in pieces.
+With a blank `address`, the tool requests the used range's dimensions first and raises `WorkbookRangeTooLargeError` without fetching its cells if it is over the cap. It then reads the exact range it checked, so an edit between the two requests can't exceed the cap, and an address it can't use raises `GraphFilesError` without fetching cells. Pass smaller addresses to read a larger sheet in pieces.
 
-Returns JSON with `drive_id`, `item_id`, `name`, `row_count`, `column_count`, `truncated`, and `text`. `text` holds JSON with `worksheet`, `address`, `values` (raw values), `text` (as displayed), and `formulas`, inside the external-content (XPIA) boundary. It is truncated to `ENTRABOT_FILES_MAX_TEXT_BYTES`, so when `truncated` is `true` the JSON is incomplete and won't parse; read a smaller range.
+Returns JSON with `drive_id`, `item_id`, `row_count`, `column_count`, `truncated`, and `text`. `text` holds JSON with `worksheet`, `address`, `values` (raw values), `text` (as displayed), and `formulas`, inside the external-content (XPIA) boundary. It is truncated to `ENTRABOT_FILES_MAX_TEXT_BYTES`, so when `truncated` is `true` the JSON is incomplete and won't parse; read a smaller range.
 
 ### `add_file_comment`
 
@@ -525,7 +525,7 @@ async def add_excel_comment(
 ) -> str
 ```
 
-Comment on one cell through Work IQ (`CreateComment`). `cell_address` is a sheet-qualified cell such as `Sheet1!A1`; any other shape, including a range, is rejected before the call. Returns JSON with `comment_id` and `cell_address`.
+Comment on one cell through Work IQ (`CreateComment`). `cell_address` is a sheet-qualified cell such as `Sheet1!A1`, up to `XFD1048576`; any other shape, including a range, is rejected before the call. Returns JSON with `comment_id`.
 
 ### `reply_to_excel_comment`
 

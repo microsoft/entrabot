@@ -66,7 +66,12 @@ from entrabot.errors import (
 from entrabot.tools.audit import log_event
 from entrabot.tools.rate_limit import RetryOn429Transport
 from entrabot.tools.text_limits import DEFAULT_MAX_TEXT_BYTES, max_text_bytes, truncate_utf8
-from entrabot.tools.worksheet_names import is_valid_worksheet_name
+from entrabot.tools.worksheet_names import (
+    MAX_WORKBOOK_COLUMN,
+    MAX_WORKBOOK_ROW,
+    column_number,
+    is_valid_worksheet_name,
+)
 
 logger = logging.getLogger("entrabot.tools.files")
 
@@ -906,19 +911,10 @@ async def read_file(
 _A1_RE = re.compile(
     r"\$?([A-Za-z]{1,3})\$?([1-9][0-9]{0,6})(?::\$?([A-Za-z]{1,3})\$?([1-9][0-9]{0,6}))?"
 )
-_MAX_WORKBOOK_COLUMN = 16_384  # XFD
-_MAX_WORKBOOK_ROW = 1_048_576
 _ADDRESS_HINT = (
     "address must be one cell or a bounded top-left:bottom-right range such as "
     "A1 or A1:D4, within XFD1048576, with no sheet name"
 )
-
-
-def _column_number(letters: str) -> int:
-    number = 0
-    for letter in letters.upper():
-        number = number * 26 + ord(letter) - ord("A") + 1
-    return number
 
 
 def _parse_workbook_address(address: str) -> tuple[str, int]:
@@ -933,13 +929,13 @@ def _parse_workbook_address(address: str) -> tuple[str, int]:
     start_col, start_row, end_col, end_row = match.groups()
     end_col = end_col or start_col
     end_row = end_row or start_row
-    first_col, last_col = _column_number(start_col), _column_number(end_col)
+    first_col, last_col = column_number(start_col), column_number(end_col)
     first_row, last_row = int(start_row), int(end_row)
     if (
-        last_col > _MAX_WORKBOOK_COLUMN
-        or first_col > _MAX_WORKBOOK_COLUMN
-        or last_row > _MAX_WORKBOOK_ROW
-        or first_row > _MAX_WORKBOOK_ROW
+        last_col > MAX_WORKBOOK_COLUMN
+        or first_col > MAX_WORKBOOK_COLUMN
+        or last_row > MAX_WORKBOOK_ROW
+        or first_row > MAX_WORKBOOK_ROW
         or last_col < first_col
         or last_row < first_row
     ):
@@ -1002,6 +998,24 @@ def _range_dimensions(resp: httpx.Response, body: dict[str, Any]) -> tuple[int, 
             resp.status_code, "malformed workbook response: missing rowCount/columnCount"
         )
     return rows, columns
+
+
+def _probed_range(resp: httpx.Response, body: dict[str, Any]) -> tuple[str, int]:
+    """Return the bounded range and cell count from a used-range probe.
+
+    Excel allows ``!`` in a sheet name, so the range follows the last one. The
+    error names no Graph-supplied value, because the address holds the
+    file-authored sheet name.
+    """
+    address = body.get("address")
+    if isinstance(address, str):
+        _sheet, separator, reference = address.rpartition("!")
+        if separator:
+            try:
+                return _parse_workbook_address(reference)
+            except InvalidWorkbookRangeError:
+                pass
+    raise GraphFilesError(resp.status_code, "malformed workbook response: unusable range address")
 
 
 def _worksheet_row(row: Any, *, status: int) -> dict[str, Any]:
@@ -1091,7 +1105,9 @@ async def read_workbook_range(
 
     With ``address=None`` the worksheet's used range is read, but only after a
     first request for its dimensions, so an oversized sheet is refused without
-    its cells being fetched. In the returned body, ``values`` holds raw values,
+    its cells being fetched. The cells then come from the exact range that was
+    checked, so an edit between the two requests can't exceed the cap. In the
+    returned body, ``values`` holds raw values,
     ``text`` the displayed strings, and ``formulas`` the source formulas.
 
     Raises ``InvalidWorkbookRangeError``, ``WorkbookRangeTooLargeError`` (for
@@ -1140,9 +1156,14 @@ async def read_workbook_range(
             )
             if size_resp.status_code != 200:
                 _raise_for_files_error(size_resp, target=not_found_target, scope="Files.Read")
-            rows, columns = _range_dimensions(size_resp, _json_object(size_resp))
+            size_body = _json_object(size_resp)
+            rows, columns = _range_dimensions(size_resp, size_body)
             if rows * columns > max_cells:
                 raise WorkbookRangeTooLargeError(rows * columns, max_cells)
+            probed, cell_count = _probed_range(size_resp, size_body)
+            if cell_count > max_cells:
+                raise WorkbookRangeTooLargeError(cell_count, max_cells)
+            range_url = f"{worksheet_url}/range(address='{probed}')"
 
         resp = await client.get(
             f"{range_url}?$select=address,rowCount,columnCount,values,text,formulas",
