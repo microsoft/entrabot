@@ -231,10 +231,10 @@ function Configure-A365WorkIq {
         [string]$BlueprintObjectId,
         [string]$AgentId
     )
-    $A365WorkIqMcpServers = @("mcp_WordServer", "mcp_ODSPRemoteServer")
+    $A365WorkIqMcpServers = @("mcp_WordServer", "mcp_ODSPRemoteServer", "mcp_ExcelServer")
 
     Write-Host ""
-    Write-Host "Configuring Microsoft Agent 365 Work IQ Word + OneDrive/SharePoint..." -ForegroundColor Cyan
+    Write-Host "Configuring Microsoft Agent 365 Work IQ Word + OneDrive/SharePoint + Excel..." -ForegroundColor Cyan
     Write-Host "This may open an interactive Microsoft sign-in/device-code flow." -ForegroundColor Yellow
     Write-Host "If the Agent 365 CLI app is missing, choose C when prompted to create it." -ForegroundColor Yellow
 
@@ -261,7 +261,7 @@ function Configure-A365WorkIq {
 
     & python (Join-Path $ScriptDir 'spike_a365_work_iq.py')
     if ($LASTEXITCODE -ne 0) { Fail "A365 Work IQ manifest validation failed" }
-    Success "A365 Work IQ Word manifest configured"
+    Success "A365 Work IQ Word and Excel manifest configured"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════

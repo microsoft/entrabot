@@ -34,9 +34,11 @@ Entrabot draws a deliberate boundary between the two surfaces:
 |---|---|
 | Teams chat send/read/members | Direct Microsoft Graph |
 | Outlook mail | Direct Microsoft Graph |
-| Files, OneDrive, SharePoint, Excel | Direct Microsoft Graph |
+| Files, OneDrive, SharePoint | Direct Microsoft Graph |
+| Excel worksheet and range reads | Direct Microsoft Graph (`list_workbook_worksheets`, `read_workbook_range`) |
 | Word document content, create, comment, reply | Work IQ Word adapter |
 | OneDrive/SharePoint metadata and small-file reads through Work IQ | Work IQ ODSP adapter |
+| Whole-workbook reads, workbook creation from CSV, cell comments and replies | Work IQ Excel adapter (see [Work IQ Excel tools](#work-iq-excel-tools)) |
 
 Teams, mail, and Files stay Graph-native because Entrabot needs explicit chat
 IDs, background polling, channel push, cross-tenant membership handling, and
@@ -105,6 +107,7 @@ The implementation lives in:
 - `src/entrabot/a365/mcp_client.py`
 - `src/entrabot/a365/provider.py`
 - `src/entrabot/a365/word.py`
+- `src/entrabot/a365/excel.py`
 - `src/entrabot/a365/odsp.py`
 
 ## Work IQ Word tools
@@ -118,10 +121,58 @@ Entrabot exposes four Word operations through the typed adapter:
 | Add comment | `AddComment` | Adds a top-level Word comment. |
 | Reply to comment | `ReplyToComment` | Replies to an existing Word comment. |
 
-Document content is external input. `get_document_content()` wraps returned
-HTML with the authoritative external-content boundary before exposing it to
-the model. Provider raw results remain available for typed parsing and
-diagnostics but are not treated as trusted instructions.
+Document content is external input. `get_document_content()` wraps the returned
+HTML, comments, and any sensitivity label with the authoritative external-content
+boundary before exposing them to the model. `read_word_document` also returns
+the `drive_id` and `document_id` the comment operations take. The adapters keep
+provider responses for typed parsing only: no MCP tool returns them, and they are
+excluded from `repr`.
+
+## Work IQ Excel tools
+
+Entrabot exposes four Excel operations through the typed adapter:
+
+| Entrabot tool | Work IQ tool | Purpose |
+|---|---|---|
+| `read_excel_workbook` | `GetDocumentContent` | Returns a workbook's cell text and comments from a sharing URL, plus the IDs needed to comment. |
+| `create_excel_workbook` | `CreateWorkbook` | Creates a workbook from CSV in the root of the Agent User's OneDrive. |
+| `add_excel_comment` | `CreateComment` | Comments on one cell, addressed as `Sheet1!A1`. |
+| `reply_to_excel_comment` | `ReplyToComment` | Replies to an existing workbook comment. |
+
+Use `read_excel_workbook` for the whole workbook as text or for its comments.
+Use the direct Graph `read_workbook_range` for a bounded range or to tell
+formulas from values.
+
+The adapter differs from the Word adapter in three ways:
+
+- **Everything from the workbook stays in the envelope.** The file name,
+  comments, and cell text sit inside one external-content envelope. Results
+  have no `raw` field, because the `CreateWorkbook` response includes a
+  pre-authenticated `@microsoft.graph.downloadUrl`.
+- **`shareWith` is intentionally not exposed.** `CreateWorkbook` accepts an
+  optional email address to share with, which would skip the sponsor, channel,
+  and membership checks in `share_file`. Entrabot never sends it, so new
+  workbooks stay unshared until `share_file` shares them.
+- **Reads are capped.** Workbook text is truncated to
+  `ENTRABOT_FILES_MAX_TEXT_BYTES`, comments first so they survive, and
+  `truncated` reports when that happened. The truncated `text` is no longer
+  valid JSON.
+
+CSV cells arrive as text, so numbers in a new workbook come back as strings.
+
+`mcp_ExcelServer` appears in the catalog returned by
+`a365 develop list-available`, but Microsoft Learn doesn't document it, so its
+tool names and response shapes come from the server's `tools/list` and may
+change. When adding it, the Agent 365 CLI warned that it "uses a legacy ATG
+audience and may not work correctly".
+
+### Excel setup
+
+Setup adds `mcp_ExcelServer` to `ToolingManifest.json`, and
+`scripts/ensure_a365_work_iq_permissions.py` adds `McpServers.Excel.All` to the
+Blueprint's grant on the Agent 365 Tools resource. Until that scope is granted,
+calls to the server return `403`. The later `a365 setup permissions mcp` step
+requires PowerShell 7+ and stops at its requirements check without it.
 
 ## Authentication
 

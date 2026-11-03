@@ -5,13 +5,16 @@ PR1 surface (Scenario 1: read SharePoint spec, comment for clarification):
 - ``resolve_file_url`` — share URL → ``FileRef`` (drive_id, item_id, site_id, kind)
 - ``list_recent_files`` — ``/me/drive/sharedWithMe`` with denylist post-filter
 - ``read_file`` — auto-detect format; .md/.txt/.html raw, .docx via PDF
-  conversion + ``pypdf``, .pdf via direct ``pypdf``, .xlsx/.pptx rejected
+  conversion + ``pypdf``, .pdf via direct ``pypdf``, Excel and PowerPoint
+  rejected
+- ``list_workbook_worksheets`` / ``read_workbook_range`` — bounded, read-only
+  Excel access through the Graph Workbook API
 - ``add_file_comment`` — Files-only comment (beta endpoint), Word + Excel
   on OneDrive-Business / SharePoint, rejects .pptx, personal OneDrive,
   folder driveItems
 
-PR2 (Scenario 2: author + upload + share) and PR3 (Excel reads) ship
-in subsequent commits. This module's contract:
+PR2 (Scenario 2: author + upload + share) shipped in a later commit. Excel
+writes remain out of scope here. This module's contract:
 
 - All public functions are ``async``.
 - All public functions take ``*, token: str, transport=None`` so the
@@ -34,6 +37,7 @@ import base64
 import json
 import logging
 import os
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -46,6 +50,7 @@ from entrabot.errors import (
     FileNotFoundError,
     FileTooLargeError,
     GraphFilesError,
+    InvalidWorkbookRangeError,
     MissingPermissionError,
     NoActiveSponsorChannelError,
     RequesterNotInChatError,
@@ -56,9 +61,17 @@ from entrabot.errors import (
     UnsupportedCommentFormatError,
     UnsupportedReadFormatError,
     UrlNotResolvableError,
+    WorkbookRangeTooLargeError,
 )
 from entrabot.tools.audit import log_event
 from entrabot.tools.rate_limit import RetryOn429Transport
+from entrabot.tools.text_limits import DEFAULT_MAX_TEXT_BYTES, max_text_bytes, truncate_utf8
+from entrabot.tools.worksheet_names import (
+    MAX_WORKBOOK_COLUMN,
+    MAX_WORKBOOK_ROW,
+    column_number,
+    is_valid_worksheet_name,
+)
 
 logger = logging.getLogger("entrabot.tools.files")
 
@@ -66,11 +79,14 @@ GRAPH_V1_HOST = "https://graph.microsoft.com/v1.0"
 GRAPH_BETA_HOST = "https://graph.microsoft.com/beta"  # comments only; isolate
 
 # Default budgets — overridable via env. Plan §"Failure-mode registry":
-# ENTRABOT_FILES_MAX_TEXT_BYTES (200KB) caps extracted text per
-# read_file; ENTRABOT_FILES_MAX_PDF_BYTES (50 MiB) refuses to download
+# ENTRABOT_FILES_MAX_TEXT_BYTES (200KB, see text_limits) caps extracted text
+# per read_file; ENTRABOT_FILES_MAX_PDF_BYTES (50 MiB) refuses to download
 # a PDF exceeding that size (P1).
-DEFAULT_MAX_TEXT_BYTES = 200_000
 DEFAULT_MAX_PDF_BYTES = 52_428_800  # 50 MiB
+# ENTRABOT_FILES_MAX_WORKBOOK_CELLS caps cells per read_workbook_range. Each
+# cell comes back three times (values, text, formulas), so this is sized to
+# usually fit inside DEFAULT_MAX_TEXT_BYTES rather than to be truncated by it.
+DEFAULT_MAX_WORKBOOK_CELLS = 5_000
 
 DriveKind = Literal["onedrive_personal", "onedrive_business", "sharepoint"]
 ReadFormat = Literal["raw", "auto"]
@@ -174,6 +190,42 @@ class FileContent:
 
 
 @dataclass(frozen=True)
+class WorkbookWorksheets:
+    """Result of ``list_workbook_worksheets``.
+
+    Worksheet names are authored by whoever wrote the file, so they live only
+    inside the wrapped ``text``. Everything else here is caller-supplied or a
+    number.
+    """
+
+    drive_id: str
+    item_id: str
+    name: str
+    text: str
+    worksheet_count: int
+    truncated: bool
+
+
+@dataclass(frozen=True)
+class WorkbookRange:
+    """Result of ``read_workbook_range``.
+
+    ``text`` is the wrapped JSON body: the worksheet, the Graph-returned
+    address (which embeds the sheet name), and the ``values`` / ``text`` /
+    ``formulas`` grids. Only caller-supplied ids and row/column counts sit
+    outside the envelope.
+    """
+
+    drive_id: str
+    item_id: str
+    name: str
+    text: str
+    row_count: int
+    column_count: int
+    truncated: bool
+
+
+@dataclass(frozen=True)
 class CommentResult:
     """Result of ``add_file_comment``.
 
@@ -214,12 +266,88 @@ def _check_site_allowed(site_id: str | None) -> None:
         raise SiteNotAllowedError(site_id)
 
 
-def _max_text_bytes() -> int:
-    raw = os.environ.get("ENTRABOT_FILES_MAX_TEXT_BYTES")
+def site_denylist_configured() -> bool:
+    """Return whether ``ENTRABOT_FILES_DENIED_SITES`` lists any site."""
+    return bool(_denied_sites())
+
+
+def _site_guid(site_id: str) -> str:
+    """Return the site GUID from a bare GUID or ``{host},{site},{web}``, for comparing."""
+    parts = site_id.strip().lower().split(",")
+    return parts[1].strip() if len(parts) > 1 else parts[0]
+
+
+def _site_is_denied(site_id: str, denied: frozenset[str]) -> bool:
+    guid = _site_guid(site_id)
+    return any(_site_guid(entry) == guid for entry in denied)
+
+
+def _graph_item_url(drive_id: str, item_id: str) -> str:
+    """Build a driveItem URL from IDs that may come from the model.
+
+    Encoding stops ``/``, ``?`` and ``#`` from changing the path. A bare dot segment
+    survives encoding and would be normalized out of the URL, so it is refused.
+    """
+    if drive_id in {".", ".."} or item_id in {".", ".."}:
+        raise InvalidWorkbookRangeError("drive_id and item_id must be Graph IDs")
+    return f"{GRAPH_V1_HOST}/drives/{quote(drive_id, safe='')}/items/{quote(item_id, safe='')}"
+
+
+async def _enforce_item_site(
+    client: httpx.AsyncClient,
+    *,
+    drive_id: str,
+    item_id: str,
+    token: str,
+) -> None:
+    """Apply the denylist to the item's real site, as Graph reports it.
+
+    Caller-supplied ``site_id`` values can't be trusted, because an empty one is always
+    allowed. No denylist means no Graph call. With one, anything short of a confirmed
+    allowed site raises, so the caller doesn't proceed.
+    """
+    denied = _denied_sites()
+    if not denied:
+        return
+    target = f"{drive_id}:{item_id}"
+    resp = await client.get(
+        f"{_graph_item_url(drive_id, item_id)}?$select=id,parentReference",
+        headers=_bearer(token),
+    )
+    if resp.status_code != 200:
+        _raise_for_files_error(resp, target=target, scope="Files.Read")
     try:
-        return int(raw) if raw else DEFAULT_MAX_TEXT_BYTES
+        body = resp.json()
     except ValueError:
-        return DEFAULT_MAX_TEXT_BYTES
+        body = None
+    parent = body.get("parentReference") if isinstance(body, dict) else None
+    site_id = parent.get("siteId") if isinstance(parent, dict) else None
+    if not isinstance(site_id, str) or not site_id.strip():
+        raise GraphFilesError(
+            resp.status_code,
+            "couldn't confirm the file's site for the operator denylist "
+            "(ENTRABOT_FILES_DENIED_SITES), so the request was refused",
+        )
+    if _site_is_denied(site_id, denied):
+        raise SiteNotAllowedError(site_id)
+
+
+async def check_item_site_allowed(
+    *,
+    drive_id: str,
+    item_id: str,
+    token: str,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> None:
+    """Raise unless the item's real site is allowed. No denylist means no Graph call."""
+    if not site_denylist_configured():
+        return
+    _graph_item_url(drive_id, item_id)
+    async with (
+        _audit_graph_call("check_item_site", f"{drive_id}:{item_id}"),
+        _client(transport, allow_5xx_retry=True) as client,
+    ):
+        await _enforce_item_site(client, drive_id=drive_id, item_id=item_id, token=token)
 
 
 def _max_pdf_bytes() -> int:
@@ -228,6 +356,24 @@ def _max_pdf_bytes() -> int:
         return int(raw) if raw else DEFAULT_MAX_PDF_BYTES
     except ValueError:
         return DEFAULT_MAX_PDF_BYTES
+
+
+def _max_workbook_cells() -> int:
+    """Return the cell cap. A cap that isn't a positive integer can't be meant."""
+    raw = os.environ.get("ENTRABOT_FILES_MAX_WORKBOOK_CELLS")
+    if not raw:
+        return DEFAULT_MAX_WORKBOOK_CELLS
+    try:
+        cap = int(raw)
+    except ValueError:
+        cap = 0
+    if cap < 1:
+        logger.warning(
+            "ENTRABOT_FILES_MAX_WORKBOOK_CELLS must be a positive integer; using %d",
+            DEFAULT_MAX_WORKBOOK_CELLS,
+        )
+        return DEFAULT_MAX_WORKBOOK_CELLS
+    return cap
 
 
 def _share_id_from_url(url: str) -> str:
@@ -582,9 +728,21 @@ async def list_recent_files(
 # Extensions read raw as text/markdown.
 _RAW_TEXT_EXTENSIONS: frozenset[str] = frozenset({".md", ".txt", ".html", ".htm"})
 
+# Graph's Excel API reads Office Open XML workbooks only; ``.xls`` is not one.
+_WORKBOOK_EXTENSIONS: frozenset[str] = frozenset({".xlsx", ".xlsm"})
+
 # Extensions rejected with a hint to the right tool / chat fallback.
-_EXCEL_EXTENSIONS: frozenset[str] = frozenset({".xlsx", ".xls", ".xlsm"})
 _PPT_EXTENSIONS: frozenset[str] = frozenset({".pptx", ".ppt"})
+
+
+_XLS_HINT = "Graph's Excel API doesn't support legacy .xls files; convert it to .xlsx first."
+
+
+def _wrap_source(file_ref: FileRef) -> str:
+    """Provenance attribute for the XPIA envelope around a file's content."""
+    if file_ref.web_url:
+        return f"file:{file_ref.web_url}"
+    return f"file:{file_ref.drive_id}:{file_ref.item_id}"
 
 
 def _extract_pdf_text(data: bytes) -> tuple[str, int]:
@@ -601,15 +759,6 @@ def _extract_pdf_text(data: bytes) -> tuple[str, int]:
     reader = pypdf.PdfReader(BytesIO(data))
     pages = [page.extract_text() or "" for page in reader.pages]
     return ("\n\n".join(pages), len(pages))
-
-
-def _truncate(text: str, *, max_bytes: int) -> tuple[str, bool]:
-    """Truncate ``text`` so its UTF-8 encoding is at most ``max_bytes``."""
-    encoded = text.encode("utf-8")
-    if len(encoded) <= max_bytes:
-        return text, False
-    truncated = encoded[:max_bytes].decode("utf-8", errors="ignore")
-    return truncated, True
 
 
 async def _check_size_or_raise(
@@ -654,7 +803,8 @@ async def read_file(
     - ``.md`` / ``.txt`` / ``.html`` / ``.htm`` → fetch raw, decode, return text
     - ``.docx`` → ``GET /content?format=pdf``, extract via ``pypdf``
     - ``.pdf`` → fetch raw, extract via ``pypdf`` (size-checked first, P1)
-    - ``.xlsx`` / ``.xls`` → reject (no Excel reader yet; paste content into chat)
+    - ``.xlsx`` / ``.xlsm`` → reject (use ``read_workbook_range``)
+    - ``.xls`` → reject (unsupported by Graph; convert to ``.xlsx`` first)
     - ``.pptx`` / ``.ppt`` → reject (paste content into chat instead)
     - everything else → reject
 
@@ -668,10 +818,13 @@ async def read_file(
     ext = _extension(file_ref.name)
     resource = f"{file_ref.drive_id}:{file_ref.item_id}"
 
-    if ext in _EXCEL_EXTENSIONS:
+    if ext in _WORKBOOK_EXTENSIONS:
         raise UnsupportedReadFormatError(
-            ext, "Excel files are not supported yet; paste the relevant cells into chat."
+            ext,
+            "Use list_workbook_worksheets and read_workbook_range for Excel workbooks.",
         )
+    if ext == ".xls":
+        raise UnsupportedReadFormatError(ext, _XLS_HINT)
     if ext in _PPT_EXTENSIONS:
         raise UnsupportedReadFormatError(
             ext,
@@ -729,7 +882,7 @@ async def read_file(
                 raise FileTooLargeError(len(pdf_bytes), cap)
             text, page_count = _extract_pdf_text(pdf_bytes)
 
-        text, truncated = _truncate(text, max_bytes=_max_text_bytes())
+        text, truncated = truncate_utf8(text, max_bytes=max_text_bytes())
 
         # XPIA envelope: file bodies are model-facing external content;
         # wrap AFTER truncation so the size cap operates on real content
@@ -737,12 +890,7 @@ async def read_file(
         # of format.
         from entrabot.security.xpia import wrap_external
 
-        wrap_source = (
-            f"file:{file_ref.web_url}"
-            if file_ref.web_url
-            else f"file:{file_ref.drive_id}:{file_ref.item_id}"
-        )
-        wrapped = wrap_external(text, source=wrap_source, sender=None)
+        wrapped = wrap_external(text, source=_wrap_source(file_ref), sender=None)
 
         return FileContent(
             drive_id=file_ref.drive_id,
@@ -751,6 +899,305 @@ async def read_file(
             mime_type=file_ref.mime_type,
             text=wrapped,
             page_count=page_count,
+            truncated=truncated,
+        )
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Excel — list_workbook_worksheets, read_workbook_range
+# ───────────────────────────────────────────────────────────────────────
+
+
+_A1_RE = re.compile(
+    r"\$?([A-Za-z]{1,3})\$?([1-9][0-9]{0,6})(?::\$?([A-Za-z]{1,3})\$?([1-9][0-9]{0,6}))?"
+)
+_ADDRESS_HINT = (
+    "address must be one cell or a bounded top-left:bottom-right range such as "
+    "A1 or A1:D4, within XFD1048576, with no sheet name"
+)
+
+
+def _parse_workbook_address(address: str) -> tuple[str, int]:
+    """Return ``(normalized_address, cell_count)``, or raise without a Graph call.
+
+    Unbounded ranges are refused because Graph returns ``null`` cell data for
+    them, and sheet-qualified ones because the worksheet is its own argument.
+    """
+    match = _A1_RE.fullmatch(address)
+    if match is None:
+        raise InvalidWorkbookRangeError(_ADDRESS_HINT)
+    start_col, start_row, end_col, end_row = match.groups()
+    end_col = end_col or start_col
+    end_row = end_row or start_row
+    first_col, last_col = column_number(start_col), column_number(end_col)
+    first_row, last_row = int(start_row), int(end_row)
+    if (
+        last_col > MAX_WORKBOOK_COLUMN
+        or first_col > MAX_WORKBOOK_COLUMN
+        or last_row > MAX_WORKBOOK_ROW
+        or first_row > MAX_WORKBOOK_ROW
+        or last_col < first_col
+        or last_row < first_row
+    ):
+        raise InvalidWorkbookRangeError(_ADDRESS_HINT)
+    start = f"{start_col.upper()}{first_row}"
+    end = f"{end_col.upper()}{last_row}"
+    normalized = start if start == end else f"{start}:{end}"
+    return normalized, (last_col - first_col + 1) * (last_row - first_row + 1)
+
+
+def _worksheet_url(file_ref: FileRef, worksheet: str) -> str:
+    """Build the worksheet URL, or raise without a Graph call.
+
+    The name is an OData string key: quotes are doubled first, then the whole
+    value is percent-encoded so nothing in it can alter the URL path.
+    """
+    if not is_valid_worksheet_name(worksheet):
+        raise InvalidWorkbookRangeError(
+            "worksheet must be an Excel worksheet name from list_workbook_worksheets"
+        )
+    key = quote(worksheet.replace("'", "''"), safe="")
+    item_url = _graph_item_url(file_ref.drive_id, file_ref.item_id)
+    return f"{item_url}/workbook/worksheets('{key}')"
+
+
+def _check_workbook_readable(file_ref: FileRef) -> None:
+    """Local checks shared by the Excel tools; no Graph call."""
+    _check_site_allowed(file_ref.site_id)
+    ext = _extension(file_ref.name)
+    if ext == ".xls":
+        raise UnsupportedReadFormatError(ext, _XLS_HINT)
+    if ext not in _WORKBOOK_EXTENSIONS:
+        # A fixed label: the suffix is file-authored, and this error reaches the
+        # model outside the XPIA envelope.
+        raise UnsupportedReadFormatError(
+            "non-workbook",
+            "The workbook tools only read .xlsx and .xlsm files.",
+        )
+    if file_ref.kind == "onedrive_personal":
+        raise UnsupportedReadFormatError(
+            ext,
+            "Graph's Excel API doesn't support workbooks on consumer OneDrive; "
+            "it needs OneDrive for Business or SharePoint.",
+        )
+
+
+def _json_object(resp: httpx.Response) -> dict[str, Any]:
+    """Parse a 2xx Graph body, failing closed on anything but a JSON object."""
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        raise GraphFilesError(resp.status_code, "malformed workbook response: not a JSON object")
+    return body
+
+
+def _range_dimensions(resp: httpx.Response, body: dict[str, Any]) -> tuple[int, int]:
+    rows, columns = body.get("rowCount"), body.get("columnCount")
+    if not isinstance(rows, int) or not isinstance(columns, int):
+        raise GraphFilesError(
+            resp.status_code, "malformed workbook response: missing rowCount/columnCount"
+        )
+    return rows, columns
+
+
+def _probed_range(resp: httpx.Response, body: dict[str, Any]) -> tuple[str, int]:
+    """Return the bounded range and cell count from a used-range probe.
+
+    Excel allows ``!`` in a sheet name, so the range follows the last one. The
+    error names no Graph-supplied value, because the address holds the
+    file-authored sheet name.
+    """
+    address = body.get("address")
+    if isinstance(address, str):
+        _sheet, separator, reference = address.rpartition("!")
+        if separator:
+            try:
+                return _parse_workbook_address(reference)
+            except InvalidWorkbookRangeError:
+                pass
+    raise GraphFilesError(resp.status_code, "malformed workbook response: unusable range address")
+
+
+def _worksheet_row(row: Any, *, status: int) -> dict[str, Any]:
+    """Return one worksheet's fields, failing closed on an unexpected shape.
+
+    The error names no Graph-supplied value, because those are file-authored.
+    """
+    if isinstance(row, dict):
+        name, position, visibility = (row.get(key) for key in ("name", "position", "visibility"))
+        if (
+            isinstance(name, str)
+            and isinstance(position, int)
+            and not isinstance(position, bool)
+            and isinstance(visibility, str)
+        ):
+            return {"name": name, "position": position, "visibility": visibility}
+    raise GraphFilesError(status, "malformed workbook response: unexpected worksheet entry")
+
+
+async def list_workbook_worksheets(
+    file_ref: FileRef,
+    *,
+    token: str,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> WorkbookWorksheets:
+    """List a workbook's worksheets, including hidden ones.
+
+    Worksheet names are file-authored, so they are returned only inside the
+    XPIA envelope. Raises ``UnsupportedReadFormatError``, or
+    ``SiteNotAllowedError`` for a listed ``file_ref.site_id``, before any Graph
+    call. With a denylist configured, the item's real site is then checked
+    through Graph before the workbook is read.
+    """
+    _check_workbook_readable(file_ref)
+    item_url = _graph_item_url(file_ref.drive_id, file_ref.item_id)
+    resource = f"{file_ref.drive_id}:{file_ref.item_id}"
+
+    async with (
+        _audit_graph_call(
+            "list_workbook_worksheets",
+            resource,
+            metadata={"name": file_ref.name, "extension": _extension(file_ref.name)},
+        ),
+        _client(transport, allow_5xx_retry=True) as client,
+    ):
+        await _enforce_item_site(
+            client, drive_id=file_ref.drive_id, item_id=file_ref.item_id, token=token
+        )
+        resp = await client.get(
+            f"{item_url}/workbook/worksheets?$select=name,position,visibility",
+            headers=_bearer(token),
+        )
+        if resp.status_code != 200:
+            _raise_for_files_error(resp, target=resource, scope="Files.Read")
+        rows = _json_object(resp).get("value")
+        if not isinstance(rows, list):
+            raise GraphFilesError(
+                resp.status_code, "malformed workbook response: value is not a list"
+            )
+        worksheets = [_worksheet_row(row, status=resp.status_code) for row in rows]
+        from entrabot.security.xpia import dumps_for_envelope, wrap_external
+
+        text, truncated = truncate_utf8(
+            dumps_for_envelope({"worksheets": worksheets}),
+            max_bytes=max_text_bytes(),
+        )
+
+        return WorkbookWorksheets(
+            drive_id=file_ref.drive_id,
+            item_id=file_ref.item_id,
+            name=file_ref.name,
+            text=wrap_external(text, source=_wrap_source(file_ref), sender=None),
+            worksheet_count=len(worksheets),
+            truncated=truncated,
+        )
+
+
+async def read_workbook_range(
+    file_ref: FileRef,
+    worksheet: str,
+    address: str | None = None,
+    *,
+    token: str,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> WorkbookRange:
+    """Read one bounded range of a worksheet.
+
+    With ``address=None`` the worksheet's used range is read, but only after a
+    first request for its dimensions, so an oversized sheet is refused without
+    its cells being fetched. The cells then come from the exact range that was
+    checked, so an edit between the two requests can't exceed the cap. In the
+    returned body, ``values`` holds raw values,
+    ``text`` the displayed strings, and ``formulas`` the source formulas.
+
+    Raises ``InvalidWorkbookRangeError``, ``WorkbookRangeTooLargeError`` (for
+    an explicit address), ``UnsupportedReadFormatError``, or
+    ``SiteNotAllowedError`` for a listed ``file_ref.site_id``, before any Graph
+    call. With a denylist configured, the item's real site is then checked
+    through Graph before any cells are read.
+    """
+    _check_workbook_readable(file_ref)
+    worksheet_url = _worksheet_url(file_ref, worksheet)
+    max_cells = _max_workbook_cells()
+
+    if address is None:
+        normalized = "usedRange"
+        range_url = f"{worksheet_url}/usedRange(valuesOnly=true)"
+    else:
+        normalized, cell_count = _parse_workbook_address(address)
+        if cell_count > max_cells:
+            raise WorkbookRangeTooLargeError(cell_count, max_cells)
+        range_url = f"{worksheet_url}/range(address='{normalized}')"
+
+    resource = f"{file_ref.drive_id}:{file_ref.item_id}"
+    # A 404 here is as likely to be a mistyped worksheet as a missing file.
+    not_found_target = f"{resource} (the file, or that worksheet in it)"
+
+    async with (
+        _audit_graph_call(
+            "read_workbook_range",
+            resource,
+            # No worksheet name and no cell data: both are file-authored.
+            metadata={
+                "name": file_ref.name,
+                "extension": _extension(file_ref.name),
+                "address": normalized,
+            },
+        ),
+        _client(transport, allow_5xx_retry=True) as client,
+    ):
+        await _enforce_item_site(
+            client, drive_id=file_ref.drive_id, item_id=file_ref.item_id, token=token
+        )
+        if address is None:
+            size_resp = await client.get(
+                f"{range_url}?$select=address,rowCount,columnCount",
+                headers=_bearer(token),
+            )
+            if size_resp.status_code != 200:
+                _raise_for_files_error(size_resp, target=not_found_target, scope="Files.Read")
+            size_body = _json_object(size_resp)
+            rows, columns = _range_dimensions(size_resp, size_body)
+            if rows * columns > max_cells:
+                raise WorkbookRangeTooLargeError(rows * columns, max_cells)
+            probed, cell_count = _probed_range(size_resp, size_body)
+            if cell_count > max_cells:
+                raise WorkbookRangeTooLargeError(cell_count, max_cells)
+            range_url = f"{worksheet_url}/range(address='{probed}')"
+
+        resp = await client.get(
+            f"{range_url}?$select=address,rowCount,columnCount,values,text,formulas",
+            headers=_bearer(token),
+        )
+        if resp.status_code != 200:
+            _raise_for_files_error(resp, target=not_found_target, scope="Files.Read")
+        body = _json_object(resp)
+        row_count, column_count = _range_dimensions(resp, body)
+
+        from entrabot.security.xpia import dumps_for_envelope, wrap_external
+
+        text, truncated = truncate_utf8(
+            dumps_for_envelope(
+                {
+                    "worksheet": worksheet,
+                    "address": body.get("address"),
+                    "values": body.get("values"),
+                    "text": body.get("text"),
+                    "formulas": body.get("formulas"),
+                }
+            ),
+            max_bytes=max_text_bytes(),
+        )
+
+        return WorkbookRange(
+            drive_id=file_ref.drive_id,
+            item_id=file_ref.item_id,
+            name=file_ref.name,
+            text=wrap_external(text, source=_wrap_source(file_ref), sender=None),
+            row_count=row_count,
+            column_count=column_count,
             truncated=truncated,
         )
 
@@ -1470,6 +1917,7 @@ __all__ = [
     "GRAPH_BETA_HOST",
     "DEFAULT_MAX_PDF_BYTES",
     "DEFAULT_MAX_TEXT_BYTES",
+    "DEFAULT_MAX_WORKBOOK_CELLS",
     "OneDriveTarget",
     "SharePointTarget",
     "SharePermission",
@@ -1477,10 +1925,14 @@ __all__ = [
     "FileSummary",
     "RecentFilesPage",
     "FileContent",
+    "WorkbookWorksheets",
+    "WorkbookRange",
     "CommentResult",
     "resolve_file_url",
     "list_recent_files",
     "read_file",
+    "list_workbook_worksheets",
+    "read_workbook_range",
     "add_file_comment",
     "write_text_file",
     "upload_file",

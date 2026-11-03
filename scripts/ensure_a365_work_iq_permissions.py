@@ -67,6 +67,11 @@ REQUIRED_RESOURCES = (
     ),
     RequiredResource(
         app_id=A365_AGENT_TOOLS_APP_ID,
+        display_name="Agent 365 Excel tools",
+        scope="McpServers.Excel.All",
+    ),
+    RequiredResource(
+        app_id=A365_AGENT_TOOLS_APP_ID,
         display_name="Agent 365 Tools metadata",
         scope="McpServersMetadata.Read.All",
     ),
@@ -365,7 +370,7 @@ def ensure_a365_work_iq_permissions(
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Ensure A365 Work IQ Word service principals and OAuth grants."
+        description="Ensure A365 Work IQ service principals and OAuth grants."
     )
     parser.add_argument(
         "--blueprint-app-id",

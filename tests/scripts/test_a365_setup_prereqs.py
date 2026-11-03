@@ -80,7 +80,10 @@ def test_unix_setup_can_run_interactive_a365_work_iq_configuration() -> None:
     assert '"agentIdentityDisplayName": agent_identity_display_name' in script
     assert '"deploymentProjectPath": str(project_root)' in script
     assert "find_local_blueprint_cert.py" in script
-    assert 'A365_WORK_IQ_MCP_SERVERS=(mcp_WordServer mcp_ODSPRemoteServer)' in script
+    assert (
+        "A365_WORK_IQ_MCP_SERVERS=(mcp_WordServer mcp_ODSPRemoteServer mcp_ExcelServer)"
+        in script
+    )
     assert (
         'a365 develop add-mcp-servers "${A365_WORK_IQ_MCP_SERVERS[@]}" '
         '--project-path "$PROJECT_ROOT"'
@@ -95,6 +98,7 @@ def test_unix_setup_can_run_interactive_a365_work_iq_configuration() -> None:
     assert "ensure_a365_work_iq_permissions.py" in script
     assert '"$SCRIPT_PYTHON" "$PROJECT_ROOT/scripts/ensure_a365_work_iq_permissions.py"' in script
     assert '"$SCRIPT_PYTHON" "$PROJECT_ROOT/scripts/spike_a365_work_iq.py"' in script
+    assert 'success "A365 Work IQ Word and Excel manifest configured"' in script
     assert '--blueprint-app-id "$BLUEPRINT_APP_ID"' in script
     config_call = script.index("write_a365_config")
     requirements_call = script.index("a365 setup requirements", config_call)
@@ -145,7 +149,10 @@ def test_windows_setup_can_run_interactive_a365_work_iq_configuration() -> None:
     assert '$config["agentBlueprintId"] = $BlueprintAppId' in script
     assert '$config["agentIdentityDisplayName"] = $AgentIdentityDisplayName' in script
     assert '$config["deploymentProjectPath"] = $ProjectRoot' in script
-    assert '$A365WorkIqMcpServers = @("mcp_WordServer", "mcp_ODSPRemoteServer")' in script
+    assert (
+        '$A365WorkIqMcpServers = @("mcp_WordServer", "mcp_ODSPRemoteServer", "mcp_ExcelServer")'
+        in script
+    )
     assert (
         "a365 develop add-mcp-servers $A365WorkIqMcpServers "
         "--project-path $ProjectRoot"
@@ -168,3 +175,4 @@ def test_windows_setup_can_run_interactive_a365_work_iq_configuration() -> None:
         "if ($ConfigureA365WorkIq)"
     )
     assert "spike_a365_work_iq.py" in script
+    assert 'Success "A365 Work IQ Word and Excel manifest configured"' in script

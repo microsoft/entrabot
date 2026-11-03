@@ -283,6 +283,31 @@ class UnsupportedReadFormatError(FilesError):
         super().__init__(f"Cannot read {extension} files: {hint}")
 
 
+class InvalidWorkbookRangeError(FilesError):
+    """A worksheet name or range address failed validation before any Graph call.
+
+    The message never echoes the rejected value: it can originate from file
+    content the model just read, and error strings are model-facing.
+    """
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(f"Invalid workbook range: {reason}")
+
+
+class WorkbookRangeTooLargeError(FilesError):
+    """A requested range exceeds ``ENTRABOT_FILES_MAX_WORKBOOK_CELLS``."""
+
+    def __init__(self, cell_count: int, max_cells: int) -> None:
+        self.cell_count = cell_count
+        self.max_cells = max_cells
+        super().__init__(
+            f"Range covers {cell_count:,} cells; max is {max_cells:,} "
+            f"(ENTRABOT_FILES_MAX_WORKBOOK_CELLS). Pass a smaller address, "
+            f"and page through the sheet in several reads if you need more."
+        )
+
+
 class UnsupportedCommentFormatError(FilesError):
     """``add_file_comment`` was called on a file/target it cannot comment on."""
 

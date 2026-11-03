@@ -19,7 +19,8 @@
 
 - Microsoft Teams messaging with explicit chat IDs, plus background chat discovery and polling.
 - Outlook read and send, background polling, and daily summaries.
-- Direct Microsoft Graph Files access alongside Agent 365 Work IQ integrations for Word and OneDrive/SharePoint (ODSP).
+- Direct Microsoft Graph Files access alongside Agent 365 Work IQ integrations for Word, Excel, and OneDrive/SharePoint (ODSP).
+- Bounded, read-only Excel worksheet and range reads through the Graph Workbook API (`list_workbook_worksheets`, `read_workbook_range`). Run against a live tenant on an `.xlsx` in the Agent User's own OneDrive; not yet exercised on a file shared by someone else or on `.xlsm`.
 
 ### Security and runtime
 
@@ -51,6 +52,9 @@
 - Live smoke tests provision real Entra, Azure, and Microsoft 365 resources and send a real Teams message, so they run manually rather than in CI until an isolated tenant and non-human CI identity are available.
 - Windows end-to-end coverage is narrower than macOS and currently centered on Windows 11 ARM64.
 - Legacy Graph file comments are not the same as Word UI comments; use the Work IQ Word tools for document comments.
+- Work IQ Excel (`mcp_ExcelServer`) is in the live Agent 365 catalog but not on Microsoft Learn, and the CLI warns of a "legacy ATG audience", so its tools may change. It requires `McpServers.Excel.All` on the Blueprint.
+- `ENTRABOT_FILES_DENIED_SITES` is checked against Graph's reported site only for the workbook and Work IQ Excel tools. The Work IQ Word and ODSP tools don't apply it, and `read_file` and `add_file_comment` check the `site_id` the caller supplies.
+- Excel writes, table reads, and workbook sessions aren't implemented ([#117](https://github.com/microsoft/entrabot/issues/117)).
 - External-content wrapping is defense in depth. It reduces instruction-injection risk but is not proof against every possible model jailbreak.
 - On a cloud backend, the email cursor starts at "now" when its key is first created (the first boot on a container, or after the key is deleted), so mail received before then isn't pushed; it stays readable through `read_email`. Once the key exists, a restart reuses it and mail received during downtime is pushed as normal. See [Upgrading to shared poll state](../troubleshooting/migrations-and-upgrades.md#upgrading-to-shared-poll-state).
 - An instance on a host that ignores channel notifications can still claim Teams and email deliveries, so with mixed hosts on one container an item can go to the host that can't show it.

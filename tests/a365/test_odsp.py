@@ -9,6 +9,7 @@ from entrabot.a365.odsp import (
     read_small_binary_file,
     read_small_text_file,
 )
+from entrabot.security.xpia import unwrap_external
 
 
 class FakeProvider:
@@ -49,9 +50,10 @@ async def test_get_file_or_folder_metadata_by_url_calls_odsp_tool() -> None:
         provider=provider,
     )
 
+    assert unwrap_external(result.name).body == "page.loop"
     assert result == OdspFileMetadata(
         item_id="item-1",
-        name="page.loop",
+        name=result.name,
         web_url="https://contoso/page.loop",
         document_library_id="drive-1",
         raw={
@@ -144,9 +146,10 @@ async def test_get_file_metadata_reads_live_pascal_case_parent_reference_drive_i
         provider=provider,
     )
 
+    assert unwrap_external(result.name).body == "page.loop"
     assert result == OdspFileMetadata(
         item_id="item-1",
-        name="page.loop",
+        name=result.name,
         web_url="https://contoso/page.loop",
         document_library_id="drive-1",
         raw={
@@ -176,3 +179,26 @@ async def test_read_small_binary_file_calls_odsp_tool() -> None:
 async def test_odsp_url_is_required() -> None:
     with pytest.raises(ValueError, match="url is required"):
         await get_file_or_folder_metadata_by_url("  ", provider=FakeProvider({}))
+
+
+@pytest.mark.asyncio
+async def test_odsp_results_hide_raw_from_repr() -> None:
+    sentinel = "SENTINEL-RAW-ONLY"
+    metadata = await get_file_or_folder_metadata_by_url(
+        "https://contoso/page.loop",
+        provider=FakeProvider({"id": "item-1", "extra": sentinel}),
+    )
+    text = await read_small_text_file(
+        "drive-1",
+        "item-1",
+        provider=FakeProvider({"content": "hello", "extra": sentinel}),
+    )
+    binary = await read_small_binary_file(
+        "drive-1",
+        "item-1",
+        provider=FakeProvider({"content": "SGVsbG8=", "extra": sentinel}),
+    )
+
+    for result in (metadata, text, binary):
+        assert sentinel in str(result.raw)
+        assert sentinel not in repr(result)

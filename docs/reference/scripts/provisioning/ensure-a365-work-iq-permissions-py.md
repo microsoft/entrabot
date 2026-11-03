@@ -50,8 +50,9 @@ grant exist. All calls use the v1.0 Graph endpoint.
   `GET /v1.0/servicePrincipals?$filter=appId eq '...'` and, when absent,
   `POST /v1.0/servicePrincipals` with the resource `appId` (retried while the
   object propagates). The required resources are the Agent 365 Tools app (for
-  the `McpServers.OneDriveSharepoint.All` and `McpServersMetadata.Read.All`
-  scopes) and the Work IQ Word MCP app (for the `Tools.ListInvoke.All` scope).
+  the `McpServers.OneDriveSharepoint.All`, `McpServers.Excel.All`, and
+  `McpServersMetadata.Read.All` scopes) and the Work IQ Word MCP app (for the
+  `Tools.ListInvoke.All` scope).
 - **OAuth grants** — an `oauth2PermissionGrant` with
   `clientId` = Blueprint service principal,
   `consentType` = `AllPrincipals`, and `resourceId` = the resource service

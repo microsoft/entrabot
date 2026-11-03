@@ -44,7 +44,7 @@ CREATE_NEW_STORAGE=false
 WITH_A365_WORK_IQ=false
 CONFIGURE_A365_WORK_IQ=false
 A365_AGENT_NAME="EntraBot Code Agent"
-A365_WORK_IQ_MCP_SERVERS=(mcp_WordServer mcp_ODSPRemoteServer)
+A365_WORK_IQ_MCP_SERVERS=(mcp_WordServer mcp_ODSPRemoteServer mcp_ExcelServer)
 
 SETUP_STATUS=false
 STATUS_ARGS=()
@@ -538,7 +538,7 @@ PY
 }
 
 configure_a365_work_iq() {
-    echo "  Configuring Microsoft Agent 365 Work IQ Word + OneDrive/SharePoint..."
+    echo "  Configuring Microsoft Agent 365 Work IQ Word + OneDrive/SharePoint + Excel..."
     echo "  This may open an interactive Microsoft sign-in/device-code flow."
     echo "  If the Agent 365 CLI app is missing, choose C when prompted to create it."
     ensure_a365_tooling_manifest
@@ -566,7 +566,7 @@ configure_a365_work_iq() {
     if ! "$SCRIPT_PYTHON" "$PROJECT_ROOT/scripts/spike_a365_work_iq.py"; then
         fail "A365 Work IQ manifest validation failed"
     fi
-    success "A365 Work IQ Word manifest configured"
+    success "A365 Work IQ Word and Excel manifest configured"
 }
 
 # ════════════════════════════════════════════════════════════════════════════

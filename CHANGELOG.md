@@ -7,6 +7,8 @@
 - Rename-safe agent matching through canonical `ENTRABOT_AGENT_UPN` with object-ID fallback.
 - Boundary-owned XPIA envelopes for model-facing Teams, email, Files, and Work IQ content.
 - `read_email`, `read_interactions`, and `bootstrap_body_state`, bringing the MCP surface to 37 tools.
+- `list_workbook_worksheets` and `read_workbook_range` for bounded, read-only Excel access through Microsoft Graph, bringing the MCP surface to 39 tools.
+- Work IQ Excel adapter with `read_excel_workbook`, `create_excel_workbook`, `add_excel_comment`, and `reply_to_excel_comment`, bringing the MCP surface to 43 tools. Work IQ setup now adds `mcp_ExcelServer` and requests `McpServers.Excel.All`.
 - Windows status tooling and expanded Windows setup/teardown guidance.
 
 ### Changed
@@ -14,6 +16,12 @@
 - Blueprint, BlueprintPrincipal, and Agent Identity creation now use the dedicated Microsoft Graph v1.0 subtype endpoints; Agent User creation remains on beta.
 - The public docs site was reorganized into nine task-oriented sections; plans, specs, and investigations were moved to non-published `engineering-history/`; source-audited MCP and script references were added; and legacy URLs redirect to current pages.
 - GitHub Pages builds run in strict mode.
+- **Breaking:** Work IQ Word and ODSP tools no longer return `raw`. `read_word_document` now returns `comments` as a wrapped string, plus `drive_id`, `document_id`, and `sensitivity_label`; `create_word_document` adds `drive_id` and `item_id`.
+- **Breaking:** `get_a365_file_metadata_by_url` now returns `name` inside the XPIA envelope. Work IQ ODSP tools raise a typed error when Work IQ reports `isError`, instead of returning empty fields.
+- `add_word_comment` returns a `warning` when Work IQ reports success without a comment ID.
+- `ENTRABOT_FILES_MAX_TEXT_BYTES` falls back to the default, with a logged warning, for a zero, negative, or unparseable value. A negative value used to disable the cap.
+- `ENTRABOT_FILES_DENIED_SITES` is now checked against the site Graph reports for the item in `list_workbook_worksheets`, `read_workbook_range`, `read_excel_workbook`, `add_excel_comment`, and `reply_to_excel_comment`, and these refuse the request if the site can't be confirmed. Those checks only run when a denylist is set. The denylist is **not** enforced by the Work IQ Word and ODSP tools, and `read_file` and `add_file_comment` still check the `site_id` the caller supplies.
+- `scripts/spike_a365_work_iq.py` now validates both Word and Excel, including their scope and audience.
 - With cloud memory, the watched-chat list and email cursor now live in the storage container instead of local files, so instances on one container share them and a machine moved to another container can't carry over stale values. **Upgrading a cloud deployment:** on first boot the email cursor starts at "now", so mail received before that first boot isn't pushed but stays readable through `read_email`; after that, a restart reuses the cursor and mail received during downtime is pushed as normal. The watched list comes from the cloud copy plus auto-discovery, and old local `watched_chats` and `email_cursor.txt` files are ignored and can be removed by hand. Upgrade every instance on a container together. See "Upgrading to shared poll state" in Migrations and upgrades.
 - Chat auto-discovery reads every page of `/me/chats`, up to 20 pages. A chat first seen through discovery or the shared list surfaces its newest message only if it is under 24 hours old.
 - Setup's cloud-memory migration no longer copies local poll state: the watched-chat list, both email cursor files, the legacy `chat_id` key, and the per-chat cursors under `chat_cursors/`. A machine's copies may be stale or belong to another agent, and a copied cursor would skip the 24-hour first-sight check.
@@ -37,6 +45,7 @@
 - Self-authored Teams messages remain filtered after an Agent User display-name change.
 - Forged `<external_content>` text can no longer bypass the authoritative XPIA boundary.
 - A UTC-midnight-dependent test no longer fails intermittently on Windows CI.
+- Work IQ Word and ODSP tool output now passes model-facing content only through the XPIA boundary, and Word comments are no longer dropped from the parsed result.
 
 ### Removed
 

@@ -61,6 +61,8 @@ Any literal `</external_content>` inside `body` is escaped to `&lt;/external_con
 
 The match is case-insensitive and whitespace-tolerant on the tag: variants like `</External_Content>`, `< / external_content >`, or `</EXTERNAL_CONTENT>` are all detected and escaped, mirroring how a lenient HTML parser would treat the same literal string. The original casing and internal whitespace of the matched substring are preserved inside the escaped entities, so [`unwrap_external`](#unwrap_external) can restore it losslessly.
 
+JSON payloads need more care, because JSON encodes a newline inside a tag as a literal backslash-n, which this match can't see. Build them with `dumps_for_envelope(value)`, which also escapes the `/` after a `<`. The payload still decodes to `value`.
+
 ### Attribute escaping
 
 `source`, `sender`, and `received_at` values are escaped for `&`, `<`, `>`, and `"` before being written into the outer tag's attributes. A hostile value such as `source="teams:<script>"` cannot open a new tag or attribute inside the envelope's attribute region. Escaping order matters: `&` is replaced first so the entities' own `&` isn't double-escaped.
@@ -145,10 +147,11 @@ As of this writing, `wrap_external` is called from:
 
 - `src/entrabot/tools/teams.py` — `read_teams_messages`, source `teams:<chat_id>`.
 - `src/entrabot/tools/email.py` — `read_email`, source `email:<message_id>`.
-- `src/entrabot/tools/files.py` — `read_file`, source `file:<web_url>` (or `file:<drive_id>:<item_id>` when no `web_url` is available).
+- `src/entrabot/tools/files.py` — `read_file`, `list_workbook_worksheets`, and `read_workbook_range`, source `file:<web_url>` (or `file:<drive_id>:<item_id>` when no `web_url` is available). The workbook tools put worksheet names and the Graph-returned address inside the envelope along with the cell data.
 - `src/entrabot/tools/read_interactions.py` — `read_interactions`, adding a `content_wrapped` field alongside the existing `summary` field on inbound entries only (additive, not in place — the log's stored `summary` schema is unchanged).
-- `src/entrabot/a365/odsp.py` — `read_small_text_file`, source `a365:<file_id>`.
-- `src/entrabot/a365/word.py` — `get_document_content`, source `file:<url>#word`.
+- `src/entrabot/a365/odsp.py` — `read_small_text_file`, source `a365:<file_id>`; the `name` from `get_file_or_folder_metadata_by_url`, source `file:<url>`.
+- `src/entrabot/a365/word.py` — `get_document_content`, source `file:<url>#word`. The body, `comments`, and `sensitivity_label` are each wrapped.
+- `src/entrabot/a365/excel.py` — `get_workbook_content`, source `file:<url>#excel`. The file name, comments, and cell text are all inside the envelope, and results have no `raw` field.
 
 `wrap_for_channel` is called from `src/entrabot/mcp_server.py`:
 
@@ -159,7 +162,8 @@ As of this writing, `wrap_external` is called from:
 
 - A Teams channel push from a verified sponsor (`_push_channel_notification`) goes out unwrapped by design, because this is how a sponsor gives an instruction. `SponsorGate` makes that check from Graph identity, never a display name. If the lookup fails, the push is wrapped.
 - `read_a365_binary_file` (`src/entrabot/a365/odsp.py`) returns binary content encoded (base64 by default) and does **not** pass it through `wrap_external` — the text envelope does not apply to binary payloads.
-- Graph/Work IQ structured metadata fields (message `sender_id`, email `subject`/recipients/headers, Word `comments`, `raw` provider responses) are returned outside the envelope everywhere above, by design — filters, counts, and routing logic need to read them directly, and they are documented elsewhere as still attacker-influenced, just not primary injection surfaces.
+- Graph/Work IQ structured metadata fields (message `sender_id`, email `subject`/recipients/headers) are returned outside the envelope everywhere above, by design — filters, counts, and routing logic need to read them directly, and they are documented elsewhere as still attacker-influenced, just not primary injection surfaces.
+- Unmodified Work IQ provider responses are not returned by any MCP tool. The Word and ODSP adapters keep them in a `raw` dataclass field for typed parsing, excluded from `repr`.
 
 ## Limitations
 

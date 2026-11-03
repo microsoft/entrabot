@@ -4,6 +4,7 @@ import pytest
 
 from entrabot.a365.catalog import (
     COPILOT_SERVER_NAME,
+    EXCEL_SERVER_NAME,
     ODSP_SERVER_NAME,
     ONEDRIVE_SERVER_NAME,
     SHAREPOINT_SERVER_NAME,
@@ -25,6 +26,19 @@ def test_catalog_contains_word_server() -> None:
         scope="McpServers.Word.All",
         audience="",
         default_endpoint="https://agent365.svc.cloud.microsoft/agents/servers/mcp_WordServer",
+        entrabot_enabled=True,
+    )
+
+
+def test_catalog_contains_excel_server() -> None:
+    server = get_server(EXCEL_SERVER_NAME)
+
+    assert server == WorkIqServer(
+        server_name="mcp_ExcelServer",
+        display_name="Work IQ Excel",
+        scope="McpServers.Excel.All",
+        audience="",
+        default_endpoint="https://agent365.svc.cloud.microsoft/agents/servers/mcp_ExcelServer",
         entrabot_enabled=True,
     )
 

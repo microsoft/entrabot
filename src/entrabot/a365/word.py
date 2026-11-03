@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from entrabot.a365.catalog import WORD_SERVER_NAME
@@ -15,23 +15,30 @@ _MAX_TOOL_ERROR_DETAIL = 500
 
 @dataclass(frozen=True)
 class WordDocumentContent:
+    """A document read. ``raw`` is for parsing only and must not reach the model."""
+
     content_html: str
-    comments: list[dict[str, Any]]
-    raw: dict[str, Any]
+    comments: str
+    drive_id: str
+    document_id: str
+    sensitivity_label: str | None
+    raw: dict[str, Any] = field(repr=False)
 
 
 @dataclass(frozen=True)
 class WordDocument:
     file_name: str
     url: str
-    raw: dict[str, Any]
+    drive_id: str
+    item_id: str
+    raw: dict[str, Any] = field(repr=False)
 
 
 @dataclass(frozen=True)
 class WordComment:
     comment_id: str
     content: str
-    raw: dict[str, Any]
+    raw: dict[str, Any] = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -39,7 +46,7 @@ class WordCommentReply:
     reply_id: str
     comment_id: str
     content: str
-    raw: dict[str, Any]
+    raw: dict[str, Any] = field(repr=False)
 
 
 def _provider(provider: WorkIqProvider | None) -> WorkIqProvider:
@@ -117,6 +124,25 @@ def _first_nested_string(raw: dict[str, Any], *paths: tuple[str, ...]) -> str:
     return ""
 
 
+def _comments_text(comments: Any) -> str:
+    """Return comments as text. Live Work IQ sends a string; older shapes send a list."""
+    from entrabot.security.xpia import dumps_for_envelope
+
+    if isinstance(comments, str):
+        return comments
+    if isinstance(comments, list):
+        return dumps_for_envelope(comments)
+    return ""
+
+
+def _sensitivity_label_text(label: Any) -> str:
+    from entrabot.security.xpia import dumps_for_envelope
+
+    if label is None:
+        return ""
+    return label if isinstance(label, str) else dumps_for_envelope(label)
+
+
 async def get_document_content(
     url: str,
     *,
@@ -132,20 +158,19 @@ async def get_document_content(
         arguments={"url": clean_url},
     )
     _raise_for_tool_error(result, "GetDocumentContent")
-    comments = result.get("comments")
     raw_html = str(result.get("content") or result.get("contentInHtml") or "")
-    # XPIA envelope: the document body is external content; wrap it so
-    # a hostile ``.docx`` author cannot smuggle instructions in the
-    # HTML. ``comments`` are already structured metadata; ``raw`` is
-    # the provider's untouched response for audit and stays unchanged.
-    wrapped = wrap_external(
-        raw_html,
-        source=f"file:{clean_url}#word",
-        sender=None,
-    )
+    source = f"file:{clean_url}#word"
+    # XPIA envelope: the body, comments, and label all come from the document,
+    # so a hostile ``.docx`` author controls them. ``raw`` is the provider's
+    # untouched response and stays out of tool output.
+    comments = _comments_text(result.get("comments"))
+    label = _sensitivity_label_text(result.get("sensitivityLabel"))
     return WordDocumentContent(
-        content_html=wrapped,
-        comments=list(comments) if isinstance(comments, list) else [],
+        content_html=wrap_external(raw_html, source=source, sender=None),
+        comments=wrap_external(comments, source=source, sender=None) if comments else "",
+        drive_id=_string_field_or_default(result, "driveId", ""),
+        document_id=_string_field_or_default(result, "documentId", ""),
+        sensitivity_label=wrap_external(label, source=source, sender=None) if label else None,
         raw=result,
     )
 
@@ -187,6 +212,16 @@ async def create_document(
         )
         or file_name,
         url=document_url,
+        drive_id=_first_nested_string(
+            result,
+            ("driveItem", "ParentReference", "DriveId"),
+            ("driveItem", "parentReference", "driveId"),
+        ),
+        item_id=_first_nested_string(
+            result,
+            ("driveItem", "Id"),
+            ("driveItem", "id"),
+        ),
         raw=result,
     )
 
