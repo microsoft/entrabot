@@ -119,13 +119,14 @@ As of this writing, `wrap_external` is called from:
 - `src/entrabot/tools/files.py` — `read_file`, `list_workbook_worksheets`, and `read_workbook_range`, source `file:<web_url>` (or `file:<drive_id>:<item_id>` when no `web_url` is available). The workbook tools put worksheet names and the Graph-returned address inside the envelope along with the cell data.
 - `src/entrabot/tools/read_interactions.py` — `read_interactions`, adding a `content_wrapped` field alongside the existing `summary` field on inbound entries only (additive, not in place — the log's stored `summary` schema is unchanged).
 - `src/entrabot/a365/odsp.py` — `read_small_text_file`, source `a365:<file_id>`.
-- `src/entrabot/a365/word.py` — `get_document_content`, source `file:<url>#word`.
+- `src/entrabot/a365/word.py` — `get_document_content`, source `file:<url>#word`. The body, `comments`, and `sensitivity_label` are each wrapped.
 - `src/entrabot/a365/excel.py` — `get_workbook_content`, source `file:<url>#excel`. The file name, comments, and cell text are all inside the envelope, and results have no `raw` field.
 
 ## Confirmed unwrapped surfaces
 
 - `read_a365_binary_file` (`src/entrabot/a365/odsp.py`) returns binary content encoded (base64 by default) and does **not** pass it through `wrap_external` — the text envelope does not apply to binary payloads.
-- Graph/Work IQ structured metadata fields (message `sender_id`, email `subject`/recipients/headers, Word `comments`, `raw` provider responses) are returned outside the envelope everywhere above, by design — filters, counts, and routing logic need to read them directly, and they are documented elsewhere as still attacker-influenced, just not primary injection surfaces.
+- Graph/Work IQ structured metadata fields (message `sender_id`, email `subject`/recipients/headers) are returned outside the envelope everywhere above, by design — filters, counts, and routing logic need to read them directly, and they are documented elsewhere as still attacker-influenced, just not primary injection surfaces.
+- Unmodified Work IQ provider responses are not returned by any MCP tool. The Word and ODSP adapters keep them in a `raw` dataclass field for typed parsing, excluded from `repr`.
 
 ## Limitations
 

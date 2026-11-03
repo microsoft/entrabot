@@ -16,12 +16,15 @@
 - Blueprint, BlueprintPrincipal, and Agent Identity creation now use the dedicated Microsoft Graph v1.0 subtype endpoints; Agent User creation remains on beta.
 - The public docs site was reorganized into nine task-oriented sections; plans, specs, and investigations were moved to non-published `engineering-history/`; source-audited MCP and script references were added; and legacy URLs redirect to current pages.
 - GitHub Pages builds run in strict mode.
+- **Breaking:** Work IQ Word and ODSP tools no longer return `raw`. `read_word_document` now returns `comments` as a wrapped string, plus `drive_id`, `document_id`, and `sensitivity_label`; `create_word_document` adds `drive_id` and `item_id`.
+- `scripts/spike_a365_work_iq.py` now validates both Word and Excel, including their scope and audience.
 
 ### Fixed
 
 - Self-authored Teams messages remain filtered after an Agent User display-name change.
 - Forged `<external_content>` text can no longer bypass the authoritative XPIA boundary.
 - A UTC-midnight-dependent test no longer fails intermittently on Windows CI.
+- Work IQ Word and ODSP tool output now passes model-facing content only through the XPIA boundary, and Word comments are no longer dropped from the parsed result.
 
 ### Removed
 

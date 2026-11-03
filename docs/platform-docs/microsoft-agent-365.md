@@ -121,10 +121,12 @@ Entrabot exposes four Word operations through the typed adapter:
 | Add comment | `AddComment` | Adds a top-level Word comment. |
 | Reply to comment | `ReplyToComment` | Replies to an existing Word comment. |
 
-Document content is external input. `get_document_content()` wraps returned
-HTML with the authoritative external-content boundary before exposing it to
-the model. Provider raw results remain available for typed parsing and
-diagnostics but are not treated as trusted instructions.
+Document content is external input. `get_document_content()` wraps the returned
+HTML, comments, and any sensitivity label with the authoritative external-content
+boundary before exposing them to the model. `read_word_document` also returns
+the `drive_id` and `document_id` the comment operations take. The adapters keep
+provider responses for typed parsing only: no MCP tool returns them, and they are
+excluded from `repr`.
 
 ## Work IQ Excel tools
 

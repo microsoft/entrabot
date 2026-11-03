@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from entrabot.a365.catalog import ODSP_SERVER_NAME
@@ -15,14 +15,14 @@ class OdspFileMetadata:
     name: str
     web_url: str
     document_library_id: str
-    raw: dict[str, Any]
+    raw: dict[str, Any] = field(repr=False)
 
 
 @dataclass(frozen=True)
 class OdspFileContent:
     content: str
     encoding: str
-    raw: dict[str, Any]
+    raw: dict[str, Any] = field(repr=False)
 
 
 def _provider(provider: WorkIqProvider | None) -> WorkIqProvider:

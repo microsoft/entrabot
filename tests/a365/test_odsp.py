@@ -176,3 +176,26 @@ async def test_read_small_binary_file_calls_odsp_tool() -> None:
 async def test_odsp_url_is_required() -> None:
     with pytest.raises(ValueError, match="url is required"):
         await get_file_or_folder_metadata_by_url("  ", provider=FakeProvider({}))
+
+
+@pytest.mark.asyncio
+async def test_odsp_results_hide_raw_from_repr() -> None:
+    sentinel = "SENTINEL-RAW-ONLY"
+    metadata = await get_file_or_folder_metadata_by_url(
+        "https://contoso/page.loop",
+        provider=FakeProvider({"id": "item-1", "extra": sentinel}),
+    )
+    text = await read_small_text_file(
+        "drive-1",
+        "item-1",
+        provider=FakeProvider({"content": "hello", "extra": sentinel}),
+    )
+    binary = await read_small_binary_file(
+        "drive-1",
+        "item-1",
+        provider=FakeProvider({"content": "SGVsbG8=", "extra": sentinel}),
+    )
+
+    for result in (metadata, text, binary):
+        assert sentinel in str(result.raw)
+        assert sentinel not in repr(result)
