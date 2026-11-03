@@ -648,7 +648,11 @@ def load_agent_identity_sponsor_gate(config: EntraBotConfig) -> SponsorGate:
     The gate is ``provisional`` when it was built without complete watched-chat data
     (see :func:`_chat_data_incomplete`). Callers may use it but shouldn't cache it.
     """
-    gate = SponsorGate.from_agent_identity_sponsors(fetch_agent_identity_sponsors(config))
+    # The Agent Identity token can't read /users/{id}. Without emails the gate can't match the
+    # ID a federated sponsor has in a group chat.
+    gate = SponsorGate.from_agent_identity_sponsors(
+        fetch_agent_identity_sponsors(config, user_token_provider=acquire_agent_user_token)
+    )
     members_by_id = fetch_watched_chat_members_by_id(config)
     flat_members = [member for members in members_by_id.values() for member in members]
     gate = gate.with_chat_members(flat_members)

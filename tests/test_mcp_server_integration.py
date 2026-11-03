@@ -1356,7 +1356,7 @@ class TestPushChannelNotificationObservability:
         mock_stream.send.assert_awaited_once()
         notif_params = mock_stream.send.call_args.args[0].message.root.params
         content = notif_params["content"]
-        assert content == "As"
+        assert content == '[external_content source="teams"]As[/external_content]'
         assert "<" not in content
         assert ">" not in content
         assert "attachment" not in content

@@ -97,6 +97,21 @@ def blob_calls_on_event_loop(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 @pytest.fixture(autouse=True)
+def _no_real_sponsor_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep a channel push from asking the real directory who the sponsors are.
+
+    A push decides whether to wrap a message by loading the sponsor gate, and with a live
+    ``.env`` that would mean real tokens and Graph calls. Tests that exercise the lookup
+    replace this themselves.
+    """
+
+    def no_directory(_config: object) -> None:
+        raise RuntimeError("no sponsor directory in tests")
+
+    monkeypatch.setattr("entrabot.identity.sponsors.load_agent_identity_sponsor_gate", no_directory)
+
+
+@pytest.fixture(autouse=True)
 def reset_active_identity_state() -> Iterator[None]:
     """Keep the process-wide identity accessor isolated between tests."""
     from entrabot.identity import set_active_identity_state

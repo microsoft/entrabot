@@ -40,6 +40,7 @@ from entrabot.errors import (
 from entrabot.identity import IdentityStateMachine, set_active_identity_state
 from entrabot.logging_config import setup_logging
 from entrabot.models import IdentityState
+from entrabot.security.xpia import channel_safe_text, wrap_for_channel
 from entrabot.tools import poll_state
 from entrabot.tools.chat_cursors import CursorResolution
 from entrabot.tools.interaction_log import detect_channel, log_interaction
@@ -1138,6 +1139,8 @@ async def _initialize_locked() -> None:
 
 
 BACKGROUND_POLL_INTERVAL = 5  # seconds between polls
+SPONSOR_GATE_RETRY_SECONDS = 60  # how long a failed sponsor lookup waits before trying again
+SPONSOR_GATE_MAX_AGE_SECONDS = 900  # how long a push may trust a cached sponsor list
 CURSOR_RESOLVE_CONCURRENCY = 8  # parallel cursor reads at boot (each does a token fetch)
 EMAIL_POLL_INTERVAL = 60  # seconds between /me/messages polls
 PUSHED_EMAIL_MAX = 500  # per-session dedup bound for pushed email IDs
@@ -1316,6 +1319,7 @@ def _invalidate_sponsor_gate() -> bool:
     its result is already stale.
     """
     _state["sponsor_gate_generation"] = _sponsor_gate_generation() + 1
+    _state.pop("_push_sponsor_gate", None)
     return _state.pop("sponsor_gate", None) is not None
 
 
@@ -2228,6 +2232,14 @@ async def _background_discover_chats() -> None:
             await asyncio.sleep(CHAT_DISCOVER_INTERVAL)
 
 
+def _plain_push_text(text: str, limit: int = 200) -> str:
+    """Collapse and truncate a plain-text field for a channel push, keeping it channel safe."""
+    collapsed = " ".join(channel_safe_text(text or "").split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: limit - 1].rstrip() + "\u2026"
+
+
 async def _push_email_notification(msg: dict) -> None:
     """Push an inbound email to Claude Code and record it in the log."""
     sender = (msg.get("from") or {}).get("emailAddress") or {}
@@ -2244,13 +2256,24 @@ async def _push_email_notification(msg: dict) -> None:
     # the receiving side, which was silently closing the MCP stream when
     # we pushed the notification (observed 2026-04-17: server shut down
     # clean-EOF immediately after every email push).
+    #
+    # Everything a sender chooses goes inside the envelope, whoever the mail claims to be
+    # from: a From address can be forged, so email never counts as a sponsor's own voice.
+    # These fields are plain text, so they aren't stripped like Teams HTML, which would delete
+    # the words in "Deploy <release-123>". They still can't carry an angle bracket.
+    heading = (
+        f"{_plain_push_text(sender_name)} ({_plain_push_text(sender_addr)}) — "
+        f"{_plain_push_text(subject)}"
+    )
     if encrypted:
+        wrapped = wrap_for_channel(heading, source="email", sender=sender_addr)
         content = (
-            f"[email · encrypted] {sender_name} ({sender_addr}) — {subject}\n"
+            f"[email · encrypted] {wrapped}\n"
             f"(Purview-encrypted; body inaccessible without IRM decryption)"
         )
     else:
-        content = f"[email] {sender_name} ({sender_addr}) — {subject}\n{preview[:400]}"
+        body = f"{heading}\n{_plain_push_text(preview, limit=400)}"
+        content = f"[email] {wrap_for_channel(body, source='email', sender=sender_addr)}"
 
     write_stream = _state.get("_write_stream")
     if write_stream:
@@ -2266,7 +2289,7 @@ async def _push_email_notification(msg: dict) -> None:
                 "meta": {
                     "chat_id": "email",  # synthetic — marks this as email-channel
                     "message_id": message_id,
-                    "user": sender_addr,
+                    "user": _plain_push_text(sender_addr),
                     "ts": received,
                 },
             },
@@ -2557,6 +2580,66 @@ async def _maybe_record_sponsor_binding(
         )
 
 
+async def _sender_is_sponsor(message: dict) -> bool:
+    """True if this Teams message is from someone whose instructions the agent takes.
+
+    This decides whether a push goes out in the XPIA envelope. The body prompt treats
+    anything inside one as data, so a sponsor's message has to stay outside it, or the
+    agent would have no way to take an instruction over Teams.
+
+    It asks the sponsor gate, not the sponsor records the channel binding uses, because
+    the gate also knows the ID a federated sponsor has in a chat, which can differ from
+    the directory's. It never looks at a display name.
+
+    Any doubt counts as "no", so the message is wrapped and still delivered. The lookup
+    is blocking Graph I/O, so it runs in a worker thread, and a failed one waits
+    ``SPONSOR_GATE_RETRY_SECONDS`` so an outage doesn't slow every push.
+
+    Pushes keep their own copy of the list, trusted for ``SPONSOR_GATE_MAX_AGE_SECONDS``, so
+    someone removed as a sponsor stops speaking outside the envelope within that time. If a
+    refresh fails the message is wrapped, rather than trusting the old list indefinitely.
+
+    A provisional list, built while some chat's members couldn't be read, still knows the
+    directory's sponsors, so it answers. It is kept only for ``SPONSOR_GATE_RETRY_SECONDS``.
+    A chat the agent has left can make every list provisional, and rebuilding one means a
+    Graph call per chat, which must not happen on every push.
+    """
+    sender_id = str(message.get("sender_id") or "")
+    if not (sender_id or message.get("sender")):
+        return False
+
+    if _identity and _identity.session.auth_mode == "delegated":
+        # There's no Agent Identity to ask here. The signed-in human is the operator.
+        session_user_id = _identity.session.user_id or ""
+        return bool(sender_id) and sender_id.lower() == session_user_id.lower()
+
+    gate = _state.get("_push_sponsor_gate")
+    if gate is None or time.monotonic() >= _state.get("_push_sponsor_gate_expires_at", 0.0):
+        if time.monotonic() < _state.get("_sponsor_gate_retry_at", 0.0):
+            return False
+        config = _state.get("config") or get_config()
+        generation = _sponsor_gate_generation()
+        try:
+            gate = await _load_sponsor_gate(config)
+        except Exception as exc:  # noqa: BLE001 — fail closed: wrapped, and still delivered.
+            _state["_sponsor_gate_retry_at"] = time.monotonic() + SPONSOR_GATE_RETRY_SECONDS
+            if logger:
+                logger.warning(
+                    "Could not load the sponsor gate, so pushes go out in the envelope: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
+            return False
+        # A chat registered during the lookup may be missing from this list. It still answers
+        # this message, but keeping it would undo that registration's invalidation.
+        if _sponsor_gate_generation() == generation:
+            _state["_push_sponsor_gate"] = gate
+            _state["_push_sponsor_gate_expires_at"] = time.monotonic() + (
+                SPONSOR_GATE_RETRY_SECONDS if gate.provisional else SPONSOR_GATE_MAX_AGE_SECONDS
+            )
+    return gate.accepts(message)
+
+
 async def _push_channel_notification(
     message: dict,
     *,
@@ -2622,11 +2705,19 @@ async def _push_channel_notification(
         "ts": message.get("sent_at", ""),
     }
 
+    # The sanitizer strips every tag, including the envelope read() added, so anything not
+    # from a sponsor is wrapped again here, in the form a push can carry. The sender comes
+    # from Graph's identity fields, never the display name.
+    content = _summarize_content(message.get("content", ""))
+    if not await _sender_is_sponsor(message):
+        sender = message.get("sender_upn") or message.get("sender") or message.get("sender_id")
+        content = wrap_for_channel(content, source="teams", sender=str(sender) if sender else None)
+
     notification = JSONRPCNotification(
         jsonrpc="2.0",
         method="notifications/claude/channel",
         params={
-            "content": _summarize_content(message.get("content", "")),
+            "content": content,
             "meta": meta,
         },
     )

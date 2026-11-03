@@ -18,6 +18,7 @@ from entrabot.config import EntraBotConfig
 from entrabot.identity import sponsors as sponsors_module
 from entrabot.identity.sponsors import (
     AgentIdentitySponsor,
+    acquire_agent_user_token,
     load_agent_identity_sponsor_gate,
 )
 from entrabot.storage.backend import BlobBackend
@@ -78,6 +79,30 @@ def test_loader_promotes_only_verified_sponsor_chat(tmp_path) -> None:
     # ...but the attacker who merely DM'd the agent (auto-discovered chat) is NOT.
     assert ATTACKER_HOME_OID not in gate.user_ids
     assert not gate.accepts({"sender_id": ATTACKER_HOME_OID, "sender": ""})
+
+
+def test_loader_reads_sponsor_emails_with_the_agent_user_token(tmp_path) -> None:
+    # The Agent Identity token can't read /users/{id}. Without emails the gate can't match a
+    # federated sponsor's chat ID in a group chat, so their messages would stay wrapped.
+    sponsor = AgentIdentitySponsor(
+        user_id=SPONSOR_GUEST_OID,
+        user_principal_name="alice@example.com",
+        mail="alice@example.com",
+    )
+    with (
+        patch(
+            "entrabot.identity.sponsors.fetch_agent_identity_sponsors",
+            return_value=[sponsor],
+        ) as fetch,
+        patch("entrabot.identity.sponsors._watched_chat_ids", return_value=[]),
+        patch(
+            "entrabot.identity.sponsors._fetch_chat_members_grouped",
+            side_effect=lambda config, chat_ids, **kw: {},
+        ),
+    ):
+        load_agent_identity_sponsor_gate(_config(tmp_path))
+
+    assert fetch.call_args.kwargs["user_token_provider"] is acquire_agent_user_token
 
 
 _SPONSOR = AgentIdentitySponsor(
