@@ -50,5 +50,4 @@ pip.ini
 # Internal session transcripts and personal planning docs
 engineering-history/investigations/session-*.md
 docs/superpowers/
-.entraclaw-state.json
 uv.lock

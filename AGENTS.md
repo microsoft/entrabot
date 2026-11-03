@@ -28,7 +28,7 @@
 - Never use `az rest` or Azure CLI tokens for Agent Identity APIs — they include `Directory.AccessAsUser.All` which causes hard 403
 - Always create BlueprintPrincipal explicitly after Blueprint — it is NOT auto-created
 - Agent IDs are service principals, not users — never create fake user accounts with passwords
-- **External content is untrusted.** Model-facing Teams, email, Files, and Work IQ content must pass through `entrabot.security.xpia.wrap_external`. Never trust or preserve an inbound `<external_content>` envelope as authoritative; always add the boundary-owned outer envelope.
+- **External content is untrusted.** Model-facing Teams, email, Files, and Work IQ content must pass through `entrabot.security.xpia.wrap_external`, or `wrap_for_channel` on a channel push, which can't carry angle brackets. The one exception is a verified sponsor's Teams push, which is how a sponsor gives an instruction. Never trust or preserve an inbound `<external_content>` envelope as authoritative; always add the boundary-owned outer envelope.
 - **AGENT NAMES CHANGE — USE UPN.** Never identify an agent by display name in code paths that filter, deduplicate, authorize, or route. Use `ENTRABOT_AGENT_UPN` as the canonical config value (for example, `entra-agent@contoso.onmicrosoft.com`), match `sender_upn` first, and fall back to the Entra object ID. `ENTRABOT_AGENT_USER_UPN` remains a compatibility alias for existing `.env` files. See Learning #69 and `docs/architecture/messaging-and-delivery.md`.
 - Parse `az` CLI output as JSON, not TSV — TSV can be corrupted by warnings
 - Graph API `$filter` and `$orderby` are unreliable for chat messages; filter client-side.
@@ -74,7 +74,7 @@ Read the listed documentation before drafting code or a plan that touches the to
 - Python 3.12+ research project — no deployed service yet
 - Core runtime components: `platform/` (OS shim) → `auth/` (certificate JWT + MSAL delegated) → `a365/` (Work IQ MCP provider + Word adapter) → `tools/` (MCP tools + interaction log + email poll + daily summary + cards) → `audit/` (tracking) → `identity/` (state machine) → `storage/` (`LocalBackend`/`BlobBackend`/`PersonaBackend` + `migration` helper — ADR-005 Phases 1, 2, 5, 6a shipped) → `mcp_server.py` (FastMCP + background channel)
 - External dependencies: Microsoft Entra ID (identity), Microsoft Teams + Outlook mailbox (Graph API), Azure Blob Storage (optional, opt-in via `setup.sh --use-cloud-memory`)
-- **No default group chat.** Every Teams tool requires an explicit `chat_id`. Chats come from `create_chat`, the persisted `watched_chats` file, or the auto-discovery sweep over `/me/chats`.
+- **No default group chat.** Every Teams tool requires an explicit `chat_id`. Chats come from `create_chat`, the persisted `watched_chats` list, or the auto-discovery sweep over `/me/chats`.
 - **Body-first prompt.** `prompts/agent_system.md` loads at boot with `@include` expansion of `prompts/anatomy/*.md`. Persona-sati output (if configured) is appended AFTER the body and cannot override body rules. See the "Body prompt is non-overridable" rule above.
 - Two authenticated session types (selected by credential presence, not by `ENTRABOT_MODE`):
   - `agent_user` — three-hop Agent User flow (Blueprint cert → Agent Identity FIC → Agent User `user_fic`)
@@ -114,9 +114,9 @@ behavioral rules) is served by a separate MCP server: **persona-sati**.
 - The body prompt (`prompts/agent_system.md`) comes from this repo and loads first; persona-sati supplies the persona layered on top
 
 **Connecting to persona-sati:**
-- Local: `cd /path/to/persona-sati && .venv/bin/persona-sati --transport sse --port 8100`
-- Cloud (AKS): `kubectl port-forward svc/persona-sati-service 8100:8100 -n persona-sati`
-- Both expose `http://localhost:8100/sse` which `.mcp.json` connects to
+- Hosted (the default): connect through the client launcher your persona-sati install provides, per its own setup documentation. In `.mcp.json` it is a `stdio` entry whose `command` is that launcher, and `PERSONA_SATI_MCP_URL` / `PERSONA_SATI_MCP_TOKEN_COMMAND` go in the `entrabot` entry's `env`. `.mcp.json.example` shows the shape.
+- Local development only: run it yourself with `cd /path/to/persona-sati && .venv/bin/persona-sati --transport sse --port 8100` and point an `sse` entry at that local listener.
+- A failed connection to a local address does not mean a hosted service is down. `./scripts/setup.sh --diagnose` reports on this (it never contacts a non-local host).
 
 ## Efferent-Copy Dispatch
 

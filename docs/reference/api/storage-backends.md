@@ -11,7 +11,9 @@ This is a distinct system from persona-sati's own memory. See [Storage and Memor
 class MemoryBackend(Protocol):
     def read_text(self, key: str) -> str | None: ...
     def read_text_with_etag(self, key: str) -> tuple[str | None, str | None]: ...
-    def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str | None: ...
+    def write_text(
+        self, key: str, content: str, *, if_match: str | None = None, if_absent: bool = False
+    ) -> str | None: ...
     def append_text(self, key: str, content: str) -> None: ...
     def exists(self, key: str) -> bool: ...
     def list(self, prefix: str = "") -> list[str]: ...
@@ -19,7 +21,7 @@ class MemoryBackend(Protocol):
 
 Keys are forward-slash separated paths (e.g. `"interactions/2026-04-17.jsonl"`). Implementations decide where each key actually lives.
 
-The interface is sync — call sites (`tools/interaction_log.py`, `tools/daily_summary.py`, `tools/promises.py`, `tools/chat_cursors.py`) are sync.
+The interface is sync — call sites (`tools/interaction_log.py`, `tools/daily_summary.py`, `tools/promises.py`, `tools/chat_cursors.py`, `tools/poll_state.py`) are sync. On `BlobBackend` every call is blocking network I/O, so async code should run these in a worker thread. `_run_sync` avoids the `asyncio.run()` error when a loop is running, but it still waits for the result on the calling thread.
 
 ## `LocalBackend`
 
@@ -49,10 +51,15 @@ Token provider: `acquire_agent_user_storage_token(cfg)` (in `tools/teams.py`) �
 
 `write_text(key, content, if_match=etag)` is compare-and-swap: it only succeeds if the key's current ETag equals `if_match`, and raises `entrabot.storage.blob.ConcurrencyError` otherwise. Both backends honor this — `LocalBackend` compares content hashes, `BlobBackend` relies on Azure's real ETag header and its native `If-Match` precondition (surfaced by Azure as HTTP 412, translated to `ConcurrencyError` by `BlobStore.put`). `if_match=None` (the default) is an unconditional overwrite.
 
-Two call sites build retry logic on top of this:
+`write_text(key, content, if_absent=True)` is the compare-and-swap for a key that doesn't exist yet: it creates the key, and raises `ConcurrencyError` if another writer got there first. `LocalBackend` writes the content to a temp file and hard-links it into place, which is atomic and fails if the key exists (where hard links aren't available it falls back to an exclusive create). `BlobBackend` sends `If-None-Match: *`, and `BlobStore.put` translates both 412 and 409 to `ConcurrencyError` on that path, since Azure's docs list both. `if_match` and `if_absent` together raise `ValueError`.
+
+Three call sites build retry logic on top of this:
 
 - **`chat_cursors.claim_delivery()`** — reads the shared per-chat cursor with its ETag, computes which candidate message IDs aren't already recorded delivered, and writes the merged cursor back with `if_match=etag`. On `ConcurrencyError` it re-reads and retries, up to `CLAIM_MAX_ATTEMPTS = 4` times; exhausting the retries returns an empty claim (push nothing) rather than risk double-delivering a message across concurrent pollers.
 - **`promises.py`** — the same read-with-etag / write-with-`if_match` shape, but retries only **once** on `ConcurrencyError` before raising `PromiseStoreConflict`.
+- **`poll_state.add_watched_chats()`** — merges a batch of chat IDs into the shared list, up to `WATCHED_CHATS_MAX_ATTEMPTS = 4` times. Exhausting the retries reports failure without raising, so the caller can keep those chats dirty and try again later.
+
+`poll_state.claim_email_window()` uses the same primitive without a retry on conflict: losing the swap means another instance owns that window of mail, so there is nothing to retry. After a failure that doesn't say whether the write landed, `poll_state.settle_email_claim()` reads the cursor back and, if it hasn't moved, retries the identical conditional write. Whichever of the two commits first leaves the other with a stale `If-Match`, so a timed-out original can't commit after this instance has given up on it.
 
 ## `get_backend()` factory
 
@@ -76,13 +83,34 @@ Resolves on every call (not cached at import time), in this order:
 - `tools/daily_summary.py` — reads the day's interaction log to build the summary; archives the rendered summary.
 - `tools/promises.py` — reads/writes the single key `promises.jsonl`.
 - `tools/chat_cursors.py` — one key per chat, `chat_cursors/<url-quoted chat_id>.json`.
+- `tools/poll_state.py` — the watched-chat list at `watched_chats`, and the email cursor at `poll_state/email_cursor.txt`.
 
-Two other pieces of operational state are **always** plain local files under `cfg.data_dir`, regardless of backend configuration, and are never wired through `get_backend()` at runtime:
+`.singleton.lock` stays a plain local file under `cfg.data_dir`: it is a per-machine process lock.
 
-- The watched-chats registration, `data_dir/watched_chats`.
-- The email poll cursor, `data_dir/email_cursor.txt`.
+### `poll_state`
 
-The one-time setup migration (below) does walk the whole data directory, so it copies both of these files into Blob as migration artifacts even though ongoing reads/writes never go through the backend abstraction.
+```python
+class PollStateOutcome(Enum):  # ABSENT, PRESENT, UNRESOLVED
+class EmailClaim(Enum):        # WON, LOST, FAILED, UNKNOWN
+
+def read_watched_chats() -> WatchedChatsRead                  # .outcome, .chat_ids, .etag
+def add_watched_chats(chat_ids) -> WatchedChatsWrite          # .persisted, .added
+def read_email_cursor() -> EmailCursorRead                    # .outcome, .cursor, .etag, .recent_claims
+def now_cursor() -> str
+def initialize_email_cursor(now: str | None = None) -> bool
+def new_claim_id() -> str
+def claim_email_window(
+    new_cursor: str, etag: str | None, *, claim_id: str, prior_claims: tuple[str, ...] = ()
+) -> EmailClaim
+def settle_email_claim(
+    new_cursor: str, etag: str | None, *, claim_id: str, prior_claims: tuple[str, ...] = ()
+) -> bool | None                                              # True ours, False lost, None can't tell
+def ignored_legacy_local_copies() -> list[Path]
+```
+
+None of these raise for a storage failure. A failed read is `UNRESOLVED`, never `ABSENT`. A cursor that isn't a timestamp is `UNRESOLVED`, and so is any value with no ETag, since it couldn't be swapped safely. List entries that can't be chat IDs (containing whitespace, `/`, `\`, `?`, `#`, `%`, or control characters) are dropped on parse, because each ID ends up in a Graph URL path. Being on the list grants nothing: `SponsorGate` trusts a chat only after Graph confirms a sponsor is a member.
+
+`initialize_email_cursor()` starts the cursor at "now" on any backend except `LocalBackend`, which first adopts a usable legacy `email_cursor.txt`. It never consults the old key on a cloud backend. See [Poll state](../../architecture/storage-and-memory.md#poll-state) for why.
 
 ## Migration
 
@@ -110,6 +138,7 @@ class MigrationReport:
 Behavior:
 
 - **Idempotent and source-preserving** — a key already present at the target is skipped (`skipped` +1); local files are never deleted.
+- **Local poll state is not copied** — `poll_state/email_cursor.txt`, the legacy `email_cursor.txt`, `watched_chats`, the legacy `chat_id` key, everything under `chat_cursors/`, and the process-lock files are skipped and not counted, since a machine's copies may be stale or another agent's. A copied per-chat cursor would be read back as present and skip the 24-hour first-sight gate. The cloud cursor starts at "now" and discovery rebuilds the list. The exclusions match keys at the container root (an empty prefix) only; a source copied under a prefix such as `claude_memory` keeps every file.
 - **Missing source roots are skipped silently** — a user with no Claude Code persona-memory directory still migrates their agent data cleanly.
 - **Per-file errors are recorded, not raised** — a file that fails to read or write is appended to `errors` as `(key, message)`; one bad file doesn't abort the rest.
 

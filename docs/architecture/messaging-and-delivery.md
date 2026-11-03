@@ -5,7 +5,7 @@
 Every Teams tool requires an explicit `chat_id` — there is no default group chat or fallback conversation. A `chat_id` comes from one of three places:
 
 1. **`create_chat`** (the MCP tool, wrapping `create_or_find_chat()` / `create_one_on_one_chat()` in `src/entrabot/tools/teams.py`) when the agent creates a new 1:1 or group chat.
-2. **The persisted `watched_chats` file** under the config data directory, loaded at boot by `_init_poll()`.
+2. **The persisted `watched_chats` list** in the configured storage backend, loaded at boot by `_init_poll()`. See [Poll state](storage-and-memory.md#poll-state).
 3. **Chat auto-discovery** (`_background_discover_chats`, Agent User mode only) — sweeps `GET /me/chats` every 120 seconds and registers any chat_id not already watched, so chats another human starts with the Agent User still get picked up.
 
 ## Outbound path
@@ -23,6 +23,7 @@ Every Teams tool requires an explicit `chat_id` — there is no default group ch
 - **Client-side filtering.** `filter_human_messages()` drops the agent's own messages by `sender_upn`, falling back to the sender's AAD object ID — never display name, which is mutable. It also drops system messages (`from == "unknown"`) and messages already present in the caller's `sent_message_ids` set. Graph `$filter` is not used for these identity and dedup decisions.
 - **Sent-message echo prevention.** Agent User mode reliably excludes the agent by UPN/object ID. Delegated mode additionally tracks outbound Graph message IDs in process and excludes those IDs on later polls. Message content is already XPIA-wrapped when `filter_human_messages()` receives it, so the literal `[EntraBot]` prefix is not a reliable restart-safe filter.
 - **XPIA wrapping before model exposure.** `read()` wraps every message body in the `<external_content>` envelope (`entrabot.security.xpia.wrap_external`) before it's returned — the body prompt instructs the model that anything inside the envelope is data, not instructions. Metadata (`message_id`, `sender_id`, timestamps) stays outside the envelope so filters and counts still work on it directly.
+- **The envelope on a push.** A channel push can't carry angle brackets, so the push sanitizer strips those tags and `_push_channel_notification` wraps the text again with `wrap_for_channel`, as `[external_content ...]...[/external_content]`. A message from a verified sponsor stays outside the envelope, because the body prompt treats anything inside one as data. Every email push is wrapped.
 
 ## Fleet-safe delivery
 
@@ -33,6 +34,18 @@ Every Teams tool requires an explicit `chat_id` — there is no default group ch
 - Retries are bounded (`CLAIM_MAX_ATTEMPTS = 4`). Every ambiguous outcome — a read failure, a corrupt or wrong-shaped cursor payload, or exhausted CAS retries — returns an empty claim list rather than guessing. The design fails closed: it would rather skip a push than risk delivering the same message twice across the fleet.
 
 This guarantees no duplicate claims are made **before** a message reaches a host's push mechanism. It does not extend to what happens after a claim succeeds — if the `notifications/claude/channel` write itself fails partway (a broken pipe, a host that dropped the connection), that specific delivery attempt can still be lost; `claim_delivery` only prevents two instances from both believing they're the one delivering a given message.
+
+Email has its own version of this, because a mailbox has one cursor rather than one per chat. Each 60-second cycle of `_email_poll_cycle()`:
+
+1. Reads the shared cursor with its ETag, off the event loop. Absent starts it at "now". Unresolved logs a warning and skips the cycle, without initializing the cursor or falling back to a local copy.
+2. Fetches mail newer than the cursor from Graph.
+3. If anything newer came back, advances the cursor with a compare-and-swap **before pushing anything**. That write is the claim.
+4. If the write fails, settles the claim, because an error doesn't prove the write failed: it may have committed before the response was lost, or a timed-out request may still commit later. Settling reads the cursor back with its ETag. The claim's own ID there means the claim is ours. A different ETag without the ID means another write landed first, so ours can no longer commit, and it drops the batch and pushes nothing. The same ETag means nothing has landed, so it retries the same conditional write with the same ETag. If that succeeds the claim is ours, and the original can never commit, because its `If-Match` is now stale. A value that isn't a timestamp, or that comes back without an ETag (a proxy answering 200 with an error page, say), settles nothing.
+5. Pushes the batch, still applying the per-session ID dedup and the filter for the agent's own sent mail.
+
+The cursor keeps the IDs of the last 32 claims, newest first, so a claim stays findable after another instance claims the next window. If settling can't answer (the read fails, the value is unusable, or the retried write fails too), nobody can say whether the cursor moved, and a batch dropped now would be lost for good if it had. So the batch is held in memory and nothing is pushed. Each later cycle settles the claim before doing anything else, and until it can, it makes no Graph call; the only cursor write is the retry of that same claim. If the claim is ours, the held batch is pushed. If another write got there first, the hold is cleared and the cycle carries on as usual.
+
+Losing a race drops a batch, not the mail: anything the winner didn't see is past its cursor, so a later cycle fetches it. The same limit applies as for chats: a push that fails after the claim is not retried, though the message stays readable through `read_email`. A held batch lives only in memory, so a restart before its claim settles loses it. That mail stays readable through `read_email` too.
 
 ## Channel-push hosts
 
@@ -50,7 +63,11 @@ For hosts not in the small hardcoded channel-push set (Copilot CLI, Codex, and a
 
 ## Chat auto-discovery
 
-`_background_discover_chats()` runs every 120 seconds, in Agent User mode only (it targets `/me/chats`, which resolves to the human's chats in delegated mode — not what's wanted). It cannot use Graph's `$orderby` on this endpoint (it 400s there); results are not sorted, but chat IDs are deduplicated against `watched_chats` client-side. Newly discovered chats are persisted to the `watched_chats` file immediately so a restart inherits them, and they pick up their cursor from the normal bootstrap path on the next poll cycle — no historical flood of old messages.
+`_background_discover_chats()` runs every 120 seconds, in Agent User mode only (it targets `/me/chats`, which resolves to the human's chats in delegated mode — not what's wanted). It cannot use Graph's `$orderby` on this endpoint (it 400s there); results are not sorted, but chat IDs are deduplicated against `watched_chats` client-side.
+
+Each sweep follows `@odata.nextLink` through every page, up to 20 pages (1,000 chats), so it can rebuild the whole list from nothing. A failure partway keeps the pages already fetched. All the new chats go to the shared `watched_chats` list in one write, along with any chat whose earlier write failed.
+
+**First sight doesn't replay.** A chat first seen through discovery or the shared list may simply never have been polled, so having no cursor doesn't make it new. Its newest message surfaces only if it is under 24 hours old, and a chat's older history stays readable through `read_teams_messages`. A genuine new-chat intro still gets through, while a first sweep can't replay a page of old imperative messages. If the bootstrap's Graph read fails, the chat stays un-bootstrapped and retries next cycle. Chats from `create_chat` keep surfacing their newest message regardless of age.
 
 ## See also
 

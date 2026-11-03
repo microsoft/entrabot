@@ -16,14 +16,14 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import dataclass, replace
 from typing import Any
 
 import httpx
 
 from entrabot.config import EntraBotConfig
 from entrabot.errors import GraphApiError, TokenExpiredError
+from entrabot.tools.poll_state import PollStateOutcome, read_watched_chats
 from entrabot.tools.teams import (
     acquire_agent_identity_token,
     acquire_agent_user_token,
@@ -214,6 +214,12 @@ class SponsorGate:
     user_ids: frozenset[str]
     upns: frozenset[str]
     mails: frozenset[str]
+    # Built from missing or partial watched-chat data: the list couldn't be read or has
+    # no chats yet, or a chat's member list couldn't be read. Safe to use, since it can
+    # only be narrower than a complete gate, but callers shouldn't cache it: a storage
+    # or Graph blip would otherwise pin the narrow gate, and a federated sponsor could
+    # never be matched until a restart.
+    provisional: bool = False
 
     @classmethod
     def from_agent_identity_sponsors(
@@ -467,11 +473,22 @@ def _fetch_sponsor_user_details(
     return None
 
 
-def _watched_chat_ids(data_dir: Path) -> list[str]:
-    watched_file = data_dir / "watched_chats"
-    if not watched_file.is_file():
+def _watched_chat_ids() -> list[str]:
+    """Return the shared watched-chat list, or ``[]`` if it can't be read.
+
+    Going through the backend makes this a blocking network call, so async callers
+    must stay off the event loop. Empty can only narrow the sponsor gate. Being on
+    this list never grants anything: :meth:`SponsorGate.with_watched_chat_ids` trusts
+    a chat only after Graph confirms a sponsor is a member of it.
+    """
+    listing = read_watched_chats()
+    if listing.outcome is PollStateOutcome.UNRESOLVED:
+        logger.warning(
+            "Watched-chat list unreadable; sponsor gate narrowed to the Agent Identity's "
+            "sponsors, with no chat enrichment"
+        )
         return []
-    return [line.strip() for line in watched_file.read_text().splitlines() if line.strip()]
+    return list(listing.chat_ids)
 
 
 def fetch_watched_chat_members(
@@ -481,7 +498,7 @@ def fetch_watched_chat_members(
     transport: httpx.BaseTransport | None = None,
 ) -> list[dict[str, Any]]:
     """Return Graph chat members for watched chats using the Agent User token."""
-    chat_ids = _watched_chat_ids(config.data_dir)
+    chat_ids = _watched_chat_ids()
     if not chat_ids:
         return []
     return fetch_chat_members(
@@ -607,19 +624,39 @@ def fetch_watched_chat_members_by_id(
     """
     return _fetch_chat_members_grouped(
         config,
-        _watched_chat_ids(config.data_dir),
+        _watched_chat_ids(),
         token_provider=token_provider,
         transport=transport,
     )
 
 
+def _chat_data_incomplete(members_by_id: dict[str, list[dict[str, Any]]]) -> bool:
+    """True when the per-chat membership data behind a gate is missing or partial.
+
+    There is none when the watched list is empty or unreadable. It is partial when a
+    chat's member fetch failed, because :func:`_fetch_chat_members_grouped` still
+    records that chat, with an empty list, so one bad response doesn't poison the
+    batch. A real chat always has at least the agent in it, so an empty list means
+    "couldn't be read", never "has no members".
+    """
+    return not members_by_id or any(not members for members in members_by_id.values())
+
+
 def load_agent_identity_sponsor_gate(config: EntraBotConfig) -> SponsorGate:
-    """Build the sponsor gate from the Agent Identity's Graph sponsors."""
-    gate = SponsorGate.from_agent_identity_sponsors(fetch_agent_identity_sponsors(config))
+    """Build the sponsor gate from the Agent Identity's Graph sponsors.
+
+    The gate is ``provisional`` when it was built without complete watched-chat data
+    (see :func:`_chat_data_incomplete`). Callers may use it but shouldn't cache it.
+    """
+    # The Agent Identity token can't read /users/{id}. Without emails the gate can't match the
+    # ID a federated sponsor has in a group chat.
+    gate = SponsorGate.from_agent_identity_sponsors(
+        fetch_agent_identity_sponsors(config, user_token_provider=acquire_agent_user_token)
+    )
     members_by_id = fetch_watched_chat_members_by_id(config)
     flat_members = [member for members in members_by_id.values() for member in members]
     gate = gate.with_chat_members(flat_members)
     agent_user_id = config.agent_user_id or ""
     if agent_user_id:
         gate = gate.with_watched_chat_ids(members_by_id, agent_user_id)
-    return gate
+    return replace(gate, provisional=_chat_data_incomplete(members_by_id))

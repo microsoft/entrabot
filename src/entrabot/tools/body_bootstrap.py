@@ -17,8 +17,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 
-from entrabot.config import get_config
-from entrabot.tools import chat_cursors
+from entrabot.tools import chat_cursors, poll_state
 from entrabot.tools.interaction_log import _interaction_key
 from entrabot.tools.promises import list_promises
 from entrabot.tools.read_interactions import _entry_chat_id, _load_day
@@ -160,13 +159,15 @@ def _cursor_freshness() -> dict:
     }
 
 
-def _count_watched_chats() -> int:
-    """Read the persisted watched_chats file; missing → 0."""
-    cfg = get_config()
-    f = cfg.data_dir / "watched_chats"
-    if not f.is_file():
-        return 0
-    return sum(1 for line in f.read_text().splitlines() if line.strip())
+def _count_watched_chats() -> int | None:
+    """Count the chats in the shared list. No list yet is 0; an unreadable one is None.
+
+    None rather than 0, because 0 would tell the model it isn't watching anything.
+    """
+    listing = poll_state.read_watched_chats()
+    if listing.outcome is poll_state.PollStateOutcome.UNRESOLVED:
+        return None
+    return len(listing.chat_ids)
 
 
 def _now_iso() -> str:
@@ -192,17 +193,20 @@ def bootstrap_body_state() -> dict:
         ``cursor_freshness`` — watched_chat_count, cursors_present,
             cursors_stale (older than 24 h), oldest_cursor_ts,
             newest_cursor_ts.
-        ``watched_chat_count`` — count from the persisted watched_chats
-            file (mirror of cursor_freshness.watched_chat_count for
-            top-level convenience).
+        ``watched_chat_count`` — count from the shared watched-chat list, or
+            null if the list couldn't be read (mirror of
+            cursor_freshness.watched_chat_count for top-level convenience).
         ``generated_at`` — when the packet was assembled.
+
+    Reads the backend synchronously, so async callers must run this off the loop.
     """
     today_entries = _today_entries()
+    cursor_freshness = _cursor_freshness()
     return {
         "today_counts": _summarize_today(today_entries),
         "top_chats_today": _top_chats(today_entries),
         "open_promises": _open_promises_index(),
-        "cursor_freshness": _cursor_freshness(),
-        "watched_chat_count": _count_watched_chats(),
+        "cursor_freshness": cursor_freshness,
+        "watched_chat_count": cursor_freshness["watched_chat_count"],
         "generated_at": _now_iso(),
     }

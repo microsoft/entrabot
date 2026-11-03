@@ -21,7 +21,7 @@ Phases 1–13 below match the phase numbering in the task brief exactly. Each ph
 Run every command from the worktree root:
 
 ```bash
-cd "/Volumes/Development HD/entraclaw-identity-research/.worktrees/docs-public-site"
+cd "/Volumes/Development HD/entrabot/.worktrees/docs-public-site"
 ```
 
 All work happens on branch `docs/public-site-restructure` inside this worktree. Do not switch branches or touch other worktrees.
@@ -4118,7 +4118,7 @@ git commit -m "docs: update source and test comments citing moved documentation 
 - [ ] **Step 1: Confirm this worktree has never had its own venv, or remove a stale one**
 
 ```bash
-cd "/Volumes/Development HD/entraclaw-identity-research/.worktrees/docs-public-site"
+cd "/Volumes/Development HD/entrabot/.worktrees/docs-public-site"
 rm -rf .venv
 ```
 
@@ -4393,7 +4393,7 @@ Expected: `live search index clean: N documents` with no assertion error.
 - [ ] **Step 5: Remove the worktree**
 
 ```bash
-cd "/Volumes/Development HD/entraclaw-identity-research"
+cd "/Volumes/Development HD/entrabot"
 git worktree remove .worktrees/docs-public-site
 git branch -d docs/public-site-restructure
 ```

@@ -89,9 +89,11 @@ and the public thumbprints are emitted.
 
 ## Related commands
 
+- [`register_windows_blueprint_cert.py`](register-windows-blueprint-cert-py.md) —
+  registers the certificate this creates on the Blueprint.
 - [`rotate_cert_windows.py`](rotate-cert-windows-py.md) — reuses this helper for
   transactional rotation.
 - [`setup-windows.ps1`](../setup/setup-windows-ps1.md) — first-time Windows
-  provisioning that generates and registers the certificate.
+  provisioning that generates the certificate and registers it on the Blueprint.
 - [`deploy-windows.ps1`](../setup/deploy-windows-ps1.md) — the rotation deploy
   wrapper.

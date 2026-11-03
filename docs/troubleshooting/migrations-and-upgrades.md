@@ -102,6 +102,56 @@ both thumbprints, smoke-test Agent User authentication, then remove the old
 certificate. A failed smoke test restores the old registration and local
 values. See [Windows troubleshooting](windows.md).
 
+## Upgrading to shared poll state
+
+This applies when a deployment using cloud memory picks up the release that moved
+the watched-chat list and email cursor into the storage backend. Before it, both
+were local files even with cloud memory on. Local-only installs have nothing to do:
+`watched_chats` stays where it is, and the email cursor picks up from the legacy
+file.
+
+On the first boot after upgrading:
+
+- **The email cursor starts at "now".** Mail received before this first boot isn't
+  pushed, but stays readable through the `read_email` tool. This is deliberate: the
+  `email_cursor.txt` blob in your container is a stale copy from setup's migration,
+  and reading it would replay up to 50 old emails as new. It only happens while the
+  cursor key is being created. From then on a restart reuses the stored cursor, and
+  mail received while an instance is down is pushed once one starts.
+- **The watched list comes from the cloud copy plus discovery.** The starting point
+  is any `watched_chats` blob already in your container from an earlier setup run; new
+  migrations no longer copy it. In an Agent User session,
+  the first discovery sweep, about two minutes after boot, adds every other chat the
+  Agent User belongs to. A chat found this way surfaces its newest message only if it
+  is under 24 hours old.
+- **Setup's migration leaves local poll state behind.** It skips `watched_chats`,
+  both email cursor files, the legacy `chat_id` key, and everything under
+  `chat_cursors/`, because a machine's copies may be stale or belong to another agent.
+  A copied per-chat cursor would be used as that chat's cursor and skip the 24-hour
+  check above, so two agents sharing a group chat could replay old messages. Earlier
+  versions of the migration copied these too, so a container set up that way may
+  still hold stale copies. They are not removed automatically.
+- **Old local files are ignored.** Startup logs their paths at info level, and you
+  can remove them by hand.
+
+On macOS or Linux:
+
+```bash
+rm ~/.entrabot/data/watched_chats ~/.entrabot/data/email_cursor.txt
+```
+
+On Windows:
+
+```powershell
+Remove-Item "$env:LOCALAPPDATA\entrabot\data\watched_chats", "$env:LOCALAPPDATA\entrabot\data\email_cursor.txt"
+```
+
+Upgrade every instance on a container together. An instance still on the old code
+keeps its own local cursor and takes no part in claiming mail, so it can push the
+same email as an upgraded one.
+
+See [Poll state](../architecture/storage-and-memory.md#poll-state).
+
 ## Post-upgrade verification
 
 After pulling an upgrade:

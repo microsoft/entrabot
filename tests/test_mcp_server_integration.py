@@ -993,28 +993,28 @@ class TestDelegatedModeFiltering:
             {
                 "message_id": "m1",
                 "from": "Human",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "h",
                 "content": "hello",
             },
             {
                 "message_id": "m2",
                 "from": "Human",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "h",
                 "content": "world",
             },
             {
                 "message_id": "m3",
                 "from": "Human",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "h",
                 "content": "test",
             },
         ]
         result = filter_human_messages(
             messages,
-            agent_upn="entra-agent@werner.ac",
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
             agent_object_id="a",
             sent_message_ids={"m1", "m3"},
         )
@@ -1027,21 +1027,21 @@ class TestDelegatedModeFiltering:
             {
                 "message_id": "m1",
                 "from": "Human",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "h",
                 "content": "[EntraBot] automated msg",
             },
             {
                 "message_id": "m2",
                 "from": "Human",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "h",
                 "content": "normal human msg",
             },
         ]
         result = filter_human_messages(
             messages,
-            agent_upn="entra-agent@werner.ac",
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
             agent_object_id="a",
         )
         assert len(result) == 1
@@ -1053,21 +1053,21 @@ class TestDelegatedModeFiltering:
             {
                 "message_id": "m1",
                 "from": "EntraBot Agent",
-                "sender_upn": "entra-agent@werner.ac",
+                "sender_upn": "entra-agent@contoso.onmicrosoft.com",
                 "sender_id": "a",
                 "content": "hi",
             },
             {
                 "message_id": "m2",
                 "from": "Human",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "h",
                 "content": "response",
             },
         ]
         result = filter_human_messages(
             messages,
-            agent_upn="entra-agent@werner.ac",
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
             agent_object_id="a",
         )
         assert len(result) == 1
@@ -1079,7 +1079,7 @@ class TestDelegatedModeFiltering:
             {
                 "message_id": "m1",
                 "from": "Agent",
-                "sender_upn": "entra-agent@werner.ac",
+                "sender_upn": "entra-agent@contoso.onmicrosoft.com",
                 "sender_id": "a",
                 "content": "agent msg",
             },
@@ -1093,28 +1093,28 @@ class TestDelegatedModeFiltering:
             {
                 "message_id": "m3",
                 "from": "Human",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "h",
                 "content": "[EntraBot] echo",
             },
             {
                 "message_id": "m4",
                 "from": "Human",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "h",
                 "content": "sent by me",
             },
             {
                 "message_id": "m5",
                 "from": "Human",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "h",
                 "content": "real human msg",
             },
         ]
         result = filter_human_messages(
             messages,
-            agent_upn="entra-agent@werner.ac",
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
             agent_object_id="a",
             sent_message_ids={"m4"},
         )
@@ -1356,7 +1356,7 @@ class TestPushChannelNotificationObservability:
         mock_stream.send.assert_awaited_once()
         notif_params = mock_stream.send.call_args.args[0].message.root.params
         content = notif_params["content"]
-        assert content == "As"
+        assert content == '[external_content source="teams"]As[/external_content]'
         assert "<" not in content
         assert ">" not in content
         assert "attachment" not in content
@@ -1722,22 +1722,8 @@ class TestChatAutoDiscovery:
                     )
                 )
 
-                # Inline the sweep loop body: one iteration without the
-                # asyncio.sleep that makes the while-True task untestable.
-                import httpx as _httpx
-
                 await mcp_server._ensure_valid_token()
-                async with _httpx.AsyncClient() as client:
-                    resp = await client.get(
-                        "https://graph.microsoft.com/v1.0/me/chats",
-                        headers={"Authorization": "Bearer tok"},
-                        params={"$top": "50"},
-                    )
-                    watched = mcp_server._state["watched_chats"]
-                    for chat in resp.json().get("value", []):
-                        cid = chat.get("id")
-                        if cid and cid not in watched:
-                            mcp_server._register_watched_chat(cid, persist=True)
+                await mcp_server._discover_chats_once("tok")
 
             # In-memory: both chats now present, new one marked not-bootstrapped
             assert existing in mcp_server._state["watched_chats"]
@@ -1846,50 +1832,125 @@ class TestBootstrapChat:
             mcp_server._state.update(old_state)
             mcp_server._identity = old_identity
 
-    async def test_bootstrap_with_no_messages_is_a_noop(self, tmp_path) -> None:
+    @pytest.fixture
+    def new_chat(self, tmp_path, monkeypatch):
+        """A watched chat that has not been bootstrapped, with its cursor saves recorded."""
         from entrabot import mcp_server
 
-        chat_id = "19:empty@thread.v2"
-
+        chat_id = "19:bootstrap-gate@thread.v2"
         fake_config = MagicMock()
         fake_config.data_dir = tmp_path
-
         sm = MagicMock()
         sm.state = mcp_server.IdentityState.AGENT_USER
         sm.session.token = "tok"
         sm.session.token_acquired_at = time.monotonic()
         sm.update_session = MagicMock()
+        saves = MagicMock()
+        monkeypatch.setattr(mcp_server, "_schedule_cursor_save", saves)
 
         old_state = mcp_server._state.copy()
         old_identity = mcp_server._identity
-        try:
-            mcp_server._state.clear()
-            mcp_server._state["config"] = fake_config
-            mcp_server._state["token"] = "tok"
-            mcp_server._state["token_acquired_at"] = time.monotonic()
-            mcp_server._state["watched_chats"] = {
-                chat_id: {
-                    "seen_ids": set(),
-                    "last_ts": None,
-                    "bootstrapped": False,
-                }
-            }
-            mcp_server._identity = sm
+        mcp_server._state.clear()
+        mcp_server._state["config"] = fake_config
+        mcp_server._state["token"] = "tok"
+        mcp_server._state["token_acquired_at"] = time.monotonic()
+        mcp_server._state["watched_chats"] = {
+            chat_id: {"seen_ids": set(), "last_ts": None, "bootstrapped": False}
+        }
+        mcp_server._identity = sm
+        yield chat_id, saves
+        mcp_server._state.clear()
+        mcp_server._state.update(old_state)
+        mcp_server._identity = old_identity
 
-            with patch(
-                "entrabot.tools.teams.read",
-                new=AsyncMock(return_value=[]),
-            ):
-                await mcp_server._bootstrap_chat(chat_id)
+    async def test_an_empty_read_leaves_the_chat_unbootstrapped_until_a_message_arrives(
+        self, new_chat
+    ) -> None:
+        """``teams.read`` maps an error-shaped HTTP 200 to ``[]``, so an empty read proves
+        nothing about the chat. Bootstrapping on it left no watermark, and the next good poll
+        then took the chat's whole history for new. Nothing changes, and the next cycle tries
+        again."""
+        from entrabot import mcp_server
 
-            chat_state = mcp_server._state["watched_chats"][chat_id]
-            assert chat_state["bootstrapped"] is True
-            assert chat_state["seen_ids"] == set()
-            assert chat_state["last_ts"] is None
-        finally:
-            mcp_server._state.clear()
-            mcp_server._state.update(old_state)
-            mcp_server._identity = old_identity
+        chat_id, saves = new_chat
+        chat_state = mcp_server._state["watched_chats"][chat_id]
+        history = [
+            {"message_id": "m-old", "sent_at": "2026-04-19T18:40:00.000Z"},
+            {"message_id": "m-mid", "sent_at": "2026-04-19T18:45:00.000Z"},
+            {"message_id": "m-new", "sent_at": "2026-04-19T18:50:54.280Z"},
+        ]
+
+        async def cycle(messages: list[dict]) -> None:
+            with patch("entrabot.tools.teams.read", new=AsyncMock(return_value=messages)):
+                await mcp_server._poll_watched_chat(
+                    chat_id, chat_state, agent_upn=None, agent_object_id=None
+                )
+
+        await cycle([])
+
+        assert chat_state == {"seen_ids": set(), "last_ts": None, "bootstrapped": False}
+        saves.assert_not_called()
+
+        await cycle(history)  # the next cycle bootstraps, with the history in hand
+
+        assert chat_state["bootstrapped"] is True
+        assert chat_state["last_ts"] == "2026-04-19T18:50:54.280Z"
+        new = mcp_server._filter_new_messages(
+            history, chat_state["last_ts"], chat_state["seen_ids"]
+        )
+        assert [m["message_id"] for m in new] == ["m-new"], "old messages must not be replayed"
+        saves.assert_called_once_with(chat_id)
+
+    @pytest.mark.parametrize(
+        "messages",
+        [
+            [{"message_id": "m1", "sent_at": "not-a-timestamp"}],
+            [{"message_id": "m1", "sent_at": ""}, {"message_id": "m2", "sent_at": "garbage"}],
+            [{"message_id": "m1", "sent_at": None}],
+            [{"message_id": "m1", "sent_at": 1713552654}],
+        ],
+        ids=["text", "empty-and-text", "none", "number"],
+    )
+    async def test_a_read_where_every_timestamp_is_invalid_changes_nothing(
+        self, new_chat, messages: list[dict]
+    ) -> None:
+        """A watermark nothing can parse would fail every later poll or admit the whole
+        history, so none is stored and the chat stays un-bootstrapped."""
+        from entrabot import mcp_server
+
+        chat_id, saves = new_chat
+        with patch("entrabot.tools.teams.read", new=AsyncMock(return_value=messages)):
+            await mcp_server._bootstrap_chat(chat_id)
+
+        assert mcp_server._state["watched_chats"][chat_id] == {
+            "seen_ids": set(),
+            "last_ts": None,
+            "bootstrapped": False,
+        }
+        saves.assert_not_called()
+
+    async def test_a_mixed_read_uses_only_the_messages_with_a_valid_timestamp(
+        self, new_chat
+    ) -> None:
+        from entrabot import mcp_server
+
+        chat_id, saves = new_chat
+        messages = [
+            {"message_id": "m-old", "sent_at": "2026-04-19T18:40:00.000Z"},
+            # Text sorts after any real timestamp, so ordering by the raw string would pick it.
+            {"message_id": "m-bad", "sent_at": "zzz-not-a-timestamp"},
+            {"message_id": "m-blank", "sent_at": ""},
+            {"message_id": "m-new", "sent_at": "2026-04-19T18:50:54.280Z"},
+        ]
+        with patch("entrabot.tools.teams.read", new=AsyncMock(return_value=messages)):
+            await mcp_server._bootstrap_chat(chat_id)
+
+        chat_state = mcp_server._state["watched_chats"][chat_id]
+        assert chat_state["bootstrapped"] is True
+        assert chat_state["last_ts"] == "2026-04-19T18:50:54.280Z"
+        # Only valid messages are marked seen, and the newest of them stays unseen to surface.
+        assert chat_state["seen_ids"] == {"m-old"}
+        saves.assert_called_once_with(chat_id)
 
 
 # ---------------------------------------------------------------------------

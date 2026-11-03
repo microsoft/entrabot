@@ -1,10 +1,11 @@
 # DESIGN — Multi-Instance Cursor Consistency (fleet-safe Teams channel poll)
 
-> **Status:** Partially shipped (branch `fix/fleet-safe-cursor`). F1, F2, F4,
-> F5, and per-message cloud idempotency are implemented + tested. F6 is served
-> by the existing process singleton (`src/entrabot/singleton.py`); orphan
-> cleanup is tracked separately. F3 (cloud-authoritative `watched_chats`) is
-> deferred — see "Deferred" below. Problem confirmed in production 2026-07-02.
+> **Status:** Shipped. F1, F2, F4, F5, and per-message cloud idempotency are
+> implemented + tested (branch `fix/fleet-safe-cursor`). F3 (cloud-authoritative
+> `watched_chats`) shipped later, along with a fleet-safe email cursor (branch
+> `fix/poll-state-in-memory-backend`) — see "F3" below. F6 is served by the
+> existing process singleton (`src/entrabot/singleton.py`); orphan cleanup is
+> tracked separately. Problem confirmed in production 2026-07-02.
 > **Owner:** unassigned (handed off for implementation).
 > **Related:** ADR-005 (cloud-hosted memory), `docs/decisions/005-cloud-hosted-memory.md`;
 > TODOS.md → "MCP server orphans when Claude Code exits" (P1) and
@@ -32,7 +33,7 @@ replay surface. Fail-closed is a security requirement, not only a polish item.
 
 ## Symptom (observed 2026-07-02)
 
-A base `entrabot` instance on a dev PC, pointed at EntraClaw's blob container
+A base `entrabot` instance on a dev PC, pointed at the primary agent's blob container
 (`agent-2071f305-…`), received a continuous stream of `notifications/claude/
 channel` pushes for DMs dated **2026-05-28 / 05-29** (~5 weeks old) plus a few
 from June. Each push was a *different chat's newest message* — the signature of
@@ -267,12 +268,28 @@ Landed with full TDD (`pytest -v && ruff check .` green):
   FastMCP's lifespan cancel scope) remains tracked in `TODOS.md` ("MCP server
   orphans when Claude Code exits").
 
-### Deferred
+### F3 — cloud-authoritative `watched_chats`
 
-- **F3 — cloud-authoritative `watched_chats`.** Not shipped in this branch. It
-  is the largest structural change (moving the watched-chats list into the
-  cloud store with the local file as a cache) and is not required by the
-  fail-closed + idempotency guarantees above: with F1/F2 + the idempotency
-  ledger, an instance that registers a chat late or on a divergent local list
-  still cannot replay — it either fails closed (unresolved) or loses the
-  delivery claim. Tracked as a follow-up.
+Deferred from that branch, then shipped on `fix/poll-state-in-memory-backend`
+after a near-miss: a machine switched to another agent's container still had the
+old agent's local list and a months-old email cursor, and its first poll would
+have pushed up to 50 existing emails as new. F1, F2, and the ledger protected
+Teams delivery, but nothing protected the email cursor, which had the same problem
+and no shared claim at all.
+
+`tools/poll_state.py` now holds both values in the configured backend. The change
+goes further than change 3 above, which kept the local file as a cache: in cloud
+mode nothing local is read or written, because a cache could be stale in exactly
+the way that caused the near-miss.
+
+- **Watched list.** Key `watched_chats`, the same file in local mode. Writes merge
+  with a compare-and-swap, so adding a chat can't remove another instance's chats.
+- **Email cursor.** New key `poll_state/email_cursor.txt`. The old `email_cursor.txt`
+  blob is a stale copy from setup's migration and is never read, because using it
+  would replay old mail on upgrade. Each cycle claims its window by advancing the
+  cursor before pushing, so exactly one instance pushes a given email. See
+  `docs/architecture/messaging-and-delivery.md`.
+- **First sight.** Reading every page of `/me/chats` reaches chats that were never
+  polled, and having no cursor doesn't make a chat new. This narrows the "genuinely
+  new chat" rule in change 1: a chat first seen through discovery or the list
+  surfaces its newest message only if it is under 24 hours old.

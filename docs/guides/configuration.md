@@ -69,7 +69,7 @@ Precedence and list rules:
 |---|---|
 | `ENTRABOT_LOG_DIR` | Directory for log files. |
 | `ENTRABOT_AUDIT_DIR` | Directory for audit-log output. |
-| `ENTRABOT_DATA_DIR` | Root directory for `LocalBackend` operational data. Also the fixed location of the `watched_chats` registry and `email_cursor.txt`, which are always plain local files under this directory — they are never routed through `MemoryBackend`, even when `BlobBackend` is active. |
+| `ENTRABOT_DATA_DIR` | Root directory for `LocalBackend` operational data, including the `watched_chats` list and the email cursor. With `BlobBackend` active, those two live in Blob and any local copies are ignored. The per-machine `.singleton.lock` is the one thing that stays here either way. |
 
 If any of these is unset, it defaults to a platform-specific subdirectory:
 
@@ -91,9 +91,9 @@ If any of these is unset, it defaults to a platform-specific subdirectory:
 3. Neither is set → `LocalBackend` rooted at `ENTRABOT_DATA_DIR` (or its platform default).
 4. Exactly one of `ENTRABOT_BLOB_ENDPOINT` / `ENTRABOT_BLOB_CONTAINER` is set → **fails closed** with `BackendMisconfiguredError` rather than silently falling back to local. A half-configured cloud setup is treated as a misconfiguration that must be fixed, not tolerated.
 
-`MemoryBackend` is not the whole of Entrabot's operational state — only some of it routes through the resolved backend:
+Almost all of Entrabot's operational state routes through the resolved backend:
 
-- **Routed through `MemoryBackend`** (so it moves to Blob when configured): interaction logs and daily summaries (`tools/interaction_log.py`, `tools/daily_summary.py`), outstanding promises (`tools/promises.py`), and the per-chat Teams poll delivery cursor (`tools/chat_cursors.py`).
-- **Always local, regardless of backend**: the `watched_chats` registry and `email_cursor.txt`, both plain files under `ENTRABOT_DATA_DIR`. Neither is ever read from or written to Blob storage.
+- **Routed through `MemoryBackend`** (so it moves to Blob when configured): interaction logs and daily summaries (`tools/interaction_log.py`, `tools/daily_summary.py`), outstanding promises (`tools/promises.py`), the per-chat Teams poll delivery cursor (`tools/chat_cursors.py`), and the `watched_chats` list and email cursor (`tools/poll_state.py`).
+- **Always local, regardless of backend**: `.singleton.lock` under `ENTRABOT_DATA_DIR`, a per-machine process lock.
 
 See [Storage Configuration and Migration](storage-configuration.md) for backend selection and migration guidance, and [Reference: Configuration](../reference/configuration.md) for the compact lookup in the Reference section.

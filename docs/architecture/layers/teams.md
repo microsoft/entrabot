@@ -33,7 +33,7 @@ Every Teams tool requires an explicit `chat_id`; Entrabot has no default or fall
 Two tasks keep conversations current without the agent needing to ask:
 
 - **Teams chat poll (5s)** — polls every chat in `watched_chats` for new messages. Starts as soon as at least one chat is watched; not gated on auth mode.
-- **Chat auto-discovery (120s)** — Agent User mode only. Sweeps `/me/chats` and registers any chat not already in `watched_chats`, persisting the updated list so it survives a restart.
+- **Chat auto-discovery (120s)** — Agent User mode only. Sweeps every page of `/me/chats`, up to 20 pages, and registers any chat not already in `watched_chats`. The updated list goes to the configured storage backend, so it survives a restart and is shared between instances on a cloud backend.
 
 ## Delivery: channel push vs. auto-wait
 
