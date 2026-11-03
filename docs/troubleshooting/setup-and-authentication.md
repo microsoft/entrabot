@@ -12,6 +12,12 @@ For an existing Blueprint on macOS or Linux:
 ./scripts/setup.sh --use-blueprint=<blueprint-app-id>
 ```
 
+On macOS and Linux, a re-run for the same Agent User keeps the sponsor
+(`ENTRABOT_HUMAN_*`) and any cloud-memory settings already in `.env`, so this
+command is safe on a configured machine. Pass `--teams-user` or `--switch-user` to
+change the sponsor, or `--keep-memory-local` to go back to local storage. Setup writes the
+rest of `.env` from scratch, so lines you added by hand are dropped.
+
 For Windows, use the native Windows launcher:
 
 ```powershell

@@ -102,7 +102,9 @@ Agent User selection:
   sponsors the agent.
 - `--teams-user=EMAIL` — set a different user (or comma-separated users) as the
   Teams recipient(s); the `az` CLI user remains the admin/provisioner. Guests
-  (B2B) are detected and resolved to their home tenant.
+  (B2B) are detected and resolved to their home tenant. Without it, a re-run for
+  the same Agent User keeps the sponsor already in `.env` (`ENTRABOT_HUMAN_*`);
+  with it, the sponsor is changed to the user(s) you name.
 
 Operational memory:
 
@@ -111,9 +113,13 @@ Operational memory:
   The watched-chat registry and the email-poll cursor stay in local files
   regardless of this flag. Provisions a resource group, storage account, and
   container scoped to the Agent User, and unsets `ENTRABOT_KEEP_MEMORY_LOCAL`.
-- `--keep-memory-local` — the default. Operational data stays on the local
-  filesystem. Kept as an explicit, backwards-compatible flag; sets
-  `ENTRABOT_KEEP_MEMORY_LOCAL=true`.
+  A re-run without this flag keeps cloud memory that is already set in `.env`
+  for the same Agent User.
+- `--keep-memory-local` — operational data stays on the local filesystem; sets
+  `ENTRABOT_KEEP_MEMORY_LOCAL=true`. A first run with neither memory flag does
+  this too. On a re-run for the same Agent User whose `.env` already has cloud
+  memory, pass this flag to switch back to local; without it the cloud settings
+  are kept.
 - `--with-storage-account=NAME` — target a named storage account instead of the
   deterministic per-tenant default (used with `--use-cloud-memory`). Mutually
   exclusive with `--create-new-storage`.
@@ -171,13 +177,24 @@ Diagnostics and control:
 - Creates `.venv`, installs the package with dev extras, and writes `.env`
   (`chmod 600`) with the resulting tenant, Blueprint, Agent Identity, Agent User,
   and human-user identifiers plus the certificate thumbprint.
+- Reads the existing `.env` before rewriting it. When this run is for the same
+  Agent User (`ENTRABOT_AGENT_USER_ID` is unchanged), it keeps the sponsor
+  (`ENTRABOT_HUMAN_*`) unless you pass `--teams-user` or `--switch-user`, and keeps the cloud-memory
+  settings (`ENTRABOT_BLOB_ENDPOINT` / `ENTRABOT_BLOB_CONTAINER`) unless you pass
+  `--keep-memory-local` or `--use-cloud-memory`. Cloud memory counts as set only
+  when both blob settings are present and `ENTRABOT_KEEP_MEMORY_LOCAL` is not
+  `true`, `1`, or `yes`. A run for a different Agent User (`--new`, or another
+  Blueprint or Agent User) carries nothing over. The rest of `.env` is written
+  fresh, so other lines you added by hand are dropped.
 - With `--use-cloud-memory` and an Agent User present, provisions Azure Blob
   Storage via [`provision_blob_storage.py`](../storage/provision-blob-storage-py.md)
   and appends `ENTRABOT_BLOB_ENDPOINT` / `ENTRABOT_BLOB_CONTAINER` to `.env`;
   offers an idempotent, source-preserving migration prompt that copies existing
   local data (interaction log, daily summaries, promises, per-chat delivery
   cursors) and Claude Code persona memory as a one-time artifact copy.
-  Provisioning failures fall back to local-only memory. The migration copies
+  If provisioning fails, setup shows the provisioner's output and warns. It keeps
+  the cloud settings already in `.env` if there were any for this Agent User, and
+  otherwise falls back to local-only memory. The migration copies
   the watched-chat registry and email-poll cursor as files too, but those two
   stay local-file-only afterward — `MemoryBackend` never becomes their runtime
   reader or writer.
