@@ -20,7 +20,16 @@ Phase 5 wires the cloud branch into ``get_backend`` once
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
+import logging
+import os
+import re
+import secrets
+import shutil
+import sys
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -36,6 +45,18 @@ from entrabot.tools.teams import (
 if TYPE_CHECKING:
     from collections.abc import Coroutine
 
+logger = logging.getLogger("entrabot.storage.backend")
+
+# Held across ``LocalBackend.write_text``, so the ETag check and the write that follows
+# it are one step as far as every other thread in this process is concerned. Without it
+# two writers holding the same ETag can both pass the check, and the later write replaces
+# the earlier one. Module-level on purpose: ``get_backend()`` builds a new instance per
+# call, so a lock on the instance would guard nothing. It does not reach across
+# processes; two processes sharing one data directory can still race, a known limit of
+# the local backend. ``BlobBackend`` needs none of this, because the service makes the
+# conditional write atomic.
+_LOCAL_WRITE_LOCK = threading.Lock()
+
 
 def _content_etag(content: str) -> str:
     """Deterministic content-hash ETag for local files.
@@ -46,6 +67,139 @@ def _content_etag(content: str) -> str:
     both local and blob storage.
     """
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _check_write_conditions(if_match: str | None, if_absent: bool) -> None:
+    """Refuse a contradictory write: exists-with-this-ETag AND does-not-exist."""
+    if if_match is not None and if_absent:
+        raise ValueError("write_text: if_match and if_absent are mutually exclusive")
+
+
+# A write goes to a temp file beside its key and is then moved into place (see
+# ``_publish_atomically``). The name is ``.tmp-`` and 16 hex digits. It leaves the key's name
+# out on purpose: a key near the 255-byte file name limit would leave no room for it.
+# ``LocalBackend.list`` hides anything shaped like it, because a list taken during a write
+# can see the temp file in flight, and a process that dies mid-write leaves one behind.
+_TEMP_FILE_NAME = re.compile(r"\.tmp-[0-9a-f]{16}")
+
+# Readers take no lock, and Python opens files without FILE_SHARE_DELETE, so on Windows a
+# replace fails with PermissionError while something is reading the file. Reads are short, so
+# it is retried briefly. Elsewhere that error means what it says, so it isn't.
+_REPLACE_CAN_BE_BLOCKED = sys.platform == "win32"
+_REPLACE_ATTEMPTS = 5
+_REPLACE_RETRY_SECONDS = 0.05
+
+
+def is_temp_file_name(name: str) -> bool:
+    """True if a file name is a write's temp file rather than a key of its own."""
+    return _TEMP_FILE_NAME.fullmatch(name) is not None
+
+
+def _replace_into_place(temp: Path, path: Path) -> None:
+    """``os.replace``, allowing for a Windows reader that has *path* open for a moment."""
+    for attempt in range(1, _REPLACE_ATTEMPTS + 1):
+        try:
+            os.replace(temp, path)
+            return
+        except PermissionError:
+            if not _REPLACE_CAN_BE_BLOCKED or attempt == _REPLACE_ATTEMPTS:
+                raise
+            time.sleep(_REPLACE_RETRY_SECONDS)
+
+
+def _publish_atomically(path: Path, content: str, key: str, *, create_only: bool) -> None:
+    """Make *content* visible at *path* in one step: all of it, or nothing.
+
+    Readers take no lock, so a value written in place can be read empty or half written,
+    and an overwrite that fails partway truncates what was there. Instead *content* is
+    written and synced to a temp file in the same directory, then moved into place:
+
+    * Overwrite: ``os.replace``, which is atomic. The target's permission bits are copied
+      onto the temp file first, once it is written, so a mode the operator chose (wider or
+      narrower than the temp file's own) survives the replacement.
+    * Create-only: ``os.link``, which is atomic too and fails if the target exists. That
+      ``FileExistsError`` becomes the ``ConcurrencyError`` callers expect. A volume
+      without hard links raises another ``OSError``, and :func:`_create_exclusively`
+      does the job there instead.
+
+    The temp file is created owner-only (0o600) rather than with the process umask, so a
+    value the operator restricted is never readable by others while it is being written, and a
+    crash can't leave a readable copy behind. A key created this way is 0o600 as well.
+
+    The temp file is always removed, so a failed write leaves the old value (or no key)
+    and nothing else behind. The caller holds ``_LOCAL_WRITE_LOCK``. The text encoding is
+    the default one, exactly as ``Path.write_text`` used.
+    """
+    temp = path.with_name(f".tmp-{secrets.token_hex(8)}")
+    try:
+        # Owner-only from the first byte, and exclusive so an existing name is refused. O_BINARY
+        # exists only on Windows, where it stops the C runtime translating newlines a second time
+        # under the text wrapper (``open`` adds it itself).
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        if create_only:
+            try:
+                os.link(temp, path)
+            except FileExistsError as exc:
+                raise ConcurrencyError(f"write_text({key!r}) refused: key exists") from exc
+            except OSError as exc:
+                logger.debug(
+                    "Could not hard-link %r (%s); creating it exclusively", key, type(exc).__name__
+                )
+                _create_exclusively(path, content, key)
+        else:
+            with contextlib.suppress(FileNotFoundError):
+                shutil.copymode(path, temp)
+            _replace_into_place(temp, path)
+    finally:
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass  # os.replace has already moved it into place.
+        except OSError as unlink_exc:
+            # Report it rather than mask the error that got us here.
+            logger.warning(
+                "Could not remove the temp file left by a write of %r: %s: %s",
+                key,
+                type(unlink_exc).__name__,
+                unlink_exc,
+            )
+
+
+def _create_exclusively(path: Path, content: str, key: str) -> None:
+    """Create *path* holding *content*, refusing if it already exists.
+
+    This is the fallback for a volume that can't hard-link (see ``_publish_atomically``).
+    The exclusive create publishes an empty file before any content is written. If
+    the write or the close then fails, the file this call created is removed and the
+    error re-raised, so a later attempt can create the key instead of every reader
+    finding an empty value that nothing can replace. A file that was already there is
+    never touched: that case raises ``ConcurrencyError`` before anything is created.
+    """
+    try:
+        # O_EXCL: atomic create-only, and owner-only like the temp file. Closed below, because
+        # the create and the write fail differently and only the second may remove the file.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+    except FileExistsError as exc:
+        raise ConcurrencyError(f"write_text({key!r}) refused: key exists") from exc
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(content)
+    except BaseException:
+        try:
+            path.unlink()
+        except OSError as unlink_exc:
+            # Report it, because now the empty file stays and blocks later creates.
+            logger.warning(
+                "Could not remove the empty file left by a failed write of %r: %s: %s",
+                key,
+                type(unlink_exc).__name__,
+                unlink_exc,
+            )
+        raise
 
 
 @runtime_checkable
@@ -70,14 +224,24 @@ class MemoryBackend(Protocol):
         """
         ...
 
-    def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str | None:
+    def write_text(
+        self,
+        key: str,
+        content: str,
+        *,
+        if_match: str | None = None,
+        if_absent: bool = False,
+    ) -> str | None:
         """Replace *key*'s content with *content*. Creates parents as needed.
 
         When ``if_match`` is provided, the write is conditional: it succeeds
         only if *key*'s current ETag equals ``if_match``, otherwise it raises
-        :class:`entrabot.storage.blob.ConcurrencyError`. ``if_match=None``
-        (default) is an unconditional overwrite. Returns the new ETag (or
-        ``None`` for backends that don't track one).
+        :class:`entrabot.storage.blob.ConcurrencyError`. ``if_absent=True`` is
+        the compare-and-swap for a key that doesn't exist yet: it creates *key*
+        and raises ``ConcurrencyError`` if another writer got there first. The
+        two are mutually exclusive. With neither, the write is an unconditional
+        overwrite. Returns the new ETag (or ``None`` for backends that don't
+        track one).
         """
         ...
 
@@ -117,18 +281,30 @@ class LocalBackend:
         content = p.read_text()
         return content, _content_etag(content)
 
-    def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str | None:
+    def write_text(
+        self,
+        key: str,
+        content: str,
+        *,
+        if_match: str | None = None,
+        if_absent: bool = False,
+    ) -> str | None:
+        _check_write_conditions(if_match, if_absent)
         p = self._path(key)
-        if if_match is not None:
-            # Conditional write: current content hash must equal if_match.
-            current = _content_etag(p.read_text()) if p.exists() else None
-            if current != if_match:
-                raise ConcurrencyError(
-                    f"write_text({key!r}) refused: If-Match={if_match!r} is stale "
-                    f"(current={current!r})"
-                )
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
+        # Every mode takes the lock, not just the conditional one: an unconditional
+        # write landing between a compare-and-swap's check and its write would be
+        # replaced just the same.
+        with _LOCAL_WRITE_LOCK:
+            if if_match is not None:
+                # Conditional write: current content hash must equal if_match.
+                current = _content_etag(p.read_text()) if p.exists() else None
+                if current != if_match:
+                    raise ConcurrencyError(
+                        f"write_text({key!r}) refused: If-Match={if_match!r} is stale "
+                        f"(current={current!r})"
+                    )
+            p.parent.mkdir(parents=True, exist_ok=True)
+            _publish_atomically(p, content, key, create_only=if_absent)
         return _content_etag(content)
 
     def append_text(self, key: str, content: str) -> None:
@@ -145,7 +321,7 @@ class LocalBackend:
             return []
         results: list[str] = []
         for f in self._root.rglob("*"):
-            if not f.is_file():
+            if not f.is_file() or is_temp_file_name(f.name):
                 continue
             rel = f.relative_to(self._root).as_posix()
             if rel.startswith(prefix):
@@ -198,10 +374,19 @@ class BlobBackend:
             return None, None
         return data.decode("utf-8"), etag
 
-    def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str | None:
-        return _run_sync(
-            self._store.put(key, content.encode("utf-8"), if_match=if_match or None)
-        )
+    def write_text(
+        self,
+        key: str,
+        content: str,
+        *,
+        if_match: str | None = None,
+        if_absent: bool = False,
+    ) -> str | None:
+        _check_write_conditions(if_match, if_absent)
+        data = content.encode("utf-8")
+        if if_absent:
+            return _run_sync(self._store.put(key, data, if_none_match="*"))
+        return _run_sync(self._store.put(key, data, if_match=if_match or None))
 
     def append_text(self, key: str, content: str) -> None:
         existing = self.read_text(key) or ""

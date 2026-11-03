@@ -26,7 +26,7 @@ Cursor schema (per chat):
 
 Storage destination: ``LocalBackend`` by default; ``BlobBackend`` when blob
 env vars are set. NEVER persona-sati — this is operational state, same bucket
-as ``watched_chats`` and ``email_cursor.txt``.
+as the watched-chat list and email cursor in :mod:`entrabot.tools.poll_state`.
 """
 
 from __future__ import annotations

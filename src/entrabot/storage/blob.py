@@ -105,6 +105,7 @@ class BlobStore:
         data: bytes,
         *,
         if_match: str | None = None,
+        if_none_match: str | None = None,
     ) -> str:
         """Upload *data* to *path*. Returns the new ETag.
 
@@ -112,13 +113,29 @@ class BlobStore:
         412 Precondition Failed if the blob's current ETag doesn't match,
         which we translate to ``ConcurrencyError`` so callers can retry
         with the fresh version.
+
+        ``if_none_match="*"`` makes the write create-only. Azure's docs list
+        both 412 (unmet ``If-None-Match``) and 409 ``BlobAlreadyExists`` for a
+        blob that is already there, so both become ``ConcurrencyError``. Any other
+        409, such as an immutability policy, is a real failure and stays an HTTP
+        error: reading it as a lost race would report a create that never happened.
         """
         headers = {"x-ms-blob-type": "BlockBlob"}
         if if_match is not None:
             headers["If-Match"] = if_match
+        if if_none_match is not None:
+            headers["If-None-Match"] = if_none_match
         resp = await self._send("PUT", self._url(path), headers=headers, content=data)
-        if resp.status_code == 412:
-            raise ConcurrencyError(f"put({path!r}) refused: If-Match={if_match!r} is stale")
+        already_exists = (
+            if_none_match is not None
+            and resp.status_code == 409
+            and resp.headers.get("x-ms-error-code") == "BlobAlreadyExists"
+        )
+        if resp.status_code == 412 or already_exists:
+            raise ConcurrencyError(
+                f"put({path!r}) refused: If-Match={if_match!r} "
+                f"If-None-Match={if_none_match!r} not met"
+            )
         resp.raise_for_status()
         return resp.headers.get("ETag", "")
 

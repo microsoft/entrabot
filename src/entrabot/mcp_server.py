@@ -18,8 +18,10 @@ import logging
 import os
 import re
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
@@ -28,7 +30,7 @@ from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage, JSONRPCNotification
 
 from entrabot import efferent_copy
-from entrabot.config import get_config
+from entrabot.config import EntraBotConfig, get_config
 from entrabot.errors import (
     AuthRefreshRequiredError,
     EntraBotError,
@@ -39,10 +41,14 @@ from entrabot.identity import IdentityStateMachine, set_active_identity_state
 from entrabot.logging_config import setup_logging
 from entrabot.models import IdentityState
 from entrabot.security.xpia import channel_safe_text, wrap_for_channel
+from entrabot.tools import poll_state
 from entrabot.tools.chat_cursors import CursorResolution
 from entrabot.tools.interaction_log import detect_channel, log_interaction
 from entrabot.tools.teams import acquire_agent_user_token
 from entrabot.url_safety import _is_graph_url
+
+if TYPE_CHECKING:
+    from entrabot.identity.sponsors import SponsorGate
 
 logger: logging.Logger | None = None
 
@@ -957,6 +963,62 @@ def _effective_user_id() -> str | None:
     return config.agent_user_id if config else None
 
 
+async def _resolve_cursors_off_loop(chat_ids: list[str]) -> list[CursorResolution]:
+    """Resolve each chat's persisted cursor concurrently in worker threads.
+
+    Each cursor read is a blocking three-hop token + blob GET (~1-2s). Run serially
+    on the loop, 14+ chats starved the MCP ``initialize`` handshake past the host's
+    30s connect timeout.
+    """
+    from entrabot.tools import chat_cursors
+
+    sem = asyncio.Semaphore(CURSOR_RESOLVE_CONCURRENCY)
+
+    async def _resolve(cid: str) -> CursorResolution:
+        async with sem:
+            return await asyncio.to_thread(chat_cursors.resolve_cursor, cid)
+
+    return await asyncio.gather(*(_resolve(cid) for cid in chat_ids))
+
+
+async def _load_persisted_watched_chats() -> bool:
+    """Register every chat on the shared list; False if the list couldn't be read.
+
+    Chats already registered keep their live state, since a retry can run after
+    discovery or ``create_chat`` has registered some of them.
+    """
+    listing = await asyncio.to_thread(poll_state.read_watched_chats)
+    if listing.outcome is poll_state.PollStateOutcome.UNRESOLVED:
+        return False
+
+    watched = _state.get("watched_chats") or {}
+    chat_ids = [cid for cid in listing.chat_ids if cid not in watched]
+    resolutions = await _resolve_cursors_off_loop(chat_ids)
+    for cid, resolution in zip(chat_ids, resolutions, strict=True):
+        _register_watched_chat(cid, persist=False, resolution=resolution, quiet_bootstrap=True)
+        if logger:
+            logger.info("Loaded persisted watched chat: %s", cid)
+    return True
+
+
+async def _background_retry_watched_list() -> None:
+    """Retry loading the shared list after a failed read at boot, until it loads."""
+    while True:
+        await asyncio.sleep(WATCHED_LIST_RETRY_INTERVAL)
+        try:
+            if await _load_persisted_watched_chats():
+                if logger:
+                    logger.info("Loaded the watched-chat list after an earlier read failure")
+                return
+        except Exception as exc:
+            if logger:
+                logger.warning(
+                    "Watched-chat list retry error: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
+
+
 async def _init_poll() -> None:
     """Phase 3: Initialize watched chats and start background polling."""
     _state["last_seen_timestamp"] = None
@@ -968,32 +1030,29 @@ async def _init_poll() -> None:
     # auto-discovery) are watched. There is no default group chat.
     _state["watched_chats"] = {}
 
-    # Load persisted watched chats (DMs created via create_chat tool).
-    # Each cursor read is a blocking three-hop token + blob GET (~1-2s), so
-    # resolve them concurrently in worker threads. Run serially on the loop,
-    # 14+ chats starved the MCP ``initialize`` handshake past the host's 30s
-    # connect timeout.
-    config = _state.get("config")
-    if config:
-        watched_file = config.data_dir / "watched_chats"
-        if watched_file.is_file():
-            import asyncio
-
-            from entrabot.tools import chat_cursors
-
-            lines = (line.strip() for line in watched_file.read_text().splitlines())
-            chat_ids = [cid for cid in dict.fromkeys(lines) if cid]
-            sem = asyncio.Semaphore(CURSOR_RESOLVE_CONCURRENCY)
-
-            async def _resolve(cid: str) -> chat_cursors.CursorResolution:
-                async with sem:
-                    return await asyncio.to_thread(chat_cursors.resolve_cursor, cid)
-
-            resolutions = await asyncio.gather(*(_resolve(cid) for cid in chat_ids))
-            for cid, resolution in zip(chat_ids, resolutions, strict=True):
-                _register_watched_chat(cid, persist=False, resolution=resolution)
-                if logger:
-                    logger.info("Loaded persisted watched chat: %s", cid)
+    # Load the persisted list through the backend. In cloud mode it is shared with
+    # other instances and any local copy is ignored. All of this is blocking I/O, so
+    # it runs in worker threads.
+    if _state.get("config"):
+        ignored = await asyncio.to_thread(poll_state.ignored_legacy_local_copies)
+        if ignored and logger:
+            logger.info(
+                "Cloud memory is active, so these legacy local files are being ignored "
+                "and can be removed: %s",
+                ", ".join(str(path) for path in ignored),
+            )
+        if not await _load_persisted_watched_chats():
+            # Never treated as an empty list and never read from a local copy. Chats
+            # discovered in the meantime are merged, so nothing here can overwrite it.
+            if logger:
+                logger.warning(
+                    "Watched-chat list unreadable at startup; starting with no chats and "
+                    "will retry every %ds",
+                    WATCHED_LIST_RETRY_INTERVAL,
+                )
+            _state["_watched_list_retry_task"] = asyncio.create_task(
+                _background_retry_watched_list()
+            )
 
     # Start background polling unconditionally. Every client that
     # spawns entrabot (stdio) gets its own process and its own poll
@@ -1005,8 +1064,6 @@ async def _init_poll() -> None:
     # (its own mailbox and outbound mail rights). In delegated mode /me/*
     # would target the human's mailbox — not what we want.
     if _identity and _identity.session and _identity.session.auth_mode == "agent_user":
-        import asyncio
-
         asyncio.get_event_loop().create_task(_background_poll_email())
         asyncio.get_event_loop().create_task(_background_daily_summary())
         asyncio.get_event_loop().create_task(_background_discover_chats())
@@ -1028,8 +1085,8 @@ async def _initialize() -> None:
     push on ``notifications/claude/channel``.
 
     There is no longer a default Teams chat. Callers must pass a chat_id to
-    any Teams tool; chats to watch come from the watched_chats file or the
-    create_chat tool at runtime.
+    any Teams tool; chats to watch come from the persisted watched_chats list or
+    the create_chat tool at runtime.
     """
     # Capture on every tool entry so background pushes can see the host
     # even after the one-shot init block below short-circuits.
@@ -1050,13 +1107,13 @@ async def _initialize() -> None:
 async def _initialize_locked() -> None:
     """Body of :func:`_initialize`; caller holds ``_init_lock``."""
     await _init_auth()
-    await _init_poll()
 
     # F2: resolve + validate the storage backend once at boot. A half-configured
     # blob env raises here (fail loud) instead of silently using an empty Local
     # store and re-bootstrapping every chat (the fleet replay-flood root cause).
     # Logs the resolved backend + container so operators can confirm fleet-wide
-    # agreement in production logs.
+    # agreement in production logs. This comes before poll setup, which reads
+    # through the backend, so a mis-enved instance starts no background tasks.
     try:
         from entrabot.storage.backend import assert_backend_config
 
@@ -1065,6 +1122,8 @@ async def _initialize_locked() -> None:
         if logger:
             logger.error("Storage backend misconfigured: %s", exc)
         raise
+
+    await _init_poll()
 
     # authorization fix: log the active-sponsor-channel binding TTL so operators
     # can verify the security configuration in production logs.
@@ -1084,8 +1143,13 @@ SPONSOR_GATE_RETRY_SECONDS = 60  # how long a failed sponsor lookup waits before
 SPONSOR_GATE_MAX_AGE_SECONDS = 900  # how long a push may trust a cached sponsor list
 CURSOR_RESOLVE_CONCURRENCY = 8  # parallel cursor reads at boot (each does a token fetch)
 EMAIL_POLL_INTERVAL = 60  # seconds between /me/messages polls
+PUSHED_EMAIL_MAX = 500  # per-session dedup bound for pushed email IDs
 CHAT_DISCOVER_INTERVAL = 120  # seconds between /me/chats auto-discovery sweeps
+CHAT_DISCOVER_MAX_PAGES = 20  # /me/chats pages per sweep, 1000 chats at $top=50
+GRAPH_ME_CHATS_URL = "https://graph.microsoft.com/v1.0/me/chats"
+WATCHED_LIST_RETRY_INTERVAL = 60  # seconds between retries after a failed list read at boot
 PERSONA_SATI_HEARTBEAT_INTERVAL = 300  # 5 min smoke test against persona-sati
+SHUTDOWN_PERSIST_TIMEOUT_SECONDS = 10  # longest shutdown waits to save the watched-chat list
 
 
 async def _persona_sati_list_files(url: str, token: str) -> list[str]:
@@ -1240,26 +1304,74 @@ def _ensure_poll_task_running() -> None:
         logger.info("Started background Teams poll task")
 
 
+def _sponsor_gate_generation() -> int:
+    """How many times the cached sponsor gate has been dropped. See :func:`_load_sponsor_gate`."""
+    value = _state.get("sponsor_gate_generation", 0)
+    return value if isinstance(value, int) else 0
+
+
+def _invalidate_sponsor_gate() -> bool:
+    """Drop the cached sponsor gate and move its generation. True if one was cached.
+
+    Every place that drops the gate goes through here. Dropping it is not enough on
+    its own: a worker that read the watched-chat list before the change can finish
+    after this call, and :func:`_load_sponsor_gate` uses the generation to see that
+    its result is already stale.
+    """
+    _state["sponsor_gate_generation"] = _sponsor_gate_generation() + 1
+    _state.pop("_push_sponsor_gate", None)
+    return _state.pop("sponsor_gate", None) is not None
+
+
+async def _load_sponsor_gate(config: EntraBotConfig) -> SponsorGate:
+    """Build the sponsor gate in a worker thread, caching it only when that is safe.
+
+    The build is blocking I/O: a read of the shared chat list plus a Graph call per
+    chat. Its result is cached only if it isn't provisional AND the generation hasn't
+    moved since the load began. If a chat was registered while the worker ran, the
+    worker may have read the list before that chat landed, so its gate is already
+    stale. It is still returned, which is fine for the call that asked, but it isn't
+    cached, so the next call rebuilds. Nothing awaits between the check and the
+    store, so on the event loop no registration can slip in between them.
+
+    Failures propagate. Each caller has its own handling for them.
+    """
+    from entrabot.identity.sponsors import load_agent_identity_sponsor_gate
+
+    generation = _sponsor_gate_generation()
+    gate = await asyncio.to_thread(load_agent_identity_sponsor_gate, config)
+    if not gate.provisional and _sponsor_gate_generation() == generation:
+        _state["sponsor_gate"] = gate
+    return gate
+
+
 def _register_watched_chat(
     chat_id: str,
     *,
     persist: bool = True,
     resolution: CursorResolution | None = None,
+    quiet_bootstrap: bool = False,
 ) -> None:
     """Register a chat for background polling.
 
     Each chat gets its own cursor and seen-set so message tracking is
     independent. Safe to call multiple times — idempotent.
 
-    When ``persist`` is True (default), the chat ID is also appended to
-    ``data_dir/watched_chats`` so it survives MCP server restarts.
+    When ``persist`` is True (default), the chat ID is also merged into the
+    shared ``watched_chats`` list so it survives MCP server restarts. This function
+    is sync and the write is blocking I/O, so the write is scheduled on a worker
+    thread; see :func:`_schedule_watched_chats_persist`.
 
     If no background poll task is currently running (e.g. the MCP server
     booted with zero watched chats and this is the first chat being added
     via create_chat), lazily spins one up.
 
     ``resolution`` lets a caller pass a cursor already resolved off the event
-    loop (see ``_init_poll``); when omitted the cursor is read synchronously.
+    loop (see ``_init_poll``); when omitted the cursor is read synchronously, which
+    only sync callers should rely on.
+
+    ``quiet_bootstrap`` is for a chat first seen through discovery or the shared
+    list, as opposed to one just created here. See :func:`_bootstrap_chat`.
     """
     watched = _state.get("watched_chats", {})
     if chat_id not in watched:
@@ -1303,6 +1415,7 @@ def _register_watched_chat(
                 "last_ts": None,
                 "bootstrapped": False,
                 "needs_resolution": True,
+                "quiet_bootstrap": quiet_bootstrap,
             }
             if logger:
                 logger.warning(
@@ -1316,6 +1429,7 @@ def _register_watched_chat(
                 "last_ts": None,
                 "bootstrapped": False,
                 "needs_resolution": False,
+                "quiet_bootstrap": quiet_bootstrap,
             }
             if logger:
                 logger.info("Registered chat for background polling: %s", chat_id)
@@ -1326,7 +1440,7 @@ def _register_watched_chat(
         # Copilot CLI session) is invisible to the gate's user_ids set —
         # federated B2B sponsors never get matched and wait hangs forever.
         # See Learning #52 in engineering-history/research/hard-won-learnings.md.
-        if _state.pop("sponsor_gate", None) is not None and logger:
+        if _invalidate_sponsor_gate() and logger:
             logger.info(
                 "Invalidated cached sponsor gate after new watched chat: %s",
                 chat_id,
@@ -1334,22 +1448,101 @@ def _register_watched_chat(
 
     _ensure_poll_task_running()
 
-    if persist:
-        config = _state.get("config")
-        if config:
-            watched_file = config.data_dir / "watched_chats"
-            watched_file.parent.mkdir(parents=True, exist_ok=True)
-            # Read existing, add if not present
-            existing = set()
-            if watched_file.is_file():
-                existing = {
-                    line.strip() for line in watched_file.read_text().splitlines() if line.strip()
-                }
-            if chat_id not in existing:
-                existing.add(chat_id)
-                watched_file.write_text("\n".join(sorted(existing)) + "\n")
+    if persist and _state.get("config"):
+        _schedule_watched_chats_persist(chat_id)
+
+
+def _mark_watched_chats_dirty(chat_ids: list[str]) -> None:
+    """Record chats that still need to reach the shared list.
+
+    Discovery only registers chats not already in memory, so this set is the only
+    thing that remembers a chat whose write failed. It is retried on the next
+    discovery sweep and at shutdown.
+    """
+    dirty: set[str] = _state.setdefault("_dirty_watched_chats", set())
+    dirty.update(chat_ids)
+
+
+async def _persist_dirty_watched_chats() -> bool:
+    """Merge every dirty chat into the shared list off the event loop.
+
+    Returns True when none remain dirty. Writes are serialized within this process,
+    and chats that turn dirty during a write go out in the next pass of the loop, so
+    a burst of registrations coalesces. A failure logs and keeps the chats dirty, and
+    never raises: polling a chat doesn't depend on its being on the list.
+    """
+    lock = _state.setdefault("_watched_persist_lock", asyncio.Lock())
+    async with lock:
+        while True:
+            dirty = _state.get("_dirty_watched_chats")
+            if not dirty:
+                return True
+            batch = sorted(dirty)
+            result = await asyncio.to_thread(poll_state.add_watched_chats, batch)
+            if not result.persisted:
                 if logger:
-                    logger.info("Persisted watched chat: %s", chat_id)
+                    logger.warning(
+                        "Could not persist %d watched chat(s); will retry later",
+                        len(batch),
+                    )
+                return False
+            dirty.difference_update(batch)
+            if result.added:
+                # A gate rebuilt while this write was in flight read a list without
+                # these chats, and its federated sponsors would never match.
+                _invalidate_sponsor_gate()
+                if logger:
+                    logger.info("Persisted %d watched chat(s)", len(result.added))
+
+
+def _schedule_watched_chats_persist(chat_id: str) -> None:
+    """Mark *chat_id* dirty and write it without blocking the caller.
+
+    Mirrors ``_schedule_cursor_save``. With no running loop there is nothing to
+    block, so it writes synchronously.
+    """
+    _mark_watched_chats_dirty([chat_id])
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _flush_watched_chats()
+        return
+    tasks: set = _state.setdefault("_watched_persist_tasks", set())
+    task = loop.create_task(_persist_dirty_watched_chats())
+    tasks.add(task)  # hold a reference so the task can't be collected mid-write
+    task.add_done_callback(tasks.discard)
+
+
+def _flush_watched_chats() -> None:
+    """Synchronously write every dirty chat, for the no-loop fallback.
+
+    Failures log and never propagate. The next process rediscovers these chats
+    anyway, so losing one here is not lasting.
+    """
+    dirty: set[str] = _state.get("_dirty_watched_chats") or set()
+    if not dirty:
+        return
+    batch = sorted(dirty)
+    result = poll_state.add_watched_chats(batch)
+    if result.persisted:
+        dirty.difference_update(batch)
+    elif logger:
+        logger.warning("Could not flush %d watched chat(s) to the list", len(batch))
+
+
+def _parse_sent_at(value: object) -> datetime | None:
+    """A message's ``sent_at`` as an aware datetime, or None when it isn't a usable timestamp.
+
+    It parses the way :func:`_overlap_timestamp` does, since a stored watermark has to get
+    through that on every later poll. A time with no zone is taken as UTC, as ``is_stale`` does.
+    """
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
 
 
 async def _bootstrap_chat(chat_id: str) -> None:
@@ -1368,26 +1561,69 @@ async def _bootstrap_chat(chat_id: str) -> None:
     it gets pushed. All older messages are dropped as duplicates. A
     chat with exactly one pre-existing message behaves the same — that
     one message surfaces once.
+
+    A chat flagged ``quiet_bootstrap`` was first seen through discovery or the
+    shared list, so having no cursor doesn't make it new: it may just never have
+    been polled. Its newest message surfaces only if it is recent. Otherwise a first
+    sweep could replay up to a thousand old imperative messages as new, the replay
+    surface the fleet design doc treats as a security problem. The chat's history
+    stays readable through ``read_teams_messages``.
+
+    Only a message whose ``sent_at`` parses can set the watermark or be marked seen. A read
+    with none (an empty chat, or an error-shaped HTTP 200 that ``teams.read`` maps to ``[]``)
+    changes nothing: the chat stays un-bootstrapped and the next cycle reads again, rather
+    than finishing with no usable watermark and letting the next good poll take the chat's
+    whole history for new. A chat that really is empty bootstraps when its first message
+    arrives.
     """
+    from entrabot.tools.chat_cursors import is_stale
     from entrabot.tools.teams import read
 
     chat_state = _state["watched_chats"][chat_id]
     try:
         await _ensure_valid_token()
         bootstrap_msgs = await _with_token_retry(read, chat_id=chat_id, count=10)
-        if bootstrap_msgs:
-            newest = max(bootstrap_msgs, key=lambda m: m.get("sent_at", ""))
-            chat_state["last_ts"] = newest["sent_at"]
-            # Mark every message EXCEPT the newest as seen. The newest
-            # must remain "unseen" so the first real poll pushes it.
-            newest_id = newest.get("message_id")
-            for m in bootstrap_msgs:
-                mid = m.get("message_id")
-                if mid and mid != newest_id:
-                    chat_state["seen_ids"].add(mid)
     except Exception as exc:
+        # Fail closed: stay un-bootstrapped and retry next cycle. With no watermark
+        # the steady-state gate treats a chat's whole history as new, so a throttled
+        # read during a large sweep would otherwise replay old messages.
         if logger:
             logger.warning("Bootstrap failed for chat %s: %s", chat_id, exc)
+        return
+
+    # Fail closed the same way when the read gives nothing to take a watermark from.
+    # ``is_stale`` counts a missing or invalid timestamp as merely old, and ``teams.read``
+    # turns an error-shaped HTTP 200 into ``[]``, so bootstrapping on such a read would finish
+    # with no usable watermark. Change nothing and read again next cycle.
+    dated: list[tuple[datetime, dict]] = []
+    for m in bootstrap_msgs or []:
+        sent = _parse_sent_at(m.get("sent_at"))
+        if sent is not None:
+            dated.append((sent, m))
+    if not dated:
+        if logger:
+            if bootstrap_msgs:
+                logger.warning(
+                    "Bootstrap read for chat %s had %d message(s) but none with a usable "
+                    "timestamp; retrying next cycle",
+                    chat_id,
+                    len(bootstrap_msgs),
+                )
+            else:
+                logger.debug("Bootstrap read for chat %s had no messages; retrying", chat_id)
+        return
+    newest = max(dated, key=lambda pair: pair[0])[1]
+    chat_state["last_ts"] = newest["sent_at"]
+    # Mark every message EXCEPT the newest as seen. The newest
+    # must remain "unseen" so the first real poll pushes it.
+    newest_id = newest.get("message_id")
+    for _, m in dated:
+        mid = m.get("message_id")
+        if mid and mid != newest_id:
+            chat_state["seen_ids"].add(mid)
+    if newest_id and chat_state.get("quiet_bootstrap") and is_stale(newest["sent_at"]):
+        chat_state["seen_ids"].add(newest_id)
+
     chat_state["bootstrapped"] = True
     # Issue #17: persist the bootstrap watermark so a restart inherits it.
     # Without this, every restart re-baselines from "the newest message at
@@ -1409,7 +1645,7 @@ def _apply_present_cursor(chat_state: dict, cursor: dict | None) -> None:
     chat_state["needs_resolution"] = False
 
 
-def _resolve_pending_chat(chat_id: str, chat_state: dict) -> None:
+async def _resolve_pending_chat(chat_id: str, chat_state: dict) -> None:
     """Re-attempt cursor resolution for a chat flagged ``needs_resolution``.
 
     Fail-closed retry (design F1): the registration read was ambiguous
@@ -1423,10 +1659,15 @@ def _resolve_pending_chat(chat_id: str, chat_state: dict) -> None:
 
     Never pushes and never bootstraps within this call — the resolution cycle
     is always delivery-free.
+
+    The read is blocking storage I/O, so it runs in a worker thread. During an outage
+    discovery can flag many chats and each poll cycle re-reads every one, so on the loop
+    those reads would stall MCP requests and every other background task. Every update
+    to *chat_state* happens here on the loop, after the read returns.
     """
     from entrabot.tools.chat_cursors import CursorOutcome, resolve_cursor
 
-    resolution = resolve_cursor(chat_id)
+    resolution = await asyncio.to_thread(resolve_cursor, chat_id)
     if resolution.outcome is CursorOutcome.UNRESOLVED:
         return  # still ambiguous — fail closed, retry next cycle
     if resolution.outcome is CursorOutcome.PRESENT:
@@ -1467,7 +1708,7 @@ async def _poll_watched_chat(
 
     # (1) Fail-closed resolution retry — pushes nothing this cycle.
     if chat_state.get("needs_resolution"):
-        _resolve_pending_chat(chat_id, chat_state)
+        await _resolve_pending_chat(chat_id, chat_state)
         return
 
     # (2) Genuinely-new chat → bootstrap once.
@@ -1482,6 +1723,9 @@ async def _poll_watched_chat(
         agent_upn=agent_upn,
         agent_object_id=agent_object_id,
     )
+    # A timestamp that won't parse can't be ordered, and saved as the watermark it would fail
+    # every later poll. Graph doesn't send these, but a proxy's answer could.
+    human_msgs = [m for m in human_msgs if _parse_sent_at(m.get("sent_at")) is not None]
     new_msgs = _filter_new_messages(
         human_msgs,
         chat_state["last_ts"],
@@ -1595,36 +1839,221 @@ async def _background_poll() -> None:
             await asyncio.sleep(BACKGROUND_POLL_INTERVAL)
 
 
+async def _email_cursor_or_initialize() -> poll_state.EmailCursorRead:
+    """Read the shared email cursor off the event loop, creating it if absent.
+
+    ABSENT starts the cursor at "now" (a local install may adopt its legacy file
+    instead) so the agent isn't flooded with historical mail. UNRESOLVED changes
+    nothing: a failed read could be hiding a live cursor, so it never initializes
+    and never falls back to a local copy.
+
+    "Now" is the time of the FIRST attempt, taken BEFORE the first read and held in
+    ``_state`` until the cursor exists. A read can be slow or fail, and creation can fail
+    for as long as storage is down. A start taken only after a read reports ABSENT, or
+    afresh on every attempt, would move past all the mail that arrived meanwhile, which
+    would then never be pushed. The held time survives a failed read and is used only
+    when a read reports ABSENT. It is dropped once creation succeeds (including by losing
+    the create race to another instance), whenever a read finds the cursor, and whenever a
+    read finds one that is corrupt, so a cursor deleted later starts from its own time and
+    not from a stale one. The last case is the operator's way out of a corrupt cursor (delete
+    the key to restart at now), and a start held from before it would replay the mail since.
+    """
+    # Lazy rather than ``setdefault(..., now_cursor())``, so a held start costs no clock read.
+    if "_email_cursor_start" not in _state:
+        _state["_email_cursor_start"] = poll_state.now_cursor()
+    start: str = _state["_email_cursor_start"]
+    current = await asyncio.to_thread(poll_state.read_email_cursor)
+    if current.outcome is poll_state.PollStateOutcome.ABSENT:
+        if await asyncio.to_thread(poll_state.initialize_email_cursor, start):
+            _state.pop("_email_cursor_start", None)
+    elif current.outcome is poll_state.PollStateOutcome.PRESENT:
+        _state.pop("_email_cursor_start", None)
+    elif current.outcome is poll_state.PollStateOutcome.UNRESOLVED:
+        if current.corrupt:
+            # The read worked and the cursor is unusable. The way out is to delete the key,
+            # which restarts the cursor at "now", so an older held start must not be used.
+            _state.pop("_email_cursor_start", None)
+        # Otherwise the held start is kept: a failed read may be hiding a live cursor.
+        if logger:
+            logger.warning("Email cursor unresolved; skipping this cycle (no push, no write)")
+    return current
+
+
+@dataclass(frozen=True)
+class PendingEmailClaim:
+    """A batch of email whose claim may or may not have landed, held until that is known.
+
+    Made when the claim write fails and settling it can't reach an answer yet (the cursor
+    can't be read back, isn't usable, or the retried write failed too), so nobody can say
+    whether the cursor now sits past this batch. If it does, no later poll fetches these
+    messages and dropping them would lose the mail. The batch is pushed or discarded once
+    :func:`entrabot.tools.poll_state.settle_email_claim` answers.
+
+    Settling may have to retry the claim's write, so this keeps the claim's own arguments:
+    the new cursor, the ETag the claim was made against, and the claim history it carried
+    forward. The retry writes exactly what the original did.
+
+    It lives only in memory, at ``_state["_email_pending_claim"]``. A restart while one
+    is held loses the batch: the new process reads the cursor, and if the claim had
+    landed that mail is behind it. The mail stays readable through ``read_email``.
+    """
+
+    claim_id: str
+    messages: list[dict]
+    new_cursor: str
+    etag: str | None
+    prior_claims: tuple[str, ...]
+
+
+async def _push_email_batch(
+    messages: list[dict], pushed_email_ids: set[str], agent_self_upn: str
+) -> None:
+    """Push a claimed batch of email, once each, skipping the agent's own mail.
+
+    Skips messages already pushed this session and records everything it handles, so a
+    message that comes around again isn't pushed twice, then bounds that set. Shared by a
+    freshly won claim and a held one that has since settled.
+    """
+    for msg in messages:
+        msg_id = msg.get("id", "")
+        if msg_id and msg_id in pushed_email_ids:
+            continue
+        # Skip emails the agent itself sent (Sent Items folder
+        # echoes through /me/messages; would create a self-push loop).
+        sender_addr = (msg.get("from") or {}).get("emailAddress", {}).get("address", "").lower()
+        if agent_self_upn and sender_addr == agent_self_upn:
+            if msg_id:
+                pushed_email_ids.add(msg_id)  # mark seen so dedup works
+            continue
+        await _push_email_notification(msg)
+        if msg_id:
+            pushed_email_ids.add(msg_id)
+
+    # Bounded cleanup so the set doesn't grow unbounded over long-lived sessions.
+    if len(pushed_email_ids) > PUSHED_EMAIL_MAX:
+        keep = list(pushed_email_ids)[-100:]
+        pushed_email_ids.clear()
+        pushed_email_ids.update(keep)
+
+
+async def _email_poll_cycle(*, pushed_email_ids: set[str], agent_self_upn: str) -> None:
+    """Run one fleet-safe email poll cycle.
+
+    The shared cursor is re-read with its ETag every cycle, because another
+    instance may have moved it. If Graph returned anything, the cursor is advanced
+    with a compare-and-swap BEFORE any push: that write is what claims the window,
+    so only the winner owns the batch. A write that fails doesn't say whether it landed
+    (a request that timed out can still commit later), so it is settled by reading the
+    cursor back. Our claim ID there means the claim is ours. Another write there means
+    ours can no longer commit, so the batch is dropped, which is also what losing the swap
+    means. If nothing has landed the same write is retried, and once that wins the
+    original can't commit any more, because its ETag is stale. The next cycle then starts
+    from the advanced cursor.
+
+    The remaining case is a claim that can't be settled yet: the cursor can't be read
+    back or isn't usable, or the retry failed too. It may have landed, which would leave
+    the cursor past this batch for good, so the batch is held
+    (:class:`PendingEmailClaim`) and nothing is pushed. At the top of each later cycle the
+    claim is settled again, and until it is the cycle makes no Graph call; the only cursor
+    write is the retry of that same claim. If the claim is ours, the held batch is pushed
+    and the cycle ends. If another write got there first, the hold is cleared and the
+    cycle carries on as usual.
+
+    A held batch lives only in memory, so a restart before it settles loses it. The
+    mail stays readable through ``read_email``.
+    """
+    from entrabot.tools.email_poll import poll_once
+
+    pending = _state.get("_email_pending_claim")
+    if isinstance(pending, PendingEmailClaim):
+        settled = await asyncio.to_thread(
+            poll_state.settle_email_claim,
+            pending.new_cursor,
+            pending.etag,
+            claim_id=pending.claim_id,
+            prior_claims=pending.prior_claims,
+        )
+        if settled is None:
+            if logger:
+                logger.warning(
+                    "Held email claim still can't be settled; holding %d message(s), "
+                    "no Graph poll this cycle",
+                    len(pending.messages),
+                )
+            return
+        _state.pop("_email_pending_claim", None)
+        if settled:
+            if logger:
+                logger.info("Held email claim is ours; pushing its batch")
+            await _push_email_batch(pending.messages, pushed_email_ids, agent_self_upn)
+            return
+        if logger:
+            logger.info("Held email claim lost to another write; polling as usual")
+
+    current = await _email_cursor_or_initialize()
+    if current.outcome is not poll_state.PollStateOutcome.PRESENT:
+        return
+
+    messages, new_cursor = await _with_token_retry(poll_once, cursor=current.cursor)
+
+    if not new_cursor or new_cursor == current.cursor:
+        return
+
+    claim_id = poll_state.new_claim_id()
+    claim = await asyncio.to_thread(
+        poll_state.claim_email_window,
+        new_cursor,
+        current.etag,
+        claim_id=claim_id,
+        prior_claims=current.recent_claims,
+    )
+    if claim is poll_state.EmailClaim.LOST:
+        if logger:
+            logger.info("Email window claimed by another instance; dropping this batch")
+        return
+    if claim is poll_state.EmailClaim.UNKNOWN:
+        _state["_email_pending_claim"] = PendingEmailClaim(
+            claim_id, messages, new_cursor, current.etag, current.recent_claims
+        )
+        if logger:
+            logger.warning(
+                "Email window claim is unconfirmed; holding %d message(s) until it settles",
+                len(messages),
+            )
+        return
+    if claim is not poll_state.EmailClaim.WON:
+        if logger:
+            logger.warning("Email window not claimed; pushing nothing, will retry next cycle")
+        return
+
+    await _push_email_batch(messages, pushed_email_ids, agent_self_upn)
+
+
 async def _background_poll_email() -> None:
     """Background poll of /me/messages for substantive inbound email.
 
     Pushes each substantive message as a ``notifications/claude/channel``
-    notification and appends an inbound entry to the interaction log.
-    Cursor (last receivedDateTime seen) persists across restarts in
-    ``<data_dir>/email_cursor.txt``; on first run we initialize it to
-    "now" so the agent isn't flooded with historical mail.
+    notification and appends an inbound entry to the interaction log. The cursor
+    (last receivedDateTime seen) lives in the configured backend under
+    ``poll_state/email_cursor.txt`` and is shared across instances; see
+    :func:`_email_poll_cycle`. A missing cursor starts at "now", so mail from before
+    the key was first created isn't pushed, but stays readable through ``read_email``.
+    Once the key exists a restart reuses it, and qualifying mail received while no
+    instance ran is fetched and pushed as normal.
     """
-    import asyncio
-
-    from entrabot.tools.email_poll import load_cursor, poll_once, save_cursor
-
     if logger:
         logger.info("Starting background email poll (interval=%ds)", EMAIL_POLL_INTERVAL)
 
-    cursor = load_cursor()
-    if cursor is None:
-        cursor = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        save_cursor(cursor)
+    # Before the first sleep, so mail arriving during the first interval is caught.
+    await _email_cursor_or_initialize()
 
     # Per-session dedup. Graph returns sub-second precision on
-    # receivedDateTime but the cursor file we save may end up truncated
-    # to second resolution, which causes the same email to be returned
-    # every poll cycle (observed 2026-04-17 with a teammate's "Ball
-    # game tonight" looping). Belt-and-suspenders: also track the
-    # Graph-side message IDs we've already pushed this session so we
-    # never double-push, regardless of cursor drift.
+    # receivedDateTime but a cursor may end up truncated to second resolution,
+    # which causes the same email to be returned every poll cycle (observed
+    # 2026-04-17 with a teammate's "Ball game tonight" looping).
+    # Belt-and-suspenders: also track the Graph-side message IDs we've already
+    # pushed this session so we never double-push, regardless of cursor drift.
     pushed_email_ids: set[str] = set()
-    _PUSHED_EMAIL_MAX = 500
 
     # Don't push our own outbound emails back as if they were inbound.
     # /me/messages returns the entire mailbox including the Sent Items
@@ -1646,41 +2075,110 @@ async def _background_poll_email() -> None:
 
             await _ensure_valid_token()
 
-            messages, new_cursor = await _with_token_retry(
-                poll_once,
-                cursor=cursor,
+            await _email_poll_cycle(
+                pushed_email_ids=pushed_email_ids,
+                agent_self_upn=agent_self_upn,
             )
-
-            if new_cursor and new_cursor != cursor:
-                cursor = new_cursor
-                save_cursor(cursor)
-
-            for msg in messages:
-                msg_id = msg.get("id", "")
-                if msg_id and msg_id in pushed_email_ids:
-                    continue
-                # Skip emails the agent itself sent (Sent Items folder
-                # echoes through /me/messages; would create a self-push loop).
-                sender_addr = (
-                    (msg.get("from") or {}).get("emailAddress", {}).get("address", "").lower()
-                )
-                if agent_self_upn and sender_addr == agent_self_upn:
-                    if msg_id:
-                        pushed_email_ids.add(msg_id)  # mark seen so dedup works
-                    continue
-                await _push_email_notification(msg)
-                if msg_id:
-                    pushed_email_ids.add(msg_id)
-
-            # Bounded cleanup so the set doesn't grow unbounded over
-            # long-lived sessions.
-            if len(pushed_email_ids) > _PUSHED_EMAIL_MAX:
-                pushed_email_ids = set(list(pushed_email_ids)[-100:])
 
         except Exception as exc:
             if logger:
                 logger.warning("Email poll error: %s", exc)
             await asyncio.sleep(EMAIL_POLL_INTERVAL)
+
+
+async def _list_my_chat_ids(token: str) -> list[str]:
+    """Return the IDs on every page of ``GET /me/chats``, up to the page bound.
+
+    Discovery only adds chats, so a failure partway keeps what was already fetched
+    and the next sweep starts over. Failures log the status or error code, never the
+    token or the response body.
+    """
+    url = GRAPH_ME_CHATS_URL
+    # NOTE: $orderby on /me/chats 400s here, so results aren't sorted.
+    params: dict[str, str] | None = {"$top": "50"}
+    chat_ids: list[str] = []
+
+    async with httpx.AsyncClient() as client:
+        for _page in range(CHAT_DISCOVER_MAX_PAGES):
+            try:
+                resp = await client.get(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    params=params,
+                )
+                if resp.status_code != 200:
+                    if logger:
+                        logger.warning(
+                            "Chat auto-discovery: /me/chats returned %d",
+                            resp.status_code,
+                        )
+                    return chat_ids
+                payload = resp.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                if logger:
+                    logger.warning(
+                        "Chat auto-discovery: /me/chats request failed: %s",
+                        type(exc).__name__,
+                    )
+                return chat_ids
+
+            if not isinstance(payload, dict):
+                return chat_ids
+            # Graph can report an error on a 200, so check before reading the page.
+            if "error" in payload:
+                error = payload["error"]
+                code = error.get("code") if isinstance(error, dict) else None
+                if logger:
+                    logger.warning("Chat auto-discovery: /me/chats error: %s", code)
+                return chat_ids
+
+            value = payload.get("value")
+            if isinstance(value, list):
+                chat_ids.extend(
+                    chat["id"] for chat in value if isinstance(chat, dict) and chat.get("id")
+                )
+
+            next_link = payload.get("@odata.nextLink")
+            if not next_link:
+                return chat_ids
+            # The next request carries the bearer token, so it only goes to Graph.
+            if not str(next_link).startswith("https://graph.microsoft.com/"):
+                if logger:
+                    logger.warning(
+                        "Chat auto-discovery: ignoring a nextLink that isn't Graph; "
+                        "stopping this sweep"
+                    )
+                return chat_ids
+            url, params = next_link, None
+
+    if logger:
+        logger.warning(
+            "Chat auto-discovery: stopped at the %d-page bound, so the chat list may be "
+            "incomplete",
+            CHAT_DISCOVER_MAX_PAGES,
+        )
+    return chat_ids
+
+
+async def _discover_chats_once(token: str) -> int:
+    """Run one discovery sweep and return how many chats it newly registered.
+
+    Registers every chat on any page that isn't already in memory, resolving cursors
+    off the event loop, then writes the whole sweep to the shared list in one batch.
+    That batch includes chats whose earlier write failed: they are already in memory,
+    so they would never count as new again, and this is what gets them onto the list.
+    """
+    chat_ids = await _list_my_chat_ids(token)
+
+    watched = _state.get("watched_chats", {})
+    new_ids = [cid for cid in dict.fromkeys(chat_ids) if cid not in watched]
+    resolutions = await _resolve_cursors_off_loop(new_ids)
+    for cid, resolution in zip(new_ids, resolutions, strict=True):
+        _register_watched_chat(cid, persist=False, resolution=resolution, quiet_bootstrap=True)
+    _mark_watched_chats_dirty(new_ids)
+
+    await _persist_dirty_watched_chats()
+    return len(new_ids)
 
 
 async def _background_discover_chats() -> None:
@@ -1692,16 +2190,12 @@ async def _background_discover_chats() -> None:
     and chats created by OTHER humans adding the Agent User to a new
     conversation never trigger the registration code at all).
 
-    This task runs every ``CHAT_DISCOVER_INTERVAL`` seconds, enumerates
-    the Agent User's chats, and registers any chat_id not already in
-    ``_state["watched_chats"]``. Persists to file so restarts inherit.
-    New chats pick up their cursor on the next ``_bootstrap_chat`` — no
-    historical flood.
+    This task runs every ``CHAT_DISCOVER_INTERVAL`` seconds, enumerates every page
+    of the Agent User's chats, and registers any chat_id not already in
+    ``_state["watched_chats"]``, so a sweep can rebuild the shared list from scratch.
+    New chats pick up their cursor on the next ``_bootstrap_chat``, which doesn't
+    replay old messages. See :func:`_discover_chats_once`.
     """
-    import asyncio
-
-    import httpx
-
     if logger:
         logger.info(
             "Starting chat auto-discovery (interval=%ds)",
@@ -1723,29 +2217,7 @@ async def _background_discover_chats() -> None:
             if not token:
                 continue
 
-            new_count = 0
-            async with httpx.AsyncClient() as client:
-                # NOTE: $orderby on /me/chats 400s — just fetch and sort client-side if needed
-                resp = await client.get(
-                    "https://graph.microsoft.com/v1.0/me/chats",
-                    headers={"Authorization": f"Bearer {token}"},
-                    params={"$top": "50"},
-                )
-                if resp.status_code != 200:
-                    if logger:
-                        logger.warning(
-                            "Chat auto-discovery: /me/chats returned %d",
-                            resp.status_code,
-                        )
-                    continue
-
-                watched = _state.get("watched_chats", {})
-                for chat in resp.json().get("value", []):
-                    cid = chat.get("id")
-                    if not cid or cid in watched:
-                        continue
-                    _register_watched_chat(cid, persist=True)
-                    new_count += 1
+            new_count = await _discover_chats_once(str(token))
 
             if new_count and logger:
                 logger.info(
@@ -2126,10 +2598,14 @@ async def _sender_is_sponsor(message: dict) -> bool:
     is blocking Graph I/O, so it runs in a worker thread, and a failed one waits
     ``SPONSOR_GATE_RETRY_SECONDS`` so an outage doesn't slow every push.
 
-    The list is trusted for ``SPONSOR_GATE_MAX_AGE_SECONDS``, so someone removed as a
-    sponsor stops speaking outside the envelope within that time. A list cached by a wait
-    has no load time, so it counts as old. If a refresh fails the message is wrapped,
-    rather than trusting the old list indefinitely.
+    Pushes keep their own copy of the list, trusted for ``SPONSOR_GATE_MAX_AGE_SECONDS``, so
+    someone removed as a sponsor stops speaking outside the envelope within that time. If a
+    refresh fails the message is wrapped, rather than trusting the old list indefinitely.
+
+    A provisional list, built while some chat's members couldn't be read, still knows the
+    directory's sponsors, so it answers. It is kept only for ``SPONSOR_GATE_RETRY_SECONDS``.
+    A chat the agent has left can make every list provisional, and rebuilding one means a
+    Graph call per chat, which must not happen on every push.
     """
     sender_id = str(message.get("sender_id") or "")
     if not (sender_id or message.get("sender")):
@@ -2140,20 +2616,14 @@ async def _sender_is_sponsor(message: dict) -> bool:
         session_user_id = _identity.session.user_id or ""
         return bool(sender_id) and sender_id.lower() == session_user_id.lower()
 
-    gate = _state.get("sponsor_gate")
-    loaded_at = _state.get("_sponsor_gate_loaded_at")
-    is_fresh = (
-        loaded_at is not None and time.monotonic() - loaded_at < SPONSOR_GATE_MAX_AGE_SECONDS
-    )
-    if gate is None or not is_fresh:
+    gate = _state.get("_push_sponsor_gate")
+    if gate is None or time.monotonic() >= _state.get("_push_sponsor_gate_expires_at", 0.0):
         if time.monotonic() < _state.get("_sponsor_gate_retry_at", 0.0):
             return False
-        from entrabot.identity.sponsors import load_agent_identity_sponsor_gate
-
         config = _state.get("config") or get_config()
-        chats_before = frozenset(_state.get("watched_chats", ()))
+        generation = _sponsor_gate_generation()
         try:
-            gate = await asyncio.to_thread(load_agent_identity_sponsor_gate, config)
+            gate = await _load_sponsor_gate(config)
         except Exception as exc:  # noqa: BLE001 — fail closed: wrapped, and still delivered.
             _state["_sponsor_gate_retry_at"] = time.monotonic() + SPONSOR_GATE_RETRY_SECONDS
             if logger:
@@ -2164,10 +2634,12 @@ async def _sender_is_sponsor(message: dict) -> bool:
                 )
             return False
         # A chat registered during the lookup may be missing from this list. It still answers
-        # this message, but caching it would undo that registration's invalidation.
-        if frozenset(_state.get("watched_chats", ())) == chats_before:
-            _state["sponsor_gate"] = gate
-            _state["_sponsor_gate_loaded_at"] = time.monotonic()
+        # this message, but keeping it would undo that registration's invalidation.
+        if _sponsor_gate_generation() == generation:
+            _state["_push_sponsor_gate"] = gate
+            _state["_push_sponsor_gate_expires_at"] = time.monotonic() + (
+                SPONSOR_GATE_RETRY_SECONDS if gate.provisional else SPONSOR_GATE_MAX_AGE_SECONDS
+            )
     return gate.accepts(message)
 
 
@@ -2443,10 +2915,6 @@ async def send_teams_message(
     import contextlib
     from collections import deque
 
-    from entrabot.identity.sponsors import (
-        SponsorGate,
-        load_agent_identity_sponsor_gate,
-    )
     from entrabot.tools.teams import filter_human_messages, read
     from entrabot.tools.wait_tool import (
         wait_listener_banner,
@@ -2458,8 +2926,7 @@ async def send_teams_message(
     gate: SponsorGate | None = _state.get("sponsor_gate")  # type: ignore[assignment]
     if gate is None:
         try:
-            gate = load_agent_identity_sponsor_gate(wait_config)
-            _state["sponsor_gate"] = gate
+            gate = await _load_sponsor_gate(wait_config)
             if logger:
                 logger.info(
                     "send_teams_message auto-wait: sponsor gate loaded ids=%s upns=%s mails=%s",
@@ -3369,10 +3836,20 @@ async def create_chat(target_email: str, target_tenant_id: str = "") -> str:
         agent_user_id=_effective_user_id(),
     )
 
-    # Auto-register the new chat for background polling
+    # Auto-register the new chat for background polling. Both the cursor read and
+    # the list write are blocking I/O, so neither runs on the event loop.
     new_chat_id = result.get("chat_id")
     if new_chat_id:
-        _register_watched_chat(new_chat_id)
+        from entrabot.tools.chat_cursors import resolve_cursor
+
+        resolution = None
+        if new_chat_id not in (_state.get("watched_chats") or {}):
+            resolution = await asyncio.to_thread(resolve_cursor, new_chat_id)
+        _register_watched_chat(new_chat_id, resolution=resolution)
+        # Wait for the write: the next call may rebuild the sponsor gate from this
+        # list, and a gate missing this chat never matches a federated sponsor
+        # (Learning #52). A failure leaves the chat dirty and doesn't fail the tool.
+        await _persist_dirty_watched_chats()
 
     return json.dumps(result, indent=2)
 
@@ -3661,10 +4138,6 @@ async def wait_for_sponsor_dm(
     import contextlib
     from collections import deque
 
-    from entrabot.identity.sponsors import (
-        SponsorGate,
-        load_agent_identity_sponsor_gate,
-    )
     from entrabot.tools.audit import log_event
     from entrabot.tools.teams import filter_human_messages, read
     from entrabot.tools.wait_tool import (
@@ -3696,8 +4169,7 @@ async def wait_for_sponsor_dm(
     gate: SponsorGate | None = _state.get("sponsor_gate")  # type: ignore[assignment]
     if gate is None:
         try:
-            gate = load_agent_identity_sponsor_gate(config)
-            _state["sponsor_gate"] = gate
+            gate = await _load_sponsor_gate(config)
             # Diagnostic: dump the loaded sponsor set once so operators
             # can correlate against rejection logs in wait_tool.
             logger.info(
@@ -4054,6 +4526,20 @@ async def _run_stdio_with_write_stream() -> None:
                         type(exc).__name__,
                         exc,
                     )
+            # Off the loop and bounded: the write is storage I/O, and a slow or wedged backend
+            # must neither freeze the loop nor hold shutdown open. Giving up on the wait doesn't
+            # stop the worker thread. A chat that doesn't get saved is rediscovered next start.
+            try:
+                await asyncio.wait_for(
+                    _persist_dirty_watched_chats(), timeout=SHUTDOWN_PERSIST_TIMEOUT_SECONDS
+                )
+            except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001
+                if logger:
+                    logger.warning(
+                        "Watched-chat persist on shutdown did not finish: %s: %s",
+                        type(exc).__name__,
+                        exc,
+                    )
 
 
 @mcp.tool()
@@ -4299,7 +4785,8 @@ async def bootstrap_body_state() -> str:
     """
     from entrabot.tools.body_bootstrap import bootstrap_body_state as _bootstrap
 
-    return json.dumps(_bootstrap(), indent=2)
+    # Reads the watched list and every chat cursor from the backend.
+    return json.dumps(await asyncio.to_thread(_bootstrap), indent=2)
 
 
 @mcp.tool()

@@ -1,6 +1,6 @@
 # Storage configuration
 
-EntraBot writes selected *operational* data to a pluggable backend. Interaction logs, daily summaries, promises, and per-chat delivery cursors use `MemoryBackend`. The watched-chat registry and email cursor always remain local under `ENTRABOT_DATA_DIR`.
+EntraBot writes its *operational* data to a pluggable backend. Interaction logs, daily summaries, promises, per-chat delivery cursors, the watched-chat list, and the email cursor all use `MemoryBackend`.
 
 ## TL;DR
 
@@ -40,10 +40,11 @@ A half-configured cloud environment is a hard failure. Exactly one of `ENTRABOT_
 | Daily-summary archives | selected `MemoryBackend` |
 | `promises.jsonl` | selected `MemoryBackend` |
 | `chat_cursors/<encoded-chat-id>.json` | selected `MemoryBackend` |
-| `watched_chats` | always `ENTRABOT_DATA_DIR/watched_chats` |
-| `email_cursor.txt` | always `ENTRABOT_DATA_DIR/email_cursor.txt` |
+| `watched_chats` | selected `MemoryBackend` |
+| `poll_state/email_cursor.txt` | selected `MemoryBackend` |
+| `.singleton.lock` | always local, under `ENTRABOT_DATA_DIR` (a per-machine process lock) |
 
-The local-to-Blob migration walks the data directory, so it may copy `watched_chats` and `email_cursor.txt` as migration artifacts. Normal runtime reads and writes for those two files remain local. No persona memory, behavioral rules, or secrets are stored through this operational backend.
+With a cloud backend, the watched-chat list and email cursor never touch local disk, so instances sharing a container share them. Any old local `watched_chats` or `email_cursor.txt` is ignored, and startup logs a line saying so. No persona memory, behavioral rules, or secrets are stored through this operational backend.
 
 ## Choosing local
 
@@ -88,7 +89,7 @@ ENTRABOT_BLOB_ENDPOINT=https://entclaw<hash>.blob.core.windows.net
 ENTRABOT_BLOB_CONTAINER=agent-<agent-user-oid>
 ```
 
-`setup.sh --use-cloud-memory` writes these for you. The backend reads them via `get_config()` on every call, so flipping between local and cloud is just an `.env` edit and an MCP server restart.
+`setup.sh --use-cloud-memory` writes these for you. The backend reads them via `get_config()` on every call, so flipping between local and cloud is just an `.env` edit and an MCP server restart. Switching from cloud back to local has one catch: see [I need to switch back to local storage](../troubleshooting/storage.md#i-need-to-switch-back-to-local-storage).
 
 ### Re-running setup
 
@@ -126,6 +127,7 @@ Near the end, the script will prompt you to migrate `~/.entrabot/data` into the 
 - Is **idempotent** — running twice skips keys already present in the blob.
 - Treats cloud as authoritative on rerun — an existing target key is not overwritten.
 - Collects per-file errors while continuing other files.
+- Leaves local poll state behind: your `watched_chats` list, both email cursor files, the legacy `chat_id` key, and the per-chat cursors under `chat_cursors/`. A machine's copies could be stale or belong to another agent, and adopting them could replay old mail or messages as new. The cloud email cursor starts at "now", so mail that arrived before the first boot on the container isn't pushed, but stays readable through the `read_email` tool. Discovery rebuilds the chat list from Graph about two minutes after boot, and a chat with no cursor surfaces its newest message only if it is under 24 hours old.
 
 When selected migration errors occur inside `setup.sh`, setup reports `Setup INCOMPLETE` and exits with code 2. Fix the reported problem and re-run the same setup command; successful copies remain in Blob and local sources remain untouched.
 
@@ -149,6 +151,10 @@ async def main():
 asyncio.run(main())
 "
 ```
+
+## Upgrading an existing deployment
+
+If you're upgrading to the release that moved the watched-chat list and email cursor into the backend, see [Upgrading to shared poll state](../troubleshooting/migrations-and-upgrades.md#upgrading-to-shared-poll-state).
 
 ## Troubleshooting
 

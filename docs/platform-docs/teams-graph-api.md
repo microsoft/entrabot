@@ -152,7 +152,9 @@ client code:
 
 A `chat_id` reaches the agent from `create_chat`, inbound channel-push metadata,
 the persisted `watched_chats` list, or the `/me/chats` auto-discovery sweep (Agent
-User mode, every 120 seconds). Inbound messages are delivered by background
+User mode, every 120 seconds). `$top` on `/me/chats` is capped at 50, and the
+result set spans pages, so the sweep follows `@odata.nextLink` until there isn't
+one, up to its bound of 20 pages. Inbound messages are delivered by background
 polling; high-frequency polling of Teams resources risks throttling, so poll
 sparingly. Change-notification subscriptions on `/chats/{id}/messages` are an
 alternative, but chat-message subscriptions expire after at most 60 minutes and

@@ -961,6 +961,27 @@ The wrap always adds an authoritative outer envelope; a body that already resemb
 
 ---
 
+### Learning #71: Moving State to Shared Storage Changes Its Failure Modes, Not Just Its Location
+
+**Date:** 2026-11-02
+**Status:** **SHIPPED — the watched-chat list and email cursor now follow the configured backend (design F3).**
+**Context:** With cloud memory on, interaction logs, chat cursors, and promises went through `get_backend()`, but `watched_chats` and `email_cursor.txt` stayed plain files under `cfg.data_dir`.
+**Symptom:** A near-miss: a machine switched to a different agent's cloud container still had the old agent's local list (68 chats) and a months-old email cursor. Its first poll would have pushed up to 50 existing emails as new. Two machines on one container also shared neither value.
+**Root cause:** State that decides what gets delivered was scoped to the machine, while the identity it belongs to is scoped to the container. Nothing ties a local file to the agent that wrote it.
+**Fix:** `src/entrabot/tools/poll_state.py` keeps both values in the backend, classifies reads as PRESENT / ABSENT / UNRESOLVED, and makes every write a compare-and-swap. Each email cycle claims its window before pushing, so exactly one instance pushes a given email. Cloud mode reads no local file at all.
+**Prevention:**
+
+- **Don't adopt a key nothing has been maintaining.** Containers already held an `email_cursor.txt` blob, but setup's migration copied it once and runtime never read it. The obvious key would have replayed old mail on upgrade, so the cursor got a new key that starts at "now". Check who has been writing a value before trusting it, and exclude the new key from any migration that walks the directory.
+- **A compare-and-swap needs a create case.** `write_text(if_match=None)` is an unconditional overwrite, so two instances that read "absent" both write and the last one wins. Use `if_absent=True` for the first write. The same goes for a value with no ETag: treat it as a failure rather than letting `if_match` degrade to an overwrite.
+- **A file read can't really fail, and a blob read can.** Every caller needs an answer for that. An unreadable list retries instead of meaning "no chats". An unreadable list narrows the sponsor gate and marks it provisional, because caching it would pin the narrow gate for the session. A failed write stays dirty, because discovery only registers chats not already in memory and would never retry it.
+- **Async writes break "done when it returns".** The old sync write meant `create_chat` finished with the chat on the list. With a scheduled write, a gate rebuilt right after would miss the chat and never match a federated sponsor (Learning #52). `create_chat` now waits for the write, and landing a write drops any gate built while it was in flight.
+- **Widening a sweep widens its replay surface.** Paging `/me/chats` reaches chats that were never polled, and having no cursor doesn't make a chat new. Bootstrapping them as new would replay up to a thousand old imperative messages. Separately, a failed bootstrap read left a chat with no watermark, which the steady-state gate treats as "everything is new", so one throttled read could push 10 old messages. When a change makes a code path run at much larger scale, re-read what that path does on failure.
+- **A failing test runs the old code.** This work's first red run executed a script that hardcoded `~/.entrabot/data`, and three tests without a home guard read a developer's real chat list before the fix existed. Point `HOME` at a decoy before a test touches anything that might read from it, and do it for every test in the file rather than the ones you expect to need it.
+
+**Evidence/references:** `src/entrabot/tools/poll_state.py`, `_email_poll_cycle` and `_discover_chats_once` in `src/entrabot/mcp_server.py`, `write_text(if_absent=)` in `src/entrabot/storage/backend.py`. Tests: `tests/tools/test_poll_state.py`, `tests/test_mcp_server_email_poll.py`, `tests/test_mcp_server_watched_chats.py`. Design: `engineering-history/architecture/DESIGN-multi-instance-cursor-consistency.md`. Companion: Learning #52 (stale sponsor gate after `create_chat`). Closes GitHub #64.
+
+---
+
 ### [HISTORICAL] Learning #4: OBO Requires Matching Token Audience
 
 **Date:** 2026-04-06

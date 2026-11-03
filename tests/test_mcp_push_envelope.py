@@ -31,9 +31,11 @@ def _gate(*user_ids: str) -> SponsorGate:
 
 
 def _use_gate(gate: SponsorGate) -> None:
-    """Cache *gate* as freshly loaded."""
-    mcp_server._state["sponsor_gate"] = gate
-    mcp_server._state["_sponsor_gate_loaded_at"] = time.monotonic()
+    """Keep *gate* as the list pushes use, freshly loaded."""
+    mcp_server._state["_push_sponsor_gate"] = gate
+    mcp_server._state["_push_sponsor_gate_expires_at"] = (
+        time.monotonic() + mcp_server.SPONSOR_GATE_MAX_AGE_SECONDS
+    )
 
 
 @pytest.fixture
@@ -45,10 +47,20 @@ def stream(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     monkeypatch.setitem(mcp_server._state, "_write_stream", mock)
     monkeypatch.setattr(mcp_server, "_identity", None)
     monkeypatch.setattr(mcp_server, "_get_sponsor_records_for_binding", no_sponsor_records)
-    for key in ("sponsor_gate", "_sponsor_gate_loaded_at", "_sponsor_gate_retry_at"):
+    for key in (
+        "sponsor_gate",
+        "_push_sponsor_gate",
+        "_push_sponsor_gate_expires_at",
+        "_sponsor_gate_retry_at",
+    ):
         monkeypatch.delitem(mcp_server._state, key, raising=False)
     yield mock
-    for key in ("sponsor_gate", "_sponsor_gate_loaded_at", "_sponsor_gate_retry_at"):
+    for key in (
+        "sponsor_gate",
+        "_push_sponsor_gate",
+        "_push_sponsor_gate_expires_at",
+        "_sponsor_gate_retry_at",
+    ):
         mcp_server._state.pop(key, None)
 
 
@@ -249,7 +261,7 @@ class TestSponsorLookup:
         )
 
         assert _params(stream)["content"].startswith("[external_content")
-        assert "sponsor_gate" not in mcp_server._state
+        assert "_push_sponsor_gate" not in mcp_server._state
         assert "sponsor" in caplog.text.lower()
 
     async def test_a_failed_lookup_is_not_retried_on_every_message(
@@ -284,9 +296,7 @@ class TestTheCachedSponsorListExpires:
         self, stream: AsyncMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _use_gate(_gate(SPONSOR_ID))
-        mcp_server._state["_sponsor_gate_loaded_at"] = (
-            time.monotonic() - mcp_server.SPONSOR_GATE_MAX_AGE_SECONDS - 1
-        )
+        mcp_server._state["_push_sponsor_gate_expires_at"] = time.monotonic() - 1
         refreshed = _gate(OTHER_ID)
         monkeypatch.setattr(
             "entrabot.identity.sponsors.load_agent_identity_sponsor_gate", lambda _c: refreshed
@@ -297,15 +307,13 @@ class TestTheCachedSponsorListExpires:
         )
 
         assert _params(stream)["content"].startswith("[external_content")
-        assert mcp_server._state["sponsor_gate"] is refreshed
+        assert mcp_server._state["_push_sponsor_gate"] is refreshed
 
     async def test_a_refresh_that_fails_wraps_even_a_sponsor_on_the_old_list(
         self, stream: AsyncMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _use_gate(_gate(SPONSOR_ID))
-        mcp_server._state["_sponsor_gate_loaded_at"] = (
-            time.monotonic() - mcp_server.SPONSOR_GATE_MAX_AGE_SECONDS - 1
-        )
+        mcp_server._state["_push_sponsor_gate_expires_at"] = time.monotonic() - 1
 
         def fail(_config: object) -> SponsorGate:
             raise RuntimeError("directory unavailable")
@@ -345,10 +353,8 @@ class TestTheCachedSponsorListExpires:
         self, stream: AsyncMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # The new chat may be missing from it, and a federated sponsor there would stay wrapped.
-        monkeypatch.setitem(mcp_server._state, "watched_chats", {"19:old@thread.v2": {}})
-
         def load(_config: object) -> SponsorGate:
-            mcp_server._state["watched_chats"]["19:new@thread.v2"] = {}
+            mcp_server._invalidate_sponsor_gate()  # what registering a chat does
             return _gate(SPONSOR_ID)
 
         monkeypatch.setattr("entrabot.identity.sponsors.load_agent_identity_sponsor_gate", load)
@@ -358,7 +364,49 @@ class TestTheCachedSponsorListExpires:
         )
 
         assert _params(stream)["content"] == "Please ship it"
+        assert "_push_sponsor_gate" not in mcp_server._state
         assert "sponsor_gate" not in mcp_server._state
+
+    async def test_registering_a_chat_drops_the_list_pushes_keep(self, stream: AsyncMock) -> None:
+        _use_gate(_gate(SPONSOR_ID))
+
+        mcp_server._invalidate_sponsor_gate()
+
+        assert "_push_sponsor_gate" not in mcp_server._state
+
+    async def test_a_provisional_list_answers_and_is_rebuilt_soon_but_not_on_every_push(
+        self, stream: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A chat the agent has left can make every list provisional. Rebuilding means a Graph
+        # call per chat, so it can't happen for each message.
+        loads: list[int] = []
+
+        def load(_config: object) -> SponsorGate:
+            loads.append(1)
+            return SponsorGate(
+                user_ids=frozenset({SPONSOR_ID}),
+                upns=frozenset(),
+                mails=frozenset(),
+                provisional=True,
+            )
+
+        monkeypatch.setattr("entrabot.identity.sponsors.load_agent_identity_sponsor_gate", load)
+
+        for _ in range(3):
+            await mcp_server._push_channel_notification(
+                _teams_message("Please ship it", sender_id=SPONSOR_ID), chat_id="19:chat@thread.v2"
+            )
+
+        assert _params(stream)["content"] == "Please ship it"
+        assert len(loads) == 1
+        expires_at = mcp_server._state["_push_sponsor_gate_expires_at"]
+        assert expires_at <= time.monotonic() + mcp_server.SPONSOR_GATE_RETRY_SECONDS
+
+        mcp_server._state["_push_sponsor_gate_expires_at"] = 0.0
+        await mcp_server._push_channel_notification(
+            _teams_message(sender_id=SPONSOR_ID), chat_id="19:chat@thread.v2"
+        )
+        assert len(loads) == 2
 
 
 class TestDelegatedSession:

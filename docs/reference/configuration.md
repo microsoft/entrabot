@@ -52,7 +52,7 @@ See [Configuration guide § Runtime mode and behavior](../guides/configuration.m
 |---|---|
 | `ENTRABOT_LOG_DIR` | Defaults to a platform-specific `logs` subdirectory. |
 | `ENTRABOT_AUDIT_DIR` | Defaults to a platform-specific `audit` subdirectory. |
-| `ENTRABOT_DATA_DIR` | Defaults to a platform-specific `data` subdirectory. Root for `LocalBackend` state, and always the location of the `watched_chats` registry and `email_cursor.txt`, even when `BlobBackend` is active. |
+| `ENTRABOT_DATA_DIR` | Defaults to a platform-specific `data` subdirectory. Root for `LocalBackend` state, including the `watched_chats` list and the email cursor. With `BlobBackend` active, those two live in Blob and any local copies are ignored. |
 
 Platform defaults: `~/.entrabot/{logs,audit,data}` on macOS/Linux; `%LOCALAPPDATA%\entrabot\{logs,audit,data}` on Windows (falling back to `<home>\AppData\Local\entrabot\...`).
 
@@ -66,6 +66,6 @@ See [Configuration guide § Local paths](../guides/configuration.md#local-paths)
 | `ENTRABOT_BLOB_ENDPOINT` | Unset by default. Must be set together with `ENTRABOT_BLOB_CONTAINER` to select `BlobBackend`. |
 | `ENTRABOT_BLOB_CONTAINER` | Unset by default. Must be set together with `ENTRABOT_BLOB_ENDPOINT` to select `BlobBackend`. |
 
-Setting exactly one of `ENTRABOT_BLOB_ENDPOINT` / `ENTRABOT_BLOB_CONTAINER` fails closed (`BackendMisconfiguredError`) instead of silently falling back to local. `MemoryBackend` (local or blob) is where interaction logs, daily summaries, promises, and per-chat delivery cursors live; the `watched_chats` registry and `email_cursor.txt` always stay on local disk under `ENTRABOT_DATA_DIR`, regardless of backend.
+Setting exactly one of `ENTRABOT_BLOB_ENDPOINT` / `ENTRABOT_BLOB_CONTAINER` fails closed (`BackendMisconfiguredError`) instead of silently falling back to local. `MemoryBackend` (local or blob) is where interaction logs, daily summaries, promises, per-chat delivery cursors, the `watched_chats` list, and the email cursor live. Only the per-machine `.singleton.lock` always stays on local disk under `ENTRABOT_DATA_DIR`.
 
 See [Configuration guide § Storage backend](../guides/configuration.md#storage-backend).

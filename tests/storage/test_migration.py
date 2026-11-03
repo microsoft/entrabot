@@ -14,12 +14,14 @@ Behavior:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from entrabot.storage.backend import LocalBackend
 from entrabot.storage.migration import MigrationReport, migrate_local_to_backend
+from entrabot.tools.chat_cursors import CursorOutcome, cursor_key, resolve_cursor
 
 
 @pytest.fixture
@@ -54,6 +56,19 @@ class TestMigrateLocalToBackend:
         assert target.read_text("state/watched_chats") == "chat-id-1\nchat-id-2\n"
         assert report.copied == 3
         assert report.skipped == 0
+
+    def test_a_temp_file_left_by_a_crashed_write_is_not_migrated(
+        self, src_root: Path, tmp_path: Path
+    ) -> None:
+        leftover = ".tmp-0123456789abcdef"
+        (src_root / "state" / leftover).write_text("half a wri")
+        target = LocalBackend(tmp_path / "dst")
+
+        report = migrate_local_to_backend([(src_root, "")], target)
+
+        assert report.copied == 3
+        assert not target.exists(f"state/{leftover}")
+        assert not (tmp_path / "dst" / "state" / leftover).exists()
 
     def test_idempotent_skips_existing_keys(self, src_root: Path, tmp_path: Path) -> None:
         target = LocalBackend(tmp_path / "dst")
@@ -108,7 +123,7 @@ class TestMigrateMultipleSources:
     def test_second_pair_is_prefixed(self, tmp_path: Path) -> None:
         agent = tmp_path / "agent"
         agent.mkdir()
-        (agent / "email_cursor.txt").write_text("cursor=42")
+        (agent / "promises.jsonl").write_text("{}\n")
 
         persona = tmp_path / "persona"
         persona.mkdir()
@@ -118,7 +133,7 @@ class TestMigrateMultipleSources:
         target = LocalBackend(tmp_path / "dst")
         report = migrate_local_to_backend([(agent, ""), (persona, "claude_memory")], target)
 
-        assert target.read_text("email_cursor.txt") == "cursor=42"
+        assert target.read_text("promises.jsonl") == "{}\n"
         assert target.read_text("claude_memory/MEMORY.md") == "index"
         assert target.read_text("claude_memory/user_brandon_role.md") == "Brandon"
         assert report.copied == 3
@@ -168,3 +183,145 @@ class TestMigrateMultipleSources:
 
         assert target.read_text("README.md") == "A"
         assert target.read_text("claude_memory/README.md") == "B"
+
+
+class TestMigrationAndPollState:
+    """Setup's migration walks the whole data directory, poll state included.
+
+    Everything that decides what gets delivered is left behind: the watched-chat list,
+    the email cursors, the legacy single-chat ``chat_id`` key, and every per-chat
+    cursor under ``chat_cursors/``. A machine's copies may be stale or belong to
+    another agent, so none of them may reach the shared container.
+    """
+
+    CHATS = ("19:a@thread.v2", "19:b@thread.v2")
+
+    def _local_install(self, tmp_path: Path) -> Path:
+        data = tmp_path / "local-data"
+        (data / "poll_state").mkdir(parents=True)
+        (data / "chat_cursors").mkdir()
+        (data / "watched_chats").write_text("\n".join(self.CHATS) + "\n")
+        (data / "chat_id").write_text(f"{self.CHATS[0]}\n")
+        (data / "email_cursor.txt").write_text("2026-05-01T00:00:00Z")
+        (data / "poll_state" / "email_cursor.txt").write_text("2026-05-02T00:00:00Z")
+        for chat_id in self.CHATS:
+            (data / cursor_key(chat_id)).write_text(
+                json.dumps(
+                    {
+                        "last_ts": "2026-05-01T00:00:00.000Z",
+                        "seen_ids_tail": ["m1"],
+                        "bootstrapped": True,
+                        "last_written_at": "2026-05-01T00:00:01.000Z",
+                    }
+                )
+            )
+        return data
+
+    def test_the_local_chat_list_is_not_carried_into_the_cloud(
+        self, tmp_path: Path, fake_cloud_store
+    ) -> None:
+        """A machine's list may belong to another agent, and the shared list never
+        shrinks, so those chats would be polled forever. Discovery rebuilds the real
+        list from Graph about two minutes after boot."""
+        from entrabot.storage.backend import get_backend
+        from entrabot.tools.poll_state import PollStateOutcome, read_watched_chats
+
+        report = migrate_local_to_backend([(self._local_install(tmp_path), "")], get_backend())
+
+        assert read_watched_chats().outcome is PollStateOutcome.ABSENT
+        assert "watched_chats" not in report.keys_copied
+
+    def test_per_machine_files_are_not_carried_into_the_cloud(
+        self, tmp_path: Path, fake_cloud_store
+    ) -> None:
+        from entrabot.storage.backend import get_backend
+
+        data = self._local_install(tmp_path)
+        (data / ".singleton.lock").write_text("")
+        (data / ".singleton.lock.holder.pid").write_text("123")
+        (data / "promises.jsonl").write_text("{}\n")
+
+        report = migrate_local_to_backend([(data, "")], get_backend())
+
+        assert report.keys_copied == ["promises.jsonl"]
+        assert report.errors == []
+
+    def test_no_local_cursor_can_become_the_cloud_cursor(
+        self, tmp_path: Path, fake_cloud_store
+    ) -> None:
+        """Cloud starts its cursor at now, and never consults a local file. Copying
+        the local cursor across would break that the moment setup runs, and a
+        machine's local value may be stale or belong to another agent's mailbox."""
+        from entrabot.storage.backend import get_backend
+        from entrabot.tools.poll_state import PollStateOutcome, read_email_cursor
+
+        report = migrate_local_to_backend([(self._local_install(tmp_path), "")], get_backend())
+
+        assert read_email_cursor().outcome is PollStateOutcome.ABSENT
+        assert "poll_state/email_cursor.txt" not in report.keys_copied
+        assert report.errors == []
+
+    def test_the_legacy_single_chat_key_is_not_carried_into_the_cloud(
+        self, tmp_path: Path, fake_cloud_store
+    ) -> None:
+        """Nothing writes ``chat_id`` any more, so a copy is as old as the install. A
+        cloud container may hold a stale one already, which is why catch_up.py reads
+        this key from a local backend only."""
+        from entrabot.storage.backend import get_backend
+
+        report = migrate_local_to_backend([(self._local_install(tmp_path), "")], get_backend())
+
+        assert "chat_id" not in report.keys_copied
+        assert "chat_id" not in fake_cloud_store.data
+        assert report.errors == []
+
+    def test_per_chat_cursors_are_not_carried_into_the_cloud(
+        self, tmp_path: Path, fake_cloud_store
+    ) -> None:
+        """A cursor copied from another agent's install would be rehydrated as PRESENT
+        when two agents share a group chat. That skips the 24-hour first-sight gate and
+        replays old messages. With no cursor a chat takes the first-sight path."""
+        from entrabot.storage.backend import get_backend
+
+        report = migrate_local_to_backend([(self._local_install(tmp_path), "")], get_backend())
+
+        assert not [key for key in report.keys_copied if key.startswith("chat_cursors/")]
+        assert not [key for key in fake_cloud_store.data if key.startswith("chat_cursors/")]
+        for chat_id in self.CHATS:
+            assert resolve_cursor(chat_id).outcome is CursorOutcome.ABSENT
+        assert report.errors == []
+
+    def test_exclusions_apply_only_at_the_container_root(self, tmp_path: Path) -> None:
+        """The persona source can hold any file name; don't reach into its prefix."""
+        persona = tmp_path / "persona"
+        (persona / "poll_state").mkdir(parents=True)
+        (persona / "chat_cursors").mkdir()
+        (persona / "poll_state" / "email_cursor.txt").write_text("a note")
+        (persona / "watched_chats").write_text("a list")
+        (persona / "chat_id").write_text("an id")
+        (persona / "chat_cursors" / "notes.json").write_text("{}")
+
+        target = LocalBackend(tmp_path / "dst")
+        migrate_local_to_backend([(persona, "claude_memory")], target)
+
+        assert target.read_text("claude_memory/poll_state/email_cursor.txt") == "a note"
+        assert target.read_text("claude_memory/watched_chats") == "a list"
+        assert target.read_text("claude_memory/chat_id") == "an id"
+        assert target.read_text("claude_memory/chat_cursors/notes.json") == "{}"
+
+    def test_only_the_exact_keys_are_excluded(self, tmp_path: Path) -> None:
+        """Names that merely look similar are ordinary data."""
+        data = tmp_path / "data"
+        (data / "chat_cursors_archive").mkdir(parents=True)
+        (data / "chat_cursors_archive" / "old.json").write_text("{}")
+        (data / "chat_id_notes.txt").write_text("notes")
+        (data / "chat_cursors.bak").write_text("backup")
+
+        target = LocalBackend(tmp_path / "dst")
+        report = migrate_local_to_backend([(data, "")], target)
+
+        assert sorted(report.keys_copied) == [
+            "chat_cursors.bak",
+            "chat_cursors_archive/old.json",
+            "chat_id_notes.txt",
+        ]

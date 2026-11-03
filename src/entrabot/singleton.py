@@ -10,7 +10,7 @@ workstation produce two competing entrabot-mcp processes that race on:
   (Keychain serializes access — one reader can block the other long
   enough that the host's MCP ``initialize`` handshake times out)
 - the local interaction log at ``~/.entrabot/data/interaction_log.jsonl``
-- the ``watched_chats`` file
+- the ``watched_chats`` list (a file in local mode, a shared blob in cloud mode)
 - the Azure Blob container (interactions/, daily_summaries/) — ETag races
 
 This module's job is to fail the second spawn loudly with a clean stderr

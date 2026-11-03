@@ -5,21 +5,18 @@ M365 marketing), detects Purview-encrypted messages via the ``message.rpmsg``
 attachment, and returns the substantive messages for the MCP server to push
 as channel notifications and write to the interaction log.
 
-Cursor is a single RFC 3339 timestamp persisted at
-``<config.data_dir>/email_cursor.txt``. On first run the cursor is absent
-and the caller should initialize it to "now" so we don't flood the agent
-with historical mail.
+This module only fetches and filters. The cursor it takes and returns is a single
+RFC 3339 timestamp owned by :mod:`entrabot.tools.poll_state`, which is also where
+the first-run "start at now" rule and the fleet-safe claim live.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import httpx
 
-from entrabot.config import get_config
 from entrabot.errors import TokenExpiredError
 
 logger = logging.getLogger("entrabot.tools.email_poll")
@@ -40,24 +37,9 @@ _NOISE_LOCAL_PART_SUBSTRINGS = (
 )
 
 
-def _cursor_path() -> Path:
-    cfg = get_config()
-    cfg.data_dir.mkdir(parents=True, exist_ok=True)
-    return cfg.data_dir / "email_cursor.txt"
-
-
-def load_cursor() -> str | None:
-    """Return the last-seen receivedDateTime, or None if no cursor yet."""
-    p = _cursor_path()
-    if not p.exists():
-        return None
-    content = p.read_text().strip()
-    return content or None
-
-
-def save_cursor(ts: str) -> None:
-    """Persist *ts* as the new cursor (whitespace stripped)."""
-    _cursor_path().write_text(ts.strip())
+def _parse_utc(ts: str) -> datetime:
+    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
 
 
 def advance_cursor(ts: str) -> str:
@@ -68,10 +50,7 @@ def advance_cursor(ts: str) -> str:
     1 ms prevents messages at the cursor's exact second from being re-fetched
     after a server restart (per-session dedup is lost on restart).
     """
-    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    advanced = (dt + timedelta(milliseconds=1)).astimezone(UTC).replace(tzinfo=None)
+    advanced = (_parse_utc(ts) + timedelta(milliseconds=1)).astimezone(UTC).replace(tzinfo=None)
     if advanced.microsecond:
         return advanced.strftime("%Y-%m-%dT%H:%M:%S.") + f"{advanced.microsecond // 1000:03d}Z"
     return advanced.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -102,10 +81,12 @@ async def poll_once(
 ) -> tuple[list[dict], str | None]:
     """Fetch new messages since *cursor* and return (substantive, new_cursor).
 
-    ``new_cursor`` is the max ``receivedDateTime`` across ALL returned
+    ``new_cursor`` is just past the max ``receivedDateTime`` across ALL returned
     messages (including filtered noise), so the next poll doesn't re-scan
-    the same noise. If no messages come back, the input cursor is returned
-    unchanged.
+    the same noise. Timestamps are compared as times: Graph mixes second and
+    sub-second precision, and a string compare can leave the cursor behind a
+    message it just returned, which another instance would then push again. If
+    nothing newer than *cursor* comes back, the input cursor is returned unchanged.
 
     Raises ``TokenExpiredError`` on HTTP 401 so the caller can refresh.
     """
@@ -128,11 +109,13 @@ async def poll_once(
             return [], cursor
 
         latest_ts: str | None = cursor
+        found_newer = False
         substantive: list[dict] = []
         for msg in messages:
             received = msg.get("receivedDateTime")
-            if received and (latest_ts is None or received > latest_ts):
+            if received and (latest_ts is None or _parse_utc(received) > _parse_utc(latest_ts)):
                 latest_ts = received
+                found_newer = True
 
             sender_addr = (msg.get("from") or {}).get("emailAddress", {}).get("address", "")
             if not is_substantive(sender_addr):
@@ -145,7 +128,7 @@ async def poll_once(
 
             substantive.append(msg)
 
-        if latest_ts is not None:
+        if found_newer and latest_ts is not None:
             latest_ts = advance_cursor(latest_ts)
         return substantive, latest_ts
 

@@ -62,7 +62,7 @@ See [Persona-Sati Host Bootstrap](../clients/persona-sati-host-bootstrap.md) for
 
 The MCP server runs a small set of background tasks, each gated differently:
 
-- **Teams chat poll (5s).** Starts as soon as at least one chat is being watched — from a persisted `watched_chats` file or a chat created during the session. It is not gated on the auth mode; a delegated-mode session with a watched chat polls it too.
+- **Teams chat poll (5s).** Starts as soon as at least one chat is being watched — from the persisted `watched_chats` list or a chat created during the session. It is not gated on the auth mode; a delegated-mode session with a watched chat polls it too.
 - **Email poll (60s), chat auto-discovery via `/me/chats` (120s), and the daily summary scheduler** all start only in **Agent User mode**, because they operate against `/me/*` endpoints that must resolve to the agent's own mailbox and chats — not the human's, which is what `/me/*` would mean in delegated mode. The daily summary fires at a fixed UTC-7 offset (not DST-adjusted).
 - **persona-sati heartbeat (300s).** Also started in Agent User mode, but it returns `"skipped"` without logging whenever `PERSONA_SATI_MCP_URL` / `PERSONA_SATI_MCP_TOKEN_COMMAND` aren't configured — so enabling it costs nothing when no persona-sati peer is attached.
 

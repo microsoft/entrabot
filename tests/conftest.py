@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from collections.abc import Iterator
@@ -43,6 +44,56 @@ def _isolate_memory_backend_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     monkeypatch.delenv("ENTRABOT_BLOB_ENDPOINT", raising=False)
     monkeypatch.delenv("ENTRABOT_BLOB_CONTAINER", raising=False)
     monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path / "data"))
+
+
+@pytest.fixture
+def fake_cloud_store(monkeypatch: pytest.MonkeyPatch):
+    """Put the process in cloud-memory mode against an in-memory blob store.
+
+    ``get_backend()`` takes its real path to a real :class:`BlobBackend`, so the
+    mode selection under test is the production one. Only ``BlobStore`` is
+    swapped, for a fake with real ETag behaviour, so nothing reaches Azure and
+    no storage token is ever acquired. Both places that construct one are covered:
+    ``storage.backend`` holds its own reference, and ``tools.promises`` imports the
+    class when called. Sharing the returned store between calls is how a test
+    models several instances on one container.
+    """
+    from tests.storage.test_backend import _FakeBlobStore
+
+    store = _FakeBlobStore()
+    monkeypatch.setenv("ENTRABOT_BLOB_ENDPOINT", "https://fake-account.invalid")
+    monkeypatch.setenv("ENTRABOT_BLOB_CONTAINER", "fake-container")
+    monkeypatch.delenv("ENTRABOT_KEEP_MEMORY_LOCAL", raising=False)
+    monkeypatch.setattr("entrabot.storage.backend.BlobStore", lambda **_: store)
+    monkeypatch.setattr("entrabot.storage.blob.BlobStore", lambda **_: store)
+    return store
+
+
+@pytest.fixture
+def blob_calls_on_event_loop(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record every ``BlobBackend`` call that blocks a running event loop.
+
+    ``_run_sync`` hands off to a helper thread when a loop is running but then
+    waits on it, so a blob call made from a coroutine still stalls the loop. A
+    blocking read like this once starved the MCP ``initialize`` handshake past the
+    host's timeout. Assert this list is empty to prove the I/O stayed off the loop.
+    """
+    from entrabot.storage import backend as backend_module
+
+    calls: list[str] = []
+    real_run_sync = backend_module._run_sync
+
+    def recording_run_sync(coro):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            calls.append(coro.__qualname__)
+        return real_run_sync(coro)
+
+    monkeypatch.setattr(backend_module, "_run_sync", recording_run_sync)
+    return calls
 
 
 @pytest.fixture(autouse=True)

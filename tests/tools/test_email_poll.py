@@ -5,36 +5,25 @@ notifications, M365 marketing), detects Purview-encrypted mail, and
 returns the substantive messages for the MCP server to push as
 channel notifications + write to the interaction log.
 
-Cursor is a single RFC 3339 timestamp persisted at
-``<config.data_dir>/email_cursor.txt``. On first run, the cursor is
-absent and the poller initializes to "now" so we don't flood the
-agent with historical mail.
+This module only fetches and filters. The cursor lives in
+:mod:`entrabot.tools.poll_state`; see ``tests/tools/test_poll_state.py``.
+The cycle that claims a window before pushing it is in the MCP server; see
+``tests/test_mcp_server_email_poll.py``.
 """
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import httpx
 import pytest
 import respx
 
+from entrabot.tools import email_poll
 from entrabot.tools.email_poll import (
     GRAPH_MESSAGES_URL,
     advance_cursor,
     is_substantive,
-    load_cursor,
     poll_once,
-    save_cursor,
 )
-
-
-@pytest.fixture
-def tmp_data_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("ENTRABOT_DATA_DIR", str(tmp_path))
-    monkeypatch.delenv("ENTRABOT_BLOB_ENDPOINT", raising=False)
-    monkeypatch.delenv("ENTRABOT_BLOB_CONTAINER", raising=False)
-    return tmp_path
 
 
 # ---------------------------------------------------------------------------
@@ -83,25 +72,13 @@ class TestAdvanceCursor:
 
 
 # ---------------------------------------------------------------------------
-# cursor persistence
+# cursor persistence moved to poll_state
 # ---------------------------------------------------------------------------
-class TestCursor:
-    def test_load_returns_none_when_missing(self, tmp_data_dir: Path) -> None:
-        assert load_cursor() is None
-
-    def test_save_then_load_roundtrip(self, tmp_data_dir: Path) -> None:
-        ts = "2026-04-16T19:00:00Z"
-        save_cursor(ts)
-        assert load_cursor() == ts
-
-    def test_save_overwrites(self, tmp_data_dir: Path) -> None:
-        save_cursor("2026-04-16T19:00:00Z")
-        save_cursor("2026-04-16T20:00:00Z")
-        assert load_cursor() == "2026-04-16T20:00:00Z"
-
-    def test_save_strips_whitespace(self, tmp_data_dir: Path) -> None:
-        save_cursor("  2026-04-16T19:00:00Z  \n")
-        assert load_cursor() == "2026-04-16T19:00:00Z"
+class TestNoLocalCursorApi:
+    @pytest.mark.parametrize("name", ["load_cursor", "save_cursor", "_cursor_path"])
+    def test_module_no_longer_owns_cursor_persistence(self, name: str) -> None:
+        """A second cursor API here would quietly bypass the shared claim."""
+        assert not hasattr(email_poll, name)
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +161,33 @@ class TestPollOnce:
             msgs, new_cursor = await poll_once(token="tok", cursor="2026-04-16T19:00:00Z")
         assert len(msgs) == 3
         assert new_cursor == "2026-04-16T19:09:00.001Z"
+
+    @pytest.mark.asyncio
+    async def test_cursor_clears_subsecond_message_after_second_precision_cursor(self) -> None:
+        """Timestamps compare as times, not strings: ``.`` sorts before ``Z``, so a
+        string compare calls ``19:00:00.500Z`` older than ``19:00:00Z``. That left
+        the cursor behind the message, and with a shared cursor the next cycle on
+        another instance, whose session dedup hasn't seen it, pushed it again."""
+        value = [_msg(msg_id="m", sender="u@example.com", received="2026-04-16T19:00:00.500Z")]
+        with respx.mock:
+            respx.get(GRAPH_MESSAGES_URL).mock(
+                return_value=httpx.Response(200, json={"value": value})
+            )
+            _, new_cursor = await poll_once(token="tok", cursor="2026-04-16T19:00:00Z")
+        assert new_cursor == "2026-04-16T19:00:00.501Z"
+
+    @pytest.mark.asyncio
+    async def test_cursor_clears_later_message_with_mixed_precision(self) -> None:
+        value = [
+            _msg(msg_id="a", sender="u@example.com", received="2026-04-16T19:00:01Z"),
+            _msg(msg_id="b", sender="u@example.com", received="2026-04-16T19:00:01.250Z"),
+        ]
+        with respx.mock:
+            respx.get(GRAPH_MESSAGES_URL).mock(
+                return_value=httpx.Response(200, json={"value": value})
+            )
+            _, new_cursor = await poll_once(token="tok", cursor="2026-04-16T19:00:00Z")
+        assert new_cursor == "2026-04-16T19:00:01.251Z"
 
     @pytest.mark.asyncio
     async def test_same_second_message_not_re_fetched_on_next_poll(self) -> None:

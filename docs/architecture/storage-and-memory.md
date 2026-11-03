@@ -2,7 +2,7 @@
 
 Entrabot has two separate things that could be called "memory," and they are owned by different systems:
 
-1. **Operational state** — the agent's own bookkeeping. Interaction logs, daily summaries, chat cursors, and promises route through `MemoryBackend` and may use local files or opt-in Azure Blob Storage. The watched-chat registration and email cursor remain runtime-local files under the data directory.
+1. **Operational state** — the agent's own bookkeeping. Interaction logs, daily summaries, chat cursors, promises, the watched-chat list, and the email cursor all route through `MemoryBackend` and may use local files or opt-in Azure Blob Storage.
 2. **Persona / mind memory** — personality, relationships, running context, behavioral rules. When a `persona-sati` MCP server is attached, the host calls its tools (`write_memory_file`, `read_memory_file`, `bootstrap_session`, and related) for this. Entrabot is not that system; it does not read or write persona content as part of its normal operation.
 
 ## The `MemoryBackend` protocol
@@ -13,7 +13,9 @@ Entrabot has two separate things that could be called "memory," and they are own
 class MemoryBackend(Protocol):
     def read_text(self, key: str) -> str | None: ...
     def read_text_with_etag(self, key: str) -> tuple[str | None, str | None]: ...
-    def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str | None: ...
+    def write_text(
+        self, key: str, content: str, *, if_match: str | None = None, if_absent: bool = False
+    ) -> str | None: ...
     def append_text(self, key: str, content: str) -> None: ...
     def exists(self, key: str) -> bool: ...
     def list(self, prefix: str = "") -> list[str]: ...
@@ -33,23 +35,41 @@ Keys are forward-slash-separated paths, e.g. `"interactions/2026-04-17.jsonl"`. 
 3. Neither set → `LocalBackend` (the default).
 4. **Exactly one** of `ENTRABOT_BLOB_ENDPOINT` / `ENTRABOT_BLOB_CONTAINER` set → raises `BackendMisconfiguredError`. This is deliberate: a half-configured cloud environment must fail loud rather than silently fall back to an empty local store — a fleet instance that quietly re-bootstraps against a fresh local store would look "up" while replaying every chat from scratch.
 
-`assert_backend_config()` calls `get_backend()` during MCP initialization to surface a half-config error and log which backend resolved (`BlobBackend` + endpoint/container, or `LocalBackend` + root path). In the current initialization order, this validation runs after authentication and poll setup.
+`assert_backend_config()` calls `get_backend()` during MCP initialization to surface a half-config error and log which backend resolved (`BlobBackend` + endpoint/container, or `LocalBackend` + root path). This validation runs after authentication and before poll setup, which reads through the backend, so a misconfigured instance starts no background tasks.
 
 ### What actually routes through `MemoryBackend`
 
-Not every piece of operational state goes through this abstraction. Modules that call `get_backend()`:
+Modules that call `get_backend()`:
 
 - `tools/interaction_log.py` — appends to and reads `interactions/<YYYY-MM-DD>.jsonl`.
 - `tools/daily_summary.py` — reads the day's interaction log to build the 17:00 (fixed UTC-7) summary.
 - `tools/promises.py` — reads/writes the single key `promises.jsonl`.
 - `tools/chat_cursors.py` — one key per chat under `chat_cursors/<url-quoted chat_id>.json`.
+- `tools/poll_state.py` — the watched-chat list and the email cursor, described next.
 
-Two other pieces of operational state are **always** plain local files under `cfg.data_dir`, regardless of how the backend is configured:
+`.singleton.lock` deliberately stays local under `cfg.data_dir`: it is a per-machine process lock, not shared state.
 
-- The watched-chats registration (`data_dir/watched_chats`), read by `entrabot.identity.sponsors._watched_chat_ids()` and written directly by the MCP server.
-- The email poll cursor (`data_dir/email_cursor.txt`), read and written by `tools/email_poll.py`.
+### Poll state
 
-Neither is wired through `get_backend()` during normal runtime, so Blob-backed operation does not move ongoing reads and writes for these files into the backend. The setup migration does walk the whole data directory, however, so it can copy both files into Blob as migration artifacts.
+`tools/poll_state.py` owns the two values that decide what the background polls deliver:
+
+| Value | Key | Format |
+|---|---|---|
+| Watched-chat list | `watched_chats` | One chat ID per line, sorted |
+| Email cursor | `poll_state/email_cursor.txt` | One RFC 3339 timestamp, then the IDs of the last 32 claims, newest first, one per line |
+
+**With a cloud backend, neither value touches local disk.** Instances on one container share them, and a machine moved to another agent's container can't carry over the old agent's chats or a stale cursor. If `data_dir/watched_chats` or `data_dir/email_cursor.txt` exist, they are never read or written; startup logs one info line saying they are being ignored.
+
+**With a local backend, little changes.** `watched_chats` is the same file at the same path. The email cursor moves to the new key, and the first run adopts the value in the legacy `email_cursor.txt` once, so there is no gap in delivery. The legacy file stays in place.
+
+**The email cursor has a new key on purpose.** Existing cloud containers hold a stale `email_cursor.txt` that setup's migration copied once and nothing has updated since, because runtime never read it. Reading that key would replay up to 50 old emails on upgrade, and replayed imperative messages are a security problem, not a nuisance (see `DESIGN-multi-instance-cursor-consistency.md`). So on a cloud backend, a missing cursor starts at "now", and neither the old key nor any local file is consulted. That happens only when the key is first initialized, on a container's first boot or after someone deletes it. Mail from before then isn't pushed, but stays readable through the `read_email` tool. Once the key exists, a restart reuses it, so qualifying mail that arrives while no instance runs is fetched and pushed as normal (one poll fetches the 50 newest).
+
+**The rules that make this fleet-safe:**
+
+- Reads classify as `PRESENT`, `ABSENT`, or `UNRESOLVED`, like chat cursors. A failed read is never treated as absent: an unreadable list starts with no chats and retries, and an unreadable email cursor skips the cycle. Neither falls back to a local copy.
+- Every write is a compare-and-swap, including the first. Adding a chat merges into the list, so it can't remove another instance's chats. A failed write stays in a dirty set and is retried on the next discovery sweep, because discovery only registers chats that aren't in memory yet.
+- A value with no ETag is treated as a failure, never overwritten unconditionally.
+- All of this is blocking network I/O, so async code runs it in a worker thread. A past bug that did blob reads on the event loop starved the MCP `initialize` handshake past the host's 30-second timeout.
 
 ## Blob authentication
 
@@ -61,10 +81,13 @@ Neither is wired through `get_backend()` during normal runtime, so Blob-backed o
 
 `write_text(key, content, if_match=etag)` is a compare-and-swap: it succeeds only if the key's current ETag equals `if_match`, and raises `ConcurrencyError` otherwise. `LocalBackend` and `BlobBackend` both honor this — Local via the content-hash ETag, Blob via Azure's real ETag header (and its native `If-Match` precondition, surfaced as HTTP 412).
 
-Two call sites build real logic on top of this:
+`write_text(key, content, if_absent=True)` is the same guarantee for a key that doesn't exist yet: it creates the key and raises `ConcurrencyError` if another writer got there first. `if_match=None` alone is an unconditional overwrite, so without this two instances that both read "absent" would both write, and the last one would win. `LocalBackend` hard-links a fully written temp file into place, which is atomic and fails if the key exists (falling back to an exclusive create where hard links aren't available); `BlobBackend` sends `If-None-Match: *`, and `BlobStore` treats both 412 and 409 as a conflict on that path, since Azure's docs list both.
+
+Three call sites build real logic on top of this:
 
 - **`chat_cursors.claim_delivery()`** — the fleet-safe delivery ledger for inbound Teams messages. It reads the shared cursor with its ETag, computes which candidate message IDs aren't already recorded as delivered, and writes the merged cursor back with `if_match=etag`. On `ConcurrencyError` it re-reads and retries, up to `CLAIM_MAX_ATTEMPTS` (4) times; exhausting the retries returns an empty claim (push nothing) rather than risk double-delivering a message across multiple polling instances.
 - **`promises.py`** — the same read-with-etag / write-with-if_match / retry-once-on-`ConcurrencyError` shape for the shared promises ledger.
+- **`poll_state.py`** — merges into the watched-chat list with bounded retries, and claims each window of email by advancing the cursor before pushing it. See [Messaging and Delivery](messaging-and-delivery.md#fleet-safe-delivery).
 
 ### Fail-closed cursor reads
 
@@ -84,11 +107,14 @@ def migrate_local_to_backend(
 Behavior:
 
 - **Source-preserving.** Files are copied, never deleted — the local copy remains as a rollback path if `ENTRABOT_KEEP_MEMORY_LOCAL` is set afterward.
+- **Local poll state is not copied.** A machine's copies may be stale or belong to another agent. The migration skips `poll_state/email_cursor.txt` and the legacy `email_cursor.txt`, so the cloud cursor starts at "now", and it skips `watched_chats`, because the shared list never shrinks and discovery rebuilds it from Graph about two minutes after boot. It also skips the legacy `chat_id` key and everything under `chat_cursors/`. A copied cursor is read back as present, which bypasses the 24-hour first-sight gate, so two agents sharing a group chat could replay old messages; a chat with no cursor takes the first-sight path instead. These exclusions match keys at the container root only, so a source copied under a prefix such as `claude_memory/` keeps every file. The process-lock files are skipped too.
 - **Idempotent.** A key already present at the target is skipped, so re-running the migration only copies what's missing.
 - **Per-file error report, not an abort.** A file that fails to read or write is recorded in `report.errors` as `(key, message)`; one bad file does not stop the rest of the migration.
 - **Missing source roots are skipped silently** — a user with no Claude Code persona-memory directory still migrates their agent data cleanly.
 
 `scripts/setup.sh --use-cloud-memory` calls this after provisioning Blob Storage, and treats any non-empty `report.errors` as a hard failure: the setup script prints the errors and **exits non-zero**, rather than reporting success while cloud memory is silently out of sync with local disk.
+
+For what changes when an existing deployment picks this up, see [Migrations and upgrades](../troubleshooting/migrations-and-upgrades.md#upgrading-to-shared-poll-state).
 
 ## Persona memory: `PersonaBackend`
 

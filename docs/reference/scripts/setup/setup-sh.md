@@ -109,10 +109,10 @@ Agent User selection:
 Operational memory:
 
 - `--use-cloud-memory` — opt in to Azure Blob Storage for operational data
-  (interaction log, daily summaries, promises, and per-chat delivery cursors).
-  The watched-chat registry and the email-poll cursor stay in local files
-  regardless of this flag. Provisions a resource group, storage account, and
-  container scoped to the Agent User, and unsets `ENTRABOT_KEEP_MEMORY_LOCAL`.
+  (interaction log, daily summaries, promises, per-chat delivery cursors, the
+  watched-chat list, and the email-poll cursor). Provisions a resource group,
+  storage account, and container scoped to the Agent User, and unsets
+  `ENTRABOT_KEEP_MEMORY_LOCAL`.
   A re-run without this flag keeps cloud memory that is already set in `.env`
   for the same Agent User.
 - `--keep-memory-local` — operational data stays on the local filesystem; sets
@@ -193,14 +193,16 @@ Diagnostics and control:
   Storage via [`provision_blob_storage.py`](../storage/provision-blob-storage-py.md)
   and appends `ENTRABOT_BLOB_ENDPOINT` / `ENTRABOT_BLOB_CONTAINER` to `.env`;
   offers an idempotent, source-preserving migration prompt that copies existing
-  local data (interaction log, daily summaries, promises, per-chat delivery
-  cursors) and Claude Code persona memory as a one-time artifact copy.
+  local data (interaction log, daily summaries, promises) and Claude Code persona
+  memory as a one-time artifact copy.
   If provisioning fails, setup shows the provisioner's output and warns. It keeps
   the cloud settings already in `.env` if there were any for this Agent User, and
-  otherwise falls back to local-only memory. The migration copies
-  the watched-chat registry and email-poll cursor as files too, but those two
-  stay local-file-only afterward — `MemoryBackend` never becomes their runtime
-  reader or writer.
+  otherwise falls back to local-only memory. The migration doesn't
+  copy local poll state: the watched-chat list, the email cursor, the legacy
+  `chat_id` key, or the per-chat delivery cursors under `chat_cursors/`. A machine's
+  copies may be stale or another agent's. The cloud cursor starts at "now", discovery
+  rebuilds the list from Graph about two minutes after boot, and a chat with no
+  cursor surfaces its newest message only if it is under 24 hours old.
 - Registers the `entrabot` MCP server in the project-local `.mcp.json` (Claude
   Code) and `~/.copilot/mcp-config.json` (Copilot CLI) via `mcp_config.py`; both
   entries are byte-identical.
