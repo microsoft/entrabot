@@ -90,6 +90,16 @@ ENTRABOT_BLOB_CONTAINER=agent-<agent-user-oid>
 
 `setup.sh --use-cloud-memory` writes these for you. The backend reads them via `get_config()` on every call, so flipping between local and cloud is just an `.env` edit and an MCP server restart.
 
+### Re-running setup
+
+Setup rewrites `.env` on every run, but it reads the old file first and keeps the memory settings when the run is for the same Agent User:
+
+- With neither `--use-cloud-memory` nor `--keep-memory-local`, an agent on cloud memory stays on it. Setup writes the same blob endpoint and container back, provisions nothing, and says so. That is why `./scripts/setup.sh --use-blueprint=<blueprint-app-id>` is safe to run on a configured machine.
+- `--keep-memory-local` switches to local. `--use-cloud-memory` provisions again and writes the new values.
+- If `--use-cloud-memory` fails to provision, setup shows the provisioner's output and keeps the cloud settings that were already there. On a machine that was not on cloud memory, it falls back to local.
+
+Cloud memory counts as set only when both `ENTRABOT_BLOB_ENDPOINT` and `ENTRABOT_BLOB_CONTAINER` are present and `ENTRABOT_KEEP_MEMORY_LOCAL` is not `true`, `1`, or `yes`. A run for a different Agent User, such as `--new`, carries nothing over; pass `--use-cloud-memory` for it. Setup writes the rest of `.env` from scratch, so lines you added by hand are dropped.
+
 ### The storage-scope token
 
 The `BlobBackend` authenticates to Azure Blob via an Agent-User-scoped OAuth token for `https://storage.azure.com/.default`. The three-hop flow is parallel to the Graph-scoped flow used by the Teams tools, minted on demand via `acquire_agent_user_storage_token(config)`. Nothing about this is delegated back to you or to `az login`; the Agent User is the data plane principal.

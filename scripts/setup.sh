@@ -26,11 +26,13 @@ TEAMS_USER_EMAIL=""
 SHOW_HELP=false
 DIAGNOSE=false
 SKIP_SMOKE=false
-# Local is the default for operational storage; users opt in to cloud
-# via --use-cloud-memory. The old --keep-memory-local flag is accepted as a
-# no-op alias so existing scripts keep working.
+# Local is the default for operational storage on a first run; users opt in to
+# cloud via --use-cloud-memory. MEMORY_FLAG_PASSED records whether either memory
+# flag was actually given. A re-run that gives neither keeps the memory settings
+# already in .env (Step 7); an explicit flag always wins.
 KEEP_MEMORY_LOCAL=true
 USE_CLOUD_MEMORY=false
+MEMORY_FLAG_PASSED=false
 NEW_CHAIN=false
 USE_BLUEPRINT=""
 REMOVE_ALL_EXISTING_CERTS=false
@@ -71,11 +73,13 @@ for arg in "$@"; do
         --use-cloud-memory)
             USE_CLOUD_MEMORY=true
             KEEP_MEMORY_LOCAL=false
+            MEMORY_FLAG_PASSED=true
             ;;
         --keep-memory-local)
-            # Kept for backwards compatibility; local is the default now.
+            # Local storage, even on a re-run whose .env already has cloud memory.
             KEEP_MEMORY_LOCAL=true
             USE_CLOUD_MEMORY=false
+            MEMORY_FLAG_PASSED=true
             ;;
         --new)
             NEW_CHAIN=true
@@ -196,6 +200,9 @@ if [ "$SHOW_HELP" = true ]; then
     echo "  --teams-user=EMAIL     Set a different user as the Teams chat recipient."
     echo "                         The az CLI user remains the admin/provisioner."
     echo "                         e.g., --teams-user=user@yourtenant.onmicrosoft.com"
+    echo "                         Without it, a re-run for the same Agent User keeps"
+    echo "                         the recipient already in .env; with it, that"
+    echo "                         recipient is changed."
     echo "  --use-cloud-memory     Opt in to Azure Blob Storage for operational data"
     echo "                         (interactions log, watched chats, email cursor)."
     echo "                         Provisions a resource group, storage account, and"
@@ -204,10 +211,14 @@ if [ "$SHOW_HELP" = true ]; then
     echo "                         Also unsets ENTRABOT_KEEP_MEMORY_LOCAL so the"
     echo "                         PreToolUse hook blocks local Claude Code auto-memory"
     echo "                         writes — mind content routes through persona-sati."
-    echo "  --keep-memory-local    [default] Operational data stays on the local"
-    echo "                         filesystem (~/.entrabot/data). Kept as an explicit"
-    echo "                         flag for backwards compatibility; this is now the"
-    echo "                         default behavior. Pass --use-cloud-memory to override."
+    echo "                         A re-run without this flag keeps cloud memory that"
+    echo "                         is already set in .env for the same Agent User."
+    echo "  --keep-memory-local    Operational data stays on the local filesystem"
+    echo "                         (~/.entrabot/data). A first run with neither memory"
+    echo "                         flag does this too. On a re-run for the same Agent"
+    echo "                         User whose .env already has cloud memory, pass this"
+    echo "                         flag to switch back to local; without it the cloud"
+    echo "                         settings are kept. Pass --use-cloud-memory to override."
     echo "                         Also sets ENTRABOT_KEEP_MEMORY_LOCAL=true, which"
     echo "                         opts the PreToolUse hook out so Claude Code's local"
     echo "                         auto-memory directory is writable again."
@@ -296,10 +307,7 @@ if [ "$DIAGNOSE" = true ]; then
         fail "No .venv found. Run setup.sh once before --diagnose."
     fi
     set +e
-    # shellcheck disable=SC1091
-    if [ -f "$PROJECT_ROOT/.env" ]; then
-        set -a; . "$PROJECT_ROOT/.env"; set +a
-    fi
+    # entrabot.config reads .env as data. It is never sourced: a value could hold $(...).
     "$PROJECT_ROOT/.venv/bin/python" - <<PY
 import sys
 from pathlib import Path
@@ -344,6 +352,39 @@ val = data.get('$key', '')
 if val:
     print(val)
 " || echo ""
+}
+
+# ── Helper: read one value from the existing .env ──────────────────────────
+#
+# Step 7 writes .env from scratch, so it asks this what the old file said first.
+# Reads the file the way entrabot.config does: each line is trimmed, blank lines,
+# comments and lines with no "=" are skipped, the line is split at the FIRST "=",
+# key and value are trimmed (a value is not unquoted), and the FIRST value of a
+# repeated key wins. Prints nothing when the file or key is absent. A file that
+# exists but can't be read stops setup (set -e) before anything is rewritten.
+# The path and key go in as arguments, never into the program text.
+
+read_env_value() {
+    "$PYTHON" -c '
+import pathlib
+import sys
+
+path, wanted = pathlib.Path(sys.argv[1]), sys.argv[2]
+if not path.is_file():
+    sys.exit(0)
+try:
+    text = path.read_text(encoding="utf-8", errors="replace")
+except OSError as exc:
+    sys.exit(f"Could not read {path}: {exc}")
+for line in text.splitlines():
+    line = line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    key, _, value = line.partition("=")
+    if key.strip() == wanted:
+        print(value.strip())
+        break
+' "$PROJECT_ROOT/.env" "$1"
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1020,6 +1061,64 @@ pip install --quiet --upgrade pip setuptools wheel
 pip install --quiet -e ".[dev]"
 success "Installed dependencies (including dev)"
 
+# ── Keep what a re-run must not silently change ────────────────────────────
+#
+# .env is written from scratch below, so read the old one first, before it is
+# truncated. Two settings must survive a re-run that doesn't mention them, such
+# as the documented repair command ./scripts/setup.sh --use-blueprint=ID:
+#   - The sponsor (ENTRABOT_HUMAN_*). Without this it becomes whoever az is
+#     signed in as, which isn't always the sponsor.
+#   - Cloud memory. Without this an agent on Azure Blob moves to an empty local
+#     store, because ENTRABOT_KEEP_MEMORY_LOCAL beats the blob settings.
+# Both belong to ONE Agent User: the blob container is scoped to it and the
+# sponsor is that agent's. A run for a different one (--new, or another
+# --use-blueprint) carries nothing over. Other lines added to .env by hand are
+# not kept.
+OLD_AGENT_USER_ID=$(read_env_value ENTRABOT_AGENT_USER_ID)
+OLD_HUMAN_USER_ID=$(read_env_value ENTRABOT_HUMAN_USER_ID)
+OLD_HUMAN_UPN=$(read_env_value ENTRABOT_HUMAN_UPN)
+OLD_HUMAN_USER_IDS=$(read_env_value ENTRABOT_HUMAN_USER_IDS)
+OLD_HUMAN_UPNS=$(read_env_value ENTRABOT_HUMAN_UPNS)
+OLD_HUMAN_USER_TENANT_IDS=$(read_env_value ENTRABOT_HUMAN_USER_TENANT_IDS)
+OLD_HUMAN_USER_MAILS=$(read_env_value ENTRABOT_HUMAN_USER_MAILS)
+OLD_HUMAN_USER_TYPES=$(read_env_value ENTRABOT_HUMAN_USER_TYPES)
+OLD_BLOB_ENDPOINT=$(read_env_value ENTRABOT_BLOB_ENDPOINT)
+OLD_BLOB_CONTAINER=$(read_env_value ENTRABOT_BLOB_CONTAINER)
+OLD_KEEP_MEMORY_LOCAL=$(read_env_value ENTRABOT_KEEP_MEMORY_LOCAL)
+
+SAME_AGENT=false
+if [ -n "${AGENT_USER_ID:-}" ] && [ "${AGENT_USER_ID:-}" = "$OLD_AGENT_USER_ID" ]; then
+    SAME_AGENT=true
+fi
+
+# --teams-user and --switch-user both say who the sponsor is, so they win. Without
+# them, a sponsor the old file names is kept. All seven values come from it together,
+# because the lists are index-aligned.
+if [ "$SAME_AGENT" = true ] && [ -z "$TEAMS_USER_EMAIL" ] && [ "$SWITCH_USER" = false ] \
+    && [ -n "$OLD_HUMAN_USER_ID$OLD_HUMAN_USER_IDS$OLD_HUMAN_UPN$OLD_HUMAN_UPNS" ]; then
+    HUMAN_USER_ID="$OLD_HUMAN_USER_ID"
+    HUMAN_UPN="$OLD_HUMAN_UPN"
+    HUMAN_USER_IDS="$OLD_HUMAN_USER_IDS"
+    HUMAN_UPNS="$OLD_HUMAN_UPNS"
+    HUMAN_USER_TENANT_IDS="$OLD_HUMAN_USER_TENANT_IDS"
+    HUMAN_USER_MAILS="$OLD_HUMAN_USER_MAILS"
+    HUMAN_USER_TYPES="$OLD_HUMAN_USER_TYPES"
+    KEPT_SPONSOR="${OLD_HUMAN_UPNS:-${OLD_HUMAN_UPN:-${OLD_HUMAN_USER_IDS:-$OLD_HUMAN_USER_ID}}}"
+    success "Kept the sponsor already in .env: $KEPT_SPONSOR (pass --teams-user=EMAIL to change it)"
+fi
+
+# Cloud memory is already set when the old file has both blob settings and doesn't
+# switch to local. The runtime gives ENTRABOT_KEEP_MEMORY_LOCAL priority and reads
+# only true, 1 and yes (any case) as on, so this does too. Half a cloud config
+# doesn't count.
+ON_CLOUD_MEMORY=false
+if [ "$SAME_AGENT" = true ] && [ -n "$OLD_BLOB_ENDPOINT" ] && [ -n "$OLD_BLOB_CONTAINER" ]; then
+    case "$OLD_KEEP_MEMORY_LOCAL" in
+        [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]) ;;
+        *) ON_CLOUD_MEMORY=true ;;
+    esac
+fi
+
 cat > .env << EOF
 # EntraBot Identity Research — generated by scripts/setup.sh
 # Uses Agent User (three-hop flow) with certificate auth — no secrets on disk
@@ -1051,12 +1150,29 @@ success ".env file created (chmod 600)"
 # ════════════════════════════════════════════════════════════════════════════
 # Step 7b: Azure Blob Storage provisioning (ADR-005)
 # ════════════════════════════════════════════════════════════════════════════
-if [ "$KEEP_MEMORY_LOCAL" = true ]; then
+
+# Writes back the blob settings the old .env had, so a run that must not move an
+# agent on cloud memory to an empty local store doesn't: no memory flag was given,
+# or the provisioning it asked for failed.
+keep_existing_cloud_memory() {
+    {
+        echo ""
+        echo "# ADR-005: cloud-hosted agent memory (Azure Blob Storage), kept from the previous .env"
+        printf 'ENTRABOT_BLOB_ENDPOINT=%s\n' "$OLD_BLOB_ENDPOINT"
+        printf 'ENTRABOT_BLOB_CONTAINER=%s\n' "$OLD_BLOB_CONTAINER"
+    } >> .env
+}
+
+if [ "$MEMORY_FLAG_PASSED" = false ] && [ "$ON_CLOUD_MEMORY" = true ]; then
+    keep_existing_cloud_memory
+    success "Memory mode: CLOUD (already set in .env: $OLD_BLOB_ENDPOINT/$OLD_BLOB_CONTAINER). Pass --keep-memory-local to switch to local."
+elif [ "$KEEP_MEMORY_LOCAL" = true ]; then
     echo "" >> .env
     echo "# ADR-005: keep agent memory local (skip cloud sync)" >> .env
     echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> .env
     success "Memory mode: LOCAL (--keep-memory-local set)"
 elif [ -z "${AGENT_USER_ID:-}" ]; then
+    # ON_CLOUD_MEMORY needs an Agent User, so there is no cloud memory to keep here.
     warn "Skipping blob storage — no Agent User to scope RBAC against"
 else
     echo ""
@@ -1076,27 +1192,42 @@ else
         PROVISION_ARGS+=(--create-new-storage)
     fi
 
+    # A failure is handled below, so keep it from ending the script here: under
+    # set -e a failed command substitution exits before $? can be read, and the
+    # fallbacks below could never run.
+    PROVISION_RC=0
     PROVISION_OUT=$("$PYTHON" "$PROJECT_ROOT/scripts/provision_blob_storage.py" \
         "${PROVISION_ARGS[@]}" \
-        2>&1 1>/tmp/entrabot-provision-stdout.$$)
-    PROVISION_RC=$?
+        2>&1 1>/tmp/entrabot-provision-stdout.$$) || PROVISION_RC=$?
     PROVISION_STDOUT=$(cat /tmp/entrabot-provision-stdout.$$)
     rm -f /tmp/entrabot-provision-stdout.$$
     # Echo the provisioner's progress lines (it prints them to stderr)
     echo "$PROVISION_OUT" | sed 's/^/  /'
 
     if [ $PROVISION_RC -ne 0 ]; then
-        warn "Blob storage provisioning failed — falling back to local-only memory"
-        echo "" >> .env
-        echo "# ADR-005: provisioning failed, using local-only memory" >> .env
-        echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> .env
-    else
-        BLOB_ENDPOINT=$(echo "$PROVISION_STDOUT" | grep '^BLOB_ENDPOINT=' | cut -d= -f2-)
-        BLOB_CONTAINER=$(echo "$PROVISION_STDOUT" | grep '^BLOB_CONTAINER=' | cut -d= -f2-)
-        if [ -z "$BLOB_ENDPOINT" ] || [ -z "$BLOB_CONTAINER" ]; then
-            warn "Provisioner returned no endpoint/container — using local-only memory"
+        if [ "$ON_CLOUD_MEMORY" = true ]; then
+            warn "Blob storage provisioning failed — keeping the cloud memory already set in .env"
+            keep_existing_cloud_memory
+        else
+            warn "Blob storage provisioning failed — falling back to local-only memory"
             echo "" >> .env
+            echo "# ADR-005: provisioning failed, using local-only memory" >> .env
             echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> .env
+        fi
+    else
+        # grep exits 1 when a line is missing, which pipefail turns into a failed
+        # assignment; an empty value is handled by the check below.
+        BLOB_ENDPOINT=$(echo "$PROVISION_STDOUT" | grep '^BLOB_ENDPOINT=' | cut -d= -f2-) || BLOB_ENDPOINT=""
+        BLOB_CONTAINER=$(echo "$PROVISION_STDOUT" | grep '^BLOB_CONTAINER=' | cut -d= -f2-) || BLOB_CONTAINER=""
+        if [ -z "$BLOB_ENDPOINT" ] || [ -z "$BLOB_CONTAINER" ]; then
+            if [ "$ON_CLOUD_MEMORY" = true ]; then
+                warn "Provisioner returned no endpoint/container — keeping the cloud memory already set in .env"
+                keep_existing_cloud_memory
+            else
+                warn "Provisioner returned no endpoint/container — using local-only memory"
+                echo "" >> .env
+                echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> .env
+            fi
         else
             echo "" >> .env
             echo "# ADR-005: cloud-hosted agent memory (Azure Blob Storage)" >> .env
@@ -1198,7 +1329,7 @@ elif [ -d "$PROJECT_ROOT/.venv" ] && [ -f "$PROJECT_ROOT/.env" ]; then
     echo ""
     echo -e "  ${BLUE}Running smoke test (token + Graph identity + Teams scope)...${NC}"
     set +e
-    set -a; . "$PROJECT_ROOT/.env"; set +a
+    # entrabot.config reads .env as data. It is never sourced: a value could hold $(...).
     "$PROJECT_ROOT/.venv/bin/python" - <<'PY'
 import sys
 from entrabot.config import EntraBotConfig
@@ -1290,7 +1421,11 @@ echo -e "  If ${BLUE}mind_contract_available=false${NC}: body-only mode; do not 
 echo ""
 
 if [ "$MIGRATION_FAILED" = true ]; then
-    echo -e "  ${RED}Re-run ${BLUE}./scripts/setup.sh${RED} after fixing the migration error above.${NC}"
+    # Name the store this run just provisioned: --use-cloud-memory alone picks the default one.
+    BLOB_ENDPOINT_ACCOUNT="${BLOB_ENDPOINT#https://}"
+    BLOB_ENDPOINT_ACCOUNT="${BLOB_ENDPOINT_ACCOUNT%%.*}"
+    echo -e "  ${RED}After fixing the migration error above, re-run:${NC}"
+    echo -e "  ${BLUE}./scripts/setup.sh --use-blueprint=$BLUEPRINT_APP_ID --use-cloud-memory --with-storage-account=${BLOB_ENDPOINT_ACCOUNT} --with-container=$BLOB_CONTAINER${NC}"
     echo ""
     exit 2
 fi
