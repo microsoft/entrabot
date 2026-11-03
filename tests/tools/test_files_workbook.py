@@ -9,6 +9,7 @@ address) inside the XPIA envelope.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import httpx
@@ -340,6 +341,54 @@ class TestReadWorkbookRange:
 
         assert exc_info.value.max_cells == DEFAULT_MAX_WORKBOOK_CELLS
 
+    @pytest.mark.asyncio
+    @respx.mock
+    @pytest.mark.parametrize("raw_cap", ["0", "-1", "not-a-number"])
+    async def test_invalid_cap_warns_and_uses_default(
+        self,
+        workbook_ref,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        raw_cap: str,
+    ) -> None:
+        monkeypatch.setenv("ENTRABOT_FILES_MAX_WORKBOOK_CELLS", raw_cap)
+
+        with (
+            caplog.at_level(logging.WARNING, logger="entrabot.tools.files"),
+            pytest.raises(WorkbookRangeTooLargeError) as exc_info,
+        ):
+            await read_workbook_range(
+                workbook_ref(), "Sheet1", "A1:XFD1048576", token=TOKEN, transport=_transport()
+            )
+
+        assert exc_info.value.max_cells == DEFAULT_MAX_WORKBOOK_CELLS
+        assert "ENTRABOT_FILES_MAX_WORKBOOK_CELLS" in caplog.text
+
+    @pytest.mark.asyncio
+    @respx.mock
+    @pytest.mark.parametrize("raw_cap", [None, ""])
+    async def test_unset_cap_uses_default_without_warning(
+        self,
+        workbook_ref,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        raw_cap: str | None,
+    ) -> None:
+        if raw_cap is None:
+            monkeypatch.delenv("ENTRABOT_FILES_MAX_WORKBOOK_CELLS", raising=False)
+        else:
+            monkeypatch.setenv("ENTRABOT_FILES_MAX_WORKBOOK_CELLS", raw_cap)
+
+        with (
+            caplog.at_level(logging.WARNING, logger="entrabot.tools.files"),
+            pytest.raises(WorkbookRangeTooLargeError),
+        ):
+            await read_workbook_range(
+                workbook_ref(), "Sheet1", "A1:XFD1048576", token=TOKEN, transport=_transport()
+            )
+
+        assert "ENTRABOT_FILES_MAX_WORKBOOK_CELLS" not in caplog.text
+
 
 class TestReadWorkbookUsedRange:
     @pytest.mark.asyncio
@@ -448,6 +497,39 @@ class TestListWorkbookWorksheets:
 
         with pytest.raises(GraphFilesError):
             await list_workbook_worksheets(workbook_ref(), token=TOKEN, transport=_transport())
+
+    @pytest.mark.asyncio
+    @respx.mock
+    @pytest.mark.parametrize(
+        "row",
+        [
+            "not-a-row",
+            {"position": 0, "visibility": "Visible"},
+            {"name": None, "position": 0, "visibility": "Visible"},
+            {"name": ["GRAPHVALUE"], "position": 0, "visibility": "Visible"},
+            {"name": "Sheet1", "visibility": "Visible"},
+            {"name": "Sheet1", "position": "GRAPHVALUE", "visibility": "Visible"},
+            {"name": "Sheet1", "position": True, "visibility": "Visible"},
+            {"name": "Sheet1", "position": 0},
+            {"name": "Sheet1", "position": 0, "visibility": {"x": "GRAPHVALUE"}},
+        ],
+    )
+    async def test_unexpected_row_shape_fails_closed_without_echo(
+        self, workbook_ref, row: Any
+    ) -> None:
+        respx.get(url__startswith=f"{WORKBOOK_ROOT}/worksheets").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "value": [{"name": "Good", "position": 0, "visibility": "Visible"}, row],
+                },
+            )
+        )
+
+        with pytest.raises(GraphFilesError) as exc_info:
+            await list_workbook_worksheets(workbook_ref(), token=TOKEN, transport=_transport())
+
+        assert "GRAPHVALUE" not in str(exc_info.value)
 
 
 class TestWorkbookXpia:

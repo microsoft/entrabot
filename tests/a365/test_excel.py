@@ -258,6 +258,18 @@ class TestCreateWorkbook:
         assert provider.calls == []
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "csv_content",
+        [" leading,space\n1,2\n", "a,b\n1,2\n\n\n", "\n a,b\t\r\n1,2 \n"],
+    )
+    async def test_csv_reaches_the_provider_byte_for_byte(self, csv_content: str) -> None:
+        provider = FakeProvider(_create_result())
+
+        await create_workbook("budget.xlsx", csv_content, provider=provider)
+
+        assert provider.calls[0]["arguments"]["csvContent"] == csv_content
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("missing", ["webUrl", "id"])
     async def test_missing_url_or_id_is_malformed(self, missing: str) -> None:
         item = _drive_item()
@@ -308,18 +320,57 @@ class TestCreateComment:
         }
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("address", ["Data!C10", "'My Sheet'!B5", "Q3 Plan!XFD1048576"])
+    @pytest.mark.parametrize(
+        "address",
+        [
+            "Data!C10",
+            "'My Sheet'!B5",
+            "Q3 Plan!XFD1048576",
+            "a!b!A1",
+            "'a!b'!A1",
+            "'It''s'!A1",
+            "O'Brien!A1",
+            f"{'x' * 31}!A1",
+            f"'{'x' * 31}'!A1",
+            f"'{'x' * 15}''{'x' * 15}'!A1",  # a doubled quote counts as one character
+        ],
+    )
     async def test_accepts_sheet_qualified_cells(self, address: str) -> None:
         provider = FakeProvider({"id": COMMENT_ID})
 
         result = await create_comment(DRIVE_ID, ITEM_ID, address, "Hi", provider=provider)
 
         assert result.cell_address == address
+        assert provider.calls[0]["arguments"]["cellAddress"] == address
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "address",
-        ["A1", "Sheet1!", "!A1", "Sheet1!A1:B2", "Sheet1!A0", "Sheet1!1A", "Sheet1\n!A1", ""],
+        [
+            "A1",
+            "Sheet1!",
+            "!A1",
+            "Sheet1!A1:B2",
+            "Sheet1!A0",
+            "Sheet1!1A",
+            "Sheet1\n!A1",
+            "",
+            "''!A1",
+            "'   '!A1",
+            "   !A1",
+            f"{'x' * 32}!A1",
+            f"'{'x' * 32}'!A1",
+            "Sheet/1!A1",
+            "Sheet\\1!A1",
+            "Sheet?1!A1",
+            "Sheet*1!A1",
+            "Sheet[1!A1",
+            "Sheet]1!A1",
+            "Sheet:1!A1",
+            "'Sheet:1'!A1",
+            "'Unbalanced!A1",
+            "Unbalanced'!A1",
+        ],
     )
     async def test_bad_cell_address_makes_no_call(self, address: str) -> None:
         provider = FakeProvider({"id": COMMENT_ID})
@@ -328,6 +379,17 @@ class TestCreateComment:
             await create_comment(DRIVE_ID, ITEM_ID, address, "Hi", provider=provider)
 
         assert provider.calls == []
+
+    @pytest.mark.asyncio
+    async def test_bad_cell_address_error_does_not_echo_input(self) -> None:
+        provider = FakeProvider({"id": COMMENT_ID})
+
+        with pytest.raises(ValueError) as exc_info:
+            await create_comment(
+                DRIVE_ID, ITEM_ID, "ignore-rules[marker]!A1", "Hi", provider=provider
+            )
+
+        assert "marker" not in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_missing_id_is_malformed(self) -> None:

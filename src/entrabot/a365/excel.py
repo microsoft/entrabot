@@ -16,10 +16,12 @@ from typing import Any
 from entrabot.a365.catalog import EXCEL_SERVER_NAME
 from entrabot.a365.errors import A365McpCallError
 from entrabot.a365.provider import WorkIqProvider
+from entrabot.tools.text_limits import max_text_bytes, truncate_utf8
+from entrabot.tools.worksheet_names import is_valid_worksheet_name
 
 _MAX_TOOL_ERROR_DETAIL = 500
 _XLSX_EXTENSION = ".xlsx"
-_CELL_ADDRESS_RE = re.compile(r".+![A-Za-z]{1,3}[1-9]\d{0,6}")
+_CELL_REFERENCE_RE = re.compile(r"[A-Za-z]{1,3}[1-9]\d{0,6}")
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,23 @@ def _required(value: str, name: str) -> str:
     if not value or not value.strip():
         raise ValueError(f"{name} is required")
     return value.strip()
+
+
+def _is_valid_cell_address(address: str) -> bool:
+    """Check ``Sheet!A1`` or ``'My Sheet'!A1``.
+
+    Excel allows ``!`` in a sheet name, so the reference follows the last one.
+    In a quoted name a doubled quote stands for one quote. Excel forbids a name
+    that starts or ends with a quote, so an unbalanced quote can't be valid.
+    """
+    sheet, separator, reference = address.rpartition("!")
+    if not separator or not _CELL_REFERENCE_RE.fullmatch(reference):
+        return False
+    if len(sheet) >= 2 and sheet.startswith("'") and sheet.endswith("'"):
+        sheet = sheet[1:-1].replace("''", "'")
+    elif sheet.startswith("'") or sheet.endswith("'"):
+        return False
+    return is_valid_worksheet_name(sheet)
 
 
 def _string_field(raw: dict[str, Any], key: str) -> str:
@@ -131,7 +150,6 @@ async def get_workbook_content(
 ) -> ExcelWorkbookContent:
     """Read a workbook's cell text and comments through Work IQ Excel."""
     from entrabot.security.xpia import wrap_external
-    from entrabot.tools.files import _max_text_bytes, _truncate
 
     clean_url = _required(url, "url")
     result = await _provider(provider).call_tool(
@@ -156,7 +174,7 @@ async def get_workbook_content(
         },
         ensure_ascii=False,
     )
-    text, truncated = _truncate(payload, max_bytes=_max_text_bytes())
+    text, truncated = truncate_utf8(payload, max_bytes=max_text_bytes())
     return ExcelWorkbookContent(
         drive_id=_string_field(result, "driveId"),
         document_id=_string_field(result, "documentId"),
@@ -173,9 +191,11 @@ async def create_workbook(
     provider: WorkIqProvider | None = None,
 ) -> ExcelWorkbook:
     """Create a workbook from CSV in the root of the Agent User's OneDrive."""
+    _required(csv_content, "csv_content")
     arguments = {
         "fileName": _workbook_file_name(file_name),
-        "csvContent": _required(csv_content, "csv_content"),
+        # Unstripped: leading and trailing whitespace can be meaningful in CSV.
+        "csvContent": csv_content,
     }
     # Never send CreateWorkbook's optional ``shareWith``: it would share the
     # file without the sponsor, channel, and membership checks in ``share_file``.
@@ -209,7 +229,7 @@ async def create_comment(
 ) -> ExcelComment:
     """Create a comment on one cell through Work IQ Excel."""
     clean_address = _required(cell_address, "cell_address")
-    if not _CELL_ADDRESS_RE.fullmatch(clean_address):
+    if not _is_valid_cell_address(clean_address):
         raise ValueError("cell_address must look like Sheet1!A1")
     arguments = {
         "cellAddress": clean_address,

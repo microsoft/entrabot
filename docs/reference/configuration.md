@@ -43,7 +43,7 @@ See [Configuration guide § Sponsor / human owner](../guides/configuration.md#sp
 | `ENTRABOT_SKIP_PROVISIONING` | Defaults to falsy. Truthy (`true`/`1`/`yes`) skips the three-hop fast path and goes straight to delegated auth. |
 | `ENTRABOT_LOG_LEVEL` | Defaults to `INFO`. |
 | `ENTRABOT_XPIA_WRAP_ENABLE` | Defaults to enabled (`true`). Set to `false`/`0`/`no`/`off` to disable. See the [Security (XPIA) API Reference](api/security.md). |
-| `ENTRABOT_FILES_MAX_WORKBOOK_CELLS` | Most cells one `read_workbook_range` call can read. Defaults to `5000`. |
+| `ENTRABOT_FILES_MAX_WORKBOOK_CELLS` | Most cells one `read_workbook_range` call can read. Defaults to `5000`, which is also used for a zero, negative, or unparseable value, with a logged warning. |
 
 See [Configuration guide § Runtime mode and behavior](../guides/configuration.md#runtime-mode-and-behavior).
 

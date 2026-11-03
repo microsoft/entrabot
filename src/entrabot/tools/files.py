@@ -65,6 +65,8 @@ from entrabot.errors import (
 )
 from entrabot.tools.audit import log_event
 from entrabot.tools.rate_limit import RetryOn429Transport
+from entrabot.tools.text_limits import DEFAULT_MAX_TEXT_BYTES, max_text_bytes, truncate_utf8
+from entrabot.tools.worksheet_names import is_valid_worksheet_name
 
 logger = logging.getLogger("entrabot.tools.files")
 
@@ -72,10 +74,9 @@ GRAPH_V1_HOST = "https://graph.microsoft.com/v1.0"
 GRAPH_BETA_HOST = "https://graph.microsoft.com/beta"  # comments only; isolate
 
 # Default budgets — overridable via env. Plan §"Failure-mode registry":
-# ENTRABOT_FILES_MAX_TEXT_BYTES (200KB) caps extracted text per
-# read_file; ENTRABOT_FILES_MAX_PDF_BYTES (50 MiB) refuses to download
+# ENTRABOT_FILES_MAX_TEXT_BYTES (200KB, see text_limits) caps extracted text
+# per read_file; ENTRABOT_FILES_MAX_PDF_BYTES (50 MiB) refuses to download
 # a PDF exceeding that size (P1).
-DEFAULT_MAX_TEXT_BYTES = 200_000
 DEFAULT_MAX_PDF_BYTES = 52_428_800  # 50 MiB
 # ENTRABOT_FILES_MAX_WORKBOOK_CELLS caps cells per read_workbook_range. Each
 # cell comes back three times (values, text, formulas), so this is sized to
@@ -260,14 +261,6 @@ def _check_site_allowed(site_id: str | None) -> None:
         raise SiteNotAllowedError(site_id)
 
 
-def _max_text_bytes() -> int:
-    raw = os.environ.get("ENTRABOT_FILES_MAX_TEXT_BYTES")
-    try:
-        return int(raw) if raw else DEFAULT_MAX_TEXT_BYTES
-    except ValueError:
-        return DEFAULT_MAX_TEXT_BYTES
-
-
 def _max_pdf_bytes() -> int:
     raw = os.environ.get("ENTRABOT_FILES_MAX_PDF_BYTES")
     try:
@@ -277,11 +270,21 @@ def _max_pdf_bytes() -> int:
 
 
 def _max_workbook_cells() -> int:
+    """Return the cell cap. A cap that isn't a positive integer can't be meant."""
     raw = os.environ.get("ENTRABOT_FILES_MAX_WORKBOOK_CELLS")
-    try:
-        return int(raw) if raw else DEFAULT_MAX_WORKBOOK_CELLS
-    except ValueError:
+    if not raw:
         return DEFAULT_MAX_WORKBOOK_CELLS
+    try:
+        cap = int(raw)
+    except ValueError:
+        cap = 0
+    if cap < 1:
+        logger.warning(
+            "ENTRABOT_FILES_MAX_WORKBOOK_CELLS must be a positive integer; using %d",
+            DEFAULT_MAX_WORKBOOK_CELLS,
+        )
+        return DEFAULT_MAX_WORKBOOK_CELLS
+    return cap
 
 
 def _share_id_from_url(url: str) -> str:
@@ -669,15 +672,6 @@ def _extract_pdf_text(data: bytes) -> tuple[str, int]:
     return ("\n\n".join(pages), len(pages))
 
 
-def _truncate(text: str, *, max_bytes: int) -> tuple[str, bool]:
-    """Truncate ``text`` so its UTF-8 encoding is at most ``max_bytes``."""
-    encoded = text.encode("utf-8")
-    if len(encoded) <= max_bytes:
-        return text, False
-    truncated = encoded[:max_bytes].decode("utf-8", errors="ignore")
-    return truncated, True
-
-
 async def _check_size_or_raise(
     *,
     client: httpx.AsyncClient,
@@ -799,7 +793,7 @@ async def read_file(
                 raise FileTooLargeError(len(pdf_bytes), cap)
             text, page_count = _extract_pdf_text(pdf_bytes)
 
-        text, truncated = _truncate(text, max_bytes=_max_text_bytes())
+        text, truncated = truncate_utf8(text, max_bytes=max_text_bytes())
 
         # XPIA envelope: file bodies are model-facing external content;
         # wrap AFTER truncation so the size cap operates on real content
@@ -828,10 +822,8 @@ async def read_file(
 _A1_RE = re.compile(
     r"\$?([A-Za-z]{1,3})\$?([1-9][0-9]{0,6})(?::\$?([A-Za-z]{1,3})\$?([1-9][0-9]{0,6}))?"
 )
-_MAX_WORKSHEET_NAME_CHARS = 31
 _MAX_WORKBOOK_COLUMN = 16_384  # XFD
 _MAX_WORKBOOK_ROW = 1_048_576
-_WORKSHEET_FORBIDDEN_CHARS = frozenset("\\/?*[]:")
 _ADDRESS_HINT = (
     "address must be one cell or a bounded top-left:bottom-right range such as "
     "A1 or A1:D4, within XFD1048576, with no sheet name"
@@ -880,12 +872,7 @@ def _worksheet_url(file_ref: FileRef, worksheet: str) -> str:
     The name is an OData string key: quotes are doubled first, then the whole
     value is percent-encoded so nothing in it can alter the URL path.
     """
-    if (
-        not worksheet.strip()
-        or len(worksheet) > _MAX_WORKSHEET_NAME_CHARS
-        or _contains_control_char(worksheet)
-        or not _WORKSHEET_FORBIDDEN_CHARS.isdisjoint(worksheet)
-    ):
+    if not is_valid_worksheet_name(worksheet):
         raise InvalidWorkbookRangeError(
             "worksheet must be an Excel worksheet name from list_workbook_worksheets"
         )
@@ -935,6 +922,23 @@ def _range_dimensions(resp: httpx.Response, body: dict[str, Any]) -> tuple[int, 
     return rows, columns
 
 
+def _worksheet_row(row: Any, *, status: int) -> dict[str, Any]:
+    """Return one worksheet's fields, failing closed on an unexpected shape.
+
+    The error names no Graph-supplied value, because those are file-authored.
+    """
+    if isinstance(row, dict):
+        name, position, visibility = (row.get(key) for key in ("name", "position", "visibility"))
+        if (
+            isinstance(name, str)
+            and isinstance(position, int)
+            and not isinstance(position, bool)
+            and isinstance(visibility, str)
+        ):
+            return {"name": name, "position": position, "visibility": visibility}
+    raise GraphFilesError(status, "malformed workbook response: unexpected worksheet entry")
+
+
 async def list_workbook_worksheets(
     file_ref: FileRef,
     *,
@@ -970,18 +974,10 @@ async def list_workbook_worksheets(
             raise GraphFilesError(
                 resp.status_code, "malformed workbook response: value is not a list"
             )
-        worksheets = [
-            {
-                "name": row.get("name"),
-                "position": row.get("position"),
-                "visibility": row.get("visibility"),
-            }
-            for row in rows
-            if isinstance(row, dict)
-        ]
-        text, truncated = _truncate(
+        worksheets = [_worksheet_row(row, status=resp.status_code) for row in rows]
+        text, truncated = truncate_utf8(
             json.dumps({"worksheets": worksheets}, ensure_ascii=False),
-            max_bytes=_max_text_bytes(),
+            max_bytes=max_text_bytes(),
         )
 
         from entrabot.security.xpia import wrap_external
@@ -1065,7 +1061,7 @@ async def read_workbook_range(
         body = _json_object(resp)
         row_count, column_count = _range_dimensions(resp, body)
 
-        text, truncated = _truncate(
+        text, truncated = truncate_utf8(
             json.dumps(
                 {
                     "worksheet": worksheet,
@@ -1076,7 +1072,7 @@ async def read_workbook_range(
                 },
                 ensure_ascii=False,
             ),
-            max_bytes=_max_text_bytes(),
+            max_bytes=max_text_bytes(),
         )
 
         from entrabot.security.xpia import wrap_external
