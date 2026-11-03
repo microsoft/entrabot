@@ -4,12 +4,18 @@
       "type": "stdio",
       "command": ".venv/bin/entrabot-mcp",
       "args": [],
+      "env": {
+        "PERSONA_SATI_MCP_URL": "<your persona-sati base URL>",
+        "PERSONA_SATI_MCP_TOKEN_COMMAND": "<absolute path to your persona-sati token command>"
+      },
       "description": "EntraBot Agent Identity — Teams tools + background DM/email poll"
     },
     "persona-sati": {
-      "type": "sse",
-      "url": "http://localhost:8100/sse",
-      "description": "Persona-sati — personality, memory, and behavioral rules (optional)"
+      "type": "stdio",
+      "command": "<absolute path to the client launcher from your persona-sati install>",
+      "args": [],
+      "env": {},
+      "description": "Persona-sati — personality, memory, and behavioral rules (optional). Delete this entry and the PERSONA_SATI_* env vars above to run standalone. Setup is covered by your persona-sati install's own setup documentation."
     }
   }
 }

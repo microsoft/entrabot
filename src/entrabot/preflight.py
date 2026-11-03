@@ -13,16 +13,21 @@ Three entry points:
 * :func:`run_smoke_checks` — Step 8.5 of setup.sh, after MCP wiring. Verifies
   the three-hop token mint, the agent's Graph identity, and Teams scope.
 * :func:`run_diagnostics` — ``./scripts/setup.sh --diagnose`` short-circuit.
-  Superset of the smoke checks plus state file, cert keystore, and MCP wiring.
+  Superset of the smoke checks plus state file, cert keystore, MCP wiring, and
+  :func:`check_persona_sati_mcp` (optional, never fails).
 """
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import shutil
+import socket
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -584,6 +589,121 @@ def check_mcp_configs(
     return checks
 
 
+_TOKEN_ENV = "PERSONA_SATI_MCP_TOKEN_COMMAND"
+_URL_TRANSPORTS = frozenset({"sse", "http", "streamable-http", "streamable_http"})
+
+
+def _is_placeholder(value: object) -> bool:
+    text = value.strip() if isinstance(value, str) else ""
+    return text.startswith("<") and text.endswith(">")
+
+
+def _is_loopback(host: str) -> bool:
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback  # all of 127.0.0.0/8, and ::1
+    except ValueError:
+        return False
+
+
+def _is_executable(command: str, base: Path, env: object) -> bool:
+    """True if ``command`` is a runnable file.
+
+    Relative paths resolve against ``base``. Bare names are looked up on the ``PATH`` in
+    the entry's own ``env``, because that's what the host runs them with, or on this
+    process's ``PATH`` if the entry doesn't set one.
+    """
+    bare = "/" not in command and "\\" not in command
+    path = env.get("PATH") if isinstance(env, dict) else None
+    target = command if bare else str(base / command)
+    return shutil.which(target, path=path if isinstance(path, str) else None) is not None
+
+
+def check_persona_sati_mcp(claude_path: Path) -> Check:
+    """Check the optional ``persona-sati`` entry in Claude Code's ``.mcp.json``.
+
+    Never ``fail``: no entry is ``skip``, misconfiguration is ``warn``. Only a loopback URL
+    is contacted (one 1s TCP connect). Details show only the command path and the URL's
+    scheme, host and port, never env values, headers, userinfo, URL paths or queries.
+    """
+    name = "persona-sati MCP (optional)"
+    try:
+        servers = json.loads(claude_path.read_text(encoding="utf-8")).get("mcpServers") or {}
+        entry, entrabot = servers.get("persona-sati"), servers.get("entrabot")
+    except (OSError, ValueError, AttributeError):  # missing, unparsable, or wrong shape
+        entry = entrabot = None
+    if not isinstance(entry, dict):
+        detail = "No persona-sati entry in the MCP config (optional; the agent runs standalone)."
+        return Check(name=name, status="skip", detail=detail)
+
+    env = entrabot.get("env") if isinstance(entrabot, dict) else None
+    env = env if isinstance(env, dict) else {}
+    url, command = entry.get("url"), entry.get("command")
+    # Follow the declared transport, as the runtime does, so an entry whose fields don't
+    # match it can't pass. Only an entry that declares nothing is inferred from its fields.
+    declared = entry.get("type") or entry.get("transport")
+    kind = str(declared).lower() if declared else ("sse" if isinstance(url, str) else "stdio")
+    problems: list[str] = []
+    ok = ""
+    if kind in _URL_TRANSPORTS and not isinstance(url, str):
+        problems.append(f"{kind} entry has no url")
+    elif kind in _URL_TRANSPORTS:
+        try:
+            parts = urlsplit(url)
+            scheme, host, port = parts.scheme, parts.hostname, parts.port
+        except ValueError:  # malformed; never echo it, the message can quote the bad part
+            scheme = host = port = None
+        if scheme not in ("http", "https") or not host:
+            problems.append("url is not a valid http(s) URL (unfilled placeholder?)")
+        else:
+            port = port or (443 if scheme == "https" else 80)
+            shown = f"{scheme}://{f'[{host}]' if ':' in host else host}:{port}"
+            if not _is_loopback(host):
+                ok = f"{shown} is a remote host (not contacted)."
+            else:
+                try:
+                    socket.create_connection((host, port), timeout=1.0).close()
+                except OSError:
+                    problems.append(
+                        f"nothing is listening on {shown} "
+                        "(this does not mean a hosted persona-sati service is down)"
+                    )
+                else:
+                    ok = f"{shown} is accepting connections."
+    elif kind != "stdio":
+        problems.append("entry has an unsupported transport type")
+    elif not isinstance(command, str) or not command:
+        problems.append("stdio entry has no command")
+    elif _is_placeholder(command):  # hosts exec the command as written, unstripped
+        problems.append(f"command {command} is an unfilled placeholder")
+    elif not _is_executable(command, claude_path.parent, entry.get("env")):
+        problems.append(f"command {command} was not found or is not executable")
+    else:
+        ok = f"stdio launcher {command} is present and executable."
+
+    token = str(env.get(_TOKEN_ENV) or "").strip()  # run directly, so it must be runnable
+    for var in ("PERSONA_SATI_MCP_URL", _TOKEN_ENV):
+        if _is_placeholder(env.get(var)):
+            problems.append(f"{var} in the entrabot env is an unfilled placeholder")
+    if token and not _is_placeholder(token) and not _is_executable(token, claude_path.parent, env):
+        problems.append(f"{_TOKEN_ENV} in the entrabot env was not found or is not executable")
+
+    if not problems:
+        return Check(name=name, status="pass", detail=ok)
+    return Check(
+        name=name,
+        status="warn",
+        detail="; ".join(problems) + ".",
+        remediation=(
+            "persona-sati is optional: to run standalone, delete this entry and remove "
+            f"PERSONA_SATI_MCP_URL and {_TOKEN_ENV} from the entrabot entry's env. If it is "
+            "hosted, use the client launcher from your persona-sati install, per its own setup "
+            "documentation."
+        ),
+    )
+
+
 def run_diagnostics(
     config: EntraBotConfig,
     *,
@@ -605,6 +725,7 @@ def run_diagnostics(
             copilot_path=copilot_mcp_path,
         )
     )
+    checks.append(check_persona_sati_mcp(claude_mcp_path))
     return checks
 
 
@@ -646,6 +767,7 @@ __all__ = [
     "TEAMS_CAPABLE_SKUS",
     "check_copilot_license_availability",
     "check_mcp_configs",
+    "check_persona_sati_mcp",
     "check_state_file",
     "check_teams_license_availability",
     "format_report",
