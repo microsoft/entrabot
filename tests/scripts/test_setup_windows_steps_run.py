@@ -373,6 +373,33 @@ class TestEnvStep:
         assert run.values("ENTRABOT_HUMAN_USER_ID") == ["runner-object"]
         assert run.values("ENTRABOT_AGENT_USER_ID") == ["agent-user"]
 
+    def test_a_different_agent_loses_the_old_sponsor_even_if_the_lookup_fails(self, run_steps):
+        # Otherwise daily summaries for the new agent could reach the previous sponsor.
+        run = run_steps(
+            [
+                "ENTRABOT_AGENT_USER_ID=another-agent",
+                "ENTRABOT_HUMAN_USER_ID=old-sponsor",
+                "ENTRABOT_HUMAN_UPNS=old@contoso.com",
+            ],
+            az_exit=1,
+        )
+        assert run.exit_code == 0, run.output
+        assert run.effective("ENTRABOT_HUMAN_USER_ID") is None
+        assert run.effective("ENTRABOT_HUMAN_UPNS") is None
+
+    def test_a_different_agent_loses_the_old_blob_store_even_if_setup_stops_early(self, run_steps):
+        # An unconfirmed certificate stops setup before Step 8. The next run sees this
+        # agent's ID in .env, so the old blob lines would pass for its own.
+        lines = ["ENTRABOT_AGENT_USER_ID=another-agent", *CLOUD_LINES]
+        run = run_steps(lines, register=3)
+        assert run.exit_code == 7, run.output
+        assert run.effective("ENTRABOT_BLOB_ENDPOINT") is None
+        assert run.effective("ENTRABOT_BLOB_CONTAINER") is None
+
+        again = run_steps()
+        assert again.exit_code == 0, again.output
+        assert again.effective("ENTRABOT_KEEP_MEMORY_LOCAL") == "true"
+
     def test_a_new_sponsor_does_not_inherit_the_old_sponsors_tenant_ids(self, run_steps):
         run = run_steps(
             ["ENTRABOT_AGENT_USER_ID=another-agent", "ENTRABOT_HUMAN_USER_TENANT_IDS=old-tenant"]

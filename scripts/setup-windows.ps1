@@ -531,9 +531,21 @@ if (-not ($sameAgent -and $namesSponsor)) {
 # key, so a stale line above a new one would win. A key with no value keeps what's there, except
 # a new sponsor's tenant IDs, which must not inherit the old sponsor's.
 $written = @($envValues.Keys | Where-Object { $envValues[$_] -or $_ -eq 'ENTRABOT_HUMAN_USER_TENANT_IDS' })
+
+# A different agent's sponsor and blob settings go now, whatever happens next: a failed lookup or
+# an unconfirmed certificate must not leave them looking like this agent's on the next run.
+$blobKeys  = @('ENTRABOT_BLOB_ENDPOINT', 'ENTRABOT_BLOB_CONTAINER')
+$inherited = @(
+    if (-not $sameAgent) {
+        'ENTRABOT_HUMAN_USER_ID', 'ENTRABOT_HUMAN_UPN', 'ENTRABOT_HUMAN_USER_IDS', 'ENTRABOT_HUMAN_UPNS',
+        'ENTRABOT_HUMAN_USER_TENANT_IDS', 'ENTRABOT_HUMAN_USER_MAILS', 'ENTRABOT_HUMAN_USER_TYPES',
+        'ENTRABOT_KEEP_MEMORY_LOCAL'
+        $blobKeys
+    }
+)
 $kept = @(
     if (Test-Path $envPath) {
-        Get-Content $envPath | Where-Object { $written -notcontains (Get-EnvKey $_) }
+        Get-Content $envPath | Where-Object { ($written + $inherited) -notcontains (Get-EnvKey $_) }
     }
 )
 @($kept) + @($written | ForEach-Object { "$_=$($envValues[$_])" }) | Set-Content -Path $envPath -Encoding utf8
@@ -557,7 +569,6 @@ Step 8 "Cloud memory (Azure Blob Storage)"
 # stay there: ENTRABOT_KEEP_MEMORY_LOCAL=true outranks the blob settings at runtime and would
 # leave the agent on an empty local store. config.py keeps the first value of a repeated key, so
 # these lines are replaced, never appended.
-$blobKeys      = @('ENTRABOT_BLOB_ENDPOINT', 'ENTRABOT_BLOB_CONTAINER')
 $onCloudMemory = $sameAgent -and (Get-EnvValue 'ENTRABOT_BLOB_ENDPOINT') -and (Get-EnvValue 'ENTRABOT_BLOB_CONTAINER') -and
                  ((Get-EnvValue 'ENTRABOT_KEEP_MEMORY_LOCAL') -notin 'true', '1', 'yes')
 
@@ -567,9 +578,7 @@ function Set-MemoryLines {
     @($kept) + $Lines | Set-Content -Path $envPath -Encoding utf8
 }
 function Use-LocalMemory {
-    # A different agent's container is no use to this one, so its lines go too.
-    $replacing = @('ENTRABOT_KEEP_MEMORY_LOCAL') + $(if ($sameAgent) { @() } else { $blobKeys })
-    Set-MemoryLines $replacing @(
+    Set-MemoryLines @('ENTRABOT_KEEP_MEMORY_LOCAL') @(
         '# ADR-005: keep agent memory local (skip cloud sync)',
         'ENTRABOT_KEEP_MEMORY_LOCAL=true'
     )

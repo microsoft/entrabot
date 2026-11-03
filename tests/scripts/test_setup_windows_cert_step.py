@@ -120,7 +120,7 @@ def test_env_is_written_on_every_run_and_replaces_earlier_lines() -> None:
     assert "if ($generated)" not in block
     # config.py keeps the FIRST value of a repeated key, so a stale line left above a new
     # one would win.
-    assert "$written -notcontains (Get-EnvKey $_)" in block
+    assert "($written + $inherited) -notcontains (Get-EnvKey $_)" in block
 
 
 def test_the_sponsor_is_defaulted_only_when_env_names_none() -> None:
