@@ -24,6 +24,7 @@ from entrabot.tools.email_poll import advance_cursor
 from entrabot.tools.poll_state import (
     EMAIL_CURSOR_KEY,
     LEGACY_EMAIL_CURSOR_KEY,
+    MAX_RECENT_CLAIMS,
     WATCHED_CHATS_KEY,
     EmailClaim,
     PollStateOutcome,
@@ -31,8 +32,10 @@ from entrabot.tools.poll_state import (
     claim_email_window,
     ignored_legacy_local_copies,
     initialize_email_cursor,
+    new_claim_id,
     read_email_cursor,
     read_watched_chats,
+    settle_email_claim,
 )
 
 CHAT_A = "19:chat-a@thread.v2"
@@ -41,6 +44,8 @@ CHAT_C = "19:chat-c_d@unq.gbl.spaces"
 NOW = "2026-11-02T12:00:00Z"
 STALE = "2026-05-01T00:00:00Z"
 LATER = "2026-11-02T12:05:00.001Z"
+NEXT = "2026-11-02T12:09:00.001Z"
+CLAIM = "claim-a"
 
 
 @pytest.fixture
@@ -449,7 +454,7 @@ class TestDefaultCursorPrecision:
         assert read_email_cursor().cursor == "2026-11-02T12:00:00.750Z"
 
     def test_default_cursor_has_the_format_advance_cursor_produces(self) -> None:
-        cursor = poll_state._now_cursor()
+        cursor = poll_state.now_cursor()
         assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z", cursor)
         # advance_cursor accepts it and keeps the same shape, so a fresh cursor and an
         # advanced one are interchangeable to everything downstream.
@@ -489,7 +494,7 @@ class TestInitializeEmailCursorLocal:
         (data_dir / "email_cursor.txt").write_text(STALE)
         initialize_email_cursor(NOW)
         etag = read_email_cursor().etag
-        assert claim_email_window(LATER, etag) is EmailClaim.WON
+        assert claim_email_window(LATER, etag, claim_id=CLAIM) is EmailClaim.WON
         # A later change to the legacy file has no effect any more.
         (data_dir / "email_cursor.txt").write_text("2026-01-01T00:00:00Z")
         initialize_email_cursor(NOW)
@@ -523,31 +528,36 @@ class TestInitializeEmailCursorLocal:
 class TestClaimEmailWindow:
     def test_winning_advances_the_cursor(self, fake_cloud_store) -> None:
         initialize_email_cursor(NOW)
-        assert claim_email_window(LATER, read_email_cursor().etag) is EmailClaim.WON
+        assert claim_email_window(LATER, read_email_cursor().etag, claim_id=CLAIM) is EmailClaim.WON
         assert read_email_cursor().cursor == LATER
 
     def test_strips_whitespace_before_storing(self, fake_cloud_store) -> None:
         initialize_email_cursor(NOW)
-        claim_email_window(f"  {LATER}  \n", read_email_cursor().etag)
+        claim_email_window(f"  {LATER}  \n", read_email_cursor().etag, claim_id=CLAIM)
         assert read_email_cursor().cursor == LATER
 
     def test_stale_etag_loses_and_leaves_the_cursor_alone(self, fake_cloud_store) -> None:
         initialize_email_cursor(NOW)
         stale_etag = read_email_cursor().etag
         BlobBackend(fake_cloud_store).write_text(EMAIL_CURSOR_KEY, LATER)
-        assert claim_email_window("2026-11-02T12:01:00Z", stale_etag) is EmailClaim.LOST
+        outcome = claim_email_window("2026-11-02T12:01:00Z", stale_etag, claim_id=CLAIM)
+        assert outcome is EmailClaim.LOST
         assert read_email_cursor().cursor == LATER
 
     def test_two_instances_one_winner(self, fake_cloud_store) -> None:
         initialize_email_cursor(NOW)
         etag = read_email_cursor().etag
         with ThreadPoolExecutor(max_workers=2) as pool:
-            outcomes = list(pool.map(lambda _: claim_email_window(LATER, etag), range(2)))
+            outcomes = list(
+                pool.map(
+                    lambda _: claim_email_window(LATER, etag, claim_id=new_claim_id()), range(2)
+                )
+            )
         assert sorted(o.name for o in outcomes) == ["LOST", "WON"]
 
     def test_non_conflict_failure_is_failed_not_lost(self, data_dir, monkeypatch) -> None:
         _use_backend(monkeypatch, _WriteFails(data_dir))
-        assert claim_email_window(LATER, '"etag"') is EmailClaim.FAILED
+        assert claim_email_window(LATER, '"etag"', claim_id=CLAIM) is EmailClaim.FAILED
 
     def test_a_write_that_landed_despite_an_error_still_wins(self, monkeypatch) -> None:
         """A transport error doesn't prove the PUT failed. If it committed and this
@@ -555,34 +565,255 @@ class TestClaimEmailWindow:
         deliver that mail."""
         backend = _ErrorAfterWrite(NOW)
         _use_backend(monkeypatch, backend)
-        assert claim_email_window(LATER, read_email_cursor().etag) is EmailClaim.WON
+        outcome = claim_email_window(LATER, read_email_cursor().etag, claim_id=CLAIM)
+        assert outcome is EmailClaim.WON
         assert read_email_cursor().cursor == LATER
 
     def test_a_retried_write_that_landed_is_not_mistaken_for_a_lost_race(self, monkeypatch) -> None:
         backend = _ErrorAfterWrite(NOW, error=ConcurrencyError("412 on a retry"))
         _use_backend(monkeypatch, backend)
-        assert claim_email_window(LATER, read_email_cursor().etag) is EmailClaim.WON
+        outcome = claim_email_window(LATER, read_email_cursor().etag, claim_id=CLAIM)
+        assert outcome is EmailClaim.WON
 
     def test_a_sibling_writing_the_same_cursor_is_not_our_claim(self, monkeypatch) -> None:
         """Both instances compute the same cursor from the same batch, so the value alone
         can't say who claimed it. Treating it as ours would push the batch twice."""
         backend = _SiblingClaimedFirst(NOW, sibling_value=LATER)
         _use_backend(monkeypatch, backend)
-        assert claim_email_window(LATER, read_email_cursor().etag) is EmailClaim.FAILED
+        outcome = claim_email_window(LATER, read_email_cursor().etag, claim_id=CLAIM)
+        assert outcome is EmailClaim.FAILED
 
-    def test_an_ambiguous_write_that_cannot_be_reread_fails_closed(self, monkeypatch) -> None:
+    def test_an_ambiguous_write_that_cannot_be_reread_is_unknown_not_failed(
+        self, monkeypatch
+    ) -> None:
+        """The write may have landed and moved the cursor, so the caller must not drop
+        the batch as if it hadn't. UNKNOWN tells it to hold the batch and settle later."""
         backend = _ErrorAfterWrite(NOW, reread_fails=True)
         _use_backend(monkeypatch, backend)
         etag = read_email_cursor().etag
         backend.arm_reread_failure()
-        assert claim_email_window(LATER, etag) is EmailClaim.FAILED
+        assert claim_email_window(LATER, etag, claim_id=CLAIM) is EmailClaim.UNKNOWN
 
     @pytest.mark.parametrize("etag", [None, ""])
     def test_missing_etag_never_writes_unconditionally(self, monkeypatch, etag) -> None:
         backend = _NoEtag(NOW)
         _use_backend(monkeypatch, backend)
-        assert claim_email_window(LATER, etag) is EmailClaim.FAILED
+        assert claim_email_window(LATER, etag, claim_id=CLAIM) is EmailClaim.FAILED
         assert backend.writes == []
+
+
+class _ClaimWriteFails:
+    """The claim's write raises ``error``. ``reread`` sets what looking again then finds.
+
+    * ``landed``: the write had committed before the response was lost.
+    * ``landed_then_sibling``: it had, and a sibling has since claimed the next window.
+      The sibling read our claim before writing, so its history carries our ID behind
+      its own.
+    * ``sibling``: it hadn't, and a sibling's claim for the same window stands.
+    * ``missing``: the key has gone.
+    * ``unreadable``: the storage can't be read any more.
+    """
+
+    def __init__(self, error: Exception, reread: str) -> None:
+        self.error = error
+        self.reread = reread
+        self.value: str | None = NOW
+        self.written = False
+
+    def read_text_with_etag(self, key: str) -> tuple[str | None, str | None]:
+        return self.value, '"etag"'
+
+    def read_text(self, key: str) -> str | None:
+        if self.written and self.reread == "unreadable":
+            raise OSError("still down")
+        return self.value
+
+    def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str:
+        self.written = True
+        ours = content.splitlines()[1:]  # our claim ID, then the ones before it
+        self.value = {
+            "landed": content,
+            "landed_then_sibling": "\n".join([NEXT, "sibling-claim", *ours]),
+            "sibling": f"{LATER}\nsibling-claim",
+            "missing": None,
+            "unreadable": content,
+        }[self.reread]
+        raise self.error
+
+
+class TestClaimOutcomeByErrorPath:
+    """Every way the write can fail, crossed with every way the re-read can come out."""
+
+    @pytest.mark.parametrize(
+        ("error", "reread", "expected"),
+        [
+            pytest.param(ConcurrencyError("412"), "landed", EmailClaim.WON, id="conflict-landed"),
+            pytest.param(
+                ConcurrencyError("412"),
+                "landed_then_sibling",
+                EmailClaim.WON,
+                id="conflict-landed-behind-a-sibling",
+            ),
+            pytest.param(ConcurrencyError("412"), "sibling", EmailClaim.LOST, id="conflict-lost"),
+            pytest.param(
+                ConcurrencyError("412"), "missing", EmailClaim.LOST, id="conflict-key-gone"
+            ),
+            pytest.param(
+                ConcurrencyError("412"), "unreadable", EmailClaim.UNKNOWN, id="conflict-unknown"
+            ),
+            pytest.param(OSError("reset"), "landed", EmailClaim.WON, id="error-landed"),
+            pytest.param(
+                OSError("reset"),
+                "landed_then_sibling",
+                EmailClaim.WON,
+                id="error-landed-behind-a-sibling",
+            ),
+            pytest.param(OSError("reset"), "sibling", EmailClaim.FAILED, id="error-failed"),
+            pytest.param(OSError("reset"), "missing", EmailClaim.FAILED, id="error-key-gone"),
+            pytest.param(OSError("reset"), "unreadable", EmailClaim.UNKNOWN, id="error-unknown"),
+        ],
+    )
+    def test_outcome(
+        self, monkeypatch, error: Exception, reread: str, expected: EmailClaim
+    ) -> None:
+        _use_backend(monkeypatch, _ClaimWriteFails(error, reread))
+        outcome = claim_email_window(LATER, '"etag"', claim_id=CLAIM, prior_claims=("older",))
+        assert outcome is expected
+
+
+# ---------------------------------------------------------------------------
+# The history of recent claims
+# ---------------------------------------------------------------------------
+class TestRecentClaimHistory:
+    """The value holds the IDs of the last few claims, newest first, not just the latest.
+
+    Another instance can claim the next window before this one has settled its own, and
+    a history that kept only the latest ID would make that look like a write that never
+    landed.
+    """
+
+    def test_the_value_is_the_cursor_then_the_claim_then_the_prior_claims(
+        self, fake_cloud_store
+    ) -> None:
+        initialize_email_cursor(NOW)
+        outcome = claim_email_window(
+            LATER,
+            read_email_cursor().etag,
+            claim_id="newest",
+            prior_claims=("older", "oldest"),
+        )
+        assert outcome is EmailClaim.WON
+        stored = fake_cloud_store.data[EMAIL_CURSOR_KEY].decode().splitlines()
+        assert stored == [LATER, "newest", "older", "oldest"]
+
+        current = read_email_cursor()
+        assert current.cursor == LATER
+        assert current.recent_claims == ("newest", "older", "oldest")
+
+    def test_the_history_is_bounded_to_the_most_recent_claims(self, fake_cloud_store) -> None:
+        assert MAX_RECENT_CLAIMS == 32
+        prior = tuple(f"claim-{n}" for n in range(MAX_RECENT_CLAIMS + 10))  # newest first
+        initialize_email_cursor(NOW)
+
+        claim_email_window(LATER, read_email_cursor().etag, claim_id="newest", prior_claims=prior)
+
+        kept = read_email_cursor().recent_claims
+        assert len(kept) == MAX_RECENT_CLAIMS
+        assert kept == ("newest", *prior[: MAX_RECENT_CLAIMS - 1])
+
+    def test_each_claim_carries_the_history_of_the_ones_before_it(self, fake_cloud_store) -> None:
+        initialize_email_cursor(NOW)
+        windows = {
+            "claim-1": LATER,
+            "claim-2": "2026-11-02T12:06:00.001Z",
+            "claim-3": "2026-11-02T12:07:00.001Z",
+        }
+        for claim_id, cursor in windows.items():
+            current = read_email_cursor()
+            outcome = claim_email_window(
+                cursor, current.etag, claim_id=claim_id, prior_claims=current.recent_claims
+            )
+            assert outcome is EmailClaim.WON
+
+        assert read_email_cursor().recent_claims == ("claim-3", "claim-2", "claim-1")
+
+    def test_a_plain_cursor_with_no_claims_is_still_valid(self, fake_cloud_store) -> None:
+        """What initialization writes, and what every cursor looked like before claims."""
+        BlobBackend(fake_cloud_store).write_text(EMAIL_CURSOR_KEY, NOW)
+        current = read_email_cursor()
+        assert current.outcome is PollStateOutcome.PRESENT
+        assert current.cursor == NOW
+        assert current.recent_claims == ()
+
+    def test_blank_lines_and_padding_around_claims_are_ignored(self, fake_cloud_store) -> None:
+        BlobBackend(fake_cloud_store).write_text(
+            EMAIL_CURSOR_KEY, f"  {NOW}\n\nclaim-2\n   \n claim-1 \n"
+        )
+        current = read_email_cursor()
+        assert current.cursor == NOW
+        assert current.recent_claims == ("claim-2", "claim-1")
+
+    def test_a_corrupt_cursor_line_is_unresolved_whatever_follows_it(
+        self, fake_cloud_store
+    ) -> None:
+        BlobBackend(fake_cloud_store).write_text(EMAIL_CURSOR_KEY, "<html>\nclaim-1")
+        assert read_email_cursor().outcome is PollStateOutcome.UNRESOLVED
+
+    def test_new_claim_ids_are_unique_and_fit_on_one_line(self) -> None:
+        ids = {new_claim_id() for _ in range(200)}
+        assert len(ids) == 200
+        assert all(re.fullmatch(r"[0-9a-f]{32}", claim_id) for claim_id in ids)
+
+
+class TestSettleEmailClaim:
+    """Asking afterwards whether a claim landed: True, False, or None when it can't be told."""
+
+    def test_true_for_the_newest_claim(self, fake_cloud_store) -> None:
+        initialize_email_cursor(NOW)
+        claim_email_window(LATER, read_email_cursor().etag, claim_id=CLAIM)
+        assert settle_email_claim(CLAIM) is True
+
+    def test_true_for_a_claim_behind_newer_ones(self, fake_cloud_store) -> None:
+        """Another instance claimed the next windows after ours landed."""
+        initialize_email_cursor(NOW)
+        claim_email_window(LATER, read_email_cursor().etag, claim_id=CLAIM)
+        for n in range(3):
+            current = read_email_cursor()
+            claim_email_window(
+                f"2026-11-02T12:1{n}:00.001Z",
+                current.etag,
+                claim_id=f"sibling-{n}",
+                prior_claims=current.recent_claims,
+            )
+        assert read_email_cursor().recent_claims[0] == "sibling-2"
+        assert settle_email_claim(CLAIM) is True
+
+    def test_false_for_a_claim_that_never_landed(self, fake_cloud_store) -> None:
+        initialize_email_cursor(NOW)
+        claim_email_window(LATER, read_email_cursor().etag, claim_id=CLAIM)
+        assert settle_email_claim("never-written") is False
+
+    def test_false_when_the_key_is_missing(self, fake_cloud_store) -> None:
+        assert settle_email_claim(CLAIM) is False
+
+    def test_none_when_the_read_fails(self, monkeypatch) -> None:
+        _use_backend(monkeypatch, _ReadFails())
+        assert settle_email_claim(CLAIM) is None
+
+    def test_a_claim_pushed_out_of_the_history_reads_as_false(self, fake_cloud_store) -> None:
+        """The history is bounded, so a claim followed by more than the bound's worth of
+        others can no longer be found. This is the limit of settling by ID."""
+        initialize_email_cursor(NOW)
+        for n in range(MAX_RECENT_CLAIMS + 1):
+            current = read_email_cursor()
+            claim_email_window(
+                f"2026-11-02T12:{n:02d}:00.001Z",
+                current.etag,
+                claim_id=f"claim-{n}",
+                prior_claims=current.recent_claims,
+            )
+        assert settle_email_claim("claim-0") is False
+        assert settle_email_claim("claim-1") is True
 
 
 # ---------------------------------------------------------------------------
@@ -593,7 +824,7 @@ class TestCloudModeNeverTouchesLocalFiles:
         add_watched_chats([CHAT_A])
         read_watched_chats()
         initialize_email_cursor(NOW)
-        claim_email_window(LATER, read_email_cursor().etag)
+        claim_email_window(LATER, read_email_cursor().etag, claim_id=CLAIM)
 
         assert not data_dir.exists() or list(data_dir.rglob("*")) == []
         assert set(fake_cloud_store.data) == {WATCHED_CHATS_KEY, EMAIL_CURSOR_KEY}

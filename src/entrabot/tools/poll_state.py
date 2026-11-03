@@ -11,8 +11,8 @@ Keys:
 
 * ``watched_chats`` holds one chat ID per line, sorted. In local mode this is the
   same file as before, so local users have nothing to migrate.
-* ``poll_state/email_cursor.txt`` holds one RFC 3339 timestamp, followed by the ID
-  of the claim that wrote it (see :func:`claim_email_window`). The key is new on
+* ``poll_state/email_cursor.txt`` holds one RFC 3339 timestamp, followed by the IDs
+  of the most recent claims, newest first (see :func:`claim_email_window`). The key is new on
   purpose. Existing cloud containers hold a stale ``email_cursor.txt`` that setup's
   migration copied once and nothing ever updated, because runtime never read it.
   Reading that key would replay up to a full page of old mail on upgrade, and the
@@ -69,6 +69,13 @@ LEGACY_DEFAULT_CHAT_KEY = "chat_id"
 # out reports failure; the caller keeps the chats dirty and retries later.
 WATCHED_CHATS_MAX_ATTEMPTS = 4
 
+# How many claim IDs the cursor value keeps, newest first. A claim whose write was
+# ambiguous is settled later by finding its ID here, so the history has to outlast
+# whatever other instances claim in the meantime. Each claim is a fresh 32-character ID,
+# so the value stays around a kilobyte. A claim followed by more than this many others
+# can no longer be found, which :func:`settle_email_claim` reports as "did not land".
+MAX_RECENT_CLAIMS = 32
+
 # Characters that can't appear in a Teams chat ID but could change the meaning of
 # the Graph URL each ID is interpolated into. The list lives in shared storage, so
 # it is parsed as data. This only rejects what is unsafe; whether a chat is
@@ -117,11 +124,18 @@ class WatchedChatsWrite:
 
 @dataclass(frozen=True)
 class EmailCursorRead:
-    """The shared email cursor. ``cursor`` and ``etag`` are set only when ``PRESENT``."""
+    """The shared email cursor.
+
+    ``cursor`` and ``etag`` are set only when ``PRESENT``. ``recent_claims`` holds the
+    IDs of the latest claims stored with the cursor, newest first, and is empty for a
+    plain cursor. A caller passes it back as ``prior_claims`` when it claims the next
+    window, so the history carries forward.
+    """
 
     outcome: PollStateOutcome
     cursor: str | None = None
     etag: str | None = None
+    recent_claims: tuple[str, ...] = ()
 
 
 class EmailClaim(Enum):
@@ -129,13 +143,19 @@ class EmailClaim(Enum):
 
     * ``WON``: this instance advanced the cursor and must push the batch.
     * ``LOST``: another instance claimed this window first. Drop the batch.
-    * ``FAILED``: the write failed for another reason. Push nothing (fail closed);
-      the cursor didn't move, so the next cycle fetches the same window again.
+    * ``FAILED``: the write failed and the claim is known not to have landed. Push
+      nothing (fail closed); the cursor didn't move for this instance, so the next
+      cycle fetches the same window again.
+    * ``UNKNOWN``: the write failed and the cursor couldn't be read again, so nobody
+      can say whether it landed. If it did, the cursor has advanced and the batch will
+      never be fetched again, so dropping it could lose mail. Push nothing, but hold
+      the batch and settle it later with :func:`settle_email_claim`.
     """
 
     WON = "won"
     LOST = "lost"
     FAILED = "failed"
+    UNKNOWN = "unknown"
 
 
 def is_chat_id(value: str) -> bool:
@@ -236,13 +256,17 @@ def add_watched_chats(chat_ids: Iterable[str]) -> WatchedChatsWrite:
     return WatchedChatsWrite(persisted=False)
 
 
-def _now_cursor() -> str:
+def now_cursor() -> str:
     """The current time as a cursor, to the millisecond.
 
     Whole seconds would round down, so mail received earlier in the same second would
     be newer than the cursor and a first boot could replay it. This is the format
     :func:`entrabot.tools.email_poll.advance_cursor` produces
     (``%Y-%m-%dT%H:%M:%S.mmmZ``), so a fresh cursor and an advanced one look alike.
+
+    Public so a caller whose first attempt to create the cursor fails can read the
+    clock once and hand the same value to every retry (see
+    :func:`initialize_email_cursor`).
     """
     now = datetime.now(UTC)
     return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
@@ -265,9 +289,17 @@ def _is_timestamp(value: str) -> bool:
 
 
 def _cursor_line(raw: str) -> str:
-    """The timestamp from a stored cursor. A second line, if any, is the claim ID."""
+    """The timestamp from a stored cursor. Any lines after it are claim IDs."""
     lines = raw.strip().splitlines()
     return lines[0].strip() if lines else ""
+
+
+def _claim_ids(raw: str) -> tuple[str, ...]:
+    """The claim IDs stored after the timestamp: the non-blank later lines, in order.
+
+    A cursor with no such lines, like the one initialization writes, has none.
+    """
+    return tuple(line.strip() for line in raw.strip().splitlines()[1:] if line.strip())
 
 
 def read_email_cursor() -> EmailCursorRead:
@@ -301,7 +333,7 @@ def read_email_cursor() -> EmailCursorRead:
     if not etag:
         logger.warning("Email cursor has no ETag and can't be claimed (UNRESOLVED)")
         return EmailCursorRead(PollStateOutcome.UNRESOLVED)
-    return EmailCursorRead(PollStateOutcome.PRESENT, cursor, etag)
+    return EmailCursorRead(PollStateOutcome.PRESENT, cursor, etag, _claim_ids(raw))
 
 
 def initialize_email_cursor(now: str | None = None) -> bool:
@@ -316,8 +348,13 @@ def initialize_email_cursor(now: str | None = None) -> bool:
     Creation is create-only, so losing a race to another instance keeps the winner's
     value and still returns True. False means the key couldn't be created this time;
     it stays absent and the next cycle tries again.
+
+    A caller that tries again after False should pass the same *now* each time, read
+    once from :func:`now_cursor`. With the default, every attempt reads its own clock,
+    so the cursor would start at the attempt that finally worked and skip the mail that
+    arrived while creation was failing.
     """
-    value = now or _now_cursor()
+    value = now or now_cursor()
     try:
         backend = get_backend()
         if isinstance(backend, LocalBackend):
@@ -342,36 +379,76 @@ def initialize_email_cursor(now: str | None = None) -> bool:
     return True
 
 
-def claim_email_window(new_cursor: str, etag: str | None) -> EmailClaim:
+def new_claim_id() -> str:
+    """A fresh ID for one claim of a window of mail.
+
+    The caller makes it, rather than :func:`claim_email_window`, so that it still has the
+    ID when the claim comes back ``UNKNOWN`` and has to be settled later.
+    """
+    return uuid.uuid4().hex
+
+
+def claim_email_window(
+    new_cursor: str,
+    etag: str | None,
+    *,
+    claim_id: str,
+    prior_claims: tuple[str, ...] = (),
+) -> EmailClaim:
     """Advance the cursor from the value read with *etag*, claiming that window.
 
     Call this BEFORE pushing anything: only the instance that wins this write owns
     the batch. *etag* must come from the read the batch was fetched with. A missing
     ETag fails closed instead of degrading to an unconditional write.
 
-    The stored value carries a unique claim ID, because an error doesn't prove a write
-    failed: Azure may have committed it before the response was lost. If that batch
-    were dropped, the next poll would read the advanced cursor and never deliver it.
-    Re-reading for this claim's own ID settles it. The cursor alone couldn't, since
-    instances fetching the same batch compute the same value.
+    The stored value is the new cursor, then *claim_id*, then *prior_claims* (the
+    ``recent_claims`` of the read that supplied *etag*), keeping at most
+    :data:`MAX_RECENT_CLAIMS` IDs in total, newest first. Take *claim_id* from
+    :func:`new_claim_id` and keep it. An error doesn't prove a write failed: Azure may
+    have committed it before the response was lost, and if that batch were dropped the
+    next poll would read the advanced cursor and never deliver it. So after an error this
+    re-reads the cursor for the claim's own ID, which the cursor alone couldn't settle,
+    since instances fetching the same batch compute the same value. The history is what
+    keeps the ID findable when another instance claims the next window first, because
+    its write carries ours forward.
+
+    After a ``ConcurrencyError`` the re-read separates WON (our write had landed) from
+    LOST (another instance's did). After any other error it separates WON from FAILED.
+    If the re-read itself fails the answer is UNKNOWN either way, since the write may or
+    may not have moved the cursor. Hold the batch then, and call
+    :func:`settle_email_claim` until storage answers.
     """
     if not etag:
         logger.warning("Email window claim has no ETag; refusing an unconditional write")
         return EmailClaim.FAILED
-    claim_id = uuid.uuid4().hex
+    claims = [claim_id, *prior_claims][:MAX_RECENT_CLAIMS]
+    value = "\n".join([new_cursor.strip(), *claims])
     try:
-        get_backend().write_text(
-            EMAIL_CURSOR_KEY, f"{new_cursor.strip()}\n{claim_id}", if_match=etag
-        )
+        get_backend().write_text(EMAIL_CURSOR_KEY, value, if_match=etag)
     except ConcurrencyError:
-        return EmailClaim.WON if _claim_landed(claim_id) else EmailClaim.LOST
+        landed = _claim_landed(claim_id)
+        if landed is None:
+            logger.warning(
+                "Email cursor write conflicted and the cursor can't be re-read; "
+                "the claim is unknown (holding the batch)"
+            )
+            return EmailClaim.UNKNOWN
+        return EmailClaim.WON if landed else EmailClaim.LOST
     except Exception as exc:  # noqa: BLE001 — fail closed: push nothing, retry next cycle.
-        if _claim_landed(claim_id):
+        landed = _claim_landed(claim_id)
+        if landed:
             logger.info(
                 "Email cursor write reported %s but landed; keeping the claim",
                 type(exc).__name__,
             )
             return EmailClaim.WON
+        if landed is None:
+            logger.warning(
+                "Email cursor write failed (%s) and the cursor can't be re-read; "
+                "the claim is unknown (holding the batch)",
+                type(exc).__name__,
+            )
+            return EmailClaim.UNKNOWN
         logger.warning(
             "Email cursor write failed (pushing nothing): %s: %s",
             type(exc).__name__,
@@ -381,17 +458,39 @@ def claim_email_window(new_cursor: str, etag: str | None) -> EmailClaim:
     return EmailClaim.WON
 
 
-def _claim_landed(claim_id: str) -> bool:
-    """True if the stored cursor was written by the claim with this ID."""
+def settle_email_claim(claim_id: str) -> bool | None:
+    """Find out whether an earlier claim landed, for a caller holding its batch.
+
+    Call this after :func:`claim_email_window` returned ``UNKNOWN``. True means the
+    claim landed: the cursor has moved past the batch, so the caller owns it and must
+    push it. False means it did not, including when the key is missing: the cursor never
+    advanced for this claim, so an ordinary poll fetches the batch again. None means
+    storage still can't be read, so keep holding and ask again. Never raises.
+
+    The history is bounded, so a claim that did land reads as False once more than
+    :data:`MAX_RECENT_CLAIMS` others have followed it. That takes this instance being cut
+    off from storage while the others keep claiming. The mail is then not fetched again,
+    though it stays readable through ``read_email``.
+    """
+    return _claim_landed(claim_id)
+
+
+def _claim_landed(claim_id: str) -> bool | None:
+    """True if *claim_id* is among the claims stored with the cursor.
+
+    False if the cursor was read and it isn't there, and a missing key counts as that.
+    None if the cursor couldn't be read, which settles nothing: callers must not take it
+    for either answer.
+    """
     try:
         raw = get_backend().read_text(EMAIL_CURSOR_KEY)
-    except Exception as exc:  # noqa: BLE001 — unknown means not ours: push nothing.
+    except Exception as exc:  # noqa: BLE001 — can't tell; the caller holds its batch.
         logger.warning(
-            "Could not re-read the email cursor after a failed write: %s",
+            "Could not re-read the email cursor to settle a claim: %s",
             type(exc).__name__,
         )
-        return False
-    return raw is not None and claim_id in raw.splitlines()
+        return None
+    return raw is not None and claim_id in _claim_ids(raw)
 
 
 def ignored_legacy_local_copies() -> list[Path]:

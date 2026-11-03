@@ -91,13 +91,18 @@ Resolves on every call (not cached at import time), in this order:
 
 ```python
 class PollStateOutcome(Enum):  # ABSENT, PRESENT, UNRESOLVED
-class EmailClaim(Enum):        # WON, LOST, FAILED
+class EmailClaim(Enum):        # WON, LOST, FAILED, UNKNOWN
 
 def read_watched_chats() -> WatchedChatsRead                  # .outcome, .chat_ids, .etag
 def add_watched_chats(chat_ids) -> WatchedChatsWrite          # .persisted, .added
-def read_email_cursor() -> EmailCursorRead                    # .outcome, .cursor, .etag
+def read_email_cursor() -> EmailCursorRead                    # .outcome, .cursor, .etag, .recent_claims
+def now_cursor() -> str
 def initialize_email_cursor(now: str | None = None) -> bool
-def claim_email_window(new_cursor: str, etag: str | None) -> EmailClaim
+def new_claim_id() -> str
+def claim_email_window(
+    new_cursor: str, etag: str | None, *, claim_id: str, prior_claims: tuple[str, ...] = ()
+) -> EmailClaim
+def settle_email_claim(claim_id: str) -> bool | None          # True landed, False didn't, None can't tell
 def ignored_legacy_local_copies() -> list[Path]
 ```
 

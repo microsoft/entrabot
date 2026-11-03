@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -1595,7 +1596,7 @@ def _apply_present_cursor(chat_state: dict, cursor: dict | None) -> None:
     chat_state["needs_resolution"] = False
 
 
-def _resolve_pending_chat(chat_id: str, chat_state: dict) -> None:
+async def _resolve_pending_chat(chat_id: str, chat_state: dict) -> None:
     """Re-attempt cursor resolution for a chat flagged ``needs_resolution``.
 
     Fail-closed retry (design F1): the registration read was ambiguous
@@ -1609,10 +1610,15 @@ def _resolve_pending_chat(chat_id: str, chat_state: dict) -> None:
 
     Never pushes and never bootstraps within this call — the resolution cycle
     is always delivery-free.
+
+    The read is blocking storage I/O, so it runs in a worker thread. During an outage
+    discovery can flag many chats and each poll cycle re-reads every one, so on the loop
+    those reads would stall MCP requests and every other background task. Every update
+    to *chat_state* happens here on the loop, after the read returns.
     """
     from entrabot.tools.chat_cursors import CursorOutcome, resolve_cursor
 
-    resolution = resolve_cursor(chat_id)
+    resolution = await asyncio.to_thread(resolve_cursor, chat_id)
     if resolution.outcome is CursorOutcome.UNRESOLVED:
         return  # still ambiguous — fail closed, retry next cycle
     if resolution.outcome is CursorOutcome.PRESENT:
@@ -1653,7 +1659,7 @@ async def _poll_watched_chat(
 
     # (1) Fail-closed resolution retry — pushes nothing this cycle.
     if chat_state.get("needs_resolution"):
-        _resolve_pending_chat(chat_id, chat_state)
+        await _resolve_pending_chat(chat_id, chat_state)
         return
 
     # (2) Genuinely-new chat → bootstrap once.
@@ -1788,46 +1794,55 @@ async def _email_cursor_or_initialize() -> poll_state.EmailCursorRead:
     instead) so the agent isn't flooded with historical mail. UNRESOLVED changes
     nothing: a failed read could be hiding a live cursor, so it never initializes
     and never falls back to a local copy.
+
+    "Now" is the time of the FIRST attempt, held in ``_state`` until the cursor exists.
+    Creation can fail for as long as storage is down, and a fresh "now" on every attempt
+    would move the start past all the mail that arrived meanwhile, which would then never
+    be pushed. The held time is dropped once creation succeeds (including by losing the
+    create race to another instance) and whenever a read finds the cursor, so a cursor
+    deleted later starts from its own time and not from a stale one.
     """
     current = await asyncio.to_thread(poll_state.read_email_cursor)
     if current.outcome is poll_state.PollStateOutcome.ABSENT:
-        await asyncio.to_thread(poll_state.initialize_email_cursor)
+        start: str = _state.setdefault("_email_cursor_start", poll_state.now_cursor())
+        if await asyncio.to_thread(poll_state.initialize_email_cursor, start):
+            _state.pop("_email_cursor_start", None)
+    elif current.outcome is poll_state.PollStateOutcome.PRESENT:
+        _state.pop("_email_cursor_start", None)
     elif current.outcome is poll_state.PollStateOutcome.UNRESOLVED and logger:
+        # Any held start is kept: the failed read may be hiding a live cursor.
         logger.warning("Email cursor unresolved; skipping this cycle (no push, no write)")
     return current
 
 
-async def _email_poll_cycle(*, pushed_email_ids: set[str], agent_self_upn: str) -> None:
-    """Run one fleet-safe email poll cycle.
+@dataclass(frozen=True)
+class PendingEmailClaim:
+    """A batch of email whose claim may or may not have landed, held until that is known.
 
-    The shared cursor is re-read with its ETag every cycle, because another
-    instance may have moved it. If Graph returned anything, the cursor is advanced
-    with a compare-and-swap BEFORE any push: that write is what claims the window,
-    so only the winner owns the batch. Losing the swap means another instance has
-    this window, and any other write failure pushes nothing either. The cursor
-    didn't move in that case, so the next cycle fetches the same window again.
+    Made when the claim write fails and the cursor can't be read back, so nobody can say
+    whether the cursor now sits past this batch. If it does, no later poll fetches these
+    messages and dropping them would lose the mail. If it doesn't, an ordinary poll
+    fetches them again. The batch is pushed or discarded once
+    :func:`entrabot.tools.poll_state.settle_email_claim` answers.
+
+    It lives only in memory, at ``_state["_email_pending_claim"]``. A restart while one
+    is held loses the batch: the new process reads the cursor, and if the claim had
+    landed that mail is behind it. The mail stays readable through ``read_email``.
     """
-    from entrabot.tools.email_poll import poll_once
 
-    current = await _email_cursor_or_initialize()
-    if current.outcome is not poll_state.PollStateOutcome.PRESENT:
-        return
+    claim_id: str
+    messages: list[dict]
 
-    messages, new_cursor = await _with_token_retry(poll_once, cursor=current.cursor)
 
-    if not new_cursor or new_cursor == current.cursor:
-        return
+async def _push_email_batch(
+    messages: list[dict], pushed_email_ids: set[str], agent_self_upn: str
+) -> None:
+    """Push a claimed batch of email, once each, skipping the agent's own mail.
 
-    claim = await asyncio.to_thread(poll_state.claim_email_window, new_cursor, current.etag)
-    if claim is poll_state.EmailClaim.LOST:
-        if logger:
-            logger.info("Email window claimed by another instance; dropping this batch")
-        return
-    if claim is not poll_state.EmailClaim.WON:
-        if logger:
-            logger.warning("Email window not claimed; pushing nothing, will retry next cycle")
-        return
-
+    Skips messages already pushed this session and records everything it handles, so a
+    message that comes around again isn't pushed twice, then bounds that set. Shared by a
+    freshly won claim and a held one that has since settled.
+    """
     for msg in messages:
         msg_id = msg.get("id", "")
         if msg_id and msg_id in pushed_email_ids:
@@ -1848,6 +1863,88 @@ async def _email_poll_cycle(*, pushed_email_ids: set[str], agent_self_upn: str) 
         keep = list(pushed_email_ids)[-100:]
         pushed_email_ids.clear()
         pushed_email_ids.update(keep)
+
+
+async def _email_poll_cycle(*, pushed_email_ids: set[str], agent_self_upn: str) -> None:
+    """Run one fleet-safe email poll cycle.
+
+    The shared cursor is re-read with its ETag every cycle, because another
+    instance may have moved it. If Graph returned anything, the cursor is advanced
+    with a compare-and-swap BEFORE any push: that write is what claims the window,
+    so only the winner owns the batch. Losing the swap means another instance has
+    this window, so the batch is dropped. A write that fails for another reason, and
+    is then shown not to have landed, pushes nothing either, and the next cycle
+    fetches the same window again.
+
+    The remaining case is a failed write whose outcome can't be checked because the
+    cursor can't be read back. It may have landed, which would leave the cursor past
+    this batch for good, so the batch is held (:class:`PendingEmailClaim`) and nothing
+    is pushed. At the top of each later cycle the claim is settled by its ID, and until
+    it is the cycle makes no Graph call and no cursor write. If it landed, the held
+    batch is pushed and the cycle ends. If it did not, the hold is cleared and the cycle
+    carries on as usual: the cursor never moved for this claim, so the ordinary fetch
+    gets the same mail again.
+
+    A held batch lives only in memory, so a restart before it settles loses it. The
+    mail stays readable through ``read_email``.
+    """
+    from entrabot.tools.email_poll import poll_once
+
+    pending = _state.get("_email_pending_claim")
+    if isinstance(pending, PendingEmailClaim):
+        settled = await asyncio.to_thread(poll_state.settle_email_claim, pending.claim_id)
+        if settled is None:
+            if logger:
+                logger.warning(
+                    "Held email claim still can't be settled (cursor unreadable); "
+                    "holding %d message(s), no poll or write this cycle",
+                    len(pending.messages),
+                )
+            return
+        _state.pop("_email_pending_claim", None)
+        if settled:
+            if logger:
+                logger.info("Held email claim had landed; pushing its batch")
+            await _push_email_batch(pending.messages, pushed_email_ids, agent_self_upn)
+            return
+        if logger:
+            logger.info("Held email claim did not land; polling as usual")
+
+    current = await _email_cursor_or_initialize()
+    if current.outcome is not poll_state.PollStateOutcome.PRESENT:
+        return
+
+    messages, new_cursor = await _with_token_retry(poll_once, cursor=current.cursor)
+
+    if not new_cursor or new_cursor == current.cursor:
+        return
+
+    claim_id = poll_state.new_claim_id()
+    claim = await asyncio.to_thread(
+        poll_state.claim_email_window,
+        new_cursor,
+        current.etag,
+        claim_id=claim_id,
+        prior_claims=current.recent_claims,
+    )
+    if claim is poll_state.EmailClaim.LOST:
+        if logger:
+            logger.info("Email window claimed by another instance; dropping this batch")
+        return
+    if claim is poll_state.EmailClaim.UNKNOWN:
+        _state["_email_pending_claim"] = PendingEmailClaim(claim_id, messages)
+        if logger:
+            logger.warning(
+                "Email window claim is unconfirmed; holding %d message(s) until it settles",
+                len(messages),
+            )
+        return
+    if claim is not poll_state.EmailClaim.WON:
+        if logger:
+            logger.warning("Email window not claimed; pushing nothing, will retry next cycle")
+        return
+
+    await _push_email_batch(messages, pushed_email_ids, agent_self_upn)
 
 
 async def _background_poll_email() -> None:

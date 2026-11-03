@@ -39,10 +39,12 @@ Email has its own version of this, because a mailbox has one cursor rather than 
 1. Reads the shared cursor with its ETag, off the event loop. Absent starts it at "now". Unresolved logs a warning and skips the cycle, without initializing the cursor or falling back to a local copy.
 2. Fetches mail newer than the cursor from Graph.
 3. If anything newer came back, advances the cursor with a compare-and-swap **before pushing anything**. That write is the claim.
-4. On a `ConcurrencyError`, another instance has claimed that window, so it drops the batch and pushes nothing. Any other write failure also pushes nothing, and because the cursor didn't move, the next cycle fetches the same window again.
+4. If the write fails, re-reads the cursor for the claim's own ID, because an error doesn't prove the write failed. A write that landed is a won claim. A `ConcurrencyError` without the ID means another instance has claimed that window, so it drops the batch and pushes nothing. Any other failure without the ID also pushes nothing, and because the cursor didn't move, the next cycle fetches the same window again.
 5. Pushes the batch, still applying the per-session ID dedup and the filter for the agent's own sent mail.
 
-Losing a race drops a batch, not the mail: anything the winner didn't see is past its cursor, so a later cycle fetches it. The same limit applies as for chats: a push that fails after the claim is not retried, though the message stays readable through `read_email`.
+The cursor keeps the IDs of the last 32 claims, newest first, so a claim stays findable after another instance claims the next window. If the re-read fails too, nobody can say whether the cursor moved, and a batch dropped now would be lost for good if it had. So the batch is held in memory and nothing is pushed. Each later cycle looks the claim up before doing anything else, and until it can, it makes no Graph call and no cursor write. If the claim landed, the held batch is pushed. If it didn't, the cycle carries on as usual and fetches the same mail again.
+
+Losing a race drops a batch, not the mail: anything the winner didn't see is past its cursor, so a later cycle fetches it. The same limit applies as for chats: a push that fails after the claim is not retried, though the message stays readable through `read_email`. A held batch lives only in memory, so a restart before its claim settles loses it. That mail stays readable through `read_email` too.
 
 ## Channel-push hosts
 

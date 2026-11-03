@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -38,6 +39,16 @@ if TYPE_CHECKING:
     from collections.abc import Coroutine
 
 logger = logging.getLogger("entrabot.storage.backend")
+
+# Held across ``LocalBackend.write_text``, so the ETag check and the write that follows
+# it are one step as far as every other thread in this process is concerned. Without it
+# two writers holding the same ETag can both pass the check, and the later write replaces
+# the earlier one. Module-level on purpose: ``get_backend()`` builds a new instance per
+# call, so a lock on the instance would guard nothing. It does not reach across
+# processes; two processes sharing one data directory can still race, a known limit of
+# the local backend. ``BlobBackend`` needs none of this, because the service makes the
+# conditional write atomic.
+_LOCAL_WRITE_LOCK = threading.Lock()
 
 
 def _content_etag(content: str) -> str:
@@ -178,19 +189,23 @@ class LocalBackend:
     ) -> str | None:
         _check_write_conditions(if_match, if_absent)
         p = self._path(key)
-        if if_match is not None:
-            # Conditional write: current content hash must equal if_match.
-            current = _content_etag(p.read_text()) if p.exists() else None
-            if current != if_match:
-                raise ConcurrencyError(
-                    f"write_text({key!r}) refused: If-Match={if_match!r} is stale "
-                    f"(current={current!r})"
-                )
-        p.parent.mkdir(parents=True, exist_ok=True)
-        if if_absent:
-            _create_exclusively(p, content, key)
-        else:
-            p.write_text(content)
+        # Every mode takes the lock, not just the conditional one: an unconditional
+        # write landing between a compare-and-swap's check and its write would be
+        # replaced just the same.
+        with _LOCAL_WRITE_LOCK:
+            if if_match is not None:
+                # Conditional write: current content hash must equal if_match.
+                current = _content_etag(p.read_text()) if p.exists() else None
+                if current != if_match:
+                    raise ConcurrencyError(
+                        f"write_text({key!r}) refused: If-Match={if_match!r} is stale "
+                        f"(current={current!r})"
+                    )
+            p.parent.mkdir(parents=True, exist_ok=True)
+            if if_absent:
+                _create_exclusively(p, content, key)
+            else:
+                p.write_text(content)
         return _content_etag(content)
 
     def append_text(self, key: str, content: str) -> None:

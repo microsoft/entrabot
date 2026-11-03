@@ -17,6 +17,7 @@ Covers the rehydration + persistence behavior added to fix issue #17:
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -288,6 +289,121 @@ def _async_recorder(sink: list):
         sink.append((args, kwargs))
 
     return _rec
+
+
+class _StateThatRecordsWriters(dict):
+    """A ``chat_state`` that notes which thread assigned each of its keys."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.writer_threads: list[int] = []
+
+    def __setitem__(self, key, value) -> None:
+        self.writer_threads.append(threading.get_ident())
+        super().__setitem__(key, value)
+
+
+def _flagged_chat_state() -> _StateThatRecordsWriters:
+    return _StateThatRecordsWriters(
+        seen_ids=set(), last_ts=None, bootstrapped=False, needs_resolution=True
+    )
+
+
+# ---------------------------------------------------------------------------
+# Re-resolving a flagged chat must not block the event loop
+# ---------------------------------------------------------------------------
+class TestResolvePendingChat:
+    """Re-resolving a flagged chat reads shared storage.
+
+    During a storage outage discovery can flag many chats ``needs_resolution``, and every
+    poll cycle re-reads each one. Done on the event loop, those reads stall MCP requests
+    and every other background task for as long as they take.
+    """
+
+    CHAT = "19:flagged@thread.v2"
+
+    async def test_the_read_runs_off_the_event_loop_thread(self, monkeypatch) -> None:
+        loop_thread = threading.get_ident()
+        ran_on: list[int] = []
+
+        def resolve(chat_id: str) -> chat_cursors.CursorResolution:
+            ran_on.append(threading.get_ident())
+            return chat_cursors.CursorResolution(chat_cursors.CursorOutcome.UNRESOLVED, None)
+
+        monkeypatch.setattr(chat_cursors, "resolve_cursor", resolve)
+        chat_state = _flagged_chat_state()
+        mcp_server._state["watched_chats"] = {self.CHAT: chat_state}
+
+        await mcp_server._poll_watched_chat(
+            self.CHAT,
+            chat_state,
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
+            agent_object_id="agent-oid",
+        )
+
+        assert ran_on, "resolve_cursor was never called"
+        assert loop_thread not in ran_on, "resolve_cursor ran on the event-loop thread"
+
+    async def test_present_rehydrates_the_chat_and_writes_its_state_on_the_loop(
+        self, monkeypatch
+    ) -> None:
+        loop_thread = threading.get_ident()
+        cursor = {"last_ts": "2026-06-09T18:00:00Z", "seen_ids_tail": ["m1", "m2"]}
+        monkeypatch.setattr(
+            chat_cursors,
+            "resolve_cursor",
+            lambda _cid: chat_cursors.CursorResolution(chat_cursors.CursorOutcome.PRESENT, cursor),
+        )
+        chat_state = _flagged_chat_state()
+
+        await mcp_server._resolve_pending_chat(self.CHAT, chat_state)
+
+        assert dict(chat_state) == {
+            "seen_ids": {"m1", "m2"},
+            "last_ts": "2026-06-09T18:00:00Z",
+            "bootstrapped": True,
+            "needs_resolution": False,
+        }
+        assert chat_state.writer_threads, "the state was updated"
+        assert set(chat_state.writer_threads) == {loop_thread}, "all updates stay on the loop"
+
+    async def test_absent_clears_the_flag_and_leaves_the_chat_to_bootstrap(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            chat_cursors,
+            "resolve_cursor",
+            lambda _cid: chat_cursors.CursorResolution(chat_cursors.CursorOutcome.ABSENT, None),
+        )
+        chat_state = _flagged_chat_state()
+
+        await mcp_server._resolve_pending_chat(self.CHAT, chat_state)
+
+        assert dict(chat_state) == {
+            "seen_ids": set(),
+            "last_ts": None,
+            "bootstrapped": False,
+            "needs_resolution": False,
+        }
+        assert set(chat_state.writer_threads) == {threading.get_ident()}
+
+    async def test_unresolved_changes_nothing_and_stays_flagged(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            chat_cursors,
+            "resolve_cursor",
+            lambda _cid: chat_cursors.CursorResolution(chat_cursors.CursorOutcome.UNRESOLVED, None),
+        )
+        chat_state = _flagged_chat_state()
+
+        await mcp_server._resolve_pending_chat(self.CHAT, chat_state)
+
+        assert dict(chat_state) == {
+            "seen_ids": set(),
+            "last_ts": None,
+            "bootstrapped": False,
+            "needs_resolution": True,
+        }
+        assert chat_state.writer_threads == [], "nothing was written"
 
 
 # ---------------------------------------------------------------------------

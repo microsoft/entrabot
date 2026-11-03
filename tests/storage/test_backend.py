@@ -15,8 +15,10 @@ config (Phase 5 will wire the cloud branch — for Phase 2 it's local-only).
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -339,6 +341,57 @@ class TestLocalBackendEtag:
         with pytest.raises(ConcurrencyError):
             backend.write_text("c.txt", "loser", if_absent=True)
         assert (tmp_path / "c.txt").read_text() == "winner"
+
+    def test_conditional_writes_are_atomic_within_a_process(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The ETag check and the write that follows it are one step.
+
+        Otherwise two writers holding the same ETag can both pass the check, and the
+        later write silently replaces the earlier one. That is how a shutdown flush can
+        lose to a worker thread still inside a list update it started before.
+
+        Each writer is held right after its check reads the file. Unprotected, both
+        arrive holding the same ETag and both go on to write. Protected, the second
+        can't get as far as the check until the first has written, so the first waits
+        out the barrier alone and carries on. The timeout keeps either case from hanging.
+        """
+        from entrabot.storage.blob import ConcurrencyError
+
+        LocalBackend(tmp_path).write_text("c.json", "v1")
+        _, etag = LocalBackend(tmp_path).read_text_with_etag("c.json")
+        target = tmp_path / "c.json"
+
+        both_have_checked = threading.Barrier(2, timeout=0.3)
+        writer = threading.local()
+        real_read_text = Path.read_text
+
+        def read_then_wait(self: Path, *args: object, **kwargs: object) -> str:
+            content = real_read_text(self, *args, **kwargs)
+            if self == target and getattr(writer, "active", False):
+                with contextlib.suppress(threading.BrokenBarrierError):
+                    both_have_checked.wait()
+            return content
+
+        monkeypatch.setattr(Path, "read_text", read_then_wait)
+
+        def write(content: str) -> bool:
+            writer.active = True
+            try:
+                # A new instance per writer, as get_backend() makes: the guard has to be
+                # shared by every LocalBackend in the process, not held per instance.
+                LocalBackend(tmp_path).write_text("c.json", content, if_match=etag)
+            except ConcurrencyError:
+                return False
+            return True
+
+        contents = ("writer-a", "writer-b")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes = dict(zip(contents, pool.map(write, contents), strict=True))
+
+        winners = [content for content, won in outcomes.items() if won]
+        assert len(winners) == 1, f"both writers passed the ETag check: {outcomes}"
+        assert target.read_text() == winners[0], "the file holds the winner's content"
 
 
 class TestBlobBackendEtag:
