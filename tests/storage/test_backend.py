@@ -17,6 +17,9 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import os
+import stat
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -33,7 +36,7 @@ from entrabot.storage.backend import (
 
 
 def _fail_after_exclusive_create(monkeypatch: pytest.MonkeyPatch, fail_on: str) -> None:
-    """Let ``LocalBackend``'s create-only open succeed, then fail the write or the close.
+    """Let ``LocalBackend``'s open of the file it writes succeed, then fail the write or the close.
 
     This is what a full disk looks like: the file already exists on disk, empty, by
     the time the error arrives. Shadowing ``open`` in the backend module leaves the
@@ -58,6 +61,12 @@ def _fail_after_exclusive_create(monkeypatch: pytest.MonkeyPatch, fail_on: str) 
             if fail_on == "write":
                 raise OSError(errno.ENOSPC, "No space left on device")
             return self._file.write(text)
+
+        def flush(self) -> None:
+            self._file.flush()
+
+        def fileno(self) -> int:
+            return self._file.fileno()
 
     monkeypatch.setattr(backend_module, "open", _FailingFile, raising=False)
 
@@ -317,10 +326,11 @@ class TestLocalBackendEtag:
     def test_if_absent_removes_the_empty_file_when_the_content_does_not_land(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_on: str
     ) -> None:
-        """The exclusive create publishes an empty file before any content is written.
-        If the write or the close then fails, that file would stay behind, and every
-        later reader (an email cursor, say) would find an empty value that no retry
-        could replace, since the key now exists."""
+        """If the content doesn't land, the key must stay creatable. An empty file left at
+        the key would be found by every later reader (an email cursor, say) as an empty
+        value that no retry could replace, since the key now exists. The content goes to a
+        temp file first, so a failed write or close leaves nothing at the key and no temp
+        file either."""
         backend = LocalBackend(tmp_path)
 
         with monkeypatch.context() as patched:
@@ -328,7 +338,7 @@ class TestLocalBackendEtag:
             with pytest.raises(OSError, match="No space left"):
                 backend.write_text("c.txt", "v1", if_absent=True)
 
-        assert not (tmp_path / "c.txt").exists()
+        assert list(tmp_path.iterdir()) == []
         backend.write_text("c.txt", "v1", if_absent=True)  # a later attempt can create it
         assert backend.read_text("c.txt") == "v1"
 
@@ -392,6 +402,166 @@ class TestLocalBackendEtag:
         winners = [content for content, won in outcomes.items() if won]
         assert len(winners) == 1, f"both writers passed the ETag check: {outcomes}"
         assert target.read_text() == winners[0], "the file holds the winner's content"
+
+
+def _must_not_run(*args: object, **kwargs: object) -> None:
+    raise AssertionError("the exclusive-create fallback ran although hard links work")
+
+
+class TestLocalBackendAtomicPublish:
+    """A value is published whole or not at all.
+
+    Local readers take no lock, so a value written in place can be seen empty or half
+    written, and a failed overwrite can truncate what was there. The content goes to a temp
+    file in the same directory first and is moved into place.
+    """
+
+    def test_a_failed_overwrite_keeps_the_existing_value_and_leaves_no_temp_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        backend = LocalBackend(tmp_path)
+        backend.write_text("c.json", "v1")
+
+        def disk_error(fd: int) -> None:
+            raise OSError(errno.EIO, "Input/output error")
+
+        monkeypatch.setattr(os, "fsync", disk_error)
+        with pytest.raises(OSError, match="Input/output error"):
+            backend.write_text("c.json", "v2")
+
+        assert backend.read_text("c.json") == "v1"
+        assert [p.name for p in tmp_path.iterdir()] == ["c.json"]
+
+    def test_create_only_on_an_existing_key_is_refused_by_the_atomic_link(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The atomic link itself refuses an existing key, with no temp file left behind.
+        The exclusive-create fallback is only for volumes that can't hard-link."""
+        from entrabot.storage.blob import ConcurrencyError
+
+        backend = LocalBackend(tmp_path)
+        backend.write_text("c.txt", "winner")
+        monkeypatch.setattr(backend_module, "_create_exclusively", _must_not_run)
+
+        with pytest.raises(ConcurrencyError):
+            backend.write_text("c.txt", "loser", if_absent=True)
+
+        assert backend.read_text("c.txt") == "winner"
+        assert [p.name for p in tmp_path.iterdir()] == ["c.txt"]
+
+    def test_create_only_falls_back_to_an_exclusive_create_without_hard_links(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from entrabot.storage.blob import ConcurrencyError
+
+        attempts: list[tuple[object, object]] = []
+
+        def no_hard_links(src: object, dst: object, *args: object, **kwargs: object) -> None:
+            attempts.append((src, dst))
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+
+        monkeypatch.setattr(os, "link", no_hard_links)
+        backend = LocalBackend(tmp_path)
+
+        etag = backend.write_text("nested/c.txt", "v1", if_absent=True)
+
+        assert len(attempts) == 1, "hard-linking is tried first"
+        assert backend.read_text("nested/c.txt") == "v1"
+        assert etag == backend.read_text_with_etag("nested/c.txt")[1]
+        assert [p.name for p in (tmp_path / "nested").iterdir()] == ["c.txt"]
+        with pytest.raises(ConcurrencyError):  # and the fallback still refuses an existing key
+            backend.write_text("nested/c.txt", "v2", if_absent=True)
+        assert backend.read_text("nested/c.txt") == "v1"
+
+    def test_list_does_not_return_a_leftover_temp_file(self, tmp_path: Path) -> None:
+        """A process that dies mid-write leaves its temp file behind, and a list taken
+        during a write can see one in flight. Neither is a key."""
+        backend = LocalBackend(tmp_path)
+        backend.write_text("interactions/a.jsonl", "1")
+        (tmp_path / "interactions" / ".a.jsonl.0123456789abcdef.tmp").write_text("partial")
+
+        assert backend.list() == ["interactions/a.jsonl"]
+        assert backend.list("interactions/") == ["interactions/a.jsonl"]
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+    def test_overwrite_keeps_the_existing_files_mode(self, tmp_path: Path) -> None:
+        """A replacement file is born with the default mode, which could widen a file the
+        operator restricted. 0o750 is a mode no umask can give a newly created file."""
+        backend = LocalBackend(tmp_path)
+        backend.write_text("c.json", "v1")
+        (tmp_path / "c.json").chmod(0o750)
+        # Read back rather than assume: Windows only keeps a file's read-only bit.
+        mode = stat.S_IMODE((tmp_path / "c.json").stat().st_mode)
+
+        backend.write_text("c.json", "v2")
+
+        assert backend.read_text("c.json") == "v2"
+        assert stat.S_IMODE((tmp_path / "c.json").stat().st_mode) == mode
+
+    def test_a_replace_blocked_by_a_reader_on_windows_is_retried(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Readers take no lock, and on Windows a file open for reading can't be replaced."""
+        backend = LocalBackend(tmp_path)
+        backend.write_text("c.json", "v1")
+        real_replace = os.replace
+        attempts: list[int] = []
+
+        def blocked_twice(source: object, target: object) -> None:
+            attempts.append(1)
+            if len(attempts) <= 2:
+                raise PermissionError(errno.EACCES, "in use")
+            real_replace(source, target)
+
+        monkeypatch.setattr(backend_module, "_REPLACE_CAN_BE_BLOCKED", True)
+        monkeypatch.setattr(backend_module, "_REPLACE_RETRY_SECONDS", 0)
+        monkeypatch.setattr(backend_module.os, "replace", blocked_twice)
+
+        backend.write_text("c.json", "v2")
+
+        assert len(attempts) == 3
+        assert backend.read_text("c.json") == "v2"
+
+    def test_a_replace_that_stays_blocked_fails_and_keeps_the_old_value(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        backend = LocalBackend(tmp_path)
+        backend.write_text("c.json", "v1")
+        attempts: list[int] = []
+
+        def always_blocked(_source: object, _target: object) -> None:
+            attempts.append(1)
+            raise PermissionError(errno.EACCES, "in use")
+
+        monkeypatch.setattr(backend_module, "_REPLACE_CAN_BE_BLOCKED", True)
+        monkeypatch.setattr(backend_module, "_REPLACE_RETRY_SECONDS", 0)
+        monkeypatch.setattr(backend_module.os, "replace", always_blocked)
+
+        with pytest.raises(PermissionError):
+            backend.write_text("c.json", "v2")
+
+        assert len(attempts) == backend_module._REPLACE_ATTEMPTS
+        assert backend.read_text("c.json") == "v1"
+        assert backend.list() == ["c.json"]
+
+    def test_elsewhere_a_permission_error_on_replace_is_real_and_not_retried(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        backend = LocalBackend(tmp_path)
+        backend.write_text("c.json", "v1")
+        attempts: list[int] = []
+
+        def denied(_source: object, _target: object) -> None:
+            attempts.append(1)
+            raise PermissionError(errno.EACCES, "denied")
+
+        monkeypatch.setattr(backend_module, "_REPLACE_CAN_BE_BLOCKED", False)
+        monkeypatch.setattr(backend_module.os, "replace", denied)
+
+        with pytest.raises(PermissionError):
+            backend.write_text("c.json", "v2")
+
+        assert len(attempts) == 1
 
 
 class TestBlobBackendEtag:

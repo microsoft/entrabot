@@ -37,7 +37,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from entrabot.storage.backend import MemoryBackend
+from entrabot.storage.backend import MemoryBackend, is_temp_file_name
 from entrabot.tools.poll_state import (
     EMAIL_CURSOR_KEY,
     LEGACY_DEFAULT_CHAT_KEY,
@@ -113,7 +113,7 @@ def _migrate_one_source(
     key_prefix = f"{prefix}/" if prefix else ""
 
     for path in sorted(local_root.rglob("*")):
-        if not path.is_file():
+        if not path.is_file() or is_temp_file_name(path.name):
             continue
         rel = path.relative_to(local_root).as_posix()
         key = f"{key_prefix}{rel}"

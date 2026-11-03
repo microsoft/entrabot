@@ -143,41 +143,43 @@ class _ClaimOutage:
     whether that write had committed first, which nothing on the client's side can tell.
     ``recover()`` brings storage back, after which everything works as usual.
 
-    ``recover(except_plain_reads=True)`` brings back everything but plain reads, which is
-    what settling a claim uses. A cycle that wrongly carried on past an unsettled claim
-    would then read the cursor, poll Graph and claim again, instead of being stopped by
-    the outage, so the test can see it.
+    Settling a claim reads the cursor and, if it still reads as it did, retries the claim
+    write. ``recover`` can bring back just one of the two, so a test can hold the claim
+    unsettled while the rest of storage works: a cycle that wrongly carried on regardless
+    would then read the cursor, poll Graph and claim again, instead of being stopped by the
+    outage, and the test can see it. ``claim_writes`` counts every conditional write to the
+    cursor that was attempted, including ones the outage refused.
     """
 
     def __init__(self, store, monkeypatch: pytest.MonkeyPatch, *, landed: bool) -> None:
-        self.down = False
-        self.plain_reads_down = False
+        self.reads_down = False
+        self.writes_down = False
         self.armed = True
         self.claim_writes = 0
         real_get, real_get_with_etag, real_put = store.get, store.get_with_etag, store.put
 
-        def check_up(*, plain_read: bool = False) -> None:
-            if self.down or (plain_read and self.plain_reads_down):
+        def check_up(*, write: bool) -> None:
+            if self.writes_down if write else self.reads_down:
                 raise OSError("storage outage")
 
         async def get(path):
-            check_up(plain_read=True)
+            check_up(write=False)
             return await real_get(path)
 
         async def get_with_etag(path):
-            check_up()
+            check_up(write=False)
             return await real_get_with_etag(path)
 
         async def put(path, data, **kwargs):
-            check_up()
             is_claim = path == EMAIL_CURSOR_KEY and kwargs.get("if_match") is not None
             if is_claim:
                 self.claim_writes += 1
+            check_up(write=True)
             if is_claim and self.armed:
                 self.armed = False
                 if landed:
                     await real_put(path, data, **kwargs)
-                self.down = True
+                self.reads_down = self.writes_down = True
                 raise OSError("connection reset")
             return await real_put(path, data, **kwargs)
 
@@ -185,9 +187,9 @@ class _ClaimOutage:
         monkeypatch.setattr(store, "get_with_etag", get_with_etag)
         monkeypatch.setattr(store, "put", put)
 
-    def recover(self, *, except_plain_reads: bool = False) -> None:
-        self.down = False
-        self.plain_reads_down = except_plain_reads
+    def recover(self, *, reads_stay_down: bool = False, writes_stay_down: bool = False) -> None:
+        self.reads_down = reads_stay_down
+        self.writes_down = writes_stay_down
 
 
 # ---------------------------------------------------------------------------
@@ -536,6 +538,28 @@ class TestFirstStartTimeSurvivesFailedCreation:
 
         assert read_email_cursor().cursor == FIRST_ATTEMPT
 
+    async def test_the_start_is_taken_before_the_first_read_not_after_it_reports_absent(
+        self, fake_cloud_store, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A first read that fails (or is just slow) must not move the start to a later
+        read. Mail that arrived in between would then be older than the cursor and never
+        pushed. Here the clock is set by hand, so the two reads really are an hour apart."""
+        now = [FIRST_ATTEMPT]
+        monkeypatch.setattr(poll_state, "now_cursor", lambda: now[0])
+
+        with patch.object(
+            fake_cloud_store, "get_with_etag", AsyncMock(side_effect=OSError("outage"))
+        ):
+            await mcp_server._email_cursor_or_initialize()  # unresolved, at the first time
+        assert mcp_server._state["_email_cursor_start"] == FIRST_ATTEMPT
+        assert EMAIL_CURSOR_KEY not in fake_cloud_store.data, "an unresolved read creates nothing"
+
+        now[0] = SECOND_ATTEMPT
+        await mcp_server._email_cursor_or_initialize()  # the key is absent, an hour later
+
+        assert read_email_cursor().cursor == FIRST_ATTEMPT
+        assert "_email_cursor_start" not in mcp_server._state
+
     @pytest.mark.parametrize("created", [True, False])
     async def test_the_start_is_handed_on_and_dropped_only_when_creation_reports_success(
         self, monkeypatch: pytest.MonkeyPatch, created: bool
@@ -601,7 +625,7 @@ class TestAmbiguousClaim:
         self, fake_cloud_store, mailbox, pushed, monkeypatch, m1, caplog: pytest.LogCaptureFixture
     ) -> None:
         caplog.set_level(logging.WARNING, logger="entrabot.mcp_server")
-        _store_cursor(fake_cloud_store, START)
+        etag = _store_cursor(fake_cloud_store, f"{START}\nsibling-2\nsibling-1")
         _ClaimOutage(fake_cloud_store, monkeypatch, landed=True)
 
         await _cycle()
@@ -611,10 +635,14 @@ class TestAmbiguousClaim:
         assert isinstance(held, mcp_server.PendingEmailClaim)
         assert [message["id"] for message in held.messages] == ["m1"]
         assert held.claim_id
+        # Everything settling needs to retry the very same write later.
+        assert held.new_cursor == AFTER_M1
+        assert held.etag == etag
+        assert held.prior_claims == ("sibling-2", "sibling-1")
         assert _server_warnings(caplog, "holding"), "the cycle itself says it is holding"
 
     @pytest.mark.parametrize("landed", [True, False])
-    async def test_the_next_cycle_polls_nothing_and_writes_nothing_while_still_unknown(
+    async def test_the_next_cycle_does_nothing_while_the_cursor_still_cannot_be_read(
         self,
         fake_cloud_store,
         mailbox,
@@ -629,19 +657,73 @@ class TestAmbiguousClaim:
         outage = _ClaimOutage(fake_cloud_store, monkeypatch, landed=landed)
         await _cycle()
         held = mcp_server._state["_email_pending_claim"]
-        # Only the read that settles the claim keeps failing. Everything else works, so
-        # a cycle that carried on regardless could read the cursor, poll Graph and claim
-        # again, and the outage wouldn't stop it.
-        outage.recover(except_plain_reads=True)
+        outage.recover(reads_stay_down=True)  # writes work, but settling reads first
         caplog.clear()
 
         await _cycle()
 
         assert len(mailbox.filters) == 1, "no Graph poll while the claim is unsettled"
-        assert outage.claim_writes == 1, "no second cursor write"
+        assert outage.claim_writes == 1, "no second cursor write: nothing was read to retry from"
         assert pushed == []
         assert mcp_server._state["_email_pending_claim"] is held, "still held, unchanged"
         assert _server_warnings(caplog, "holding"), "and it says so again"
+
+    async def test_the_next_cycle_retries_the_claim_but_polls_nothing_while_the_retry_fails(
+        self,
+        fake_cloud_store,
+        mailbox,
+        pushed,
+        monkeypatch,
+        m1,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The cursor reads fine and still shows the old value, so settling retries the very
+        same write. It fails as well, so nothing is settled: still no poll, no new claim."""
+        caplog.set_level(logging.WARNING, logger="entrabot.mcp_server")
+        _store_cursor(fake_cloud_store, START)
+        outage = _ClaimOutage(fake_cloud_store, monkeypatch, landed=False)
+        await _cycle()
+        held = mcp_server._state["_email_pending_claim"]
+        outage.recover(writes_stay_down=True)  # reads work, writes don't
+        caplog.clear()
+
+        await _cycle()
+
+        assert outage.claim_writes == 2, "the original write and one retry, not a new claim"
+        assert len(mailbox.filters) == 1, "no Graph poll while the claim is unsettled"
+        assert pushed == []
+        assert mcp_server._state["_email_pending_claim"] is held, "still held, unchanged"
+        assert _server_warnings(caplog, "holding"), "and it says so again"
+
+    @pytest.mark.parametrize("fault", ["corrupt", "no-etag"])
+    async def test_a_cursor_that_cannot_settle_the_claim_leaves_the_batch_held(
+        self, fake_cloud_store, mailbox, pushed, monkeypatch, m1, fault: str
+    ) -> None:
+        """A proxy answering 200 with an error page, or a read that comes back without an
+        ETag, can be read but says nothing about the claim. It must not be taken for
+        proof that the claim didn't land."""
+        _store_cursor(fake_cloud_store, START)
+        outage = _ClaimOutage(fake_cloud_store, monkeypatch, landed=False)
+        await _cycle()
+        held = mcp_server._state["_email_pending_claim"]
+        outage.recover()
+        if fault == "corrupt":
+            fake_cloud_store.data[EMAIL_CURSOR_KEY] = b"<html>proxy</html>"
+        else:
+            read_with_etag = fake_cloud_store.get_with_etag
+
+            async def without_etag(path: str) -> tuple[bytes, str]:
+                data, _ = await read_with_etag(path)
+                return data, ""
+
+            monkeypatch.setattr(fake_cloud_store, "get_with_etag", without_etag)
+
+        await _cycle()
+
+        assert mcp_server._state["_email_pending_claim"] is held, "the batch stays held"
+        assert pushed == []
+        assert len(mailbox.filters) == 1, "no Graph poll"
+        assert outage.claim_writes == 1, "and nothing written over a value that can't be trusted"
 
     async def test_a_claim_that_turns_out_to_have_landed_pushes_the_held_batch_once(
         self, fake_cloud_store, mailbox, pushed, monkeypatch, m1, blob_calls_on_event_loop
@@ -665,21 +747,52 @@ class TestAmbiguousClaim:
         assert pushed == ["m1"], "pushed exactly once"
         assert mailbox.filters[1:] == [f"receivedDateTime gt {AFTER_M1}"] * 2
 
-    async def test_a_claim_that_did_not_land_clears_and_polls_normally(
+    async def test_a_claim_that_did_not_land_is_retried_at_settle_time_and_pushed_once(
         self, fake_cloud_store, mailbox, pushed, monkeypatch, m1
     ) -> None:
+        """The cursor still shows the old value, so the original write may yet be in flight.
+        Settling retries the same write: if it wins, the batch is ours and the original,
+        whose ETag is now stale, can never commit."""
         _store_cursor(fake_cloud_store, START)
         outage = _ClaimOutage(fake_cloud_store, monkeypatch, landed=False)
         await _cycle()
-        assert mcp_server._state["_email_pending_claim"].messages == [m1]
+        held = mcp_server._state["_email_pending_claim"]
         outage.recover()
 
         await _cycle()
 
         assert "_email_pending_claim" not in mcp_server._state
-        assert mailbox.filters == [f"receivedDateTime gt {START}"] * 2, "it polled again"
-        assert pushed == ["m1"], "the normal fetch got the same mail and claimed it afresh"
-        assert read_email_cursor().cursor == AFTER_M1
+        assert pushed == ["m1"]
+        assert outage.claim_writes == 2, "the original write and one retry of it"
+        assert len(mailbox.filters) == 1, "settling the claim polls nothing in that cycle"
+        stored = fake_cloud_store.data[EMAIL_CURSOR_KEY].decode().splitlines()
+        assert stored == [AFTER_M1, held.claim_id], "the retry carries the original claim ID"
+
+        await _cycle()  # the next ordinary cycle starts from the advanced cursor
+        assert pushed == ["m1"], "pushed exactly once"
+        assert mailbox.filters[1:] == [f"receivedDateTime gt {AFTER_M1}"]
+
+    async def test_a_held_claim_another_instance_overtook_is_dropped_and_polling_resumes(
+        self, fake_cloud_store, mailbox, pushed, monkeypatch, m1
+    ) -> None:
+        """Another instance claimed the same window while this one's write was unconfirmed.
+        Ours can no longer commit, the sibling pushes the batch, and the cycle carries on."""
+        _store_cursor(fake_cloud_store, START)
+        outage = _ClaimOutage(fake_cloud_store, monkeypatch, landed=False)
+        await _cycle()
+        assert mcp_server._state["_email_pending_claim"].messages == [m1]
+        outage.recover()
+        _store_cursor(fake_cloud_store, f"{AFTER_M1}\nsibling-claim")
+
+        await _cycle()
+
+        assert "_email_pending_claim" not in mcp_server._state
+        assert pushed == [], "the sibling owns that mail"
+        assert outage.claim_writes == 1, "ours was not retried over the sibling's claim"
+        assert mailbox.filters == [
+            f"receivedDateTime gt {START}",
+            f"receivedDateTime gt {AFTER_M1}",
+        ], "and the cycle polled as usual, from the sibling's cursor"
 
     async def test_a_held_claim_is_found_behind_a_siblings_newer_claim(
         self, fake_cloud_store, mailbox, pushed, monkeypatch, m1

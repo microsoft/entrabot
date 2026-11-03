@@ -1795,22 +1795,27 @@ async def _email_cursor_or_initialize() -> poll_state.EmailCursorRead:
     nothing: a failed read could be hiding a live cursor, so it never initializes
     and never falls back to a local copy.
 
-    "Now" is the time of the FIRST attempt, held in ``_state`` until the cursor exists.
-    Creation can fail for as long as storage is down, and a fresh "now" on every attempt
-    would move the start past all the mail that arrived meanwhile, which would then never
-    be pushed. The held time is dropped once creation succeeds (including by losing the
-    create race to another instance) and whenever a read finds the cursor, so a cursor
+    "Now" is the time of the FIRST attempt, taken BEFORE the first read and held in
+    ``_state`` until the cursor exists. A read can be slow or fail, and creation can fail
+    for as long as storage is down. A start taken only after a read reports ABSENT, or
+    afresh on every attempt, would move past all the mail that arrived meanwhile, which
+    would then never be pushed. The held time survives UNRESOLVED reads and is used only
+    when a read reports ABSENT. It is dropped once creation succeeds (including by losing
+    the create race to another instance) and whenever a read finds the cursor, so a cursor
     deleted later starts from its own time and not from a stale one.
     """
+    # Lazy rather than ``setdefault(..., now_cursor())``, so a held start costs no clock read.
+    if "_email_cursor_start" not in _state:
+        _state["_email_cursor_start"] = poll_state.now_cursor()
+    start: str = _state["_email_cursor_start"]
     current = await asyncio.to_thread(poll_state.read_email_cursor)
     if current.outcome is poll_state.PollStateOutcome.ABSENT:
-        start: str = _state.setdefault("_email_cursor_start", poll_state.now_cursor())
         if await asyncio.to_thread(poll_state.initialize_email_cursor, start):
             _state.pop("_email_cursor_start", None)
     elif current.outcome is poll_state.PollStateOutcome.PRESENT:
         _state.pop("_email_cursor_start", None)
     elif current.outcome is poll_state.PollStateOutcome.UNRESOLVED and logger:
-        # Any held start is kept: the failed read may be hiding a live cursor.
+        # The held start is kept: the failed read may be hiding a live cursor.
         logger.warning("Email cursor unresolved; skipping this cycle (no push, no write)")
     return current
 
@@ -1819,11 +1824,15 @@ async def _email_cursor_or_initialize() -> poll_state.EmailCursorRead:
 class PendingEmailClaim:
     """A batch of email whose claim may or may not have landed, held until that is known.
 
-    Made when the claim write fails and the cursor can't be read back, so nobody can say
+    Made when the claim write fails and settling it can't reach an answer yet (the cursor
+    can't be read back, isn't usable, or the retried write failed too), so nobody can say
     whether the cursor now sits past this batch. If it does, no later poll fetches these
-    messages and dropping them would lose the mail. If it doesn't, an ordinary poll
-    fetches them again. The batch is pushed or discarded once
+    messages and dropping them would lose the mail. The batch is pushed or discarded once
     :func:`entrabot.tools.poll_state.settle_email_claim` answers.
+
+    Settling may have to retry the claim's write, so this keeps the claim's own arguments:
+    the new cursor, the ETag the claim was made against, and the claim history it carried
+    forward. The retry writes exactly what the original did.
 
     It lives only in memory, at ``_state["_email_pending_claim"]``. A restart while one
     is held loses the batch: the new process reads the cursor, and if the claim had
@@ -1832,6 +1841,9 @@ class PendingEmailClaim:
 
     claim_id: str
     messages: list[dict]
+    new_cursor: str
+    etag: str | None
+    prior_claims: tuple[str, ...]
 
 
 async def _push_email_batch(
@@ -1871,19 +1883,22 @@ async def _email_poll_cycle(*, pushed_email_ids: set[str], agent_self_upn: str) 
     The shared cursor is re-read with its ETag every cycle, because another
     instance may have moved it. If Graph returned anything, the cursor is advanced
     with a compare-and-swap BEFORE any push: that write is what claims the window,
-    so only the winner owns the batch. Losing the swap means another instance has
-    this window, so the batch is dropped. A write that fails for another reason, and
-    is then shown not to have landed, pushes nothing either, and the next cycle
-    fetches the same window again.
+    so only the winner owns the batch. A write that fails doesn't say whether it landed
+    (a request that timed out can still commit later), so it is settled by reading the
+    cursor back. Our claim ID there means the claim is ours. Another write there means
+    ours can no longer commit, so the batch is dropped, which is also what losing the swap
+    means. If nothing has landed the same write is retried, and once that wins the
+    original can't commit any more, because its ETag is stale. The next cycle then starts
+    from the advanced cursor.
 
-    The remaining case is a failed write whose outcome can't be checked because the
-    cursor can't be read back. It may have landed, which would leave the cursor past
-    this batch for good, so the batch is held (:class:`PendingEmailClaim`) and nothing
-    is pushed. At the top of each later cycle the claim is settled by its ID, and until
-    it is the cycle makes no Graph call and no cursor write. If it landed, the held
-    batch is pushed and the cycle ends. If it did not, the hold is cleared and the cycle
-    carries on as usual: the cursor never moved for this claim, so the ordinary fetch
-    gets the same mail again.
+    The remaining case is a claim that can't be settled yet: the cursor can't be read
+    back or isn't usable, or the retry failed too. It may have landed, which would leave
+    the cursor past this batch for good, so the batch is held
+    (:class:`PendingEmailClaim`) and nothing is pushed. At the top of each later cycle the
+    claim is settled again, and until it is the cycle makes no Graph call; the only cursor
+    write is the retry of that same claim. If the claim is ours, the held batch is pushed
+    and the cycle ends. If another write got there first, the hold is cleared and the
+    cycle carries on as usual.
 
     A held batch lives only in memory, so a restart before it settles loses it. The
     mail stays readable through ``read_email``.
@@ -1892,23 +1907,29 @@ async def _email_poll_cycle(*, pushed_email_ids: set[str], agent_self_upn: str) 
 
     pending = _state.get("_email_pending_claim")
     if isinstance(pending, PendingEmailClaim):
-        settled = await asyncio.to_thread(poll_state.settle_email_claim, pending.claim_id)
+        settled = await asyncio.to_thread(
+            poll_state.settle_email_claim,
+            pending.new_cursor,
+            pending.etag,
+            claim_id=pending.claim_id,
+            prior_claims=pending.prior_claims,
+        )
         if settled is None:
             if logger:
                 logger.warning(
-                    "Held email claim still can't be settled (cursor unreadable); "
-                    "holding %d message(s), no poll or write this cycle",
+                    "Held email claim still can't be settled; holding %d message(s), "
+                    "no Graph poll this cycle",
                     len(pending.messages),
                 )
             return
         _state.pop("_email_pending_claim", None)
         if settled:
             if logger:
-                logger.info("Held email claim had landed; pushing its batch")
+                logger.info("Held email claim is ours; pushing its batch")
             await _push_email_batch(pending.messages, pushed_email_ids, agent_self_upn)
             return
         if logger:
-            logger.info("Held email claim did not land; polling as usual")
+            logger.info("Held email claim lost to another write; polling as usual")
 
     current = await _email_cursor_or_initialize()
     if current.outcome is not poll_state.PollStateOutcome.PRESENT:
@@ -1932,7 +1953,9 @@ async def _email_poll_cycle(*, pushed_email_ids: set[str], agent_self_upn: str) 
             logger.info("Email window claimed by another instance; dropping this batch")
         return
     if claim is poll_state.EmailClaim.UNKNOWN:
-        _state["_email_pending_claim"] = PendingEmailClaim(claim_id, messages)
+        _state["_email_pending_claim"] = PendingEmailClaim(
+            claim_id, messages, new_cursor, current.etag, current.recent_claims
+        )
         if logger:
             logger.warning(
                 "Email window claim is unconfirmed; holding %d message(s) until it settles",

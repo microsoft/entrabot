@@ -20,9 +20,16 @@ Phase 5 wires the cloud branch into ``get_backend`` once
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import logging
+import os
+import re
+import secrets
+import shutil
+import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -68,9 +75,95 @@ def _check_write_conditions(if_match: str | None, if_absent: bool) -> None:
         raise ValueError("write_text: if_match and if_absent are mutually exclusive")
 
 
+# A write goes to a temp file beside its key and is then moved into place (see
+# ``_publish_atomically``). The name is ``.{key name}.{16 hex digits}.tmp``.
+# ``LocalBackend.list`` hides anything shaped like it, because a list taken during a write
+# can see the temp file in flight, and a process that dies mid-write leaves one behind.
+_TEMP_FILE_NAME = re.compile(r"\..+\.[0-9a-f]{16}\.tmp")
+
+# Readers take no lock, and Python opens files without FILE_SHARE_DELETE, so on Windows a
+# replace fails with PermissionError while something is reading the file. Reads are short, so
+# it is retried briefly. Elsewhere that error means what it says, so it isn't.
+_REPLACE_CAN_BE_BLOCKED = sys.platform == "win32"
+_REPLACE_ATTEMPTS = 5
+_REPLACE_RETRY_SECONDS = 0.05
+
+
+def is_temp_file_name(name: str) -> bool:
+    """True if a file name is a write's temp file rather than a key of its own."""
+    return _TEMP_FILE_NAME.fullmatch(name) is not None
+
+
+def _replace_into_place(temp: Path, path: Path) -> None:
+    """``os.replace``, allowing for a Windows reader that has *path* open for a moment."""
+    for attempt in range(1, _REPLACE_ATTEMPTS + 1):
+        try:
+            os.replace(temp, path)
+            return
+        except PermissionError:
+            if not _REPLACE_CAN_BE_BLOCKED or attempt == _REPLACE_ATTEMPTS:
+                raise
+            time.sleep(_REPLACE_RETRY_SECONDS)
+
+
+def _publish_atomically(path: Path, content: str, key: str, *, create_only: bool) -> None:
+    """Make *content* visible at *path* in one step: all of it, or nothing.
+
+    Readers take no lock, so a value written in place can be read empty or half written,
+    and an overwrite that fails partway truncates what was there. Instead *content* is
+    written and synced to a temp file in the same directory, then moved into place:
+
+    * Overwrite: ``os.replace``, which is atomic. The target's permission bits are copied
+      onto the temp file first, because a replacement is born with the default mode and
+      could widen a file the operator restricted.
+    * Create-only: ``os.link``, which is atomic too and fails if the target exists. That
+      ``FileExistsError`` becomes the ``ConcurrencyError`` callers expect. A volume
+      without hard links raises another ``OSError``, and :func:`_create_exclusively`
+      does the job there instead.
+
+    The temp file is always removed, so a failed write leaves the old value (or no key)
+    and nothing else behind. The caller holds ``_LOCAL_WRITE_LOCK``. The text encoding is
+    the default one, exactly as ``Path.write_text`` used.
+    """
+    temp = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    try:
+        with open(temp, "x") as fh:
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        if create_only:
+            try:
+                os.link(temp, path)
+            except FileExistsError as exc:
+                raise ConcurrencyError(f"write_text({key!r}) refused: key exists") from exc
+            except OSError as exc:
+                logger.debug(
+                    "Could not hard-link %r (%s); creating it exclusively", key, type(exc).__name__
+                )
+                _create_exclusively(path, content, key)
+        else:
+            with contextlib.suppress(FileNotFoundError):
+                shutil.copymode(path, temp)
+            _replace_into_place(temp, path)
+    finally:
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass  # os.replace has already moved it into place.
+        except OSError as unlink_exc:
+            # Report it rather than mask the error that got us here.
+            logger.warning(
+                "Could not remove the temp file left by a write of %r: %s: %s",
+                key,
+                type(unlink_exc).__name__,
+                unlink_exc,
+            )
+
+
 def _create_exclusively(path: Path, content: str, key: str) -> None:
     """Create *path* holding *content*, refusing if it already exists.
 
+    This is the fallback for a volume that can't hard-link (see ``_publish_atomically``).
     The exclusive create publishes an empty file before any content is written. If
     the write or the close then fails, the file this call created is removed and the
     error re-raised, so a later attempt can create the key instead of every reader
@@ -202,10 +295,7 @@ class LocalBackend:
                         f"(current={current!r})"
                     )
             p.parent.mkdir(parents=True, exist_ok=True)
-            if if_absent:
-                _create_exclusively(p, content, key)
-            else:
-                p.write_text(content)
+            _publish_atomically(p, content, key, create_only=if_absent)
         return _content_etag(content)
 
     def append_text(self, key: str, content: str) -> None:
@@ -222,7 +312,7 @@ class LocalBackend:
             return []
         results: list[str] = []
         for f in self._root.rglob("*"):
-            if not f.is_file():
+            if not f.is_file() or is_temp_file_name(f.name):
                 continue
             rel = f.relative_to(self._root).as_posix()
             if rel.startswith(prefix):

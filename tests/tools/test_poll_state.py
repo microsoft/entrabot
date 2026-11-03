@@ -9,6 +9,7 @@ instance's chats, and a stale cursor can never replay old mail.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -94,7 +95,10 @@ class _NoEtag:
 # read_watched_chats
 # ---------------------------------------------------------------------------
 class _ErrorAfterWrite:
-    """Commits the write, then raises as if the response had been lost."""
+    """Commits the write, then raises as if the response had been lost.
+
+    The ETag moves with every committed write, as a service's does.
+    """
 
     def __init__(
         self, value: str, *, error: Exception | None = None, reread_fails: bool = False
@@ -103,20 +107,19 @@ class _ErrorAfterWrite:
         self.error = error or OSError("connection reset")
         self.reread_fails = reread_fails
         self.armed = False
+        self.commits = 0
 
     def arm_reread_failure(self) -> None:
         self.armed = self.reread_fails
 
     def read_text_with_etag(self, key: str) -> tuple[str, str]:
-        return self.value, '"etag"'
-
-    def read_text(self, key: str) -> str:
         if self.armed:
             raise OSError("still down")
-        return self.value
+        return self.value, f'"etag-{self.commits}"'
 
     def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str:
         self.value = content
+        self.commits += 1
         raise self.error
 
 
@@ -129,6 +132,7 @@ class _SiblingClaimedFirst(_ErrorAfterWrite):
 
     def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str:
         self.value = f"{self.sibling_value}\nsibling-claim"
+        self.commits += 1
         raise self.error
 
 
@@ -555,9 +559,15 @@ class TestClaimEmailWindow:
             )
         assert sorted(o.name for o in outcomes) == ["LOST", "WON"]
 
-    def test_non_conflict_failure_is_failed_not_lost(self, data_dir, monkeypatch) -> None:
+    def test_a_write_that_keeps_failing_is_unknown_not_lost(self, data_dir, monkeypatch) -> None:
+        """Nothing shows the claim landed or that another write beat it, and the retry made
+        while settling fails as well, so the caller has to hold its batch."""
+        LocalBackend(data_dir).write_text(EMAIL_CURSOR_KEY, NOW)
         _use_backend(monkeypatch, _WriteFails(data_dir))
-        assert claim_email_window(LATER, '"etag"', claim_id=CLAIM) is EmailClaim.FAILED
+        etag = read_email_cursor().etag
+
+        assert claim_email_window(LATER, etag, claim_id=CLAIM) is EmailClaim.UNKNOWN
+        assert (data_dir / EMAIL_CURSOR_KEY).read_text() == NOW
 
     def test_a_write_that_landed_despite_an_error_still_wins(self, monkeypatch) -> None:
         """A transport error doesn't prove the PUT failed. If it committed and this
@@ -577,11 +587,12 @@ class TestClaimEmailWindow:
 
     def test_a_sibling_writing_the_same_cursor_is_not_our_claim(self, monkeypatch) -> None:
         """Both instances compute the same cursor from the same batch, so the value alone
-        can't say who claimed it. Treating it as ours would push the batch twice."""
+        can't say who claimed it. Treating it as ours would push the batch twice. The
+        sibling's write moved the ETag and carries its own claim ID, so the window is lost."""
         backend = _SiblingClaimedFirst(NOW, sibling_value=LATER)
         _use_backend(monkeypatch, backend)
         outcome = claim_email_window(LATER, read_email_cursor().etag, claim_id=CLAIM)
-        assert outcome is EmailClaim.FAILED
+        assert outcome is EmailClaim.LOST
 
     def test_an_ambiguous_write_that_cannot_be_reread_is_unknown_not_failed(
         self, monkeypatch
@@ -612,24 +623,25 @@ class _ClaimWriteFails:
     * ``sibling``: it hadn't, and a sibling's claim for the same window stands.
     * ``missing``: the key has gone.
     * ``unreadable``: the storage can't be read any more.
+
+    A write that changed the value moved the ETag too, as a service's does.
     """
 
     def __init__(self, error: Exception, reread: str) -> None:
         self.error = error
         self.reread = reread
         self.value: str | None = NOW
+        self.etag = '"etag"'
         self.written = False
 
     def read_text_with_etag(self, key: str) -> tuple[str | None, str | None]:
-        return self.value, '"etag"'
-
-    def read_text(self, key: str) -> str | None:
         if self.written and self.reread == "unreadable":
             raise OSError("still down")
-        return self.value
+        return self.value, (None if self.value is None else self.etag)
 
     def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str:
         self.written = True
+        self.etag = '"etag-after"'
         ours = content.splitlines()[1:]  # our claim ID, then the ones before it
         self.value = {
             "landed": content,
@@ -642,7 +654,12 @@ class _ClaimWriteFails:
 
 
 class TestClaimOutcomeByErrorPath:
-    """Every way the write can fail, crossed with every way the re-read can come out."""
+    """Every way the write can fail, crossed with every way the re-read can come out.
+
+    Both kinds of error are settled the same way, by what the cursor shows afterwards and
+    not by which error came back: our claim ID is a win, another write is a loss, and a
+    cursor that can't be read is unknown.
+    """
 
     @pytest.mark.parametrize(
         ("error", "reread", "expected"),
@@ -668,8 +685,8 @@ class TestClaimOutcomeByErrorPath:
                 EmailClaim.WON,
                 id="error-landed-behind-a-sibling",
             ),
-            pytest.param(OSError("reset"), "sibling", EmailClaim.FAILED, id="error-failed"),
-            pytest.param(OSError("reset"), "missing", EmailClaim.FAILED, id="error-key-gone"),
+            pytest.param(OSError("reset"), "sibling", EmailClaim.LOST, id="error-lost"),
+            pytest.param(OSError("reset"), "missing", EmailClaim.LOST, id="error-key-gone"),
             pytest.param(OSError("reset"), "unreadable", EmailClaim.UNKNOWN, id="error-unknown"),
         ],
     )
@@ -765,18 +782,51 @@ class TestRecentClaimHistory:
         assert all(re.fullmatch(r"[0-9a-f]{32}", claim_id) for claim_id in ids)
 
 
+class _TimedOutClaim:
+    """The first conditional write to the cursor times out, and stays in flight.
+
+    The client gave up on it, but the service may still commit it later. ``commit_late()``
+    does that, through the store's own conditional write and with the ETag the write was
+    sent with. ``sent`` records every conditional write to the cursor as ``(data, if_match)``.
+    """
+
+    def __init__(self, store, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._real_put = store.put
+        self.sent: list[tuple[bytes, object]] = []
+
+        async def put(path: str, data: bytes, **kwargs: object) -> str:
+            if path == EMAIL_CURSOR_KEY and kwargs.get("if_match") is not None:
+                self.sent.append((data, kwargs["if_match"]))
+                if len(self.sent) == 1:
+                    raise TimeoutError("the write timed out")
+            return await self._real_put(path, data, **kwargs)
+
+        monkeypatch.setattr(store, "put", put)
+
+    def commit_late(self) -> str:
+        data, if_match = self.sent[0]
+        return asyncio.run(self._real_put(EMAIL_CURSOR_KEY, data, if_match=if_match))
+
+
 class TestSettleEmailClaim:
-    """Asking afterwards whether a claim landed: True, False, or None when it can't be told."""
+    """Asking afterwards how a claim came out: True, False, or None when it can't be told.
+
+    True means the claim is ours, whether the original write landed or the retry made at
+    settle time won. False means another write got there first. None means nothing can be
+    said yet, and the caller asks again.
+    """
 
     def test_true_for_the_newest_claim(self, fake_cloud_store) -> None:
         initialize_email_cursor(NOW)
-        claim_email_window(LATER, read_email_cursor().etag, claim_id=CLAIM)
-        assert settle_email_claim(CLAIM) is True
+        etag = read_email_cursor().etag
+        claim_email_window(LATER, etag, claim_id=CLAIM)
+        assert settle_email_claim(LATER, etag, claim_id=CLAIM) is True
 
     def test_true_for_a_claim_behind_newer_ones(self, fake_cloud_store) -> None:
         """Another instance claimed the next windows after ours landed."""
         initialize_email_cursor(NOW)
-        claim_email_window(LATER, read_email_cursor().etag, claim_id=CLAIM)
+        etag = read_email_cursor().etag
+        claim_email_window(LATER, etag, claim_id=CLAIM)
         for n in range(3):
             current = read_email_cursor()
             claim_email_window(
@@ -786,34 +836,155 @@ class TestSettleEmailClaim:
                 prior_claims=current.recent_claims,
             )
         assert read_email_cursor().recent_claims[0] == "sibling-2"
-        assert settle_email_claim(CLAIM) is True
+        assert settle_email_claim(LATER, etag, claim_id=CLAIM) is True
 
-    def test_false_for_a_claim_that_never_landed(self, fake_cloud_store) -> None:
+    def test_false_when_another_instance_moved_the_cursor_without_our_id(
+        self, fake_cloud_store
+    ) -> None:
         initialize_email_cursor(NOW)
-        claim_email_window(LATER, read_email_cursor().etag, claim_id=CLAIM)
-        assert settle_email_claim("never-written") is False
+        etag = read_email_cursor().etag
+        assert claim_email_window(LATER, etag, claim_id="sibling-claim") is EmailClaim.WON
+        before = (fake_cloud_store.data[EMAIL_CURSOR_KEY], fake_cloud_store.etags[EMAIL_CURSOR_KEY])
+
+        assert settle_email_claim(LATER, etag, claim_id=CLAIM) is False
+        assert claim_email_window(LATER, etag, claim_id=CLAIM) is EmailClaim.LOST
+
+        after = (fake_cloud_store.data[EMAIL_CURSOR_KEY], fake_cloud_store.etags[EMAIL_CURSOR_KEY])
+        assert after == before, "ours can't commit, so nothing is retried over the sibling's claim"
 
     def test_false_when_the_key_is_missing(self, fake_cloud_store) -> None:
-        assert settle_email_claim(CLAIM) is False
+        """An If-Match write can't commit against a key that doesn't exist."""
+        assert settle_email_claim(LATER, '"etag"', claim_id=CLAIM) is False
+        assert EMAIL_CURSOR_KEY not in fake_cloud_store.data, "and nothing was written"
 
     def test_none_when_the_read_fails(self, monkeypatch) -> None:
         _use_backend(monkeypatch, _ReadFails())
-        assert settle_email_claim(CLAIM) is None
+        assert settle_email_claim(LATER, '"etag"', claim_id=CLAIM) is None
+
+    def test_none_when_the_backend_cannot_be_resolved(self, monkeypatch) -> None:
+        def boom() -> object:
+            raise RuntimeError("half-configured backend")
+
+        monkeypatch.setattr(poll_state, "get_backend", boom)
+        assert settle_email_claim(LATER, '"etag"', claim_id=CLAIM) is None
 
     def test_a_claim_pushed_out_of_the_history_reads_as_false(self, fake_cloud_store) -> None:
         """The history is bounded, so a claim followed by more than the bound's worth of
         others can no longer be found. This is the limit of settling by ID."""
         initialize_email_cursor(NOW)
+        claims = []  # (cursor, etag, prior_claims) as each claim was made
         for n in range(MAX_RECENT_CLAIMS + 1):
             current = read_email_cursor()
+            cursor = f"2026-11-02T12:{n:02d}:00.001Z"
+            claims.append((cursor, current.etag, current.recent_claims))
             claim_email_window(
-                f"2026-11-02T12:{n:02d}:00.001Z",
-                current.etag,
-                claim_id=f"claim-{n}",
-                prior_claims=current.recent_claims,
+                cursor, current.etag, claim_id=f"claim-{n}", prior_claims=current.recent_claims
             )
-        assert settle_email_claim("claim-0") is False
-        assert settle_email_claim("claim-1") is True
+
+        def settle(n: int) -> bool | None:
+            cursor, etag, prior = claims[n]
+            return settle_email_claim(cursor, etag, claim_id=f"claim-{n}", prior_claims=prior)
+
+        assert settle(0) is False
+        assert settle(1) is True
+
+
+class TestSettleNeedsAUsableCursor:
+    """A response that reads fine but isn't a usable cursor says nothing about a claim.
+
+    A proxy can answer 200 with an error page. That must not be taken for proof that the
+    claim didn't land, or the batch would be dropped for good. ``read_email_cursor`` treats
+    the same two faults as UNRESOLVED.
+    """
+
+    @pytest.mark.parametrize(
+        "corrupt",
+        ["<html>proxy</html>", "", "cursor=42", "2026-11-02", f"<html>proxy</html>\n{CLAIM}"],
+    )
+    def test_none_for_a_value_that_is_not_a_cursor(self, fake_cloud_store, corrupt: str) -> None:
+        etag = BlobBackend(fake_cloud_store).write_text(EMAIL_CURSOR_KEY, corrupt)
+
+        assert settle_email_claim(LATER, etag, claim_id=CLAIM) is None
+        assert fake_cloud_store.data[EMAIL_CURSOR_KEY].decode() == corrupt, "nothing written"
+
+    def test_none_for_a_value_that_comes_back_without_an_etag(self, monkeypatch) -> None:
+        backend = _NoEtag(f"{LATER}\n{CLAIM}")
+        _use_backend(monkeypatch, backend)
+
+        assert settle_email_claim(LATER, '"etag"', claim_id=CLAIM) is None
+        assert backend.writes == []
+
+
+class TestSettleRetriesTheClaimWrite:
+    """A write that timed out may be in flight, and could commit after we gave up on it.
+
+    When the cursor still reads as it did, settling retries the same conditional write
+    instead of concluding that nothing happened. Once either commits, the other's If-Match
+    is stale and it can never commit, so the write itself decides the claim, not timing.
+    """
+
+    def test_a_timed_out_write_that_never_landed_is_retried_and_won(
+        self, fake_cloud_store, monkeypatch
+    ) -> None:
+        initialize_email_cursor(NOW)
+        etag = read_email_cursor().etag
+        timed_out = _TimedOutClaim(fake_cloud_store, monkeypatch)
+
+        outcome = claim_email_window(LATER, etag, claim_id=CLAIM, prior_claims=("older",))
+
+        assert outcome is EmailClaim.WON
+        stored = fake_cloud_store.data[EMAIL_CURSOR_KEY].decode().splitlines()
+        assert stored == [LATER, CLAIM, "older"], "the retry carries the original claim ID"
+        assert len(timed_out.sent) == 2
+        assert timed_out.sent[0] == timed_out.sent[1], "the same bytes with the same If-Match"
+
+    def test_once_the_retry_has_won_the_original_can_no_longer_commit(
+        self, fake_cloud_store, monkeypatch
+    ) -> None:
+        initialize_email_cursor(NOW)
+        timed_out = _TimedOutClaim(fake_cloud_store, monkeypatch)
+        etag = read_email_cursor().etag
+        assert claim_email_window(LATER, etag, claim_id=CLAIM) is EmailClaim.WON
+        stored = (fake_cloud_store.data[EMAIL_CURSOR_KEY], fake_cloud_store.etags[EMAIL_CURSOR_KEY])
+
+        with pytest.raises(ConcurrencyError):
+            timed_out.commit_late()  # the original arrives after all, with its old If-Match
+
+        after = (fake_cloud_store.data[EMAIL_CURSOR_KEY], fake_cloud_store.etags[EMAIL_CURSOR_KEY])
+        assert after == stored, "refused, and nothing changed"
+
+    def test_a_retry_that_conflicts_because_the_original_landed_is_none_then_true(
+        self, fake_cloud_store, monkeypatch
+    ) -> None:
+        initialize_email_cursor(NOW)
+        etag = read_email_cursor().etag
+        real_put = fake_cloud_store.put
+
+        async def original_lands_as_the_retry_is_sent(
+            path: str, data: bytes, **kwargs: object
+        ) -> str:
+            await real_put(path, f"{LATER}\n{CLAIM}".encode(), if_match=etag)
+            return await real_put(path, data, **kwargs)  # stale by now
+
+        monkeypatch.setattr(fake_cloud_store, "put", original_lands_as_the_retry_is_sent)
+
+        assert settle_email_claim(LATER, etag, claim_id=CLAIM) is None, "the retry conflicted"
+        assert settle_email_claim(LATER, etag, claim_id=CLAIM) is True, "the next call sees who won"
+        assert fake_cloud_store.data[EMAIL_CURSOR_KEY].decode() == f"{LATER}\n{CLAIM}"
+
+    def test_a_retry_that_fails_for_another_reason_is_none(
+        self, fake_cloud_store, monkeypatch
+    ) -> None:
+        initialize_email_cursor(NOW)
+        etag = read_email_cursor().etag
+
+        async def refuse(path: str, data: bytes, **kwargs: object) -> str:
+            raise OSError("simulated blob outage")
+
+        monkeypatch.setattr(fake_cloud_store, "put", refuse)
+
+        assert settle_email_claim(LATER, etag, claim_id=CLAIM) is None
+        assert fake_cloud_store.data[EMAIL_CURSOR_KEY].decode() == NOW
 
 
 # ---------------------------------------------------------------------------

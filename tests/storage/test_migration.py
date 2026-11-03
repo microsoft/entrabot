@@ -57,6 +57,19 @@ class TestMigrateLocalToBackend:
         assert report.copied == 3
         assert report.skipped == 0
 
+    def test_a_temp_file_left_by_a_crashed_write_is_not_migrated(
+        self, src_root: Path, tmp_path: Path
+    ) -> None:
+        leftover = ".watched_chats.0123456789abcdef.tmp"
+        (src_root / "state" / leftover).write_text("half a wri")
+        target = LocalBackend(tmp_path / "dst")
+
+        report = migrate_local_to_backend([(src_root, "")], target)
+
+        assert report.copied == 3
+        assert not target.exists(f"state/{leftover}")
+        assert not (tmp_path / "dst" / "state" / leftover).exists()
+
     def test_idempotent_skips_existing_keys(self, src_root: Path, tmp_path: Path) -> None:
         target = LocalBackend(tmp_path / "dst")
         target.write_text("interactions/2026-04-17.jsonl", "ALREADY-IN-CLOUD")

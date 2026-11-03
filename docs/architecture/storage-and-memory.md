@@ -81,7 +81,7 @@ Modules that call `get_backend()`:
 
 `write_text(key, content, if_match=etag)` is a compare-and-swap: it succeeds only if the key's current ETag equals `if_match`, and raises `ConcurrencyError` otherwise. `LocalBackend` and `BlobBackend` both honor this — Local via the content-hash ETag, Blob via Azure's real ETag header (and its native `If-Match` precondition, surfaced as HTTP 412).
 
-`write_text(key, content, if_absent=True)` is the same guarantee for a key that doesn't exist yet: it creates the key and raises `ConcurrencyError` if another writer got there first. `if_match=None` alone is an unconditional overwrite, so without this two instances that both read "absent" would both write, and the last one would win. `LocalBackend` uses an exclusive create; `BlobBackend` sends `If-None-Match: *`, and `BlobStore` treats both 412 and 409 as a conflict on that path, since Azure's docs list both.
+`write_text(key, content, if_absent=True)` is the same guarantee for a key that doesn't exist yet: it creates the key and raises `ConcurrencyError` if another writer got there first. `if_match=None` alone is an unconditional overwrite, so without this two instances that both read "absent" would both write, and the last one would win. `LocalBackend` hard-links a fully written temp file into place, which is atomic and fails if the key exists (falling back to an exclusive create where hard links aren't available); `BlobBackend` sends `If-None-Match: *`, and `BlobStore` treats both 412 and 409 as a conflict on that path, since Azure's docs list both.
 
 Three call sites build real logic on top of this:
 

@@ -51,7 +51,7 @@ Token provider: `acquire_agent_user_storage_token(cfg)` (in `tools/teams.py`) �
 
 `write_text(key, content, if_match=etag)` is compare-and-swap: it only succeeds if the key's current ETag equals `if_match`, and raises `entrabot.storage.blob.ConcurrencyError` otherwise. Both backends honor this — `LocalBackend` compares content hashes, `BlobBackend` relies on Azure's real ETag header and its native `If-Match` precondition (surfaced by Azure as HTTP 412, translated to `ConcurrencyError` by `BlobStore.put`). `if_match=None` (the default) is an unconditional overwrite.
 
-`write_text(key, content, if_absent=True)` is the compare-and-swap for a key that doesn't exist yet: it creates the key, and raises `ConcurrencyError` if another writer got there first. `LocalBackend` uses an exclusive create. `BlobBackend` sends `If-None-Match: *`, and `BlobStore.put` translates both 412 and 409 to `ConcurrencyError` on that path, since Azure's docs list both. `if_match` and `if_absent` together raise `ValueError`.
+`write_text(key, content, if_absent=True)` is the compare-and-swap for a key that doesn't exist yet: it creates the key, and raises `ConcurrencyError` if another writer got there first. `LocalBackend` writes the content to a temp file and hard-links it into place, which is atomic and fails if the key exists (where hard links aren't available it falls back to an exclusive create). `BlobBackend` sends `If-None-Match: *`, and `BlobStore.put` translates both 412 and 409 to `ConcurrencyError` on that path, since Azure's docs list both. `if_match` and `if_absent` together raise `ValueError`.
 
 Three call sites build retry logic on top of this:
 
@@ -59,7 +59,7 @@ Three call sites build retry logic on top of this:
 - **`promises.py`** — the same read-with-etag / write-with-`if_match` shape, but retries only **once** on `ConcurrencyError` before raising `PromiseStoreConflict`.
 - **`poll_state.add_watched_chats()`** — merges a batch of chat IDs into the shared list, up to `WATCHED_CHATS_MAX_ATTEMPTS = 4` times. Exhausting the retries reports failure without raising, so the caller can keep those chats dirty and try again later.
 
-`poll_state.claim_email_window()` uses the same primitive without a retry: losing the swap means another instance owns that window of mail, so there is nothing to retry.
+`poll_state.claim_email_window()` uses the same primitive without a retry on conflict: losing the swap means another instance owns that window of mail, so there is nothing to retry. After a failure that doesn't say whether the write landed, `poll_state.settle_email_claim()` reads the cursor back and, if it hasn't moved, retries the identical conditional write. Whichever of the two commits first leaves the other with a stale `If-Match`, so a timed-out original can't commit after this instance has given up on it.
 
 ## `get_backend()` factory
 
@@ -102,7 +102,9 @@ def new_claim_id() -> str
 def claim_email_window(
     new_cursor: str, etag: str | None, *, claim_id: str, prior_claims: tuple[str, ...] = ()
 ) -> EmailClaim
-def settle_email_claim(claim_id: str) -> bool | None          # True landed, False didn't, None can't tell
+def settle_email_claim(
+    new_cursor: str, etag: str | None, *, claim_id: str, prior_claims: tuple[str, ...] = ()
+) -> bool | None                                              # True ours, False lost, None can't tell
 def ignored_legacy_local_copies() -> list[Path]
 ```
 
