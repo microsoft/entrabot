@@ -154,7 +154,7 @@ def graph_entry(
     *,
     key_id: str,
     display_name: str,
-    end: str = "2027-06-01T00:00:00Z",
+    end: str = "2099-06-01T00:00:00Z",  # far off: matching ignores expired certificates
     **extra: Any,
 ) -> dict[str, Any]:
     """A keyCredentials entry shaped the way Graph returns one."""

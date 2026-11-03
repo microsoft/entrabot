@@ -155,9 +155,10 @@ Diagnostics and control:
 - Reuses this machine's certificate only when
   [`find_local_blueprint_cert.py`](../auth-and-certs/find-local-blueprint-cert-py.md)
   shows that the local private key matches a certificate still registered on the
-  Blueprint. The thumbprint cached in the state file is never trusted on its own: setup
-  uses the thumbprint that check returns, and saves it if it differs from the cached
-  one. `verify_blueprint_cert.py` is an operator tool that setup does not call.
+  Blueprint that hasn't expired. The thumbprint cached in the state file is never
+  trusted on its own: setup uses the thumbprint that check returns, and saves it if it
+  differs from the cached one. `verify_blueprint_cert.py` is an operator tool that setup
+  does not call.
 - Otherwise, including whenever a new private key is still waiting under the pending
   keystore entry from an earlier run,
   [`register_blueprint_cert.py`](../auth-and-certs/register-blueprint-cert-py.md)

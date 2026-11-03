@@ -53,6 +53,15 @@ Most operators reach this through `setup.sh` rather than running it directly.
 
 ## Effects
 
+Before anything else, the command takes an exclusive, non-blocking lock on
+`~/.entrabot/.blueprint-cert.lock` and holds it until it exits. Overlapping runs share
+the one pending-key entry, so without the lock one run could overwrite or delete the key
+another needs to recover. If another setup holds the lock, the command exits `1` at once,
+having read and changed nothing. The lock is per OS user and shared by every checkout,
+and the kernel releases it if the process dies, so there is nothing stale to clear. It
+covers one machine only; see [Common failures](#common-failures) for two machines
+attaching at once.
+
 1. Checks the `keyring` backend, mints a Provisioner Graph token, and reads the
    Blueprint's `keyCredentials`. If any of this fails, nothing is generated.
 2. Prints `adding to N existing certificate(s)`, or with
@@ -67,7 +76,9 @@ Most operators reach this through `setup.sh` rather than running it directly.
    lag, until the new certificate's thumbprint and every earlier `keyId` are present.
 7. Promotes the key to `blueprint-private-key` and reads it back.
 8. Writes `BLUEPRINT_CERT_THUMBPRINT` to the state file and removes any old
-   `BLUEPRINT_SECRET`.
+   `BLUEPRINT_SECRET`. The new contents go to a temporary file beside it, which is then
+   swapped in with the existing file's mode kept, so a full disk or an interruption can't
+   leave the state file truncated or invalid.
 9. Deletes the pending entry, and prints the thumbprint.
 
 The pending entry goes last on purpose. It is how a later run finds the key's
@@ -80,6 +91,11 @@ normal run, if that key's certificate is already on the Blueprint, the command d
 7 to 9 for it and prints the thumbprint, without writing to the Blueprint. In every other
 case it reuses the pending key for the new certificate instead of generating another, so
 a certificate from the earlier run that has yet to appear isn't orphaned.
+
+An expired certificate isn't "on the Blueprint" for this purpose, and neither is one that
+isn't valid yet: only a certificate that can authenticate now is a match. If the pending
+key's only certificate has expired, the command registers a new certificate for that same
+key. The expired entry stays on the list, because entries are never pruned.
 
 ### Removing every certificate
 
@@ -122,7 +138,7 @@ instead of replacing it, and a later failure leaves it in place.
 - `0` — registered, confirmed, key promoted, and state file updated. The thumbprint is
   on stdout, and nothing else is.
 - `1` — not registered, and nothing was changed: a read or token failure, Graph refused
-  the update, or the operator declined at the prompt.
+  the update, the operator declined at the prompt, or another setup is running.
 - `2` — usage error.
 - `3` — the outcome isn't confirmed. The Blueprint may have changed, or the thumbprint
   couldn't be recorded. Re-run setup.
@@ -137,9 +153,13 @@ token, never an `az` CLI token, and have bounded timeouts.
 
 - **Exit `1`, Graph answered 4xx** — usually missing Provisioner permissions; the
   message includes Graph's error. Nothing changed, so fix the cause and re-run.
+- **Exit `1`, "Another setup is already running for this user"** — a second setup holds
+  the lock. Wait for it to finish, then re-run. Nothing was read or changed. If the first
+  run was killed, the kernel has already released the lock, so there is nothing to delete.
 - **Exit `3`, a certificate named as not seen on the Blueprint** — either replication
-  is slower than usual, or something else changed the list at the same moment. Re-run
-  setup, then check the list with
+  is slower than usual, or something else changed the list at the same moment, such as
+  another machine attaching. The lock doesn't cover that: it only stops two setups on
+  one machine overlapping. Re-run setup, then check the list with
   [`list_blueprint_certs.py`](list-blueprint-certs-py.md). If an earlier machine's
   certificate really is gone, run setup on that machine to add it back.
 

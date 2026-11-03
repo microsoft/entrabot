@@ -51,7 +51,7 @@
 - Windows end-to-end coverage is narrower than macOS and currently centered on Windows 11 ARM64.
 - Legacy Graph file comments are not the same as Word UI comments; use the Work IQ Word tools for document comments.
 - External-content wrapping is defense in depth. It reduces instruction-injection risk but is not proof against every possible model jailbreak.
-- Adding a Blueprint certificate reads the list and then writes it, and those two steps aren't atomic. Two machines attaching in the same moment can lose one of the new certificates; the affected machine's setup reports it, and re-running setup there adds it again.
+- Adding a Blueprint certificate reads the list and then writes it, and those two steps aren't atomic. Two machines attaching in the same moment can lose one of the new certificates; the affected machine's setup reports it, and re-running setup there adds it again. A per-user lock keeps two setups on the same machine from overlapping, but it can't cover two machines.
 - `ENTRABOT_MODE` is validated but does not currently select the auth path in `_init_auth`; credential presence and `ENTRABOT_SKIP_PROVISIONING` determine which path (three-hop Agent User or MSAL delegated) is attempted.
 
 ## Project links

@@ -12,6 +12,7 @@ import copy
 import hashlib
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,8 @@ SAME_NAME = "EntraBot Device Certificate — MacBook-Pro"
 CERT_A = make_cert("host-a")
 CERT_B = make_cert("host-b")
 CERT_NEW = make_cert("host-new")
+
+NOW = datetime(2026, 7, 1, tzinfo=UTC)
 
 
 @pytest.fixture(autouse=True)
@@ -570,6 +573,53 @@ class TestPublicKeyMatching:
         credentials = [blueprint_certs.KeyCredential(raw={"keyId": "x", "key": "bm90LWEtY2VydA=="})]
         public_key = blueprint_certs.public_key_of_private_pem(CERT_B.private_key_pem)
         assert blueprint_certs.find_credential_for_public_key(credentials, public_key) is None
+
+    @staticmethod
+    def _match(*entries: dict[str, Any]) -> Any:
+        credentials = [blueprint_certs.KeyCredential(raw=entry) for entry in entries]
+        public_key = blueprint_certs.public_key_of_private_pem(CERT_B.private_key_pem)
+        return blueprint_certs.find_credential_for_public_key(credentials, public_key, now=NOW)
+
+    @pytest.mark.parametrize(
+        "change",
+        [
+            {"endDateTime": "2026-06-30T23:59:59Z"},
+            {"startDateTime": "2026-07-01T00:00:01Z"},
+            {"usage": "Sign"},
+        ],
+        ids=["expired", "not-yet-valid", "not-for-verifying"],
+    )
+    def test_a_certificate_that_cannot_authenticate_now_is_not_a_match(
+        self, change: dict[str, str]
+    ) -> None:
+        assert self._match(graph_entry(CERT_B, key_id="k-1", display_name=HOST_B, **change)) is None
+
+    @pytest.mark.parametrize(
+        "tweak",
+        [
+            lambda entry: entry,
+            lambda entry: {k: v for k, v in entry.items() if "DateTime" not in k},
+            lambda entry: {**entry, "startDateTime": "garbage", "endDateTime": None},
+            lambda entry: {k: v for k, v in entry.items() if k not in ("type", "usage")},
+        ],
+        ids=["in-date", "no-dates", "unreadable-dates", "no-type-or-usage"],
+    )
+    def test_a_certificate_matches_unless_its_dates_clearly_rule_it_out(self, tweak: Any) -> None:
+        # A date nobody can read must not trigger a needless re-registration.
+        match = self._match(tweak(graph_entry(CERT_B, key_id="k-1", display_name=HOST_B)))
+        assert match is not None
+        assert match.thumbprint == CERT_B.thumbprint
+
+    def test_a_valid_certificate_is_returned_over_an_expired_one_for_the_same_key(self) -> None:
+        expired = graph_entry(
+            CERT_B, key_id="k-old", display_name=HOST_B, endDateTime="2026-01-01T00:00:00Z"
+        )
+        valid = graph_entry(CERT_B, key_id="k-new", display_name=HOST_B)
+
+        match = self._match(expired, valid)
+
+        assert match is not None
+        assert match.key_id == "k-new"
 
     def test_unreadable_certificates_are_reported(self) -> None:
         readable = blueprint_certs.KeyCredential(raw=_entries()[0])

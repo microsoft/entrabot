@@ -74,6 +74,16 @@ def _entry(cert: Any, key_id: str = "k-1", name: str = "EntraBot Device Certific
     return graph_entry(cert, key_id=key_id, display_name=name)
 
 
+def _expired(cert: Any) -> dict:
+    return graph_entry(
+        cert,
+        key_id="k-old",
+        display_name="EntraBot Device Certificate — old",
+        startDateTime="2019-01-01T00:00:00Z",
+        end="2020-01-01T00:00:00Z",
+    )
+
+
 def _run(module: Any, monkeypatch: pytest.MonkeyPatch, *args: str) -> int:
     monkeypatch.setattr(sys, "argv", [f"{module.__name__}.py", *args])
     return module.main()
@@ -285,6 +295,27 @@ class TestFindLocalBlueprintCert:
             FakeGraph([{**_entry(OTHER_CERT), "key": None}, _entry(LOCAL_CERT, "k-2")]),
         )
         assert self._find(monkeypatch) == EXIT_OK
+
+    def test_an_expired_match_exits_1_so_setup_registers_a_new_certificate(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Reusing it would keep selecting a credential that can't authenticate, forever.
+        self._keyring(monkeypatch, pem=LOCAL_CERT.private_key_pem)
+        use_fake_graph(monkeypatch, FakeGraph([_expired(LOCAL_CERT)]))
+
+        assert self._find(monkeypatch) == EXIT_NOT_REGISTERED
+
+        assert capsys.readouterr().out == ""
+
+    def test_an_expired_entry_with_unreadable_key_material_does_not_block_registering(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # It can't be this machine's usable certificate, whatever its key material says.
+        self._keyring(monkeypatch, pem=LOCAL_CERT.private_key_pem)
+        use_fake_graph(
+            monkeypatch, FakeGraph([{**_expired(OTHER_CERT), "key": "bm90LWEtY2VydA=="}])
+        )
+        assert self._find(monkeypatch) == EXIT_NOT_REGISTERED
 
     def test_usage_error_exits_2(self, monkeypatch: pytest.MonkeyPatch) -> None:
         assert _run(find_mod, monkeypatch) == EXIT_USAGE

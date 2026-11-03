@@ -10,8 +10,11 @@ write would lock out every machine.
 from __future__ import annotations
 
 import base64
+import errno
 import json
+import os
 import socket
+import stat
 import sys
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -63,6 +66,15 @@ OLD_REAL_KEY = "old-real-private-key-placeholder"
 @pytest.fixture(autouse=True)
 def _no_real_keychain_or_network(monkeypatch: pytest.MonkeyPatch) -> None:
     block_real_keyring_and_network(monkeypatch)
+
+
+@pytest.fixture(autouse=True)
+def _lock_in_tmp_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Keep the registration lock out of the real home directory."""
+    lock = tmp_path_factory.mktemp("lock") / ".entrabot" / ".blueprint-cert.lock"
+    monkeypatch.setattr(reg, "_lock_path", lambda: lock)
 
 
 class FakeStdin:
@@ -342,6 +354,36 @@ class TestStateFile:
         assert env.run() == EXIT_OK
         assert "BLUEPRINT_CERT_THUMBPRINT" in env.state
 
+    def test_a_failed_write_leaves_the_old_file_and_the_pending_key_in_place(
+        self, env: Env, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # A full disk must not leave a truncated file once the key is promoted: later runs
+        # couldn't parse it, and the pending key could not repair it.
+        before = env.state_file.read_text()
+        full = OSError(errno.ENOSPC, "No space left on device")
+        env.monkeypatch.setattr(os, "fsync", raising(full))
+        env.graph(*_existing())
+
+        assert env.run() == EXIT_UNCONFIRMED
+
+        assert env.state_file.read_text() == before
+        assert list(env.state_file.parent.iterdir()) == [env.state_file]  # no temp file left
+        assert env.real_key != OLD_REAL_KEY
+        assert env.pending_key == env.real_key
+        assert capsys.readouterr().out == ""
+
+    def test_keeps_the_existing_files_mode_and_leaves_valid_json(self, env: Env) -> None:
+        env.state_file.chmod(0o640)
+        mode = stat.S_IMODE(env.state_file.stat().st_mode)
+        env.graph(*_existing())
+
+        assert env.run() == EXIT_OK
+
+        assert stat.S_IMODE(env.state_file.stat().st_mode) == mode
+        assert env.state["BLUEPRINT_APP_ID"] == FAKE_APP_ID
+        assert env.state["BLUEPRINT_CERT_THUMBPRINT"]
+        assert list(env.state_file.parent.iterdir()) == [env.state_file]
+
     def test_state_write_failure_is_reported_without_printing_a_thumbprint(
         self, env: Env, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -394,6 +436,38 @@ class TestStateFile:
         assert match is not None
         assert capsys.readouterr().out == match.thumbprint + "\n"
         assert env.state["BLUEPRINT_CERT_THUMBPRINT"] == match.thumbprint
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the lock is flock-based, so POSIX-only")
+class TestRegistrationLock:
+    """Overlapping runs share one pending-key entry, so only one may run at a time."""
+
+    def test_a_second_setup_stops_before_reading_or_changing_anything(
+        self, env: Env, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import fcntl
+
+        graph = env.graph(*_existing())
+        lock_path = reg._lock_path()
+        lock_path.parent.mkdir(parents=True)
+
+        with lock_path.open("a") as other_setup:  # held as another setup process would hold it
+            fcntl.flock(other_setup, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            assert env.run() == EXIT_NOT_REGISTERED
+
+        assert env.events == []  # no keyring, token, or Graph access at all
+        assert graph.requests == []
+        assert env.real_key == OLD_REAL_KEY
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "another setup" in captured.err.lower()
+        assert "nothing was changed" in captured.err.lower()
+
+    def test_the_lock_is_released_when_a_run_ends_so_a_later_run_proceeds(self, env: Env) -> None:
+        env.graph(*_existing(), get_script=[503])  # the first run fails, after taking the lock
+
+        assert env.run() == EXIT_NOT_REGISTERED
+        assert env.run() == EXIT_OK
 
 
 class TestStdout:
@@ -663,6 +737,37 @@ class TestRecoveryFromAnEarlierRun:
 
         cert = _cert_from(graph.patch_bodies[0][-1])
         assert _spki(cert) == blueprint_certs.public_key_of_private_pem(RETAINED.private_key_pem)
+        assert env.real_key == RETAINED.private_key_pem
+        assert env.pending_key is None
+
+    def test_a_retained_key_whose_only_certificate_expired_gets_a_new_certificate(
+        self, env: Env, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # An expired match can't authenticate, so it counts as no match: the key is reused for a
+        # new certificate, and the expired entry stays on the list (nothing is ever pruned).
+        self._retain(env)
+        env.monkeypatch.setattr(
+            reg.rsa, "generate_private_key", raising(AssertionError("generated a key"))
+        )
+        expired = graph_entry(
+            RETAINED,
+            key_id="k-expired",
+            display_name=HOST_A,
+            startDateTime="2019-01-01T00:00:00Z",
+            end="2020-01-01T00:00:00Z",
+        )
+        graph = env.graph(*_existing(), expired)
+
+        assert env.run() == EXIT_OK
+
+        body = graph.patch_bodies[0]
+        assert body[:3] == [*_existing(), expired]
+        assert _spki(_cert_from(body[3])) == blueprint_certs.public_key_of_private_pem(
+            RETAINED.private_key_pem
+        )
+        thumbprint = capsys.readouterr().out.strip()
+        assert thumbprint != RETAINED.thumbprint
+        assert env.state["BLUEPRINT_CERT_THUMBPRINT"] == thumbprint
         assert env.real_key == RETAINED.private_key_pem
         assert env.pending_key is None
 

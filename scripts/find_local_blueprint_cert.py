@@ -4,8 +4,9 @@ This is how setup.sh decides whether to reuse a certificate. It never trusts the
 thumbprint cached in the state file: that can be stale, or can belong to an earlier key
 (after an unconfirmed ``--remove-all-existing-certs``, or a failed state write). Only a
 match between the local private key and a certificate registered on the Blueprint counts,
-and the thumbprint printed is that certificate's, so setup.sh can reuse it instead of
-registering another one and correct a stale cache at the same time.
+and only while that certificate is valid: an expired one is not a match, so setup.sh
+registers a new one. The thumbprint printed is the matching certificate's, so setup.sh can
+reuse it instead of registering another one and correct a stale cache at the same time.
 
 A private key waiting under ``blueprint-private-key.pending`` is checked for first. It
 means an earlier run didn't finish, and register_blueprint_cert.py is the one place that
@@ -21,7 +22,7 @@ Output:
 Exit codes:
     0 — a registered cert matches the local key; its thumbprint is on stdout
     1 — checked: a pending private key exists, there is no usable local key, or the local
-        key matches no registered cert
+        key matches no valid registered cert (one that has expired doesn't count)
     2 — usage error
     3 — could not check (keystore, Graph, or token failure, or a certificate whose
         key material couldn't be read). setup.sh must stop rather than regenerate.
@@ -31,6 +32,7 @@ from __future__ import annotations
 
 import contextlib
 import sys
+from datetime import UTC, datetime
 
 try:
     import keyring
@@ -91,13 +93,15 @@ def _find(blueprint_obj_id: str) -> int:
         token = get_existing_graph_token()
 
     credentials = fetch_key_credentials(blueprint_obj_id, token)
-    match = find_credential_for_public_key(credentials, public_key)
+    now = datetime.now(UTC)
+    match = find_credential_for_public_key(credentials, public_key, now=now)
     if match is not None:
         print(match.thumbprint)
         print(f"  Recovered local Blueprint cert from Entra: {match.display_name}", file=sys.stderr)
         return EXIT_FOUND
 
-    unreadable = unreadable_certificates(credentials)
+    # An expired certificate can't be this machine's usable one, so it can't hide a match.
+    unreadable = [c for c in unreadable_certificates(credentials) if c.is_usable_at(now)]
     if unreadable:
         print(
             f"  Could not check: the key material of {len(unreadable)} certificate(s) "
@@ -106,7 +110,7 @@ def _find(blueprint_obj_id: str) -> int:
         )
         return EXIT_COULD_NOT_CHECK
 
-    print("  Local private key does not match any registered Blueprint cert.", file=sys.stderr)
+    print("  Local private key matches no valid registered Blueprint cert.", file=sys.stderr)
     return EXIT_NOT_REGISTERED
 
 

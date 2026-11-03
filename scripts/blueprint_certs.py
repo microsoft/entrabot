@@ -32,6 +32,7 @@ import sys
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -96,6 +97,15 @@ class RegistrationUnconfirmedError(BlueprintCertError):
         self.missing = missing
 
 
+def _graph_date(value: Any) -> datetime | None:
+    """A Graph date as an aware datetime, or None if it's missing or can't be read."""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed.replace(tzinfo=parsed.tzinfo or UTC)
+
+
 @dataclass(frozen=True)
 class KeyCredential:
     """One ``keyCredentials`` entry.
@@ -121,6 +131,20 @@ class KeyCredential:
     @property
     def is_certificate(self) -> bool:
         return self.raw.get("type", CERTIFICATE_TYPE) == CERTIFICATE_TYPE
+
+    def is_usable_at(self, now: datetime) -> bool:
+        """Whether this is a certificate that can verify at ``now``.
+
+        Only a date clearly out of range rules it out; a missing or unreadable one doesn't.
+        """
+        start = _graph_date(self.raw.get("startDateTime"))
+        end = _graph_date(self.raw.get("endDateTime"))
+        return (
+            self.is_certificate
+            and (self.raw.get("usage") or CERTIFICATE_USAGE) == CERTIFICATE_USAGE
+            and (start is None or start <= now)
+            and (end is None or now <= end)
+        )
 
     @property
     def der(self) -> bytes | None:
@@ -187,10 +211,12 @@ def public_key_of_private_pem(private_key_pem: str) -> bytes:
 
 
 def find_credential_for_public_key(
-    credentials: Sequence[KeyCredential], public_key_der: bytes
+    credentials: Sequence[KeyCredential], public_key_der: bytes, *, now: datetime | None = None
 ) -> KeyCredential | None:
+    """The certificate for this key that can verify now. An expired one is not a match."""
+    now = now or datetime.now(UTC)
     for credential in credentials:
-        if credential.public_key_der == public_key_der:
+        if credential.is_usable_at(now) and credential.public_key_der == public_key_der:
             return credential
     return None
 

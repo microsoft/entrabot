@@ -26,6 +26,9 @@ the key of the replacement certificate and changes nothing (not the real key, no
 state file, not the pending entry) until the replacement is confirmed, so declining the
 prompt, or Graph refusing the update, leaves everything as it was.
 
+Only one run per OS user may go at a time, because overlapping runs share the one pending
+entry: a second exits 1 having changed nothing. That doesn't cover two machines at once.
+
 Only the public certificate leaves this machine. Graph calls use the Provisioner token,
 not an az CLI token (Learning #1: those carry Directory.AccessAsUser.All, which Agent
 Identity APIs reject).
@@ -42,7 +45,7 @@ Output:
 Exit codes:
     0 — registered, confirmed, key promoted, state file updated
     1 — not registered, and nothing was changed: a read or token failure, Graph refused
-        the update, or the operator declined at the prompt
+        the update, the operator declined at the prompt, or another setup is running
     2 — usage error
     3 — outcome not confirmed: the Blueprint may have changed, or the thumbprint could
         not be recorded; re-run setup
@@ -53,9 +56,12 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import os
+import shutil
 import sys
+import tempfile
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -109,6 +115,36 @@ class GeneratedCertificate:
     private_key_pem: str = field(repr=False)
     der_bytes: bytes
     thumbprint: str
+
+
+def _lock_path() -> Path:
+    """One lock per OS user, outside every checkout and outside the (configurable) data dir."""
+    return Path.home() / ".entrabot" / ".blueprint-cert.lock"
+
+
+@contextlib.contextmanager
+def _registration_lock() -> Iterator[None]:
+    """Hold an exclusive lock for the whole run, or stop before touching anything.
+
+    The kernel drops it if the process dies, so there is no stale lock to clean up.
+    """
+    if sys.platform == "win32":  # no fcntl; this script isn't used on Windows, but its tests run
+        yield
+        return
+    import fcntl
+
+    path = _lock_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock = path.open("a")
+    except OSError as exc:
+        raise _NotRegistered(f"Could not open the setup lock ({type(exc).__name__}).") from exc
+    with lock:  # closing it releases the lock, however the run ends
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise _NotRegistered("Another setup is already running for this user.") from exc
+        yield
 
 
 def _say(message: str = "") -> None:
@@ -200,7 +236,20 @@ def _write_state(state_file: Path, thumbprint: str) -> None:
     data = json.loads(state_file.read_text()) if state_file.is_file() else {}
     data["BLUEPRINT_CERT_THUMBPRINT"] = thumbprint
     data.pop("BLUEPRINT_SECRET", None)  # clean up old secret if present
-    state_file.write_text(json.dumps(data, indent=2) + "\n")
+    # Write beside the target and swap it in. Truncating the target first would leave invalid
+    # JSON after a full disk or an interruption, and later runs couldn't parse it.
+    fd, temp = tempfile.mkstemp(dir=state_file.parent, prefix=f".{state_file.name}.")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(json.dumps(data, indent=2) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())  # a full disk shows up here, before the swap
+        if state_file.exists():
+            shutil.copymode(state_file, temp)
+        os.replace(temp, state_file)
+    except BaseException:
+        Path(temp).unlink(missing_ok=True)
+        raise
 
 
 def _activate_key(private_key_pem: str, thumbprint: str, state_file: Path) -> None:
@@ -389,7 +438,8 @@ def main(
     # reach it, whatever a helper prints (Learning #29).
     with contextlib.redirect_stdout(sys.stderr):
         try:
-            thumbprint = _run(args, sleep)
+            with _registration_lock():
+                thumbprint = _run(args, sleep)
         except _NotRegistered as exc:
             _say(f"  ERROR: {exc} Nothing was changed.")
             return EXIT_NOT_REGISTERED

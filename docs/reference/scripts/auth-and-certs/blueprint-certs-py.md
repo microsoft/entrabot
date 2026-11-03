@@ -39,8 +39,15 @@ Not a CLI. The main functions are:
 
 - `fetch_key_credentials(object_id, token)` — read the list, or raise
   `KeyCredentialsReadError`.
+- `find_credential_for_public_key(credentials, public_key_der, *, now=None)` — the
+  certificate for a private key's public half that can authenticate at `now` (the current
+  time by default), or `None`. An expired or not-yet-valid certificate is not a match, and
+  neither is an entry that isn't a `Verify` certificate. A missing or unreadable date
+  doesn't rule a certificate out. If an expired and a valid certificate share a key, the
+  valid one is returned.
 - `merge_key_credentials(existing, new_entry, *, remove_all_existing=False)` — the list
-  to send. A pure function; `remove_all_existing=True` returns only the new entry.
+  to send. A pure function; `remove_all_existing=True` returns only the new entry. Expired
+  entries are kept like any other: nothing is pruned.
 - `register_key_credential(...)` — fetch, merge, `PATCH`, then confirm by reading back.
 - `swap_key_credential(...)` — one step of a Windows rotation. Drops only the entries
   whose key material matches the old or new certificate and adds the given one.
@@ -76,7 +83,10 @@ code and message, never the token or key material.
 
 - **Two machines attaching in the same moment** — the read and the write aren't atomic,
   so one machine's new certificate can be lost. That machine's own verification doesn't
-  see its certificate and reports it, and re-running setup there adds it again.
+  see its certificate and reports it, and re-running setup there adds it again. The
+  per-user lock in [`register_blueprint_cert.py`](register-blueprint-cert-py.md) only
+  keeps two setups on the same machine from overlapping; this module takes no lock, and
+  nothing can lock across machines.
 - **Graph rejects an existing entry** — sending back an entry as Graph returned it fails
   closed: Graph's error is reported and nothing changes.
 
