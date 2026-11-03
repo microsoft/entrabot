@@ -43,7 +43,8 @@ def _validate_server(servers: list[dict[str, Any]], name: str) -> int:
     if not matches:
         print(f"ERROR: {name} is not configured", file=sys.stderr)
         return 3
-    missing = [field for field in ("scope", "audience") if not matches[0].get(field)]
+    required = ("mcpServerUniqueName", "scope", "audience")
+    missing = [field for field in required if not matches[0].get(field)]
     if missing:
         print(f"ERROR: {name} is missing {' and '.join(missing)}", file=sys.stderr)
         return 4
@@ -56,7 +57,7 @@ async def smoke_read_word(url: str) -> int:
 
     content = await get_document_content(url)
     print(f"content_html bytes: {len(content.content_html.encode('utf-8'))}")
-    print(f"comments: {len(content.comments)}")
+    print(f"comments bytes: {len(content.comments.encode('utf-8'))}")
     return 0
 
 

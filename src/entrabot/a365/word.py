@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -127,17 +126,21 @@ def _first_nested_string(raw: dict[str, Any], *paths: tuple[str, ...]) -> str:
 
 def _comments_text(comments: Any) -> str:
     """Return comments as text. Live Work IQ sends a string; older shapes send a list."""
+    from entrabot.security.xpia import dumps_for_envelope
+
     if isinstance(comments, str):
         return comments
     if isinstance(comments, list):
-        return json.dumps(comments)
+        return dumps_for_envelope(comments)
     return ""
 
 
 def _sensitivity_label_text(label: Any) -> str:
+    from entrabot.security.xpia import dumps_for_envelope
+
     if label is None:
         return ""
-    return label if isinstance(label, str) else json.dumps(label)
+    return label if isinstance(label, str) else dumps_for_envelope(label)
 
 
 async def get_document_content(

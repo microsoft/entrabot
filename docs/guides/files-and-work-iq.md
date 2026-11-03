@@ -66,6 +66,10 @@ including a cell cap on Excel ranges (`ENTRABOT_FILES_MAX_WORKBOOK_CELLS`), and
 every write (comment, upload, share) is recorded through the audit
 layer.
 
+`ENTRABOT_FILES_DENIED_SITES` also covers the Work IQ Excel read and comment
+tools, which check the site Graph reports before calling Work IQ. The Work IQ
+Word and ODSP tools don't apply the denylist.
+
 ## Consent and setup
 
 If a direct Graph call fails because the Agent User is missing Files or

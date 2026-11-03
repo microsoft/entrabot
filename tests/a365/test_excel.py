@@ -168,8 +168,8 @@ class TestGetWorkbookContent:
             await get_workbook_content(URL, provider=provider)
 
     @pytest.mark.asyncio
-    async def test_non_list_comments_become_empty(self) -> None:
-        provider = FakeProvider(_content_result(comments="not-a-list"))
+    async def test_other_comment_shapes_become_empty(self) -> None:
+        provider = FakeProvider(_content_result(comments={"not": "a list or string"}))
 
         result = await get_workbook_content(URL, provider=provider)
 

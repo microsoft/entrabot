@@ -149,7 +149,7 @@ async def get_workbook_content(
     provider: WorkIqProvider | None = None,
 ) -> ExcelWorkbookContent:
     """Read a workbook's cell text and comments through Work IQ Excel."""
-    from entrabot.security.xpia import wrap_external
+    from entrabot.security.xpia import dumps_for_envelope, wrap_external
 
     clean_url = _required(url, "url")
     result = await _provider(provider).call_tool(
@@ -166,13 +166,13 @@ async def get_workbook_content(
     # The file name, comments, and cells are all author-controlled, so all of
     # them stay inside one envelope. Comments precede the cell text so that
     # truncating a large workbook keeps them, and their IDs, readable.
-    payload = json.dumps(
+    payload = dumps_for_envelope(
         {
             "file_name": _string_field(result, "fileName"),
-            "comments": comments if isinstance(comments, list) else [],
+            # Word's server sends comments as a string, so don't assume a list here.
+            "comments": comments if isinstance(comments, list | str) else [],
             "content": content,
-        },
-        ensure_ascii=False,
+        }
     )
     text, truncated = truncate_utf8(payload, max_bytes=max_text_bytes())
     return ExcelWorkbookContent(

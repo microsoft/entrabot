@@ -261,6 +261,90 @@ def _check_site_allowed(site_id: str | None) -> None:
         raise SiteNotAllowedError(site_id)
 
 
+def site_denylist_configured() -> bool:
+    """Return whether ``ENTRABOT_FILES_DENIED_SITES`` lists any site."""
+    return bool(_denied_sites())
+
+
+def _site_guid(site_id: str) -> str:
+    """Return the site GUID from a bare GUID or ``{host},{site},{web}``, for comparing."""
+    parts = site_id.strip().lower().split(",")
+    return parts[1].strip() if len(parts) > 1 else parts[0]
+
+
+def _site_is_denied(site_id: str, denied: frozenset[str]) -> bool:
+    guid = _site_guid(site_id)
+    return any(_site_guid(entry) == guid for entry in denied)
+
+
+def _graph_item_url(drive_id: str, item_id: str) -> str:
+    """Build a driveItem URL from IDs that may come from the model.
+
+    Encoding stops ``/``, ``?`` and ``#`` from changing the path. A bare dot segment
+    survives encoding and would be normalized out of the URL, so it is refused.
+    """
+    if drive_id in {".", ".."} or item_id in {".", ".."}:
+        raise InvalidWorkbookRangeError("drive_id and item_id must be Graph IDs")
+    return f"{GRAPH_V1_HOST}/drives/{quote(drive_id, safe='')}/items/{quote(item_id, safe='')}"
+
+
+async def _enforce_item_site(
+    client: httpx.AsyncClient,
+    *,
+    drive_id: str,
+    item_id: str,
+    token: str,
+) -> None:
+    """Apply the denylist to the item's real site, as Graph reports it.
+
+    Caller-supplied ``site_id`` values can't be trusted, because an empty one is always
+    allowed. No denylist means no Graph call. With one, anything short of a confirmed
+    allowed site raises, so the caller doesn't proceed.
+    """
+    denied = _denied_sites()
+    if not denied:
+        return
+    target = f"{drive_id}:{item_id}"
+    resp = await client.get(
+        f"{_graph_item_url(drive_id, item_id)}?$select=id,parentReference",
+        headers=_bearer(token),
+    )
+    if resp.status_code != 200:
+        _raise_for_files_error(resp, target=target, scope="Files.Read")
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    parent = body.get("parentReference") if isinstance(body, dict) else None
+    site_id = parent.get("siteId") if isinstance(parent, dict) else None
+    if not isinstance(site_id, str) or not site_id.strip():
+        raise GraphFilesError(
+            resp.status_code,
+            "couldn't confirm the file's site for the operator denylist "
+            "(ENTRABOT_FILES_DENIED_SITES), so the request was refused",
+        )
+    if _site_is_denied(site_id, denied):
+        raise SiteNotAllowedError(site_id)
+
+
+async def check_item_site_allowed(
+    *,
+    drive_id: str,
+    item_id: str,
+    token: str,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> None:
+    """Raise unless the item's real site is allowed. No denylist means no Graph call."""
+    if not site_denylist_configured():
+        return
+    _graph_item_url(drive_id, item_id)
+    async with (
+        _audit_graph_call("check_item_site", f"{drive_id}:{item_id}"),
+        _client(transport, allow_5xx_retry=True) as client,
+    ):
+        await _enforce_item_site(client, drive_id=drive_id, item_id=item_id, token=token)
+
+
 def _max_pdf_bytes() -> int:
     raw = os.environ.get("ENTRABOT_FILES_MAX_PDF_BYTES")
     try:
@@ -877,10 +961,8 @@ def _worksheet_url(file_ref: FileRef, worksheet: str) -> str:
             "worksheet must be an Excel worksheet name from list_workbook_worksheets"
         )
     key = quote(worksheet.replace("'", "''"), safe="")
-    return (
-        f"{GRAPH_V1_HOST}/drives/{file_ref.drive_id}/items/{file_ref.item_id}"
-        f"/workbook/worksheets('{key}')"
-    )
+    item_url = _graph_item_url(file_ref.drive_id, file_ref.item_id)
+    return f"{item_url}/workbook/worksheets('{key}')"
 
 
 def _check_workbook_readable(file_ref: FileRef) -> None:
@@ -948,10 +1030,13 @@ async def list_workbook_worksheets(
     """List a workbook's worksheets, including hidden ones.
 
     Worksheet names are file-authored, so they are returned only inside the
-    XPIA envelope. Raises ``UnsupportedReadFormatError`` or
-    ``SiteNotAllowedError`` before any Graph call.
+    XPIA envelope. Raises ``UnsupportedReadFormatError``, or
+    ``SiteNotAllowedError`` for a listed ``file_ref.site_id``, before any Graph
+    call. With a denylist configured, the item's real site is then checked
+    through Graph before the workbook is read.
     """
     _check_workbook_readable(file_ref)
+    item_url = _graph_item_url(file_ref.drive_id, file_ref.item_id)
     resource = f"{file_ref.drive_id}:{file_ref.item_id}"
 
     async with (
@@ -962,9 +1047,11 @@ async def list_workbook_worksheets(
         ),
         _client(transport, allow_5xx_retry=True) as client,
     ):
+        await _enforce_item_site(
+            client, drive_id=file_ref.drive_id, item_id=file_ref.item_id, token=token
+        )
         resp = await client.get(
-            f"{GRAPH_V1_HOST}/drives/{file_ref.drive_id}/items/{file_ref.item_id}"
-            "/workbook/worksheets?$select=name,position,visibility",
+            f"{item_url}/workbook/worksheets?$select=name,position,visibility",
             headers=_bearer(token),
         )
         if resp.status_code != 200:
@@ -975,12 +1062,12 @@ async def list_workbook_worksheets(
                 resp.status_code, "malformed workbook response: value is not a list"
             )
         worksheets = [_worksheet_row(row, status=resp.status_code) for row in rows]
+        from entrabot.security.xpia import dumps_for_envelope, wrap_external
+
         text, truncated = truncate_utf8(
-            json.dumps({"worksheets": worksheets}, ensure_ascii=False),
+            dumps_for_envelope({"worksheets": worksheets}),
             max_bytes=max_text_bytes(),
         )
-
-        from entrabot.security.xpia import wrap_external
 
         return WorkbookWorksheets(
             drive_id=file_ref.drive_id,
@@ -1009,7 +1096,9 @@ async def read_workbook_range(
 
     Raises ``InvalidWorkbookRangeError``, ``WorkbookRangeTooLargeError`` (for
     an explicit address), ``UnsupportedReadFormatError``, or
-    ``SiteNotAllowedError`` before any Graph call.
+    ``SiteNotAllowedError`` for a listed ``file_ref.site_id``, before any Graph
+    call. With a denylist configured, the item's real site is then checked
+    through Graph before any cells are read.
     """
     _check_workbook_readable(file_ref)
     worksheet_url = _worksheet_url(file_ref, worksheet)
@@ -1041,6 +1130,9 @@ async def read_workbook_range(
         ),
         _client(transport, allow_5xx_retry=True) as client,
     ):
+        await _enforce_item_site(
+            client, drive_id=file_ref.drive_id, item_id=file_ref.item_id, token=token
+        )
         if address is None:
             size_resp = await client.get(
                 f"{range_url}?$select=address,rowCount,columnCount",
@@ -1061,21 +1153,20 @@ async def read_workbook_range(
         body = _json_object(resp)
         row_count, column_count = _range_dimensions(resp, body)
 
+        from entrabot.security.xpia import dumps_for_envelope, wrap_external
+
         text, truncated = truncate_utf8(
-            json.dumps(
+            dumps_for_envelope(
                 {
                     "worksheet": worksheet,
                     "address": body.get("address"),
                     "values": body.get("values"),
                     "text": body.get("text"),
                     "formulas": body.get("formulas"),
-                },
-                ensure_ascii=False,
+                }
             ),
             max_bytes=max_text_bytes(),
         )
-
-        from entrabot.security.xpia import wrap_external
 
         return WorkbookRange(
             drive_id=file_ref.drive_id,

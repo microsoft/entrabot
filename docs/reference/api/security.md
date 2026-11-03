@@ -61,6 +61,8 @@ Any literal `</external_content>` inside `body` is escaped to `&lt;/external_con
 
 The match is case-insensitive and whitespace-tolerant on the tag: variants like `</External_Content>`, `< / external_content >`, or `</EXTERNAL_CONTENT>` are all detected and escaped, mirroring how a lenient HTML parser would treat the same literal string. The original casing and internal whitespace of the matched substring are preserved inside the escaped entities, so [`unwrap_external`](#unwrap_external) can restore it losslessly.
 
+JSON payloads need more care, because JSON encodes a newline inside a tag as a literal backslash-n, which this match can't see. Build them with `dumps_for_envelope(value)`, which also escapes the `/` after a `<`. The payload still decodes to `value`.
+
 ### Attribute escaping
 
 `source`, `sender`, and `received_at` values are escaped for `&`, `<`, `>`, and `"` before being written into the outer tag's attributes. A hostile value such as `source="teams:<script>"` cannot open a new tag or attribute inside the envelope's attribute region. Escaping order matters: `&` is replaced first so the entities' own `&` isn't double-escaped.
@@ -147,7 +149,7 @@ As of this writing, `wrap_external` is called from:
 - `src/entrabot/tools/email.py` — `read_email`, source `email:<message_id>`.
 - `src/entrabot/tools/files.py` — `read_file`, `list_workbook_worksheets`, and `read_workbook_range`, source `file:<web_url>` (or `file:<drive_id>:<item_id>` when no `web_url` is available). The workbook tools put worksheet names and the Graph-returned address inside the envelope along with the cell data.
 - `src/entrabot/tools/read_interactions.py` — `read_interactions`, adding a `content_wrapped` field alongside the existing `summary` field on inbound entries only (additive, not in place — the log's stored `summary` schema is unchanged).
-- `src/entrabot/a365/odsp.py` — `read_small_text_file`, source `a365:<file_id>`.
+- `src/entrabot/a365/odsp.py` — `read_small_text_file`, source `a365:<file_id>`; the `name` from `get_file_or_folder_metadata_by_url`, source `file:<url>`.
 - `src/entrabot/a365/word.py` — `get_document_content`, source `file:<url>#word`. The body, `comments`, and `sensitivity_label` are each wrapped.
 - `src/entrabot/a365/excel.py` — `get_workbook_content`, source `file:<url>#excel`. The file name, comments, and cell text are all inside the envelope, and results have no `raw` field.
 

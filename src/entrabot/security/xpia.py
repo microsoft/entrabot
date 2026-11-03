@@ -41,9 +41,11 @@ fits alongside identity attribution, sponsor authorization, and audit.
 from __future__ import annotations
 
 import html
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from entrabot.config import get_config
 
@@ -118,6 +120,21 @@ def _unescape_attribute(value: str) -> str:
     return (
         value.replace("&quot;", '"').replace("&gt;", ">").replace("&lt;", "<").replace("&amp;", "&")
     )
+
+
+# A ``<`` then ``/``, with any whitespace between them as JSON encodes it. The ``/`` is
+# escaped because ``_CLOSE_TAG_RE`` can't see through a JSON escape such as a literal ``\\n``.
+_JSON_TAG_OPEN_RE = re.compile(r"<((?:\s|\\[nrtfb]|\\u00[0-9a-fA-F]{2})*)/")
+
+
+def dumps_for_envelope(value: Any) -> str:
+    """Encode ``value`` as JSON that can't form a close-tag look-alike in an envelope.
+
+    ``wrap_external`` escapes a close tag it can recognize, but JSON turns a real newline
+    inside one into a literal backslash-n, which it can't. ``\\/`` is valid JSON for ``/``,
+    so the payload still decodes to ``value``.
+    """
+    return _JSON_TAG_OPEN_RE.sub(r"<\1\\/", json.dumps(value, ensure_ascii=False))
 
 
 def wrap_external(

@@ -53,6 +53,7 @@
 - Windows end-to-end coverage is narrower than macOS and currently centered on Windows 11 ARM64.
 - Legacy Graph file comments are not the same as Word UI comments; use the Work IQ Word tools for document comments.
 - Work IQ Excel (`mcp_ExcelServer`) is in the live Agent 365 catalog but not on Microsoft Learn, and the CLI warns of a "legacy ATG audience", so its tools may change. It requires `McpServers.Excel.All` on the Blueprint.
+- `ENTRABOT_FILES_DENIED_SITES` is checked against Graph's reported site only for the workbook and Work IQ Excel tools. The Work IQ Word and ODSP tools don't apply it, and `read_file` and `add_file_comment` check the `site_id` the caller supplies.
 - Excel writes, table reads, and workbook sessions aren't implemented ([#117](https://github.com/microsoft/entrabot/issues/117)).
 - External-content wrapping is defense in depth. It reduces instruction-injection risk but is not proof against every possible model jailbreak.
 - On a cloud backend, the email cursor starts at "now" when its key is first created (the first boot on a container, or after the key is deleted), so mail received before then isn't pushed; it stays readable through `read_email`. Once the key exists, a restart reuses it and mail received during downtime is pushed as normal. See [Upgrading to shared poll state](../troubleshooting/migrations-and-upgrades.md#upgrading-to-shared-poll-state).

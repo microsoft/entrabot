@@ -59,7 +59,7 @@ Precedence and list rules:
 
 | Variable | Description |
 |---|---|
-| `ENTRABOT_FILES_MAX_TEXT_BYTES` | Caps the text a Files read returns, in bytes. Defaults to `200000`. Longer content is truncated and flagged with `truncated`. |
+| `ENTRABOT_FILES_MAX_TEXT_BYTES` | Caps the text a Files read returns, in bytes. Defaults to `200000`. Longer content is truncated and flagged with `truncated`. A zero, negative, or unparseable value falls back to the default and logs a warning. |
 | `ENTRABOT_FILES_MAX_PDF_BYTES` | Largest PDF `read_file` will download, in bytes. Defaults to `52428800` (50 MiB). |
 | `ENTRABOT_FILES_MAX_WORKBOOK_CELLS` | Most cells one `read_workbook_range` call can read. Defaults to `5000`. Larger requests fail with `WorkbookRangeTooLargeError` before any cell data is fetched. A zero, negative, or unparseable value falls back to the default and logs a warning. |
 

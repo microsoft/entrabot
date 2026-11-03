@@ -9,6 +9,7 @@ from entrabot.a365.odsp import (
     read_small_binary_file,
     read_small_text_file,
 )
+from entrabot.security.xpia import unwrap_external
 
 
 class FakeProvider:
@@ -49,9 +50,10 @@ async def test_get_file_or_folder_metadata_by_url_calls_odsp_tool() -> None:
         provider=provider,
     )
 
+    assert unwrap_external(result.name).body == "page.loop"
     assert result == OdspFileMetadata(
         item_id="item-1",
-        name="page.loop",
+        name=result.name,
         web_url="https://contoso/page.loop",
         document_library_id="drive-1",
         raw={
@@ -144,9 +146,10 @@ async def test_get_file_metadata_reads_live_pascal_case_parent_reference_drive_i
         provider=provider,
     )
 
+    assert unwrap_external(result.name).body == "page.loop"
     assert result == OdspFileMetadata(
         item_id="item-1",
-        name="page.loop",
+        name=result.name,
         web_url="https://contoso/page.loop",
         document_library_id="drive-1",
         raw={

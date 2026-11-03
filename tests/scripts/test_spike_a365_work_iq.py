@@ -117,3 +117,36 @@ def test_other_servers_are_not_required(
     )
 
     assert code == 0
+
+
+def test_fails_when_excel_entry_has_no_unique_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    excel = server("mcp_ExcelServer")
+    del excel["mcpServerUniqueName"]
+
+    code = run_main(tmp_path, monkeypatch, [server("mcp_WordServer"), excel])
+
+    assert code == 4
+    assert "mcp_ExcelServer" in capsys.readouterr().err
+
+
+def test_read_word_prints_comment_bytes_not_a_count(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    async def fake_read(url: str) -> SimpleNamespace:
+        return SimpleNamespace(content_html="<p>é</p>", comments="é")
+
+    monkeypatch.setattr("entrabot.a365.word.get_document_content", fake_read)
+
+    assert asyncio.run(load_module().smoke_read_word("https://contoso/doc.docx")) == 0
+
+    output = capsys.readouterr().out
+    assert "comments bytes: 2" in output
+    assert "comments: " not in output

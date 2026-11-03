@@ -54,3 +54,43 @@ class TestSharedUse:
 
     def test_excel_adapter_does_not_import_the_files_module(self) -> None:
         assert "entrabot.tools.files" not in Path(excel.__file__).read_text()
+
+
+class TestMaxTextBytesBadValues:
+    @pytest.mark.parametrize("raw", ["0", "-1", "not-a-number"])
+    def test_bad_value_uses_default_and_warns(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        raw: str,
+    ) -> None:
+        monkeypatch.setenv("ENTRABOT_FILES_MAX_TEXT_BYTES", raw)
+
+        with caplog.at_level("WARNING", logger="entrabot.tools.text_limits"):
+            assert max_text_bytes() == DEFAULT_MAX_TEXT_BYTES
+
+        assert "ENTRABOT_FILES_MAX_TEXT_BYTES" in caplog.text
+
+    def test_unset_and_empty_do_not_warn(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setenv("ENTRABOT_FILES_MAX_TEXT_BYTES", "")
+
+        with caplog.at_level("WARNING", logger="entrabot.tools.text_limits"):
+            assert max_text_bytes() == DEFAULT_MAX_TEXT_BYTES
+
+        assert caplog.text == ""
+
+
+class TestLoneSurrogates:
+    def test_untruncated_text_encodes_cleanly(self) -> None:
+        text, truncated = truncate_utf8("a\ud83db", max_bytes=100)
+
+        assert (text, truncated) == ("a?b", False)
+        text.encode("utf-8")
+
+    def test_truncated_text_encodes_cleanly(self) -> None:
+        text, truncated = truncate_utf8("a\ud83dbcd", max_bytes=3)
+
+        assert (text, truncated) == ("a?b", True)
+        text.encode("utf-8")
