@@ -17,6 +17,7 @@
 
 ### Fixed
 
+- Channel pushes now mark outside content as data. A Teams push lost the XPIA envelope to the push sanitizer and an email push never had one, so `wrap_for_channel` writes a bracket form a push can carry. A verified sponsor's Teams message stays outside the envelope, and all email is wrapped. Sender names and subjects on an email push also lose their angle brackets, as a Teams push already did.
 - Self-authored Teams messages remain filtered after an Agent User display-name change.
 - Forged `<external_content>` text can no longer bypass the authoritative XPIA boundary.
 - A UTC-midnight-dependent test no longer fails intermittently on Windows CI.

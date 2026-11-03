@@ -87,6 +87,27 @@ Raises `ValueError` if the input is not a valid `<external_content ...>...</exte
 
 If `received_at` is present but fails to parse via `datetime.fromisoformat()`, `unwrap_external` returns `received_at=None` rather than raising — this is a best-effort, test/audit-only path, not a fail-loud production boundary.
 
+## `wrap_for_channel`
+
+```python
+def wrap_for_channel(body: str, *, source: str, sender: str | None = None) -> str
+```
+
+Wraps external text for a channel push, in the bracket form of the envelope:
+
+```text
+[external_content source="..." sender="..."]body[/external_content]
+```
+
+A channel push can't carry angle brackets, and the push sanitizer strips every tag, so the `<external_content>` form can't reach the model that way. The body prompt treats the two forms alike.
+
+- **The body can't forge a marker.** Square brackets in the body become parentheses, and the marker's name becomes `external content` however it's padded or split. Fullwidth brackets are covered too.
+- **No angle brackets.** Any in the body become their single-guillemet look-alikes, and `source` and `sender` lose anything that could end the value or the marker.
+- **One-way.** Unlike `wrap_external`, this isn't reversible. Pushes are notifications, and the original stays readable through the read tools.
+- **Cut to length first.** Truncate `body` before wrapping, so the close marker is never what gets cut.
+
+`ENTRABOT_XPIA_WRAP_ENABLE=false` makes this return `body` unchanged, as it does for `wrap_external`.
+
 ## Minimal example
 
 ```python
@@ -121,8 +142,14 @@ As of this writing, `wrap_external` is called from:
 - `src/entrabot/a365/odsp.py` — `read_small_text_file`, source `a365:<file_id>`.
 - `src/entrabot/a365/word.py` — `get_document_content`, source `file:<url>#word`.
 
+`wrap_for_channel` is called from `src/entrabot/mcp_server.py`:
+
+- `_push_channel_notification` — every Teams push except a verified sponsor's, source `teams`.
+- `_push_email_notification` — every email push, source `email`.
+
 ## Confirmed unwrapped surfaces
 
+- A Teams channel push from a verified sponsor (`_push_channel_notification`) goes out unwrapped by design, because this is how a sponsor gives an instruction. `SponsorGate` makes that check from Graph identity, never a display name. If the lookup fails, the push is wrapped.
 - `read_a365_binary_file` (`src/entrabot/a365/odsp.py`) returns binary content encoded (base64 by default) and does **not** pass it through `wrap_external` — the text envelope does not apply to binary payloads.
 - Graph/Work IQ structured metadata fields (message `sender_id`, email `subject`/recipients/headers, Word `comments`, `raw` provider responses) are returned outside the envelope everywhere above, by design — filters, counts, and routing logic need to read them directly, and they are documented elsewhere as still attacker-influenced, just not primary injection surfaces.
 

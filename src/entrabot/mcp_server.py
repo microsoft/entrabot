@@ -38,6 +38,7 @@ from entrabot.errors import (
 from entrabot.identity import IdentityStateMachine, set_active_identity_state
 from entrabot.logging_config import setup_logging
 from entrabot.models import IdentityState
+from entrabot.security.xpia import wrap_for_channel
 from entrabot.tools.chat_cursors import CursorResolution
 from entrabot.tools.interaction_log import detect_channel, log_interaction
 from entrabot.tools.teams import acquire_agent_user_token
@@ -1079,6 +1080,7 @@ async def _initialize_locked() -> None:
 
 
 BACKGROUND_POLL_INTERVAL = 5  # seconds between polls
+SPONSOR_GATE_RETRY_SECONDS = 60  # how long a failed sponsor lookup waits before trying again
 CURSOR_RESOLVE_CONCURRENCY = 8  # parallel cursor reads at boot (each does a token fetch)
 EMAIL_POLL_INTERVAL = 60  # seconds between /me/messages polls
 CHAT_DISCOVER_INTERVAL = 120  # seconds between /me/chats auto-discovery sweeps
@@ -1776,13 +1778,24 @@ async def _push_email_notification(msg: dict) -> None:
     # the receiving side, which was silently closing the MCP stream when
     # we pushed the notification (observed 2026-04-17: server shut down
     # clean-EOF immediately after every email push).
+    #
+    # Everything a sender chooses goes inside the envelope, whoever the mail claims to be
+    # from: a From address can be forged, so email never counts as a sponsor's own voice.
+    # It goes through the same sanitizer as a Teams push first, since a subject can hold
+    # angle brackets just as a display name can.
+    heading = (
+        f"{_summarize_content(sender_name)} ({_summarize_content(sender_addr)}) — "
+        f"{_summarize_content(subject)}"
+    )
     if encrypted:
+        wrapped = wrap_for_channel(heading, source="email", sender=sender_addr)
         content = (
-            f"[email · encrypted] {sender_name} ({sender_addr}) — {subject}\n"
+            f"[email · encrypted] {wrapped}\n"
             f"(Purview-encrypted; body inaccessible without IRM decryption)"
         )
     else:
-        content = f"[email] {sender_name} ({sender_addr}) — {subject}\n{preview[:400]}"
+        body = f"{heading}\n{_summarize_content(preview, limit=400)}"
+        content = f"[email] {wrap_for_channel(body, source='email', sender=sender_addr)}"
 
     write_stream = _state.get("_write_stream")
     if write_stream:
@@ -1798,7 +1811,7 @@ async def _push_email_notification(msg: dict) -> None:
                 "meta": {
                     "chat_id": "email",  # synthetic — marks this as email-channel
                     "message_id": message_id,
-                    "user": sender_addr,
+                    "user": _summarize_content(sender_addr),
                     "ts": received,
                 },
             },
@@ -2089,6 +2102,52 @@ async def _maybe_record_sponsor_binding(
         )
 
 
+async def _sender_is_sponsor(message: dict) -> bool:
+    """True if this Teams message is from someone whose instructions the agent takes.
+
+    This decides whether a push goes out in the XPIA envelope. The body prompt treats
+    anything inside one as data, so a sponsor's message has to stay outside it, or the
+    agent would have no way to take an instruction over Teams.
+
+    It asks the sponsor gate, not the sponsor records the channel binding uses, because
+    the gate also knows the ID a federated sponsor has in a chat, which can differ from
+    the directory's. It never looks at a display name.
+
+    Any doubt counts as "no", so the message is wrapped and still delivered. The lookup
+    is blocking Graph I/O, so it runs in a worker thread, and a failed one waits
+    ``SPONSOR_GATE_RETRY_SECONDS`` so an outage doesn't slow every push.
+    """
+    sender_id = str(message.get("sender_id") or "")
+    if not (sender_id or message.get("sender")):
+        return False
+
+    if _identity and _identity.session.auth_mode == "delegated":
+        # There's no Agent Identity to ask here. The signed-in human is the operator.
+        session_user_id = _identity.session.user_id or ""
+        return bool(sender_id) and sender_id.lower() == session_user_id.lower()
+
+    gate = _state.get("sponsor_gate")
+    if gate is None:
+        if time.monotonic() < _state.get("_sponsor_gate_retry_at", 0.0):
+            return False
+        from entrabot.identity.sponsors import load_agent_identity_sponsor_gate
+
+        config = _state.get("config") or get_config()
+        try:
+            gate = await asyncio.to_thread(load_agent_identity_sponsor_gate, config)
+        except Exception as exc:  # noqa: BLE001 — fail closed: wrapped, and still delivered.
+            _state["_sponsor_gate_retry_at"] = time.monotonic() + SPONSOR_GATE_RETRY_SECONDS
+            if logger:
+                logger.warning(
+                    "Could not load the sponsor gate, so pushes go out in the envelope: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
+            return False
+        _state["sponsor_gate"] = gate
+    return gate.accepts(message)
+
+
 async def _push_channel_notification(
     message: dict,
     *,
@@ -2154,11 +2213,19 @@ async def _push_channel_notification(
         "ts": message.get("sent_at", ""),
     }
 
+    # The sanitizer strips every tag, including the envelope read() added, so anything not
+    # from a sponsor is wrapped again here, in the form a push can carry. The sender comes
+    # from Graph's identity fields, never the display name.
+    content = _summarize_content(message.get("content", ""))
+    if not await _sender_is_sponsor(message):
+        sender = message.get("sender_upn") or message.get("sender") or message.get("sender_id")
+        content = wrap_for_channel(content, source="teams", sender=str(sender) if sender else None)
+
     notification = JSONRPCNotification(
         jsonrpc="2.0",
         method="notifications/claude/channel",
         params={
-            "content": _summarize_content(message.get("content", "")),
+            "content": content,
             "meta": meta,
         },
     )
