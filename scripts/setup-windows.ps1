@@ -520,15 +520,45 @@ if ($unconfirmed) {
 # ═══════════════════════════════════════════════════════════════════════════
 Step 8 "Cloud memory (Azure Blob Storage)"
 
+# Re-running setup is how a machine repairs its certificate, so a machine on cloud memory must
+# stay there: ENTRABOT_KEEP_MEMORY_LOCAL=true outranks the blob settings at runtime and would
+# leave the agent on an empty local store. config.py keeps the first value of a repeated key, so
+# these lines are replaced, never appended, and read the same way here.
+$envNow        = (Get-Content $envPath) -join "`n"
+$onCloudMemory = [regex]::Match($envNow, '(?m)^ENTRABOT_BLOB_ENDPOINT=(.*?)\s*$').Groups[1].Value -and
+                 [regex]::Match($envNow, '(?m)^ENTRABOT_BLOB_CONTAINER=(.*?)\s*$').Groups[1].Value -and
+                 ([regex]::Match($envNow, '(?m)^ENTRABOT_KEEP_MEMORY_LOCAL=(.*?)\s*$').Groups[1].Value -notin 'true', '1', 'yes')
+
+function Set-MemoryLines {
+    param([string]$Replacing, [string[]]$Lines)
+    $kept = @(Get-Content $envPath | Where-Object { $_ -notmatch "^($Replacing)=" -and $_ -notmatch '^# ADR-005:' })
+    @($kept) + $Lines | Set-Content -Path $envPath -Encoding utf8
+}
+function Use-LocalMemory {
+    Set-MemoryLines 'ENTRABOT_KEEP_MEMORY_LOCAL' @(
+        '# ADR-005: keep agent memory local (skip cloud sync)',
+        'ENTRABOT_KEEP_MEMORY_LOCAL=true'
+    )
+}
+function Skip-BlobStorage {
+    param([string]$Problem)
+    if ($onCloudMemory) {
+        Write-Host "  ⚠ $Problem — keeping the cloud memory already in .env" -ForegroundColor Yellow
+    } else {
+        Write-Host "  ⚠ $Problem — using local-only memory" -ForegroundColor Yellow
+        Use-LocalMemory
+    }
+}
+
 if (-not $UseCloudMemory) {
-    Add-Content -Path $envPath -Value ""
-    Add-Content -Path $envPath -Value "# ADR-005: keep agent memory local (skip cloud sync)"
-    Add-Content -Path $envPath -Value "ENTRABOT_KEEP_MEMORY_LOCAL=true"
-    Success "Memory mode: LOCAL (pass -UseCloudMemory to opt in)"
+    if ($onCloudMemory) {
+        Success "Memory mode: CLOUD (already set in .env)"
+    } else {
+        Use-LocalMemory
+        Success "Memory mode: LOCAL (pass -UseCloudMemory to opt in)"
+    }
 } elseif (-not $AgentUserId) {
-    Write-Host "  ⚠ Skipping blob storage — no Agent User ID found in state" -ForegroundColor Yellow
-    Add-Content -Path $envPath -Value ""
-    Add-Content -Path $envPath -Value "ENTRABOT_KEEP_MEMORY_LOCAL=true"
+    Skip-BlobStorage "Skipping blob storage, no Agent User ID found in state"
 } else {
     $provArgs = @(
         '--tenant-id', $account.tenantId,
@@ -545,22 +575,19 @@ if (-not $UseCloudMemory) {
     $provRc = $LASTEXITCODE
 
     if ($provRc -ne 0) {
-        Write-Host "  ⚠ Blob storage provisioning failed — falling back to local-only memory" -ForegroundColor Yellow
-        Add-Content -Path $envPath -Value ""
-        Add-Content -Path $envPath -Value "# ADR-005: provisioning failed, using local-only memory"
-        Add-Content -Path $envPath -Value "ENTRABOT_KEEP_MEMORY_LOCAL=true"
+        Skip-BlobStorage "Blob storage provisioning failed"
     } else {
-        $blobEndpoint  = ($provStdout | Select-String '^BLOB_ENDPOINT=(.+)$').Matches[0].Groups[1].Value
-        $blobContainer = ($provStdout | Select-String '^BLOB_CONTAINER=(.+)$').Matches[0].Groups[1].Value
+        $provText      = $provStdout -join "`n"
+        $blobEndpoint  = [regex]::Match($provText, '(?m)^BLOB_ENDPOINT=(.+?)\s*$').Groups[1].Value
+        $blobContainer = [regex]::Match($provText, '(?m)^BLOB_CONTAINER=(.+?)\s*$').Groups[1].Value
         if (-not $blobEndpoint -or -not $blobContainer) {
-            Write-Host "  ⚠ Provisioner returned no endpoint/container — using local-only memory" -ForegroundColor Yellow
-            Add-Content -Path $envPath -Value ""
-            Add-Content -Path $envPath -Value "ENTRABOT_KEEP_MEMORY_LOCAL=true"
+            Skip-BlobStorage "Provisioner returned no endpoint/container"
         } else {
-            Add-Content -Path $envPath -Value ""
-            Add-Content -Path $envPath -Value "# ADR-005: cloud-hosted agent memory (Azure Blob Storage)"
-            Add-Content -Path $envPath -Value "ENTRABOT_BLOB_ENDPOINT=$blobEndpoint"
-            Add-Content -Path $envPath -Value "ENTRABOT_BLOB_CONTAINER=$blobContainer"
+            Set-MemoryLines 'ENTRABOT_KEEP_MEMORY_LOCAL|ENTRABOT_BLOB_ENDPOINT|ENTRABOT_BLOB_CONTAINER' @(
+                '# ADR-005: cloud-hosted agent memory (Azure Blob Storage)',
+                "ENTRABOT_BLOB_ENDPOINT=$blobEndpoint",
+                "ENTRABOT_BLOB_CONTAINER=$blobContainer"
+            )
             Success "Blob storage ready: $blobEndpoint/$blobContainer"
         }
     }

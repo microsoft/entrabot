@@ -133,6 +133,13 @@ def test_the_sponsor_is_defaulted_only_when_env_names_none() -> None:
     assert "az ad signed-in-user show --output json" in block  # JSON, never TSV (AGENTS.md)
 
 
+def test_the_memory_step_replaces_env_lines_and_tolerates_missing_output() -> None:
+    # test_setup_windows_steps_run.py runs this step where pwsh exists; this holds elsewhere.
+    step = _between('Step 8 "Cloud memory', 'Step 9 "')
+    assert "Add-Content" not in step  # config.py keeps the first value of a repeated key
+    assert ".Matches[0]" not in step  # throws on missing output under strict mode
+
+
 def test_the_script_no_longer_claims_provisioning_publishes_the_cert() -> None:
     text = " ".join(TEXT.split())
     assert "already publishes the cert" not in text

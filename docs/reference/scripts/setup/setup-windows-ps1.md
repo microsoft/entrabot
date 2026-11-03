@@ -124,8 +124,12 @@ Install everything first with
   so re-runs and rotation can still update it.
 - With `-UseCloudMemory` and an Agent User present, provisions Azure Blob Storage
   via [`provision_blob_storage.py`](../storage/provision-blob-storage-py.md) and
-  appends the blob endpoint/container to `.env`; falls back to local-only memory
-  on failure. Without `-UseCloudMemory`, writes `ENTRABOT_KEEP_MEMORY_LOCAL=true`.
+  writes the blob endpoint/container to `.env`, replacing any earlier memory lines.
+  If that can't be done, a machine already on cloud memory stays there and any other
+  falls back to local-only memory.
+- Without `-UseCloudMemory`, a machine already on cloud memory stays there, so
+  re-running setup to repair a certificate can't move it to local memory. Any other
+  machine gets `ENTRABOT_KEEP_MEMORY_LOCAL=true`, which is the default.
 - Registers the `entrabot` MCP server for Claude Code and Copilot CLI via
   `mcp_config.py`.
 - Does **not** run a smoke test and does **not** create or watch any Teams chat.

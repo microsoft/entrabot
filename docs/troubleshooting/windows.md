@@ -109,7 +109,8 @@ pwsh -File scripts\setup-windows.ps1 -UseBlueprint <blueprint-app-id>
 
 Setup checks whether the certificate named in `.env` is on the Blueprint. If it isn't,
 setup registers that same certificate and generates nothing new. Other machines'
-certificates stay on the Blueprint.
+certificates stay on the Blueprint, and a machine on cloud memory stays there without
+`-UseCloudMemory`.
 
 Don't run `deploy-windows.ps1` for this. Rotation authenticates with the registered
 certificate to get its Graph token, so it can't repair a certificate that was never
