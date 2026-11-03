@@ -11,7 +11,8 @@ Keys:
 
 * ``watched_chats`` holds one chat ID per line, sorted. In local mode this is the
   same file as before, so local users have nothing to migrate.
-* ``poll_state/email_cursor.txt`` holds one RFC 3339 timestamp. The key is new on
+* ``poll_state/email_cursor.txt`` holds one RFC 3339 timestamp, followed by the ID
+  of the claim that wrote it (see :func:`claim_email_window`). The key is new on
   purpose. Existing cloud containers hold a stale ``email_cursor.txt`` that setup's
   migration copied once and nothing ever updated, because runtime never read it.
   Reading that key would replay up to a full page of old mail on upgrade, and the
@@ -43,6 +44,7 @@ from __future__ import annotations
 
 import logging
 import re
+import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -247,16 +249,25 @@ def _now_cursor() -> str:
 
 
 def _is_timestamp(value: str) -> bool:
-    """True when *value* parses as a timestamp.
+    """True when *value* is a complete RFC 3339 date-time with a timezone.
 
-    The cursor is interpolated into a Graph ``$filter``, so this also keeps a
-    tampered shared value from changing the query.
+    The cursor is interpolated into a Graph ``$filter``, so this also keeps a tampered
+    shared value from changing the query. A bare date parses but can't be used there,
+    and accepting one would leave every poll failing instead of reporting it.
     """
+    if "T" not in value:
+        return False
     try:
-        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return False
-    return True
+    return parsed.tzinfo is not None
+
+
+def _cursor_line(raw: str) -> str:
+    """The timestamp from a stored cursor. A second line, if any, is the claim ID."""
+    lines = raw.strip().splitlines()
+    return lines[0].strip() if lines else ""
 
 
 def read_email_cursor() -> EmailCursorRead:
@@ -279,7 +290,7 @@ def read_email_cursor() -> EmailCursorRead:
     if raw is None:
         return EmailCursorRead(PollStateOutcome.ABSENT)
 
-    cursor = raw.strip()
+    cursor = _cursor_line(raw)
     if not _is_timestamp(cursor):
         logger.warning(
             "Email cursor at %s is not a timestamp (UNRESOLVED). Delete the key to "
@@ -337,15 +348,30 @@ def claim_email_window(new_cursor: str, etag: str | None) -> EmailClaim:
     Call this BEFORE pushing anything: only the instance that wins this write owns
     the batch. *etag* must come from the read the batch was fetched with. A missing
     ETag fails closed instead of degrading to an unconditional write.
+
+    The stored value carries a unique claim ID, because an error doesn't prove a write
+    failed: Azure may have committed it before the response was lost. If that batch
+    were dropped, the next poll would read the advanced cursor and never deliver it.
+    Re-reading for this claim's own ID settles it. The cursor alone couldn't, since
+    instances fetching the same batch compute the same value.
     """
     if not etag:
         logger.warning("Email window claim has no ETag; refusing an unconditional write")
         return EmailClaim.FAILED
+    claim_id = uuid.uuid4().hex
     try:
-        get_backend().write_text(EMAIL_CURSOR_KEY, new_cursor.strip(), if_match=etag)
+        get_backend().write_text(
+            EMAIL_CURSOR_KEY, f"{new_cursor.strip()}\n{claim_id}", if_match=etag
+        )
     except ConcurrencyError:
-        return EmailClaim.LOST
+        return EmailClaim.WON if _claim_landed(claim_id) else EmailClaim.LOST
     except Exception as exc:  # noqa: BLE001 — fail closed: push nothing, retry next cycle.
+        if _claim_landed(claim_id):
+            logger.info(
+                "Email cursor write reported %s but landed; keeping the claim",
+                type(exc).__name__,
+            )
+            return EmailClaim.WON
         logger.warning(
             "Email cursor write failed (pushing nothing): %s: %s",
             type(exc).__name__,
@@ -353,6 +379,19 @@ def claim_email_window(new_cursor: str, etag: str | None) -> EmailClaim:
         )
         return EmailClaim.FAILED
     return EmailClaim.WON
+
+
+def _claim_landed(claim_id: str) -> bool:
+    """True if the stored cursor was written by the claim with this ID."""
+    try:
+        raw = get_backend().read_text(EMAIL_CURSOR_KEY)
+    except Exception as exc:  # noqa: BLE001 — unknown means not ours: push nothing.
+        logger.warning(
+            "Could not re-read the email cursor after a failed write: %s",
+            type(exc).__name__,
+        )
+        return False
+    return raw is not None and claim_id in raw.splitlines()
 
 
 def ignored_legacy_local_copies() -> list[Path]:

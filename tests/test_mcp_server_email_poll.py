@@ -518,9 +518,8 @@ class TestLocalMode:
         await _cycle()
 
         assert (data_dir / "email_cursor.txt").read_text() == "2026-11-02T12:00:00Z"
-        assert (data_dir / "poll_state" / "email_cursor.txt").read_text() == (
-            "2026-11-02T12:30:00.001Z"
-        )
+        stored = (data_dir / "poll_state" / "email_cursor.txt").read_text()
+        assert stored.splitlines()[0] == "2026-11-02T12:30:00.001Z"
 
     async def test_no_legacy_cursor_starts_at_now(self, data_dir: Path, mailbox, pushed) -> None:
         mailbox.messages = [_mail("old", datetime.now(UTC) - timedelta(days=30))]

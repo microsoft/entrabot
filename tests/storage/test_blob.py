@@ -297,16 +297,39 @@ class TestBlobETag:
         assert route.calls.last.request.headers["If-None-Match"] == "*"
         assert "If-Match" not in route.calls.last.request.headers
 
-    @pytest.mark.parametrize("status", [409, 412])
-    async def test_put_if_none_match_conflict_raises_concurrency_error(self, status: int) -> None:
+    @pytest.mark.parametrize(
+        ("status", "headers"),
+        [(412, {}), (409, {"x-ms-error-code": "BlobAlreadyExists"})],
+    )
+    async def test_put_if_none_match_conflict_raises_concurrency_error(
+        self, status: int, headers: dict[str, str]
+    ) -> None:
         """Azure documents both shapes for "blob already exists" on a create-only
         PUT: 412 for an unmet If-None-Match and 409 BlobAlreadyExists."""
         from entrabot.storage.blob import ConcurrencyError
 
         store = _make_store()
         with respx.mock:
-            respx.put(f"{BLOB_URL}/cursor.txt").mock(return_value=httpx.Response(status))
+            respx.put(f"{BLOB_URL}/cursor.txt").mock(
+                return_value=httpx.Response(status, headers=headers)
+            )
             with pytest.raises(ConcurrencyError):
+                await store.put("cursor.txt", b"x", if_none_match="*")
+
+    @pytest.mark.parametrize(
+        "headers",
+        [{"x-ms-error-code": "BlobImmutableDueToPolicy"}, {"x-ms-error-code": "ContainerBeingDeleted"}, {}],
+    )
+    async def test_put_if_none_match_other_409_is_a_real_failure(
+        self, headers: dict[str, str]
+    ) -> None:
+        """Reading these as a lost race would report a cursor as created when it wasn't."""
+        store = _make_store()
+        with respx.mock:
+            respx.put(f"{BLOB_URL}/cursor.txt").mock(
+                return_value=httpx.Response(409, headers=headers)
+            )
+            with pytest.raises(httpx.HTTPStatusError):
                 await store.put("cursor.txt", b"x", if_none_match="*")
 
     async def test_put_409_without_if_none_match_is_not_a_concurrency_error(self) -> None:

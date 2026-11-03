@@ -56,7 +56,7 @@ Modules that call `get_backend()`:
 | Value | Key | Format |
 |---|---|---|
 | Watched-chat list | `watched_chats` | One chat ID per line, sorted |
-| Email cursor | `poll_state/email_cursor.txt` | One RFC 3339 timestamp |
+| Email cursor | `poll_state/email_cursor.txt` | One RFC 3339 timestamp, then the ID of the claim that wrote it |
 
 **With a cloud backend, neither value touches local disk.** Instances on one container share them, and a machine moved to another agent's container can't carry over the old agent's chats or a stale cursor. If `data_dir/watched_chats` or `data_dir/email_cursor.txt` exist, they are never read or written; startup logs one info line saying they are being ignored.
 

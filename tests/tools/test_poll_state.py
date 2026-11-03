@@ -88,6 +88,45 @@ class _NoEtag:
 # ---------------------------------------------------------------------------
 # read_watched_chats
 # ---------------------------------------------------------------------------
+class _ErrorAfterWrite:
+    """Commits the write, then raises as if the response had been lost."""
+
+    def __init__(
+        self, value: str, *, error: Exception | None = None, reread_fails: bool = False
+    ) -> None:
+        self.value = value
+        self.error = error or OSError("connection reset")
+        self.reread_fails = reread_fails
+        self.armed = False
+
+    def arm_reread_failure(self) -> None:
+        self.armed = self.reread_fails
+
+    def read_text_with_etag(self, key: str) -> tuple[str, str]:
+        return self.value, '"etag"'
+
+    def read_text(self, key: str) -> str:
+        if self.armed:
+            raise OSError("still down")
+        return self.value
+
+    def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str:
+        self.value = content
+        raise self.error
+
+
+class _SiblingClaimedFirst(_ErrorAfterWrite):
+    """Our write fails without landing, and a sibling stores the same cursor."""
+
+    def __init__(self, value: str, *, sibling_value: str) -> None:
+        super().__init__(value)
+        self.sibling_value = sibling_value
+
+    def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str:
+        self.value = f"{self.sibling_value}\nsibling-claim"
+        raise self.error
+
+
 class TestReadWatchedChats:
     def test_absent_is_absent_not_unresolved(self, fake_cloud_store) -> None:
         result = read_watched_chats()
@@ -310,7 +349,18 @@ class TestReadEmailCursor:
         _use_backend(monkeypatch, _ReadFails())
         assert read_email_cursor().outcome is PollStateOutcome.UNRESOLVED
 
-    @pytest.mark.parametrize("corrupt", ["", "   \n", "cursor=42", "<html>proxy</html>"])
+    @pytest.mark.parametrize(
+        "corrupt",
+        [
+            "",
+            "   \n",
+            "cursor=42",
+            "<html>proxy</html>",
+            "2026-11-02",  # parses, but Graph can't filter on a date with no time
+            "2026-11-02T12:00:00",  # no timezone
+            "2026-11-02 12:00:00Z",  # not RFC 3339's T separator
+        ],
+    )
     def test_corrupt_value_is_unresolved(self, fake_cloud_store, corrupt: str) -> None:
         """Mirrors chat_cursors: a corrupt value is ambiguous, not a clean slate."""
         BlobBackend(fake_cloud_store).write_text(EMAIL_CURSOR_KEY, corrupt)
@@ -479,7 +529,7 @@ class TestClaimEmailWindow:
     def test_strips_whitespace_before_storing(self, fake_cloud_store) -> None:
         initialize_email_cursor(NOW)
         claim_email_window(f"  {LATER}  \n", read_email_cursor().etag)
-        assert fake_cloud_store.data[EMAIL_CURSOR_KEY].decode() == LATER
+        assert read_email_cursor().cursor == LATER
 
     def test_stale_etag_loses_and_leaves_the_cursor_alone(self, fake_cloud_store) -> None:
         initialize_email_cursor(NOW)
@@ -498,6 +548,34 @@ class TestClaimEmailWindow:
     def test_non_conflict_failure_is_failed_not_lost(self, data_dir, monkeypatch) -> None:
         _use_backend(monkeypatch, _WriteFails(data_dir))
         assert claim_email_window(LATER, '"etag"') is EmailClaim.FAILED
+
+    def test_a_write_that_landed_despite_an_error_still_wins(self, monkeypatch) -> None:
+        """A transport error doesn't prove the PUT failed. If it committed and this
+        batch were dropped, the next poll would read the advanced cursor and never
+        deliver that mail."""
+        backend = _ErrorAfterWrite(NOW)
+        _use_backend(monkeypatch, backend)
+        assert claim_email_window(LATER, read_email_cursor().etag) is EmailClaim.WON
+        assert read_email_cursor().cursor == LATER
+
+    def test_a_retried_write_that_landed_is_not_mistaken_for_a_lost_race(self, monkeypatch) -> None:
+        backend = _ErrorAfterWrite(NOW, error=ConcurrencyError("412 on a retry"))
+        _use_backend(monkeypatch, backend)
+        assert claim_email_window(LATER, read_email_cursor().etag) is EmailClaim.WON
+
+    def test_a_sibling_writing_the_same_cursor_is_not_our_claim(self, monkeypatch) -> None:
+        """Both instances compute the same cursor from the same batch, so the value alone
+        can't say who claimed it. Treating it as ours would push the batch twice."""
+        backend = _SiblingClaimedFirst(NOW, sibling_value=LATER)
+        _use_backend(monkeypatch, backend)
+        assert claim_email_window(LATER, read_email_cursor().etag) is EmailClaim.FAILED
+
+    def test_an_ambiguous_write_that_cannot_be_reread_fails_closed(self, monkeypatch) -> None:
+        backend = _ErrorAfterWrite(NOW, reread_fails=True)
+        _use_backend(monkeypatch, backend)
+        etag = read_email_cursor().etag
+        backend.arm_reread_failure()
+        assert claim_email_window(LATER, etag) is EmailClaim.FAILED
 
     @pytest.mark.parametrize("etag", [None, ""])
     def test_missing_etag_never_writes_unconditionally(self, monkeypatch, etag) -> None:
