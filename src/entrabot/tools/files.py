@@ -968,8 +968,10 @@ def _check_workbook_readable(file_ref: FileRef) -> None:
     if ext == ".xls":
         raise UnsupportedReadFormatError(ext, _XLS_HINT)
     if ext not in _WORKBOOK_EXTENSIONS:
+        # A fixed label: the suffix is file-authored, and this error reaches the
+        # model outside the XPIA envelope.
         raise UnsupportedReadFormatError(
-            ext or "(no extension)",
+            "non-workbook",
             "The workbook tools only read .xlsx and .xlsm files.",
         )
     if file_ref.kind == "onedrive_personal":
