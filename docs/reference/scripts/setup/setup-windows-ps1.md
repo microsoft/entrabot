@@ -90,7 +90,7 @@ Install everything first with
   `.entrabot-state.json`.
 - Makes sure this machine's certificate is on the Blueprint. If `.env` names a
   certificate (`ENTRABOT_BLUEPRINT_CERT_SHA1` and `ENTRABOT_BLUEPRINT_CERT_THUMBPRINT`)
-  that is in `Cert:\CurrentUser\My`, it asks
+  that is in `Cert:\CurrentUser\My`, in date, and has its private key, it asks
   [`verify_blueprint_cert.py`](../auth-and-certs/verify-blueprint-cert-py.md):
     - **Registered** — the certificate is reused. Nothing is generated.
     - **Not registered** — the state of a machine set up before this step existed.
@@ -119,8 +119,9 @@ Install everything first with
   in `Cert:\CurrentUser\My`), and `ENTRABOT_BLUEPRINT_KSP`. Earlier lines for these
   keys are replaced rather than appended to, because `.env` loading keeps the first
   value of a repeated key. The sponsor (`ENTRABOT_HUMAN_*`) defaults to the signed-in
-  account only when `.env` doesn't already name one, so a re-run under another account
-  doesn't change it. The file is locked with `icacls ... :M` (modify, not read-only)
+  account only when `.env` doesn't already name one through its singular or plural ID or
+  UPN keys, so a re-run under another account doesn't change it. A run for a different
+  Agent User keeps neither the sponsor nor the blob settings. The file is locked with `icacls ... :M` (modify, not read-only)
   so re-runs and rotation can still update it.
 - With `-UseCloudMemory` and an Agent User present, provisions Azure Blob Storage
   via [`provision_blob_storage.py`](../storage/provision-blob-storage-py.md) and

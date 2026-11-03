@@ -108,7 +108,13 @@ function Test-Path {
 }
 function Get-Item {
     param([string]$Path)
-    $cert = [pscustomobject]@{}
+    $now = Get-Date
+    $state = $env:FAKE_CERT_STATE
+    $cert = [pscustomobject]@{
+        HasPrivateKey = $state -ne 'no-private-key'
+        NotBefore     = $now.AddDays($(if ($state -eq 'not-yet-valid') { 1 } else { -1 }))
+        NotAfter      = $now.AddDays($(if ($state -eq 'expired') { -1 } else { 1 }))
+    }
     $cert | Add-Member -MemberType ScriptMethod -Name GetRawCertData -Value { [byte[]](1, 2, 3, 4) }
     $cert
 }
@@ -134,6 +140,17 @@ class Run:
     def values(self, key: str) -> list[str]:
         return [line.split("=", 1)[1] for line in self.env if line.startswith(f"{key}=")]
 
+    def effective(self, key: str) -> str | None:
+        """The value config.py would use: trimmed, skipping comments, first one wins."""
+        for raw in self.env:
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name, _, value = line.partition("=")
+            if name.strip() == key:
+                return value.strip()
+        return None
+
 
 @pytest.fixture
 def run_steps(tmp_path: Path):
@@ -145,6 +162,7 @@ def run_steps(tmp_path: Path):
         env: list[str] | None = None,
         *,
         cert_in_store: bool = False,
+        cert_state: str = "usable",
         verify: int = 0,
         register: int = 0,
         use_cloud: bool = False,
@@ -161,6 +179,7 @@ def run_steps(tmp_path: Path):
             "NO_COLOR": "1",  # keeps escape codes out of a failure's output
             "STEPS_WORK_DIR": str(tmp_path),
             "FAKE_CERT_IN_STORE": "1" if cert_in_store else "",
+            "FAKE_CERT_STATE": cert_state,
             "FAKE_VERIFY_EXIT": str(verify),
             "FAKE_REGISTER_EXIT": str(register),
             "FAKE_USE_CLOUD_MEMORY": "1" if use_cloud else "",
@@ -238,6 +257,30 @@ class TestCertificateStep:
         assert run.called("generate_windows_cert.py")
         assert run.values("ENTRABOT_BLUEPRINT_CERT_SHA1") == [NEW_SHA1]
 
+    @pytest.mark.parametrize("state", ["expired", "no-private-key", "not-yet-valid"])
+    def test_a_certificate_that_cannot_sign_is_replaced(self, run_steps, state):
+        # Registering or reusing it would report success while Hop 1 stays broken.
+        run = run_steps(CERT_LINES, cert_in_store=True, cert_state=state)
+        assert run.exit_code == 0, run.output
+        assert not run.called("verify_blueprint_cert.py")
+        assert run.called("generate_windows_cert.py")
+        assert run.called("register_windows_blueprint_cert.py")
+        assert run.values("ENTRABOT_BLUEPRINT_CERT_SHA1") == [NEW_SHA1]
+
+    def test_a_padded_certificate_line_is_read_the_way_the_runtime_reads_it(self, run_steps):
+        run = run_steps(
+            [
+                f" ENTRABOT_BLUEPRINT_CERT_THUMBPRINT = {OLD_X5T} ",
+                f"ENTRABOT_BLUEPRINT_CERT_SHA1 = {OLD_SHA1}",
+                "ENTRABOT_BLUEPRINT_KSP = software",
+            ],
+            cert_in_store=True,
+            verify=0,
+        )
+        assert run.exit_code == 0, run.output
+        assert not run.called("generate_windows_cert.py")
+        assert run.effective("ENTRABOT_BLUEPRINT_CERT_SHA1") == OLD_SHA1
+
     def test_a_refused_registration_removes_the_new_certificate_and_writes_nothing(self, run_steps):
         run = run_steps(["KEEP=me"], register=1)
         assert run.exit_code == 7, run.output
@@ -294,6 +337,59 @@ class TestEnvStep:
         assert run.values("ENTRABOT_HUMAN_USER_ID") == []
         assert run.values("ENTRABOT_AGENT_ID") == ["agent-app"]
 
+    def test_both_upn_keys_name_the_selected_agent(self, run_steps):
+        # config.py prefers ENTRABOT_AGENT_UPN, so a stale one would outrank the alias and
+        # the email poll's self-sender filter would stop recognizing the agent's own mail.
+        run = run_steps(["ENTRABOT_AGENT_UPN=old-agent@example.invalid"])
+        assert run.exit_code == 0, run.output
+        assert run.values("ENTRABOT_AGENT_UPN") == ["agent@example.invalid"]
+        assert run.values("ENTRABOT_AGENT_USER_UPN") == ["agent@example.invalid"]
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "ENTRABOT_HUMAN_USER_IDS=sponsor-a,sponsor-b",
+            "ENTRABOT_HUMAN_UPN=sponsor@contoso.com",
+            "ENTRABOT_HUMAN_UPNS=sponsor@contoso.com,other@contoso.com",
+            " ENTRABOT_HUMAN_USER_ID = the-sponsor ",
+        ],
+    )
+    def test_any_sponsor_key_counts_as_naming_a_sponsor(self, run_steps, line):
+        run = run_steps(["ENTRABOT_AGENT_USER_ID=agent-user", line])
+        assert run.exit_code == 0, run.output
+        assert line in run.env
+        assert not [call for call in run.calls if call.startswith("az ")]
+        assert run.values("ENTRABOT_HUMAN_USER_TYPES") == []
+
+    def test_a_commented_out_sponsor_does_not_count(self, run_steps):
+        run = run_steps(["# ENTRABOT_HUMAN_USER_ID=old-sponsor"])
+        assert run.values("ENTRABOT_HUMAN_USER_ID") == ["runner-object"]
+
+    def test_a_run_for_a_different_agent_does_not_keep_the_old_sponsor(self, run_steps):
+        run = run_steps(
+            ["ENTRABOT_AGENT_USER_ID=another-agent", "ENTRABOT_HUMAN_USER_ID=old-sponsor"]
+        )
+        assert run.exit_code == 0, run.output
+        assert run.values("ENTRABOT_HUMAN_USER_ID") == ["runner-object"]
+        assert run.values("ENTRABOT_AGENT_USER_ID") == ["agent-user"]
+
+    def test_a_new_sponsor_does_not_inherit_the_old_sponsors_tenant_ids(self, run_steps):
+        run = run_steps(
+            ["ENTRABOT_AGENT_USER_ID=another-agent", "ENTRABOT_HUMAN_USER_TENANT_IDS=old-tenant"]
+        )
+        assert run.exit_code == 0, run.output
+        assert run.values("ENTRABOT_HUMAN_USER_TENANT_IDS") == [""]
+
+    def test_padded_keys_are_replaced_and_comments_are_left_alone(self, run_steps):
+        # config.py trims keys, so a padded stale line above the new one would win.
+        run = run_steps(
+            ["ENTRABOT_AGENT_ID = stale", "  ENTRABOT_TENANT_ID=old", "# ENTRABOT_AGENT_ID=a note"]
+        )
+        assert run.exit_code == 0, run.output
+        assert run.effective("ENTRABOT_AGENT_ID") == "agent-app"
+        assert run.effective("ENTRABOT_TENANT_ID") == "tenant"
+        assert "# ENTRABOT_AGENT_ID=a note" in run.env
+
 
 class TestMemoryStep:
     def test_a_new_machine_defaults_to_local_memory(self, run_steps):
@@ -326,6 +422,45 @@ class TestMemoryStep:
         assert run.exit_code == 0, run.output
         assert run.values("ENTRABOT_KEEP_MEMORY_LOCAL") == ["true"]
         assert run.values("ENTRABOT_BLOB_ENDPOINT") == ["https://old.example.invalid"]
+
+    def test_padded_cloud_settings_count_as_cloud(self, run_steps):
+        lines = [
+            "  ENTRABOT_BLOB_ENDPOINT = https://old.example.invalid",
+            "ENTRABOT_BLOB_CONTAINER = c",
+        ]
+        run = run_steps(lines)
+        assert run.exit_code == 0, run.output
+        assert run.effective("ENTRABOT_KEEP_MEMORY_LOCAL") is None
+        assert run.effective("ENTRABOT_BLOB_CONTAINER") == "c"
+
+    @pytest.mark.parametrize(
+        "line", ["ENTRABOT_KEEP_MEMORY_LOCAL = true", "ENTRABOT_KEEP_MEMORY_LOCAL=YES"]
+    )
+    def test_a_local_flag_counts_however_it_is_written(self, run_steps, line):
+        run = run_steps([*CLOUD_LINES, line])
+        assert run.exit_code == 0, run.output
+        assert run.effective("ENTRABOT_KEEP_MEMORY_LOCAL") in ("true", "YES")
+
+    def test_opting_in_replaces_a_padded_local_flag(self, run_steps):
+        run = run_steps(["ENTRABOT_KEEP_MEMORY_LOCAL = true"], use_cloud=True)
+        assert run.exit_code == 0, run.output
+        assert run.effective("ENTRABOT_KEEP_MEMORY_LOCAL") is None
+        assert run.effective("ENTRABOT_BLOB_ENDPOINT") == "https://new.example.invalid"
+
+    def test_the_first_value_of_a_repeated_flag_decides(self, run_steps):
+        run = run_steps(
+            [*CLOUD_LINES, "ENTRABOT_KEEP_MEMORY_LOCAL=false", "ENTRABOT_KEEP_MEMORY_LOCAL=true"]
+        )
+        assert run.exit_code == 0, run.output
+        assert run.effective("ENTRABOT_KEEP_MEMORY_LOCAL") == "false"
+        assert run.effective("ENTRABOT_BLOB_ENDPOINT") == "https://old.example.invalid"
+
+    def test_a_run_for_a_different_agent_does_not_keep_the_old_blob_store(self, run_steps):
+        # The container is scoped to one Agent User, so the new one couldn't reach it.
+        run = run_steps(["ENTRABOT_AGENT_USER_ID=another-agent", *CLOUD_LINES])
+        assert run.exit_code == 0, run.output
+        assert run.effective("ENTRABOT_KEEP_MEMORY_LOCAL") == "true"
+        assert run.effective("ENTRABOT_BLOB_ENDPOINT") is None
 
     def test_half_a_cloud_configuration_is_not_treated_as_cloud(self, run_steps):
         run = run_steps(CLOUD_LINES[:1])

@@ -120,16 +120,15 @@ def test_env_is_written_on_every_run_and_replaces_earlier_lines() -> None:
     assert "if ($generated)" not in block
     # config.py keeps the FIRST value of a repeated key, so a stale line left above a new
     # one would win.
-    assert '$line.StartsWith("$_=")' in block
+    assert "$written -notcontains (Get-EnvKey $_)" in block
 
 
 def test_the_sponsor_is_defaulted_only_when_env_names_none() -> None:
     # The account running setup isn't always the sponsor, so a re-run must not change it.
     block = _env_block()
-    guard = "if ($envText -notmatch '(?m)^ENTRABOT_HUMAN_USER_ID=\\S')"
+    guard = "if (-not ($sameAgent -and $namesSponsor))"
     assert guard in block
-    assert block.index(guard) < block.index("ENTRABOT_HUMAN_USER_ID'")
-    assert "ENTRABOT_HUMAN" not in block[: block.index(guard)]
+    assert block.index(guard) < block.index("$envValues['ENTRABOT_HUMAN_USER_ID']")
     assert "az ad signed-in-user show --output json" in block  # JSON, never TSV (AGENTS.md)
 
 

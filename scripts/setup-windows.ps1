@@ -392,15 +392,40 @@ if (-not $BlueprintObjectId) {
 # Each Python helper below answers through its exit code, so a non-zero exit must not throw.
 $PSNativeCommandUseErrorActionPreference = $false
 
-# Is there a cert in .env that is also in the local store? The first line wins when a key
-# repeats, as in config.py.
-$envPath    = Join-Path $ProjectRoot '.env'
-$envText    = if (Test-Path $envPath) { (Get-Content $envPath) -join "`n" } else { "" }
-$thumbprint = [regex]::Match($envText, '(?m)^ENTRABOT_BLUEPRINT_CERT_SHA1=(.*?)\s*$').Groups[1].Value
-$x5tS256    = [regex]::Match($envText, '(?m)^ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=(.*?)\s*$').Groups[1].Value
-$ksp        = [regex]::Match($envText, '(?m)^ENTRABOT_BLUEPRINT_KSP=(.*?)\s*$').Groups[1].Value
+# .env is read the way config.py reads it, since that decides what the agent uses: keys and
+# values are trimmed, comments are skipped, and the first value of a repeated key wins.
+$envPath = Join-Path $ProjectRoot '.env'
+function Get-EnvKey {
+    param([string]$Line)
+    $text = $Line.Trim()
+    if ($text.StartsWith('#') -or -not $text.Contains('=')) { return '' }
+    return ($text -split '=', 2)[0].Trim()
+}
+function Get-EnvValue {
+    param([string]$Key)
+    if (-not (Test-Path $envPath)) { return '' }
+    foreach ($line in Get-Content $envPath) {
+        if ((Get-EnvKey $line) -eq $Key) { return ($line -split '=', 2)[1].Trim() }
+    }
+    return ''
+}
+
+# Is there a cert in .env that is also in the local store?
+$thumbprint = Get-EnvValue 'ENTRABOT_BLUEPRINT_CERT_SHA1'
+$x5tS256    = Get-EnvValue 'ENTRABOT_BLUEPRINT_CERT_THUMBPRINT'
+$ksp        = Get-EnvValue 'ENTRABOT_BLUEPRINT_KSP'
 $haveLocalCert = ($thumbprint -match '^[0-9A-F]{40}$') -and ($x5tS256 -match '^[A-Za-z0-9_-]{43}$') -and
                  (Test-Path "Cert:\CurrentUser\My\$thumbprint")
+if ($haveLocalCert) {
+    # One that has expired or has no private key here can't sign, so reusing or registering it
+    # would report success while Hop 1 stays broken.
+    $localCert = Get-Item "Cert:\CurrentUser\My\$thumbprint"
+    $now = Get-Date
+    $haveLocalCert = $localCert.HasPrivateKey -and ($localCert.NotBefore -le $now) -and ($now -le $localCert.NotAfter)
+    if (-not $haveLocalCert) {
+        Write-Host "  The certificate in .env can't sign (not in date, or no private key here). Generating a new one." -ForegroundColor Yellow
+    }
+}
 
 $derPath     = Join-Path $env:TEMP "entrabot-blueprint-$(Get-Random).cer"
 $register    = $true    # false once the local cert is known to be on the Blueprint
@@ -471,13 +496,23 @@ $envValues = [ordered]@{
     ENTRABOT_AGENT_ID                  = $AgentId
     ENTRABOT_AGENT_OBJECT_ID           = $AgentObjectId
     ENTRABOT_AGENT_USER_ID             = $AgentUserId
+    ENTRABOT_AGENT_UPN                 = $StateAgentUserUpn
     ENTRABOT_AGENT_USER_UPN            = $StateAgentUserUpn
     ENTRABOT_PROVISIONER_APP_ID        = $ProvisionerClientId
 }
 
+# The sponsor and the blob store in .env belong to the agent they were set up for, so a run for a
+# different agent (-NewChain, or another -UseBlueprint) inherits neither. With no ID on one side
+# there's no telling, which counts as the same agent: a machine set up before this step wrote IDs
+# has none in .env.
+$previousAgentUserId = Get-EnvValue 'ENTRABOT_AGENT_USER_ID'
+$sameAgent = (-not $previousAgentUserId) -or (-not $AgentUserId) -or ($previousAgentUserId -eq $AgentUserId)
+
 # The sponsor defaults to the signed-in account, as in setup.sh, but only when .env names none:
 # the account running setup isn't always the sponsor, and a re-run must not silently change it.
-if ($envText -notmatch '(?m)^ENTRABOT_HUMAN_USER_ID=\S') {
+$namesSponsor = @('ENTRABOT_HUMAN_USER_ID', 'ENTRABOT_HUMAN_USER_IDS', 'ENTRABOT_HUMAN_UPN', 'ENTRABOT_HUMAN_UPNS') |
+    Where-Object { Get-EnvValue $_ }
+if (-not ($sameAgent -and $namesSponsor)) {
     $me = az ad signed-in-user show --output json | ConvertFrom-Json
     if ($LASTEXITCODE -eq 0 -and $me) {
         $envValues['ENTRABOT_HUMAN_USER_ID']         = $me.id
@@ -493,14 +528,12 @@ if ($envText -notmatch '(?m)^ENTRABOT_HUMAN_USER_ID=\S') {
 }
 
 # Replace earlier lines instead of appending: config.py keeps the FIRST value of a repeated
-# key, so a stale line above a new one would win. A key with no value keeps what's there.
-$written = @($envValues.Keys | Where-Object { $envValues[$_] })
+# key, so a stale line above a new one would win. A key with no value keeps what's there, except
+# a new sponsor's tenant IDs, which must not inherit the old sponsor's.
+$written = @($envValues.Keys | Where-Object { $envValues[$_] -or $_ -eq 'ENTRABOT_HUMAN_USER_TENANT_IDS' })
 $kept = @(
     if (Test-Path $envPath) {
-        Get-Content $envPath | Where-Object {
-            $line = $_
-            -not ($written | Where-Object { $line.StartsWith("$_=") })
-        }
+        Get-Content $envPath | Where-Object { $written -notcontains (Get-EnvKey $_) }
     }
 )
 @($kept) + @($written | ForEach-Object { "$_=$($envValues[$_])" }) | Set-Content -Path $envPath -Encoding utf8
@@ -523,19 +556,20 @@ Step 8 "Cloud memory (Azure Blob Storage)"
 # Re-running setup is how a machine repairs its certificate, so a machine on cloud memory must
 # stay there: ENTRABOT_KEEP_MEMORY_LOCAL=true outranks the blob settings at runtime and would
 # leave the agent on an empty local store. config.py keeps the first value of a repeated key, so
-# these lines are replaced, never appended, and read the same way here.
-$envNow        = (Get-Content $envPath) -join "`n"
-$onCloudMemory = [regex]::Match($envNow, '(?m)^ENTRABOT_BLOB_ENDPOINT=(.*?)\s*$').Groups[1].Value -and
-                 [regex]::Match($envNow, '(?m)^ENTRABOT_BLOB_CONTAINER=(.*?)\s*$').Groups[1].Value -and
-                 ([regex]::Match($envNow, '(?m)^ENTRABOT_KEEP_MEMORY_LOCAL=(.*?)\s*$').Groups[1].Value -notin 'true', '1', 'yes')
+# these lines are replaced, never appended.
+$blobKeys      = @('ENTRABOT_BLOB_ENDPOINT', 'ENTRABOT_BLOB_CONTAINER')
+$onCloudMemory = $sameAgent -and (Get-EnvValue 'ENTRABOT_BLOB_ENDPOINT') -and (Get-EnvValue 'ENTRABOT_BLOB_CONTAINER') -and
+                 ((Get-EnvValue 'ENTRABOT_KEEP_MEMORY_LOCAL') -notin 'true', '1', 'yes')
 
 function Set-MemoryLines {
-    param([string]$Replacing, [string[]]$Lines)
-    $kept = @(Get-Content $envPath | Where-Object { $_ -notmatch "^($Replacing)=" -and $_ -notmatch '^# ADR-005:' })
+    param([string[]]$Replacing, [string[]]$Lines)
+    $kept = @(Get-Content $envPath | Where-Object { $Replacing -notcontains (Get-EnvKey $_) -and $_ -notmatch '^\s*# ADR-005:' })
     @($kept) + $Lines | Set-Content -Path $envPath -Encoding utf8
 }
 function Use-LocalMemory {
-    Set-MemoryLines 'ENTRABOT_KEEP_MEMORY_LOCAL' @(
+    # A different agent's container is no use to this one, so its lines go too.
+    $replacing = @('ENTRABOT_KEEP_MEMORY_LOCAL') + $(if ($sameAgent) { @() } else { $blobKeys })
+    Set-MemoryLines $replacing @(
         '# ADR-005: keep agent memory local (skip cloud sync)',
         'ENTRABOT_KEEP_MEMORY_LOCAL=true'
     )
@@ -583,7 +617,7 @@ if (-not $UseCloudMemory) {
         if (-not $blobEndpoint -or -not $blobContainer) {
             Skip-BlobStorage "Provisioner returned no endpoint/container"
         } else {
-            Set-MemoryLines 'ENTRABOT_KEEP_MEMORY_LOCAL|ENTRABOT_BLOB_ENDPOINT|ENTRABOT_BLOB_CONTAINER' @(
+            Set-MemoryLines (@('ENTRABOT_KEEP_MEMORY_LOCAL') + $blobKeys) @(
                 '# ADR-005: cloud-hosted agent memory (Azure Blob Storage)',
                 "ENTRABOT_BLOB_ENDPOINT=$blobEndpoint",
                 "ENTRABOT_BLOB_CONTAINER=$blobContainer"
