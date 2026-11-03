@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
 import os
 import re
 import stat
@@ -204,7 +205,7 @@ case "$1" in
         fi
         printf '%s' "$FAKE_FIND_OUT"; exit "$FAKE_FIND_RC" ;;
     *register_blueprint_cert.py) printf '%s' "$FAKE_REGISTER_OUT"; exit "$FAKE_REGISTER_RC" ;;
-    -c) printf '%s\n' "$2" > "$FAKE_ROOT/state-write.py"; exit 0 ;;
+    -c) printf '%s\n' "$2" > "$FAKE_ROOT/state-write.py"; exit "$FAKE_STATE_RC" ;;
     *) echo "unexpected interpreter call: $*" >&2; exit 99 ;;
 esac
 """
@@ -272,6 +273,7 @@ def _run_step(
     pending: bool = False,
     find: tuple[int, str] = (1, ""),
     register: tuple[int, str] = (0, REGISTERED),
+    state_write_rc: int = 0,
 ) -> StepRun:
     root = tmp_path / "fake root with a space"
     root.mkdir()
@@ -297,6 +299,7 @@ def _run_step(
         "FAKE_FIND_OUT": find[1],
         "FAKE_REGISTER_RC": str(register[0]),
         "FAKE_REGISTER_OUT": register[1],
+        "FAKE_STATE_RC": str(state_write_rc),
     }
     result = subprocess.run(
         ["bash", str(script)],
@@ -346,8 +349,44 @@ class TestStepSixDecisions:
         assert run.returncode == 0, run.stdout + run.stderr
         assert run.scripts == ["find_local_blueprint_cert", "state-write"]
         assert run.thumbprint == RECOVERED
-        assert f"data['BLUEPRINT_CERT_THUMBPRINT'] = '{RECOVERED}'" in run.state_write
-        assert CACHED not in run.state_write
+        assert run.argument_count(1) == 4  # -c, the program, the state file, the thumbprint
+        assert run.calls[1].endswith(f".entrabot-state.json {RECOVERED}")
+        assert CACHED not in run.calls[1]
+
+    def test_the_recovered_thumbprint_is_saved_by_the_atomic_writer(self, tmp_path: Path) -> None:
+        run = _run_step(tmp_path, cached=CACHED, find=(0, RECOVERED + "\n"))
+        state = tmp_path / "state.json"
+        state.write_text(
+            json.dumps({"BLUEPRINT_CERT_THUMBPRINT": CACHED, "BLUEPRINT_SECRET": "x", "KEEP": "me"})
+        )
+
+        # Truncating the file in place could leave invalid JSON after a full disk or an
+        # interruption, and later runs couldn't read the saved identity. So run the program
+        # setup hands to Python, for real, against a scratch state file.
+        assert "write_state" in run.state_write
+        assert "write_text" not in run.state_write
+        result = subprocess.run(
+            [sys.executable, "-c", run.state_write, str(state), RECOVERED],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+            env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "scripts")},
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert json.loads(state.read_text()) == {
+            "BLUEPRINT_CERT_THUMBPRINT": RECOVERED,
+            "KEEP": "me",
+        }
+
+    def test_a_failed_state_write_stops_setup_and_says_what_to_do(self, tmp_path: Path) -> None:
+        run = _run_step(tmp_path, cached=CACHED, find=(0, RECOVERED + "\n"), state_write_rc=1)
+
+        assert run.returncode != 0
+        assert "FAIL: Could not save the certificate thumbprint" in run.stdout
+        assert "re-run setup" in run.stdout
+        assert run.thumbprint is None
 
     def test_a_stale_cache_adds_without_the_flag(self, tmp_path: Path) -> None:
         run = _run_step(tmp_path, cached=CACHED, find=(1, ""))
