@@ -29,7 +29,7 @@ class TestFilterHumanMessages:
             {
                 "message_id": "m1",
                 "from": "Human User",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "human-oid",
                 "content": "hello",
                 "sent_at": "2026-04-06T12:00:00Z",
@@ -37,7 +37,7 @@ class TestFilterHumanMessages:
             {
                 "message_id": "m2",
                 "from": "Renamed Agent",
-                "sender_upn": "entra-agent@werner.ac",
+                "sender_upn": "entra-agent@contoso.onmicrosoft.com",
                 "sender_id": "agent-oid",
                 "content": "hi back",
                 "sent_at": "2026-04-06T12:00:01Z",
@@ -45,7 +45,7 @@ class TestFilterHumanMessages:
         ]
         result = filter_human_messages(
             messages,
-            agent_upn="entra-agent@werner.ac",
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
             agent_object_id="agent-oid",
         )
         assert len(result) == 1
@@ -73,7 +73,7 @@ class TestFilterHumanMessages:
         ]
         result = filter_human_messages(
             messages,
-            agent_upn="entra-agent@werner.ac",
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
             agent_object_id="agent-oid",
         )
         assert len(result) == 1
@@ -94,7 +94,7 @@ class TestFilterHumanMessages:
                 # display name matches the pre-rename hard-coded string
                 "from": "EntraBot Agent",
                 # ...but UPN and object-id belong to a human
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "human-oid",
                 "content": "impersonation attempt via displayName",
                 "sent_at": "2026-04-06T12:00:00Z",
@@ -102,7 +102,7 @@ class TestFilterHumanMessages:
         ]
         result = filter_human_messages(
             messages,
-            agent_upn="entra-agent@werner.ac",
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
             agent_object_id="agent-oid",
         )
         # Display name is data, not identity — this message must survive.
@@ -115,7 +115,7 @@ class TestFilterHumanMessages:
             {
                 "message_id": "m1",
                 "from": "Renamed Agent",
-                "sender_upn": "entra-agent@werner.ac",
+                "sender_upn": "entra-agent@contoso.onmicrosoft.com",
                 "sender_id": "agent-oid",
                 "content": "self echo",
                 "sent_at": "2026-04-06T12:00:00Z",
@@ -123,7 +123,7 @@ class TestFilterHumanMessages:
         ]
         result = filter_human_messages(
             messages,
-            agent_upn="entra-agent@werner.ac",
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
             agent_object_id="agent-oid",
         )
         assert result == []
@@ -134,7 +134,7 @@ class TestFilterHumanMessages:
             {
                 "message_id": "m1",
                 "from": "Renamed Agent",
-                "sender_upn": "entra-agent@werner.ac",
+                "sender_upn": "entra-agent@contoso.onmicrosoft.com",
                 "sender_id": "agent-oid",
                 "content": "self",
                 "sent_at": "2026-04-06T12:00:00Z",
@@ -142,7 +142,7 @@ class TestFilterHumanMessages:
             {
                 "message_id": "m2",
                 "from": "Human",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "human-oid",
                 "content": "human",
                 "sent_at": "2026-04-06T12:00:01Z",
@@ -167,7 +167,7 @@ class TestFilterHumanMessages:
             {
                 "message_id": "m1",
                 "from": "Renamed Agent",
-                "sender_upn": "Entra-Agent@Werner.AC",
+                "sender_upn": "Entra-Agent@Contoso.OnMicrosoft.com",
                 "sender_id": "agent-oid",
                 "content": "self",
                 "sent_at": "2026-04-06T12:00:00Z",
@@ -175,7 +175,7 @@ class TestFilterHumanMessages:
         ]
         result = filter_human_messages(
             messages,
-            agent_upn="entra-agent@werner.ac",
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
             agent_object_id="agent-oid",
         )
         assert result == []
@@ -186,7 +186,7 @@ class TestFilterHumanMessages:
             {
                 "message_id": "m1",
                 "from": "Human User",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "human-oid",
                 "content": "hello",
                 "sent_at": "2026-04-06T12:00:00Z",
@@ -202,7 +202,7 @@ class TestFilterHumanMessages:
         ]
         result = filter_human_messages(
             messages,
-            agent_upn="entra-agent@werner.ac",
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
             agent_object_id="agent-oid",
         )
         assert len(result) == 1
@@ -211,7 +211,7 @@ class TestFilterHumanMessages:
     def test_empty_list(self) -> None:
         result = filter_human_messages(
             [],
-            agent_upn="entra-agent@werner.ac",
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
             agent_object_id="agent-oid",
         )
         assert result == []
@@ -685,7 +685,7 @@ class TestWatchTeamsReplies:
                                     "user": {
                                         "displayName": "Human",
                                         "id": "human-oid",
-                                        "userPrincipalName": "brandon@werner.ac",
+                                        "userPrincipalName": "sponsor@contoso.onmicrosoft.com",
                                     }
                                 },
                                 "body": {"content": "old msg"},
@@ -705,7 +705,7 @@ class TestWatchTeamsReplies:
                                     "user": {
                                         "displayName": "Human",
                                         "id": "human-oid",
-                                        "userPrincipalName": "brandon@werner.ac",
+                                        "userPrincipalName": "sponsor@contoso.onmicrosoft.com",
                                     }
                                 },
                                 "body": {"content": "do something"},
@@ -719,7 +719,7 @@ class TestWatchTeamsReplies:
                                         # doesn't match config; identity is UPN.
                                         "displayName": "Renamed Agent",
                                         "id": "agent-oid",
-                                        "userPrincipalName": "entra-agent@werner.ac",
+                                        "userPrincipalName": "entra-agent@contoso.onmicrosoft.com",
                                     }
                                 },
                                 "body": {"content": "sure thing"},
@@ -733,7 +733,7 @@ class TestWatchTeamsReplies:
 
         mock_acquire = MagicMock(return_value="token")
         mock_config = MagicMock()
-        mock_config.agent_user_upn = "entra-agent@werner.ac"
+        mock_config.agent_user_upn = "entra-agent@contoso.onmicrosoft.com"
         mock_config.agent_user_id = "agent-oid"
         mock_config.agent_object_id = "agent-oid"
 
