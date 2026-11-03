@@ -186,7 +186,7 @@ class TestMigrationPopulatesSeenIdsTail:
         # Mock the message-fetch surface the migration uses. It should return
         # the last N messages for the chat; only self-authored ones (by UPN)
         # count as seen-ids to persist.
-        agent_upn = "entra-agent@werner.ac"
+        agent_upn = "entra-agent@contoso.onmicrosoft.com"
 
         def fake_recent_self_ids(
             chat_id: str, agent_upn: str, agent_object_id: str

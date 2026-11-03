@@ -993,28 +993,28 @@ class TestDelegatedModeFiltering:
             {
                 "message_id": "m1",
                 "from": "Human",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "h",
                 "content": "hello",
             },
             {
                 "message_id": "m2",
                 "from": "Human",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "h",
                 "content": "world",
             },
             {
                 "message_id": "m3",
                 "from": "Human",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "h",
                 "content": "test",
             },
         ]
         result = filter_human_messages(
             messages,
-            agent_upn="entra-agent@werner.ac",
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
             agent_object_id="a",
             sent_message_ids={"m1", "m3"},
         )
@@ -1027,21 +1027,21 @@ class TestDelegatedModeFiltering:
             {
                 "message_id": "m1",
                 "from": "Human",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "h",
                 "content": "[EntraBot] automated msg",
             },
             {
                 "message_id": "m2",
                 "from": "Human",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "h",
                 "content": "normal human msg",
             },
         ]
         result = filter_human_messages(
             messages,
-            agent_upn="entra-agent@werner.ac",
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
             agent_object_id="a",
         )
         assert len(result) == 1
@@ -1053,21 +1053,21 @@ class TestDelegatedModeFiltering:
             {
                 "message_id": "m1",
                 "from": "EntraBot Agent",
-                "sender_upn": "entra-agent@werner.ac",
+                "sender_upn": "entra-agent@contoso.onmicrosoft.com",
                 "sender_id": "a",
                 "content": "hi",
             },
             {
                 "message_id": "m2",
                 "from": "Human",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "h",
                 "content": "response",
             },
         ]
         result = filter_human_messages(
             messages,
-            agent_upn="entra-agent@werner.ac",
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
             agent_object_id="a",
         )
         assert len(result) == 1
@@ -1079,7 +1079,7 @@ class TestDelegatedModeFiltering:
             {
                 "message_id": "m1",
                 "from": "Agent",
-                "sender_upn": "entra-agent@werner.ac",
+                "sender_upn": "entra-agent@contoso.onmicrosoft.com",
                 "sender_id": "a",
                 "content": "agent msg",
             },
@@ -1093,28 +1093,28 @@ class TestDelegatedModeFiltering:
             {
                 "message_id": "m3",
                 "from": "Human",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "h",
                 "content": "[EntraBot] echo",
             },
             {
                 "message_id": "m4",
                 "from": "Human",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "h",
                 "content": "sent by me",
             },
             {
                 "message_id": "m5",
                 "from": "Human",
-                "sender_upn": "brandon@werner.ac",
+                "sender_upn": "sponsor@contoso.onmicrosoft.com",
                 "sender_id": "h",
                 "content": "real human msg",
             },
         ]
         result = filter_human_messages(
             messages,
-            agent_upn="entra-agent@werner.ac",
+            agent_upn="entra-agent@contoso.onmicrosoft.com",
             agent_object_id="a",
             sent_message_ids={"m4"},
         )
