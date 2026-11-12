@@ -26,6 +26,34 @@ import pytest
 from entrabot.tools.teams import filter_human_messages
 
 
+@pytest.fixture
+def token_command(tmp_path) -> str:
+    """A persona-sati token command the server's real resolver accepts on every platform.
+
+    The tests mock ``subprocess.check_output``, but the command is resolved before that: on
+    Windows it must be an absolute path to a file that exists (or a program on PATH), and a
+    POSIX path such as ``/tmp/fake-token-cli`` is refused there before the mock is reached.
+    So it is a real file: ``.cmd`` on Windows, an executable script elsewhere.
+    """
+    import os
+    import stat
+
+    if os.name == "nt":
+        path = tmp_path / "fake-token-cli.cmd"
+        path.write_text("@echo fake.jwt.token\r\n", encoding="ascii")
+    else:
+        path = tmp_path / "fake-token-cli"
+        path.write_text("#!/bin/sh\necho fake.jwt.token\n", encoding="ascii")
+        path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return str(path)
+
+
+def test_the_fake_token_command_is_accepted_by_the_real_resolver(token_command) -> None:
+    from entrabot import mcp_server
+
+    assert mcp_server._persona_token_argv(token_command) == [token_command]
+
+
 # ---------------------------------------------------------------------------
 # _load_agent_instructions (body-then-persona architecture)
 # ---------------------------------------------------------------------------
@@ -76,14 +104,14 @@ class TestLoadAgentInstructions:
         assert "BODY_ONLY" in result
         assert "EntraBot Teams Interface" not in result
 
-    def test_body_is_prepended_to_persona(self, monkeypatch, tmp_path) -> None:
+    def test_body_is_prepended_to_persona(self, token_command, monkeypatch, tmp_path) -> None:
         """When both body and persona are available, body loads FIRST
         (before persona) so its rules can't be overridden."""
         import asyncio
         import subprocess
 
         monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
-        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/fake-token-cli")
+        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", token_command)
         monkeypatch.setattr(subprocess, "check_output", lambda *a, **kw: "fake.jwt.token\n")
 
         def _fake_run(coro):
@@ -106,14 +134,14 @@ class TestLoadAgentInstructions:
         assert body_at >= 0, "body must be present"
         assert persona_at > body_at, "body must precede persona so rules aren't overridden"
 
-    def test_persona_alone_when_body_missing(self, monkeypatch, tmp_path) -> None:
+    def test_persona_alone_when_body_missing(self, token_command, monkeypatch, tmp_path) -> None:
         """If the body file doesn't exist but persona works, return
         persona alone (legacy behavior; real deployments ship a body)."""
         import asyncio
         import subprocess
 
         monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
-        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/fake-token-cli")
+        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", token_command)
         monkeypatch.setattr(subprocess, "check_output", lambda *a, **kw: "fake.jwt.token\n")
         monkeypatch.setattr(
             asyncio,
@@ -222,13 +250,14 @@ class TestLoadAgentInstructionsPersonaSati:
 
     def test_load_instructions_uses_local_when_token_cmd_fails(
         self,
+        token_command: str,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         import subprocess
 
         monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
-        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/does-not-exist")
+        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", token_command)
 
         def _raise(*args, **kwargs):
             raise subprocess.SubprocessError("token mint blew up")
@@ -246,6 +275,7 @@ class TestLoadAgentInstructionsPersonaSati:
 
     def test_load_instructions_uses_remote_when_all_works(
         self,
+        token_command: str,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
@@ -253,7 +283,7 @@ class TestLoadAgentInstructionsPersonaSati:
         import subprocess
 
         monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
-        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/fake-token-cli")
+        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", token_command)
         monkeypatch.setattr(
             subprocess,
             "check_output",
@@ -277,6 +307,7 @@ class TestLoadAgentInstructionsPersonaSati:
 
     def test_load_instructions_uses_local_when_remote_fetch_fails(
         self,
+        token_command: str,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
@@ -284,7 +315,7 @@ class TestLoadAgentInstructionsPersonaSati:
         import subprocess
 
         monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
-        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/fake-token-cli")
+        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", token_command)
         monkeypatch.setattr(
             subprocess,
             "check_output",
@@ -312,6 +343,7 @@ class TestLoadAgentInstructionsPersonaSati:
 
     def test_persona_load_success_is_logged(
         self,
+        token_command: str,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
@@ -320,7 +352,7 @@ class TestLoadAgentInstructionsPersonaSati:
         import subprocess
 
         monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
-        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/fake-token-cli")
+        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", token_command)
         monkeypatch.setattr(subprocess, "check_output", lambda *a, **kw: "fake.jwt.token\n")
         monkeypatch.setattr(asyncio, "run", lambda c: (c.close(), "REMOTE_SYSTEM_PROMPT")[1])
 
@@ -358,6 +390,7 @@ class TestLoadAgentInstructionsPersonaSati:
 
     def test_persona_fetch_failure_is_logged(
         self,
+        token_command: str,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
@@ -366,7 +399,7 @@ class TestLoadAgentInstructionsPersonaSati:
         import subprocess
 
         monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
-        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/fake-token-cli")
+        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", token_command)
         monkeypatch.setattr(subprocess, "check_output", lambda *a, **kw: "fake.jwt.token\n")
 
         def _boom(coro):
@@ -414,6 +447,7 @@ class TestPersonaSatiHeartbeat:
 
     async def test_logs_info_on_success(
         self,
+        token_command: str,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
@@ -421,7 +455,7 @@ class TestPersonaSatiHeartbeat:
         import subprocess
 
         monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
-        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/fake-token-cli")
+        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", token_command)
         monkeypatch.setattr(subprocess, "check_output", lambda *a, **kw: "fake.jwt.token\n")
         # Stub asyncio.run inside the function if it uses it, or mock
         # the SSE client; simplest: patch the fetch helper.
@@ -446,6 +480,7 @@ class TestPersonaSatiHeartbeat:
 
     async def test_logs_warning_on_token_mint_failure(
         self,
+        token_command: str,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
@@ -453,7 +488,7 @@ class TestPersonaSatiHeartbeat:
         import subprocess
 
         monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
-        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/nope")
+        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", token_command)
 
         def _raise(*a, **kw):
             raise subprocess.SubprocessError("mint blew up")
@@ -472,6 +507,7 @@ class TestPersonaSatiHeartbeat:
 
     async def test_logs_warning_on_remote_failure(
         self,
+        token_command: str,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
@@ -479,7 +515,7 @@ class TestPersonaSatiHeartbeat:
         import subprocess
 
         monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
-        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/fake-token-cli")
+        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", token_command)
         monkeypatch.setattr(subprocess, "check_output", lambda *a, **kw: "fake.jwt.token\n")
 
         from entrabot import mcp_server
@@ -504,6 +540,7 @@ class TestPersonaSatiHeartbeat:
 
     async def test_empty_token_is_failure(
         self,
+        token_command: str,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
@@ -511,7 +548,7 @@ class TestPersonaSatiHeartbeat:
         import subprocess
 
         monkeypatch.setenv("PERSONA_SATI_MCP_URL", "https://persona.example")
-        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", "/tmp/empty-tok")
+        monkeypatch.setenv("PERSONA_SATI_MCP_TOKEN_COMMAND", token_command)
         monkeypatch.setattr(subprocess, "check_output", lambda *a, **kw: "\n")
 
         from entrabot.mcp_server import _persona_sati_heartbeat_once

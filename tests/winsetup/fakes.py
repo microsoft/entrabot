@@ -8,11 +8,48 @@ from __future__ import annotations
 
 import io
 import json
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 
+from entrabot.winsetup._winacl import ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE, Ace, Dacl
 from entrabot.winsetup.console import Console, RunRequest
+
+# The SDDL names for accounts, as Windows resolves them when it turns SDDL into a binary list.
+# LA ("this machine's built-in Administrator") is relative to the machine: see dacl_from_sddl.
+_ACCOUNT_ALIASES = {
+    "SY": "S-1-5-18",
+    "BA": "S-1-5-32-544",
+    "BU": "S-1-5-32-545",
+    "AU": "S-1-5-11",
+    "WD": "S-1-1-0",
+}
+_RIGHTS = {"FA": 0x1F01FF, "FR": 0x120089, "FW": 0x120116, "FX": 0x1200A0, "GA": 0x10000000}
+_ACE_TYPES = {"A": ACCESS_ALLOWED_ACE_TYPE, "D": ACCESS_DENIED_ACE_TYPE}
+
+
+def dacl_from_sddl(sddl: str, *, user: str = "S-1-5-21-1-2-3-1001") -> Dacl:
+    """The binary access list Windows would store for *sddl*, the way the product reads it
+    back: every account as its numeric SID (``LA`` becomes the machine's ``-500`` account,
+    the machine being *user*'s). Only the simple forms the tests write are understood:
+    ``D:[P][AI](A|D;flags;rights;;;account)...``; anything else is a test bug."""
+    match = re.fullmatch(r"D:(?P<flags>[A-Z]*)(?P<aces>(?:\([^()]*\))*)", sddl)
+    assert match, f"the fake does not understand this SDDL: {sddl!r}"
+    machine = "-".join(user.split("-")[:7])  # S-1-5-21-a-b-c
+    entries: list[Ace] = []
+    for body in re.findall(r"\(([^()]*)\)", match.group("aces")):
+        kind, flags, rights, _object, _inherited, account = body.split(";")
+        sid = {**_ACCOUNT_ALIASES, "LA": f"{machine}-500"}.get(account.upper(), account.upper())
+        entries.append(
+            Ace(
+                type=_ACE_TYPES[kind],
+                flags=0x10 if "ID" in flags else 0,
+                mask=_RIGHTS.get(rights) or int(rights, 16),
+                sid=sid,
+            )
+        )
+    return Dacl(present=True, protected="P" in match.group("flags"), entries=tuple(entries))
 
 
 @dataclass
@@ -188,8 +225,6 @@ class FakeDirectory:
 
 
 def _user_matches(user: dict[str, object], condition: str) -> bool:
-    import re
-
     def text(key: str) -> str:
         return str(user.get(key) or "")
 
@@ -221,7 +256,9 @@ class FakeWindowsAcl:
     """
 
     sid: str = "S-1-5-21-1-2-3-1001"
-    acls: dict[str, str] = field(default_factory=dict)
+    # What each file's access list was set to: SDDL text as setup wrote it, or a Dacl a test
+    # puts there directly for a shape SDDL can't easily say.
+    acls: dict[str, str | Dacl] = field(default_factory=dict)
     events: list[str] = field(
         default_factory=list
     )  # "lock <name>", "read <name>", "replace <name>"
@@ -235,23 +272,6 @@ class FakeWindowsAcl:
     def current_user_sid(self) -> str:
         return self.sid
 
-    def canonical_sid(self, text: str) -> str:
-        """What Windows does with the two-letter names SDDL uses for well-known accounts:
-        ``LA`` is this machine's built-in Administrator (the account whose SID ends -500)."""
-        if text.upper().startswith("S-1-"):
-            return text.upper()
-        machine = "-".join(self.sid.split("-")[:7])  # S-1-5-21-a-b-c
-        known = {
-            "SY": "S-1-5-18",
-            "BA": "S-1-5-32-544",
-            "BU": "S-1-5-32-545",
-            "WD": "S-1-1-0",
-            "LA": f"{machine}-500",
-        }
-        if text.upper() not in known:
-            raise OSError(f"ConvertStringSidToSidW failed for {text!r}")
-        return known[text.upper()]
-
     def set_dacl(self, path: Path, sddl: str) -> None:
         self.events.append(f"lock {Path(path).name}")
         if self.fail_set:
@@ -260,11 +280,13 @@ class FakeWindowsAcl:
             sddl = f"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1301bf;;;{self.sid})"
         self.acls[str(path)] = sddl
 
-    def read_dacl_sddl(self, path: Path) -> str:
+    def read_dacl(self, path: Path) -> Dacl:
+        """What Windows hands back: the binary list, every account as a numeric SID."""
         self.events.append(f"read {Path(path).name}")
         if self.fail_read:
             raise OSError(self.fail_read)
-        return self.acls.get(str(path), self.new_file_sddl())
+        stored = self.acls.get(str(path), self.new_file_sddl())
+        return stored if isinstance(stored, Dacl) else dacl_from_sddl(stored, user=self.sid)
 
     def install(self, monkeypatch: object) -> None:
         """Make ``entrabot.winsetup.envfile`` behave as on Windows, against this store."""

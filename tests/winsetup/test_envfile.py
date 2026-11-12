@@ -10,17 +10,18 @@ from pathlib import Path
 import pytest
 
 from entrabot.winsetup import envfile
+from entrabot.winsetup._winacl import ACCESS_ALLOWED_ACE_TYPE, Ace, Dacl
 from entrabot.winsetup.envfile import (
     EnvGuard,
     EnvLockError,
+    dacl_lock_problem,
     lock_problem,
     lock_to_current_user,
     private_sddl,
     read_env,
-    sddl_lock_problem,
     update_env,
 )
-from tests.winsetup.fakes import FakeSpawn, FakeWindowsAcl, make_console
+from tests.winsetup.fakes import FakeSpawn, FakeWindowsAcl, dacl_from_sddl, make_console
 
 
 def _write(path: Path, lines: list[str], *, newline: str = "\n", bom: bool = False) -> None:
@@ -166,12 +167,13 @@ class TestLock:
         acl.install(monkeypatch)
         path = tmp_path / ".env"
         path.write_text("A=1\n", encoding="utf-8")
-        assert "SY" in acl.read_dacl_sddl(path)  # the starting point, as measured
+        before = acl.read_dacl(path)  # the starting point, as measured
+        assert "S-1-5-18" in [entry.sid for entry in before.entries]
         lock_to_current_user(path)
         assert acl.acls[str(path)] == f"D:P(A;;0x1301bf;;;{acl.sid})"
         # Modify, not read-only: the next setup run and certificate rotation update the file.
         assert private_sddl(acl.sid) == acl.acls[str(path)]
-        assert sddl_lock_problem(acl.acls[str(path)], acl.sid) is None
+        assert dacl_lock_problem(acl.read_dacl(path), acl.sid) is None
 
     def test_windows_raises_when_the_permissions_cannot_be_set(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -212,14 +214,35 @@ class TestLock:
 
 
 SID = "S-1-5-21-1-2-3-1001"
-LOCKED_SDDL = f"O:{SID}G:S-1-5-21-1-2-3-513D:PAI(A;;0x1301bf;;;{SID})"
+SYSTEM, ADMINISTRATORS, USERS, EVERYONE = "S-1-5-18", "S-1-5-32-544", "S-1-5-32-545", "S-1-1-0"
+MODIFY, FULL, READ = 0x1301BF, 0x1F01FF, 0x120089
+INHERITED_ACE = 0x10
+
+
+def _allow(sid: str, mask: int = MODIFY, flags: int = 0) -> Ace:
+    return Ace(type=ACCESS_ALLOWED_ACE_TYPE, flags=flags, mask=mask, sid=sid)
+
+
+def _deny(sid: str, mask: int = FULL) -> Ace:
+    return Ace(type=1, flags=0, mask=mask, sid=sid)
+
+
+def _dacl(*entries: Ace, protected: bool = True) -> Dacl:
+    return Dacl(present=True, protected=protected, entries=entries)
+
+
+LOCKED = _dacl(_allow(SID))
 # What a new file in a user's project folder looks like on Windows 11 (measured): SYSTEM,
 # Administrators and the user, all EXPLICIT entries.
-EXPLICIT_SDDL = f"D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{SID})"
+EXPLICIT = _dacl(
+    _allow(SYSTEM, FULL), _allow(ADMINISTRATORS, FULL), _allow(SID, FULL), protected=False
+)
 # The same accounts as inherited entries, which is what the first fix assumed.
-INHERITED_SDDL = f"O:{SID}G:DUD:AI(A;ID;FA;;;SY)(A;ID;FA;;;BA)(A;ID;FA;;;{SID})"
+INHERITED = _dacl(
+    *(_allow(sid, FULL, INHERITED_ACE) for sid in (SYSTEM, ADMINISTRATORS, SID)), protected=False
+)
 # What "icacls /inheritance:r /grant:r <user>:M" leaves behind on such a file (measured).
-HALF_LOCKED_SDDL = f"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1301bf;;;{SID})"
+HALF_LOCKED = _dacl(_allow(SYSTEM, FULL), _allow(ADMINISTRATORS, FULL), _allow(SID))
 
 
 class TestEveryWriteIsLocked:
@@ -350,9 +373,13 @@ class TestEveryWriteIsLocked:
 
 @pytest.mark.skipif(sys.platform != "win32", reason="sets and reads real Windows permissions")
 class TestRealWindowsPermissions:
-    """No fakes: the real access list of a real file, set in-process and read back."""
+    """No fakes: the real access list of a real file, set in-process and read back.
 
-    SYSTEM, ADMINISTRATORS = "S-1-5-18", "S-1-5-32-544"
+    Everything is checked through the product's own read-back (:func:`envfile.read_dacl`),
+    which hands back every account as a numeric SID. Nothing here matches SDDL text: Windows
+    prints some accounts under two-letter names (the built-in Administrator, which a CI
+    runner may well be, as ``LA``), so text would depend on which account runs the tests.
+    """
 
     def _with_explicit_extra_entries(self, path: Path, *, protected: bool = False) -> str:
         """Give *path* explicit entries for SYSTEM and Administrators as well as the user:
@@ -366,33 +393,37 @@ class TestRealWindowsPermissions:
         path.write_text("A=1\n", encoding="utf-8")
         flags = "P" if protected else ""
         envfile._winacl.set_dacl(
-            path,
-            f"D:{flags}(A;;FA;;;{self.SYSTEM})(A;;FA;;;{self.ADMINISTRATORS})(A;;FA;;;{sid})",
+            path, f"D:{flags}(A;;FA;;;{SYSTEM})(A;;FA;;;{ADMINISTRATORS})(A;;FA;;;{sid})"
         )
-        before = sddl_lock_problem(envfile.read_sddl(path), sid)
+        before = dacl_lock_problem(envfile.read_dacl(path), sid)
         # The starting point is NOT locked: the other two accounts really are in the list.
         assert before is not None and "SYSTEM" in before and "Administrators" in before, before
         return sid
 
+    def _assert_locked_to(self, path: Path, sid: str) -> None:
+        dacl = envfile.read_dacl(path)
+        assert dacl.present and dacl.protected, dacl  # a real list, inheritance off...
+        (entry,) = dacl.entries  # ...exactly one entry...
+        assert entry.type == ACCESS_ALLOWED_ACE_TYPE, dacl
+        assert (entry.sid or "").upper() == sid.upper(), dacl  # ...for this very account...
+        assert entry.mask & MODIFY == MODIFY, dacl  # ...which can still change the file
+        assert dacl_lock_problem(dacl, sid) is None
+        assert lock_problem(path) is None
+
     def test_the_current_user_has_a_real_sid(self) -> None:
         assert envfile.current_user_sid().startswith("S-1-5-")
 
-    def test_well_known_account_names_resolve_to_their_sids(self) -> None:
-        resolve = envfile._winacl.canonical_sid
-        assert resolve("SY") == self.SYSTEM
-        assert resolve("BA") == self.ADMINISTRATORS
-        assert resolve(self.SYSTEM) == self.SYSTEM
-        sid = envfile.current_user_sid()
-        assert resolve(sid).upper() == sid.upper()
-
-    def test_the_built_in_administrators_short_name_resolves_to_its_real_sid(self) -> None:
-        # SDDL prints this account as LA; it must compare equal to S-1-5-21-...-500.
-        sid = envfile._winacl.canonical_sid("LA")
-        assert sid.startswith("S-1-5-21-") and sid.endswith("-500"), sid
-
-    def test_a_name_that_is_not_an_account_is_an_error_not_a_guess(self) -> None:
-        with pytest.raises(OSError):
-            envfile._winacl.canonical_sid("not-a-sid")
+    def test_accounts_come_back_as_numeric_sids_even_when_sddl_has_a_name_for_them(
+        self, tmp_path: Path
+    ) -> None:
+        # Written with the SDDL short names, read back as S-1-...: the comparison never
+        # depends on how Windows would print an account.
+        path = tmp_path / ".env"
+        path.write_text("A=1\n", encoding="utf-8")
+        envfile._winacl.set_dacl(path, "D:P(A;;FA;;;SY)(A;;FR;;;BA)")
+        dacl = envfile.read_dacl(path)
+        assert [entry.sid for entry in dacl.entries] == [SYSTEM, ADMINISTRATORS], dacl
+        assert dacl.protected
 
     @pytest.mark.parametrize("protected", [False, True], ids=["as-created", "half-locked"])
     def test_locking_a_file_with_explicit_extra_entries_leaves_exactly_one(
@@ -401,12 +432,7 @@ class TestRealWindowsPermissions:
         path = tmp_path / ".env"
         sid = self._with_explicit_extra_entries(path, protected=protected)
         lock_to_current_user(path)
-        after = envfile.read_sddl(path)
-        assert after.count("(") == 1, after  # exactly one entry...
-        assert after.upper().rstrip(")").endswith(sid.upper()), after  # ...for this user...
-        assert after.startswith("D:P"), after  # ...and inheritance is off
-        assert sddl_lock_problem(after, sid) is None
-        assert lock_problem(path) is None
+        self._assert_locked_to(path, sid)
 
     def test_the_user_can_still_read_and_rewrite_the_locked_file(self, tmp_path: Path) -> None:
         path = tmp_path / ".env"
@@ -425,8 +451,7 @@ class TestRealWindowsPermissions:
         sid = self._with_explicit_extra_entries(path)
         for change in ({"B": "2"}, {"C": "3"}):
             update_env(path, change)
-            after = envfile.read_sddl(path)
-            assert after.count("(") == 1 and sddl_lock_problem(after, sid) is None, after
+            self._assert_locked_to(path, sid)
 
     def test_an_ordinary_new_file_is_reported_as_not_locked(self, tmp_path: Path) -> None:
         path = tmp_path / "plain.env"
@@ -434,38 +459,14 @@ class TestRealWindowsPermissions:
         assert lock_problem(path) is not None
 
 
-class TestWellKnownAccountNames:
+class TestTheBuiltInAdministrator:
     """SDDL text does not always spell an account as S-1-...: for well-known accounts Windows
-    prints a two-letter name. The built-in Administrator (the account whose SID ends in -500)
-    appears as ``LA``. Comparing text would then say the user has no entry and that some
-    other account, "LA", has access, on a file that is in fact locked to that very user."""
+    prints a two-letter name, and the built-in Administrator (the account whose SID ends in
+    -500) appears as ``LA``. Comparing text said the user had no entry and that some other
+    account, "LA", had access, on a file that was in fact locked to that very user (seen on a
+    CI runner). The check reads the binary list instead, where every account is a SID."""
 
     ADMINISTRATOR = "S-1-5-21-1-2-3-500"
-
-    def test_text_alone_would_get_the_built_in_administrator_wrong(self) -> None:
-        assert sddl_lock_problem("D:P(A;;0x1301bf;;;LA)", self.ADMINISTRATOR) is not None
-
-    def test_names_are_turned_into_real_sids_before_comparing(self) -> None:
-        acl = FakeWindowsAcl(sid=self.ADMINISTRATOR)
-        problem = sddl_lock_problem(
-            "D:P(A;;0x1301bf;;;LA)", self.ADMINISTRATOR, resolve=acl.canonical_sid
-        )
-        assert problem is None
-
-    def test_another_well_known_account_is_still_reported_by_name(self) -> None:
-        acl = FakeWindowsAcl(sid=self.ADMINISTRATOR)
-        problem = sddl_lock_problem(
-            "D:P(A;;FA;;;BA)(A;;0x1301bf;;;LA)", self.ADMINISTRATOR, resolve=acl.canonical_sid
-        )
-        assert problem == "these also have access: Administrators"
-
-    def test_a_name_windows_cannot_resolve_counts_as_someone_else(self) -> None:
-        # Unresolvable is never quietly treated as "the user".
-        acl = FakeWindowsAcl(sid=self.ADMINISTRATOR)
-        problem = sddl_lock_problem(
-            "D:P(A;;0x1301bf;;;ZZ)", self.ADMINISTRATOR, resolve=acl.canonical_sid
-        )
-        assert problem is not None and "ZZ" in problem and "your account" in problem
 
     def test_the_lock_check_passes_for_the_built_in_administrator(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -474,7 +475,8 @@ class TestWellKnownAccountNames:
         acl.install(monkeypatch)
         path = tmp_path / ".env"
         update_env(path, {"A": "1"})
-        acl.acls[str(path)] = "D:P(A;;0x1301bf;;;LA)"  # as Windows prints it back
+        acl.acls[str(path)] = "D:P(A;;0x1301bf;;;LA)"  # however it was written...
+        assert acl.read_dacl(path).entries[0].sid == self.ADMINISTRATOR  # ...read back as a SID
         assert lock_problem(path) is None
 
     def test_the_lock_check_still_fails_when_someone_else_is_in(
@@ -485,84 +487,79 @@ class TestWellKnownAccountNames:
         path = tmp_path / ".env"
         path.write_text("A=1\n", encoding="utf-8")
         acl.acls[str(path)] = "D:P(A;;FA;;;SY)(A;;0x1301bf;;;LA)"
-        problem = lock_problem(path)
-        assert problem is not None and "SYSTEM" in problem
+        assert lock_problem(path) == "these also have access: SYSTEM"
 
 
-class TestSddl:
+class TestDaclLockProblem:
     def test_a_locked_file_has_no_problem(self) -> None:
-        assert sddl_lock_problem(LOCKED_SDDL, SID) is None
-        assert sddl_lock_problem(f"D:P(A;;FA;;;{SID})", SID.lower()) is None
-        assert sddl_lock_problem(private_sddl(SID), SID) is None
+        assert dacl_lock_problem(LOCKED, SID) is None
+        assert dacl_lock_problem(_dacl(_allow(SID, FULL)), SID.lower()) is None
+        assert dacl_lock_problem(dacl_from_sddl(private_sddl(SID)), SID) is None
+
+    def test_generic_all_counts_as_being_able_to_change_the_file(self) -> None:
+        assert dacl_lock_problem(_dacl(_allow(SID, 0x10000000)), SID) is None
 
     def test_explicit_entries_for_other_accounts_are_named(self) -> None:
-        problem = sddl_lock_problem(EXPLICIT_SDDL, SID)
+        problem = dacl_lock_problem(EXPLICIT, SID)
         assert problem is not None
         assert "SYSTEM" in problem and "Administrators" in problem
 
     def test_the_half_lock_the_old_tool_produced_is_a_problem(self) -> None:
         # Inheritance off and the user at "modify", yet SYSTEM and Administrators still in.
-        problem = sddl_lock_problem(HALF_LOCKED_SDDL, SID)
+        problem = dacl_lock_problem(HALF_LOCKED, SID)
         assert problem is not None and "SYSTEM" in problem and "Administrators" in problem
         assert "inherits" not in problem
 
     def test_inherited_permissions_are_named_precisely(self) -> None:
-        problem = sddl_lock_problem(INHERITED_SDDL, SID)
+        problem = dacl_lock_problem(INHERITED, SID)
         assert problem is not None
         assert "SYSTEM" in problem and "Administrators" in problem
         assert "inherits" in problem
 
+    def test_a_list_that_is_not_protected_is_a_problem_even_with_only_the_user(self) -> None:
+        problem = dacl_lock_problem(_dacl(_allow(SID), protected=False), SID)
+        assert problem == "it inherits permissions from its folder"
+
     def test_another_account_with_access_is_a_problem_even_without_inheritance(self) -> None:
         other = "S-1-5-21-9-9-9-500"
-        problem = sddl_lock_problem(f"D:P(A;;FA;;;{SID})(A;;FR;;;{other})", SID)
+        problem = dacl_lock_problem(_dacl(_allow(SID), _allow(other, READ)), SID)
         assert problem is not None and other in problem
 
     def test_no_entry_for_the_user_is_a_problem(self) -> None:
-        problem = sddl_lock_problem("D:P(A;;FA;;;SY)", SID)
+        problem = dacl_lock_problem(_dacl(_allow(SYSTEM, FULL)), SID)
         assert problem is not None and "your account" in problem
 
+    def test_an_entry_that_only_lets_the_user_read_is_a_problem(self) -> None:
+        # Setup and certificate rotation rewrite the file: read-only would break them.
+        problem = dacl_lock_problem(_dacl(_allow(SID, READ)), SID)
+        assert problem is not None and "change" in problem
+
     def test_a_deny_entry_for_someone_else_is_not_access(self) -> None:
-        assert sddl_lock_problem(f"D:P(D;;FA;;;WD)(A;;0x1301bf;;;{SID})", SID) is None
+        assert dacl_lock_problem(_dacl(_deny(EVERYONE), _allow(SID)), SID) is None
 
-    @pytest.mark.parametrize("garbage", ["", "nonsense", "O:BAG:BA"])
-    def test_unreadable_text_is_a_problem_not_a_pass(self, garbage: str) -> None:
-        assert sddl_lock_problem(garbage, SID) is not None
+    @pytest.mark.parametrize("kind", [5, 9, 0x0B, 0x11, 0xFF])
+    def test_an_entry_of_a_kind_setup_does_not_read_is_a_problem(self, kind: int) -> None:
+        # Object, callback and every other kind: their layout is not ACCESS_ALLOWED_ACE's,
+        # so who they let in is not known. Unknown is never a pass.
+        unknown = Ace(type=kind, flags=0, mask=FULL, sid=None)
+        problem = dacl_lock_problem(_dacl(_allow(SID), unknown), SID)
+        assert problem is not None and "cannot check" in problem
 
-    def test_a_conditional_entry_does_not_hide_the_entries_after_it(self) -> None:
-        # A callback (conditional) entry carries its condition in parentheses of its own.
-        # Read as "up to the first )", it swallows the rest of the list, and an allow entry
-        # for Users after it would go unseen.
-        sddl = f"D:P(A;;0x1301bf;;;{SID})(XD;;FA;;;WD;(Member_of {{SID(BA)}}))(A;;FR;;;BU)"
-        problem = sddl_lock_problem(sddl, SID)
-        assert problem is not None and "Users" in problem
-
-    def test_a_conditional_allow_entry_for_someone_else_is_access(self) -> None:
-        sddl = f"D:P(A;;0x1301bf;;;{SID})(XA;;FR;;;WD;(Member_of {{SID(BA)}}))"
-        problem = sddl_lock_problem(sddl, SID)
-        assert problem is not None and "Everyone" in problem
-
-    def test_an_entry_of_a_kind_setup_does_not_know_is_a_problem(self) -> None:
-        problem = sddl_lock_problem(f"D:P(A;;0x1301bf;;;{SID})(QQ;;FA;;;WD)", SID)
-        assert problem is not None
+    def test_an_allow_entry_whose_account_was_not_read_is_a_problem(self) -> None:
+        problem = dacl_lock_problem(_dacl(_allow(SID), Ace(type=0, mask=FULL, sid=None)), SID)
+        assert problem is not None and "cannot check" in problem
 
     def test_no_access_list_at_all_means_everyone_is_in(self) -> None:
-        problem = sddl_lock_problem("D:NO_ACCESS_CONTROL", SID)
+        problem = dacl_lock_problem(Dacl(present=False, protected=True), SID)
         assert problem is not None and "Everyone" in problem
 
     def test_an_empty_protected_list_is_not_a_lock_the_user_can_use(self) -> None:
-        problem = sddl_lock_problem("D:P", SID)
+        problem = dacl_lock_problem(_dacl(), SID)
         assert problem is not None and "your account" in problem
 
-    @pytest.mark.parametrize(
-        "broken", [f"D:P(A;;0x1301bf;;;{SID}", f"D:P(A;;0x1301bf;;;{SID})junk", "D:P(A;;FA)"]
-    )
-    def test_a_list_that_does_not_parse_cleanly_is_a_problem(self, broken: str) -> None:
-        assert sddl_lock_problem(broken, SID) is not None
-
-    def test_the_owner_and_group_before_the_list_are_not_read_as_entries(self) -> None:
-        # "G:DU" followed by "D:" reads "G:DUD:": the list starts at the right "D:".
-        assert sddl_lock_problem(f"O:{SID}G:DUD:P(A;;0x1301bf;;;{SID})", SID) is None
-        assert sddl_lock_problem(f"O:BAG:DDD:P(A;;FA;;;{SID})", SID) is None
+    def test_everyone_and_users_are_named_in_words(self) -> None:
+        problem = dacl_lock_problem(_dacl(_allow(SID), _allow(USERS, READ), _allow(EVERYONE)), SID)
+        assert problem == "these also have access: Users, Everyone"
 
 
 class TestLockProblem:
@@ -573,19 +570,19 @@ class TestLockProblem:
         acl.install(monkeypatch)
         path = tmp_path / ".env"
         path.write_text("A=1\n", encoding="utf-8")
-        acl.acls[str(path)] = LOCKED_SDDL
+        acl.acls[str(path)] = LOCKED
         assert lock_problem(path) is None
         assert acl.events == ["read .env"]
 
-    @pytest.mark.parametrize("sddl", [EXPLICIT_SDDL, HALF_LOCKED_SDDL, INHERITED_SDDL])
+    @pytest.mark.parametrize("dacl", [EXPLICIT, HALF_LOCKED, INHERITED])
     def test_windows_reports_what_is_wrong(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sddl: str
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dacl: Dacl
     ) -> None:
         acl = FakeWindowsAcl()
         acl.install(monkeypatch)
         path = tmp_path / ".env"
         path.write_text("A=1\n", encoding="utf-8")
-        acl.acls[str(path)] = sddl
+        acl.acls[str(path)] = dacl
         problem = lock_problem(path)
         assert problem is not None and "Administrators" in problem
 

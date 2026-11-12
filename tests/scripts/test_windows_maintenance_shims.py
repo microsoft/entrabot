@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._powershell import shell_env
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEPLOY = REPO_ROOT / "scripts" / "deploy-windows.ps1"
 TEARDOWN = REPO_ROOT / "scripts" / "teardown-windows.ps1"
@@ -67,7 +69,7 @@ def _ps(shell: str, script: Path, expression: str) -> object:
         "$ErrorActionPreference = 'Stop'; . $env:EB_SCRIPT; "
         f"ConvertTo-Json -Compress -Depth 4 -InputObject ({expression})"
     )
-    env = dict(os.environ)
+    env = shell_env(shell)
     env["EB_SCRIPT"] = str(script)
     env["EB_ROOT"] = r"C:\Users\Jo O'Brien\entrabot"
     env["POWERSHELL_TELEMETRY_OPTOUT"] = "1"
@@ -226,7 +228,7 @@ class TestParses:
             "$env:EB_SCRIPT, [ref]$tokens, [ref]$errors); "
             "ConvertTo-Json -Compress -InputObject @($errors | ForEach-Object { $_.ToString() })"
         )
-        env = dict(os.environ)
+        env = shell_env(shell)
         env["EB_SCRIPT"] = str(path)
         result = subprocess.run(
             [shell, "-NoProfile", "-NonInteractive", "-Command", command],
@@ -353,7 +355,7 @@ class _Folder:
             python.chmod(0o755)
 
     def run(self, *args: str, **extra_env: str) -> subprocess.CompletedProcess[str]:
-        env = dict(os.environ)
+        env = shell_env(self.shell)
         env.update(OS="Windows_NT", FAKE_ARGV=str(self.argv), POWERSHELL_TELEMETRY_OPTOUT="1")
         env.pop("PYTHONUTF8", None)
         env.pop("PYTHONIOENCODING", None)

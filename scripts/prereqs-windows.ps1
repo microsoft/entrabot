@@ -46,6 +46,27 @@ param(
 # not a console (SSH, CI, a captured run), and its progress bar slows downloads badly.
 $ProgressPreference = 'SilentlyContinue'
 
+# Windows PowerShell started from a PowerShell 7 terminal through anything other than
+# PowerShell 7 itself (cmd.exe, Python, ...) keeps PowerShell 7's module paths, resolves
+# its in-box modules (Microsoft.PowerShell.Utility, ...) to versions it cannot load, and
+# then cannot find Write-Host or Get-FileHash (about_PSModulePath, "Starting Windows
+# PowerShell from PowerShell 7"). So under Windows PowerShell, put back its own default
+# locations for this process, before the first cmdlet that needs a module. No cmdlet is
+# used here: even Join-Path lives in a module. PowerShell 7 builds its own; nothing to do.
+if ($PSVersionTable.PSVersion.Major -lt 6) {
+    $windowsPowerShellModulePaths = @()
+    $documentsFolder = [Environment]::GetFolderPath('MyDocuments')
+    if ($documentsFolder) {
+        $windowsPowerShellModulePaths += [System.IO.Path]::Combine($documentsFolder, 'WindowsPowerShell\Modules')
+    }
+    $programFilesFolder = [Environment]::GetFolderPath('ProgramFiles')
+    if ($programFilesFolder) {
+        $windowsPowerShellModulePaths += [System.IO.Path]::Combine($programFilesFolder, 'WindowsPowerShell\Modules')
+    }
+    $windowsPowerShellModulePaths += [System.IO.Path]::Combine($PSHOME, 'Modules')
+    $env:PSModulePath = $windowsPowerShellModulePaths -join ';'
+}
+
 # Used when the latest release cannot be looked up (GitHub's API is rate limited).
 $PinnedGitVersion = '2.56.1'
 # Git for Windows releases are signed by the project's maintainer.

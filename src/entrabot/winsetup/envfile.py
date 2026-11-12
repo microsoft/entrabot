@@ -16,7 +16,8 @@ modify. Removing inheritance and granting the user is not enough: a new file in 
 folder carries SYSTEM and Administrators as explicit entries, which that leaves in place
 (see ``_winacl``). It is done in-process, so a write starts no other program. Whether a file
 really is restricted is answered by reading its access list back (:func:`lock_problem`),
-never by the fact that locking returned.
+never by the fact that locking returned. The read-back is the binary list, every account a
+numeric SID, so it can't be fooled by the short names SDDL text gives some accounts.
 """
 
 from __future__ import annotations
@@ -24,15 +25,15 @@ from __future__ import annotations
 import contextlib
 import locale
 import os
-import re
 import stat
 import sys
 import tempfile
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from entrabot.winsetup import _winacl
+from entrabot.winsetup._winacl import ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE, Dacl
 from entrabot.winsetup.console import Console
 
 
@@ -153,89 +154,32 @@ def update_env(
 
 
 MODIFY_RIGHTS = "0x1301bf"  # read, write, execute, delete: what icacls calls (M)
-# The well-known accounts a folder's permissions usually name, in SDDL shorthand.
-_SDDL_NAMES = {
-    "SY": "SYSTEM",
-    "BA": "Administrators",
-    "BU": "Users",
-    "AU": "Authenticated Users",
-    "WD": "Everyone",
-    "IU": "Interactive users",
-    "CO": "Creator Owner",
+_MODIFY_MASK = int(MODIFY_RIGHTS, 16)
+# How the generic rights map onto a file's own (FILE_GENERIC_READ, ..., FILE_ALL_ACCESS).
+_GENERIC_FILE_RIGHTS = {
+    0x80000000: 0x120089,  # GENERIC_READ
+    0x40000000: 0x120116,  # GENERIC_WRITE
+    0x20000000: 0x1200A0,  # GENERIC_EXECUTE
+    0x10000000: 0x1F01FF,  # GENERIC_ALL
+}
+# The well-known accounts a folder's permissions usually name, by SID.
+_WELL_KNOWN_NAMES = {
     "S-1-5-18": "SYSTEM",
     "S-1-5-32-544": "Administrators",
     "S-1-5-32-545": "Users",
     "S-1-5-11": "Authenticated Users",
     "S-1-1-0": "Everyone",
+    "S-1-5-4": "Interactive users",
+    "S-1-3-0": "Creator Owner",
 }
-_SDDL_FLAGS = re.compile(r"[A-Z_]*")
-# The kinds of entry an access list (DACL) can hold, by their SDDL names. "X" and "Z" are the
-# conditional (callback) kinds, whose condition is in parentheses of its own.
-_SDDL_ALLOW = frozenset({"A", "OA", "XA", "ZA"})
-_SDDL_DENY = frozenset({"D", "OD", "XD"})
 
 
-@dataclass(frozen=True)
-class _Dacl:
-    """An access list as setup checks it: inheritance off or not, and who is allowed in."""
-
-    protected: bool
-    allowed: tuple[str, ...]  # who is allowed in, as SDDL prints them (a SID or a 2-letter name)
-    unknown: int = 0  # entries of a kind setup does not know, so can't vouch for
-    everyone: bool = False  # no access list at all (a NULL DACL): nothing is restricted
-
-
-def _sddl_entries(text: str) -> list[str] | None:
-    """The ``(...)`` entries at the start of *text*, nested parentheses kept whole. None when
-    anything else is there, or a parenthesis is left open: half-read is never a pass."""
-    entries: list[str] = []
-    index = 0
-    while index < len(text) and text[index] == "(":
-        depth, start = 0, index
-        while index < len(text):
-            depth += {"(": 1, ")": -1}.get(text[index], 0)
-            index += 1
-            if depth == 0:
-                break
-        if depth != 0:
-            return None
-        entries.append(text[start + 1 : index - 1])
-    # Only a system access list (SACL, "S:") may follow, and it is not about who can read.
-    if index < len(text) and not text.startswith("S:", index):
-        return None
-    return entries
-
-
-def _parse_sddl_dacl(sddl: str) -> _Dacl | None:
-    """The access list in *sddl*, or None when it can't be read with certainty.
-
-    The owner and group come first and never contain a colon, so the first ``D:`` is where the
-    access list starts (``G:DUD:P...`` is the group DU, then the list).
-    """
-    start = (sddl or "").find("D:")
-    if start < 0:
-        return None
-    rest = sddl[start + 2 :]
-    flags_match = _SDDL_FLAGS.match(rest)
-    flags = flags_match.group(0) if flags_match else ""
-    entries = _sddl_entries(rest[len(flags) :])
-    if entries is None:
-        return None
-    if "NO_ACCESS_CONTROL" in flags:
-        return _Dacl(protected=False, allowed=(), everyone=True)
-    allowed: list[str] = []
-    unknown = 0
-    for entry in entries:
-        # type;flags;rights;object;inherited object;account[;condition]
-        parts = entry.split(";", 6)
-        if len(parts) < 6 or not parts[5]:
-            return None
-        kind = parts[0].upper()
-        if kind in _SDDL_ALLOW:
-            allowed.append(parts[5])
-        elif kind not in _SDDL_DENY:
-            unknown += 1  # an entry setup can't interpret is never assumed harmless
-    return _Dacl(protected="P" in flags, allowed=tuple(allowed), unknown=unknown)
+def _file_rights(mask: int) -> int:
+    """*mask* with any generic rights replaced by the file rights they stand for."""
+    for generic, specific in _GENERIC_FILE_RIGHTS.items():
+        if mask & generic:
+            mask = (mask & ~generic) | specific
+    return mask
 
 
 def _is_windows() -> bool:
@@ -293,71 +237,61 @@ def lock_to_current_user(
         raise EnvLockError(f"Could not restrict {path.name} to your account: {exc}") from exc
 
 
-def read_sddl(
+def read_dacl(
     path: Path, *, console: Console | None = None, env: Mapping[str, str] | None = None
-) -> str:
-    """The file's access list as text (SDDL), which names accounts by SID and does not change
-    with the display language. Windows only. Raises :class:`EnvLockError` when it can't be
-    read."""
+) -> Dacl:
+    """The file's access list as Windows stores it: every entry, every account as a numeric
+    SID, and whether inheritance is off. Windows only. Raises :class:`EnvLockError` when it
+    can't be read."""
     if not _is_windows():
         raise EnvLockError("Only a Windows file has an access list to read.")
     try:
-        return _winacl.read_dacl_sddl(path)
+        return _winacl.read_dacl(path)
     except OSError as exc:
         raise EnvLockError(str(exc)) from exc
 
 
-def sddl_lock_problem(
-    sddl: str, sid: str, *, resolve: Callable[[str], str] | None = None
-) -> str | None:
-    """Why the permissions in *sddl* are not "this user only", or None when they are.
+def dacl_lock_problem(dacl: Dacl, sid: str) -> str | None:
+    """Why *dacl* is not "this user only", or None when it is.
 
-    Locked means: inheritance is switched off, the user has an entry of their own, and nobody
-    else is allowed in.
+    Locked means: inheritance is switched off, the user has an allow entry of their own that
+    lets them change the file (setup and certificate rotation rewrite it), and nobody else is
+    allowed in. A deny entry is not access. Accounts are compared as numeric SIDs, which is
+    how :func:`read_dacl` hands every one of them back.
 
-    Accounts are compared as SIDs, never as text. SDDL prints well-known accounts under
-    two-letter names (the built-in Administrator is ``LA``), so the name in the text and the
-    user's SID can be the same account spelled differently. *resolve* turns such a name into
-    its SID (``_winacl.canonical_sid`` on Windows). A name it can't resolve is somebody else:
-    unknown never counts as the user.
-
-    The whole list is read, a conditional entry's own parentheses included, so no entry can
-    hide the ones after it. A list that can't be read with certainty, an entry of a kind this
-    does not know, and a missing list (everyone allowed) are all problems, never a pass.
+    A missing list (everyone allowed), and an entry whose account could not be read or whose
+    kind is not plain allow/deny, are problems, never a pass.
     """
-    dacl = _parse_sddl_dacl(sddl)
-    if dacl is None:
-        return "its permissions could not be understood"
-    if dacl.everyone:
+    if not dacl.present:
         return "it has no access list at all, so Everyone can open it"
-
-    def as_sid(trustee: str) -> str:
-        if resolve is None or trustee.upper().startswith("S-1-"):
-            return trustee.upper()
-        try:
-            return resolve(trustee).upper()
-        except OSError:
-            return trustee.upper()
-
-    mine = False
+    mine = 0
+    has_entry = False
     others: list[str] = []
-    for trustee in dacl.allowed:
-        account = as_sid(trustee)
-        if account == sid.upper():
-            mine = True
+    unknown = 0
+    for entry in dacl.entries:
+        if entry.sid is None or entry.type not in (ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE):
+            unknown += 1  # an entry setup can't interpret is never assumed harmless
             continue
-        name = _SDDL_NAMES.get(trustee.upper()) or _SDDL_NAMES.get(account) or trustee
+        if entry.type == ACCESS_DENIED_ACE_TYPE:
+            continue
+        if entry.sid.upper() == sid.upper():
+            has_entry = True
+            mine |= _file_rights(entry.mask)
+            continue
+        name = _WELL_KNOWN_NAMES.get(entry.sid.upper(), entry.sid)
         if name not in others:
             others.append(name)
     problems: list[str] = []
     if others:
         problems.append(f"these also have access: {', '.join(others)}")
-    if dacl.unknown:
-        problems.append(f"it has {dacl.unknown} entry(s) of a kind setup cannot check")
+    if unknown:
+        problems.append(f"it has {unknown} entry(s) of a kind setup cannot check")
     if not dacl.protected:
         problems.append("it inherits permissions from its folder")
-    if not mine:
+    if not has_entry:
         problems.append("your account has no entry of its own")
+    elif mine & _MODIFY_MASK != _MODIFY_MASK:
+        problems.append("your account's entry does not let it change the file")
     return "; ".join(problems) or None
 
 
@@ -382,7 +316,7 @@ def lock_problem(
         return None if mode & 0o077 == 0 else f"other accounts can open it (mode {mode:o})"
     try:
         sid = current_user_sid()
-        sddl = read_sddl(path)
+        dacl = read_dacl(path)
     except EnvLockError as exc:
         return f"its permissions could not be read ({exc})"
-    return sddl_lock_problem(sddl, sid, resolve=_winacl.canonical_sid)
+    return dacl_lock_problem(dacl, sid)

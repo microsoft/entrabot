@@ -2,16 +2,21 @@
 
 What this can show without Windows: every function the module calls has its argument and
 return types declared (and is called with that many arguments), everything Windows would
-allocate is handed back with ``LocalFree`` exactly once, on the error paths too, and an
-account SDDL prints as a two-letter name is compared as its real SID. What it can't show is
-that Windows behaves as the fake does; ``tests/winsetup/test_envfile.py`` has the win32-only
-tests for that.
+allocate is handed back with ``LocalFree`` exactly once, on the error paths too, and nothing
+Windows only lends (the access list inside a descriptor, an entry inside the list) is freed.
+
+The fake lays the access list out in memory the way winnt.h documents it (an ``ACL`` header,
+then ``ACCESS_ALLOWED_ACE``/``ACCESS_DENIED_ACE`` entries whose SID starts at byte 8, every
+SID in its binary form), so the module really walks bytes: a wrong offset reads garbage and
+the fake's SID decoder refuses it. What it can't show is that Windows behaves as the fake
+does; ``tests/winsetup/test_envfile.py`` has the win32-only tests for that.
 """
 
 from __future__ import annotations
 
 import ctypes
 import re
+import struct
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -19,8 +24,12 @@ from typing import Any
 import pytest
 
 from entrabot.winsetup import _winacl, envfile
+from entrabot.winsetup._winacl import ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE, Ace, Dacl
+from tests.winsetup.fakes import dacl_from_sddl
 
-USER = "S-1-5-21-1-2-3-500"  # the built-in Administrator: SDDL prints it as LA
+USER = "S-1-5-21-1-2-3-500"  # the built-in Administrator: SDDL would print it as LA
+SYSTEM, ADMINISTRATORS, EVERYONE = "S-1-5-18", "S-1-5-32-544", "S-1-1-0"
+MODIFY, FULL = 0x1301BF, 0x1F01FF
 _UNSET = object()
 
 
@@ -62,11 +71,42 @@ def _out(ref: Any, value: int) -> None:
     ref._obj.value = value  # what Windows does with a pointer it was handed by reference
 
 
+def _address(arg: Any) -> int:
+    """The address a pointer argument points at, however the module spelled it."""
+    if hasattr(arg, "_obj"):  # ctypes.byref(...)
+        return ctypes.addressof(arg._obj)
+    return int(_value(arg) or 0)
+
+
+def _encode_sid(text: str) -> bytes:
+    """A SID in its binary form (winnt.h ``SID``): revision, count, 48-bit big-endian
+    authority, then each sub-authority as a little-endian DWORD."""
+    parts = text.split("-")
+    assert parts[0].upper() == "S" and parts[1] == "1", text
+    authority, subs = int(parts[2]), [int(part) for part in parts[3:]]
+    return (
+        bytes([1, len(subs)])
+        + authority.to_bytes(6, "big")
+        + b"".join(struct.pack("<I", sub) for sub in subs)
+    )
+
+
+def _decode_sid(address: int) -> str:
+    revision, count = ctypes.string_at(address, 2)
+    assert revision == 1 and count <= 15, f"not a SID at {address}: {revision=} {count=}"
+    raw = ctypes.string_at(address, 8 + 4 * count)
+    authority = int.from_bytes(raw[2:8], "big")
+    subs = struct.unpack(f"<{count}I", raw[8:])
+    return "-".join(["S", "1", str(authority), *map(str, subs)])
+
+
+SE_DACL_PRESENT, SE_SELF_RELATIVE = 0x0004, 0x8000
+_DACL_OFFSET = 20  # a self-relative SECURITY_DESCRIPTOR header is 20 bytes; the DACL follows
+
+
 class FakeWindows:
     """advapi32 and kernel32, in memory. ``live`` holds what Windows allocated and expects
     back through LocalFree; ``freed`` is every LocalFree call, in order."""
-
-    ALIASES = {"SY": "S-1-5-18", "BA": "S-1-5-32-544", "LA": USER}
 
     def __init__(self) -> None:
         self.live: dict[int, Any] = {}
@@ -74,14 +114,15 @@ class FakeWindows:
         self.closed: list[int] = []
         self.last_error = 0
         self.fail: set[str] = set()
-        self.files: dict[str, str] = {}
+        self.sid_strings_before_failure: int | None = None  # ConvertSidToStringSidW then fails
+        self.sid_strings = 0
+        self.files: dict[str, str | Dacl] = {}  # each file's list: SDDL as written, or a Dacl
         self.applied: list[tuple[str, int]] = []
-        self._sid_at: dict[int, str] = {}
+        self.ace_size_override: dict[int, int] = {}  # entry index -> AceSize to claim
         self._descriptor_at: dict[int, str] = {}
         self._keep: list[Any] = []
-        user_sid = ctypes.create_string_buffer(16)
+        user_sid = ctypes.create_string_buffer(_encode_sid(USER))
         self._keep.append(user_sid)
-        self._sid_at[ctypes.addressof(user_sid)] = USER
         self.user_sid_address = ctypes.addressof(user_sid)
 
     # memory Windows hands out
@@ -132,21 +173,25 @@ class FakeWindows:
         _winacl._TokenUser.from_buffer(buffer).User.Sid = self.user_sid_address
         return 1
 
-    def ConvertStringSidToSidW(self, text: str, sid: Any) -> int:  # noqa: N802
-        resolved = self.ALIASES.get(text.upper(), text if text.upper().startswith("S-1-") else "")
-        if not resolved or self._failing("ConvertStringSidToSidW", 1337):
-            self.last_error = 1337
-            return 0
-        address = self._alloc()
-        self._sid_at[address] = resolved
-        _out(sid, address)
-        return 1
-
     def ConvertSidToStringSidW(self, sid: Any, text: Any) -> int:  # noqa: N802
         if self._failing("ConvertSidToStringSidW"):
             return 0
-        _out(text, self._alloc_text(self._sid_at[_value(sid) or 0]))
+        if (
+            self.sid_strings_before_failure is not None
+            and self.sid_strings >= self.sid_strings_before_failure
+        ):
+            self.last_error = 1337
+            return 0
+        self.sid_strings += 1
+        _out(text, self._alloc_text(_decode_sid(_address(sid))))
         return 1
+
+    def IsValidSid(self, sid: Any) -> int:  # noqa: N802
+        revision, count = ctypes.string_at(_address(sid), 2)
+        return int(revision == 1 and count <= 15)
+
+    def GetLengthSid(self, sid: Any) -> int:  # noqa: N802
+        return 8 + 4 * ctypes.string_at(_address(sid), 2)[1]
 
     def ConvertStringSecurityDescriptorToSecurityDescriptorW(  # noqa: N802
         self, sddl: str, revision: int, descriptor: Any, size: Any
@@ -192,20 +237,72 @@ class FakeWindows:
         sacl: Any,
         descriptor: Any,
     ) -> int:
+        """A self-relative descriptor with the DACL laid out after its header, in one block
+        Windows allocated, so only the descriptor itself goes back through LocalFree."""
+        assert kind == _winacl.SE_FILE_OBJECT
+        assert information == _winacl.DACL_SECURITY_INFORMATION
         if path not in self.files:
             return 2  # ERROR_FILE_NOT_FOUND
-        address = self._alloc()
-        self._descriptor_at[address] = self.files[path]
+        stored = self.files[path]
+        parsed = stored if isinstance(stored, Dacl) else dacl_from_sddl(stored, user=USER)
+        control = SE_SELF_RELATIVE | (SE_DACL_PRESENT if parsed.present else 0)
+        if parsed.protected:
+            control |= _winacl.SE_DACL_PROTECTED
+        acl = self._acl_bytes(parsed.entries) if parsed.present else b""
+        header = struct.pack("<BBHIIII", 1, 0, control, 0, 0, 0, _DACL_OFFSET if acl else 0)
+        address = self._alloc(len(header) + len(acl) + 8)
+        ctypes.memmove(address, header + acl, len(header) + len(acl))
         _out(descriptor, address)
-        _out(dacl, address + 8)
+        _out(dacl, address + _DACL_OFFSET if acl else 0)  # NULL: no access list at all
         return 0
 
-    def ConvertSecurityDescriptorToStringSecurityDescriptorW(  # noqa: N802
-        self, descriptor: Any, revision: int, information: int, text: Any, size: Any
+    def _acl_bytes(self, entries: tuple[Ace, ...]) -> bytes:
+        body = b""
+        for index, entry in enumerate(entries):
+            if entry.sid is None:  # some other kind: a GUID-sized body nobody should parse
+                rest = struct.pack("<I", entry.mask) + b"\xee" * 16
+            else:
+                rest = struct.pack("<I", entry.mask) + _encode_sid(entry.sid)
+            rest += b"\0" * (-len(rest) % 4)  # entries are DWORD-aligned
+            size = self.ace_size_override.get(index, 4 + len(rest))
+            body += struct.pack("<BBH", entry.type, entry.flags, size) + rest
+        return struct.pack("<BBHHH", 2, 0, 8 + len(body), len(entries), 0) + body
+
+    def GetSecurityDescriptorControl(  # noqa: N802
+        self, descriptor: Any, control: Any, revision: Any
     ) -> int:
-        if self._failing("ConvertSecurityDescriptorToStringSecurityDescriptorW"):
+        if self._failing("GetSecurityDescriptorControl"):
             return 0
-        _out(text, self._alloc_text(self._descriptor_at[_value(descriptor) or 0]))
+        address = _value(descriptor)
+        assert address in self.live, "GetSecurityDescriptorControl on something else"
+        revision_byte, _, word = struct.unpack("<BBH", ctypes.string_at(address, 4))
+        control._obj.value = word
+        revision._obj.value = revision_byte
+        return 1
+
+    def GetAclInformation(  # noqa: N802
+        self, acl: Any, information: Any, length: int, cls: int
+    ) -> int:
+        if self._failing("GetAclInformation"):
+            return 0
+        assert cls == 2, "AclSizeInformation is class 2"
+        assert length == ctypes.sizeof(_winacl._AclSizeInformation) == 12
+        _, _, size, count, _ = struct.unpack("<BBHHH", ctypes.string_at(_value(acl), 8))
+        ctypes.memmove(_address(information), struct.pack("<III", count, size, 0), 12)
+        return 1
+
+    def GetAce(self, acl: Any, index: int, ace: Any) -> int:  # noqa: N802
+        if self._failing("GetAce"):
+            return 0
+        start = _value(acl)
+        _, _, _, count, _ = struct.unpack("<BBHHH", ctypes.string_at(start, 8))
+        if not 0 <= index < count:
+            self.last_error = 87  # ERROR_INVALID_PARAMETER
+            return 0
+        address = start + 8
+        for _ in range(index):
+            address += struct.unpack("<H", ctypes.string_at(address + 2, 2))[0]
+        _out(ace, address)
         return 1
 
     def GetCurrentProcess(self) -> int:  # noqa: N802
@@ -250,27 +347,20 @@ class TestPrototypes:
             assert declared.argtypes is not None, f"{dll_name}.{function}.argtypes"
             assert declared.restype is not _UNSET, f"{dll_name}.{function}.restype"
 
+    def test_the_read_back_never_turns_the_list_into_text(self) -> None:
+        # SDDL text is where accounts get their two-letter names; the read-back avoids it.
+        source = Path(_winacl.__file__).read_text(encoding="utf-8")
+        assert "ConvertSecurityDescriptorToStringSecurityDescriptor" not in source
 
-class TestCanonicalSid:
-    def test_a_two_letter_name_becomes_its_sid_and_both_allocations_are_freed(
-        self, windows: FakeWindows
-    ) -> None:
-        assert _winacl.canonical_sid("LA") == USER
-        assert _winacl.canonical_sid("sy") == "S-1-5-18"
-        assert len(windows.live) == 4 and windows.leaked() == set()
-
-    def test_a_name_that_is_no_account_is_an_error_and_nothing_leaks(
-        self, windows: FakeWindows
-    ) -> None:
-        with pytest.raises(OSError, match="ConvertStringSidToSidW"):
-            _winacl.canonical_sid("ZZ")
-        assert windows.leaked() == set()
-
-    def test_the_sid_is_freed_even_when_printing_it_fails(self, windows: FakeWindows) -> None:
-        windows.fail.add("ConvertSidToStringSidW")
-        with pytest.raises(OSError, match="ConvertSidToStringSidW"):
-            _winacl.canonical_sid("BA")
-        assert len(windows.live) == 1 and windows.leaked() == set()
+    def test_the_structures_have_the_documented_layout(self) -> None:
+        # winnt.h: ACE_HEADER is BYTE, BYTE, WORD; ACCESS_ALLOWED_ACE/ACCESS_DENIED_ACE are
+        # the header, a DWORD mask, then the SID from byte 8; ACL_SIZE_INFORMATION is three
+        # DWORDs. None holds a pointer, so the layout is the same on 32- and 64-bit Windows.
+        assert ctypes.sizeof(_winacl._AceHeader) == 4
+        assert _winacl._AccessAce.Mask.offset == 4
+        assert _winacl._AccessAce.SidStart.offset == 8
+        assert ctypes.sizeof(_winacl._AclSizeInformation) == 12
+        assert ctypes.sizeof(_winacl._TokenUser) == 2 * ctypes.sizeof(ctypes.c_void_p)
 
 
 class TestCurrentUserSid:
@@ -285,7 +375,7 @@ class TestCurrentUserSid:
         assert windows.closed == [4242] and windows.leaked() == set()
 
 
-class TestSetAndRead:
+class TestSetDacl:
     def test_a_lock_is_applied_protected_and_the_descriptor_is_freed(
         self, windows: FakeWindows, tmp_path: Path
     ) -> None:
@@ -305,24 +395,100 @@ class TestSetAndRead:
             _winacl.set_dacl(tmp_path / ".env", f"D:P(A;;0x1301bf;;;{USER})")
         assert windows.leaked() == set()
 
-    def test_reading_back_frees_the_descriptor_and_the_text(
+
+class TestReadDacl:
+    def _read(self, windows: FakeWindows, tmp_path: Path, stored: str | Dacl) -> Dacl:
+        path = tmp_path / ".env"
+        windows.files[str(path)] = stored
+        return _winacl.read_dacl(path)
+
+    def test_a_locked_file_reads_back_as_one_entry_with_its_numeric_sid(
         self, windows: FakeWindows, tmp_path: Path
     ) -> None:
-        path = tmp_path / ".env"
-        windows.files[str(path)] = "D:P(A;;0x1301bf;;;LA)"
-        assert _winacl.read_dacl_sddl(path) == "D:P(A;;0x1301bf;;;LA)"
+        # Written as LA, read back as S-1-5-21-...-500: no alias ever reaches the comparison.
+        dacl = self._read(windows, tmp_path, "D:P(A;;0x1301bf;;;LA)")
+        assert dacl == Dacl(
+            present=True,
+            protected=True,
+            entries=(Ace(type=ACCESS_ALLOWED_ACE_TYPE, flags=0, mask=MODIFY, sid=USER),),
+        )
+        # The descriptor and the one SID string were freed; the list and entry inside the
+        # descriptor were not (LocalFree would have refused them).
         assert len(windows.live) == 2 and windows.leaked() == set()
 
-    @pytest.mark.parametrize("failure", ["missing", "convert"])
-    def test_a_read_that_fails_is_an_error_and_leaks_nothing(
+    def test_every_entry_is_read_in_order_with_its_kind_flags_and_rights(
+        self, windows: FakeWindows, tmp_path: Path
+    ) -> None:
+        dacl = self._read(windows, tmp_path, "D:AI(D;;FA;;;WD)(A;ID;FA;;;SY)(A;;FR;;;BA)")
+        assert dacl.protected is False
+        assert dacl.entries == (
+            Ace(type=ACCESS_DENIED_ACE_TYPE, flags=0, mask=FULL, sid=EVERYONE),
+            Ace(type=ACCESS_ALLOWED_ACE_TYPE, flags=0x10, mask=FULL, sid=SYSTEM),
+            Ace(type=ACCESS_ALLOWED_ACE_TYPE, flags=0, mask=0x120089, sid=ADMINISTRATORS),
+        )
+        assert windows.sid_strings == 3 and windows.leaked() == set()
+
+    @pytest.mark.parametrize("kind", [5, 9, 0x0B, 0x11])
+    def test_an_entry_of_another_kind_comes_back_with_no_account(
+        self, windows: FakeWindows, tmp_path: Path, kind: int
+    ) -> None:
+        # Object (5), callback (9, 0x0B) and other kinds lay out their bodies differently:
+        # reading a SID at byte 8 of them would be a guess. They come back unread.
+        stored = Dacl(
+            present=True,
+            protected=True,
+            entries=(Ace(type=0, mask=MODIFY, sid=USER), Ace(type=kind, mask=FULL, sid=None)),
+        )
+        dacl = self._read(windows, tmp_path, stored)
+        assert dacl.entries[1] == Ace(type=kind, flags=0, mask=FULL, sid=None)
+        assert windows.sid_strings == 1 and windows.leaked() == set()
+
+    def test_an_entry_too_short_to_hold_its_sid_is_not_read_as_an_account(
+        self, windows: FakeWindows, tmp_path: Path
+    ) -> None:
+        windows.ace_size_override[0] = 12  # header + mask + 4 bytes: no room for any SID
+        dacl = self._read(windows, tmp_path, f"D:P(A;;0x1301bf;;;{USER})")
+        assert dacl.entries[0].sid is None
+        assert windows.leaked() == set()
+
+    def test_no_access_list_at_all_is_reported_as_such(
+        self, windows: FakeWindows, tmp_path: Path
+    ) -> None:
+        dacl = self._read(windows, tmp_path, Dacl(present=False, protected=False))
+        assert dacl == Dacl(present=False, protected=False, entries=())
+        assert windows.leaked() == set()
+
+    def test_an_empty_list_is_present_with_no_entries(
+        self, windows: FakeWindows, tmp_path: Path
+    ) -> None:
+        dacl = self._read(windows, tmp_path, "D:P")
+        assert dacl == Dacl(present=True, protected=True, entries=())
+
+    @pytest.mark.parametrize(
+        "failure", ["GetSecurityDescriptorControl", "GetAclInformation", "GetAce"]
+    )
+    def test_a_step_that_fails_is_an_error_and_the_descriptor_is_still_freed(
         self, windows: FakeWindows, tmp_path: Path, failure: str
     ) -> None:
-        path = tmp_path / ".env"
-        if failure == "convert":
-            windows.files[str(path)] = "D:P(A;;FA;;;SY)"
-            windows.fail.add("ConvertSecurityDescriptorToStringSecurityDescriptorW")
-        with pytest.raises(OSError):
-            _winacl.read_dacl_sddl(path)
+        windows.fail.add(failure)
+        with pytest.raises(OSError, match=failure):
+            self._read(windows, tmp_path, f"D:P(A;;0x1301bf;;;{USER})")
+        assert windows.leaked() == set()
+
+    def test_a_sid_that_cannot_be_printed_frees_the_ones_already_printed(
+        self, windows: FakeWindows, tmp_path: Path
+    ) -> None:
+        windows.sid_strings_before_failure = 1
+        with pytest.raises(OSError, match="ConvertSidToStringSidW"):
+            self._read(windows, tmp_path, f"D:P(A;;FA;;;SY)(A;;0x1301bf;;;{USER})")
+        assert windows.sid_strings == 1 and len(windows.live) == 2
+        assert windows.leaked() == set()
+
+    def test_a_file_that_is_not_there_is_an_error_and_leaks_nothing(
+        self, windows: FakeWindows, tmp_path: Path
+    ) -> None:
+        with pytest.raises(OSError, match="GetNamedSecurityInfoW"):
+            _winacl.read_dacl(tmp_path / "missing.env")
         assert windows.leaked() == set()
 
 
@@ -336,12 +502,13 @@ class TestThroughEnvfile:
     def test_a_file_locked_to_the_built_in_administrator_is_recognised(
         self, windows: FakeWindows, tmp_path: Path
     ) -> None:
-        # Windows prints this account as LA, not as its SID. Compared as text, setup would
-        # warn that "LA" has access and the user has none, on a correctly locked file.
+        # The account SDDL prints as LA. Compared as text, setup warned that "LA" had access
+        # and the user had none, on a correctly locked file (seen on a CI runner).
         path = tmp_path / ".env"
         envfile.lock_to_current_user(path)
         assert windows.files[str(path)] == f"D:P(A;;0x1301bf;;;{USER})"
-        windows.files[str(path)] = "D:P(A;;0x1301bf;;;LA)"  # as Windows reads it back
+        assert envfile.lock_problem(path) is None
+        windows.files[str(path)] = "D:P(A;;0x1301bf;;;LA)"  # however it came to be written
         assert envfile.lock_problem(path) is None
         assert windows.leaked() == set()
 
@@ -352,6 +519,23 @@ class TestThroughEnvfile:
         windows.files[str(path)] = "D:P(A;;FA;;;BA)(A;;0x1301bf;;;LA)"
         problem = envfile.lock_problem(path)
         assert problem == "these also have access: Administrators"
+
+    def test_an_unknown_kind_of_entry_is_reported_not_passed(
+        self, windows: FakeWindows, tmp_path: Path
+    ) -> None:
+        path = tmp_path / ".env"
+        windows.files[str(path)] = Dacl(
+            present=True,
+            protected=True,
+            entries=(Ace(type=0, mask=MODIFY, sid=USER), Ace(type=9, mask=FULL, sid=None)),
+        )
+        problem = envfile.lock_problem(path)
+        assert problem is not None and "cannot check" in problem
+
+    def test_an_inherited_list_is_reported(self, windows: FakeWindows, tmp_path: Path) -> None:
+        path = tmp_path / ".env"
+        windows.files[str(path)] = f"D:AI(A;ID;0x1301bf;;;{USER})"
+        assert envfile.lock_problem(path) == "it inherits permissions from its folder"
 
     def test_an_access_list_that_cannot_be_read_is_never_a_pass(
         self, windows: FakeWindows, tmp_path: Path

@@ -27,6 +27,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._powershell import shell_env
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SETUP_PS1 = REPO_ROOT / "scripts" / "setup-windows.ps1"
 SETUP_CMD = REPO_ROOT / "scripts" / "setup-windows.cmd"
@@ -99,7 +101,7 @@ def _ps(shell: str, script: Path, expression: str) -> object:
         "$ErrorActionPreference = 'Stop'; . $env:EB_SCRIPT; "
         f"ConvertTo-Json -Compress -Depth 6 -InputObject ({expression})"
     )
-    env = dict(os.environ)
+    env = shell_env(shell)
     env["EB_SCRIPT"] = str(script)
     env["POWERSHELL_TELEMETRY_OPTOUT"] = "1"
     result = subprocess.run(
@@ -700,7 +702,7 @@ class TestParses:
             "$env:EB_SCRIPT, [ref]$tokens, [ref]$errors); "
             "ConvertTo-Json -Compress -InputObject @($errors | ForEach-Object { $_.ToString() })"
         )
-        env = dict(os.environ)
+        env = shell_env(shell)
         env["EB_SCRIPT"] = str(path)
         result = subprocess.run(
             [shell, "-NoProfile", "-NonInteractive", "-Command", command],
@@ -1566,7 +1568,7 @@ class _Simulation:
         self.pip_argv = tmp_path / "pip-argv.txt"
 
     def run(self, *args: str, **extra_env: str) -> subprocess.CompletedProcess[str]:
-        env = dict(os.environ)
+        env = shell_env(self.shell)
         env.update(
             OS="Windows_NT",
             LOCALAPPDATA=str(self.local),
@@ -1939,7 +1941,7 @@ def _run_prereqs_with_stubs(
     assert source.count(marker) == 1
     script = tmp_path / "prereqs-windows.ps1"
     script.write_text(source.replace(marker, stubs + "\n" + marker), encoding="ascii")
-    env = dict(os.environ)
+    env = shell_env(shell)
     env.update(
         ProgramFiles=r"C:\Program Files",
         LOCALAPPDATA=r"C:\Users\a\AppData\Local",
