@@ -13,6 +13,8 @@ Three things that only matter on Windows, simulated here so they run everywhere:
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import importlib.util
 import json
 import re
@@ -81,6 +83,10 @@ def ep(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     spec.loader.exec_module(module)
     monkeypatch.setattr(module, "_STATE_FILE", tmp_path / ".entrabot-state.json")
     monkeypatch.delenv("ENTRABOT_TENANT_ID", raising=False)
+    # The operator's "I checked this app", if their shell has one; and the app ID setup
+    # writes to .env, which importing entrabot.config loads into the environment.
+    monkeypatch.delenv("ENTRABOT_PROVISIONER_APP_ID_VERIFIED", raising=False)
+    monkeypatch.delenv("ENTRABOT_PROVISIONER_APP_ID", raising=False)
     yield module
     sys.modules.pop("entra_provisioning", None)
 
@@ -204,9 +210,21 @@ class TestAzArguments:
         self, ep: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls: list[list[str]] = []
+        graph_sp = "99999999-0000-0000-0000-000000000003"
+        graph_app = "00000003-0000-0000-c000-000000000000"
+
+        def granted(role: str, resource: str, name: str) -> dict[str, str]:
+            return {
+                "principalId": "sp-object-id",
+                "resourceId": resource,
+                "resourceDisplayName": name,
+                "appRoleId": role,
+            }
 
         def fake_run_az(args: list[str], capture: bool = True) -> tuple[int, str, str]:
             calls.append(args)
+            if args[:5] == ["ad", "sp", "show", "--id", graph_app]:
+                return 0, json.dumps([graph_sp, graph_app]), ""
             if args[:3] == ["ad", "sp", "show"]:
                 return 0, '"sp-object-id"', ""
             return (
@@ -214,9 +232,11 @@ class TestAzArguments:
                 json.dumps(
                     {
                         "value": [
-                            {"resourceDisplayName": "Microsoft Graph", "appRoleId": "role-rw"},
-                            {"resourceDisplayName": "Some Other API", "appRoleId": "role-x"},
-                            {"resourceDisplayName": "Microsoft Graph", "appRoleId": "role-apra"},
+                            granted("role-rw", graph_sp, "Microsoft Graph"),
+                            granted("role-x", "some-other-api", "Some Other API"),
+                            granted("role-apra", graph_sp, "Microsoft Graph"),
+                            # Calls itself Microsoft Graph, but is somebody's own app.
+                            granted("role-fake", "look-alike", "Microsoft Graph"),
                         ]
                     }
                 ),
@@ -228,7 +248,8 @@ class TestAzArguments:
         assert ep._get_consented_graph_role_ids(CLIENT) == {"role-rw", "role-apra"}
 
         assert calls[0][:5] == ["ad", "sp", "show", "--id", CLIENT]
-        url = calls[1][calls[1].index("--url") + 1]
+        assert calls[1][:5] == ["ad", "sp", "show", "--id", graph_app], "Graph, by its appId"
+        url = calls[2][calls[2].index("--url") + 1]
         assert url == (
             "https://graph.microsoft.com/v1.0/servicePrincipals/sp-object-id/appRoleAssignments"
         )
@@ -663,9 +684,13 @@ class TestWindowsProvisionerCredential:
     ) -> None:
         env.write_legacy_pem()
         env.app_status = "not_found"
-        monkeypatch.setattr(
-            env.ep, "run_az", lambda args, capture=True: (0, '"' + CLIENT + '"', "")
-        )
+
+        def fake_run_az(args: list[str], capture: bool = True) -> tuple[int, str, str]:
+            if args[:3] == ["ad", "app", "list"]:
+                return 0, "[]", ""  # no app with the name: the replacement is created
+            return 0, '"' + CLIENT + '"', ""
+
+        monkeypatch.setattr(env.ep, "run_az", fake_run_az)
         env.upload_error = env.ep.ProvisionerBootstrapError("upload refused")
 
         with pytest.raises(env.ep.ProvisionerBootstrapError, match="upload refused"):
@@ -714,6 +739,130 @@ class TestWindowsProvisionerCredential:
         assert path == tmp_path / "home" / "AppData" / "Local" / "entrabot" / (
             f"provisioner-cert-{TENANT}.pem"
         )
+
+
+class TestTakeOverOnWindows:
+    """Taking over an existing app with the Provisioner's name works as on other platforms
+    (``test_entra_provisioning.py``); only how this machine's certificates are found
+    differs: the key-store certificates for this tenant, and an older setup's key file."""
+
+    ME = "aaaaaaaa-0000-0000-0000-000000000001"
+    APP_OBJECT = "cccccccc-0000-0000-0000-000000000001"
+
+    def _directory(
+        self, env: _Env, monkeypatch: pytest.MonkeyPatch, certificates: list[bytes]
+    ) -> None:
+        """One app with the Provisioner's name, owned by you, holding these certificates."""
+        env.ep.clear_state("PROVISIONER_CLIENT_ID")
+        monkeypatch.setattr(
+            env.ep, "resolve_graph_permissions", lambda: {"Application.ReadWrite.All": "role"}
+        )
+        app = {
+            "id": self.APP_OBJECT,
+            "appId": CLIENT,
+            "displayName": env.ep.PROVISIONER_APP_DISPLAY_NAME,
+            "createdDateTime": "2026-03-04T05:06:07Z",
+            "passwordCredentials": [],
+            "requiredResourceAccess": [],
+        }
+        you = {"@odata.type": "#microsoft.graph.user", "id": self.ME, "userPrincipalName": "a@b.c"}
+        keys = [
+            {"keyId": f"k{n}", "key": base64.b64encode(der).decode()}
+            for n, der in enumerate(certificates)
+        ]
+        replies = {
+            ("ad", "app", "list"): [app],
+            ("ad", "signed-in-user", "show"): self.ME,
+            ("ad", "app", "owner"): [you],
+            ("rest", "--method", "GET"): {"keyCredentials": keys},
+            ("ad", "app", "federated-credential"): [],
+            ("ad", "sp", "list"): [],  # no service principal yet, so nothing approved either
+            # Microsoft Graph's service principal, looked up by its well-known appId.
+            ("ad", "sp", "show"): [
+                "99999999-0000-0000-0000-000000000003",
+                "00000003-0000-0000-c000-000000000000",
+            ],
+        }
+
+        def fake_run_az(args: list[str], capture: bool = True) -> tuple[int, str, str]:
+            assert args[-2:] == ["-o", "json"], args
+            reply = replies.get(tuple(args[:3]), AssertionError(f"unexpected az call: {args}"))
+            if isinstance(reply, AssertionError):
+                raise reply
+            return 0, json.dumps(reply), ""
+
+        monkeypatch.setattr(env.ep, "run_az", fake_run_az)
+
+    def test_an_app_holding_only_this_users_key_store_certificate_is_taken_over(
+        self, env: _Env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        der = b"the certificate of this user's key-store key"
+        sha1 = hashlib.sha1(der).hexdigest().upper()  # noqa: S324
+        env.store[sha1] = _store_cert(sha1)
+        self._directory(env, monkeypatch, [der])
+
+        client_id, credential, _ = env.ensure()
+
+        assert client_id == CLIENT and env.ep.get_state("PROVISIONER_CLIENT_ID") == CLIENT
+        assert credential.sha1_hex == sha1
+        assert [upload[0] for upload in env.uploads] == [CLIENT]
+
+    def test_the_certificate_of_an_older_setups_key_file_counts_as_this_machines(
+        self, env: _Env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+
+        env.write_legacy_pem()
+        legacy = x509.load_pem_x509_certificate(env.ep._cert_pem_from_bundle(LEGACY_PEM).encode())
+        self._directory(env, monkeypatch, [legacy.public_bytes(serialization.Encoding.DER)])
+
+        client_id, _, _ = env.ensure()
+
+        assert client_id == CLIENT
+        assert env.revokes[0]["sha1_hex"] == LEGACY_SHA1, "then migrated as usual"
+
+    @pytest.mark.parametrize("local", ["none", "other", "no_private_key"])
+    def test_a_certificate_whose_key_is_not_in_this_users_store_blocks_the_takeover(
+        self,
+        env: _Env,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        local: str,
+    ) -> None:
+        der = b"a certificate on the app"
+        sha1 = hashlib.sha1(der).hexdigest().upper()  # noqa: S324
+        if local == "other":
+            env.store[SHA1] = _store_cert(SHA1)
+        elif local == "no_private_key":
+            # Anyone can put a public certificate in the store; it proves nothing.
+            env.store[sha1] = _store_cert(sha1, has_private_key=False)
+        self._directory(env, monkeypatch, [der])
+
+        with pytest.raises(env.ep.ProvisionerBootstrapError):
+            env.ensure()
+
+        assert env.uploads == [] and env.created == []
+        assert env.ep.get_state("PROVISIONER_CLIENT_ID") is None
+        out = capsys.readouterr().out
+        assert "private key is not on this machine" in out
+        assert "ENTRABOT_PROVISIONER_APP_ID_VERIFIED" in out
+
+    def test_a_key_store_that_cannot_be_read_blocks_the_takeover(
+        self, env: _Env, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._directory(env, monkeypatch, [b"a certificate on the app"])
+
+        def unreadable(*, friendly_name: str | None = None) -> list[wincert.StoreCert]:
+            raise wincert.WinCertError("Cert:\\CurrentUser\\My could not be opened")
+
+        monkeypatch.setattr(wincert, "list_certs", unreadable)
+
+        with pytest.raises(env.ep.ProvisionerBootstrapError):
+            env.ensure()
+
+        assert env.uploads == [] and env.created == []
+        assert "could not be opened" in capsys.readouterr().out
 
 
 class TestRevokeAppCertificate:

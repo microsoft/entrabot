@@ -24,7 +24,7 @@ from entrabot.winsetup.azcli import (
     validate_tenant,
 )
 from entrabot.winsetup.console import RunRequest
-from tests.winsetup.fakes import FakeSpawn, Reply, make_console
+from tests.winsetup.fakes import FakeDirectory, FakeSpawn, Reply, make_console
 
 ACCOUNT = {
     "id": "sub-1",
@@ -390,6 +390,50 @@ class TestCmdSafety:
         az = _az(spawn, command=("C:/az/python.exe", "-IBm", "azure.cli"))
         az.run(["account", "set", "--subscription", "Dev & Test (R&D)"])
         assert spawn.calls[0].argv[:3] == ["C:/az/python.exe", "-IBm", "azure.cli"]
+
+
+class TestSearchUserOrder:
+    """The order of the lookups, as search_user reports them. Who is found by each one is in
+    tests/winsetup/test_sponsors.py."""
+
+    MISSING_ID = "00000000-0000-0000-0000-00000000beef"
+
+    def _search(self, identifier: str, *, batch_file: bool = False) -> tuple[str, ...]:
+        spawn = FakeSpawn()
+        directory = FakeDirectory(users=[])
+        if batch_file:
+            directory.attach_cli(spawn)
+        else:
+            directory.attach(spawn)
+        az = _az(spawn, command=("C:/az/az.cmd",) if batch_file else ("az",))
+        found = az.search_user(identifier)
+        assert found.user is None
+        return found.tried
+
+    def test_a_search_for_the_sign_in_name_comes_right_after_the_direct_lookup(self) -> None:
+        assert self._search("o'brien@contoso.com") == (
+            "their sign-in name",
+            "a search for their sign-in name",
+            "their primary email",
+            "their other email addresses",
+            "their email aliases",
+            "a guest or personal account made from that address",
+        )
+
+    def test_a_batch_file_azure_cli_makes_the_same_search_in_the_same_place(self) -> None:
+        assert self._search("o'brien@contoso.com", batch_file=True) == (
+            "their sign-in name or object ID",
+            "a search for their sign-in name",
+            "their primary email",
+            "(other lookups are not possible with this Azure CLI install)",
+        )
+
+    def test_an_object_id_gets_the_direct_lookup_only(self) -> None:
+        assert self._search(self.MISSING_ID) == ("that object ID",)
+        assert self._search(self.MISSING_ID, batch_file=True) == (
+            "their sign-in name or object ID",
+            "(other lookups are not possible with this Azure CLI install)",
+        )
 
 
 class TestInteractiveDesktop:

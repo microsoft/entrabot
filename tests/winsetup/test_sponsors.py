@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 
@@ -19,7 +19,7 @@ from entrabot.winsetup.sponsors import (
     tenant_id_from_discovery,
     validate_sponsor,
 )
-from tests.winsetup.fakes import FakeDirectory, FakeSpawn, Reply, make_console, words
+from tests.winsetup.fakes import FakeDirectory, FakeSpawn, make_console, words
 
 MEMBER = {
     "id": "member-id",
@@ -125,7 +125,11 @@ class TestResolve:
         sponsors = resolve_sponsors(["sam@fabrikam.com"], az, http_get=lambda url: None)
         assert sponsors[0].object_id == "guest-id"
         assert sponsors[0].upn == "sam@fabrikam.com"  # what was typed, as setup.sh records it
-        assert directory.asked == ["id sam@fabrikam.com", "mail eq 'sam@fabrikam.com'"]
+        assert directory.asked == [
+            "id sam@fabrikam.com",
+            "userPrincipalName eq 'sam@fabrikam.com'",
+            "mail eq 'sam@fabrikam.com'",
+        ]
 
     def test_an_unknown_user_is_an_error_saying_what_was_tried(self) -> None:
         az, _, _ = _az_with([MEMBER])
@@ -133,7 +137,14 @@ class TestResolve:
             resolve_sponsors(["nobody@contoso.com"], az, http_get=_no_http)
         message = str(error.value)
         assert "nobody@contoso.com" in message
-        for tried in ("sign-in name", "primary email", "other email", "aliases", "guest"):
+        for tried in (
+            "sign-in name",
+            "a search for their sign-in name",
+            "primary email",
+            "other email",
+            "aliases",
+            "guest",
+        ):
             assert tried in message
         assert "object ID" in message  # the way that always works
 
@@ -177,6 +188,7 @@ class TestPersonalAndExternalAccounts:
         ]
         assert directory.asked == [
             "id brandwe@outlook.com",
+            "userPrincipalName eq 'brandwe@outlook.com'",
             "mail eq 'brandwe@outlook.com'",
             "otherMails/any(x:x eq 'brandwe@outlook.com')",
         ]
@@ -273,11 +285,11 @@ class TestPersonalAndExternalAccounts:
         assert spawn.calls and all(call.argv[-2:] == ["--output", "json"] for call in spawn.calls)
 
     def test_a_batch_file_azure_cli_still_finds_members_and_mail(self) -> None:
-        # With az.cmd as the only way in, cmd.exe would reinterpret an encoded URL. The two
+        # With az.cmd as the only way in, cmd.exe would reinterpret an encoded URL. The
         # lookups that need no special characters still run; the rest are named as skipped.
         spawn = FakeSpawn()
-        spawn.on(words("ad", "user", "show"), Reply(returncode=3, stderr="does not exist"))
-        spawn.on(words("ad", "user", "list"), Reply(stdout=json.dumps([GUEST])))
+        directory = FakeDirectory(users=[dict(GUEST)])
+        directory.attach_cli(spawn)
         console, _ = make_console(spawn=spawn)
         az = AzCli(
             AzLocation(command=("C:/az/az.cmd",), bin_dir=Path("/x"), source="path"), console
@@ -286,6 +298,11 @@ class TestPersonalAndExternalAccounts:
             0
         ].object_id == ("guest-id")
         assert not any("rest" in call.argv for call in spawn.calls)
+        assert directory.asked == [
+            "id sam@fabrikam.com",
+            "userPrincipalName eq 'sam@fabrikam.com'",
+            "mail eq 'sam@fabrikam.com'",  # found by mail
+        ]
 
 
 _BATCH_FILE_AZ = AzLocation(command=("C:/az/az.cmd",), bin_dir=Path("/x"), source="path")
@@ -325,7 +342,11 @@ class TestUnusualButValidAddresses:
         assert sponsors[0].object_id == "obrien-id"
         assert sponsors[0].upn == "o'brien@contoso.com"
         # What Graph was asked, once decoded: one string literal, the quote doubled.
-        assert directory.asked == ["id o'brien@contoso.com", "mail eq 'o''brien@contoso.com'"]
+        assert directory.asked == [
+            "id o'brien@contoso.com",
+            "userPrincipalName eq 'o''brien@contoso.com'",
+            "mail eq 'o''brien@contoso.com'",
+        ]
 
     def test_two_people_with_an_apostrophe_address_are_listed_never_one_picked(self) -> None:
         twin = {
@@ -346,7 +367,8 @@ class TestUnusualButValidAddresses:
         az, directory, _ = _az_with([OBRIEN])
         resolve_sponsors(["o'brien@contoso.com"], az, http_get=_no_http)
         assert directory.urls and not any("'" in url for url in directory.urls)
-        assert "mail%20eq%20%27o%27%27brien%40contoso.com%27" in directory.urls[1]
+        assert "userPrincipalName%20eq%20%27o%27%27brien%40contoso.com%27" in directory.urls[1]
+        assert "mail%20eq%20%27o%27%27brien%40contoso.com%27" in directory.urls[2]
 
     def test_an_apostrophe_cannot_end_the_string_and_add_a_condition(self) -> None:
         # The classic injection shape. It must be looked for as one odd address, and match
@@ -355,7 +377,10 @@ class TestUnusualButValidAddresses:
         hostile = "x'or'1'eq'1@contoso.com"
         with pytest.raises(SponsorError, match="Could not find"):
             resolve_sponsors([hostile], az, http_get=_no_http)
-        assert directory.asked[1] == "mail eq 'x''or''1''eq''1@contoso.com'"
+        assert directory.asked[1:3] == [
+            "userPrincipalName eq 'x''or''1''eq''1@contoso.com'",
+            "mail eq 'x''or''1''eq''1@contoso.com'",
+        ]
 
     @pytest.mark.parametrize("field", ["otherMails", "proxyAddresses"])
     def test_an_apostrophe_is_found_in_the_other_places_too(self, field: str) -> None:
@@ -392,13 +417,20 @@ class TestUnusualButValidAddresses:
 
     def test_a_batch_file_azure_cli_still_looks_an_apostrophe_up_by_mail(self) -> None:
         spawn = FakeSpawn()
-        spawn.on(words("ad", "user", "show"), Reply(returncode=3, stderr="does not exist"))
-        spawn.on(words("ad", "user", "list"), Reply(stdout=json.dumps([OBRIEN])))
+        FakeDirectory(users=[dict(OBRIEN)]).attach_cli(spawn)
         console, _ = make_console(spawn=spawn)
         az = AzCli(_BATCH_FILE_AZ, console)
-        resolve_sponsors(["o'brien@contoso.com"], az, http_get=_no_http)
-        listed = next(call.argv for call in spawn.calls if words("ad", "user", "list")(call))
-        assert listed[listed.index("--filter") + 1] == "mail eq 'o''brien@contoso.com'"
+        sponsors = resolve_sponsors(["o'brien@contoso.com"], az, http_get=_no_http)
+        assert sponsors[0].object_id == "obrien-id"
+        filters = [
+            call.argv[call.argv.index("--filter") + 1]
+            for call in spawn.calls
+            if words("ad", "user", "list")(call)
+        ]
+        assert filters == [
+            "userPrincipalName eq 'o''brien@contoso.com'",
+            "mail eq 'o''brien@contoso.com'",
+        ]
 
     def test_a_batch_file_azure_cli_never_hands_cmd_a_character_it_would_act_on(self) -> None:
         # "&" is a valid address character and a command separator to cmd.exe. With az.cmd as
@@ -409,6 +441,139 @@ class TestUnusualButValidAddresses:
         with pytest.raises(SponsorError, match="Could not find"):
             resolve_sponsors(["r&d@contoso.com"], az, http_get=_no_http)
         assert spawn.calls == []
+
+
+# Signs in as o'brien@contoso.com; their mail is something else, so no email lookup finds them.
+OBRIEN_SIGN_IN = {
+    "id": "obrien-sign-in-id",
+    "displayName": "Pat O'Brien",
+    "userType": "Member",
+    "mail": "pat.obrien@contoso.com",
+    "userPrincipalName": "o'brien@contoso.com",
+    "otherMails": [],
+}
+OBRIEN_TWIN = {
+    **OBRIEN_SIGN_IN,
+    "id": "obrien-twin-id",
+    "displayName": "P. O'Brien (old)",
+    "userPrincipalName": "O'Brien@contoso.com",
+}
+SEARCH_FOR_OBRIEN = "userPrincipalName eq 'o''brien@contoso.com'"
+
+
+class TestAnApostropheInTheSignInName:
+    """The defect: someone whose sign-in name has an apostrophe, and whose mail is different,
+    was never found. Graph's /users/{sign-in name} lookup may not take the apostrophe, and no
+    later step compared the sign-in name. A search for it (``userPrincipalName eq``, the quote
+    doubled) now comes right after the direct lookup misses."""
+
+    @staticmethod
+    def _az(users: list[dict], *, path_takes_a_quote: bool = False) -> tuple[AzCli, FakeDirectory]:
+        az, directory, _ = _az_with(users)
+        directory.refused_in_path = "" if path_takes_a_quote else "'"
+        return az, directory
+
+    @staticmethod
+    def _batch_file_az(users: list[dict]) -> tuple[AzCli, FakeDirectory, FakeSpawn]:
+        spawn = FakeSpawn()
+        directory = FakeDirectory(users=[dict(user) for user in users], refused_in_path="'")
+        directory.attach_cli(spawn)
+        console, _ = make_console(spawn=spawn)
+        return AzCli(_BATCH_FILE_AZ, console), directory, spawn
+
+    def test_they_are_found_by_a_search_for_the_sign_in_name(self) -> None:
+        az, directory = self._az([OBRIEN_SIGN_IN, MEMBER])
+        sponsors = resolve_sponsors(["o'brien@contoso.com"], az, http_get=_no_http)
+        assert sponsors == [
+            Sponsor(
+                object_id="obrien-sign-in-id",
+                upn="o'brien@contoso.com",
+                mail="pat.obrien@contoso.com",
+                user_type="Member",
+                home_tenant_id="",
+            )
+        ]
+        # Right after the direct lookup missed, and the first to find one person: it stops.
+        assert directory.asked == ["id o'brien@contoso.com", SEARCH_FOR_OBRIEN]
+
+    def test_the_url_for_that_search_doubles_the_quote_and_encodes_all_of_it(self) -> None:
+        az, directory = self._az([OBRIEN_SIGN_IN])
+        resolve_sponsors(["o'brien@contoso.com"], az, http_get=_no_http)
+        url = directory.urls[1]
+        assert url.startswith("https://graph.microsoft.com/v1.0/users?$filter=")
+        value = url.split("$filter=", 1)[1].split("&", 1)[0]
+        assert value == "userPrincipalName%20eq%20%27o%27%27brien%40contoso.com%27"
+
+    def test_reserved_characters_never_reach_the_url_unencoded(self) -> None:
+        # All legal in an address. Raw, "#" would end the request, "&" start a new
+        # parameter, "+" arrive as a space and "%" start an escape.
+        typed = "o'b#x+y&z%w@contoso.com"
+        az, directory = self._az([OBRIEN_SIGN_IN])
+        with pytest.raises(SponsorError, match="Could not find"):
+            resolve_sponsors([typed], az, http_get=_no_http)
+        search = "userPrincipalName eq 'o''b#x+y&z%w@contoso.com'"
+        assert directory.asked[:2] == [f"id {typed}", search]  # arrived intact
+        url = directory.urls[1]
+        value = url.split("$filter=", 1)[1].split("&", 1)[0]
+        assert value == quote(search, safe="")
+        assert not any(character in value for character in "'#+& @")
+
+    def test_two_people_found_by_that_search_are_listed_never_one_picked(self) -> None:
+        # Sign-in names are unique, ignoring case. A directory that answered with two anyway
+        # must not have one of them chosen for it.
+        az, directory = self._az([OBRIEN_SIGN_IN, OBRIEN_TWIN])
+        with pytest.raises(SponsorError) as error:
+            resolve_sponsors(["o'brien@contoso.com"], az, http_get=_no_http)
+        message = str(error.value)
+        assert "Pat O'Brien <o'brien@contoso.com>" in message
+        assert "P. O'Brien (old) <O'Brien@contoso.com>" in message
+        assert "(by a search for their sign-in name)" in message and "object ID" in message
+        assert directory.asked[-1] == SEARCH_FOR_OBRIEN  # nothing after it was tried
+
+    def test_the_search_is_skipped_when_the_direct_lookup_finds_them(self) -> None:
+        az, directory = self._az([OBRIEN_SIGN_IN], path_takes_a_quote=True)
+        found = resolve_sponsors(["o'brien@contoso.com"], az, http_get=_no_http)
+        assert found[0].object_id == "obrien-sign-in-id"
+        assert directory.asked == ["id o'brien@contoso.com"]
+
+    def test_an_object_id_is_never_searched_for_as_a_sign_in_name(self) -> None:
+        az, directory = self._az([OBRIEN_SIGN_IN])
+        missing = "00000000-0000-0000-0000-00000000beef"
+        with pytest.raises(SponsorError, match="object ID"):
+            resolve_sponsors([missing], az, http_get=_no_http)
+        assert directory.asked == [f"id {missing}"]
+
+    def test_nobody_found_names_the_search_among_what_was_tried(self) -> None:
+        az, _ = self._az([MEMBER])
+        with pytest.raises(SponsorError) as error:
+            resolve_sponsors(["o'brien@contoso.com"], az, http_get=_no_http)
+        assert (
+            "Setup looked for a user by: their sign-in name; a search for their sign-in name; "
+            "their primary email;" in str(error.value)
+        )
+
+    def test_a_batch_file_azure_cli_makes_the_same_search(self) -> None:
+        az, directory, spawn = self._batch_file_az([OBRIEN_SIGN_IN])
+        found = resolve_sponsors(["o'brien@contoso.com"], az, http_get=_no_http)
+        assert found[0].object_id == "obrien-sign-in-id"
+        assert directory.asked == ["id o'brien@contoso.com", SEARCH_FOR_OBRIEN]
+        assert not any("rest" in call.argv for call in spawn.calls)
+
+    def test_a_batch_file_azure_cli_lists_two_people_found_by_that_search(self) -> None:
+        az, directory, _ = self._batch_file_az([OBRIEN_SIGN_IN, OBRIEN_TWIN])
+        with pytest.raises(SponsorError) as error:
+            resolve_sponsors(["o'brien@contoso.com"], az, http_get=_no_http)
+        message = str(error.value)
+        assert "<o'brien@contoso.com>" in message and "<O'Brien@contoso.com>" in message
+        assert "(by a search for their sign-in name)" in message
+        assert directory.asked[-1] == SEARCH_FOR_OBRIEN
+
+    def test_a_batch_file_azure_cli_does_not_search_for_an_object_id(self) -> None:
+        az, directory, _ = self._batch_file_az([OBRIEN_SIGN_IN])
+        missing = "00000000-0000-0000-0000-00000000beef"
+        with pytest.raises(SponsorError, match="object ID"):
+            resolve_sponsors([missing], az, http_get=_no_http)
+        assert directory.asked == [f"id {missing}"]
 
 
 class TestSponsorEnv:

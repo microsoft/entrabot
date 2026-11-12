@@ -25,10 +25,13 @@ certificate, gets a token with it to prove Microsoft Entra accepts it, then
 removes the file's certificate from the Provisioner app by thumbprint, so a copy
 of the file stops working, and deletes the file. Until the new key is accepted
 the file is kept, because it is still the PC's working credential. If the
-removal from the app fails, the file is still deleted and setup still finishes;
-the warning names the certificate (the last four characters of its thumbprint,
-and its expiry date) and the App registrations path to remove it by hand, and
-the next run tries again (the state key `PROVISIONER_CERT_REVOKE_PENDING`).
+removal from the app fails, the file is still deleted and setup carries on, but
+it finishes "with something to check" (exit code 3). The wizard shows the
+warning on screen, with or without `-Verbose`, at the provisioning step and on
+the finish screen: it names the certificate (the last four characters of its
+thumbprint, and its expiry date) and the App registrations path to remove it by
+hand. The next run tries again (the state key `PROVISIONER_CERT_REVOKE_PENDING`),
+and so does teardown.
 
 Both certificates are created by `entrabot.platform.wincert`
 (`platform/wincert.py`), which is the one owner of the key lifecycle on Windows:
@@ -178,12 +181,17 @@ administrator rights. Run them on a native Windows host, not under WSL —
 - **`status-windows.ps1`** shows status and health. It installs nothing.
 - **`scripts/teardown-windows.ps1`** disconnects this PC: it removes this PC's
   certificate from the Blueprint and deletes it locally with its key, selected by
-  the configured SHA-1 thumbprint rather than by subject. A certificate that
+  the configured SHA-1 thumbprint rather than by subject. A certificate left by
+  an interrupted rotation comes off in the same write, so that a read that has
+  not caught up cannot put the first one back. A certificate that
   `.env` names but this PC's certificate store does not hold may be another
   PC's, so it is left on the Blueprint unless the person says otherwise. It
-  then retires this PC's Provisioner certificate the same way, unless another
-  Entrabot agent on the PC still needs it or `-KeepSetupCredential` is given.
-  `-DeleteAgent` and `-PurgeData` widen the scope.
+  then takes off the Provisioner app any old setup certificate that setup
+  recorded as still to remove. Last, it retires this PC's Provisioner
+  certificate (off the Provisioner app, and deleted locally with its key),
+  unless another Entrabot agent on the PC still needs it or
+  `-KeepSetupCredential` is given. `-DeleteAgent` and `-PurgeData` widen the
+  scope.
 - **`scripts/generate_windows_cert.py`** and
   **`scripts/register_windows_blueprint_cert.py`** are the lower-level pieces the
   wizard uses: create a certificate through `wincert`, and add its public half to

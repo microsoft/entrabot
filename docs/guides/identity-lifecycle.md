@@ -86,9 +86,12 @@ warning when 30 days or fewer remain. See the
 
 To disconnect a Windows PC from an agent, run `scripts\teardown-windows.ps1`. It
 removes that PC's certificate from the Blueprint, keeping other machines', and deletes
-it locally with its key. It also retires that PC's setup (Provisioner) certificate
+it locally with its key; a certificate left by an interrupted rotation comes off in the
+same write. It also retires that PC's setup (Provisioner) certificate
 (removed from the Provisioner app and deleted locally with its key) unless another
-Entrabot agent on the PC still needs it or `-KeepSetupCredential` is given. See the
+Entrabot agent on the PC still needs it or `-KeepSetupCredential` is given. Before
+that, it tries to remove any older setup certificate that setup noted it could not take
+off the Provisioner app, and reports where to remove it by hand if that fails. See the
 [`teardown-windows.ps1` reference](../reference/scripts/teardown/teardown-windows-ps1.md).
 
 **macOS and Linux** have no automated rotation flow. Setup checks the certificate on

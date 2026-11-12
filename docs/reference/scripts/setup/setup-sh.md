@@ -157,8 +157,9 @@ Diagnostics and control:
 ## Effects
 
 - Verifies `az`, Python ≥ 3.12, and required CLI tools; verifies the Azure login.
-- Bootstraps the Provisioner app via `entra_provisioning.py` and creates or
-  reuses the Blueprint, Agent Identity, and Agent User via
+- Bootstraps the Provisioner app via `entra_provisioning.py` (see
+  [Which app registration is the Provisioner](#which-app-registration-is-the-provisioner))
+  and creates or reuses the Blueprint, Agent Identity, and Agent User via
   [`create_entra_agent_ids.py`](../provisioning/create-entra-agent-ids-py.md)
   (using the Provisioner certificate token, never `az` CLI tokens).
 - Reuses this machine's certificate only when
@@ -212,12 +213,58 @@ Diagnostics and control:
   Teams tool requires an explicit chat id supplied at runtime. See
   [Messaging and delivery](../../../architecture/messaging-and-delivery.md).
 
+### Which app registration is the Provisioner
+
+`entra_provisioning.py` uses the Provisioner app that an earlier run on this
+machine recorded in `.entrabot-state.json` (`PROVISIONER_CLIENT_ID`). Windows
+setup runs the same script with the same rule. When no app is recorded, or the
+recorded one no longer exists in Microsoft Entra, it looks for app registrations
+named exactly `EntraBot Agent ID Provisioner`:
+
+- **None:** it creates one.
+- **One:** it takes that app over only if doing so grants nobody anything. That
+  is the case when either:
+    - an administrator has already granted it admin consent for every Microsoft
+      Graph permission setup needs, and anything else the app asks for is a
+      Graph application permission that has been granted too. This is the usual
+      case on a second machine, or for a second administrator. Setup then grants
+      no consent in this run; or
+    - nobody else can use it: you are the only owner of the app and of its
+      service principal (or they have no owners), the app has no client secret
+      and no federated credential, its service principal has no credential of
+      its own, every certificate on the app has its private key on this machine,
+      and the app asks for no permission besides setup's Graph application
+      permissions.
+- **More than one, or one that meets neither condition:** setup stops before it
+  changes anything in Microsoft Entra. It lists each app (application ID,
+  creation date, owners) and why it was not used, and exits `1`. Anything setup
+  could not read counts against the app.
+
+The reason: the Provisioner app is granted tenant-wide Microsoft Graph
+application permissions with admin consent, and app names are not unique.
+Anyone allowed to register applications can create an app with this name, and
+taking it over would hand those permissions to whoever controls it.
+
+To use a particular app, set `ENTRABOT_PROVISIONER_APP_ID_VERIFIED` to its
+application (client) ID for one run (see
+[Setup and authentication](../../../troubleshooting/setup-and-authentication.md#setup-will-not-take-over-an-existing-provisioner-app-registration)).
+Setup only checks that an app with that ID exists, then records it and treats it
+as its own: it adds the permissions setup needs and, when any are not yet
+consented, grants admin consent, which covers everything the app asks for. As on
+every run, it also deletes any client secret on the app. Check the app's owners,
+credentials and permissions first. A value that is not an
+application ID, an ID no app has, or an app other than the one this machine
+already has recorded is refused, and nothing is changed. The variable is not
+read from `.env`, and `ENTRABOT_PROVISIONER_APP_ID`, which setup writes to
+`.env`, does not choose the app.
+
 ## Exit behavior
 
 - `0` — setup (or `--status` / `--help`) completed successfully; the smoke test
   either passed or was skipped.
 - `1` — a fatal setup error (for example a missing prerequisite, no Azure login,
-  a failed provisioning step, a certificate check that couldn't complete, a declined
+  a failed provisioning step, an existing Provisioner app that setup would not take
+  over, a certificate check that couldn't complete, a declined
   `--remove-all-existing-certs` prompt, `--new` / `--use-blueprint` conflict, or a
   missing required identity mode).
 - `2` — mutually exclusive storage flags, `--new` with
@@ -237,6 +284,11 @@ Diagnostics and control:
   --switch-user`) and retry.
 - **`No identity mode specified`** — pass `--new --with-upn-suffix=NAME` or
   `--use-blueprint=APP_ID`.
+- **`Setup did not take over an existing 'EntraBot Agent ID Provisioner' app
+  registration`** — see
+  [Which app registration is the Provisioner](#which-app-registration-is-the-provisioner)
+  and
+  [Setup and authentication](../../../troubleshooting/setup-and-authentication.md#setup-will-not-take-over-an-existing-provisioner-app-registration).
 - **`Could not check ...`** — setup couldn't read the Blueprint's certificates or the
   OS credential store (the pending key entry included), so it doesn't know whether this
   machine is already registered. It stops rather than generating a certificate, and

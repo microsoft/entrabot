@@ -34,8 +34,9 @@ accepts it. It then:
 
 1. Finds Python 3.12 or newer, or downloads a private, signature-checked copy,
    and builds the project's `.venv`
-2. Signs you in to Microsoft (installing a private copy of the Azure CLI if
-   there is none)
+2. Signs you in to Microsoft (installing the Azure CLI if there is none: with
+   `winget` when your account is a local administrator and has it, otherwise
+   as a private copy)
 3. Creates or joins the Entra Agent Identity chain (Blueprint → Agent Identity
    → Agent User), assigns a Teams-capable licence when one is free, and grants
    the Graph permissions

@@ -56,6 +56,21 @@ If your organization only allows sign-in from managed devices, sign-in from an u
 
 **Fix.** Sign in with an account that holds one of those roles, or ask an administrator to run setup. If you hold the role through Privileged Identity Management, activate it first. Setup checks your active roles after sign-in and warns before it changes anything; you can continue anyway if you know you have the rights another way.
 
+## "An app registration with the Provisioner's name already exists ..."
+
+The message ends "and setup would not take it over". Setup exits with code 1.
+
+**Cause.** This PC has no Provisioner app recorded (a new PC, or one that was torn down), and an app registration named 'EntraBot Agent ID Provisioner' already exists in the tenant. That app gets tenant-wide Microsoft Graph permissions with admin consent, and anyone allowed to register applications can give an app that name. So setup takes an existing app over only when an administrator has already approved it for every permission setup needs (the usual case on a second PC), or when nobody else can use it. The lines above the message, and the setup log, list each app setup found and why it did not use it. Nothing was changed in Microsoft Entra. The full rule is in [Setup and authentication](setup-and-authentication.md#setup-will-not-take-over-an-existing-provisioner-app-registration).
+
+**Fix.** Delete or rename the app you don't recognise (Entra admin center > App registrations > All applications). Or, once you have checked that the app is yours, set `ENTRABOT_PROVISIONER_APP_ID_VERIFIED` to its application ID and run setup again from the same window:
+
+```bat
+set "ENTRABOT_PROVISIONER_APP_ID_VERIFIED=<application ID>"
+scripts\setup-windows.cmd
+```
+
+In PowerShell, set it with `$env:ENTRABOT_PROVISIONER_APP_ID_VERIFIED = '<application ID>'`. Setup records the app, so later runs do not need the variable. If setup then says it "could not get the access it needs", read the lines above that message: a value that is not an application ID, that no app in the tenant has, or that differs from the app this PC already has recorded is refused there, and nothing is changed.
+
 ## "No Teams licence", or `Graph returned 403 for /me/chats`
 
 **Cause.** The agent has no licence that includes Teams. Setup looks for a free Teams-capable licence in the tenant and assigns it; if none is free, the agent is still created and can sign in, but Teams refuses it. Setup then ends with exit code 3.
@@ -87,7 +102,7 @@ or use the script directly:
 
 Setup only adds sponsors; it never removes one. To remove one, use `scripts\remove_agent_sponsor.py`. Restart the assistant afterwards.
 
-If setup says it could not find the person, give their Entra object ID instead of an address (Microsoft Entra admin center > Users > the person > Object ID). That always works.
+Setup looks an address up as a sign-in name, first directly and then with a search (which finds a sign-in name with an apostrophe, such as `o'brien@contoso.com`), then by email address, email alias, and guest sign-in name. The message lists what it tried. If setup says it could not find the person, give their Entra object ID instead of an address (Microsoft Entra admin center > Users > the person > Object ID). That always works.
 
 ## Claude Code blocks every edit or Teams message
 
@@ -166,13 +181,17 @@ Restart the assistant afterwards; the agent reads its certificate when it starts
 | `2` | Run without a terminal and without `-Yes`. Nothing was changed. | Run it in a terminal, or add `-Yes`. |
 | `3` | Rotated; the agent is on the new certificate, but removing the old one did not finish. For example, Microsoft Entra did not yet list the new certificate on the Blueprint, so the old one was left there. | Run it again, in a few minutes. It finishes the cleanup. |
 
-## "The old Provisioner certificate ... could not be removed from the app"
+## "An older setup key for this computer could not be switched off in Microsoft Entra"
 
-**Cause.** Older versions of setup kept the setup (Provisioner) private key in a plain file under `%LOCALAPPDATA%\entrabot`. Setup now replaces it with a non-exportable key in the certificate store. Once Microsoft Entra accepts the new key, setup removes the old file's certificate from the Provisioner app, so that a copy of the file stops working, and then deletes the file. If the removal fails, setup still deletes the file and finishes, but a copy of the file can get tokens for the Provisioner app until its certificate is removed. Setup records the certificate (`PROVISIONER_CERT_REVOKE_PENDING` in `.entrabot-state.json`) and tries again on every run.
+**Cause.** Older versions of setup kept the setup (Provisioner) private key in a plain file under `%LOCALAPPDATA%\entrabot`. Setup now replaces it with a non-exportable key in the certificate store. Once Microsoft Entra accepts the new key, setup removes the old file's certificate from the Provisioner app, so that a copy of the file stops working, and then deletes the file. If the removal fails, setup still deletes the file and carries on, but a copy of the file can get tokens for the Provisioner app until its certificate is removed. Setup records the certificate (`PROVISIONER_CERT_REVOKE_PENDING` in `.entrabot-state.json`) and tries again on every run.
 
-The warning names the certificate by the last four characters of its thumbprint and its expiry date, and says where it is. It is in the setup log; add `-Verbose` to see it on screen.
+The warning is on screen in every mode, with or without `-Verbose`: at the end of the step that connects setup to your tenant, and again on the finish screen. It names the certificate by the last four characters of its thumbprint and its expiry date, gives the admin-center path, and says setup will try again. Setup then finishes "with something to check" (exit code 3). If a later step in the same run removes the certificate, the finish screen says it is switched off now instead. The reason the removal failed is in the setup log: search it for "The old Provisioner certificate".
 
-**Fix.** Run `scripts\setup-windows.cmd` again. If the warning comes back, remove the certificate by hand: in the Microsoft Entra admin center, open App registrations > 'EntraBot Agent ID Provisioner' (the warning gives its application ID) > Certificates & secrets > Certificates, and remove the certificate whose thumbprint ends in the four characters the warning shows. Then run setup again; it finds the certificate gone and stops retrying.
+If setup cannot read its record (an entry that is not a thumbprint, or a state file it cannot read), the warning says so and asks you to check the app's certificates by hand. It names the certificate this computer uses now, when it knows it, so you keep that one.
+
+**Fix.** Run `scripts\setup-windows.cmd` again. If the warning comes back, remove the certificate by hand: in the Microsoft Entra admin center (<https://entra.microsoft.com>), open App registrations > 'EntraBot Agent ID Provisioner' (the warning gives its application ID) > Certificates & secrets > Certificates, and remove the certificate whose thumbprint ends in the four characters the warning shows. Then run setup again; it finds the certificate gone and stops retrying.
+
+Teardown also tries to remove the certificate before it deletes `.entrabot-state.json`, and says what is left if it cannot; see the [`teardown-windows.ps1` reference](../reference/scripts/teardown/teardown-windows-ps1.md).
 
 ## ".env is NOT restricted to your account"
 
@@ -202,7 +221,7 @@ Setup has no proxy or TLS-inspection setting of its own, and it has not been tes
 powershell -ExecutionPolicy Bypass -File scripts\teardown-windows.ps1
 ```
 
-By default this disconnects this PC only: its certificate is removed from the agent's Blueprint and from the PC, the `entrabot` entry is removed from the assistants' configuration, `.env` and `.entrabot-state.json` are backed up and removed, and this PC's setup certificate is retired (add `-KeepSetupCredential` if you are about to set up again). The agent, its memory, and `%LOCALAPPDATA%\entrabot` are kept. `-DeleteAgent` also deletes the agent from the tenant; `-PurgeData` also deletes the data folder. See the [`teardown-windows.ps1` reference](../reference/scripts/teardown/teardown-windows-ps1.md).
+By default this disconnects this PC only: its certificate is removed from the agent's Blueprint and from the PC, the `entrabot` entry is removed from the assistants' configuration, `.env` and `.entrabot-state.json` are backed up and removed, and this PC's setup certificate is retired (add `-KeepSetupCredential` if you are about to set up again). The agent, its memory, and `%LOCALAPPDATA%\entrabot` are kept. `-DeleteAgent` also deletes the agent from the tenant; `-PurgeData` also deletes the data folder. If setup left an older setup key it could not switch off, teardown tries to remove it as well. When that fails it says where to remove it by hand and exits 1; when it keeps the setup certificate (`-KeepSetupCredential`) it also leaves `.entrabot-state.json` holding only setup's note about the key, so setup's next run tries again. See the [`teardown-windows.ps1` reference](../reference/scripts/teardown/teardown-windows-ps1.md).
 
 ## Reference: the two certificate thumbprints
 

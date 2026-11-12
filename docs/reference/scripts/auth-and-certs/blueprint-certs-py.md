@@ -52,16 +52,26 @@ Not a CLI. The main functions are:
 - `remove_key_credential(*, object_id, token, x5t_s256=None, sha1_hex=None, ...)` — remove
   one certificate, identified by its key material, and keep every other machine's. The
   write counts only once a read shows that certificate gone and the others still there. A
-  certificate that isn't registered is not an error. Windows rotation and teardown use it.
+  certificate that isn't registered is not an error. Windows rotation uses it, and Windows
+  teardown uses it for this computer's setup certificate on the Provisioner app.
+- `remove_key_credentials(*, object_id, token, thumbprints, must_keep=(), ...)` — remove
+  several certificates in ONE read, write and confirmed read-back, keeping every other
+  entry exactly as Graph returned it. Each thumbprint is a 40-character hex SHA-1 or a
+  base64url SHA-256 (`x5t#S256`). The write counts only once a read shows all of them gone
+  and every other entry still there. Certificates that aren't registered are not an error:
+  the result's `not_listed` names them, and when none is registered nothing is sent.
+  Windows teardown uses it to take this computer's certificate and a rotation leftover off
+  the Blueprint together.
 - `swap_key_credential(...)` — used only by the older `rotate_cert_windows.rotate()`
   library function. Drops only the entries whose key material matches the old or new
   certificate and adds the given one.
 
 ## Effects
 
-`fetch_key_credentials` is read-only. `register_key_credential`, `remove_key_credential`
-and `swap_key_credential` update the Blueprint's `keyCredentials` through Graph v1.0. Every
-request has a bounded timeout, and the module changes nothing locally.
+`fetch_key_credentials` is read-only. `register_key_credential`, `remove_key_credential`,
+`remove_key_credentials` and `swap_key_credential` update the Blueprint's `keyCredentials`
+through Graph v1.0. Every request has a bounded timeout, and the module changes nothing
+locally.
 
 ## Exit behavior
 
@@ -94,6 +104,10 @@ code and message, never the token or key material.
   nothing can lock across machines.
 - **Graph rejects an existing entry** — sending back an entry as Graph returned it fails
   closed: Graph's error is reported and nothing changes.
+- **Removing several certificates one call at a time** — each `remove_key_credential` call
+  is a whole-list write. The second call's read can land on a replica that still lists the
+  certificate the first call removed, and its write then puts that certificate back, while
+  both calls report success. Use `remove_key_credentials` to remove them in one write.
 
 ## Related commands
 
@@ -101,6 +115,8 @@ code and message, never the token or key material.
   machine's certificate on macOS and Linux.
 - [`deploy-windows.ps1`](../setup/deploy-windows-ps1.md) — the Windows rotation, which
   uses `register_key_credential` and then `remove_key_credential`.
+- [`teardown-windows.ps1`](../teardown/teardown-windows-ps1.md) — the Windows teardown,
+  which uses `remove_key_credentials` for the Blueprint.
 - [`verify_blueprint_cert.py`](verify-blueprint-cert-py.md),
   [`find_local_blueprint_cert.py`](find-local-blueprint-cert-py.md), and
   [`list_blueprint_certs.py`](list-blueprint-certs-py.md) — the read-only checks built on

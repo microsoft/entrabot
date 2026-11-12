@@ -31,6 +31,12 @@ Usage:
 
     # As a standalone bootstrap:
     python3 scripts/entra_provisioning.py
+
+An existing app registration with the Provisioner's name is only taken over when this run
+would grant nobody anything: an administrator has already approved it for every permission
+setup needs, or nobody else can use it. Otherwise setup stops and says why; set
+ENTRABOT_PROVISIONER_APP_ID_VERIFIED to the application ID of the app you have checked to
+use that one.
 """
 
 from __future__ import annotations
@@ -47,7 +53,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -1075,6 +1081,9 @@ def _get_consented_graph_role_ids(client_id: str) -> set[str]:
     On a read failure we return an empty set, which makes the caller treat
     everything as unconsented and re-run admin consent. ``admin-consent`` is
     idempotent, so erring toward re-consent is safe.
+
+    Graph is the resource whose service principal has Graph's well-known application ID,
+    matched by object ID: an app that only calls itself "Microsoft Graph" doesn't count.
     """
     # Two steps, by object ID: the one-call form addresses the service principal as
     # servicePrincipals(appId='...'), and those parentheses don't survive az.cmd on
@@ -1084,34 +1093,12 @@ def _get_consented_graph_role_ids(client_id: str) -> set[str]:
     sp_object_id = _az_scalar(out) if rc == 0 else ""
     if not sp_object_id:
         return set()
-
-    rc, out, _ = run_az(
-        [
-            "rest",
-            "--method",
-            "GET",
-            "--url",
-            f"https://graph.microsoft.com/v1.0/servicePrincipals/{sp_object_id}/appRoleAssignments",
-            "-o",
-            "json",
-        ]
-    )
-    if rc != 0 or not out:
-        return set()
     try:
-        data = json.loads(out)
-    except json.JSONDecodeError:
+        graph_id = _graph_service_principal_id()
+        assignments, _complete = _app_role_assignments(sp_object_id)
+    except ProvisionerBootstrapError:
         return set()
-    assignments = data.get("value") if isinstance(data, dict) else None
-    if not isinstance(assignments, list):
-        return set()
-    return {
-        item["appRoleId"]
-        for item in assignments
-        if isinstance(item, dict)
-        and item.get("resourceDisplayName") == "Microsoft Graph"
-        and item.get("appRoleId")
-    }
+    return _graph_role_ids(assignments, sp_object_id, graph_id)
 
 
 # What az says when the signed-in account simply isn't allowed to do this. Retrying
@@ -1289,6 +1276,691 @@ def _ensure_permissions_and_consent(client_id: str, required_values: list[str]) 
 
 
 # ---------------------------------------------------------------------------
+# Which app registration is the Provisioner
+# ---------------------------------------------------------------------------
+#
+# The Provisioner app is granted tenant-wide Microsoft Graph application permissions with
+# admin consent. Display names are not unique, and anyone allowed to register applications
+# can give an app this one. So a machine with no Provisioner app recorded takes over an
+# existing app only when this run would grant nobody anything: an administrator has
+# already approved it for every permission setup needs, or nobody else can use it (see
+# _assess_candidate). Otherwise the operator removes the app they don't recognise, or
+# names the right one in ENTRABOT_PROVISIONER_APP_ID_VERIFIED: a variable, because setup
+# runs unattended, and not ENTRABOT_PROVISIONER_APP_ID, which setup itself writes to .env.
+
+VERIFIED_APP_ID_ENV = "ENTRABOT_PROVISIONER_APP_ID_VERIFIED"
+
+# Printed on a line of its own when an existing app is not taken over. The Windows setup
+# wizard (src/entrabot/winsetup/wizard.py) looks for exactly this line to explain the
+# refusal; tests on both sides pin it. It uses the wizard's ENTRABOT_RESULT= convention.
+TAKEOVER_REFUSED_MARKER = "ENTRABOT_RESULT=provisioner-takeover-refused"
+
+_GUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+_AZ_ERROR_LIMIT = 160
+
+
+def _printable(value: object, limit: int = 120) -> str:
+    """Directory text, safe to print: control characters (a terminal escape sequence in an
+    owner's display name, say) become ``?``, and a long value is cut short."""
+    text = "".join(ch if ch.isprintable() else "?" for ch in str(value))
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _az_error(err: str, rc: int) -> str:
+    """What az said on stderr, on one line and safe to print."""
+    text = " ".join((err or "").split())
+    return _printable(text, _AZ_ERROR_LIMIT) if text else f"az exited {rc}"
+
+
+def _az_json(args: list[str]) -> Any:
+    """Run a read-only az command and return its JSON output. Raises when it fails."""
+    rc, out, err = run_az([*args, "-o", "json"])
+    if rc != 0:
+        raise ProvisionerBootstrapError(_az_error(err, rc))
+    try:
+        return json.loads(out) if out else None
+    except json.JSONDecodeError as exc:
+        raise ProvisionerBootstrapError(
+            f"az printed something that isn't JSON ({exc.msg})"
+        ) from exc
+
+
+def _objects(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise ProvisionerBootstrapError("az did not return a list of directory objects")
+    return value
+
+
+def _count(number: int, noun: str) -> str:
+    return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
+
+
+def _provisioner_app_override() -> str | None:
+    """The application ID set in ENTRABOT_PROVISIONER_APP_ID_VERIFIED, lower case, or None.
+
+    Raises when it is set to something that isn't an application ID. The value isn't
+    repeated: whatever was pasted there by mistake must not end up in the setup log.
+    """
+    value = os.environ.get(VERIFIED_APP_ID_ENV, "").strip()
+    if not value:
+        return None
+    if not _GUID_RE.match(value):
+        raise ProvisionerBootstrapError(
+            f"{VERIFIED_APP_ID_ENV} is set, but not to an application ID (a GUID such as "
+            "00000000-0000-0000-0000-000000000000). Nothing was changed in Microsoft Entra. "
+            "Set it to the Application (client) ID of the app registration you have checked, "
+            "or unset it, then run setup again."
+        )
+    return value.lower()
+
+
+def _signed_in_user_object_id() -> tuple[str | None, str]:
+    """(object ID of the account az is signed in with, "") or (None, why it isn't known)."""
+    rc, out, err = run_az(["ad", "signed-in-user", "show", "--query", "id", "-o", "json"])
+    if rc != 0:
+        return None, _az_error(err, rc)
+    user_id = _az_scalar(out)
+    if not _GUID_RE.match(user_id):
+        return None, "az did not return an object ID"
+    return user_id.lower(), ""
+
+
+def _service_principal_object_id(app_id: str) -> str:
+    """Object ID of this app's service principal. Raises when it can't be read."""
+    rc, out, err = run_az(["ad", "sp", "show", "--id", app_id, "--query", "id", "-o", "json"])
+    object_id = _az_scalar(out) if rc == 0 else ""
+    if not _GUID_RE.match(object_id):
+        raise ProvisionerBootstrapError(
+            _az_error(err, rc) if rc != 0 else "az did not return an object ID"
+        )
+    return object_id.lower()
+
+
+def _graph_service_principal_id() -> str:
+    """Object ID of Microsoft Graph's service principal in this tenant, looked up by Graph's
+    well-known application ID: an app that only calls itself "Microsoft Graph" is not it.
+    Raises when it can't be read."""
+    found = _az_json(["ad", "sp", "show", "--id", MS_GRAPH_API_ID, "--query", "[id,appId]"])
+    if not (
+        isinstance(found, list)
+        and len(found) == 2
+        and all(isinstance(value, str) for value in found)
+        and _GUID_RE.match(found[0])
+        and found[1].lower() == MS_GRAPH_API_ID
+    ):
+        raise ProvisionerBootstrapError(
+            "az returned something that is not Microsoft Graph's service principal"
+        )
+    return found[0].lower()
+
+
+def _app_role_assignments(principal_id: str) -> tuple[list[dict[str, Any]], bool]:
+    """A service principal's appRoleAssignments, the application permissions admin consent
+    gave it, and whether that is all of them. Raises when they can't be read."""
+    url = f"https://graph.microsoft.com/v1.0/servicePrincipals/{principal_id}/appRoleAssignments"
+    found = _az_json(["rest", "--method", "GET", "--url", url])
+    entries = found.get("value") if isinstance(found, dict) else None
+    if not isinstance(entries, list):
+        raise ProvisionerBootstrapError("az did not return a list of app role assignments")
+    complete = not found.get("@odata.nextLink")
+    return [entry for entry in entries if isinstance(entry, dict)], complete
+
+
+def _graph_role_ids(
+    assignments: list[dict[str, Any]], principal_id: str, graph_id: str
+) -> set[str]:
+    """The Microsoft Graph application permissions among these assignments: granted to this
+    principal, by Graph's own service principal (matched by object ID, never by name)."""
+    return {
+        str(entry["appRoleId"])
+        for entry in assignments
+        if entry.get("appRoleId")
+        and str(entry.get("principalId", "")).lower() == principal_id.lower()
+        and str(entry.get("resourceId", "")).lower() == graph_id.lower()
+    }
+
+
+def _local_provisioner_thumbprints(tenant_id: str, stored_pem: str | None) -> set[str]:
+    """SHA-1 thumbprints (upper-case hex) of the Provisioner certificates whose private key
+    is on this machine. Raises when the certificate store can't be read."""
+    if not _uses_cng():
+        if not stored_pem:
+            return set()
+        try:
+            return {_thumbprint_from_cert_pem(_cert_pem_from_bundle(stored_pem)).upper()}
+        except (ProvisionerBootstrapError, ValueError):
+            return set()  # an unreadable bundle is no key this machine can sign with
+
+    from entrabot.platform import wincert
+
+    try:
+        certs = wincert.list_certs(
+            friendly_name=_PROVISIONER_FRIENDLY_NAME.format(tenant_id=tenant_id)
+        )
+        legacy_pem = _windows_legacy_pem_read(tenant_id)
+    except (wincert.WinCertError, OSError) as exc:
+        raise ProvisionerBootstrapError(str(exc)) from exc
+    # A certificate without its private key proves nothing: anyone can import one.
+    found = {cert.sha1_hex.upper() for cert in certs if cert.has_private_key}
+    legacy = _legacy_cert_identity(legacy_pem) if legacy_pem else None
+    if legacy is not None:
+        found.add(legacy[0])
+    return found
+
+
+def _certificate_sha1(entry: dict[str, Any]) -> str | None:
+    """SHA-1 of the certificate in a ``keyCredentials`` entry, from its key material only.
+
+    ``customKeyIdentifier`` is whatever the uploader said it is, so it can't show whose
+    certificate this is.
+    """
+    thumbprints = _key_credential_thumbprints({"key": entry.get("key")})
+    return next(iter(thumbprints)) if thumbprints else None
+
+
+def _created_on(app: dict[str, Any]) -> str:
+    value = app.get("createdDateTime")
+    if isinstance(value, str) and re.match(r"^\d{4}-\d{2}-\d{2}", value):
+        return value[:10]
+    return "on an unknown date"
+
+
+def _owner_label(owner: dict[str, Any], me: str | None) -> str:
+    """An owner's sign-in name (else display name), marked when it is the signed-in user."""
+    name = owner.get("userPrincipalName") or owner.get("displayName") or owner.get("id")
+    label = _printable(name or "an owner that could not be identified")
+    if str(owner.get("@odata.type", "")).endswith("servicePrincipal"):
+        label = f"{label} (an application)"
+    if me is not None and str(owner.get("id", "")).lower() == me:
+        label = f"you ({label})"
+    return label
+
+
+def _other_owners(owners: list[dict[str, Any]], me: str | None) -> list[str]:
+    """Owners other than the signed-in user. None when who is signed in isn't known: that
+    is reported once for every candidate, and blocks the takeover by itself."""
+    if me is None:
+        return []
+    return [_owner_label(o, me) for o in owners if str(o.get("id", "")).lower() != me]
+
+
+def _permissions_beyond(app: dict[str, Any], role_ids: set[str]) -> int | None:
+    """How many permissions the app declares besides these Microsoft Graph application
+    permissions (``role_ids`` in lower case), or None when what it declares can't be read."""
+    declared = app.get("requiredResourceAccess")
+    if not isinstance(declared, list):
+        return None
+    extra = 0
+    for resource in declared:
+        accesses = resource.get("resourceAccess") if isinstance(resource, dict) else None
+        if not isinstance(accesses, list) or not all(isinstance(a, dict) for a in accesses):
+            return None
+        for access in accesses:
+            if not (
+                str(resource.get("resourceAppId", "")).lower() == MS_GRAPH_API_ID
+                and access.get("type") == "Role"
+                and str(access.get("id", "")).lower() in role_ids
+            ):
+                extra += 1
+    return extra
+
+
+@dataclass(frozen=True)
+class _Facts:
+    """What every candidate is judged against, read once."""
+
+    me: str | None  # the signed-in user's object ID
+    local: set[str] | None  # thumbprints of the certificates whose private key is here
+    local_error: str
+    role_ids: set[str] | None  # Graph app role IDs, lower case, of every permission needed
+    graph_id: str | None  # object ID of Microsoft Graph's service principal in this tenant
+    graph_error: str
+
+
+@dataclass
+class _Candidate:
+    """An existing app registration with the Provisioner's name, as far as it was read."""
+
+    app_id: str
+    created: str
+    owners: str = "could not be read"
+    unsafe: list[str] = field(default_factory=list)  # who else could use it, or what it'd get
+    unknown: list[str] = field(default_factory=list)  # what could not be checked
+    approved: bool = False  # an administrator approved everything; taking it over grants nothing
+    approval: str = ""  # what to say about that approval, if anything
+
+
+def _assess_candidate(app: dict[str, Any], facts: _Facts) -> _Candidate:
+    """Read what decides whether this app may become the Provisioner without being named.
+
+    It may when this run would grant nobody anything by taking it over. That is so in two
+    cases. The first is ``approved`` (see _approval): an administrator has already given it
+    admin consent for every permission setup needs, so whoever can use it already could, and
+    this run consents nothing. Otherwise everything below must hold (``unsafe`` and
+    ``unknown`` stay empty): nobody but this machine and the tenant's administrators can use
+    it or change it, now or later, and admin consent would grant it nothing setup doesn't
+    ask for.
+
+    * Every owner of the app, and of its service principal, is the signed-in user, or it
+      has none. Owners can add credentials, so anyone else could let themselves in later.
+      An app with no owners (an administrator can create one, with an app-only token for
+      example, and owners can be removed) can only be changed by an administrator, who
+      could change any app anyway. With the next point, nobody else can use it: that is
+      the same guarantee as an app you alone own, so it is taken over the same way.
+    * The app has no client secret and no federated credential, its service principal
+      has no credential of its own, and every certificate on the app is one whose
+      private key is on this machine. Owners alone don't show this: whoever registered
+      the app can leave a way in, then make you its only owner or remove themselves.
+    * It declares no permission but setup's Graph application permissions. Admin consent
+      grants everything declared: a delegated scope, with a redirect URI someone else
+      controls, would let them collect other users' tokens.
+
+    Once taken over, only an administrator can change any of this before consent is given.
+    """
+    app_id = str(app.get("appId") or "")
+    object_id = str(app.get("id") or "")
+    candidate = _Candidate(app_id=_printable(app_id) or "(none)", created=_created_on(app))
+    if not (_GUID_RE.match(app_id) and _GUID_RE.match(object_id)):
+        candidate.unknown.append("the directory returned it without usable IDs")
+        return candidate
+    me, local, local_error, role_ids = facts.me, facts.local, facts.local_error, facts.role_ids
+
+    try:
+        owners = _objects(_az_json(["ad", "app", "owner", "list", "--id", app_id]))
+    except ProvisionerBootstrapError as exc:
+        candidate.unknown.append(f"its owners could not be read ({exc})")
+    else:
+        candidate.owners = ", ".join(_owner_label(owner, me) for owner in owners) or "none"
+        others = _other_owners(owners, me)
+        if others:
+            candidate.unsafe.append(f"someone other than you owns it: {', '.join(others)}")
+
+    secrets = app.get("passwordCredentials")
+    if not isinstance(secrets, list):
+        candidate.unknown.append("its client secrets could not be read")
+    elif secrets:
+        candidate.unsafe.append(f"it has {_count(len(secrets), 'client secret')}")
+
+    # Graph returns a certificate's key material only when keyCredentials is selected on
+    # a single application.
+    url = f"https://graph.microsoft.com/v1.0/applications/{object_id}?$select=keyCredentials"
+    try:
+        found = _az_json(["rest", "--method", "GET", "--url", url])
+        certificates = _objects(found.get("keyCredentials") if isinstance(found, dict) else None)
+    except ProvisionerBootstrapError as exc:
+        candidate.unknown.append(f"its certificates could not be read ({exc})")
+    else:
+        if certificates and local is None:
+            candidate.unknown.append(
+                f"whether its certificates are this machine's could not be checked ({local_error})"
+            )
+        elif certificates:
+            foreign = [entry for entry in certificates if _certificate_sha1(entry) not in local]
+            if foreign:
+                candidate.unsafe.append(
+                    f"it has {_count(len(foreign), 'certificate')} whose private key is not "
+                    "on this machine"
+                )
+
+    try:
+        federated = _objects(
+            _az_json(["ad", "app", "federated-credential", "list", "--id", app_id])
+        )
+    except ProvisionerBootstrapError as exc:
+        candidate.unknown.append(f"its federated credentials could not be read ({exc})")
+    else:
+        if federated:
+            candidate.unsafe.append(
+                f"it has {_count(len(federated), 'federated credential')}, so an identity "
+                "from elsewhere can sign in as it"
+            )
+
+    if role_ids is not None:
+        extra = _permissions_beyond(app, role_ids)
+        if extra is None:
+            candidate.unknown.append("the permissions it asks for could not be read")
+        elif extra:
+            candidate.unsafe.append(
+                f"it asks for {_count(extra, 'permission')} setup does not use, which admin "
+                "consent would grant as well"
+            )
+
+    _assess_service_principal(candidate, app, facts)
+    return candidate
+
+
+def _assess_service_principal(candidate: _Candidate, app: dict[str, Any], facts: _Facts) -> None:
+    """The app's service principal, if it has one yet: the admin consent it holds, its own
+    credentials, and its owners."""
+    app_id = str(app.get("appId") or "")
+    try:
+        principals = [
+            principal
+            for principal in _objects(_az_json(["ad", "sp", "list", "--spn", app_id]))
+            if str(principal.get("appId", "")).lower() == app_id.lower()
+        ]
+    except ProvisionerBootstrapError as exc:
+        candidate.unknown.append(f"its service principal could not be read ({exc})")
+        return
+    if not principals:
+        return  # nothing approved yet; setup creates it, as you
+    if len(principals) > 1:
+        candidate.unknown.append("it has more than one service principal")
+        return
+    principal = principals[0]
+    principal_id = str(principal.get("id") or "")
+    if not _GUID_RE.match(principal_id):
+        candidate.unknown.append("its service principal could not be identified")
+        return
+    candidate.approved, candidate.approval = _approval(app, principal_id, facts)
+
+    credentials = [principal.get("passwordCredentials"), principal.get("keyCredentials")]
+    if not all(isinstance(entries, list) for entries in credentials):
+        candidate.unknown.append("its service principal's credentials could not be read")
+    elif any(credentials):
+        total = sum(len(entries) for entries in credentials)
+        candidate.unsafe.append(
+            f"its service principal has {_count(total, 'credential')} of its own"
+        )
+    try:
+        owners = _objects(_az_json(["ad", "sp", "owner", "list", "--id", principal_id]))
+    except ProvisionerBootstrapError as exc:
+        candidate.unknown.append(f"its service principal's owners could not be read ({exc})")
+        return
+    others = _other_owners(owners, facts.me)
+    if others:
+        candidate.unsafe.append(
+            f"someone other than you owns its service principal: {', '.join(others)}"
+        )
+
+
+def _approval(app: dict[str, Any], principal_id: str, facts: _Facts) -> tuple[bool, str]:
+    """Whether an administrator has already approved this app for every Microsoft Graph
+    permission setup needs, so that taking it over grants nobody anything; and what to say.
+
+    The approval read is the admin consent on its service principal: appRoleAssignments
+    from Graph's own service principal, found by Graph's application ID and matched by
+    object ID. It must cover every permission setup needs, or this run would consent the
+    rest. Every other permission the app declares must be approved already too, or admin
+    consent (never given in this run, but given by a later one) would grant it. Anything
+    that can't be read means "not approved": the strict rule then decides.
+    """
+    unreadable = "whether an administrator has approved it could not be read"
+    if facts.role_ids is None:
+        return False, ""  # what setup needs is unknown, which is said once for all of them
+    if facts.graph_id is None:
+        return False, f"{unreadable} ({facts.graph_error})"
+    try:
+        assignments, complete = _app_role_assignments(principal_id)
+    except ProvisionerBootstrapError as exc:
+        return False, f"{unreadable} ({exc})"
+    if not complete:
+        return False, f"{unreadable} (there are more of them than one read returns)"
+    granted = {role.lower() for role in _graph_role_ids(assignments, principal_id, facts.graph_id)}
+    missing = facts.role_ids - granted
+    if missing:
+        return False, (
+            f"not yet approved by an administrator for {len(missing)} of the permissions "
+            "setup needs"
+        )
+    unapproved = _permissions_beyond(app, granted)
+    if unapproved is None:
+        return False, ""  # the strict rule says the permissions could not be read
+    if unapproved:
+        return False, (
+            "approved by an administrator for the permissions setup needs, but it also asks "
+            f"for {_count(unapproved, 'permission')} no administrator has approved"
+        )
+    return True, "already approved by an administrator for the permissions setup needs"
+
+
+def _record_provisioner_app(app_id: str) -> None:
+    set_state("PROVISIONER_CLIENT_ID", app_id)
+    # A certificate recorded here was registered on whichever app was recorded before, so
+    # it says nothing about this one. Unrecorded, this machine's certificate is uploaded.
+    clear_state("PROVISIONER_CERT_THUMBPRINT")
+
+
+def _create_provisioner_app() -> str:
+    """Create a new Provisioner app registration and record it."""
+    print("  Creating dedicated EntraBot provisioner app...")
+    rc, out, err = run_az(
+        [
+            "ad",
+            "app",
+            "create",
+            "--display-name",
+            PROVISIONER_APP_DISPLAY_NAME,
+            "--sign-in-audience",
+            "AzureADMyOrg",
+            "--query",
+            "appId",
+            "-o",
+            "json",
+        ]
+    )
+    created_app_id = _az_scalar(out) if rc == 0 else ""
+    if not created_app_id:
+        lowered = (err or "").lower()
+        if any(
+            term in lowered for term in ["insufficient", "authorization", "privilege", "permission"]
+        ):
+            _print_admin_required("create the dedicated provisioner app registration", err)
+        raise ProvisionerBootstrapError(err or "app registration creation failed")
+    print(f"  Created provisioner app: {created_app_id}")
+    _record_provisioner_app(created_app_id)
+    return created_app_id
+
+
+def _use_named_app(app_id: str) -> str:
+    """The app ENTRABOT_PROVISIONER_APP_ID_VERIFIED names, once Entra shows it exists. Recorded.
+
+    The operator has checked this app, so it is not examined the way an app found by name
+    is; it only has to exist, under that application ID.
+    """
+    try:
+        listed = _objects(_az_json(["ad", "app", "list", "--app-id", app_id]))
+    except ProvisionerBootstrapError as exc:
+        raise ProvisionerBootstrapError(
+            f"Could not look up the app registration {VERIFIED_APP_ID_ENV} names "
+            f"({app_id}): {exc}. Nothing was changed in Microsoft Entra. Fix that (for "
+            "example, run 'az login') and run setup again."
+        ) from exc
+    apps = [app for app in listed if str(app.get("appId", "")).lower() == app_id]
+    if not apps:
+        raise ProvisionerBootstrapError(
+            f"{VERIFIED_APP_ID_ENV} is set to {app_id}, but no app registration in this "
+            "tenant has that application ID. Nothing was changed in Microsoft Entra. Set it "
+            "to the Application (client) ID of the app registration you have checked, or "
+            "unset it, then run setup again."
+        )
+    if len(apps) > 1:
+        raise ProvisionerBootstrapError(
+            f"Microsoft Entra returned {len(apps)} app registrations with the application ID "
+            f"{app_id}. Nothing was changed in Microsoft Entra."
+        )
+    name = _printable(apps[0].get("displayName") or "")
+    print(f"  Using the provisioner app {VERIFIED_APP_ID_ENV} names: {app_id} ('{name}')")
+    _record_provisioner_app(app_id)
+    return app_id
+
+
+def _confirm_already_approved(client_id: str, required_values: list[str]) -> bool:
+    """For an app taken over because an administrator already approved it: read its admin
+    consent again, just before setup goes on, and consent nothing.
+
+    This stands in for _ensure_permissions_and_consent, which would run admin consent
+    (granting everything the app declares) if anything were missing. Raises, with nothing
+    changed, when the approval no longer covers every permission setup needs: this run
+    would then have to consent. Returns False: no permission changed, nothing to wait for.
+    """
+    required = {
+        spec.split("=", 1)[0].lower() for _, spec in _resolve_permission_specs(required_values)
+    }
+    try:
+        principal_id = _service_principal_object_id(client_id)
+        assignments, complete = _app_role_assignments(principal_id)
+        if not complete:
+            raise ProvisionerBootstrapError("there are more of them than one read returns")
+        graph_id = _graph_service_principal_id()
+    except ProvisionerBootstrapError as exc:
+        raise ProvisionerBootstrapError(
+            f"Could not read the admin consent of the Provisioner app {client_id} again "
+            f"({exc}), so setup did not take it over. Nothing was changed in Microsoft "
+            "Entra. Run setup again."
+        ) from exc
+    granted = {role.lower() for role in _graph_role_ids(assignments, principal_id, graph_id)}
+    missing = required - granted
+    if missing:
+        raise ProvisionerBootstrapError(
+            f"The Provisioner app {client_id} is no longer approved by an administrator for "
+            f"{len(missing)} of the permissions setup needs, so setup did not take it over: "
+            "this run would have to consent. Nothing was changed in Microsoft Entra. Run "
+            "setup again."
+        )
+    print("  Provisioner app already has the Graph permissions setup needs, approved by an")
+    print("  administrator; nothing is consented for it in this run.")
+    return False
+
+
+def _print_takeover_refused(candidates: list[_Candidate], reasons: list[str]) -> None:
+    name = PROVISIONER_APP_DISPLAY_NAME
+    one = len(candidates) == 1
+    print(TAKEOVER_REFUSED_MARKER)
+    if one:
+        print(f"  An app registration named '{name}' already exists, and this")
+        print("  machine has no Provisioner app recorded. Setup did not take it over.")
+    else:
+        print(f"  {len(candidates)} app registrations are named '{name}', and this")
+        print("  machine has no Provisioner app recorded. Setup did not take any of them over:")
+        print("  it can't tell which one, if any, an earlier setup run created.")
+    for line in (
+        "The Provisioner app gets tenant-wide Microsoft Graph permissions with admin consent, so",
+        "setup takes an existing app over only when an administrator has already approved it for",
+        "all of them, or when nobody else can use it: you are its only owner (or it has none),",
+        "every credential on it is this machine's, and it asks for no other permissions.",
+    ):
+        print(f"  {line}")
+    for reason in reasons:
+        print(f"  {reason}")
+    for candidate in candidates:
+        print(f"    - '{name}' (application ID {candidate.app_id})")
+        print(f"      created {candidate.created}, owners: {candidate.owners}")
+        notes = [candidate.approval] if candidate.approval else []
+        for problem in [*notes, *candidate.unsafe, *candidate.unknown]:
+            print(f"      {problem}")
+    print(
+        "  Nothing was changed in Microsoft Entra. To go on, do one of these and run setup again:"
+    )
+    if reasons or any(candidate.unknown for candidate in candidates):
+        print("    - fix what could not be read above (for example, run 'az login', or activate")
+        print("      your administrator role);")
+    which = "it, if you don't recognise it" if one else "the ones you don't recognise"
+    print(f"    - delete or rename {which} (Entra admin center >")
+    print("      App registrations > All applications);")
+    which = "it is yours" if one else "one of them is yours"
+    print(f"    - or, once you have checked that {which}, set")
+    print(f"      {VERIFIED_APP_ID_ENV} to its application ID.")
+
+
+def _provisioner_app_for_this_machine(
+    named: str | None, tenant_id: str, stored_pem: str | None, required_values: list[str]
+) -> tuple[str, bool]:
+    """The Provisioner app for a machine that has none recorded: the app
+    ENTRABOT_PROVISIONER_APP_ID_VERIFIED names; else the one app with the Provisioner's
+    name, when taking it over grants nobody anything; else, when no app has that name, a
+    new one. Returns (application ID, whether this run may give it admin consent).
+
+    It is recorded here, except an app taken over because an administrator already approved
+    it: the caller records that one once the approval has been read again (see
+    _confirm_already_approved), and this run consents nothing for it.
+
+    Raises, with nothing in Entra changed, when an app has the name but can't be shown to
+    be safe to take over, or when looking could not be finished: "could not check" is
+    never "safe".
+    """
+    if named:
+        return _use_named_app(named), True
+
+    name = PROVISIONER_APP_DISPLAY_NAME
+    try:
+        listed = _objects(_az_json(["ad", "app", "list", "--display-name", name]))
+    except ProvisionerBootstrapError as exc:
+        raise ProvisionerBootstrapError(
+            f"Could not look for an existing '{name}' app registration ({exc}). Nothing was "
+            "changed in Microsoft Entra. Fix that (for example, run 'az login') and run "
+            "setup again."
+        ) from exc
+    # az matches the start of the name, in any case. Only the exact name is one this
+    # script could have created; an app with another name is never taken over.
+    apps = [app for app in listed if app.get("displayName") == name]
+    if not apps:
+        return _create_provisioner_app(), True
+
+    reasons: list[str] = []
+    me, me_error = _signed_in_user_object_id()
+    if me is None:
+        whose = "it" if len(apps) == 1 else "them"
+        reasons.append(
+            f"Who is signed in could not be read ({me_error}), so who else owns {whose} is unknown."
+        )
+    local: set[str] | None
+    try:
+        local, local_error = _local_provisioner_thumbprints(tenant_id, stored_pem), ""
+    except ProvisionerBootstrapError as exc:
+        local, local_error = None, str(exc)
+    role_ids: set[str] | None = None
+    try:
+        graph_roles = resolve_graph_permissions()
+    except ProvisionerBootstrapError as exc:
+        reasons.append(
+            f"Microsoft Graph's permissions could not be read ({exc}), so what admin consent "
+            "would grant is unknown."
+        )
+    else:
+        unknown_values = [value for value in required_values if value not in graph_roles]
+        if unknown_values:
+            reasons.append(
+                f"Microsoft Graph has no permission named {', '.join(unknown_values)} in this "
+                "tenant, so what setup needs can't be checked."
+            )
+        else:
+            role_ids = {str(graph_roles[value]).lower() for value in required_values}
+    graph_id: str | None
+    try:
+        graph_id, graph_error = _graph_service_principal_id(), ""
+    except ProvisionerBootstrapError as exc:
+        graph_id, graph_error = None, str(exc)
+
+    facts = _Facts(me, local, local_error, role_ids, graph_id, graph_error)
+    candidates = [_assess_candidate(app, facts) for app in apps]
+    (first, *rest) = candidates
+    if not rest and not reasons and not first.unsafe and not first.unknown:
+        print(f"  Found existing provisioner app: {first.app_id}")
+        who = "it has no owners" if first.owners == "none" else f"its only owner is {first.owners}"
+        print(f"  Taking it over: {who},")
+        print("  and nothing on it lets anyone else sign in as it.")
+        _record_provisioner_app(first.app_id)
+        return first.app_id, True
+    if not rest and first.approved:
+        # Whoever can use it already holds everything setup needs, and this run consents
+        # nothing; its owners and certificates (other computers', usually) don't change that.
+        print(f"  Found existing provisioner app: {first.app_id}")
+        print(f"  Taking it over: {first.approval}.")
+        return first.app_id, False
+
+    _print_takeover_refused(candidates, reasons)
+    raise ProvisionerBootstrapError(
+        f"Setup did not take over an existing '{name}' app registration (see above), and "
+        "nothing was changed in Microsoft Entra. Delete or rename the one you don't "
+        f"recognise, or set {VERIFIED_APP_ID_ENV} to the application ID of the one you "
+        "have checked is yours, then run setup again."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Provisioner app lifecycle
 # ---------------------------------------------------------------------------
 
@@ -1309,6 +1981,12 @@ def ensure_app_registration(
     non-exportable key in the certificate store and holds no secret.
 
     State file tracks only non-secret identifiers (app id, thumbprint).
+
+    The app is the one recorded in the state file by an earlier run on this machine. With
+    none recorded it is the app ``ENTRABOT_PROVISIONER_APP_ID_VERIFIED`` names, else an
+    existing app with the Provisioner's name that this run would grant nobody anything by
+    taking over, else a new one; an app with the name that can't be shown to be safe stops
+    setup before anything in Entra changes.
     """
     tenant_id = os.environ.get("ENTRABOT_TENANT_ID") or get_state("TENANT_ID")
     if not tenant_id:
@@ -1332,8 +2010,10 @@ def ensure_app_registration(
         clear_state("PROVISIONER_CLIENT_SECRET")
 
     client_id = get_state("PROVISIONER_CLIENT_ID")
+    named = _provisioner_app_override()
     # Windows keeps the key in CNG; its certificate is looked up further down.
-    pem_bundle = None if _uses_cng() else _keychain_get_cert(tenant_id)
+    stored_pem = None if _uses_cng() else _keychain_get_cert(tenant_id)
+    pem_bundle = stored_pem
 
     # Stale-app detection. Only Entra saying "no such app" makes the cached app stale;
     # a lookup that failed changes nothing, because acting on it would throw away a
@@ -1358,57 +2038,32 @@ def ensure_app_registration(
             # Unrecorded, so a key-store certificate on Windows is uploaded to the new app.
             clear_state("PROVISIONER_CERT_THUMBPRINT")
 
-    # Find-or-create the Provisioner app registration
-    if not client_id:
-        rc, out, _ = run_az(
-            [
-                "ad",
-                "app",
-                "list",
-                "--display-name",
-                PROVISIONER_APP_DISPLAY_NAME,
-                "--query",
-                "[0].appId",
-                "-o",
-                "json",
-            ]
+    # The recorded app is trusted: an earlier run on this machine created or took it over.
+    # Naming a different one isn't a way to move off it, and is refused before any change.
+    if client_id and named and named != client_id.lower():
+        raise ProvisionerBootstrapError(
+            f"{VERIFIED_APP_ID_ENV} is set to {named}, but this machine already uses the "
+            f"Provisioner app {client_id} (recorded in {_STATE_FILE.name} by an earlier setup "
+            "run). Nothing was changed in Microsoft Entra. To keep using it, unset "
+            f"{VERIFIED_APP_ID_ENV} and run setup again."
         )
-        found_app_id = _az_scalar(out) if rc == 0 else ""
-        if found_app_id:
-            client_id = found_app_id
-            print(f"  Found existing provisioner app: {client_id}")
-            set_state("PROVISIONER_CLIENT_ID", client_id)
-        else:
-            print("  Creating dedicated EntraBot provisioner app...")
-            rc, out, err = run_az(
-                [
-                    "ad",
-                    "app",
-                    "create",
-                    "--display-name",
-                    PROVISIONER_APP_DISPLAY_NAME,
-                    "--sign-in-audience",
-                    "AzureADMyOrg",
-                    "--query",
-                    "appId",
-                    "-o",
-                    "json",
-                ]
-            )
-            created_app_id = _az_scalar(out) if rc == 0 else ""
-            if not created_app_id:
-                lowered = (err or "").lower()
-                if any(
-                    term in lowered
-                    for term in ["insufficient", "authorization", "privilege", "permission"]
-                ):
-                    _print_admin_required("create the dedicated provisioner app registration", err)
-                raise ProvisionerBootstrapError(err or "app registration creation failed")
-            client_id = created_app_id
-            print(f"  Created provisioner app: {client_id}")
-            set_state("PROVISIONER_CLIENT_ID", client_id)
 
-    permissions_changed = _ensure_permissions_and_consent(client_id, required_values)
+    # Find, take over, or create the Provisioner app registration: before any certificate
+    # upload, permission change or consent.
+    may_consent = True
+    if not client_id:
+        client_id, may_consent = _provisioner_app_for_this_machine(
+            named, tenant_id, stored_pem, required_values
+        )
+
+    if may_consent:
+        permissions_changed = _ensure_permissions_and_consent(client_id, required_values)
+    else:
+        # Taken over because an administrator already approved it: this run consents
+        # nothing, and the app is recorded only once that approval has been read again, so
+        # a run that stops here leaves nothing behind that a later run would consent for.
+        permissions_changed = _confirm_already_approved(client_id, required_values)
+        _record_provisioner_app(client_id)
 
     # SECURITY: any leftover password credentials on the app are a
     # backdoor — remove them unconditionally. This closes the window

@@ -104,7 +104,9 @@ so a later stage can resume from a partially provisioned chain.
   [`show_agent_status.py`](../operations/show-agent-status-py.md), to confirm
   which stages actually succeeded.
 - **Exit 1** — the Provisioner token could not be obtained
-  (`ProvisionerBootstrapError`), the delegated Graph consent grant failed (a
+  (`ProvisionerBootstrapError`), the Blueprint recorded for this machine does
+  not exist or could not be checked, more than one application has the
+  Blueprint's name and none is recorded, the delegated Graph consent grant failed (a
   blocking error, because the third hop cannot mint an Agent User token without
   it), or a create call failed after its retries. Token responses are checked
   for an `"error"` key and for a leaked `Directory.AccessAsUser.All` scope
@@ -114,7 +116,13 @@ so a later stage can resume from a partially provisioned chain.
 ## Idempotency and resume
 
 Each stage first consults `.entrabot-state.json`, then queries Graph by stored
-ID and finally by display name. Before creating a new chain, the script also
+ID. For the Blueprint, a stored ID is the only one the script will use: if that
+Blueprint does not exist, or Graph cannot say whether it does, the script stops
+before creating or changing anything and never looks for another Blueprint by
+name. Display names are not unique, so a name match could be a different
+agent's Blueprint. Only when no Blueprint is recorded at all does the script
+search by display name; one exact match is used, none means a new Blueprint is
+created, and more than one stops the run and lists them. Before creating a new chain, the script also
 searches the tenant for an existing Agent User by intended UPN and reuses it
 (and its parent Agent Identity) rather than colliding on the unique-UPN
 constraint — which lets a second device or a lost state file re-attach to an

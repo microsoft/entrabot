@@ -341,3 +341,210 @@ class TestMustKeep:
             _remove(x5t_s256=CERT_B.thumbprint, must_keep=[CERT_C.thumbprint])
 
         assert graph.patches == []
+
+
+def _remove_several(*thumbprints: str, **kwargs: Any) -> tuple[Any, list[float]]:
+    sleeps: list[float] = []
+    result = blueprint_certs.remove_key_credentials(
+        object_id=FAKE_OBJECT_ID,
+        token=FAKE_TOKEN,
+        thumbprints=list(thumbprints),
+        sleep=sleeps.append,
+        **kwargs,
+    )
+    return result, sleeps
+
+
+class TestSeveralCertificatesInOneWrite:
+    """Teardown takes two certificates off the Blueprint when a rotation was interrupted:
+    this computer's and the rotation's leftover. Done as two removals, that is two
+    read-modify-writes of the whole list, and the second read can land on a replica that
+    still shows the certificate the first write removed. The second write then puts it back,
+    and both removals report success. Removed together there is one read, one write and one
+    read-back, so there is no second read to be stale.
+    """
+
+    def test_the_defect_two_removals_and_a_stale_second_read_put_one_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Pinned, so the scenario the fix is for is on record. The first removal reads A, B
+        # and C, writes B and C and reads that back. The second removal's read lands on a
+        # replica that has not caught up: it still shows A.
+        everything = _stale_body(_entries())
+        after_first = _stale_body(_entries()[1:])
+        graph = use_fake_graph(
+            monkeypatch, FakeGraph(_entries(), get_script=[everything, after_first, everything])
+        )
+
+        _remove(x5t_s256=CERT_A.thumbprint)
+        _remove(x5t_s256=CERT_B.thumbprint)  # both "succeed"
+
+        assert graph.patch_bodies[-1] == [_entries()[0], _entries()[2]]  # A written back
+        assert [entry["keyId"] for entry in graph.entries] == [KEY_A, KEY_C]
+
+    def test_one_read_one_write_one_read_back_for_all_of_them(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        graph = use_fake_graph(monkeypatch, FakeGraph(_entries()))
+
+        result, sleeps = _remove_several(CERT_A.thumbprint, CERT_B.thumbprint)
+
+        assert len(graph.gets) == 2 and len(graph.patches) == 1
+        assert graph.patch_bodies == [[_entries()[2]]]  # C goes back exactly as Graph sent it
+        assert [c.key_id for c in result.removed] == [KEY_A, KEY_B]
+        assert [c.key_id for c in result.current] == [KEY_C]
+        assert result.not_listed == ()
+        assert sleeps == []
+
+    def test_a_read_back_still_showing_the_first_one_is_waited_out_and_both_go(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The same lagging replica, now only able to delay the confirmation.
+        lagging = _stale_body([_entries()[0], _entries()[2]])  # A still listed
+        graph = use_fake_graph(
+            monkeypatch, FakeGraph(_entries(), get_script=[_stale_body(_entries()), lagging])
+        )
+
+        result, sleeps = _remove_several(CERT_A.thumbprint, CERT_B.thumbprint, delay_seconds=7.0)
+
+        assert sleeps == [7.0]
+        assert len(graph.patches) == 1
+        assert [entry["keyId"] for entry in graph.entries] == [KEY_C]  # neither is back
+        assert [c.key_id for c in result.removed] == [KEY_A, KEY_B]  # and it says so
+        assert [c.key_id for c in result.current] == [KEY_C]
+
+    @pytest.mark.parametrize("leftover", [0, 1], ids=["first", "second"])
+    def test_a_read_back_that_keeps_showing_either_is_unconfirmed(
+        self, monkeypatch: pytest.MonkeyPatch, leftover: int
+    ) -> None:
+        still = _stale_body([_entries()[leftover], _entries()[2]])
+        use_fake_graph(
+            monkeypatch,
+            FakeGraph(_entries(), get_script=[_stale_body(_entries()), still, still]),
+        )
+
+        with pytest.raises(blueprint_certs.RegistrationUnconfirmedError, match="still listed"):
+            _remove_several(CERT_A.thumbprint, CERT_B.thumbprint, attempts=2)
+
+    def test_a_write_that_did_not_land_is_unconfirmed_not_success(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        use_fake_graph(monkeypatch, FakeGraph(_entries(), patch_outcome=503, patch_applies=False))
+
+        with pytest.raises(blueprint_certs.RegistrationUnconfirmedError) as caught:
+            _remove_several(CERT_A.thumbprint, CERT_B.thumbprint, attempts=2)
+
+        assert "2 of the 2 certificates" in str(caught.value)
+
+    def test_one_that_is_not_listed_is_said_and_the_other_still_goes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        graph = use_fake_graph(monkeypatch, FakeGraph(_entries()[1:]))  # A is not there
+
+        result, _ = _remove_several(_sha1(CERT_A), CERT_B.thumbprint)
+
+        assert result.not_listed == (_sha1(CERT_A),)
+        assert [c.key_id for c in result.removed] == [KEY_B]
+        assert [entry["keyId"] for entry in graph.entries] == [KEY_C]
+
+    def test_none_of_them_listed_is_a_no_op_without_a_patch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        graph = use_fake_graph(monkeypatch, FakeGraph(_entries()[2:]))
+
+        result, _ = _remove_several(CERT_A.thumbprint, _sha1(CERT_B).lower())
+
+        assert result.removed == ()
+        assert result.not_listed == (CERT_A.thumbprint, _sha1(CERT_B).lower())
+        assert graph.patches == []
+
+    def test_each_is_named_by_either_thumbprint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        graph = use_fake_graph(monkeypatch, FakeGraph(_entries()))
+
+        _remove_several(_sha1(CERT_A).lower(), CERT_C.thumbprint)
+
+        assert [entry["keyId"] for entry in graph.entries] == [KEY_B]
+
+    @pytest.mark.parametrize("status", [401, 403, 404, 500, 503])
+    def test_a_failed_read_sends_nothing(
+        self, monkeypatch: pytest.MonkeyPatch, status: int
+    ) -> None:
+        graph = use_fake_graph(monkeypatch, FakeGraph(_entries(), get_script=[status]))
+
+        with pytest.raises(blueprint_certs.KeyCredentialsReadError):
+            _remove_several(CERT_A.thumbprint, CERT_B.thumbprint)
+
+        assert graph.patches == []
+
+    def test_not_listed_beside_an_unreadable_entry_is_could_not_check(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # B is found, but A is not, and C's key material can't be read: C may be A. Writing
+        # would remove B and could leave A registered while saying it isn't, so nothing is.
+        unreadable = {**graph_entry(CERT_C, key_id=KEY_C, display_name="host-c"), "key": None}
+        graph = use_fake_graph(monkeypatch, FakeGraph([_entries()[1], unreadable]))
+
+        with pytest.raises(blueprint_certs.KeyCredentialsReadError, match="couldn't be read"):
+            _remove_several(CERT_A.thumbprint, CERT_B.thumbprint)
+
+        assert graph.patches == []
+
+    def test_another_machines_certificate_vanishing_is_unconfirmed_and_named(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        use_fake_graph(monkeypatch, FakeGraph(_entries(), lost_key_ids=[KEY_C]))
+
+        with pytest.raises(blueprint_certs.RegistrationUnconfirmedError) as caught:
+            _remove_several(CERT_A.thumbprint, CERT_B.thumbprint, attempts=2)
+
+        assert caught.value.missing == ("host-c",)
+
+    def test_must_keep_still_holds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        graph = use_fake_graph(monkeypatch, FakeGraph(_entries()[:2]))  # C not shown yet
+
+        with pytest.raises(blueprint_certs.RequiredCertificateMissingError):
+            _remove_several(
+                CERT_A.thumbprint, CERT_B.thumbprint, must_keep=[CERT_C.thumbprint], attempts=2
+            )
+
+        assert graph.patches == []
+
+    def test_a_certificate_cannot_be_both_removed_and_kept(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        graph = use_fake_graph(monkeypatch, FakeGraph(_entries()))
+
+        with pytest.raises(ValueError, match="must_keep"):
+            _remove_several(CERT_A.thumbprint, _sha1(CERT_B), must_keep=[_sha1(CERT_B).lower()])
+
+        assert graph.requests == []
+
+    def test_needs_a_thumbprint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        graph = use_fake_graph(monkeypatch, FakeGraph(_entries()))
+
+        with pytest.raises(ValueError, match="thumbprint"):
+            _remove_several(" ", "")
+
+        assert graph.requests == []
+
+    def test_errors_carry_no_token_or_key_material(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        use_fake_graph(monkeypatch, FakeGraph(_entries(), patch_outcome=503, patch_applies=False))
+
+        with pytest.raises(blueprint_certs.RegistrationUnconfirmedError) as caught:
+            _remove_several(CERT_A.thumbprint, _sha1(CERT_B), attempts=1)
+
+        text = str(caught.value)
+        assert FAKE_TOKEN not in text
+        for secretish in (CERT_A.b64, CERT_A.thumbprint, CERT_B.b64, _sha1(CERT_B)):
+            assert secretish not in text
+
+    def test_removing_one_says_whether_it_was_listed_too(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        use_fake_graph(monkeypatch, FakeGraph(_entries()[1:]))
+
+        absent, _ = _remove(x5t_s256=CERT_A.thumbprint)
+        present, _ = _remove(sha1_hex=_sha1(CERT_B))
+
+        assert absent.not_listed == (CERT_A.thumbprint,)
+        assert present.not_listed == ()

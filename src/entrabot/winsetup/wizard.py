@@ -6,8 +6,9 @@ until the person confirms the review screen. The second half does the work, one 
 time, and every step is safe to run again: re-running setup is the repair path.
 
 Exit codes: 0 done, 1 failed, 2 usage or a missing answer under ``--yes``, 3 set up but with
-something to check (the end-to-end test failed, a sponsor could not be confirmed, or Claude
-Code is too old for the project's safety checks), 130 cancelled.
+something to check (the end-to-end test failed, a sponsor could not be confirmed, Claude Code
+is too old for the project's safety checks, or an older setup key could not be switched off in
+Microsoft Entra), 130 cancelled.
 """
 
 from __future__ import annotations
@@ -20,8 +21,8 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass, field, replace
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -66,6 +67,20 @@ TOTAL_STEPS = 11
 DEFAULT_LOCATION = "eastus"
 RERUN = "Run setup again. It continues from here and keeps what already works."
 
+# What scripts/entra_provisioning.py prints after RESULT_MARKER, on a line of its own, when it
+# would not take over an existing app registration with the Provisioner's name. Tests on both
+# sides pin the whole line.
+PROVISIONER_TAKEOVER_REFUSED = "provisioner-takeover-refused"
+_TAKEOVER_REFUSED_FIX = (
+    "The app registrations it found, and why it did not use them, are listed above and in\n"
+    "the setup log. To go on, delete or rename the one you don't recognise (Entra admin\n"
+    "center > App registrations > All applications), or, once you have checked that it is\n"
+    "yours, set ENTRABOT_PROVISIONER_APP_ID_VERIFIED to its application ID in this window:\n"
+    '  cmd.exe:     set "ENTRABOT_PROVISIONER_APP_ID_VERIFIED=<application ID>"\n'
+    "  PowerShell:  $env:ENTRABOT_PROVISIONER_APP_ID_VERIFIED = '<application ID>'\n"
+    "Then run setup again from the same window (scripts\\setup-windows.cmd)."
+)
+
 # What a failed sign-in test looks like when the only problem is the kind of session.
 _KEYRING_MARKERS = (
     "keyring",
@@ -108,6 +123,145 @@ def licence_outcome(
     if sku:
         return "existing" if before.get("AGENT_USER_LICENSE_SKU", "") == sku else "assigned"
     return "unknown"
+
+
+# An older setup kept the Provisioner's private key in a plain file. On Windows
+# scripts/entra_provisioning.py moves this computer onto a key in the certificate store and then
+# removes the old certificate from the Provisioner app, which holds tenant-wide Graph permissions.
+# A removal that fails is recorded here by _retire_old_certificates, and retried on every run:
+# lowercase SHA-1 thumbprints, comma-separated, and their expiry dates in the same order ("" when
+# unknown).
+_REVOKE_PENDING = "PROVISIONER_CERT_REVOKE_PENDING"
+_REVOKE_PENDING_EXPIRES = "PROVISIONER_CERT_REVOKE_PENDING_EXPIRES"
+_SHA1_THUMBPRINT = re.compile(r"[0-9A-Fa-f]{40}")
+_ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+PROVISIONER_APP_NAME = "EntraBot Agent ID Provisioner"  # the app registration's display name
+ENTRA_ADMIN_CENTER = "https://entra.microsoft.com"
+
+
+@dataclass(frozen=True)
+class OldSetupKey:
+    """An older setup's Provisioner certificate that Microsoft Entra may still trust. Only the
+    end of its thumbprint is kept: enough to find it in the admin center, not to look it up."""
+
+    ending: str  # the thumbprint's last four characters, upper case
+    expires: str  # YYYY-MM-DD, or "" when the record does not say
+
+
+@dataclass(frozen=True)
+class OldSetupKeys:
+    """What the state file says about older setup keys that could not be switched off."""
+
+    keys: tuple[OldSetupKey, ...] = ()
+    unreadable: bool = False  # something is recorded that can't be read as a certificate
+    app_id: str = ""  # the Provisioner app's application ID
+    current: str = ""  # the end of this computer's own Provisioner certificate's thumbprint
+
+    @property
+    def pending(self) -> bool:
+        return bool(self.keys) or self.unreadable
+
+
+def _recorded_date(text: str) -> str:
+    if not _ISO_DATE.fullmatch(text):
+        return ""
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        return ""
+
+
+def old_setup_keys(recorded: Mapping[str, str]) -> OldSetupKeys:
+    """The older Provisioner certificates the state file says are still on the app.
+
+    Read as ``_pending_revocations`` in ``scripts/entra_provisioning.py`` reads them: blank
+    entries are skipped, and expiry dates line up with thumbprints by position. An entry that
+    is not a thumbprint is not dropped silently: the record is then *unreadable*, and the person
+    is asked to check, because what it named may still be trusted.
+    """
+    thumbprints = [part.strip() for part in recorded.get(_REVOKE_PENDING, "").split(",")]
+    expiries = [part.strip() for part in recorded.get(_REVOKE_PENDING_EXPIRES, "").split(",")]
+    keys: list[OldSetupKey] = []
+    seen: set[str] = set()
+    unreadable = False
+    for index, thumbprint in enumerate(thumbprints):
+        if not thumbprint:
+            continue
+        if not _SHA1_THUMBPRINT.fullmatch(thumbprint):
+            unreadable = True
+            continue
+        if thumbprint.upper() in seen:
+            continue
+        seen.add(thumbprint.upper())
+        expires = expiries[index] if index < len(expiries) else ""
+        keys.append(OldSetupKey(ending=thumbprint[-4:].upper(), expires=_recorded_date(expires)))
+    current = recorded.get("PROVISIONER_CERT_THUMBPRINT", "").strip()
+    return OldSetupKeys(
+        keys=tuple(keys),
+        unreadable=unreadable,
+        app_id=recorded.get("PROVISIONER_CLIENT_ID", "").strip(),
+        current=current[-4:].upper() if _SHA1_THUMBPRINT.fullmatch(current) else "",
+    )
+
+
+def _listed(items: Sequence[str]) -> str:
+    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
+
+
+def old_setup_key_lines(note: OldSetupKeys) -> list[str]:
+    """The warning about older setup keys, in plain words: the first line says what is wrong,
+    the rest which key it is, why it matters and how to remove it. Empty when nothing is
+    pending."""
+    if not note.pending:
+        return []
+    app = f"'{PROVISIONER_APP_NAME}'" + (f" (application ID {note.app_id})" if note.app_id else "")
+    where = [f"  App registrations > {app} >", "  Certificates & secrets > Certificates."]
+    keep = (
+        [f"Keep the one whose thumbprint ends in {note.current}: this computer uses it now."]
+        if note.current
+        else []
+    )
+    if not note.keys:
+        # Nothing to retry: setup does not know which certificate the record meant.
+        return [
+            "Setup could not read its record of older setup keys for this computer.",
+            "Microsoft Entra may still trust a key that an earlier version of setup kept in an "
+            "unprotected file.",
+            f"Check by hand in the Microsoft Entra admin center ({ENTRA_ADMIN_CENTER}):",
+            *where,
+            "Remove any certificate there that you can't account for.",
+            *keep,
+        ]
+    named = [
+        f"{key.ending} ({f'expires {key.expires}' if key.expires else 'expiry date unknown'})"
+        for key in note.keys
+    ]
+    if len(note.keys) == 1:
+        lines = [
+            "An older setup key for this computer could not be switched off in Microsoft Entra.",
+            "An earlier version of setup kept that key in an unprotected file.",
+            "Anyone with a copy of that file can still use it to make changes in your tenant.",
+            f"It is the certificate whose thumbprint ends in {named[0]}.",
+            f"Remove it by hand in the Microsoft Entra admin center ({ENTRA_ADMIN_CENTER}):",
+        ]
+    else:
+        lines = [
+            f"{len(note.keys)} older setup keys for this computer could not be switched off in "
+            "Microsoft Entra.",
+            "An earlier version of setup kept those keys in unprotected files.",
+            "Anyone with a copy of those files can still use them to make changes in your tenant.",
+            f"They are the certificates whose thumbprints end in {_listed(named)}.",
+            f"Remove them by hand in the Microsoft Entra admin center ({ENTRA_ADMIN_CENTER}):",
+        ]
+    lines += where
+    if note.unreadable:
+        lines += [
+            "Setup's record also has an entry it could not read: remove any other certificate "
+            "there that you can't account for.",
+            *keep,
+        ]
+    lines.append("Setup will try again the next time it runs.")
+    return lines
 
 
 class SetupFailed(Exception):
@@ -251,6 +405,8 @@ class Wizard:
         self.sponsor_sync: SponsorSync | None = None
         self.sponsor_attention: list[list[str]] = []  # what the person still has to do
         self._sponsor_names: dict[str, str] = {}
+        # Older setup keys Entra still trusts, as the record stood after the provisioning step.
+        self.old_keys = OldSetupKeys()
         console.verbose = console.verbose or options.verbose
         # Every write of .env goes through this: locked before it lands, and setup carries
         # on (with a precise warning) if a lock can't be applied. The file holds IDs only.
@@ -1049,10 +1205,21 @@ class Wizard:
             env["ENTRABOT_ASSIGN_WORK_IQ_LICENSE"] = "1"
         return env
 
+    def _expected_blueprint(self) -> str:
+        """The Blueprint App ID the agent step must come back with: the one this run joins,
+        or the one this computer is recorded for. Empty for a new agent."""
+        identity = self.plan.identity
+        if identity.mode == "join":
+            return identity.blueprint_app_id
+        if identity.mode == "continue":
+            return self.state.get("BLUEPRINT_APP_ID", "")
+        return ""
+
     def _create_agent(self) -> Identity:
         console, paths = self.console, self.paths
         assert self.account is not None and self.az is not None
         already_here = self._same_agent()  # asked now: the state file is about to change
+        expected_blueprint = self._expected_blueprint()  # likewise
 
         self._next_step("Connecting setup to your tenant")
         try:
@@ -1076,6 +1243,13 @@ class Wizard:
         )
         if bootstrap.returncode != 0:
             console.show_tail(bootstrap)
+            outcome = (marked_line(bootstrap.stdout, RESULT_MARKER) or "").strip()
+            if outcome == PROVISIONER_TAKEOVER_REFUSED:
+                raise SetupFailed(
+                    "An app registration with the Provisioner's name already exists in this "
+                    "tenant, and setup would not take it over.",
+                    fix=_TAKEOVER_REFUSED_FIX,
+                )
             raise SetupFailed(
                 "Setup could not get the access it needs in your tenant.",
                 fix="This step needs an administrator of the tenant. If you activate admin "
@@ -1084,8 +1258,15 @@ class Wizard:
         console.ok("Setup has the access it needs")
         if "Created provisioner app" in bootstrap.stdout:
             console.detail(
-                "First time in this tenant: created the 'EntraBot Provisioner' app registration."
+                "First time in this tenant: created the "
+                f"'{PROVISIONER_APP_NAME}' app registration."
             )
+        # The helper's own warning went to the log, so what it recorded is said here.
+        self.old_keys = self._read_old_setup_keys()
+        if self.old_keys.pending:
+            self._say_old_setup_keys(self.old_keys)
+            if console.log_file:
+                console.detail(f"The reason is in the setup log: {console.log_file}")
 
         self._next_step("Creating your agent")
         self._licence_preflight()
@@ -1103,6 +1284,23 @@ class Wizard:
         except IdentityError as exc:
             raise SetupFailed(str(exc)) from exc
         identity = identity_from_state(self.state, tenant_id=self.account.tenant_id)
+        returned = identity.blueprint_app_id
+        if expected_blueprint and returned and returned.lower() != expected_blueprint.lower():
+            # Defence in depth: the next steps would register this computer's certificate on
+            # the Blueprint just recorded, and add sponsors to its agent.
+            console.show_tail(created)
+            asked = (
+                "This computer is set up for the agent"
+                if already_here
+                else "You asked to join the agent"
+            )
+            raise SetupFailed(
+                f"{asked} with Blueprint {expected_blueprint}, but the agent step "
+                f"(create_entra_agent_ids.py) returned Blueprint {returned}. Setup stopped "
+                "before this computer's certificate step. Nothing further was changed.",
+                fix=f"Run setup again with -UseBlueprint {expected_blueprint}, or check that "
+                f"{expected_blueprint} is the right Blueprint App ID.",
+            )
         if not identity.blueprint_app_id or not identity.agent_id:
             console.show_tail(created)
             raise SetupFailed(
@@ -1224,6 +1422,23 @@ class Wizard:
             step_back = agentsponsors.remove_command(paths, me, object_id=self.me.object_id)
             console.info(f"You ({me}) are a sponsor too, because you created the agent.")
             console.detail(f"To step back later:  {step_back}")
+
+    def _read_old_setup_keys(self) -> OldSetupKeys:
+        """What the state file says now about older setup keys Entra may still trust. A file
+        that can't be read is treated like a record that can't: setup can't tell, so it asks
+        the person to check."""
+        try:
+            return old_setup_keys(state.read_state(self.paths.state_file))
+        except IdentityError:
+            return OldSetupKeys(unreadable=True)
+
+    def _say_old_setup_keys(self, note: OldSetupKeys) -> None:
+        lines = old_setup_key_lines(note)
+        if not lines:
+            return
+        self.console.warn(lines[0])
+        for line in lines[1:]:
+            self.console.info(f"     {line}")
 
     def _claude_command(self, host_report: hosts.HostReport) -> str:
         """The command that starts the agent by hand. Claude Code's installer does not always
@@ -1465,11 +1680,19 @@ class Wizard:
         smoke: str,
     ) -> int:
         console, paths = self.console, self.paths
+        # Read again: the certificate step's helper also asks for the provisioner, and that
+        # retries the removal (or makes the first attempt) after the provisioning step. An
+        # entry that could not be read stays a thing to check: the script drops it from the
+        # record without knowing what it named.
+        old_keys = self._read_old_setup_keys()
+        if self.old_keys.unreadable and not old_keys.unreadable:
+            old_keys = replace(old_keys, unreadable=True)
         healthy = (
             smoke in ("pass", "skipped")
             and not upload_failed
             and not self.sponsor_attention
             and not host_report.attention
+            and not old_keys.pending
         )
         console.banner(
             "Entrabot is set up" if healthy else "Setup finished, with something to check"
@@ -1488,6 +1711,20 @@ class Wizard:
         console.info(f"Certificate:  valid until {cert.not_after:%d %b %Y}")
         if console.log_file:
             console.info(f"Setup log:    {console.log_file}")
+
+        if old_keys.pending:
+            console.blank()
+            self._say_old_setup_keys(old_keys)
+        elif self.old_keys.keys:
+            endings = _listed([key.ending for key in self.old_keys.keys])
+            console.blank()
+            console.ok(
+                f"The older setup key ending in {endings} is switched off now: a later step in "
+                "this run removed it."
+                if len(self.old_keys.keys) == 1
+                else f"The older setup keys ending in {endings} are switched off now: a later "
+                "step in this run removed them."
+            )
 
         if smoke == "keyring":
             console.blank()
@@ -1600,7 +1837,12 @@ class Wizard:
         self._offer_to_start(host_report, smoke)
         if upload_failed:
             return EXIT_FAILED
-        if smoke not in ("pass", "skipped") or self.sponsor_attention or host_report.attention:
+        if (
+            smoke not in ("pass", "skipped")
+            or self.sponsor_attention
+            or host_report.attention
+            or old_keys.pending
+        ):
             return EXIT_SMOKE_FAILED  # set up, with something to check
         return EXIT_OK
 

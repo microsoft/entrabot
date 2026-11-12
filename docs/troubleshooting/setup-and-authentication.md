@@ -38,6 +38,87 @@ time for a newly assigned Teams or Exchange license to propagate, then run:
 See [Identity Lifecycle](../guides/identity-lifecycle.md) and the
 [setup script references](../reference/scripts/index.md#setup).
 
+## Setup will not take over an existing Provisioner app registration
+
+Setup stops at the Provisioner step with "Setup did not take over an existing
+'EntraBot Agent ID Provisioner' app registration (see above), and nothing was
+changed in Microsoft Entra." On Windows the wizard says "An app registration
+with the Provisioner's name already exists in this tenant, and setup would not
+take it over." The lines above the message list each app it found (application
+ID, creation date, owners) and why setup did not use it.
+
+**Cause.** This machine has no Provisioner app recorded in
+`.entrabot-state.json`: it is a new machine, or its state file was removed
+(teardown removes it). An app registration with the Provisioner's name already
+exists, and setup could not show that taking it over grants nobody anything.
+The Provisioner app gets tenant-wide Microsoft Graph application permissions
+with admin consent, and app names are not unique: anyone allowed to register
+applications can create one with this name. So setup takes an existing app over
+only when an administrator has already approved it for every permission setup
+needs (the usual case on a second machine, or for a second administrator), or
+when nobody else can use it: you are its only owner (or it has none), every
+credential on it is this machine's, and it asks for no other permissions. It
+never picks one of several apps with that name, and anything it could not read
+counts against the app. The full rule is in the
+[`setup.sh` reference](../reference/scripts/setup/setup-sh.md#which-app-registration-is-the-provisioner).
+
+If the app is yours and the reason given is "not yet approved by an
+administrator for N of the permissions setup needs", no administrator has
+consented yet to permissions this version of setup asks for. Setup asks for
+every Agent ID permission Microsoft Graph offers, so the list grows when a newer
+version of setup, or Microsoft, adds one. Run setup once on a machine that
+already has the app recorded: it adds those permissions and grants consent, and
+this machine can then take the app over. Naming the app, below, also works.
+
+**Fix.** Do one of these, then run the same setup command again:
+
+- **Something could not be read** (for example "its owners could not be read"):
+  sign in again with `az login`, or activate your administrator role.
+- **You do not recognise the app:** delete or rename it in the Microsoft Entra
+  admin center (App registrations > All applications). With no app left under
+  that exact name, setup creates a new one.
+- **You have checked that the app is yours** (its owners, its certificates and
+  secrets, and its API permissions): set `ENTRABOT_PROVISIONER_APP_ID_VERIFIED`
+  to its Application (client) ID for that run.
+
+On macOS or Linux, for one command (use the options of the run that stopped):
+
+```bash
+ENTRABOT_PROVISIONER_APP_ID_VERIFIED=<application-id> ./scripts/setup.sh --use-blueprint=<blueprint-app-id>
+```
+
+On Windows, in `cmd.exe`, then run setup from the same window:
+
+```bat
+set "ENTRABOT_PROVISIONER_APP_ID_VERIFIED=<application ID>"
+scripts\setup-windows.cmd
+```
+
+On Windows, in PowerShell:
+
+```powershell
+$env:ENTRABOT_PROVISIONER_APP_ID_VERIFIED = '<application ID>'
+scripts\setup-windows.cmd
+```
+
+Setup records the app, so later runs do not need the variable. In `cmd.exe`
+and PowerShell it stays set until the window is closed. Do not put it in
+`.env`: setup does not read it from there. Setup treats the named app as its
+own: it adds the permissions setup needs and, when any are not yet consented,
+grants admin consent, which covers everything the app asks for. As on every
+run, it also deletes any client secret on the app.
+
+**If your tenant was set up with an earlier version.** Earlier versions used
+the first app registration whose name began with the Provisioner's name,
+without these checks. Look at that app once in the Microsoft Entra admin center
+(App registrations > All applications, search for
+`EntraBot Agent ID Provisioner`). There should be one. Its **Owners** should be
+people you expect. Under **Certificates & secrets** there should be no client
+secret and no federated credential, and only certificates you can account for
+(each machine that ran setup added one). Under **API permissions** there should
+be only Microsoft Graph application permissions. Remove anything you cannot
+account for.
+
 ## The runtime selected an unexpected authentication type
 
 `ENTRABOT_MODE` is validated, but `_init_auth` does not currently use it as the

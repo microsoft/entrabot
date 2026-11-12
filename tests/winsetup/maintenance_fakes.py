@@ -30,8 +30,12 @@ OLD_X5T = "o" * 43
 NEW_X5T = "n" * 43
 
 # Markers that pick out each child program (see entrabot.winsetup.directory).
+# REMOVE_BLUEPRINT_CREDENTIAL matches both Blueprint removals; the second marker only the one
+# that takes several certificates off in a single write (teardown's).
 REMOVE_BLUEPRINT_CREDENTIAL = "remove this computer's certificate from the Blueprint"
+REMOVE_BLUEPRINT_CREDENTIALS_IN_ONE_WRITE = "with any rotation leftover, in one write"
 REMOVE_PROVISIONER_CREDENTIAL = "remove this computer's setup certificate"
+REVOKE_OLD_SETUP_CERTIFICATE = "old setup certificates an earlier setup could not remove"
 PROVE_CERTIFICATE = "prove the new certificate"
 
 
@@ -166,6 +170,15 @@ STATE = {
     "BLUEPRINT_APP_ID": BP_APP,
     "BLUEPRINT_OBJECT_ID": BP_OBJECT,
     "AGENT_USER_UPN": UPN,
+}
+# Setup moved an older install off its plaintext Provisioner key file but could not take that
+# key's certificate off the Provisioner app, so it left this note in the state file and retries
+# on its next run (scripts/entra_provisioning.py, _retire_old_certificates).
+OLD_PROV_SHA1 = "F" * 36 + "C0DE"
+OLD_PROV_EXPIRES = "2027-01-31"
+REVOKE_PENDING = {
+    "PROVISIONER_CERT_REVOKE_PENDING": OLD_PROV_SHA1.lower(),
+    "PROVISIONER_CERT_REVOKE_PENDING_EXPIRES": OLD_PROV_EXPIRES,
 }
 ACCOUNT = {
     "tenantId": TENANT,

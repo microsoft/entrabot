@@ -22,7 +22,15 @@ from entrabot.winsetup.azcli import GLOBAL_ADMIN
 from entrabot.winsetup.console import Console, RunRequest
 from entrabot.winsetup.envfile import read_env
 from entrabot.winsetup.helpers import CHECKS_MARKER, RESULT_MARKER, Paths
-from entrabot.winsetup.wizard import Options, Wizard, World, licence_outcome
+from entrabot.winsetup.wizard import (
+    OldSetupKey,
+    Options,
+    Wizard,
+    World,
+    licence_outcome,
+    old_setup_key_lines,
+    old_setup_keys,
+)
 from tests.winsetup.fakes import (
     FakeDirectory,
     FakeSpawn,
@@ -624,6 +632,84 @@ class TestOtherIdentityModes:
         assert "_ENTRABOT_UPN_SUFFIX" not in request.env
 
 
+class TestTheAgentStepKeepsTheBlueprint:
+    """Defence in depth. A run that joins a Blueprint by App ID, or continues the one recorded
+    on this computer, must come back from the agent step with that same Blueprint. The helper
+    once fell back to the first Blueprint with the right display name; had it come back with
+    another one, the next step would have registered this computer's certificate on it."""
+
+    LETTERED_BP = "abcdef01-2345-4678-9abc-def012345678"
+
+    @staticmethod
+    def _agent_step_records(world: Scenario, blueprint_app_id: str) -> None:
+        """create_entra_agent_ids.py succeeds and records *blueprint_app_id* as the agent's."""
+
+        def create(_request: RunRequest) -> Reply:
+            current = (
+                json.loads(world.state_file.read_text("utf-8")) if world.state_file.exists() else {}
+            )
+            created = {**CREATED_STATE, "BLUEPRINT_APP_ID": blueprint_app_id}
+            world.state_file.write_text(json.dumps({**current, **created}), encoding="utf-8")
+            return Reply(stdout=CREATE_CHATTER)
+
+        world.spawn.on(script("create_entra_agent_ids.py"), create)
+
+    @staticmethod
+    def _stopped_after_the_agent_step(world: Scenario) -> bool:
+        """Was the agent step the last thing setup ran (no certificate, sponsors or Work IQ)?"""
+        return world.spawn.calls[-1] is world.ran("create_entra_agent_ids.py")[0]
+
+    def test_joining_one_blueprint_and_getting_another_stops_before_the_certificate(
+        self, world: Scenario
+    ) -> None:
+        self._agent_step_records(world, OTHER_BP)
+
+        assert world.run(use_blueprint=BP_APP) == 1
+
+        assert f"You asked to join the agent with Blueprint {BP_APP}" in world.out
+        assert f"returned Blueprint {OTHER_BP}" in world.out
+        assert "Nothing further was changed" in world.out
+        assert f"-UseBlueprint {BP_APP}" in world.out
+        assert self._stopped_after_the_agent_step(world)
+        assert not world.wincert.created
+        assert not world.env_file.exists()
+
+    def test_continuing_and_getting_another_blueprint_stops_too(self, world: Scenario) -> None:
+        world.existing()
+        before = world.env_file.read_bytes()
+        self._agent_step_records(world, OTHER_BP)
+
+        assert world.run() == 1
+
+        assert f"This computer is set up for the agent with Blueprint {BP_APP}" in world.out
+        assert f"returned Blueprint {OTHER_BP}" in world.out
+        assert "Nothing further was changed" in world.out
+        assert self._stopped_after_the_agent_step(world)
+        assert not world.wincert.created
+        assert world.env_file.read_bytes() == before
+
+    @pytest.mark.parametrize(
+        ("asked", "recorded"),
+        [(LETTERED_BP.upper(), LETTERED_BP), (LETTERED_BP, LETTERED_BP.upper())],
+        ids=["typed-in-capitals", "recorded-in-capitals"],
+    )
+    def test_the_same_blueprint_in_other_letter_case_is_the_same_blueprint(
+        self, world: Scenario, asked: str, recorded: str
+    ) -> None:
+        self._agent_step_records(world, recorded)
+
+        assert world.run(use_blueprint=asked) == 0, world.out
+
+        assert world.ran("register_windows_blueprint_cert.py")
+        assert world.dotenv["ENTRABOT_BLUEPRINT_APP_ID"] == recorded
+
+    def test_a_new_agent_has_no_blueprint_to_keep(self, world: Scenario) -> None:
+        world.existing(state={**CREATED_STATE, "BLUEPRINT_APP_ID": OTHER_BP}, env=OTHER_AGENT_ENV)
+        self._agent_step_records(world, BP_APP)
+
+        assert world.run(new_chain=True, upn_suffix="sati") == 0, world.out
+
+
 class TestRepair:
     def test_re_running_with_no_flags_continues_with_the_existing_agent(
         self, world: Scenario
@@ -941,6 +1027,59 @@ class TestFailures:
         assert "Insufficient privileges" in world.out  # the helper's own error is not hidden
         assert "administrator" in world.out and "Run setup again" in world.out
         assert world.ran("create_entra_agent_ids.py") == []
+
+    # scripts/entra_provisioning.py prints this, on a line of its own, when it would not take
+    # over an existing app registration with the Provisioner's name
+    # (tests/scripts/test_entra_provisioning.py pins the same text on that side).
+    TAKEOVER_REFUSED = "ENTRABOT_RESULT=provisioner-takeover-refused"
+
+    def test_a_refused_takeover_says_what_exists_and_how_to_name_the_right_app(
+        self, world: Scenario
+    ) -> None:
+        candidate = "11111111-2222-3333-4444-555555555555"
+        world.spawn.on(
+            script("entra_provisioning.py"),
+            Reply(
+                returncode=1,
+                stdout=(
+                    f"{self.TAKEOVER_REFUSED}\n"
+                    "  An app registration named 'EntraBot Agent ID Provisioner' already "
+                    "exists, and this\n"
+                    f"    - 'EntraBot Agent ID Provisioner' (application ID {candidate})\n"
+                    "      created 2026-03-04, owners: mallory@contoso.com\n"
+                    "ERROR: Setup did not take over an existing 'EntraBot Agent ID "
+                    "Provisioner' app registration (see above)\n"
+                ),
+            ),
+        )
+
+        assert world.run(new_chain=True, upn_suffix="sati") == 1
+
+        out = world.out
+        assert "already exists in this tenant" in out and "would not take it over" in out
+        assert "could not get the access it needs" not in out
+        assert candidate in out, "what the helper found is on screen"
+        assert 'set "ENTRABOT_PROVISIONER_APP_ID_VERIFIED=<application ID>"' in out  # cmd.exe
+        assert "$env:ENTRABOT_PROVISIONER_APP_ID_VERIFIED = '<application ID>'" in out
+        assert "delete or rename" in out
+        assert world.ran("create_entra_agent_ids.py") == []
+
+    def test_only_the_marker_line_means_a_refused_takeover(self, world: Scenario) -> None:
+        # The words alone, or the marker anywhere but at the start of a line, are some
+        # other failure and keep the usual message.
+        world.spawn.on(
+            script("entra_provisioning.py"),
+            Reply(
+                returncode=1,
+                stdout="  Setup did not take over an existing app registration.\n"
+                f"  echo {self.TAKEOVER_REFUSED}\n",
+            ),
+        )
+
+        assert world.run(new_chain=True, upn_suffix="sati") == 1
+
+        assert "could not get the access it needs" in world.out
+        assert "ENTRABOT_PROVISIONER_APP_ID_VERIFIED" not in world.out
 
     def test_a_failed_agent_creation_stops_before_the_certificate(self, world: Scenario) -> None:
         world.spawn.on(script("create_entra_agent_ids.py"), Reply(returncode=1))
@@ -1865,3 +2004,344 @@ class TestClaudeCodeVersion:
         world.claude_version = "development build"
         assert world.run(new_chain=True, upn_suffix="sati") == 0
         assert "2.1.295" in world.out
+
+
+# An older setup kept the Provisioner's private key in a plain file. On Windows,
+# scripts/entra_provisioning.py moves this computer onto a key in the certificate store, then
+# removes the old certificate from the Provisioner app, which holds tenant-wide Microsoft Graph
+# permissions. When that removal fails, _retire_old_certificates records the certificate under
+# PROVISIONER_CERT_REVOKE_PENDING (lowercase SHA-1 thumbprints, comma-separated) and
+# PROVISIONER_CERT_REVOKE_PENDING_EXPIRES (their expiry dates, in the same order, "" if unknown).
+PENDING = "PROVISIONER_CERT_REVOKE_PENDING"
+PENDING_EXPIRES = "PROVISIONER_CERT_REVOKE_PENDING_EXPIRES"
+OLD_KEY_SHA1 = "c3f1a2b4d5e6f708192a3b4c5d6e7f8091a2b3c4"
+SECOND_OLD_KEY_SHA1 = "0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b9e8d"
+THIS_COMPUTERS_KEY_SHA1 = "77aa88bb99cc00dd11ee22ff33aa44bb55cc66dd"  # PROVISIONER_CERT_THUMBPRINT
+# What the script prints when the removal fails (_print_revocation_failed). It goes to the log.
+REMOVAL_FAILED = (
+    "  WARNING: The old Provisioner certificate (…B3C4, expires 2027-02-01) could not be\n"
+    "  removed from the app: Entra did not remove certificate …B3C4: Request_Throttled\n"
+    "  Its private key was kept in a plaintext file by an earlier setup, so a copy of\n"
+    "  that file can still get tokens for the Provisioner app until it is removed.\n"
+    "  Remove it in the Entra admin center: App registrations >\n"
+    "  'EntraBot Agent ID Provisioner' (application ID prov-app) >\n"
+    "  Certificates & secrets > Certificates: the certificate whose thumbprint ends in\n"
+    "  …B3C4 (expires 2027-02-01). Setup tries again on its next run.\n"
+)
+
+
+def _write_state(world: Scenario, **values: str) -> None:
+    current = json.loads(world.state_file.read_text("utf-8")) if world.state_file.exists() else {}
+    current.update(values)
+    world.state_file.write_text(json.dumps(current), encoding="utf-8")
+
+
+def _clear_state(world: Scenario, *keys: str) -> None:
+    current = json.loads(world.state_file.read_text("utf-8"))
+    for key in keys:
+        current.pop(key, None)
+    world.state_file.write_text(json.dumps(current), encoding="utf-8")
+
+
+class TestAnOlderSetupKeyStillTrusted:
+    """The defect: the provisioning helper's output goes to the setup log, not the screen. When
+    it could not remove an older setup's certificate from the Provisioner app, its warning was
+    log-only, the screen said "Setup has the access it needs", and setup exited 0. A credential
+    that still worked, on an app with tenant-wide permissions, went unnoticed."""
+
+    @staticmethod
+    def _provisioning_records(world: Scenario, **values: str) -> None:
+        """The provisioning helper leaves *values* in the state file, as the script does."""
+
+        def provision(_request: RunRequest) -> Reply:
+            _write_state(
+                world,
+                PROVISIONER_CLIENT_ID="prov-app",
+                PROVISIONER_CERT_THUMBPRINT=THIS_COMPUTERS_KEY_SHA1,
+                **values,
+            )
+            return Reply(stdout=PROVISION_CHATTER + REMOVAL_FAILED)
+
+        world.spawn.on(script("entra_provisioning.py"), provision)
+
+    def _removal_failed(self, world: Scenario, expires: str | None = "2027-02-01") -> None:
+        values = {PENDING: OLD_KEY_SHA1}
+        if expires is not None:
+            values[PENDING_EXPIRES] = expires
+        self._provisioning_records(world, **values)
+
+    @staticmethod
+    def _things_to_check(world: Scenario) -> str:
+        finish = world.out[world.out.index("Setup finished, with something to check") :]
+        return finish[: finish.index("To start your agent:")]
+
+    @pytest.mark.parametrize("verbose", [False, True])
+    def test_the_step_says_it_plainly_in_every_mode(self, world: Scenario, verbose: bool) -> None:
+        self._removal_failed(world)
+        world.run(new_chain=True, upn_suffix="sati", verbose=verbose)
+        step = world.out[
+            world.out.index("Connecting setup to your tenant") : world.out.index("[6/11]")
+        ]
+        assert "Setup has the access it needs" in step
+        warning = step[step.index("[!!] An older setup key") :]
+        assert warning.startswith(
+            "[!!] An older setup key for this computer could not be switched off in "
+            "Microsoft Entra."
+        )
+        for expected in (
+            "kept that key in an unprotected file",
+            "Anyone with a copy of that file can still use it to make changes in your tenant.",
+            "the certificate whose thumbprint ends in B3C4 (expires 2027-02-01).",
+            "Microsoft Entra admin center (https://entra.microsoft.com):",
+            "App registrations > 'EntraBot Agent ID Provisioner' (application ID prov-app) >",
+            "Certificates & secrets > Certificates.",
+            "Setup will try again the next time it runs.",
+            "setup.log",  # the helper's own account of what went wrong
+        ):
+            assert expected in warning, expected
+
+    def test_quietly_the_helpers_own_words_stay_in_the_log(self, world: Scenario) -> None:
+        self._removal_failed(world)
+        world.run(new_chain=True, upn_suffix="sati")
+        assert "Request_Throttled" not in world.out and "Request_Throttled" in world.log
+        assert "could not be switched off in Microsoft Entra" in world.log  # the warning too
+
+    def test_the_finish_screen_lists_it_and_the_run_is_exit_3(self, world: Scenario) -> None:
+        self._removal_failed(world)
+        assert world.run(new_chain=True, upn_suffix="sati") == 3
+        assert "Entrabot is set up" not in world.out
+        things = self._things_to_check(world)
+        assert (
+            "[!!] An older setup key for this computer could not be switched off in Microsoft "
+            "Entra." in things
+        )
+        assert "thumbprint ends in B3C4 (expires 2027-02-01)" in things
+        assert "App registrations > 'EntraBot Agent ID Provisioner'" in things
+        assert "Setup will try again the next time it runs." in things
+        assert world.dotenv["ENTRABOT_AGENT_ID"] == "agent-app"  # setup itself is complete
+        assert (world.root / ".mcp.json").is_file()
+
+    def test_no_full_thumbprint_reaches_the_screen_or_the_log(self, world: Scenario) -> None:
+        self._provisioning_records(
+            world, **{PENDING: f"{OLD_KEY_SHA1},{SECOND_OLD_KEY_SHA1}", PENDING_EXPIRES: ","}
+        )
+        world.run(new_chain=True, upn_suffix="sati")
+        assert "B3C4" in world.out and "9E8D" in world.out
+        for full in (OLD_KEY_SHA1, SECOND_OLD_KEY_SHA1, THIS_COMPUTERS_KEY_SHA1):
+            assert full not in world.out.lower()
+            assert full not in world.log.lower()
+
+    def test_two_keys_are_both_named(self, world: Scenario) -> None:
+        self._provisioning_records(
+            world,
+            **{PENDING: f"{OLD_KEY_SHA1},{SECOND_OLD_KEY_SHA1}", PENDING_EXPIRES: "2027-02-01,"},
+        )
+        assert world.run(new_chain=True, upn_suffix="sati") == 3
+        things = self._things_to_check(world)
+        assert "2 older setup keys for this computer could not be switched off" in things
+        assert (
+            "thumbprints end in B3C4 (expires 2027-02-01) and 9E8D (expiry date unknown)" in things
+        )
+
+    def test_a_record_without_expiry_dates_still_names_the_key(self, world: Scenario) -> None:
+        self._removal_failed(world, expires=None)
+        assert world.run(new_chain=True, upn_suffix="sati") == 3
+        assert "thumbprint ends in B3C4 (expiry date unknown)" in self._things_to_check(world)
+
+    @pytest.mark.parametrize("value", ["not-a-thumbprint", OLD_KEY_SHA1[:-1], "['x', 'y']"])
+    def test_a_record_that_cannot_be_read_is_a_soft_warning_not_a_crash(
+        self, world: Scenario, value: str
+    ) -> None:
+        self._provisioning_records(world, **{PENDING: value})
+        # Setup still finishes, and asks the person to check: what the record named may
+        # still be trusted.
+        assert world.run(new_chain=True, upn_suffix="sati") == 3
+        assert world.dotenv["ENTRABOT_AGENT_ID"] == "agent-app"
+        things = self._things_to_check(world)
+        assert "Setup could not read its record of older setup keys for this computer." in things
+        assert "Remove any certificate there that you can't account for." in things
+        assert "Keep the one whose thumbprint ends in 66DD: this computer uses it now." in things
+        assert "try again" not in things  # it can't: it does not know which certificate
+        assert "Traceback" not in world.out + world.log
+
+    def test_an_unreadable_record_is_still_reported_after_a_later_step_rewrites_it(
+        self, world: Scenario
+    ) -> None:
+        # The script drops an entry it can't read the next time it writes the record, without
+        # knowing what that entry named: a clean record afterwards proves nothing.
+        self._provisioning_records(world, **{PENDING: "not-a-thumbprint"})
+
+        def register(_request: RunRequest) -> Reply:
+            _clear_state(world, PENDING, PENDING_EXPIRES)
+            return Reply(
+                stderr="  WARNING: ignoring a malformed entry in PROVISIONER_CERT_REVOKE_PENDING "
+                "in the state file."
+            )
+
+        world.spawn.on(script("register_windows_blueprint_cert.py"), register)
+        assert world.run(new_chain=True, upn_suffix="sati") == 3
+        things = self._things_to_check(world)
+        assert "Setup could not read its record of older setup keys for this computer." in things
+        assert "switched off now" not in world.out
+
+    def test_a_state_file_that_cannot_be_read_at_the_end_is_a_soft_warning(
+        self, world: Scenario
+    ) -> None:
+        def register(_request: RunRequest) -> Reply:
+            world.state_file.write_text("{half written", encoding="utf-8")
+            return Reply()
+
+        world.spawn.on(script("register_windows_blueprint_cert.py"), register)
+        assert world.run(new_chain=True, upn_suffix="sati") == 3
+        assert "Setup could not read its record of older setup keys" in world.out
+
+    @pytest.mark.parametrize(
+        "values",
+        [
+            {},
+            {PENDING: "", PENDING_EXPIRES: ""},  # what an empty record looks like
+            {PENDING: " , "},
+            {PENDING_EXPIRES: "2027-02-01"},  # an expiry with no certificate names nothing
+        ],
+    )
+    def test_nothing_pending_changes_nothing(self, world: Scenario, values: dict) -> None:
+        self._provisioning_records(world, **values)
+        assert world.run(new_chain=True, upn_suffix="sati") == 0, world.out
+        assert "Entrabot is set up" in world.out
+        assert "setup key" not in world.out and "switched off" not in world.out
+
+    def test_a_key_switched_off_by_a_later_step_is_not_left_as_a_warning(
+        self, world: Scenario
+    ) -> None:
+        # The certificate step's helper asks for a provisioner token too, and that retries
+        # the removal. When it works, the finish screen says so instead of the warning.
+        self._removal_failed(world)
+
+        def register(_request: RunRequest) -> Reply:
+            _clear_state(world, PENDING, PENDING_EXPIRES)
+            return Reply(stderr="  Removed the old Provisioner certificate (…B3C4) from the app.")
+
+        world.spawn.on(script("register_windows_blueprint_cert.py"), register)
+        assert world.run(new_chain=True, upn_suffix="sati") == 0, world.out
+        finish = world.out[world.out.index("Entrabot is set up") :]
+        assert "could not be switched off" not in finish
+        assert (
+            "The older setup key ending in B3C4 is switched off now: a later step in this run "
+            "removed it." in finish
+        )
+
+    def test_a_key_the_certificate_step_could_not_switch_off_is_on_the_finish_screen(
+        self, world: Scenario
+    ) -> None:
+        # That same helper can be the first to retire the old key: when Entra had not yet
+        # accepted this computer's new key during the provisioning step, the old one was kept.
+        def register(_request: RunRequest) -> Reply:
+            _write_state(world, **{PENDING: OLD_KEY_SHA1, PENDING_EXPIRES: "2027-02-01"})
+            return Reply(stderr=REMOVAL_FAILED)
+
+        world.spawn.on(script("register_windows_blueprint_cert.py"), register)
+        assert world.run(new_chain=True, upn_suffix="sati") == 3
+        assert "thumbprint ends in B3C4 (expires 2027-02-01)" in self._things_to_check(world)
+
+    def test_a_repair_run_is_told_too(self, world: Scenario) -> None:
+        world.existing()
+        self._removal_failed(world)
+        assert world.run() == 3
+        assert "could not be switched off in Microsoft Entra" in self._things_to_check(world)
+
+
+class TestOlderSetupKeyRecord:
+    """Reading the record the way scripts/entra_provisioning.py's _pending_revocations does."""
+
+    def test_one_key_with_its_expiry(self) -> None:
+        note = old_setup_keys(
+            {
+                PENDING: OLD_KEY_SHA1,
+                PENDING_EXPIRES: "2027-02-01",
+                "PROVISIONER_CLIENT_ID": "prov-app",
+                "PROVISIONER_CERT_THUMBPRINT": THIS_COMPUTERS_KEY_SHA1,
+            }
+        )
+        assert note.keys == (OldSetupKey(ending="B3C4", expires="2027-02-01"),)
+        assert note.pending and not note.unreadable
+        assert note.app_id == "prov-app" and note.current == "66DD"
+
+    def test_expiry_dates_line_up_by_position_as_the_script_writes_them(self) -> None:
+        note = old_setup_keys(
+            {PENDING: f"{OLD_KEY_SHA1}, ,{SECOND_OLD_KEY_SHA1}", PENDING_EXPIRES: "2027-02-01,,"}
+        )
+        assert note.keys == (
+            OldSetupKey("B3C4", "2027-02-01"),
+            OldSetupKey("9E8D", ""),  # the blank entry kept its place
+        )
+
+    def test_case_and_padding_do_not_matter_and_a_repeat_is_named_once(self) -> None:
+        note = old_setup_keys({PENDING: f" {OLD_KEY_SHA1.upper()} ,{OLD_KEY_SHA1}"})
+        assert note.keys == (OldSetupKey("B3C4", ""),)
+
+    @pytest.mark.parametrize(
+        "recorded", [{}, {PENDING: ""}, {PENDING: " , ,"}, {PENDING_EXPIRES: "2027-02-01"}]
+    )
+    def test_nothing_recorded_is_nothing_pending(self, recorded: dict) -> None:
+        note = old_setup_keys(recorded)
+        assert not note.pending
+        assert old_setup_key_lines(note) == []
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "not-a-thumbprint",
+            OLD_KEY_SHA1[:-1],
+            OLD_KEY_SHA1 + "0",
+            OLD_KEY_SHA1[:-1] + "g",
+            f"['{OLD_KEY_SHA1}']",  # a JSON list, as the wizard's reader turns it into text
+            "True",
+        ],
+    )
+    def test_an_entry_that_is_not_a_thumbprint_leaves_the_record_unreadable(
+        self, value: str
+    ) -> None:
+        note = old_setup_keys({PENDING: value})
+        assert note.pending and note.unreadable and note.keys == ()
+
+    def test_a_readable_key_is_still_named_beside_an_unreadable_entry(self) -> None:
+        note = old_setup_keys({PENDING: f"junk,{OLD_KEY_SHA1}", PENDING_EXPIRES: ",2027-02-01"})
+        assert note.keys == (OldSetupKey("B3C4", "2027-02-01"),) and note.unreadable
+        text = "\n".join(old_setup_key_lines(note))
+        assert "thumbprint ends in B3C4 (expires 2027-02-01)" in text
+        assert "an entry it could not read" in text
+        assert text.endswith("Setup will try again the next time it runs.")
+
+    @pytest.mark.parametrize(
+        "expires", ["soon", "2027-13-45", "20270201", "2027-02-01T00:00:00", "٢027-02-01"]
+    )
+    def test_an_expiry_that_is_not_a_date_is_unknown(self, expires: str) -> None:
+        note = old_setup_keys({PENDING: OLD_KEY_SHA1, PENDING_EXPIRES: expires})
+        assert note.keys == (OldSetupKey("B3C4", ""),)
+
+    def test_an_unknown_app_id_and_key_are_left_out_not_guessed(self) -> None:
+        text = "\n".join(old_setup_key_lines(old_setup_keys({PENDING: "junk"})))
+        assert "App registrations > 'EntraBot Agent ID Provisioner' >" in text
+        assert "application ID" not in text and "Keep the one" not in text
+
+    def test_the_record_never_holds_a_full_thumbprint(self) -> None:
+        note = old_setup_keys(
+            {
+                PENDING: f"{OLD_KEY_SHA1},{SECOND_OLD_KEY_SHA1}",
+                "PROVISIONER_CERT_THUMBPRINT": THIS_COMPUTERS_KEY_SHA1,
+            }
+        )
+        text = (repr(note) + "\n".join(old_setup_key_lines(note))).lower()
+        for full in (OLD_KEY_SHA1, SECOND_OLD_KEY_SHA1, THIS_COMPUTERS_KEY_SHA1):
+            assert full not in text
+            assert full[:36] not in text  # nor most of one
+
+    def test_three_keys_read_as_a_list(self) -> None:
+        third = "f" * 36 + "a1b2"
+        note = old_setup_keys({PENDING: f"{OLD_KEY_SHA1},{SECOND_OLD_KEY_SHA1},{third}"})
+        text = "\n".join(old_setup_key_lines(note))
+        assert text.startswith("3 older setup keys")
+        assert (
+            "end in B3C4 (expiry date unknown), 9E8D (expiry date unknown) and A1B2 "
+            "(expiry date unknown)." in text
+        )

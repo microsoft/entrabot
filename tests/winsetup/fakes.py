@@ -177,12 +177,18 @@ class FakeDirectory:
     It decodes the URL exactly as a web server does, so a filter that was not URL-encoded
     properly behaves here as it would for real: an unencoded ``#`` cuts the request short.
     ``proxyAddresses`` is matched case-sensitively, the stricter reading of Graph.
+
+    :meth:`attach_cli` answers the Azure CLI's own ``ad user show`` and ``ad user list``
+    commands from the same users: the lookups an ``az.cmd`` install makes without a URL.
     """
 
     users: list[dict[str, object]] = field(default_factory=list)
     asked: list[str] = field(default_factory=list)  # the decoded lookups, in order
     urls: list[str] = field(default_factory=list)  # the raw URLs az was given
     fail_filters: tuple[str, ...] = ()  # filters Graph rejects (e.g. "proxyAddresses")
+    # Characters Graph refuses in a /users/{sign-in name} lookup. An apostrophe
+    # (o'brien@contoso.com) is reported to fail there; in a $filter the same name is found.
+    refused_in_path: str = ""
 
     def matches(self, request: RunRequest) -> bool:
         argv = request.argv
@@ -190,6 +196,41 @@ class FakeDirectory:
 
     def attach(self, spawn: FakeSpawn) -> None:
         spawn.on(self.matches, self)
+
+    def attach_cli(self, spawn: FakeSpawn) -> None:
+        """Answer ``az ad user show --id X`` and ``az ad user list --filter F``."""
+        spawn.on(words("ad", "user", "show"), self._cli_show)
+        spawn.on(words("ad", "user", "list"), self._cli_list)
+
+    def _by_id(
+        self,
+        wanted: str,
+        shaped: Callable[[dict[str, object]], dict[str, object]] = lambda user: user,
+    ) -> Reply:
+        """One user by object ID or sign-in name, the way Graph's /users/{id} answers."""
+        self.asked.append(f"id {wanted}")
+        if any(character in wanted for character in self.refused_in_path):
+            return Reply(returncode=1, stderr="ERROR: Bad Request: Invalid object identifier")
+        for user in self.users:
+            if wanted in (str(user["id"]).lower(), str(user["userPrincipalName"]).lower()):
+                return Reply(stdout=json.dumps(shaped(user)))
+        return Reply(returncode=3, stderr="ERROR: Resource does not exist")
+
+    def _filtered(self, condition: str) -> list[dict[str, object]] | None:
+        """The users an OData filter matches; None when Graph rejects the filter."""
+        self.asked.append(condition)
+        if any(word in condition for word in self.fail_filters):
+            return None
+        return [user for user in self.users if _user_matches(user, condition)]
+
+    def _cli_show(self, request: RunRequest) -> Reply:
+        return self._by_id(request.argv[request.argv.index("--id") + 1].lower())
+
+    def _cli_list(self, request: RunRequest) -> Reply:
+        found = self._filtered(request.argv[request.argv.index("--filter") + 1])
+        if found is None:
+            return Reply(returncode=1, stderr="ERROR: Unsupported or invalid query filter clause")
+        return Reply(stdout=json.dumps(found))
 
     def __call__(self, request: RunRequest) -> Reply:
         from urllib.parse import parse_qs, unquote, urlsplit
@@ -206,22 +247,12 @@ class FakeDirectory:
 
         marker = "/v1.0/users/"
         if marker in path:
-            wanted = path.split(marker, 1)[1].lower()
-            self.asked.append(f"id {wanted}")
-            for user in self.users:
-                if wanted in (str(user["id"]).lower(), str(user["userPrincipalName"]).lower()):
-                    return Reply(stdout=json.dumps(shaped(user)))
-            return Reply(returncode=3, stderr="ERROR: Resource does not exist")
+            return self._by_id(path.split(marker, 1)[1].lower(), shaped)
 
-        condition = query.get("$filter", "")
-        self.asked.append(condition)
-        if any(word in condition for word in self.fail_filters):
+        found = self._filtered(query.get("$filter", ""))
+        if found is None:
             return Reply(returncode=1, stderr="ERROR: Unsupported or invalid query filter clause")
-        return Reply(
-            stdout=json.dumps(
-                {"value": [shaped(user) for user in self.users if _user_matches(user, condition)]}
-            )
-        )
+        return Reply(stdout=json.dumps({"value": [shaped(user) for user in found]}))
 
 
 def _user_matches(user: dict[str, object], condition: str) -> bool:
@@ -235,6 +266,8 @@ def _user_matches(user: dict[str, object], condition: str) -> bool:
         value = user.get(key) or []
         return [str(item) for item in value] if isinstance(value, list) else []
 
+    if found := re.fullmatch(r"userPrincipalName eq '(.*)'", condition):
+        return text("userPrincipalName").lower() == literal(found).lower()
     if found := re.fullmatch(r"mail eq '(.*)'", condition):
         return text("mail").lower() == literal(found).lower()
     if found := re.fullmatch(r"otherMails/any\(x:x eq '(.*)'\)", condition):

@@ -1,13 +1,17 @@
 """Microsoft Entra, as the maintenance commands (rotate-cert, teardown, status) need it.
 
-Three things, each run in a child process with the virtual-environment interpreter, so that
+Each of these runs in a child process with the virtual-environment interpreter, so that
 ``entrabot.config`` never loads into the command itself and a token never passes through it:
 
-* take ONE certificate off an application's list, keeping every other machine's, confirmed
-  by reading the list back (``scripts/blueprint_certs.remove_key_credential``);
+* take certificates off an application's list, keeping every other machine's, confirmed by
+  reading the list back (``scripts/blueprint_certs.remove_key_credential``, or
+  ``remove_key_credentials`` for several in one write);
+* take old setup certificates an earlier setup could not remove off the Provisioner app
+  (``scripts/entra_provisioning._revoke_app_certificate``, setup's own retry);
 * prove that a certificate in this user's store really signs the agent in;
-* find the Azure CLI and say who is signed in, because the Provisioner token the first two
-  need is only issued to a signed-in administrator's setup.
+* find the Azure CLI and say who is signed in: the Provisioner token the certificate removals
+  need is only issued to a signed-in administrator's setup, and setup's retry above works
+  through that sign-in directly.
 
 Thumbprints go to the children as arguments and never into program text. Nothing here
 prints one: callers show at most the last four characters.
@@ -50,17 +54,22 @@ try:
 except Exception as exc:
     done({_NO_ACCESS}, problem=f"could not get access to Microsoft Entra ({{exc}})")
 
-def remove(object_id, sha1, must_keep=()):
+def settle(write):
+    # Runs one removal and returns its result. Anything else ends the program with what it
+    # says about the list.
     try:
-        result = blueprint_certs.remove_key_credential(
-            object_id=object_id, token=token, sha1_hex=sha1, must_keep=list(must_keep)
-        )
+        return write()
     except blueprint_certs.KeyCredentialsReadError as exc:  # nothing was sent
         done({_UNCHANGED}, problem=str(exc))
     except blueprint_certs.RegistrationRejectedError as exc:  # refused: nothing changed
         done({_UNCHANGED}, problem=str(exc))
     except Exception as exc:  # the write may have landed, so don't claim otherwise
         done({_UNCONFIRMED}, problem=str(exc))
+
+def remove(object_id, sha1, must_keep=()):
+    result = settle(lambda: blueprint_certs.remove_key_credential(
+        object_id=object_id, token=token, sha1_hex=sha1, must_keep=list(must_keep)
+    ))
     done({_GONE}, removed=len(result.removed), kept=len(result.current))
 """
 
@@ -69,6 +78,24 @@ REMOVE_BLUEPRINT_CREDENTIAL_SNIPPET = (
     + _REMOVAL_COMMON
     + """
 remove(sys.argv[2], sys.argv[3], must_keep=sys.argv[4:])
+"""
+)
+
+# Every certificate named, in ONE read, write and read-back: two removals in a row are two
+# whole-list writes, and the second one's read can still show what the first removed, which
+# its write would then put back. The result says, by position, which were not listed.
+# argv: scripts folder, Blueprint object ID, then the SHA-1 thumbprints.
+REMOVE_BLUEPRINT_CREDENTIALS_SNIPPET = (
+    "# Entrabot: remove this computer's certificate from the Blueprint, "
+    "with any rotation leftover, in one write\n"
+    + _REMOVAL_COMMON
+    + f"""
+targets = sys.argv[3:]
+result = settle(lambda: blueprint_certs.remove_key_credentials(
+    object_id=sys.argv[2], token=token, thumbprints=targets
+))
+not_listed = [index for index, sha1 in enumerate(targets) if sha1 in result.not_listed]
+done({_GONE}, removed=len(result.removed), kept=len(result.current), not_listed=not_listed)
 """
 )
 
@@ -95,6 +122,39 @@ if not response.is_success:
 remove(response.json()["id"], sys.argv[2])
 """
 )
+
+# Setup's own retry of the old Provisioner certificates it could not take off the app when it
+# moved an older install off its plaintext key file (entra_provisioning._retire_old_certificates
+# calls the same function). It works through the Azure CLI sign-in, not the Provisioner token,
+# and changes only the entries that hold the certificate (az ad app credential delete), never
+# the rest of the app's list. No keep_sha1: setup names the certificate it is moving TO, so that
+# a migration never removes what may be the app's only working certificate. Teardown moves to
+# nothing: it retires this computer's setup certificate itself or keeps it, and never passes it
+# here as an old one. The result says, by position, what happened to each.
+# argv: scripts folder, Provisioner app (client) ID, then the SHA-1 thumbprints.
+REVOKE_OLD_SETUP_CERTIFICATES_SNIPPET = f"""
+# Entrabot: take old setup certificates an earlier setup could not remove off the Provisioner app
+import contextlib, json, sys
+sys.path.insert(0, sys.argv[1])  # the repo's scripts folder
+client_id, targets = sys.argv[2], sys.argv[3:]
+results = []
+with contextlib.redirect_stdout(sys.stderr):  # stdout carries the result line only
+    try:
+        from entra_provisioning import ProvisionerBootstrapError, _revoke_app_certificate
+    except Exception as exc:
+        problem = f"could not load setup's provisioning helper ({{type(exc).__name__}}: {{exc}})"
+        results = [dict(outcome="failed", problem=problem[:400]) for _ in targets]
+    else:
+        for sha1 in targets:
+            try:
+                results.append(dict(outcome=_revoke_app_certificate(client_id, sha1)))
+            except ProvisionerBootstrapError as exc:
+                results.append(dict(outcome="failed", problem=str(exc)[:400]))
+            except Exception as exc:  # it may or may not have been removed: claim nothing
+                problem = f"{{type(exc).__name__}}: {{exc}}"
+                results.append(dict(outcome="failed", problem=problem[:400]))
+print({RESULT_MARKER!r} + json.dumps(dict(results=results)))
+"""
 
 PROVE_CERTIFICATE_SNIPPET = f"""
 # Entrabot: prove the new certificate signs the agent in (three-hop token)
@@ -198,16 +258,41 @@ def key_removal_advice(ksp: str) -> str:
 
 @dataclass(frozen=True)
 class Removal:
-    """What happened when a certificate was taken off an application's list."""
+    """What happened when certificates were taken off an application's list.
+
+    *not_listed*: of the thumbprints asked for, those that were not on the list to begin with
+    (known only when the removal is confirmed).
+    """
 
     status: RemovalStatus
     removed: int = 0
     detail: str = ""
+    not_listed: tuple[str, ...] = ()
 
     @property
     def gone(self) -> bool:
         """The certificate is not on the list (it was removed, or was never there)."""
         return self.status == "gone"
+
+
+RevocationStatus = Literal["revoked", "not-listed", "failed"]
+
+_REVOCATION_OUTCOMES: dict[str, RevocationStatus] = {
+    "removed": "revoked",  # what _revoke_app_certificate returns once a read confirms it
+    "not_registered": "not-listed",
+}
+
+
+@dataclass(frozen=True)
+class Revocation:
+    """What happened to one old setup certificate on the Provisioner app.
+
+    "revoked": a read confirmed it gone. "not-listed": it was not on the app. "failed"
+    claims nothing either way: it may still be listed, and *detail* says why it is not known.
+    """
+
+    status: RevocationStatus
+    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -286,7 +371,9 @@ class Directory:
         self._paths = paths
         self._helpers = helpers
 
-    def _remove(self, code: str, args: list[str], waiting: str) -> Removal:
+    def _remove(
+        self, code: str, args: list[str], waiting: str, *, targets: Sequence[str] = ()
+    ) -> Removal:
         result = self._console.run(
             [str(self._paths.python), "-c", code, str(self._paths.scripts), *args],
             env=self._helpers.base_env,
@@ -298,7 +385,14 @@ class Directory:
         data = _result(result.stdout)
         detail = str(data.get("problem") or "")
         if result.returncode == _GONE and data:
-            return Removal("gone", removed=int(data.get("removed") or 0))
+            # The child names the ones that were not listed by position, never by thumbprint.
+            positions = data.get("not_listed")
+            not_listed = tuple(
+                targets[index]
+                for index in (positions if isinstance(positions, list) else [])
+                if isinstance(index, int) and 0 <= index < len(targets)
+            )
+            return Removal("gone", removed=int(data.get("removed") or 0), not_listed=not_listed)
         if result.returncode == _NO_ACCESS:
             return Removal("no-access", detail=detail)
         if result.returncode == _UNCHANGED:
@@ -323,6 +417,27 @@ class Directory:
             "Waiting for Microsoft Entra to confirm the certificate is gone",
         )
 
+    def remove_blueprint_credentials(
+        self, blueprint_object_id: str, sha1s: Sequence[str]
+    ) -> Removal:
+        """Take several certificates off the Blueprint in ONE write. Every other machine's stays.
+
+        One read, one write, one confirmed read-back for all of them. Calling
+        :meth:`remove_blueprint_credential` for each instead is a whole-list write each, and the
+        second one's read can land on a replica that still lists the certificate the first
+        took off: that write puts it back, and both say they succeeded. The result is "gone"
+        only when a read showed every one of them gone; ``not_listed`` says which were not
+        there to begin with.
+        """
+        targets = list(sha1s)
+        return self._remove(
+            REMOVE_BLUEPRINT_CREDENTIALS_SNIPPET,
+            [blueprint_object_id, *targets],
+            "Waiting for Microsoft Entra to confirm the "
+            + ("certificate is gone" if len(targets) == 1 else "certificates are gone"),
+            targets=targets,
+        )
+
     def remove_provisioner_credential(self, sha1_hex: str) -> Removal:
         """Take this computer's setup certificate off the Provisioner app."""
         return self._remove(
@@ -330,6 +445,47 @@ class Directory:
             [sha1_hex],
             "Waiting for Microsoft Entra to confirm the setup certificate is gone",
         )
+
+    def revoke_old_setup_certificates(
+        self, provisioner_client_id: str, sha1s: Sequence[str]
+    ) -> list[Revocation]:
+        """Take old setup certificates off the Provisioner app the way setup's retry does.
+
+        These are the certificates an earlier setup could not remove when it moved an older
+        install off its plaintext key file (``PROVISIONER_CERT_REVOKE_PENDING`` in the state
+        file). Returns one :class:`Revocation` per thumbprint, in order; a child that did
+        not say what happened to one leaves it "failed", never "revoked".
+        """
+        targets = list(sha1s)
+        result = self._console.run(
+            [
+                str(self._paths.python),
+                "-c",
+                REVOKE_OLD_SETUP_CERTIFICATES_SNIPPET,
+                str(self._paths.scripts),
+                provisioner_client_id,
+                *targets,
+            ],
+            env=self._helpers.base_env,
+            cwd=self._paths.project_root,
+            capture=True,
+            quiet=True,
+            heartbeat="Waiting for Microsoft Entra to confirm the old setup certificate is gone",
+        )
+        answers = _result(result.stdout).get("results")
+        if not isinstance(answers, list) or len(answers) != len(targets):
+            why = _last_lines(result.stderr) or "the removal could not be confirmed"
+            return [Revocation("failed", why) for _ in targets]
+        revocations: list[Revocation] = []
+        for answer in answers:
+            fields = answer if isinstance(answer, dict) else {}
+            status = _REVOCATION_OUTCOMES.get(str(fields.get("outcome")), "failed")
+            if status == "failed":
+                why = str(fields.get("problem") or "") or "the removal could not be confirmed"
+                revocations.append(Revocation("failed", why))
+            else:
+                revocations.append(Revocation(status))
+        return revocations
 
     def prove_certificate(self, *, sha1_hex: str, x5t_s256: str, ksp: str) -> Proof:
         """Sign the agent in with the named certificate, in a fresh process.

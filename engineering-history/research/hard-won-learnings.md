@@ -1102,6 +1102,18 @@ The wrap always adds an authoritative outer envelope; a body that already resemb
 
 ---
 
+### Learning #82: Never Adopt a Directory Object by Display Name Before Granting It Privileges
+
+**Date:** 2026-11-12
+**Status:** **Fix in place and covered by unit tests; not yet run against a real tenant.**
+**Context:** A machine with no Provisioner app recorded ran `az ad app list --display-name "EntraBot Agent ID Provisioner" --query "[0].appId"`, took the first result, uploaded its certificate to it, and granted it admin consent for tenant-wide Microsoft Graph application permissions.
+**Problem:** Display names are not unique, and `--display-name` matches the start of the name in any case. Anyone allowed to register applications can create an app with that name, own it, or leave a secret, certificate or federated credential on it and then hand it over, and setup would grant that app tenant-wide permissions. The consent check had the same flaw one level down: it counted an app role assignment as Microsoft Graph's when its `resourceDisplayName` was "Microsoft Graph".
+**Fix:** `entra_provisioning._provisioner_app_for_this_machine` takes over an exact-name match only when that grants nobody anything: an administrator has already consented to every permission setup needs and to anything else the app declares, or nobody else can use it (the signed-in user is the only owner of the app and its service principal, or there are none; no client secret, federated credential or service-principal credential; every certificate's private key is on this machine; no other permission declared). Several matches, or anything that could not be read, refuse with nothing changed; `ENTRABOT_PROVISIONER_APP_ID_VERIFIED` names a checked app for one run. Graph's service principal is found by its well-known appId (`00000003-0000-0000-c000-000000000000`) and assignments are matched to it by object ID.
+**Prevention:** Never adopt a directory object by display name before granting it privileges: names are not unique, and anyone who can register an app can squat one. Decide from who can control the object (its owners and credentials) and from what an administrator has already approved, and treat "could not check" as "no". Identify Microsoft Graph, and any other first-party resource, by its well-known appId, never by its display name.
+**Evidence/references:** `scripts/entra_provisioning.py` (`_provisioner_app_for_this_machine`, `_assess_candidate`, `_approval`, `_graph_service_principal_id`), `tests/scripts/test_entra_provisioning.py`. The same rule was then applied to the Blueprint: `scripts/create_entra_agent_ids.py` (`find_existing_blueprint`) uses only the Blueprint that is recorded or named, and stops instead of searching by display name when it is missing or cannot be checked. Not yet fixed: `scripts/teardown.sh` deletes Provisioner apps found by display name.
+
+---
+
 ### [HISTORICAL] Learning #4: OBO Requires Matching Token Audience
 
 **Date:** 2026-04-06

@@ -205,11 +205,14 @@ class RegistrationResult:
 class RemovalResult:
     """A removal that was confirmed by reading it back.
 
-    ``removed`` is empty when the certificate wasn't on the Blueprint to begin with.
+    ``removed`` is empty when no certificate asked for was on the Blueprint to begin with.
+    ``not_listed`` holds the thumbprints asked for, as given, whose certificate was not on the
+    list, so there was nothing to remove for them.
     """
 
     removed: tuple[KeyCredential, ...]
     current: tuple[KeyCredential, ...]
+    not_listed: tuple[str, ...] = ()
 
 
 def thumbprint_of_der(der: bytes) -> str:
@@ -502,6 +505,16 @@ def _not_listed(credentials: Sequence[KeyCredential], thumbprints: Sequence[str]
     ]
 
 
+def _comparable(thumbprint: str) -> str:
+    """A thumbprint as it compares: hex SHA-1 ignores case, base64url SHA-256 does not."""
+    return thumbprint.upper() if _SHA1_HEX.match(thumbprint) else thumbprint
+
+
+def _lists(credentials: Sequence[KeyCredential], target: Sequence[str]) -> bool:
+    """Whether any entry holds the certificate that *target*'s thumbprints name."""
+    return any(_holds(credential, item) for credential in credentials for item in target)
+
+
 def remove_key_credential(
     *,
     object_id: str,
@@ -531,6 +544,9 @@ def remove_key_credential(
     repeated, up to ``attempts`` times, and if it never shows them nothing is sent.
     Rotation uses this for the certificate it added moments earlier.
 
+    To take off more than one certificate, use :func:`remove_key_credentials`: two calls
+    in a row are two whole-list writes, and the second can put back what the first removed.
+
     Raises:
         ValueError: neither thumbprint was given, or the certificate to remove is
             also in ``must_keep``.
@@ -545,10 +561,85 @@ def remove_key_credential(
     """
     if not x5t_s256 and not sha1_hex:
         raise ValueError("a certificate thumbprint (x5t_s256 or sha1_hex) is required")
+    return _remove_in_one_write(
+        object_id=object_id,
+        token=token,
+        targets=[tuple(item for item in (x5t_s256, sha1_hex) if item)],
+        must_keep=must_keep,
+        attempts=attempts,
+        delay_seconds=delay_seconds,
+        sleep=sleep,
+    )
+
+
+def remove_key_credentials(
+    *,
+    object_id: str,
+    token: str,
+    thumbprints: Sequence[str],
+    must_keep: Sequence[str] = (),
+    attempts: int = VERIFY_ATTEMPTS,
+    delay_seconds: float = VERIFY_DELAY_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> RemovalResult:
+    """Remove several certificates from the Blueprint in ONE write, keeping every other.
+
+    One read, one PATCH, one confirmed read-back for all of them. Removing them one call at
+    a time is a read-modify-write each, and Graph is eventually consistent: the second
+    call's read can land on a replica that still lists the certificate the first call took
+    off, and its write then puts that certificate back while both calls report success.
+    With a single write there is no second read to be stale.
+
+    Each thumbprint names one certificate: 40 hex characters are its SHA-1 (the Windows
+    thumbprint), anything else its base64url SHA-256 (``x5t#S256``). Every entry holding one
+    of them goes; everything else is sent back exactly as Graph returned it. The write counts
+    once a read shows all of them gone and every other entry still there. Certificates that
+    are not registered are not an error; ``not_listed`` names them, and when none is
+    registered nothing is sent. ``must_keep`` is as for :func:`remove_key_credential`.
+
+    Raises:
+        ValueError: no thumbprint was given, or one to remove is also in ``must_keep``.
+        KeyCredentialsReadError: the read before the write failed, or one of them wasn't
+            found while another entry's key material couldn't be read, so it can't be ruled
+            out. Nothing was sent.
+        RequiredCertificateMissingError: a ``must_keep`` certificate never appeared on the
+            list that was read. Nothing was sent.
+        RegistrationRejectedError: Graph refused the write. Nothing changed.
+        RegistrationUnconfirmedError: the write may have landed but couldn't be confirmed:
+            a read-back still listed one of them, or no longer listed another entry.
+    """
+    wanted = dict.fromkeys(item.strip() for item in thumbprints if item and item.strip())
+    if not wanted:
+        raise ValueError("at least one certificate thumbprint is required")
+    return _remove_in_one_write(
+        object_id=object_id,
+        token=token,
+        targets=[(item,) for item in wanted],
+        must_keep=must_keep,
+        attempts=attempts,
+        delay_seconds=delay_seconds,
+        sleep=sleep,
+    )
+
+
+def _remove_in_one_write(
+    *,
+    object_id: str,
+    token: str,
+    targets: Sequence[tuple[str, ...]],
+    must_keep: Sequence[str],
+    attempts: int,
+    delay_seconds: float,
+    sleep: Callable[[float], None],
+) -> RemovalResult:
+    """Read, drop every entry holding one of *targets*, write once, confirm by reading back.
+
+    Each target is the thumbprints (either form) of one certificate.
+    """
     required = [item.strip() for item in must_keep if item and item.strip()]
     both = "the certificate to remove is also named in must_keep"
-    targets = {x5t_s256 or "", (sha1_hex or "").upper()} - {""}
-    if any(item in targets or item.upper() in targets for item in required):
+    named = {_comparable(item) for target in targets for item in target}
+    if any(_comparable(item) in named for item in required):
         raise ValueError(both)
 
     prior = fetch_key_credentials(object_id, token)
@@ -566,17 +657,19 @@ def remove_key_credential(
             "moments ago can take a minute to appear. Nothing was changed."
         )
 
-    removed = [c for c in prior if _is_certificate(c, x5t_s256=x5t_s256, sha1_hex=sha1_hex)]
+    removed = [c for c in prior if any(_lists([c], target) for target in targets)]
     if any(_holds(credential, item) for credential in removed for item in required):
         raise ValueError(both)  # the same certificate, named by its other thumbprint
-    if not removed:
+    not_listed = tuple(item for target in targets if not _lists(prior, target) for item in target)
+    if not_listed:
         unreadable = unreadable_certificates(prior)
         if unreadable:
             raise KeyCredentialsReadError(
                 f"the key material of {len(unreadable)} certificate(s) couldn't be read, so "
                 "the certificate may still be registered"
             )
-        return RemovalResult(removed=(), current=tuple(prior))
+    if not removed:
+        return RemovalResult(removed=(), current=tuple(prior), not_listed=not_listed)
 
     kept = [c for c in prior if c not in removed]
 
@@ -594,7 +687,7 @@ def remove_key_credential(
         if not response.is_success:
             write_problem = f"Graph answered the PATCH with {response.status_code}. "
 
-    still_listed = True
+    still_listed = len(targets)  # how many of them the last read showed (none read yet: all)
     missing: tuple[str, ...] = ()
     required_gone: list[str] = []
     read_problem = ""
@@ -607,9 +700,7 @@ def remove_key_credential(
             read_problem = f"The last read failed: {exc}. "
             continue
         read_problem = ""
-        still_listed = any(
-            _is_certificate(c, x5t_s256=x5t_s256, sha1_hex=sha1_hex) for c in current
-        )
+        still_listed = sum(1 for target in targets if _lists(current, target))
         current_ids = {c.key_id for c in current}
         current_thumbprints = {c.thumbprint for c in current}
         # Kept if its keyId survived or, since Graph may reissue keyId when key is
@@ -622,7 +713,9 @@ def remove_key_credential(
         )
         required_gone = _not_listed(current, required)
         if not still_listed and not missing and not required_gone:
-            return RemovalResult(removed=tuple(removed), current=tuple(current))
+            return RemovalResult(
+                removed=tuple(removed), current=tuple(current), not_listed=not_listed
+            )
 
     problems = []
     if required_gone:
@@ -630,8 +723,13 @@ def remove_key_credential(
             f"{len(required_gone)} certificate(s) that must stay on the Blueprint are not "
             "listed any more."
         )
-    if still_listed:
+    if still_listed and len(targets) == 1:
         problems.append("The certificate is still listed on the Blueprint.")
+    elif still_listed:
+        problems.append(
+            f"{still_listed} of the {len(targets)} certificates being removed "
+            f"{'is' if still_listed == 1 else 'are'} still listed on the Blueprint."
+        )
     if missing:
         names = ", ".join(f"'{name}'" for name in missing)
         problems.append(f"Not seen on the Blueprint any more: {names}.")

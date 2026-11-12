@@ -34,7 +34,7 @@ Running `scripts\setup-windows.cmd` again is how you repair or change a setup. I
 
 | Question | Suggested answer | Notes |
 |---|---|---|
-| Install the Azure CLI? | Yes | Only asked if it is missing. A private copy goes into Entrabot's data folder. |
+| Install the Azure CLI? | Yes | Only asked if it is missing. If your account is a local administrator and `winget` is present, setup installs it with `winget` (the standard install, for the whole PC; Windows may ask for permission). Otherwise, or if that does not work, a private copy goes into Entrabot's data folder. |
 | Use this account? | Yes | Shown when you are already signed in. Otherwise a Microsoft sign-in window opens. |
 | How do you want to set up your agent? | Create a new agent | Or join an agent that already exists, using its Blueprint App ID. On a PC that is already set up, the suggested answer is to continue with that agent. |
 | Short name for your agent | Your Windows user name | The agent's address becomes `entrabot-agent-<name>@<your domain>`. |
@@ -76,13 +76,13 @@ See the [`setup-windows.ps1` reference](../reference/scripts/setup/setup-windows
 
 ## What it installs and where
 
-Everything is installed for your account only. Nothing is installed machine-wide and nothing asks for administrator approval.
+Everything is installed for your account only, with one exception: on an account that is a local administrator and has `winget`, a missing Azure CLI is installed with `winget`, for the whole PC, and Windows may ask for permission. Nothing else is installed machine-wide or asks for administrator approval.
 
 | What | Where | When |
 |---|---|---|
 | Python 3.12 (private copy; checksum and signature checked before use) | `%LOCALAPPDATA%\entrabot\python` | Only if the PC has no Python 3.12 or newer. |
 | The project's Python environment | `.venv` in the Entrabot folder | Always. |
-| Azure CLI (private copy, version 2.92.0 or later and below 3) | `%LOCALAPPDATA%\entrabot\tools\azure-cli` | Only if the Azure CLI is missing. |
+| Azure CLI (private copy, version 2.92.0 or later and below 3) | `%LOCALAPPDATA%\entrabot\tools\azure-cli` | Only if the Azure CLI is missing and was not installed with `winget` (see above). |
 | Git for Windows | `%LOCALAPPDATA%\Programs\Git` | Only if you say yes. Claude Code needs it for this project. |
 | Claude Code | `%USERPROFILE%\.local\bin` | Only if you say yes. |
 | Two certificates with non-exportable keys | Your Windows certificate store (`Cert:\CurrentUser\My`) | Always. The keys are held by the PC's TPM when it accepts them. |
@@ -125,6 +125,7 @@ Not yet tested:
 - Cloud memory and Work IQ set up through the wizard.
 - Teardown with `-PurgeData`.
 - The fixes made after a security review (the Claude Code version check, the hooks' UTF-8 input, the persona-sati token command lookup, revoking an older setup key file, and the teardown and rotation safeguards). They are covered by unit tests, but the end-to-end run above was done before them.
+- The rule for taking over an existing Provisioner app, the on-screen warning about an older setup key, teardown's one-write certificate removal and its retry of an older setup key, and the sponsor search by sign-in name. They are covered by unit tests only and have not been run against a real tenant.
 
 If something goes wrong, see [Windows troubleshooting](../troubleshooting/windows.md).
 

@@ -40,6 +40,9 @@ _GRAPH = "https://graph.microsoft.com/v1.0"
 AZURE_CLI_REQUIREMENT = "azure-cli>=2.92.0,<3"
 # Only what setup uses is asked for: less of the directory travels, and less lands in the log.
 _USER_FIELDS = "id,displayName,userPrincipalName,mail,userType,otherMails"
+# The step after the direct lookup, as the person is told about it (what was tried, or why
+# more than one person matched).
+_SIGN_IN_SEARCH = "a search for their sign-in name"
 _ROLE_FIELDS = "id,displayName,roleTemplateId"
 _ROLES_ONLY = (
     "{value: value[?roleTemplateId].{id: id, displayName: displayName, "
@@ -511,12 +514,15 @@ class AzCli:
         first step that finds exactly one person:
 
         1. the sign-in name or object ID, exactly;
-        2. the primary email (``mail``);
-        3. other email addresses (``otherMails``);
-        4. email aliases (``proxyAddresses``, ``SMTP:`` and ``smtp:``);
-        5. an external sign-in name made from the address (``@`` becomes ``_``).
+        2. a search for the sign-in name (``userPrincipalName eq``), for a name the first
+           lookup can miss: Graph may not take an apostrophe (o'brien@contoso.com) in a path;
+        3. the primary email (``mail``);
+        4. other email addresses (``otherMails``);
+        5. email aliases (``proxyAddresses``, ``SMTP:`` and ``smtp:``);
+        6. an external sign-in name made from the address (``@`` becomes ``_``).
 
-        Raises :class:`AmbiguousUser` when a step finds more than one person.
+        An object ID is only ever looked up by step 1. Raises :class:`AmbiguousUser` when a step
+        finds more than one person.
         """
         identifier = identifier.strip()
         if self._through_cmd:
@@ -532,6 +538,7 @@ class AzCli:
 
         literal = identifier.replace("'", "''")  # OData doubles a quote inside a string
         steps = [
+            (_SIGN_IN_SEARCH, [f"userPrincipalName eq '{literal}'"]),
             ("their primary email", [f"mail eq '{literal}'"]),
             ("their other email addresses", [f"otherMails/any(x:x eq '{literal}')"]),
             (
@@ -577,15 +584,21 @@ class AzCli:
         """The lookups that need no character ``cmd.exe`` would reinterpret."""
         tried = ["their sign-in name or object ID"]
         user = _directory_user(self.try_json(["ad", "user", "show", "--id", identifier]))
-        if user is None and "@" in identifier:
-            tried.append("their primary email")
+        if user is None and "@" in identifier:  # never for an object ID
             literal = identifier.replace("'", "''")  # OData doubles a quote inside a string
-            matches = self.try_json(["ad", "user", "list", "--filter", f"mail eq '{literal}'"])
-            found = [_directory_user(item) for item in matches or []]
-            users = [item for item in found if item is not None]
-            if len(users) > 1:
-                raise AmbiguousUser(identifier, users, "their primary email")
-            user = users[0] if users else None
+            for label, condition in (
+                (_SIGN_IN_SEARCH, f"userPrincipalName eq '{literal}'"),
+                ("their primary email", f"mail eq '{literal}'"),
+            ):
+                tried.append(label)
+                matches = self.try_json(["ad", "user", "list", "--filter", condition])
+                found = [_directory_user(item) for item in matches or []]
+                users = [item for item in found if item is not None]
+                if len(users) > 1:
+                    raise AmbiguousUser(identifier, users, label)
+                if users:
+                    user = users[0]
+                    break
         if user is None:
             tried.append("(other lookups are not possible with this Azure CLI install)")
         return UserSearch(user, tuple(tried))
@@ -681,9 +694,9 @@ def assess_privileges(
 
     What setup needs, from ``scripts/entra_provisioning.py``:
 
-    * A first run in a tenant creates the "EntraBot Provisioner" app registration and grants
-      it Microsoft Graph application permissions. Granting Graph application permissions takes
-      a Global Administrator, or a Privileged Role Administrator (who also needs to be able to
+    * A first run in a tenant creates the "EntraBot Agent ID Provisioner" app registration and
+      grants it Microsoft Graph application permissions. Granting Graph application permissions
+      takes a Global Administrator, or a Privileged Role Administrator (who also needs to be able to
       manage the app: Application or Cloud Application Administrator).
     * Every machine uploads its own certificate to that app, which takes an Application or
       Cloud Application Administrator, or being an owner of the app.
@@ -705,7 +718,7 @@ def assess_privileges(
             "none",
             "Your account has no admin role in this tenant. Adding this machine to an existing "
             "agent works only if an administrator has made you an owner of the "
-            "'EntraBot Provisioner' app registration, or does this step for you.",
+            "'EntraBot Agent ID Provisioner' app registration, or does this step for you.",
         )
     if app_admin:
         return Privileges(

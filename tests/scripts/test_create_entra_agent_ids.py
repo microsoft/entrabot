@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
+import requests
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "create_entra_agent_ids.py"
@@ -584,3 +586,424 @@ class TestAssignLicenseToAgentUser:
         assert "Work IQ provisioning can take 10-15 minutes" in output
         assert "Teams/mailbox and Work IQ provisioning can take 10-15 minutes" not in output
         assert state == {"AGENT_USER_WORK_IQ_LICENSE_SKU": "MICROSOFT_365_COPILOT"}
+
+
+# ---------------------------------------------------------------------------
+# Which Blueprint a run is for
+# ---------------------------------------------------------------------------
+
+OURS_OBJECT = "aaaaaaaa-0000-4000-8000-00000000000a"
+OTHER_OBJECT = "bbbbbbbb-0000-4000-8000-00000000000b"
+BY_NAME = "/applications?$filter=displayName eq 'EntraBot Code Agent'"
+CREATE_BLUEPRINT = "/applications/microsoft.graph.agentIdentityBlueprint"
+
+
+def _by_app_id(app_id: str) -> str:
+    return f"/applications?$filter=appId eq '{app_id}'"
+
+
+def _principal(app_id: str) -> str:
+    return f"/servicePrincipals?$filter=appId eq '{app_id}'"
+
+
+def _blueprint(app_id: str, object_id: str, created: str = "2026-04-19T17:02:11Z") -> dict:
+    return {
+        "@odata.type": "#microsoft.graph.agentIdentityBlueprint",
+        "id": object_id,
+        "appId": app_id,
+        "displayName": "EntraBot Code Agent",
+        "createdDateTime": created,
+    }
+
+
+def _not_json(status: int) -> SimpleNamespace:
+    """A response whose body is not JSON (a proxy's error page, a truncated answer)."""
+
+    def broken() -> dict:
+        raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    return SimpleNamespace(status_code=status, json=broken, text="<html>gateway</html>")
+
+
+class FakeGraph:
+    """Stands in for ``graph_request``: answers only the ``(method, path)`` a test set up.
+
+    Any other call fails the test, so a request the code must never make (the search by
+    display name, a create) shows up as a failure rather than passing unnoticed.
+    """
+
+    def __init__(self) -> None:
+        self.answers: dict[tuple[str, str], object] = {}
+        self.calls: list[tuple[str, str]] = []
+
+    def __call__(
+        self, method: str, path: str, token: str, json_body: dict | None = None, **_: object
+    ) -> object:
+        self.calls.append((method, path))
+        reply = self.answers.get((method, path))
+        if reply is None:
+            raise AssertionError(f"unexpected Graph call: {method} {path}")
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
+
+    @property
+    def writes(self) -> list[tuple[str, str]]:
+        return [call for call in self.calls if call[0] != "GET"]
+
+
+@dataclass
+class Lookup:
+    module: ModuleType
+    state: dict[str, str]
+    graph: FakeGraph
+
+    def answer(self, path: str, reply: object, *, method: str = "GET") -> None:
+        self.graph.answers[(method, path)] = reply
+
+
+@pytest.fixture
+def lookup(agent_ids_module: ModuleType, monkeypatch: pytest.MonkeyPatch) -> Lookup:
+    """The script with its world replaced: the state file is a dict, Graph answers only what
+    the test sets up, and nothing can reach the network or the Azure CLI."""
+    state: dict[str, str] = {}
+    graph = FakeGraph()
+    monkeypatch.setattr(agent_ids_module, "get_state", state.get)
+    monkeypatch.setattr(agent_ids_module, "set_state", state.__setitem__)
+    monkeypatch.setattr(agent_ids_module, "graph_request", graph)
+    monkeypatch.setattr(agent_ids_module, "get_existing_graph_token", lambda: "tok")
+    monkeypatch.setattr(agent_ids_module, "build_sponsors_bind", lambda: [])
+    monkeypatch.setattr(agent_ids_module, "get_signed_in_user_id", lambda: None)
+    monkeypatch.setattr(agent_ids_module, "_FORCE_NEW", False)
+    monkeypatch.setenv("ENTRABOT_TENANT_ID", "tenant-under-test")
+
+    def no_network(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("a test tried to reach the network")
+
+    monkeypatch.setattr(requests.Session, "request", no_network)
+    return Lookup(agent_ids_module, state, graph)
+
+
+def _stopped(lookup: Lookup) -> str:
+    """Run the lookup, which must stop; return what it tells the operator."""
+    with pytest.raises(lookup.module.BlueprintLookupError) as stopped:
+        lookup.module.find_existing_blueprint("tok")
+    return str(stopped.value)
+
+
+class TestTheBlueprintThisRunIsFor:
+    """The defect: when the Blueprint recorded in the state file (setup records there the one
+    it is asked to join, with --use-blueprint or -UseBlueprint) was not returned by Graph, for
+    any reason at all, the lookup fell back to the first application named "EntraBot Code
+    Agent". Display names are not unique, so this machine could be attached to somebody
+    else's Blueprint without a word: its certificate registered there, its Agent Identity and
+    Agent User resolved under it."""
+
+    def test_a_recorded_blueprint_that_exists_is_the_one_used(self, lookup: Lookup) -> None:
+        lookup.state["BLUEPRINT_APP_ID"] = BLUEPRINT_OURS
+        lookup.answer(
+            _by_app_id(BLUEPRINT_OURS),
+            _resp(200, {"value": [_blueprint(BLUEPRINT_OURS, OURS_OBJECT)]}),
+        )
+        lookup.answer(_principal(BLUEPRINT_OURS), _resp(200, {"value": [{"id": "bp-sp"}]}))
+
+        assert lookup.module.create_blueprint("tok") == (BLUEPRINT_OURS, OURS_OBJECT)
+
+        assert lookup.state["BLUEPRINT_OBJECT_ID"] == OURS_OBJECT
+        assert ("GET", BY_NAME) not in lookup.graph.calls
+        assert lookup.graph.writes == []
+
+    def test_the_recorded_app_id_in_other_letter_case_is_the_same_blueprint(
+        self, lookup: Lookup
+    ) -> None:
+        lookup.state["BLUEPRINT_APP_ID"] = BLUEPRINT_OURS.upper()  # as typed
+        lookup.answer(
+            _by_app_id(BLUEPRINT_OURS.upper()),
+            _resp(200, {"value": [_blueprint(BLUEPRINT_OURS, OURS_OBJECT)]}),  # as Graph has it
+        )
+
+        found = lookup.module.find_existing_blueprint("tok")
+
+        assert found is not None and found["appId"] == BLUEPRINT_OURS
+
+    def test_an_object_id_left_from_another_blueprint_cannot_pin_the_run_to_it(
+        self, lookup: Lookup, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # The stored object ID used to be tried first and won outright: an object ID left over
+        # from another Blueprint pinned the run to that Blueprint (scripts/setup.sh wipes the
+        # state on a switch for exactly this reason). The App ID is what was asked for.
+        lookup.state.update(BLUEPRINT_APP_ID=BLUEPRINT_OURS, BLUEPRINT_OBJECT_ID=OTHER_OBJECT)
+        lookup.answer(
+            f"/applications/{OTHER_OBJECT}", _resp(200, _blueprint(BLUEPRINT_OTHER, OTHER_OBJECT))
+        )
+        lookup.answer(
+            _by_app_id(BLUEPRINT_OURS),
+            _resp(200, {"value": [_blueprint(BLUEPRINT_OURS, OURS_OBJECT)]}),
+        )
+
+        found = lookup.module.find_existing_blueprint("tok")
+
+        assert found is not None
+        assert (found["appId"], found["id"]) == (BLUEPRINT_OURS, OURS_OBJECT)
+        assert OTHER_OBJECT in capsys.readouterr().out  # the stale record is reported
+
+    def test_a_recorded_app_id_that_does_not_exist_stops_without_a_name_search(
+        self, lookup: Lookup
+    ) -> None:
+        lookup.state["BLUEPRINT_APP_ID"] = BLUEPRINT_OURS
+        lookup.answer(_by_app_id(BLUEPRINT_OURS), _resp(200, {"value": []}))
+        # What the old fallback would have taken: another Blueprint with the same name.
+        lookup.answer(BY_NAME, _resp(200, {"value": [_blueprint(BLUEPRINT_OTHER, OTHER_OBJECT)]}))
+
+        message = _stopped(lookup)
+
+        assert f"Blueprint {BLUEPRINT_OURS} does not exist in this tenant" in message
+        assert "tenant-under-test" in message
+        assert "mistyped" in message and "different tenant" in message and "deleted" in message
+        assert "Nothing was created or changed" in message
+        assert "--use-blueprint=APP_ID" in message and "-UseBlueprint APP_ID" in message
+        assert BLUEPRINT_OTHER not in message
+        assert lookup.graph.calls == [("GET", _by_app_id(BLUEPRINT_OURS))]
+
+    def test_a_recorded_object_id_that_graph_says_is_gone_stops_without_a_name_search(
+        self, lookup: Lookup
+    ) -> None:
+        lookup.state["BLUEPRINT_OBJECT_ID"] = OURS_OBJECT
+        lookup.answer(
+            f"/applications/{OURS_OBJECT}",
+            _resp(404, {"error": {"code": "Request_ResourceNotFound"}}),
+        )
+        lookup.answer(BY_NAME, _resp(200, {"value": [_blueprint(BLUEPRINT_OTHER, OTHER_OBJECT)]}))
+
+        message = _stopped(lookup)
+
+        assert OURS_OBJECT in message and "does not exist in this tenant" in message
+        assert ("GET", BY_NAME) not in lookup.graph.calls
+
+    @pytest.mark.parametrize(
+        ("reply", "reason"),
+        [
+            (
+                _resp(500, {"error": {"code": "InternalServerError"}}),
+                "HTTP 500 (InternalServerError)",
+            ),
+            (_resp(503, {}), "HTTP 503"),
+            (_resp(429, {"error": {"code": "TooManyRequests"}}), "HTTP 429 (TooManyRequests)"),
+            (
+                _resp(403, {"error": {"code": "Authorization_RequestDenied"}}),
+                "HTTP 403 (Authorization_RequestDenied)",
+            ),
+            (_resp(401, {}), "HTTP 401"),
+            # A collection query answers "none" with an empty list; a 404 from it says nothing
+            # about this App ID.
+            (_resp(404, {}), "HTTP 404"),
+            (requests.exceptions.ReadTimeout("read timed out"), "ReadTimeout"),
+            (requests.exceptions.ConnectionError("no route to host"), "ConnectionError"),
+            (_not_json(200), "could not be read"),
+            (_resp(200, {"unexpected": "shape"}), "could not be read"),
+            (_resp(200, {"value": [{"appId": BLUEPRINT_OURS}]}), "could not be read"),  # no id
+        ],
+        ids=[
+            "500",
+            "503",
+            "throttled",
+            "forbidden",
+            "unauthorized",
+            "404-from-the-query",
+            "timeout",
+            "network",
+            "not-json",
+            "no-value-list",
+            "no-object-id",
+        ],
+    )
+    def test_a_recorded_app_id_that_could_not_be_checked_stops_without_a_name_search(
+        self, lookup: Lookup, reply: object, reason: str
+    ) -> None:
+        lookup.state["BLUEPRINT_APP_ID"] = BLUEPRINT_OURS
+        lookup.answer(_by_app_id(BLUEPRINT_OURS), reply)
+        lookup.answer(BY_NAME, _resp(200, {"value": [_blueprint(BLUEPRINT_OTHER, OTHER_OBJECT)]}))
+
+        message = _stopped(lookup)
+
+        assert f"Could not check whether Blueprint {BLUEPRINT_OURS} exists" in message
+        assert reason in message
+        assert "does not exist" not in message  # "could not check" is not "not found"
+        assert "Nothing was created or changed" in message
+        assert lookup.graph.calls == [("GET", _by_app_id(BLUEPRINT_OURS))]
+
+    def test_a_recorded_object_id_that_could_not_be_checked_stops_too(self, lookup: Lookup) -> None:
+        lookup.state["BLUEPRINT_OBJECT_ID"] = OURS_OBJECT
+        lookup.answer(f"/applications/{OURS_OBJECT}", _resp(503, {}))
+        lookup.answer(BY_NAME, _resp(200, {"value": [_blueprint(BLUEPRINT_OTHER, OTHER_OBJECT)]}))
+
+        message = _stopped(lookup)
+
+        assert "Could not check whether" in message and OURS_OBJECT in message
+        assert ("GET", BY_NAME) not in lookup.graph.calls
+
+    def test_a_recorded_value_that_is_not_an_id_stops_before_asking_graph(
+        self, lookup: Lookup
+    ) -> None:
+        lookup.state["BLUEPRINT_APP_ID"] = "9bfb75b3-e65f-4e56-bdbe"  # cut short when pasted
+
+        message = _stopped(lookup)
+
+        assert "'9bfb75b3-e65f-4e56-bdbe'" in message and "is not an ID" in message
+        assert lookup.graph.calls == []
+
+    def test_with_nothing_recorded_the_one_blueprint_with_the_name_is_used(
+        self, lookup: Lookup
+    ) -> None:
+        lookup.answer(BY_NAME, _resp(200, {"value": [_blueprint(BLUEPRINT_OURS, OURS_OBJECT)]}))
+
+        found = lookup.module.find_existing_blueprint("tok")
+
+        assert found is not None and found["appId"] == BLUEPRINT_OURS
+
+    def test_with_nothing_recorded_and_none_with_the_name_a_blueprint_is_created(
+        self, lookup: Lookup
+    ) -> None:
+        lookup.answer(BY_NAME, _resp(200, {"value": []}))
+        lookup.answer(
+            CREATE_BLUEPRINT, _resp(201, _blueprint(BLUEPRINT_OURS, OURS_OBJECT)), method="POST"
+        )
+        lookup.answer(_principal(BLUEPRINT_OURS), _resp(200, {"value": [{"id": "bp-sp"}]}))
+
+        assert lookup.module.create_blueprint("tok") == (BLUEPRINT_OURS, OURS_OBJECT)
+        assert lookup.state["BLUEPRINT_APP_ID"] == BLUEPRINT_OURS
+
+    def test_with_nothing_recorded_two_blueprints_with_the_name_stop_and_are_listed(
+        self, lookup: Lookup
+    ) -> None:
+        lookup.answer(
+            BY_NAME,
+            _resp(
+                200,
+                {
+                    "value": [
+                        _blueprint(BLUEPRINT_OTHER, OTHER_OBJECT, created="2026-05-03T11:22:33Z"),
+                        _blueprint(BLUEPRINT_OURS, OURS_OBJECT, created="2026-04-19T17:02:11Z"),
+                    ]
+                },
+            ),
+        )
+
+        message = _stopped(lookup)
+
+        assert "2 applications in this tenant are named 'EntraBot Code Agent'" in message
+        lines = message.splitlines()
+        for app_id, created in (
+            (BLUEPRINT_OURS, "2026-04-19T17:02:11Z"),
+            (BLUEPRINT_OTHER, "2026-05-03T11:22:33Z"),
+        ):
+            assert any(app_id in line and created in line for line in lines), message
+        assert message.index(BLUEPRINT_OURS) < message.index(BLUEPRINT_OTHER)  # oldest first
+        assert "Nothing was created or changed" in message
+        assert "--use-blueprint=APP_ID" in message and "-UseBlueprint APP_ID" in message
+        assert lookup.graph.writes == []
+
+    def test_a_name_search_longer_than_one_page_is_not_taken_as_complete(
+        self, lookup: Lookup
+    ) -> None:
+        page = {
+            "value": [_blueprint(BLUEPRINT_OURS, OURS_OBJECT)],
+            "@odata.nextLink": "https://graph.microsoft.com/beta/applications?$skiptoken=x",
+        }
+        lookup.answer(BY_NAME, _resp(200, page))
+
+        message = _stopped(lookup)
+
+        assert "Could not look for an existing Blueprint named 'EntraBot Code Agent'" in message
+        assert lookup.graph.calls == [("GET", BY_NAME)]
+
+    @pytest.mark.parametrize(
+        "reply",
+        [_resp(503, {}), requests.exceptions.ReadTimeout("slow"), _not_json(200)],
+        ids=["503", "timeout", "not-json"],
+    )
+    def test_with_nothing_recorded_a_failed_name_search_stops_instead_of_creating(
+        self, lookup: Lookup, reply: object
+    ) -> None:
+        # The old code read any failure here as "there is none" and created a Blueprint.
+        lookup.answer(BY_NAME, reply)
+
+        with pytest.raises(lookup.module.BlueprintLookupError) as stopped:
+            lookup.module.create_blueprint("tok")
+
+        message = str(stopped.value)
+        assert "Could not look for an existing Blueprint named 'EntraBot Code Agent'" in message
+        assert "Nothing was created or changed" in message
+        assert lookup.graph.writes == []
+
+    def test_a_new_chain_run_looks_nothing_up_even_with_a_blueprint_recorded(
+        self, lookup: Lookup, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(lookup.module, "_FORCE_NEW", True)
+        lookup.state.update(BLUEPRINT_APP_ID=BLUEPRINT_OTHER, BLUEPRINT_OBJECT_ID=OTHER_OBJECT)
+        lookup.answer(
+            CREATE_BLUEPRINT, _resp(201, _blueprint(BLUEPRINT_OURS, OURS_OBJECT)), method="POST"
+        )
+        lookup.answer(_principal(BLUEPRINT_OURS), _resp(200, {"value": [{"id": "bp-sp"}]}))
+
+        assert lookup.module.create_blueprint("tok") == (BLUEPRINT_OURS, OURS_OBJECT)
+
+        assert [call for call in lookup.graph.calls if call[1].startswith("/applications")] == [
+            ("POST", CREATE_BLUEPRINT)
+        ]
+
+    @pytest.mark.parametrize(
+        ("recorded", "answers"),
+        [
+            ({"BLUEPRINT_APP_ID": BLUEPRINT_OURS}, {_by_app_id(BLUEPRINT_OURS): _resp(200, {})}),
+            (
+                {"BLUEPRINT_APP_ID": BLUEPRINT_OURS},
+                {_by_app_id(BLUEPRINT_OURS): _resp(200, {"value": []})},
+            ),
+            (
+                {"BLUEPRINT_APP_ID": BLUEPRINT_OURS},
+                {_by_app_id(BLUEPRINT_OURS): requests.exceptions.ReadTimeout("slow")},
+            ),
+            ({"BLUEPRINT_APP_ID": "not-an-app-id"}, {}),
+            (
+                {},
+                {
+                    BY_NAME: _resp(
+                        200,
+                        {
+                            "value": [
+                                _blueprint(BLUEPRINT_OURS, OURS_OBJECT),
+                                _blueprint(BLUEPRINT_OTHER, OTHER_OBJECT),
+                            ]
+                        },
+                    )
+                },
+            ),
+            ({}, {BY_NAME: _resp(500, {})}),
+        ],
+        ids=[
+            "unreadable-answer",
+            "not-found",
+            "could-not-check",
+            "not-an-id",
+            "several-with-the-name",
+            "name-search-failed",
+        ],
+    )
+    def test_every_stop_exits_1_before_anything_is_created_or_recorded(
+        self,
+        lookup: Lookup,
+        capsys: pytest.CaptureFixture[str],
+        recorded: dict[str, str],
+        answers: dict[str, object],
+    ) -> None:
+        lookup.state.update(recorded, TENANT_ID="tenant-under-test")
+        before = dict(lookup.state)
+        for path, reply in answers.items():
+            lookup.answer(path, reply)
+
+        assert lookup.module.main() == 1
+
+        assert "ERROR:" in capsys.readouterr().out
+        assert lookup.graph.writes == []  # nothing created or changed in the directory
+        assert lookup.state == before  # nor in the state file

@@ -30,7 +30,16 @@ proof either) is left there and said so; interactively the person is asked, defa
 
 A rotation that could not finish leaves its old certificate's thumbprint in ``.env``
 (``ENTRABOT_BLUEPRINT_CERT_RETIRING_SHA1``). That certificate goes too when it is in this
-store (off the Blueprint, and deleted with its key); when it is not, it is reported.
+store (off the Blueprint, and deleted with its key); when it is not, it is reported. Both come
+off the Blueprint in ONE write: the list is replaced whole, and a second write built from a
+read that has not caught up with the first would put the first certificate back.
+
+Setup may have left a note in ``.entrabot-state.json`` (``PROVISIONER_CERT_REVOKE_PENDING``):
+an old setup certificate, whose private key an older install kept in a plaintext file, that it
+could not take off the Provisioner app. Setup retries on its next run, but the note goes with
+the state file, so teardown tries first, the way setup's retry does. If that does not work it
+is a to-do with where to remove it by hand; with ``--keep-setup-credential`` (someone is about
+to set up again) the state file is left holding only that note, so setup's retry still finds it.
 
 What can't be done is said precisely, with what to do about it. If Microsoft Entra can't be
 reached the local cleanup still completes; a certificate that stays listed there has lost
@@ -43,7 +52,7 @@ from __future__ import annotations
 import json
 import shutil
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -57,6 +66,7 @@ from entrabot.winsetup.directory import (
     Access,
     Directory,
     LocalDeletion,
+    Revocation,
     connect,
     delete_local_cert,
     is_sha1,
@@ -78,6 +88,49 @@ _ENTRA_CERTS = (
     "Certificates & secrets"
 )
 _PROVISIONER_APP = "EntraBot Agent ID Provisioner"
+
+# The note setup leaves in the state file when it could not take an old setup certificate off
+# the Provisioner app: SHA-1 thumbprints, lowercase and comma-separated, and their expiry dates
+# in the same order (scripts/entra_provisioning.py, _REVOKE_PENDING and _set_pending_revocations).
+REVOKE_PENDING_KEY = "PROVISIONER_CERT_REVOKE_PENDING"
+REVOKE_PENDING_EXPIRES_KEY = "PROVISIONER_CERT_REVOKE_PENDING_EXPIRES"
+_PROVISIONER_CLIENT_KEY = "PROVISIONER_CLIENT_ID"
+_TENANT_KEY = "TENANT_ID"
+
+
+@dataclass(frozen=True)
+class _OldSetupCert:
+    """An old setup (Provisioner) certificate setup could not take off the Provisioner app,
+    exactly as the state file's note names it."""
+
+    sha1: str
+    expires: str = ""  # as setup recorded it; empty when it did not know
+
+    @property
+    def when(self) -> str:
+        return f"expires {self.expires}" if self.expires else "expiry date unknown"
+
+    @property
+    def ident(self) -> str:
+        return f"thumbprint ending {last4(self.sha1)}, {self.when}"
+
+
+def _idents(items: Sequence[_OldSetupCert]) -> str:
+    return "; ".join(item.ident for item in items)
+
+
+def _pending_revocations(state: Mapping[str, str]) -> list[_OldSetupCert]:
+    """Read the note the way setup reads it (``entra_provisioning._pending_revocations``):
+    empty and malformed entries are skipped, and an expiry belongs to the thumbprint in the
+    same position."""
+    sha1s = [part.strip() for part in state.get(REVOKE_PENDING_KEY, "").split(",")]
+    expiries = [part.strip() for part in state.get(REVOKE_PENDING_EXPIRES_KEY, "").split(",")]
+    found: dict[str, _OldSetupCert] = {}
+    for index, sha1 in enumerate(sha1s):
+        if is_sha1(sha1):
+            expires = expiries[index] if index < len(expiries) else ""
+            found.setdefault(sha1.upper(), _OldSetupCert(sha1.upper(), expires))
+    return list(found.values())
 
 
 @dataclass(frozen=True)
@@ -115,6 +168,8 @@ class _Facts:
     upn: str
     mcp_files: list[Path]
     certs: list[_Cert] = field(default_factory=list)  # the current one first
+    # Old setup certificates setup still has to take off the Provisioner app (its note).
+    old_setup_certs: list[_OldSetupCert] = field(default_factory=list)
 
     @property
     def agent(self) -> str:
@@ -228,6 +283,13 @@ class _Teardown:
         # Whether the person explicitly said yes to removing, from the Blueprint, a
         # certificate that is not known to be this computer's. Never assumed.
         self.remove_unverified = False
+        # The old setup certificates teardown takes off the Provisioner app (setup's note,
+        # less this computer's own setup certificate, which is never an "old" one).
+        self.old_setup_certs: list[_OldSetupCert] = []
+        # Those it could not, when the note is to be left for setup's next run, and the
+        # state file's content that keeps it (-KeepSetupCredential).
+        self.left_for_setup: list[_OldSetupCert] = []
+        self.state_note: dict[str, str] = {}
 
     # ── What is here ─────────────────────────────────────────────────────────
 
@@ -276,6 +338,7 @@ class _Teardown:
             ).strip(),
             mcp_files=[path for path in targets if _has_entry(path)],
             certs=certs,
+            old_setup_certs=_pending_revocations(state),
         )
 
     def _setup_credential(self, facts: _Facts) -> _SetupCredential:
@@ -331,6 +394,9 @@ class _Teardown:
             return EXIT_USAGE
 
         self.setup = self._setup_credential(facts)
+        # Setup never removes the certificate it signs in with as an old one; nor does teardown.
+        in_use = {cert.sha1_hex.upper() for cert in self.setup.certs}
+        self.old_setup_certs = [item for item in facts.old_setup_certs if item.sha1 not in in_use]
         # Looked up before the question is asked, so the answer is given knowing whether
         # Microsoft Entra can be reached. Reads only; never signs in.
         access = connect(
@@ -360,18 +426,30 @@ class _Teardown:
 
         console.blank()
         agent_deleted = self._delete_agent(facts, access) if self.delete_agent else False
+        # A deleted agent's Blueprint is gone, and its certificate list with it.
+        listed = {} if agent_deleted else self._take_off_blueprint(facts, access, directory)
         for cert in facts.certs:
-            self._disconnect_certificate(facts, cert, access, directory, agent_deleted)
+            self._disconnect_certificate(facts, cert, listed.get(cert.sha1))
         self._remove_assistant_entries(facts)
         if self.delete_agent and not agent_deleted:
             # A second attempt at deleting the agent needs the settings and the setup
             # certificate, so they stay until the agent is really gone.
-            self.report.kept.append(
+            kept = (
                 "This folder's settings (.env, .entrabot-state.json) and the setup "
                 "certificate: deleting the agent again needs them."
             )
+            if self.old_setup_certs:
+                kept += (
+                    " The settings also keep setup's note about the old setup (Provisioner) "
+                    f"certificate{'s' if len(self.old_setup_certs) > 1 else ''} it could not "
+                    f"take off the Provisioner app ({_idents(self.old_setup_certs)}): teardown "
+                    "tries again when it runs again, and so does setup."
+                )
+            self.report.kept.append(kept)
         else:
-            # Last of the Microsoft Entra steps: everything above signed in with it.
+            # Before the setup credential and the state file, which holds the note about them.
+            self._settle_old_setup_certs(facts, access, directory)
+            # Last of the Microsoft Entra steps: the Blueprint and agent steps signed in with it.
             self._settle_setup_credential(directory)
             if agent_deleted:
                 self._mention_cloud_memory(facts)
@@ -448,7 +526,8 @@ class _Teardown:
                 "Setup credential: this computer's setup (Provisioner) certificate is kept: "
                 "another Entrabot agent on this computer still uses it."
             )
-        if access.problem and (facts.cert_sha1 or self.delete_agent):
+        self._plan_old_setup_certs()
+        if access.problem and (facts.cert_sha1 or self.delete_agent or self.old_setup_certs):
             console.blank()
             console.warn(
                 f"{access.problem[0]} Nothing can be changed in Microsoft Entra right now, so "
@@ -482,6 +561,36 @@ class _Teardown:
             if not self.purge_data:
                 untouched += ", its memory, and Entrabot's data folder on this computer"
             console.info(untouched + ".")
+
+    def _plan_old_setup_certs(self) -> None:
+        items = self.old_setup_certs
+        if not items:
+            return
+        if len(items) == 1:
+            what, keys, it = (
+                "an old setup (Provisioner) certificate",
+                "its private key in a plaintext file",
+                "it",
+            )
+        else:
+            what, keys, it = (
+                "old setup (Provisioner) certificates",
+                "their private keys in plaintext files",
+                "them",
+            )
+        if self.setup.decision == "keep-asked":
+            otherwise = (
+                f".entrabot-state.json is left holding only the note about {it}, so setup "
+                "tries again on its next run"
+            )
+        else:
+            otherwise = f"the report at the end says where to remove {it} by hand"
+        self.console.bullet(
+            f"Microsoft Entra: an earlier setup could not take {what} off the Provisioner app "
+            f"({_idents(items)}). An older install kept {keys}, so a copy can still sign in "
+            "to the Provisioner app, which can manage applications in your tenant. Teardown "
+            f"removes {it} there now. If that does not work, {otherwise}."
+        )
 
     def _asks_about_unverified(self, facts: _Facts, access: Access) -> bool:
         """Whether the person is asked about a configured certificate not known to be here.
@@ -594,19 +703,11 @@ class _Teardown:
             f"{last4(cert.sha1)}): {why} {usable}: {self._blueprint_place(facts)}."
         )
 
-    def _disconnect_certificate(
-        self,
-        facts: _Facts,
-        cert: _Cert,
-        access: Access,
-        directory: Directory | None,
-        agent_deleted: bool,
-    ) -> None:
-        """Take one certificate off the Blueprint (unless the agent is gone), then off this
-        computer with its private key, and report exactly what is left."""
-        why_listed = (
-            None if agent_deleted else self._take_off_blueprint(facts, cert, access, directory)
-        )
+    def _disconnect_certificate(self, facts: _Facts, cert: _Cert, why_listed: str | None) -> None:
+        """Take *cert* and its private key off this computer, and report exactly what is left.
+
+        *why_listed* is why it is still listed on the Blueprint, or None when it is not there
+        or was deliberately left there (:meth:`_take_off_blueprint` has reported that)."""
         local = self._delete_here(cert, listed=why_listed is not None)
         if why_listed is not None:
             self.report.todo.append(
@@ -614,52 +715,72 @@ class _Teardown:
             )
 
     def _take_off_blueprint(
-        self, facts: _Facts, cert: _Cert, access: Access, directory: Directory | None
-    ) -> str | None:
-        """Remove *cert* from the Blueprint. Returns why it is still listed, or None when it
-        is gone or was deliberately left (which is reported here)."""
-        unverified = cert.here is not True
-        if unverified and (cert.retiring or not self.remove_unverified):
-            self._leave_unverified(facts, cert)
-            return None
+        self, facts: _Facts, access: Access, directory: Directory | None
+    ) -> dict[str, str]:
+        """Remove this folder's certificates from the Blueprint, all of them in ONE write.
+
+        Graph replaces the whole list on every write and a read can land on a replica that
+        has not caught up, so a second removal's read could still show the certificate the
+        first one took off, and its write would put it back. One write leaves no second read.
+
+        Returns, by thumbprint, why a certificate that should have come off is still listed.
+        One deliberately left there (not known to be this computer's) is reported here and is
+        not in the result.
+        """
+        leaving: list[_Cert] = []
+        for cert in facts.certs:
+            if cert.here is not True and (cert.retiring or not self.remove_unverified):
+                self._leave_unverified(facts, cert)
+            else:
+                leaving.append(cert)
+        if not leaving:
+            return {}
         if not facts.blueprint_object_id:
-            return "this folder has no record of the Blueprint."
+            return {cert.sha1: "this folder has no record of the Blueprint." for cert in leaving}
         if directory is None:
             assert access.problem is not None
             self.console.warn(f"Could not reach Microsoft Entra. {access.problem[0]}")
-            return access.problem[0]
-        removal = directory.remove_blueprint_credential(facts.blueprint_object_id, cert.sha1)
+            return {cert.sha1: access.problem[0] for cert in leaving}
+        removal = directory.remove_blueprint_credentials(
+            facts.blueprint_object_id, [cert.sha1 for cert in leaving]
+        )
         if removal.gone:
-            if cert.retiring:
-                self.console.ok(
-                    "Removed the old certificate an earlier certificate rotation left behind "
-                    "from the agent's Blueprint"
-                    if removal.removed
-                    else "The old certificate an earlier rotation left behind was no longer "
-                    "listed on the agent's Blueprint"
-                )
-                self.report.removed.append(
-                    f"The old certificate an earlier certificate rotation left behind (ending "
-                    f"{last4(cert.sha1)}), from the agent's Blueprint in Microsoft Entra."
-                )
-            elif unverified:
-                self.console.ok(
-                    "Removed the certificate this folder's settings name from the agent's "
-                    "Blueprint, as you asked"
-                )
-                self.report.removed.append(
-                    f"The certificate this folder's settings named (ending {last4(cert.sha1)}), "
-                    "from the agent's Blueprint in Microsoft Entra, as you asked."
-                )
-            else:
-                self.console.ok("Removed this computer's certificate from the agent's Blueprint")
-                self.report.removed.append(
-                    "This computer's certificate, from the agent's Blueprint in Microsoft Entra."
-                )
-            return None
+            for cert in leaving:
+                self._off_blueprint(cert, was_listed=cert.sha1 not in removal.not_listed)
+            return {}
         why = removal.detail or "the change could not be confirmed"
-        self.console.warn(f"The certificate could not be taken off the Blueprint: {why}")
-        return f"{why.rstrip('.')}."
+        what = "The certificate" if len(leaving) == 1 else "The certificates"
+        self.console.warn(f"{what} could not be taken off the Blueprint: {why}")
+        return {cert.sha1: f"{why.rstrip('.')}." for cert in leaving}
+
+    def _off_blueprint(self, cert: _Cert, *, was_listed: bool) -> None:
+        """Say that *cert* is confirmed off the Blueprint."""
+        if cert.retiring:
+            self.console.ok(
+                "Removed the old certificate an earlier certificate rotation left behind "
+                "from the agent's Blueprint"
+                if was_listed
+                else "The old certificate an earlier rotation left behind was no longer "
+                "listed on the agent's Blueprint"
+            )
+            self.report.removed.append(
+                f"The old certificate an earlier certificate rotation left behind (ending "
+                f"{last4(cert.sha1)}), from the agent's Blueprint in Microsoft Entra."
+            )
+        elif cert.here is not True:
+            self.console.ok(
+                "Removed the certificate this folder's settings name from the agent's "
+                "Blueprint, as you asked"
+            )
+            self.report.removed.append(
+                f"The certificate this folder's settings named (ending {last4(cert.sha1)}), "
+                "from the agent's Blueprint in Microsoft Entra, as you asked."
+            )
+        else:
+            self.console.ok("Removed this computer's certificate from the agent's Blueprint")
+            self.report.removed.append(
+                "This computer's certificate, from the agent's Blueprint in Microsoft Entra."
+            )
 
     def _leave_unverified(self, facts: _Facts, cert: _Cert) -> None:
         """Say that a certificate not known to be this computer's stays on the Blueprint.
@@ -701,6 +822,96 @@ class _Teardown:
                 f"remove it in the {place}."
             )
         (self.report.todo if cert.here is None else self.report.kept).append(text)
+
+    def _settle_old_setup_certs(
+        self, facts: _Facts, access: Access, directory: Directory | None
+    ) -> None:
+        """Take the old setup certificates in setup's note off the Provisioner app.
+
+        The note is in the state file, which teardown removes, and nothing else would ever
+        retry it; so this runs before the settings go, and before the setup credential is
+        settled. The removal is setup's own retry, signed in through the Azure CLI. One that
+        does not work is a to-do saying where to remove it by hand; with -KeepSetupCredential
+        its note is also left for setup's next run (see :meth:`_leave_state_note`).
+        """
+        items = self.old_setup_certs
+        if not items:
+            return
+        client_id = facts.state.get(_PROVISIONER_CLIENT_KEY, "").strip()
+        outcomes: list[Revocation]
+        if access.problem:
+            outcomes = [Revocation("failed", access.problem[0])] * len(items)
+        elif not client_id:
+            no_app = "this folder has no record of the Provisioner app"
+            outcomes = [Revocation("failed", no_app)] * len(items)
+        else:
+            assert directory is not None
+            outcomes = directory.revoke_old_setup_certificates(
+                client_id, [item.sha1 for item in items]
+            )
+        left: list[_OldSetupCert] = []
+        for item, outcome in zip(items, outcomes, strict=True):
+            tail = last4(item.sha1)
+            if outcome.status == "revoked":
+                self.console.ok(
+                    f"Removed the old setup certificate (ending {tail}) from the Provisioner app"
+                )
+                self.report.removed.append(
+                    f"An old setup (Provisioner) certificate an earlier setup could not remove "
+                    f"({item.ident}), from the Provisioner app in Microsoft Entra."
+                )
+            elif outcome.status == "not-listed":
+                self.console.ok(
+                    f"The old setup certificate (ending {tail}) was no longer on the "
+                    "Provisioner app"
+                )
+                self.report.removed.append(
+                    f"An old setup (Provisioner) certificate an earlier setup could not remove "
+                    f"({item.ident}): it is no longer on the Provisioner app."
+                )
+            else:
+                why = outcome.detail.strip().rstrip(".") or "the removal could not be confirmed"
+                self.console.warn(
+                    f"The old setup certificate (ending {tail}) could not be removed from the "
+                    f"Provisioner app: {why}"
+                )
+                self.report.todo.append(self._old_setup_cert_todo(item, why, client_id))
+                left.append(item)
+        if left and self.setup.decision == "keep-asked":
+            # Someone is about to set up again with the kept credential, and setup is what
+            # retries this. Only the note and which tenant's Provisioner app it is about: the
+            # recorded app is the one setup trusts and retries against (with none recorded it
+            # looks for one by name and may settle on another, where the certificate is "not
+            # registered" and the note is dropped), and the tenant lets a later teardown find
+            # the kept setup certificate. Setup itself takes the tenant from the sign-in. No
+            # agent, so setup is not steered to one, and no recorded setup certificate, so
+            # setup uploads the kept one again rather than trust that it is still on the app.
+            self.left_for_setup = left
+            self.state_note = {
+                key: value
+                for key, value in (
+                    (_TENANT_KEY, facts.tenant_id),
+                    (_PROVISIONER_CLIENT_KEY, client_id),
+                    (REVOKE_PENDING_KEY, ",".join(item.sha1.lower() for item in left)),
+                    (REVOKE_PENDING_EXPIRES_KEY, ",".join(item.expires for item in left)),
+                )
+                if value or key == REVOKE_PENDING_EXPIRES_KEY
+            }
+
+    @staticmethod
+    def _old_setup_cert_todo(item: _OldSetupCert, why: str, client_id: str) -> str:
+        """Where to remove it by hand, in the words the provisioning script uses for it."""
+        app = f"'{_PROVISIONER_APP}'" + (f" (application ID {client_id})" if client_id else "")
+        return (
+            f"An old setup (Provisioner) certificate may still be listed on the Provisioner app "
+            f"({item.ident}): an earlier setup could not remove it, and neither could teardown "
+            f"({why}). An older install kept its private key in a plaintext file, so a copy of "
+            "that file can still get tokens for the Provisioner app, which can manage "
+            "applications in your tenant, until the certificate is removed. Remove it in the "
+            f"Entra admin center: App registrations > {app} > Certificates & secrets > "
+            f"Certificates: the certificate whose thumbprint ends in {last4(item.sha1)} "
+            f"({item.when})."
+        )
 
     def _settle_setup_credential(self, directory: Directory | None) -> None:
         """Carry out what :meth:`_setup_credential` decided, and record it for the report."""
@@ -926,8 +1137,42 @@ class _Teardown:
                 self.console.warn(f"{path.name} could not be removed: {exc}")
                 self.report.todo.append(f"{path} could not be removed: {exc}. Delete it by hand.")
                 continue
+            if path == self.paths.state_file and self.state_note:
+                self._leave_state_note(path, backup)
+                continue
             self.console.ok(f"Removed {path.name} (backup: {backup.name})")
             self.report.removed.append(f"{path.name} (a copy is kept as {backup.name}).")
+
+    def _leave_state_note(self, path: Path, backup: Path) -> None:
+        """Put back a state file holding only setup's note about the old setup certificates
+        teardown could not take off the Provisioner app.
+
+        Setup's retry reads the note from this file and nowhere else, so this is the one
+        place it can live; written as setup writes the file, so setup reads it as its own.
+        """
+        items = self.left_for_setup
+        which = _idents(items)
+        try:
+            path.write_text(json.dumps(self.state_note, indent=2) + "\n", encoding="utf-8")
+        except OSError as exc:
+            self.console.warn(f"The note setup needs could not be left in {path.name}: {exc}")
+            self.report.removed.append(f"{path.name} (a copy is kept as {backup.name}).")
+            self.report.todo.append(
+                f"Setup will not try again to remove the old setup (Provisioner) certificate "
+                f"({which}): the note it reads could not be left in {path.name} ({exc}). "
+                "Remove it by hand, as said above."
+            )
+            return
+        self.console.ok(
+            f"Cleared {path.name} down to the note setup needs to retry (backup: {backup.name})"
+        )
+        self.report.kept.append(
+            f"{path.name}, holding only setup's note that the old setup (Provisioner) "
+            f"certificate{'s' if len(items) > 1 else ''} ({which}) still "
+            f"{'have' if len(items) > 1 else 'has'} to come off the Provisioner app: setup "
+            "reads it and tries again on its next run. Everything else in it was removed (a "
+            f"copy of the whole file is kept as {backup.name})."
+        )
 
     def _purge_data(self) -> None:
         root = self.paths.data_root

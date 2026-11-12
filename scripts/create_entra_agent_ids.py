@@ -13,6 +13,12 @@ rejected by Agent Identity APIs).
 Usage:
     python3 scripts/create_entra_agent_ids.py
 
+Which Blueprint: the one recorded in .entrabot-state.json, where setup also records the one it
+is asked to join. If that one does not exist, or can't be checked, the run stops (exit 1) before
+changing anything; it never takes another Blueprint by display name. With nothing recorded, an
+existing Blueprint named "EntraBot Code Agent" is used only when it is the only one.
+ENTRABOT_NEW_CHAIN=1 skips every lookup and creates a fresh chain.
+
 Prerequisites:
     - az login has been run
     - pip install azure-identity requests
@@ -20,6 +26,7 @@ Prerequisites:
 
 import os
 import platform
+import re
 import socket
 import sys
 import time
@@ -50,6 +57,30 @@ from entrabot.preflight import COPILOT_CAPABLE_SKUS, TEAMS_CAPABLE_SKUS  # noqa:
 
 BLUEPRINT_DISPLAY_NAME = "EntraBot Code Agent"
 
+_ID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+_UNREADABLE = "Microsoft Graph's answer could not be read"
+
+# How to go on after a stop, for both setup front ends.
+_HOW_TO_JOIN = (
+    "    macOS/Linux: ./scripts/setup.sh --use-blueprint=APP_ID",
+    "    Windows:     scripts\\setup-windows.cmd -UseBlueprint APP_ID",
+)
+_HOW_TO_START_OVER = (
+    "  To create a new agent instead: ./scripts/setup.sh --new --with-upn-suffix=NAME",
+    "  (Windows: scripts\\setup-windows.cmd -NewChain -UpnSuffix NAME).",
+)
+
+
+class BlueprintLookupError(RuntimeError):
+    """Which Blueprint this run is for can't be settled. The message is for the operator.
+
+    Raised before anything is created or changed, in the directory or in the state file.
+    """
+
+
+class _NoAnswer(Exception):
+    """Graph gave no answer that settles the question. The message says why."""
+
 
 # ---------------------------------------------------------------------------
 # Blueprint
@@ -57,42 +88,222 @@ BLUEPRINT_DISPLAY_NAME = "EntraBot Code Agent"
 
 
 def find_existing_blueprint(token: str) -> dict | None:
-    """Find an existing Blueprint by stored IDs, then by display name."""
-    # Try stored object ID first
-    stored_obj_id = get_state("BLUEPRINT_OBJECT_ID")
-    if stored_obj_id:
-        resp = graph_request("GET", f"/applications/{stored_obj_id}", token, retry=False)
-        if resp.status_code == 200:
-            return resp.json()
-        print(f"  [warn] Stored BLUEPRINT_OBJECT_ID not found: {stored_obj_id}")
+    """The Blueprint this run is for, or None when there is none yet and one may be created.
 
-    # Try stored app ID
-    stored_app_id = get_state("BLUEPRINT_APP_ID")
-    if stored_app_id:
-        resp = graph_request(
-            "GET",
-            f"/applications?$filter=appId eq '{odata_escape(stored_app_id)}'",
-            token,
+    A Blueprint recorded in the state file is the only acceptable answer: setup records there
+    the one it is asked to join (``setup.sh --use-blueprint``, ``-UseBlueprint`` on Windows),
+    and every run records the one it found or created. Its App ID decides; the object ID is
+    looked up only when no App ID is recorded. When Graph says that Blueprint does not exist,
+    or the lookup fails for any reason, this stops. It never looks for another Blueprint by
+    name: display names are not unique, and the first match may be somebody else's.
+
+    Only with nothing recorded is a Blueprint looked for by its display name. A single match
+    is used. Several matches stop, listing them; a search that fails stops as well, because
+    "could not check" is not "there is none", and a second Blueprint is not created on the
+    strength of it.
+
+    Raises :class:`BlueprintLookupError`.
+    """
+    app_id = str(get_state("BLUEPRINT_APP_ID") or "").strip()
+    object_id = str(get_state("BLUEPRINT_OBJECT_ID") or "").strip()
+    if app_id:
+        return _recorded_blueprint_by_app_id(token, app_id, object_id)
+    if object_id:
+        return _recorded_blueprint_by_object_id(token, object_id)
+    return _only_blueprint_named(token, BLUEPRINT_DISPLAY_NAME)
+
+
+def _recorded_blueprint_by_app_id(token: str, app_id: str, stored_object_id: str) -> dict:
+    _require_id(app_id, "BLUEPRINT_APP_ID")
+    recorded = f"Blueprint {app_id}"
+    try:
+        resp = _graph_get(token, f"/applications?$filter=appId eq '{odata_escape(app_id)}'")
+        if resp.status_code != 200:
+            raise _NoAnswer(_http_reason(resp))
+        matches = [
+            app
+            for app in _value_list(_json_object(resp))
+            if str(app.get("appId", "")).lower() == app_id.lower()
+        ]
+        if matches and not matches[0].get("id"):
+            raise _NoAnswer(_UNREADABLE)
+    except _NoAnswer as exc:
+        raise BlueprintLookupError(_unreadable(recorded, str(exc))) from exc
+    if not matches:
+        raise BlueprintLookupError(_not_found(recorded))
+    found = matches[0]
+    found_object_id = str(found["id"])
+    if stored_object_id and stored_object_id.lower() != found_object_id.lower():
+        print(
+            f"  [warn] Stored BLUEPRINT_OBJECT_ID {stored_object_id} is not the object ID of "
+            f"Blueprint {app_id}; recording its object ID, {found_object_id}."
         )
+    return found
+
+
+def _recorded_blueprint_by_object_id(token: str, object_id: str) -> dict:
+    _require_id(object_id, "BLUEPRINT_OBJECT_ID")
+    recorded = f"the Blueprint with object ID {object_id}"
+    app: dict | None = None
+    try:
+        resp = _graph_get(token, f"/applications/{object_id}")
         if resp.status_code == 200:
-            values = resp.json().get("value", [])
-            if values:
-                return values[0]
-        print(f"  [warn] Stored BLUEPRINT_APP_ID not found: {stored_app_id}")
+            app = _json_object(resp)
+            if not app.get("appId") or not app.get("id"):
+                raise _NoAnswer(_UNREADABLE)
+        elif resp.status_code != 404:  # GET by ID: 404 is Graph's "no such object"
+            raise _NoAnswer(_http_reason(resp))
+    except _NoAnswer as exc:
+        raise BlueprintLookupError(_unreadable(recorded, str(exc))) from exc
+    if app is None:
+        raise BlueprintLookupError(_not_found(recorded))
+    return app
 
-    # Fall back to display name search
-    resp = graph_request(
-        "GET",
-        f"/applications?$filter=displayName eq '{odata_escape(BLUEPRINT_DISPLAY_NAME)}'",
-        token,
+
+def _only_blueprint_named(token: str, name: str) -> dict | None:
+    try:
+        resp = _graph_get(token, f"/applications?$filter=displayName eq '{odata_escape(name)}'")
+        if resp.status_code != 200:
+            raise _NoAnswer(_http_reason(resp))
+        body = _json_object(resp)
+        values = _value_list(body)
+        if body.get("@odata.nextLink"):
+            # Only a whole list says how many there are.
+            raise _NoAnswer("Microsoft Graph returned more than one page of applications")
+        matches = [app for app in values if app.get("displayName") == name]
+        if len(matches) == 1 and not (matches[0].get("appId") and matches[0].get("id")):
+            raise _NoAnswer(_UNREADABLE)
+    except _NoAnswer as exc:
+        raise BlueprintLookupError(_search_unreadable(name, str(exc))) from exc
+    if len(matches) > 1:
+        raise BlueprintLookupError(_ambiguous(name, matches))
+    return matches[0] if matches else None
+
+
+def _graph_get(token: str, path: str) -> requests.Response:
+    """GET *path*. A request that fails before Graph answers raises :class:`_NoAnswer`."""
+    try:
+        return graph_request("GET", path, token)
+    except requests.RequestException as exc:
+        text = str(exc).strip().rstrip(".")
+        detail = f"{type(exc).__name__}: {text}"[:200] if text else type(exc).__name__
+        raise _NoAnswer(f"the request to Microsoft Graph failed ({detail})") from exc
+
+
+def _json_object(resp: requests.Response) -> dict:
+    try:
+        body = resp.json()
+    except ValueError as exc:
+        raise _NoAnswer(_UNREADABLE) from exc
+    if not isinstance(body, dict):
+        raise _NoAnswer(_UNREADABLE)
+    return body
+
+
+def _value_list(body: dict) -> list[dict]:
+    values = body.get("value")
+    if not isinstance(values, list) or not all(isinstance(item, dict) for item in values):
+        raise _NoAnswer(_UNREADABLE)
+    return values
+
+
+def _http_reason(resp: requests.Response) -> str:
+    code = ""
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        code = str(body["error"].get("code") or "")[:80]
+    return f"Microsoft Graph answered HTTP {resp.status_code}" + (f" ({code})" if code else "")
+
+
+def _this_tenant() -> str:
+    tenant = str(os.environ.get("ENTRABOT_TENANT_ID") or get_state("TENANT_ID") or "").strip()
+    return f"this tenant ({tenant})" if tenant else "this tenant"
+
+
+def _require_id(value: str, key: str) -> None:
+    if _ID.match(value):
+        return
+    raise BlueprintLookupError(
+        "\n".join(
+            [
+                f"  ERROR: {key} in .entrabot-state.json is {value!r}, which is not an ID",
+                "  (an ID looks like 1a2b3c4d-1234-5678-9abc-def012345678).",
+                "  Nothing was created or changed, and no other Blueprint was looked for by name.",
+                "  Run setup again with the Blueprint's App ID:",
+                *_HOW_TO_JOIN,
+            ]
+        )
     )
-    if resp.status_code != 200:
-        return None
 
-    for app in resp.json().get("value", []):
-        if app.get("displayName") == BLUEPRINT_DISPLAY_NAME:
-            return app
-    return None
+
+def _not_found(recorded: str) -> str:
+    return "\n".join(
+        [
+            f"  ERROR: {recorded[:1].upper()}{recorded[1:]} does not exist in {_this_tenant()}.",
+            "  It is the Blueprint recorded for this machine in .entrabot-state.json, where setup",
+            "  also records the one it is asked to join. The ID may be mistyped, it may belong to",
+            "  a different tenant, or the Blueprint was deleted.",
+            "  Nothing was created or changed, and no other Blueprint was looked for by name.",
+            "  Check the ID and the tenant you are signed in to, then run setup again with the",
+            "  right Blueprint App ID:",
+            *_HOW_TO_JOIN,
+            *_HOW_TO_START_OVER,
+            "  A Blueprint created in the last few minutes may not be listed yet. If so, wait a",
+            "  few minutes and run setup again.",
+        ]
+    )
+
+
+def _unreadable(recorded: str, reason: str) -> str:
+    return "\n".join(
+        [
+            f"  ERROR: Could not check whether {recorded} exists: {reason}.",
+            "  It is the Blueprint recorded for this machine in .entrabot-state.json, where setup",
+            "  also records the one it is asked to join, and the only one this run will use.",
+            "  Nothing was created or changed, and no other Blueprint was looked for by name.",
+            "  This is usually temporary (throttling or a network problem): run setup again in a",
+            "  few minutes. If it keeps failing with HTTP 401 or 403, setup's Provisioner app is",
+            "  missing a permission or its admin consent: run setup again as a tenant",
+            "  administrator.",
+        ]
+    )
+
+
+def _search_unreadable(name: str, reason: str) -> str:
+    return "\n".join(
+        [
+            f"  ERROR: Could not look for an existing Blueprint named '{name}': {reason}.",
+            "  No Blueprint is recorded for this machine, so this run looks for one by name",
+            "  before it creates one, and it does not create one without an answer.",
+            "  Nothing was created or changed. Run setup again in a few minutes, or name the",
+            "  Blueprint to join:",
+            *_HOW_TO_JOIN,
+        ]
+    )
+
+
+def _ambiguous(name: str, matches: list[dict]) -> str:
+    # Oldest first; an application without a creation date goes last.
+    listed = sorted(matches, key=lambda app: str(app.get("createdDateTime") or "~"))
+    return "\n".join(
+        [
+            f"  ERROR: {len(matches)} applications in this tenant are named '{name}', and no",
+            "  Blueprint is recorded for this machine, so this run can't tell which one is",
+            "  this agent's:",
+            *(
+                f"    App ID {app.get('appId') or 'unknown'}   "
+                f"created {app.get('createdDateTime') or 'unknown'}"
+                for app in listed
+            ),
+            "  Nothing was created or changed. To join one of them, run setup again with its",
+            "  App ID:",
+            *_HOW_TO_JOIN,
+            *_HOW_TO_START_OVER,
+        ]
+    )
 
 
 def ensure_blueprint_principal(token: str, app_id: str) -> None:
@@ -134,7 +345,11 @@ def ensure_blueprint_principal(token: str, app_id: str) -> None:
 
 
 def create_blueprint(token: str) -> tuple[str, str]:
-    """Create or find the Agent Identity Blueprint. Returns (app_id, object_id)."""
+    """Create or find the Agent Identity Blueprint. Returns (app_id, object_id).
+
+    Raises :class:`BlueprintLookupError`, before anything is created or recorded, when the
+    Blueprint this run is for can't be settled (see :func:`find_existing_blueprint`).
+    """
     print("\n--- Creating Agent Identity Blueprint ---\n")
 
     if _FORCE_NEW:
@@ -1089,7 +1304,11 @@ def main() -> int:
         print(f"ERROR: {exc}")
         return 1
 
-    blueprint_app_id, blueprint_obj_id = create_blueprint(token)
+    try:
+        blueprint_app_id, blueprint_obj_id = create_blueprint(token)
+    except BlueprintLookupError as exc:
+        print(exc)
+        return 1
 
     # Check tenant-wide for an existing Agent User by UPN BEFORE provisioning
     # anything new. If the UPN already exists (from a prior run on another

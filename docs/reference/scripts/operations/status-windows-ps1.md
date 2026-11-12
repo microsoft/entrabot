@@ -49,7 +49,10 @@ In a folder that has neither `.env` nor `.entrabot-state.json` (a fresh copy, or
 one that teardown has disconnected) it prints one line, "This folder is not
 connected to an agent. Run scripts\setup-windows.cmd to set one up.", and exits
 `1`. With `-Json` that answer is a small JSON object
-(`{"configured": false, "message": ...}`).
+(`{"configured": false, "message": ...}`). Teardown can leave
+`.entrabot-state.json` holding only a note for setup (see
+[`teardown-windows.ps1`](../teardown/teardown-windows-ps1.md)); while it is
+there, the full report runs instead.
 
 `PASS`, `WARN` and `FAIL` labels are coloured only when the output is a
 terminal that can draw colour (Windows Terminal, or a classic console where

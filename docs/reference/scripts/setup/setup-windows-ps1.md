@@ -64,11 +64,17 @@ Which agent:
   Teams. Each named sponsor is added on the agent's directory object; nobody is
   removed. Default for a new agent: the account that signs in. Default when
   joining or continuing: the agent's current sponsors, unchanged. A value can
-  be an email address, a sign-in name, or an Entra object ID. Setup looks an
-  address up by sign-in name, `mail`, other email addresses, email aliases, and
-  the guest (`#EXT#`) form of the sign-in name, so a personal Microsoft account
-  that administers the tenant is found. If more than one person matches, setup
-  lists them and asks for the exact sign-in name or object ID.
+  be an email address, a sign-in name, or an Entra object ID. An object ID is
+  looked up directly. An address is looked up in this order, stopping at the
+  first step that finds one person: the sign-in name directly; a search for the
+  sign-in name (`userPrincipalName eq`), which finds a name the direct lookup
+  can miss, such as one with an apostrophe (`o'brien@contoso.com`); `mail`;
+  other email addresses; email aliases; and the guest (`#EXT#`) form of the
+  sign-in name, so a personal Microsoft account that administers the tenant is
+  found. If more than one person matches at a step, setup lists them and asks
+  for the exact sign-in name or object ID. With an Azure CLI that can only be
+  started through its `az.cmd` batch file, only the first three steps are
+  possible, and setup says so when it finds nobody.
 
 Memory:
 
@@ -158,7 +164,12 @@ The wizard, in order:
 4. Shows a review screen. **Nothing in the tenant or on the PC is changed
    before this is confirmed.**
 5. Connects setup to the tenant: the Provisioner app registration and this PC's
-   Provisioner certificate.
+   Provisioner certificate. A PC with no Provisioner app recorded takes over an
+   existing app registration with the Provisioner's name only under the rule
+   described for [`setup.sh`](setup-sh.md#which-app-registration-is-the-provisioner);
+   otherwise setup stops here with exit `1`, having changed nothing in Microsoft
+   Entra. If an older setup key could not be switched off on the Provisioner
+   app, setup says so here, on screen, and again on the finish screen.
 6. Creates or connects the agent, assigns a Teams-capable licence when one is
    free, and adds the chosen sponsors.
 7. Creates this PC's Blueprint certificate, or reuses the existing one if it is
@@ -190,8 +201,9 @@ reported and nothing is changed.
 - `2` — conflicting parameters (reported before anything is installed), or an
   answer was missing under `-Yes`.
 - `3` — set up, but something needs checking: the end-to-end test failed (for
-  example, the agent has no Teams licence), a sponsor could not be added, or
-  Claude Code is older than 2.1.295.
+  example, the agent has no Teams licence), a sponsor could not be added,
+  Claude Code is older than 2.1.295, or an older setup key could not be switched
+  off in Microsoft Entra.
 - `130` — cancelled, with Ctrl+C or "no" at the review screen.
 - `-Status` — the exit code of `status-windows.ps1`.
 
@@ -200,7 +212,8 @@ reported and nothing is changed.
 See [Windows troubleshooting](../../../troubleshooting/windows.md). The most
 common are a missing Teams licence (exit `3`), an account without the needed
 directory rights, and a sign-in window hidden behind another window (use
-`-DeviceCode`).
+`-DeviceCode`). If an existing Provisioner app is not taken over (exit `1`), see
+[Setup will not take over an existing Provisioner app registration](../../../troubleshooting/setup-and-authentication.md#setup-will-not-take-over-an-existing-provisioner-app-registration).
 
 ## Related commands
 
