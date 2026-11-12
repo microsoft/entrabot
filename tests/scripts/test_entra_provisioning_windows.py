@@ -796,7 +796,15 @@ class TestTakeOverOnWindows:
     def test_an_app_holding_only_this_users_key_store_certificate_is_taken_over(
         self, env: _Env, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        der = b"the certificate of this user's key-store key"
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+
+        # A real certificate: the script reads the thumbprint from the certificate itself,
+        # so bytes that are not one cannot be matched to anything in the key store.
+        own = x509.load_pem_x509_certificate(
+            env.ep._cert_pem_from_bundle(_legacy_pem()[0]).encode()
+        )
+        der = own.public_bytes(serialization.Encoding.DER)
         sha1 = hashlib.sha1(der).hexdigest().upper()  # noqa: S324
         env.store[sha1] = _store_cert(sha1)
         self._directory(env, monkeypatch, [der])

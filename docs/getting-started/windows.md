@@ -126,6 +126,7 @@ Not yet tested:
 - Teardown with `-PurgeData`.
 - The fixes made after a security review (the Claude Code version check, the hooks' UTF-8 input, the persona-sati token command lookup, revoking an older setup key file, and the teardown and rotation safeguards). They are covered by unit tests, but the end-to-end run above was done before them.
 - The rule for taking over an existing Provisioner app, the on-screen warning about an older setup key, teardown's one-write certificate removal and its retry of an older setup key, and the sponsor search by sign-in name. They are covered by unit tests only and have not been run against a real tenant.
+- The check that an existing Agent User belongs to the agent's Blueprint before it is reused, the stops when Microsoft Entra could not be read, the wizard's explanations of why it stopped, and the health checks' warning about an older setup key. They are covered by unit tests and have not all been run against a real tenant.
 
 If something goes wrong, see [Windows troubleshooting](../troubleshooting/windows.md).
 

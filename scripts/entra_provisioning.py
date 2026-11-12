@@ -534,7 +534,19 @@ def _key_credential_thumbprints(entry: dict[str, Any]) -> set[str] | None:
             except ValueError:
                 der = b""
         if der:
-            return {hashlib.sha1(der).hexdigest().upper()}  # noqa: S324 — an identifier
+            # The thumbprint is the certificate's public identifier (what Windows and Entra
+            # show), not a security digest. It is taken through the certificate object.
+            try:
+                from cryptography import x509
+                from cryptography.hazmat.primitives import hashes
+
+                thumbprint = x509.load_der_x509_certificate(der).fingerprint(
+                    hashes.SHA1()  # noqa: S303 — an identifier, not a security hash
+                )
+            except ValueError:
+                thumbprint = b""
+            if thumbprint:
+                return {thumbprint.hex().upper()}
 
     identifier = entry.get("customKeyIdentifier")
     if not isinstance(identifier, str) or not identifier.strip():
@@ -1294,6 +1306,12 @@ VERIFIED_APP_ID_ENV = "ENTRABOT_PROVISIONER_APP_ID_VERIFIED"
 # wizard (src/entrabot/winsetup/wizard.py) looks for exactly this line to explain the
 # refusal; tests on both sides pin it. It uses the wizard's ENTRABOT_RESULT= convention.
 TAKEOVER_REFUSED_MARKER = "ENTRABOT_RESULT=provisioner-takeover-refused"
+# Printed the same way, just before the error, when the app ENTRABOT_PROVISIONER_APP_ID_VERIFIED
+# names is not accepted (not an application ID, no such app, or not the app this machine already
+# uses), and when setup could not read from Entra what it needed to decide (a lookup of the app,
+# by name or by ID, or the second read of its admin consent failed). Nothing in Entra changed.
+APP_CHOICE_REJECTED_MARKER = "ENTRABOT_RESULT=provisioner-app-choice-rejected"
+COULD_NOT_CHECK_MARKER = "ENTRABOT_RESULT=provisioner-could-not-check"
 
 _GUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -1347,6 +1365,7 @@ def _provisioner_app_override() -> str | None:
     if not value:
         return None
     if not _GUID_RE.match(value):
+        print(APP_CHOICE_REJECTED_MARKER)
         raise ProvisionerBootstrapError(
             f"{VERIFIED_APP_ID_ENV} is set, but not to an application ID (a GUID such as "
             "00000000-0000-0000-0000-000000000000). Nothing was changed in Microsoft Entra. "
@@ -1763,6 +1782,7 @@ def _use_named_app(app_id: str) -> str:
     try:
         listed = _objects(_az_json(["ad", "app", "list", "--app-id", app_id]))
     except ProvisionerBootstrapError as exc:
+        print(COULD_NOT_CHECK_MARKER)
         raise ProvisionerBootstrapError(
             f"Could not look up the app registration {VERIFIED_APP_ID_ENV} names "
             f"({app_id}): {exc}. Nothing was changed in Microsoft Entra. Fix that (for "
@@ -1770,6 +1790,7 @@ def _use_named_app(app_id: str) -> str:
         ) from exc
     apps = [app for app in listed if str(app.get("appId", "")).lower() == app_id]
     if not apps:
+        print(APP_CHOICE_REJECTED_MARKER)
         raise ProvisionerBootstrapError(
             f"{VERIFIED_APP_ID_ENV} is set to {app_id}, but no app registration in this "
             "tenant has that application ID. Nothing was changed in Microsoft Entra. Set it "
@@ -1777,6 +1798,7 @@ def _use_named_app(app_id: str) -> str:
             "unset it, then run setup again."
         )
     if len(apps) > 1:
+        print(APP_CHOICE_REJECTED_MARKER)
         raise ProvisionerBootstrapError(
             f"Microsoft Entra returned {len(apps)} app registrations with the application ID "
             f"{app_id}. Nothing was changed in Microsoft Entra."
@@ -1806,6 +1828,7 @@ def _confirm_already_approved(client_id: str, required_values: list[str]) -> boo
             raise ProvisionerBootstrapError("there are more of them than one read returns")
         graph_id = _graph_service_principal_id()
     except ProvisionerBootstrapError as exc:
+        print(COULD_NOT_CHECK_MARKER)
         raise ProvisionerBootstrapError(
             f"Could not read the admin consent of the Provisioner app {client_id} again "
             f"({exc}), so setup did not take it over. Nothing was changed in Microsoft "
@@ -1888,6 +1911,7 @@ def _provisioner_app_for_this_machine(
     try:
         listed = _objects(_az_json(["ad", "app", "list", "--display-name", name]))
     except ProvisionerBootstrapError as exc:
+        print(COULD_NOT_CHECK_MARKER)
         raise ProvisionerBootstrapError(
             f"Could not look for an existing '{name}' app registration ({exc}). Nothing was "
             "changed in Microsoft Entra. Fix that (for example, run 'az login') and run "
@@ -2021,6 +2045,7 @@ def ensure_app_registration(
     if client_id:
         status = _application_status(client_id)
         if status == APP_UNKNOWN:
+            print(COULD_NOT_CHECK_MARKER)
             raise ProvisionerBootstrapError(
                 f"Could not check whether the Provisioner app {client_id} still exists in "
                 "Entra (see the az error above). Nothing was changed. Fix that (for "
@@ -2041,6 +2066,7 @@ def ensure_app_registration(
     # The recorded app is trusted: an earlier run on this machine created or took it over.
     # Naming a different one isn't a way to move off it, and is refused before any change.
     if client_id and named and named != client_id.lower():
+        print(APP_CHOICE_REJECTED_MARKER)
         raise ProvisionerBootstrapError(
             f"{VERIFIED_APP_ID_ENV} is set to {named}, but this machine already uses the "
             f"Provisioner app {client_id} (recorded in {_STATE_FILE.name} by an earlier setup "

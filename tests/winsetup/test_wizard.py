@@ -22,14 +22,14 @@ from entrabot.winsetup.azcli import GLOBAL_ADMIN
 from entrabot.winsetup.console import Console, RunRequest
 from entrabot.winsetup.envfile import read_env
 from entrabot.winsetup.helpers import CHECKS_MARKER, RESULT_MARKER, Paths
+from entrabot.winsetup.oldkeys import OldSetupKey, old_setup_key_lines, old_setup_keys
 from entrabot.winsetup.wizard import (
-    OldSetupKey,
+    NEW_CERT_ATTEMPTS,
+    NEW_CERT_RETRY_SECONDS,
     Options,
     Wizard,
     World,
     licence_outcome,
-    old_setup_key_lines,
-    old_setup_keys,
 )
 from tests.winsetup.fakes import (
     FakeDirectory,
@@ -148,6 +148,7 @@ class Scenario:
     launch_override: Callable[[list[str], Path], None] | None = None
     claude_version: str = "2.1.300 (Claude Code)"  # what "claude --version" prints
     acl: FakeWindowsAcl = field(default_factory=FakeWindowsAcl)  # .env's permissions
+    slept: list[float] = field(default_factory=list)  # every wait, in seconds; none is real
     out: str = ""
     log: str = ""
 
@@ -401,6 +402,7 @@ class Scenario:
             os_description=lambda: "Windows 11 (10.0.26200), AMD64",
             launch=self.launch_override
             or (lambda argv, cwd: self.launched.append((list(argv), cwd))),
+            sleep=self.slept.append,
         )
         paths = Paths(
             self.root,
@@ -965,6 +967,91 @@ class TestSignIn:
         assert world.run(new_chain=True, upn_suffix="sati") == 1
         assert "Sign-in did not complete" in world.out and not world.mutated()
 
+    # How az login ends when nobody used the device code before it ran out (seen verbatim on a
+    # real machine). Setup used to answer it with advice about managed devices.
+    UNUSED_CODE = (
+        "ERROR: AADSTS70016: OAuth 2.0 device flow error. Authorization is pending. Continue "
+        "polling. Trace ID: 0b1c Correlation ID: 2d3e Timestamp: 2026-11-12 09:15:00Z"
+    )
+    CODE_NOT_USED = "The sign-in code was not used in time. Codes last about 15 minutes."
+    GET_A_NEW_ONE = "Run setup again to get a new code."
+
+    @pytest.mark.parametrize("code", ["AADSTS70016", "AADSTS70019", "AADSTS70020"])
+    def test_a_device_code_nobody_used_in_time_is_said_as_exactly_that(
+        self, world: Scenario, code: str
+    ) -> None:
+        world.signed_in = False
+        world.spawn.on(
+            words("login"),
+            Reply(returncode=1, stderr=self.UNUSED_CODE.replace("AADSTS70016", code)),
+        )
+
+        assert world.run(new_chain=True, upn_suffix="sati", device_code=True) == 1
+
+        out = world.out
+        assert f"[xx] {self.CODE_NOT_USED}" in out and self.GET_A_NEW_ONE in out
+        assert "managed devices" not in out
+        assert len(world.az("login")) == 1  # unattended: nobody is there to use another code
+        assert not world.mutated()
+
+    def test_interactively_a_new_code_is_offered_at_once(self, world: Scenario) -> None:
+        world.signed_in = False
+        attempts: list[list[str]] = []
+
+        def login(request: RunRequest) -> Reply:
+            attempts.append(request.argv)
+            if len(attempts) == 1:
+                return Reply(returncode=1, stderr=self.UNUSED_CODE)
+            world.signed_in = True
+            return Reply()
+
+        world.spawn.on(words("login"), login)
+
+        assert world.run(typed="\n" * 40, device_code=True) == 0, world.out
+
+        assert len(attempts) == 2 and all("--use-device-code" in argv for argv in attempts)
+        assert f"[!!] {self.CODE_NOT_USED}" in world.out
+        assert "Get a new code and try again? [Y/n]" in world.out
+        assert "managed devices" not in world.out
+
+    def test_declining_a_new_code_ends_with_how_to_get_one(self, world: Scenario) -> None:
+        world.signed_in = False
+        world.spawn.on(words("login"), Reply(returncode=1, stderr=self.UNUSED_CODE))
+
+        # Enter for a new agent and for its name, then "n" when a new code is offered.
+        assert world.run(typed="\n\nn\n", device_code=True) == 1
+
+        assert "Get a new code and try again? [Y/n]" in world.out
+        assert self.GET_A_NEW_ONE in world.out and "managed devices" not in world.out
+        assert len(world.az("login")) == 1 and not world.mutated()
+
+    def test_a_code_that_runs_out_after_the_browser_failed_is_said_the_same_way(
+        self, world: Scenario
+    ) -> None:
+        world.signed_in = False
+        world.spawn.on(words("login"), Reply(returncode=1, stderr=self.UNUSED_CODE))
+
+        assert world.run(new_chain=True, upn_suffix="sati") == 1
+
+        logins = world.az("login")
+        assert len(logins) == 2 and "--use-device-code" in logins[1].argv
+        assert self.CODE_NOT_USED in world.out and "managed devices" not in world.out
+
+    def test_any_other_failed_sign_in_keeps_the_managed_device_advice(
+        self, world: Scenario
+    ) -> None:
+        world.signed_in = False
+        world.spawn.on(
+            words("login"),
+            Reply(returncode=1, stderr="ERROR: AADSTS50097: Device authentication is required."),
+        )
+
+        assert world.run(new_chain=True, upn_suffix="sati", device_code=True) == 1
+
+        assert "Sign-in did not complete." in world.out
+        assert "only allows sign-in from managed devices" in world.out
+        assert "not used in time" not in world.out
+
     def test_an_existing_session_in_another_tenant_is_not_reused_when_one_is_asked_for(
         self, world: Scenario
     ) -> None:
@@ -1081,6 +1168,90 @@ class TestFailures:
         assert "could not get the access it needs" in world.out
         assert "ENTRABOT_PROVISIONER_APP_ID_VERIFIED" not in world.out
 
+    # The same script prints these the same way, just before its error, when the app named in
+    # ENTRABOT_PROVISIONER_APP_ID_VERIFIED is not accepted, and when it could not read what it
+    # needed from Microsoft Entra (tests/scripts/test_entra_provisioning.py pins them there).
+    APP_CHOICE_REJECTED = "ENTRABOT_RESULT=provisioner-app-choice-rejected"
+    COULD_NOT_CHECK = "ENTRABOT_RESULT=provisioner-could-not-check"
+
+    def test_a_rejected_app_choice_says_so_and_how_to_correct_or_clear_it(
+        self, world: Scenario
+    ) -> None:
+        world.spawn.on(
+            script("entra_provisioning.py"),
+            Reply(
+                returncode=1,
+                stdout=(
+                    f"{PROVISION_CHATTER}{self.APP_CHOICE_REJECTED}\n"
+                    "ERROR: ENTRABOT_PROVISIONER_APP_ID_VERIFIED is set to "
+                    f"{OTHER_BP}, but no app registration in this tenant has that application "
+                    "ID. Nothing was changed in Microsoft Entra.\n"
+                ),
+            ),
+        )
+
+        assert world.run(new_chain=True, upn_suffix="sati") == 1
+
+        out = world.out
+        assert (
+            "The value given in ENTRABOT_PROVISIONER_APP_ID_VERIFIED was not accepted. Nothing "
+            "was changed in Microsoft Entra." in out
+        )
+        assert "no app registration in this tenant has that application ID" in out  # why
+        assert "The reason is in the lines above" in out
+        assert 'cmd.exe:     set "ENTRABOT_PROVISIONER_APP_ID_VERIFIED=<application ID>"' in out
+        assert "PowerShell:  $env:ENTRABOT_PROVISIONER_APP_ID_VERIFIED = '<application ID>'" in out
+        assert 'cmd.exe:     set "ENTRABOT_PROVISIONER_APP_ID_VERIFIED="' in out  # cleared
+        assert "PowerShell:  Remove-Item Env:ENTRABOT_PROVISIONER_APP_ID_VERIFIED" in out
+        assert "could not get the access it needs" not in out
+        assert "would not take it over" not in out
+        assert "ENTRABOT_RESULT" not in out  # the marker is for setup, not for people
+        assert world.ran("create_entra_agent_ids.py") == []
+
+    def test_a_directory_that_could_not_be_read_is_not_blamed_on_admin_rights(
+        self, world: Scenario
+    ) -> None:
+        world.spawn.on(
+            script("entra_provisioning.py"),
+            Reply(
+                returncode=1,
+                stdout=(
+                    f"{self.COULD_NOT_CHECK}\n"
+                    "ERROR: Could not look for an existing 'EntraBot Agent ID Provisioner' app "
+                    "registration (ERROR: Request_Throttled). Nothing was changed in Microsoft "
+                    "Entra.\n"
+                ),
+            ),
+        )
+
+        assert world.run(new_chain=True, upn_suffix="sati") == 1
+
+        out = world.out
+        assert (
+            "Setup could not read what it needed from Microsoft Entra. Nothing was changed in "
+            "Microsoft Entra." in out
+        )
+        assert "Request_Throttled" in out  # what Entra said, from the lines above
+        assert "usually temporary, or a problem with the sign-in or an admin role" in out
+        assert "Run setup again" in out
+        assert "could not get the access it needs" not in out
+        assert "needs an administrator" not in out
+        assert "ENTRABOT_RESULT" not in out
+        assert world.ran("create_entra_agent_ids.py") == []
+
+    def test_a_result_setup_does_not_know_keeps_the_administrator_message(
+        self, world: Scenario
+    ) -> None:
+        world.spawn.on(
+            script("entra_provisioning.py"),
+            Reply(returncode=1, stdout="ENTRABOT_RESULT=something-new\nERROR: boom\n"),
+        )
+
+        assert world.run(new_chain=True, upn_suffix="sati") == 1
+
+        assert "could not get the access it needs" in world.out
+        assert "ENTRABOT_RESULT" not in world.out
+
     def test_a_failed_agent_creation_stops_before_the_certificate(self, world: Scenario) -> None:
         world.spawn.on(script("create_entra_agent_ids.py"), Reply(returncode=1))
         assert world.run(new_chain=True, upn_suffix="sati") == 1
@@ -1129,6 +1300,411 @@ class TestFailures:
     def test_work_iq_without_its_tools_stops_before_anything_changes(self, world: Scenario) -> None:
         assert world.run(new_chain=True, upn_suffix="sati", configure_work_iq=True) == 1
         assert "dotnet tool install" in world.out and not world.mutated()
+
+
+class TestTheAgentStepSaysWhyItStopped:
+    """scripts/create_entra_agent_ids.py prints one of these, alone on a line, just before it
+    stops. Pinned here as the wizard reads them; that script's own tests pin them on its
+    side. The exit code stays what it was for any failed agent step: 1."""
+
+    NOT_FOUND = "ENTRABOT_RESULT=blueprint-not-found"
+    COULD_NOT_CHECK = "ENTRABOT_RESULT=blueprint-could-not-check"
+    AMBIGUOUS = "ENTRABOT_RESULT=blueprint-ambiguous"
+    WRONG_BLUEPRINT = "ENTRABOT_RESULT=agent-user-wrong-blueprint"
+    AGENT_COULD_NOT_CHECK = "ENTRABOT_RESULT=agent-lookup-could-not-check"
+
+    @staticmethod
+    def _stops(world: Scenario, marker: str, explanation: str = "  ERROR: why it stopped") -> None:
+        world.spawn.on(
+            script("create_entra_agent_ids.py"),
+            Reply(returncode=1, stdout=f"{CREATE_CHATTER}{marker}\n{explanation}\n"),
+        )
+
+    @staticmethod
+    def _stopped_there(world: Scenario) -> None:
+        """What every one of these stops has in common with the generic one."""
+        out = world.out
+        assert "The details are in the lines above and in the setup log." in out
+        assert "setup.log" in out
+        assert "The agent could not be created." not in out  # replaced, not added to
+        assert "ENTRABOT_RESULT" not in out
+        assert not world.ran("register_windows_blueprint_cert.py")
+        assert not world.wincert.created
+
+    def test_a_blueprint_app_id_that_does_not_exist_here(self, world: Scenario) -> None:
+        self._stops(world, self.NOT_FOUND, f"  ERROR: Blueprint {BP_APP} does not exist")
+
+        assert world.run(use_blueprint=BP_APP) == 1
+
+        out = world.out
+        assert (
+            f"The Blueprint App ID you gave ({BP_APP}) does not exist in this tenant (Werner)."
+            in out
+        )
+        assert "Check the Blueprint App ID and that you signed in to the agent's tenant" in out
+        assert "-UseBlueprint" in out and "-NewChain" in out  # join the right one, or start over
+        self._stopped_there(world)
+
+    def test_a_recorded_blueprint_that_does_not_exist_here(self, world: Scenario) -> None:
+        world.existing()
+        self._stops(world, self.NOT_FOUND)
+
+        assert world.run() == 1
+
+        assert (
+            f"The Blueprint App ID recorded on this computer ({BP_APP}) does not exist in this "
+            "tenant (Werner)." in world.out
+        )
+        self._stopped_there(world)
+
+    def test_a_blueprint_lookup_that_could_not_be_read(self, world: Scenario) -> None:
+        # The helper asks about the Blueprint before it records or creates anything.
+        self._stops(world, self.COULD_NOT_CHECK, "  ERROR: Microsoft Graph answered HTTP 503")
+
+        assert world.run(new_chain=True, upn_suffix="sati") == 1
+
+        out = world.out
+        assert (
+            "Setup could not read what it needed from Microsoft Entra. Nothing was changed." in out
+        )
+        assert "HTTP 503" in out  # what Entra said, from the lines above
+        assert "This is usually temporary: run setup again in a few minutes." in out
+        self._stopped_there(world)
+
+    def test_an_agent_lookup_that_could_not_be_read_does_not_claim_nothing_changed(
+        self, world: Scenario
+    ) -> None:
+        # The Agent Identity and Agent User lookups run after the Blueprint is recorded (or,
+        # for a new agent, created), and the Agent User's after a new Agent Identity may have
+        # been created. The helper's own lines say which.
+        self._stops(
+            world,
+            self.AGENT_COULD_NOT_CHECK,
+            "  ERROR: Could not check whether the Agent User exists: Microsoft Graph answered "
+            "HTTP 503.\n  No Agent User was created, and no permission or licence was granted.",
+        )
+
+        assert world.run(new_chain=True, upn_suffix="sati") == 1
+
+        out = world.out
+        assert "[xx] Setup could not read what it needed from Microsoft Entra.\n" in out
+        assert "Nothing was changed" not in out
+        assert "No Agent User was created" in out  # the helper's own account, from above
+        assert "The lines above say what was and was not created." in out
+        assert "This is usually temporary: run setup again in a few minutes." in out
+        assert "It continues from where it stopped." in out
+        self._stopped_there(world)
+
+    def test_several_applications_with_the_agents_name(self, world: Scenario) -> None:
+        self._stops(
+            world,
+            self.AMBIGUOUS,
+            f"    App ID {BP_APP}   created 2026-01-02\n    App ID {OTHER_BP}   created 2026-03-04",
+        )
+
+        assert world.run(new_chain=True, upn_suffix="sati") == 1
+
+        out = world.out
+        assert "Several applications in this tenant have the agent's name" in out
+        assert "none is recorded on this computer" in out
+        assert BP_APP in out and OTHER_BP in out  # the candidates, from the lines above
+        assert "scripts\\setup-windows.cmd -UseBlueprint <App ID>" in out
+        self._stopped_there(world)
+
+    def test_an_agent_name_that_belongs_to_another_agent(self, world: Scenario) -> None:
+        self._stops(world, self.WRONG_BLUEPRINT)
+
+        assert world.run(new_chain=True, upn_suffix="sati") == 1
+
+        out = world.out
+        assert "The name chosen for the agent already belongs to a different agent." in out
+        assert "-UseBlueprint" in out and "-UpnSuffix" in out  # join that one, or another name
+        self._stopped_there(world)
+
+    def test_a_stop_without_a_marker_keeps_the_general_message(self, world: Scenario) -> None:
+        world.spawn.on(
+            script("create_entra_agent_ids.py"),
+            Reply(returncode=1, stdout="ENTRABOT_RESULT=something-new\nERROR: boom\n"),
+        )
+
+        assert world.run(new_chain=True, upn_suffix="sati") == 1
+
+        assert "The agent could not be created." in world.out
+        assert "boom" in world.out and "ENTRABOT_RESULT" not in world.out
+
+
+class TestABlueprintThatDoesNotExistIsNotKept:
+    """Seen on a real machine: a run asked to join a Blueprint App ID that does not exist and
+    stopped at the agent step, as it should, but the App ID stayed recorded in the state file.
+    The next run, with the right App ID, was then a "switch", and warned that this machine's
+    certificate on the previous Blueprint was not revoked. There never was one."""
+
+    NOT_REVOKED = "This machine's certificate on the previous Blueprint is NOT revoked."
+
+    @staticmethod
+    def _only_exists(world: Scenario, blueprint: str) -> None:
+        """The agent step finds *blueprint* and no other. For any other it stops the way
+        create_entra_agent_ids.py does: before it writes anything."""
+
+        def create(_request: RunRequest) -> Reply:
+            current = json.loads(world.state_file.read_text("utf-8"))
+            recorded = current.get("BLUEPRINT_APP_ID", "")
+            if recorded.lower() != blueprint.lower():
+                return Reply(
+                    returncode=1,
+                    stdout=f"ENTRABOT_RESULT=blueprint-not-found\n"
+                    f"  ERROR: Blueprint {recorded} does not exist in this tenant.\n",
+                )
+            created = {**CREATED_STATE, "BLUEPRINT_APP_ID": blueprint}
+            world.state_file.write_text(json.dumps({**current, **created}), encoding="utf-8")
+            return Reply(stdout=CREATE_CHATTER)
+
+        world.spawn.on(script("create_entra_agent_ids.py"), create)
+
+    @staticmethod
+    def _provisioning_records(world: Scenario, **values: str) -> None:
+        """entra_provisioning.py records what it set up in the state file, as it does."""
+
+        def provision(_request: RunRequest) -> Reply:
+            current = (
+                json.loads(world.state_file.read_text("utf-8")) if world.state_file.exists() else {}
+            )
+            world.state_file.write_text(json.dumps({**current, **values}), encoding="utf-8")
+            return Reply(stdout=PROVISION_CHATTER)
+
+        world.spawn.on(script("entra_provisioning.py"), provision)
+
+    def test_the_next_run_with_the_right_app_id_is_not_a_switch(self, world: Scenario) -> None:
+        self._only_exists(world, BP_APP)
+        self._provisioning_records(world, PROVISIONER_CLIENT_ID="prov-app", TENANT_ID=TENANT)
+
+        assert world.run(use_blueprint=OTHER_BP) == 1
+        assert f"({OTHER_BP}) does not exist" in world.out
+        assert "this computer's record of its agent is as it was before this run" in world.out
+        # What the provisioning step recorded stays; the App ID that was not found does not.
+        recorded = json.loads(world.state_file.read_text("utf-8"))
+        assert recorded == {"PROVISIONER_CLIENT_ID": "prov-app", "TENANT_ID": TENANT}
+
+        assert world.run(use_blueprint=BP_APP) == 0, world.out
+        assert "Switching agents" not in world.out and self.NOT_REVOKED not in world.out
+        assert not list(world.root.glob(".entrabot-state.json.bak.*"))
+
+    def test_a_switch_to_one_that_does_not_exist_leaves_this_computer_on_its_agent(
+        self, world: Scenario
+    ) -> None:
+        world.existing(state={**CREATED_STATE, "PROVISIONER_CERT_THUMBPRINT": "old-setup-key"})
+        env_before = world.env_file.read_bytes()
+        self._only_exists(world, BP_APP)
+        # In the same run the provisioning step moved this computer to a new setup key.
+        self._provisioning_records(world, PROVISIONER_CERT_THUMBPRINT="new-setup-key")
+
+        assert world.run(use_blueprint=OTHER_BP) == 1
+
+        assert "Switching agents" in world.out  # said before the agent step looked it up
+        assert json.loads(world.state_file.read_text("utf-8")) == {
+            **CREATED_STATE,
+            "PROVISIONER_CERT_THUMBPRINT": "new-setup-key",
+        }
+        assert world.env_file.read_bytes() == env_before
+        assert not world.wincert.created
+
+    def test_a_blueprint_that_could_not_be_checked_stays_recorded_for_the_next_try(
+        self, world: Scenario
+    ) -> None:
+        # "Could not check" is not "does not exist": the next run asks about the same one.
+        world.spawn.on(
+            script("create_entra_agent_ids.py"),
+            Reply(returncode=1, stdout="ENTRABOT_RESULT=blueprint-could-not-check\n"),
+        )
+
+        assert world.run(use_blueprint=OTHER_BP) == 1
+
+        assert json.loads(world.state_file.read_text("utf-8"))["BLUEPRINT_APP_ID"] == OTHER_BP
+
+    def test_a_switch_away_from_this_computers_certificate_still_warns_about_it(
+        self, world: Scenario
+    ) -> None:
+        world.existing(
+            state={**CREATED_STATE, "BLUEPRINT_APP_ID": OTHER_BP},
+            env=[
+                *OTHER_AGENT_ENV,
+                f"ENTRABOT_BLUEPRINT_APP_ID={OTHER_BP}",
+                f"ENTRABOT_BLUEPRINT_CERT_SHA1={'D' * 40}",
+            ],
+        )
+
+        assert world.run(use_blueprint=BP_APP) == 0, world.out
+
+        assert "Switching agents. Backed up the previous record to .entrabot-state.json.bak." in (
+            world.out
+        )
+        assert (
+            f"{self.NOT_REVOKED} Ask an administrator to remove it if this machine should lose "
+            "access to that agent." in world.out
+        )
+
+    def test_a_switch_away_from_an_agent_without_one_says_only_that_it_was_backed_up(
+        self, world: Scenario
+    ) -> None:
+        world.existing(state={**CREATED_STATE, "BLUEPRINT_APP_ID": OTHER_BP}, env=OTHER_AGENT_ENV)
+
+        assert world.run(use_blueprint=BP_APP) == 0, world.out
+
+        assert "Switching agents. Backed up the previous record to" in world.out
+        assert "NOT revoked" not in world.out
+
+
+# What preflight's token check says when Microsoft Entra does not know the certificate that
+# signed the sign-in, as seen on a real machine moments after setup registered it (the
+# identifiers here are made up). Entra echoes the full thumbprint back.
+NOT_ACCEPTED_YET = (
+    "hop1:blueprint failed — invalid_client: AADSTS700027: The certificate with identifier "
+    "used to sign the client assertion is not registered on application. [Reason - The key was "
+    f"not found., Thumbprint of key used by client: '{'C' * 40}', Please visit the Azure Portal, "
+    "Graph Explorer or directly use MS Graph to see configured keys for app Id "
+    f"'{BP_APP}'.] Trace ID: 0b1c Correlation ID: 2d3e Timestamp: 2026-11-12 09:00:00Z"
+)
+
+
+class TestANewCertificateIsGivenTimeToBeAccepted:
+    """Seen on a real machine: the certificate step registered this computer's new certificate
+    (its helper read it back from Microsoft Graph), and the end-to-end test straight after
+    failed at hop 1 with AADSTS700027. Microsoft Entra's sign-in can lag behind Graph by tens of
+    seconds; setup run again a minute later passed. Certificate rotation waits for exactly
+    this. Setup now does too, but only when this run registered a certificate, and only for
+    that answer at hop 1."""
+
+    @staticmethod
+    def _answers(world: Scenario, *details: str | None) -> None:
+        """The end-to-end test fails at sign-in with each detail in turn (None: everything
+        passes). The last answer repeats."""
+        queue = list(details)
+
+        def smoke(_request: RunRequest) -> Reply:
+            detail = queue.pop(0) if len(queue) > 1 else queue[0]
+            if detail is None:
+                return _checks(PASSING_SMOKE)
+            checks = [dict(check) for check in PASSING_SMOKE]
+            checks[0].update(status="fail", detail=detail)
+            for later in checks[1:]:
+                later.update(status="skip", detail="Skipped - token mint failed.")
+            return _checks(checks)
+
+        world.spawn.on(snippet("run_smoke_checks"), smoke)
+
+    @staticmethod
+    def _tests_run(world: Scenario) -> int:
+        return len([call for call in world.spawn.calls if snippet("run_smoke_checks")(call)])
+
+    @staticmethod
+    def _with_this_computers_certificate(world: Scenario, *, on_the_blueprint: bool) -> None:
+        from tests.winsetup.test_certstep import OLD_SHA1, OLD_X5T, StoreCert
+
+        world.existing(
+            env=[
+                "ENTRABOT_AGENT_USER_ID=agent-user",
+                f"ENTRABOT_BLUEPRINT_CERT_SHA1={OLD_SHA1}",
+                f"ENTRABOT_BLUEPRINT_CERT_THUMBPRINT={OLD_X5T}",
+            ]
+        )
+        world.wincert.store[OLD_SHA1] = StoreCert(OLD_SHA1, OLD_X5T, b"\x01")
+        world.spawn.on(
+            script("verify_blueprint_cert.py"), Reply(returncode=0 if on_the_blueprint else 1)
+        )
+
+    def test_two_answers_of_not_yet_then_a_sign_in_is_a_normal_finish(
+        self, world: Scenario
+    ) -> None:
+        self._answers(world, NOT_ACCEPTED_YET, NOT_ACCEPTED_YET, None)
+
+        assert world.run(new_chain=True, upn_suffix="sati") == 0, world.out
+
+        assert self._tests_run(world) == 3
+        assert world.slept == [NEW_CERT_RETRY_SECONDS] * 2
+        step = world.out[world.out.index("Testing the agent end to end") :]
+        assert "Microsoft Entra has not started accepting the certificate just registered" in step
+        assert f"Trying again in 10s (attempt 2 of {NEW_CERT_ATTEMPTS})" in step
+        assert f"Trying again in 10s (attempt 3 of {NEW_CERT_ATTEMPTS})" in step
+        assert "[ok] The agent can sign in" in step
+        assert "The agent can sign in: no" not in world.out  # only the real result is reported
+        assert "Entrabot is set up" in world.out
+
+    def test_one_never_accepted_is_reported_after_about_two_minutes(self, world: Scenario) -> None:
+        self._answers(world, NOT_ACCEPTED_YET)
+
+        assert world.run(new_chain=True, upn_suffix="sati") == 3
+
+        assert self._tests_run(world) == NEW_CERT_ATTEMPTS
+        assert world.slept == [NEW_CERT_RETRY_SECONDS] * (NEW_CERT_ATTEMPTS - 1)
+        assert 90 <= sum(world.slept) <= 120  # the order of what rotation allows
+        finish = world.out[world.out.index("Setup finished, with something to check") :]
+        assert (
+            "The agent could not sign in yet: this computer's certificate was registered on the "
+            "agent's Blueprint moments ago, and Microsoft Entra has not started accepting it "
+            "yet." in finish
+        )
+        assert (
+            "Run setup again in a few minutes. It continues from here and keeps what already "
+            "works." in finish
+        )
+        assert "This is not a licence delay" not in world.out
+        assert "C" * 40 not in world.out  # only the end of the echoed thumbprint is shown
+
+    def test_this_computers_own_certificate_just_added_to_the_blueprint_gets_the_wait_too(
+        self, world: Scenario
+    ) -> None:
+        self._with_this_computers_certificate(world, on_the_blueprint=False)
+        self._answers(world, NOT_ACCEPTED_YET, None)
+
+        assert world.run() == 0, world.out
+
+        assert world.ran("register_windows_blueprint_cert.py") and not world.wincert.created
+        assert self._tests_run(world) == 2 and world.slept == [NEW_CERT_RETRY_SECONDS]
+
+    def test_without_a_registration_in_this_run_the_same_answer_is_reported_at_once(
+        self, world: Scenario
+    ) -> None:
+        self._with_this_computers_certificate(world, on_the_blueprint=True)
+        self._answers(world, NOT_ACCEPTED_YET)
+
+        assert world.run() == 3
+
+        assert world.ran("register_windows_blueprint_cert.py") == []
+        assert self._tests_run(world) == 1 and world.slept == []
+        assert "This is not a licence delay" in world.out
+        assert "has not started accepting" not in world.out
+
+    @pytest.mark.parametrize(
+        "detail",
+        [
+            "hop1:blueprint failed — invalid_client: AADSTS7000215: Invalid client secret.",
+            "hop1:blueprint failed — invalid_client: AADSTS700024: Client assertion is not "
+            "within its valid time range.",
+            "hop2:agent_identity failed — invalid_client: AADSTS700027: Client assertion "
+            "failed signature validation.",
+            "hop1:blueprint failed — invalid_client: The certificate with identifier used to "
+            "sign the client assertion is not registered on application.",
+        ],
+        ids=["another-code", "clock-skew", "the-code-at-hop-2", "the-words-without-the-code"],
+    )
+    def test_any_other_sign_in_failure_is_reported_at_once(
+        self, world: Scenario, detail: str
+    ) -> None:
+        self._answers(world, detail)
+
+        assert world.run(new_chain=True, upn_suffix="sati") == 3
+
+        assert self._tests_run(world) == 1 and world.slept == []
+        assert "This is not a licence delay" in world.out
+
+    def test_an_agent_whose_certificate_is_not_accepted_yet_is_not_offered_a_start(
+        self, world: Scenario
+    ) -> None:
+        self._answers(world, NOT_ACCEPTED_YET)
+
+        assert world.run(typed="\n" * 40) == 3
+
+        assert world.launched == [] and "Start your agent now?" not in world.out
 
 
 class TestSmokeOutcomes:
@@ -1577,6 +2153,93 @@ class TestLicenceAdvice:
         self, output: str, before: dict, after: dict, expected: str
     ) -> None:
         assert licence_outcome(output, before, after) == expected
+
+
+class TestNoLicenceNeverClaimsASignIn:
+    """Seen on a real machine, a line apart on the finish screen: "The agent could not sign in.
+    This is not a licence delay." and "The agent is set up and can sign in, but it has no Teams
+    licence". The licence note says the agent can sign in only when the test saw it do so."""
+
+    LICENCE_ONLY = (
+        "The agent is set up and can sign in, but it has no Teams licence, so it cannot use "
+        "Teams yet."
+    )
+    ALSO = "The agent also has no Teams licence, so it cannot use Teams yet."
+    WHAT_TO_DO = "Run setup again. It gives the agent the licence by itself."
+
+    @staticmethod
+    def _finish(world: Scenario) -> str:
+        out = world.out
+        start = max(
+            out.rfind("Setup finished, with something to check"), out.rfind("Entrabot is set up")
+        )
+        return out[start : out.index("To start your agent:")]
+
+    @staticmethod
+    def _sign_in_fails(world: Scenario, detail: str) -> None:
+        checks = [dict(check) for check in PASSING_SMOKE]
+        checks[0].update(status="fail", detail=detail)
+        for later in checks[1:]:
+            later.update(status="skip", detail="Skipped - token mint failed.")
+        world.spawn.on(snippet("run_smoke_checks"), _checks(checks))
+
+    @pytest.mark.parametrize(
+        ("failure", "said_first"),
+        [
+            (
+                "hop1:blueprint failed — invalid_client: AADSTS7000215: Invalid client.",
+                "The agent could not sign in. This is not a licence delay.",
+            ),
+            (
+                "Unexpected error: (1312, 'CredWrite', 'A specified logon session does not "
+                "exist.')",
+                "The test could not use Windows Credential Manager",
+            ),
+            (NOT_ACCEPTED_YET, "The agent could not sign in yet:"),
+            (None, "The end-to-end test could not run."),
+        ],
+        ids=["sign-in-failed", "credential-manager", "certificate-not-accepted-yet", "no-test"],
+    )
+    def test_when_the_agent_did_not_sign_in_the_licence_note_comes_second_and_claims_none(
+        self, world: Scenario, failure: str | None, said_first: str
+    ) -> None:
+        world.licence = "none"
+        if failure is None:
+            world.spawn.on(snippet("run_smoke_checks"), Reply(returncode=1, stderr="Traceback"))
+        else:
+            self._sign_in_fails(world, failure)
+
+        assert world.run(new_chain=True, upn_suffix="sati") == 3
+
+        finish = self._finish(world)
+        assert "can sign in" not in finish
+        assert finish.index(said_first) < finish.index(self.ALSO)
+        assert "https://admin.microsoft.com" in finish and self.WHAT_TO_DO in finish
+
+    def test_a_skipped_test_claims_no_sign_in_either(self, world: Scenario) -> None:
+        world.licence = "none"
+
+        assert world.run(new_chain=True, upn_suffix="sati", skip_smoke=True) == 0
+
+        finish = self._finish(world)
+        assert "can sign in" not in finish and self.ALSO not in finish
+        assert (
+            "The agent is set up, but it has no Teams licence, so it cannot use Teams yet."
+            in finish
+        )
+        assert self.WHAT_TO_DO in finish
+
+    def test_when_the_agent_signed_in_the_licence_note_is_unchanged(self, world: Scenario) -> None:
+        world.licence = "none"
+        checks = [dict(check) for check in PASSING_SMOKE]
+        checks[2].update(status="fail", detail="403 Forbidden")
+        world.spawn.on(snippet("run_smoke_checks"), _checks(checks))
+
+        assert world.run(new_chain=True, upn_suffix="sati") == 3
+
+        finish = self._finish(world)
+        assert self.LICENCE_ONLY in finish and self.ALSO not in finish
+        assert "could not sign in" not in finish and self.WHAT_TO_DO in finish
 
 
 class TestQuietByDefault:
@@ -2248,6 +2911,32 @@ class TestAnOlderSetupKeyStillTrusted:
         self._removal_failed(world)
         assert world.run() == 3
         assert "could not be switched off in Microsoft Entra" in self._things_to_check(world)
+
+    def test_a_health_check_does_not_end_with_all_checks_passed(self, world: Scenario) -> None:
+        # The health check reports the key as a warning (entrabot.preflight), which fails no
+        # check; the last line must not read as if nothing were left to do.
+        world.existing(
+            state={**CREATED_STATE, PENDING: OLD_KEY_SHA1, PENDING_EXPIRES: "2027-02-01"}
+        )
+        world.spawn.on(
+            snippet("run_diagnostics"),
+            Reply(stdout="[ WARN ] Older setup keys: An older setup key for this computer ..."),
+        )
+
+        assert world.run(answers={"existing": "diagnose"}) == 0  # a warning, not a failure
+
+        assert "All checks passed." not in world.out
+        assert (
+            "No check failed, but an older setup key still has to be switched off in Microsoft "
+            "Entra (see above)." in world.out
+        )
+        assert world.ran("entra_provisioning.py") == []
+
+    def test_a_health_check_with_nothing_pending_passes_as_before(self, world: Scenario) -> None:
+        world.existing()
+        world.spawn.on(snippet("run_diagnostics"), Reply(stdout="[ PASS ] everything"))
+        assert world.run(answers={"existing": "diagnose"}) == 0
+        assert "All checks passed." in world.out and "setup key" not in world.out
 
 
 class TestOlderSetupKeyRecord:

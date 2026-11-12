@@ -78,7 +78,13 @@ Identity mode (choose one):
   User are reused. If local state points at a *different* Blueprint, the stale
   identity-derived state is wiped (after a timestamped backup) so discovery re-runs
   cleanly against the new Blueprint. The old machine's cert on the previous
-  Blueprint is **not** revoked automatically.
+  Blueprint is **not** revoked automatically. Unless `--agent-user-upn` or
+  `--with-upn-suffix` names the Agent User, the one `.env` names
+  (`ENTRABOT_AGENT_USER_UPN`) is looked for only when `.env` was written for
+  this same Blueprint (`ENTRABOT_BLUEPRINT_APP_ID`). Otherwise setup runs the
+  agent step without it, and says so. An Agent User found by its
+  sign-in name is reused only when it belongs to this Blueprint; see
+  [`create_entra_agent_ids.py`](../provisioning/create-entra-agent-ids-py.md#idempotency-and-resume).
 - `--remove-all-existing-certs` — used with `--use-blueprint`. Removes **every**
   certificate on the Blueprint, including those of other machines, and replaces them
   with a new one for this machine, even if this machine's current certificate is
@@ -95,9 +101,11 @@ Agent User selection:
 
 - `--with-upn-suffix=NAME` — UPN suffix for the Agent User (required with `--new`
   unless `--agent-user-upn` is given). With `--use-blueprint`, selects an
-  existing suffixed Agent User.
+  existing suffixed Agent User of that Blueprint.
 - `--agent-user-upn=UPN` — explicit Agent User UPN. With `--new`, creates exactly
-  that UPN; with `--use-blueprint`, selects an existing Agent User to reuse.
+  that UPN; with `--use-blueprint`, selects an existing Agent User to reuse. An
+  Agent User of a different Blueprint stops setup at Step 5 with nothing
+  created, granted or recorded.
 - `--switch-user` — run `az login` first so a different signed-in user owns and
   sponsors the agent.
 - `--teams-user=EMAIL` — set a different user (or comma-separated users) as the
@@ -162,6 +170,11 @@ Diagnostics and control:
   and creates or reuses the Blueprint, Agent Identity, and Agent User via
   [`create_entra_agent_ids.py`](../provisioning/create-entra-agent-ids-py.md)
   (using the Provisioner certificate token, never `az` CLI tokens).
+- With `--use-blueprint`, checks after that step that the Blueprint recorded in
+  `.entrabot-state.json` is the one asked for (in any letter case). If it is
+  not, setup stops (exit `1`) before Work IQ is configured and before the
+  certificate step: no certificate is registered on either Blueprint, and
+  `.env` is not written.
 - Reuses this machine's certificate only when
   [`find_local_blueprint_cert.py`](../auth-and-certs/find-local-blueprint-cert-py.md)
   shows that the local private key matches a certificate still registered on the
@@ -264,7 +277,8 @@ read from `.env`, and `ENTRABOT_PROVISIONER_APP_ID`, which setup writes to
   either passed or was skipped.
 - `1` — a fatal setup error (for example a missing prerequisite, no Azure login,
   a failed provisioning step, an existing Provisioner app that setup would not take
-  over, a certificate check that couldn't complete, a declined
+  over, an agent step that recorded a different Blueprint from the one
+  `--use-blueprint` named, a certificate check that couldn't complete, a declined
   `--remove-all-existing-certs` prompt, `--new` / `--use-blueprint` conflict, or a
   missing required identity mode).
 - `2` — mutually exclusive storage flags, `--new` with
@@ -289,7 +303,23 @@ read from `.env`, and `ENTRABOT_PROVISIONER_APP_ID`, which setup writes to
   [Which app registration is the Provisioner](#which-app-registration-is-the-provisioner)
   and
   [Setup and authentication](../../../troubleshooting/setup-and-authentication.md#setup-will-not-take-over-an-existing-provisioner-app-registration).
-- **`Could not check ...`** — setup couldn't read the Blueprint's certificates or the
+- **`Not reusing the Agent User named in .env (...)`** — a warning, not a stop.
+  With `--use-blueprint`, `.env` was written for another Blueprint (or records
+  none), so the Agent User it names is not looked for under this one. To use a
+  particular Agent User of this Blueprint, name it with `--agent-user-upn` or
+  `--with-upn-suffix`. See
+  [Setup and authentication](../../../troubleshooting/setup-and-authentication.md#setup-says-it-is-not-reusing-the-agent-user-named-in-env).
+- **Step 5 stops: `The Agent User ... belongs to a different Blueprint`,
+  `... does not exist in this tenant`, or `Could not check ...`** —
+  `create_entra_agent_ids.py` stopped instead of guessing which agent is this
+  one, before creating the object in question. The line above the message, such
+  as `ENTRABOT_RESULT=blueprint-not-found`, names the outcome for the Windows
+  wizard. See
+  [Setup stops while creating the agent](../../../troubleshooting/setup-and-authentication.md#setup-stops-while-creating-the-agent).
+- **`You asked to join Blueprint ..., but create_entra_agent_ids.py recorded
+  Blueprint ...`** — setup stopped before the certificate step; see
+  [Setup and authentication](../../../troubleshooting/setup-and-authentication.md#setup-stops-because-a-different-blueprint-was-recorded).
+- **`Could not check ...` at the certificate step (Step 6)** — setup couldn't read the Blueprint's certificates or the
   OS credential store (the pending key entry included), so it doesn't know whether this
   machine is already registered. It stops rather than generating a certificate, and
   nothing was changed. Fix the error shown above the message and re-run.

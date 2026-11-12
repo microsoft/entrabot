@@ -50,6 +50,14 @@ Setup prints a web address and a short code; open the address on any device. Add
 
 If your organization only allows sign-in from managed devices, sign-in from an unmanaged PC is refused by Microsoft Entra; setup cannot work around that.
 
+## "The sign-in code was not used in time"
+
+With `-DeviceCode` (or in a remote session, where setup uses a code automatically) setup shows a code and waits for you to enter it at the page it names. Setup says "The sign-in code was not used in time. Codes last about 15 minutes."
+
+**Cause.** Nobody finished the sign-in before the code expired.
+
+**Fix.** In the wizard, answer yes to "Get a new code and try again?". With `-Yes` setup exits with code 1: run `scripts\setup-windows.cmd` again to get a new code.
+
 ## Setup says your account lacks admin rights, or consent fails
 
 **Cause.** Creating an agent grants admin consent to the setup (Provisioner) app, which needs a **Global Administrator** or **Privileged Role Administrator**. Joining an existing agent also needs directory rights, because each PC adds its own credential to the Provisioner app and to the agent's Blueprint.
@@ -69,7 +77,52 @@ set "ENTRABOT_PROVISIONER_APP_ID_VERIFIED=<application ID>"
 scripts\setup-windows.cmd
 ```
 
-In PowerShell, set it with `$env:ENTRABOT_PROVISIONER_APP_ID_VERIFIED = '<application ID>'`. Setup records the app, so later runs do not need the variable. If setup then says it "could not get the access it needs", read the lines above that message: a value that is not an application ID, that no app in the tenant has, or that differs from the app this PC already has recorded is refused there, and nothing is changed.
+In PowerShell, set it with `$env:ENTRABOT_PROVISIONER_APP_ID_VERIFIED = '<application ID>'`. Setup records the app, so later runs do not need the variable. If setup then says the value was not accepted, see the next entry.
+
+## "The value given in ENTRABOT_PROVISIONER_APP_ID_VERIFIED was not accepted"
+
+The message goes on "Nothing was changed in Microsoft Entra." Setup exits with code 1, at the step that connects setup to your tenant.
+
+**Cause.** `ENTRABOT_PROVISIONER_APP_ID_VERIFIED` is set in this window, and setup refused the app it names: the value is not an application ID, no app registration in the tenant has that application ID (or Microsoft Entra returned more than one), or this PC already uses a different Provisioner app, recorded by an earlier setup. The lines above the message, and the setup log, give the reason.
+
+**Fix.** Set the variable to the application ID of the Provisioner app you have checked is yours, or clear it, then run setup again from the same window. If this PC already has a Provisioner app recorded, clear the variable: setup keeps using the recorded app, and naming another one is not a way to move off it.
+
+To clear it in `cmd.exe`:
+
+```bat
+set "ENTRABOT_PROVISIONER_APP_ID_VERIFIED="
+scripts\setup-windows.cmd
+```
+
+To set it, use `set "ENTRABOT_PROVISIONER_APP_ID_VERIFIED=<application ID>"` instead. In PowerShell, `$env:ENTRABOT_PROVISIONER_APP_ID_VERIFIED = '<application ID>'` sets it and `Remove-Item Env:ENTRABOT_PROVISIONER_APP_ID_VERIFIED` clears it.
+
+## "Setup could not read what it needed from Microsoft Entra"
+
+Setup exits with code 1. At the step that connects setup to your tenant the message goes on "Nothing was changed in Microsoft Entra." At the step that creates your agent it goes on "Nothing was changed." when the lookup was for the Blueprint, and "The lines above say what was and was not created." when it was for the Agent Identity or Agent User, because by then the step may already have created something.
+
+**Cause.** A lookup setup needs got no answer it could use: Microsoft Entra throttled it, the network failed, the sign-in expired, or your account lacks an active admin role. At the step that connects setup to your tenant, it is a lookup of the Provisioner app (the one this PC has recorded, the one `ENTRABOT_PROVISIONER_APP_ID_VERIFIED` names, or one with the Provisioner's name) or a second read of its admin consent. At the agent step it is a lookup of the agent's Blueprint, Agent Identity or Agent User. Setup never reads "could not check" as "there is none", so it does not create, take over or reuse anything on the strength of it. What Microsoft Entra said, and at the agent step what was not created, is in the lines above the message and in the setup log.
+
+**Fix.** Run `scripts\setup-windows.cmd` again in a few minutes; it continues from what is recorded. If you activate admin roles on demand (Privileged Identity Management), activate them first. If it keeps failing with HTTP 401 or 403, run setup as an administrator of the tenant.
+
+## "The Blueprint App ID ... does not exist in this tenant"
+
+The message is "The Blueprint App ID you gave (<App ID>) does not exist in this tenant (<tenant>)." for an agent you named with `-UseBlueprint` that this PC is not set up for yet, or "The Blueprint App ID recorded on this computer (<App ID>) ..." for the agent it is set up for. Setup exits with code 1, at the step that creates your agent.
+
+**Cause.** The tenant you signed in to has no Blueprint with that App ID: it is mistyped, it belongs to another tenant, or the Blueprint was deleted. One created in the last few minutes may not be listed yet. Setup uses only that Blueprint and never looks for another one by name, so the agent step stopped before creating or changing anything.
+
+**Fix.** Check the Blueprint App ID, and that you signed in to the agent's tenant (`-Tenant <domain>` chooses one). Then run setup again with the right one (`-UseBlueprint <App ID>`), or create a new agent instead (`-NewChain -UpnSuffix <name>`).
+
+Setup does not keep an App ID that does not exist: it prints "Setup did not keep that Blueprint App ID: this computer's record of its agent is as it was before this run.", so the next run starts from where this PC was before.
+
+If the message is instead "Several applications in this tenant have the agent's name, and none is recorded on this computer, so setup can't tell which one is your agent.", more than one application in the tenant is named 'EntraBot Code Agent', the name setup gives a new agent's Blueprint, and display names are not unique. The lines above list each one's App ID and creation date. Run setup again with the App ID of yours: `scripts\setup-windows.cmd -UseBlueprint <App ID>`.
+
+## "The name chosen for the agent already belongs to a different agent."
+
+Setup exits with code 1, at the step that creates your agent.
+
+**Cause.** When you join or continue an agent, setup looks for an existing Agent User with the sign-in name this run uses, and reuses it only when it belongs to that agent's Blueprint. This one belongs to another agent's Blueprint, so the agent step stopped before creating, granting or recording anything. The name is the one `-AgentUserUpn` or `-UpnSuffix` gave, or the one this PC's `.env` names from an earlier setup; with neither, it is `entrabot-agent@<domain>`. A PC whose switch to another agent was interrupted can still name the previous agent's Agent User in `.env`. The lines above the message list both Blueprints and the commands to go on.
+
+**Fix.** Join that agent instead (`scripts\setup-windows.cmd -UseBlueprint <its Blueprint App ID>`), or give this agent's Agent User another name (`-UpnSuffix <name>`), or name one of its Agent Users exactly (`-AgentUserUpn <address>`). See [Setup and authentication](setup-and-authentication.md#setup-stops-because-the-agent-user-belongs-to-a-different-blueprint).
 
 ## "No Teams licence", or `Graph returned 403 for /me/chats`
 
@@ -154,6 +207,14 @@ Open a new terminal afterwards.
 
 **Fix.** Put the full path in the `env` block of the `entrabot` entry in `.mcp.json`, for example `C:\Users\you\persona-sati\get-token.cmd --profile work`, then restart the assistant. A path with spaces needs no quotes. A `.ps1` script runs under the Windows PowerShell that ships with Windows (`powershell.exe`, version 5.1), not PowerShell 7; for a script that needs PowerShell 7, set the command to `pwsh -File <full path to the script>`. A `.py` script runs with Entrabot's own Python.
 
+## "The agent could not sign in yet"
+
+At the end-to-end test setup prints "Microsoft Entra has not started accepting the certificate just registered. That can take a minute or two." and waits, trying again every 10 seconds. If it gives up it says "The agent could not sign in yet: this computer's certificate was registered on the agent's Blueprint moments ago, and Microsoft Entra has not started accepting it yet." and exits with code 3.
+
+**Cause.** This run registered a new certificate for this PC, and Microsoft's sign-in service can take a minute or two longer than the directory to start accepting it. Setup waits about two minutes.
+
+**Fix.** Run `scripts\setup-windows.cmd` again in a few minutes. It keeps the certificate and only repeats the test.
+
 ## The agent cannot sign in: certificate missing, expired, or unusable
 
 **Cause.** The agent signs in with a certificate in your Windows certificate store. Sign-in fails if that certificate has expired (it is valid for one year), was deleted, or its private key is not on this PC, for example after the PC was reset or the profile was copied from another PC. The agent logs a warning when 30 days or fewer remain.
@@ -188,6 +249,8 @@ Restart the assistant afterwards; the agent reads its certificate when it starts
 The warning is on screen in every mode, with or without `-Verbose`: at the end of the step that connects setup to your tenant, and again on the finish screen. It names the certificate by the last four characters of its thumbprint and its expiry date, gives the admin-center path, and says setup will try again. Setup then finishes "with something to check" (exit code 3). If a later step in the same run removes the certificate, the finish screen says it is switched off now instead. The reason the removal failed is in the setup log: search it for "The old Provisioner certificate".
 
 If setup cannot read its record (an entry that is not a thumbprint, or a state file it cannot read), the warning says so and asks you to check the app's certificates by hand. It names the certificate this computer uses now, when it knows it, so you keep that one.
+
+The health checks report the same key while it is waiting, as a warning named "Older setup keys" that fails no check and does not change their exit codes. `scripts\setup-windows.cmd -Diagnose` lists it after the state file check and then ends "No check failed, but an older setup key still has to be switched off in Microsoft Entra (see above)." instead of "All checks passed.". `status-windows.ps1` lists it among its health checks, with or without `-Strict`. In a folder that `teardown-windows.ps1 -KeepSetupCredential` left holding only setup's note about the key, `status-windows.ps1` says the folder is not connected to an agent, names the key on a second line, and exits 1.
 
 **Fix.** Run `scripts\setup-windows.cmd` again. If the warning comes back, remove the certificate by hand: in the Microsoft Entra admin center (<https://entra.microsoft.com>), open App registrations > 'EntraBot Agent ID Provisioner' (the warning gives its application ID) > Certificates & secrets > Certificates, and remove the certificate whose thumbprint ends in the four characters the warning shows. Then run setup again; it finds the certificate gone and stops retrying.
 

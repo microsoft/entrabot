@@ -8,10 +8,17 @@ reach Microsoft Entra, and Entrabot's private copy is not on the user's PATH). N
 installed, and nothing is printed around the script's own output, so ``--json`` stays
 parseable. The exit code is the script's.
 
-One case is answered here instead: a folder with neither ``.env`` nor a state file, which
-is what a teardown leaves and what a fresh checkout is. The status script would report that
-the Provisioner app is not bootstrapped; the plain fact is that this folder is not connected
-to an agent, so that is what is said (as a small JSON object under ``--json``), with exit 1.
+Two cases are answered here instead, both with exit 1 and, under ``--json``, a small JSON
+object saying the same:
+
+* a folder with neither ``.env`` nor a state file, which is what a teardown leaves and what a
+  fresh checkout is. The status script would report that the Provisioner app is not
+  bootstrapped; the plain fact is that this folder is not connected to an agent.
+* a folder with no ``.env`` whose state file holds only setup's note about an older setup key
+  it could not switch off in Microsoft Entra (and which tenant's Provisioner app that is
+  about). Teardown with ``--keep-setup-credential`` leaves exactly that, so that setup's next
+  run retries the key. The status script would report a missing agent; what is said is that
+  this folder is not connected to an agent, and which key is still waiting.
 """
 
 from __future__ import annotations
@@ -26,10 +33,23 @@ from pathlib import Path
 from entrabot.winsetup import azcli
 from entrabot.winsetup.directory import SETUP_COMMAND
 from entrabot.winsetup.helpers import Paths
+from entrabot.winsetup.oldkeys import (
+    REVOKE_PENDING,
+    REVOKE_PENDING_EXPIRES,
+    OldSetupKeys,
+    old_setup_key_waiting,
+    old_setup_keys,
+)
+from entrabot.winsetup.state import IdentityError, read_state
 from entrabot.winsetup.wizard import World
 
 STATUS_SCRIPT = "show_agent_status.py"
 NOT_SET_UP = f"This folder is not connected to an agent. Run {SETUP_COMMAND} to set one up."
+# All a state file holds when teardown left it only for setup's retry of an older setup key
+# (teardown.py, _settle_old_setup_certs). Anything else recorded means more than that note.
+_NOTE_ONLY = frozenset(
+    {"TENANT_ID", "PROVISIONER_CLIENT_ID", REVOKE_PENDING, REVOKE_PENDING_EXPIRES}
+)
 
 Runner = Callable[..., int]
 
@@ -54,6 +74,45 @@ def _child_env(paths: Paths, world: World) -> dict[str, str]:
     return env
 
 
+def _only_setups_note(paths: Paths) -> OldSetupKeys | None:
+    """The older setup keys a folder still has a note about, when that note is all there is:
+    no ``.env``, and a state file that records nothing else (a key left empty records
+    nothing). None for any other folder, and for a state file that can't be read: the status
+    script reports those."""
+    if paths.env_file.is_file() or not paths.state_file.is_file():
+        return None
+    try:
+        recorded = read_state(paths.state_file)
+    except IdentityError:
+        return None
+    if not {key for key, value in recorded.items() if value.strip()} <= _NOTE_ONLY:
+        return None
+    note = old_setup_keys(recorded)
+    return note if note.pending else None
+
+
+def _report_setups_note(note: OldSetupKeys, *, json_output: bool) -> None:
+    waiting = old_setup_key_waiting(note)
+    if not json_output:
+        print(NOT_SET_UP)
+        print(waiting)
+        return
+    keys = [{"thumbprint_ends_in": key.ending, "expires": key.expires or None} for key in note.keys]
+    print(
+        json.dumps(
+            {
+                "configured": False,
+                "message": NOT_SET_UP,
+                "old_setup_keys": {
+                    "waiting": keys,
+                    "record_unreadable": note.unreadable,
+                    "message": waiting,
+                },
+            }
+        )
+    )
+
+
 def run_status(
     paths: Paths,
     world: World,
@@ -70,6 +129,10 @@ def run_status(
         print(
             json.dumps({"configured": False, "message": NOT_SET_UP}) if json_output else NOT_SET_UP
         )
+        return 1
+    note = _only_setups_note(paths)
+    if note is not None:
+        _report_setups_note(note, json_output=json_output)
         return 1
     script = paths.scripts / STATUS_SCRIPT
     if not script.is_file():

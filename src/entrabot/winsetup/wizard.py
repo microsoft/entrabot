@@ -20,9 +20,10 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -59,6 +60,13 @@ from entrabot.winsetup.helpers import (
     marked_line,
 )
 from entrabot.winsetup.memory import MemoryRequest, MemoryResult, MemoryStopped
+from entrabot.winsetup.oldkeys import (
+    PROVISIONER_APP_NAME,
+    OldSetupKeys,
+    listed,
+    old_setup_key_lines,
+    read_old_setup_keys,
+)
 from entrabot.winsetup.sponsors import Sponsor, SponsorError
 from entrabot.winsetup.state import IdentityChoice, IdentityError
 
@@ -80,6 +88,68 @@ _TAKEOVER_REFUSED_FIX = (
     "  PowerShell:  $env:ENTRABOT_PROVISIONER_APP_ID_VERIFIED = '<application ID>'\n"
     "Then run setup again from the same window (scripts\\setup-windows.cmd)."
 )
+# Printed the same way, just before the script's error: the app named in
+# ENTRABOT_PROVISIONER_APP_ID_VERIFIED was not accepted, or setup could not read from Microsoft
+# Entra what it needed to decide. Nothing in Entra changed in either case.
+PROVISIONER_APP_CHOICE_REJECTED = "provisioner-app-choice-rejected"
+PROVISIONER_COULD_NOT_CHECK = "provisioner-could-not-check"
+_APP_CHOICE_REJECTED = (
+    "The value given in ENTRABOT_PROVISIONER_APP_ID_VERIFIED was not accepted. Nothing was "
+    "changed in Microsoft Entra."
+)
+_APP_CHOICE_REJECTED_FIX = (
+    "The reason is in the lines above and in the setup log. Set it, in this window, to the\n"
+    "application ID of the Provisioner app you have checked is yours:\n"
+    '  cmd.exe:     set "ENTRABOT_PROVISIONER_APP_ID_VERIFIED=<application ID>"\n'
+    "  PowerShell:  $env:ENTRABOT_PROVISIONER_APP_ID_VERIFIED = '<application ID>'\n"
+    "or clear it:\n"
+    '  cmd.exe:     set "ENTRABOT_PROVISIONER_APP_ID_VERIFIED="\n'
+    "  PowerShell:  Remove-Item Env:ENTRABOT_PROVISIONER_APP_ID_VERIFIED\n"
+    "Then run setup again from the same window (scripts\\setup-windows.cmd)."
+)
+_COULD_NOT_READ_ENTRA = "Setup could not read what it needed from Microsoft Entra."
+_PROVISIONER_COULD_NOT_CHECK_FIX = (
+    "This is usually temporary, or a problem with the sign-in or an admin role (if you activate\n"
+    "admin roles on demand, activate them first). What Microsoft Entra said is in the lines\n"
+    f"above and in the setup log.\n{RERUN}"
+)
+
+# What scripts/create_entra_agent_ids.py prints after RESULT_MARKER, on a line of its own, just
+# before it stops. Tests on both sides pin the whole line.
+BLUEPRINT_NOT_FOUND = "blueprint-not-found"
+BLUEPRINT_COULD_NOT_CHECK = "blueprint-could-not-check"
+BLUEPRINT_AMBIGUOUS = "blueprint-ambiguous"
+AGENT_USER_WRONG_BLUEPRINT = "agent-user-wrong-blueprint"
+AGENT_LOOKUP_COULD_NOT_CHECK = "agent-lookup-could-not-check"
+_DETAILS_ABOVE = "The details are in the lines above and in the setup log."
+_BLUEPRINT_NOT_FOUND_FIX = (
+    "Check the Blueprint App ID and that you signed in to the agent's tenant, then run setup\n"
+    "again with the right one (-UseBlueprint APP_ID), or create a new agent instead\n"
+    f"(-NewChain -UpnSuffix NAME).\n{_DETAILS_ABOVE}"
+)
+# The helper asks about the Blueprint before it records or creates anything (in
+# blueprint_for_this_run), so "nothing was changed" holds for that stop.
+_BLUEPRINT_COULD_NOT_CHECK_FIX = (
+    f"This is usually temporary: run setup again in a few minutes.\n{_DETAILS_ABOVE}"
+)
+# Not for the agent lookups: they run after the Blueprint is recorded (or, for a new agent,
+# created), and the Agent User's can run after a new Agent Identity was created. The helper's
+# own lines say what was and was not created.
+_AGENT_LOOKUP_COULD_NOT_CHECK_FIX = (
+    "The lines above say what was and was not created.\n"
+    "This is usually temporary: run setup again in a few minutes.\n"
+    f"It continues from where it stopped.\n{_DETAILS_ABOVE}"
+)
+_BLUEPRINT_AMBIGUOUS_FIX = (
+    "Run setup again with the App ID of the right one (the candidates are listed in the lines\n"
+    "above):\n"
+    "  scripts\\setup-windows.cmd -UseBlueprint <App ID>\n"
+    f"{_DETAILS_ABOVE}"
+)
+_AGENT_USER_WRONG_BLUEPRINT_FIX = (
+    "Join that agent instead (run setup with -UseBlueprint and its Blueprint App ID), or\n"
+    f"choose another name for this one (-UpnSuffix NAME).\n{_DETAILS_ABOVE}"
+)
 
 # What a failed sign-in test looks like when the only problem is the kind of session.
 _KEYRING_MARKERS = (
@@ -92,11 +162,29 @@ _KEYRING_MARKERS = (
 
 
 # The preflight module names its checks for engineers; these are the same checks in plain words.
+_TOKEN_CHECK = "Token mint (three-hop)"
 _CHECK_LABELS = {
-    "Token mint (three-hop)": "The agent can sign in",
+    _TOKEN_CHECK: "The agent can sign in",
     "Graph /me identity": "The agent is who it should be",
     "Teams scope (/me/chats)": "The agent can reach Teams",
 }
+
+# Microsoft Entra's sign-in can lag behind Microsoft Graph by tens of seconds after a
+# certificate is added to an application: Graph lists it (the registration helper reads it
+# back) while sign-in still answers that the key is not there. When this run registered the
+# certificate, the end-to-end test waits for that the way certificate rotation does
+# (rotation.PROOF_ATTEMPTS, PROOF_DELAY_SECONDS): up to twelve tries, ten seconds apart, about
+# two minutes in all.
+NEW_CERT_ATTEMPTS = 12
+NEW_CERT_RETRY_SECONDS = 10.0
+# Microsoft Entra's answer at hop 1 (the only step the Blueprint certificate signs) when it does
+# not know the certificate that signed the request ("[Reason - The key was not found.]").
+CERT_NOT_ACCEPTED_CODE = "AADSTS700027"
+_AADSTS = re.compile(r"AADSTS\d+")
+
+# A device-code sign-in that nobody finished before the code ran out.
+_CODE_NOT_USED = "The sign-in code was not used in time. Codes last about 15 minutes."
+_CODE_NOT_USED_FIX = "Run setup again to get a new code."
 
 
 LicenceOutcome = Literal["assigned", "existing", "none", "unknown"]
@@ -123,145 +211,6 @@ def licence_outcome(
     if sku:
         return "existing" if before.get("AGENT_USER_LICENSE_SKU", "") == sku else "assigned"
     return "unknown"
-
-
-# An older setup kept the Provisioner's private key in a plain file. On Windows
-# scripts/entra_provisioning.py moves this computer onto a key in the certificate store and then
-# removes the old certificate from the Provisioner app, which holds tenant-wide Graph permissions.
-# A removal that fails is recorded here by _retire_old_certificates, and retried on every run:
-# lowercase SHA-1 thumbprints, comma-separated, and their expiry dates in the same order ("" when
-# unknown).
-_REVOKE_PENDING = "PROVISIONER_CERT_REVOKE_PENDING"
-_REVOKE_PENDING_EXPIRES = "PROVISIONER_CERT_REVOKE_PENDING_EXPIRES"
-_SHA1_THUMBPRINT = re.compile(r"[0-9A-Fa-f]{40}")
-_ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
-PROVISIONER_APP_NAME = "EntraBot Agent ID Provisioner"  # the app registration's display name
-ENTRA_ADMIN_CENTER = "https://entra.microsoft.com"
-
-
-@dataclass(frozen=True)
-class OldSetupKey:
-    """An older setup's Provisioner certificate that Microsoft Entra may still trust. Only the
-    end of its thumbprint is kept: enough to find it in the admin center, not to look it up."""
-
-    ending: str  # the thumbprint's last four characters, upper case
-    expires: str  # YYYY-MM-DD, or "" when the record does not say
-
-
-@dataclass(frozen=True)
-class OldSetupKeys:
-    """What the state file says about older setup keys that could not be switched off."""
-
-    keys: tuple[OldSetupKey, ...] = ()
-    unreadable: bool = False  # something is recorded that can't be read as a certificate
-    app_id: str = ""  # the Provisioner app's application ID
-    current: str = ""  # the end of this computer's own Provisioner certificate's thumbprint
-
-    @property
-    def pending(self) -> bool:
-        return bool(self.keys) or self.unreadable
-
-
-def _recorded_date(text: str) -> str:
-    if not _ISO_DATE.fullmatch(text):
-        return ""
-    try:
-        return date.fromisoformat(text).isoformat()
-    except ValueError:
-        return ""
-
-
-def old_setup_keys(recorded: Mapping[str, str]) -> OldSetupKeys:
-    """The older Provisioner certificates the state file says are still on the app.
-
-    Read as ``_pending_revocations`` in ``scripts/entra_provisioning.py`` reads them: blank
-    entries are skipped, and expiry dates line up with thumbprints by position. An entry that
-    is not a thumbprint is not dropped silently: the record is then *unreadable*, and the person
-    is asked to check, because what it named may still be trusted.
-    """
-    thumbprints = [part.strip() for part in recorded.get(_REVOKE_PENDING, "").split(",")]
-    expiries = [part.strip() for part in recorded.get(_REVOKE_PENDING_EXPIRES, "").split(",")]
-    keys: list[OldSetupKey] = []
-    seen: set[str] = set()
-    unreadable = False
-    for index, thumbprint in enumerate(thumbprints):
-        if not thumbprint:
-            continue
-        if not _SHA1_THUMBPRINT.fullmatch(thumbprint):
-            unreadable = True
-            continue
-        if thumbprint.upper() in seen:
-            continue
-        seen.add(thumbprint.upper())
-        expires = expiries[index] if index < len(expiries) else ""
-        keys.append(OldSetupKey(ending=thumbprint[-4:].upper(), expires=_recorded_date(expires)))
-    current = recorded.get("PROVISIONER_CERT_THUMBPRINT", "").strip()
-    return OldSetupKeys(
-        keys=tuple(keys),
-        unreadable=unreadable,
-        app_id=recorded.get("PROVISIONER_CLIENT_ID", "").strip(),
-        current=current[-4:].upper() if _SHA1_THUMBPRINT.fullmatch(current) else "",
-    )
-
-
-def _listed(items: Sequence[str]) -> str:
-    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
-
-
-def old_setup_key_lines(note: OldSetupKeys) -> list[str]:
-    """The warning about older setup keys, in plain words: the first line says what is wrong,
-    the rest which key it is, why it matters and how to remove it. Empty when nothing is
-    pending."""
-    if not note.pending:
-        return []
-    app = f"'{PROVISIONER_APP_NAME}'" + (f" (application ID {note.app_id})" if note.app_id else "")
-    where = [f"  App registrations > {app} >", "  Certificates & secrets > Certificates."]
-    keep = (
-        [f"Keep the one whose thumbprint ends in {note.current}: this computer uses it now."]
-        if note.current
-        else []
-    )
-    if not note.keys:
-        # Nothing to retry: setup does not know which certificate the record meant.
-        return [
-            "Setup could not read its record of older setup keys for this computer.",
-            "Microsoft Entra may still trust a key that an earlier version of setup kept in an "
-            "unprotected file.",
-            f"Check by hand in the Microsoft Entra admin center ({ENTRA_ADMIN_CENTER}):",
-            *where,
-            "Remove any certificate there that you can't account for.",
-            *keep,
-        ]
-    named = [
-        f"{key.ending} ({f'expires {key.expires}' if key.expires else 'expiry date unknown'})"
-        for key in note.keys
-    ]
-    if len(note.keys) == 1:
-        lines = [
-            "An older setup key for this computer could not be switched off in Microsoft Entra.",
-            "An earlier version of setup kept that key in an unprotected file.",
-            "Anyone with a copy of that file can still use it to make changes in your tenant.",
-            f"It is the certificate whose thumbprint ends in {named[0]}.",
-            f"Remove it by hand in the Microsoft Entra admin center ({ENTRA_ADMIN_CENTER}):",
-        ]
-    else:
-        lines = [
-            f"{len(note.keys)} older setup keys for this computer could not be switched off in "
-            "Microsoft Entra.",
-            "An earlier version of setup kept those keys in unprotected files.",
-            "Anyone with a copy of those files can still use them to make changes in your tenant.",
-            f"They are the certificates whose thumbprints end in {_listed(named)}.",
-            f"Remove them by hand in the Microsoft Entra admin center ({ENTRA_ADMIN_CENTER}):",
-        ]
-    lines += where
-    if note.unreadable:
-        lines += [
-            "Setup's record also has an entry it could not read: remove any other certificate "
-            "there that you can't account for.",
-            *keep,
-        ]
-    lines.append("Setup will try again the next time it runs.")
-    return lines
 
 
 class SetupFailed(Exception):
@@ -335,6 +284,7 @@ class World:
     http_get: sponsors.HttpGet = sponsors.http_get_json
     os_description: Callable[[], str] = _os_description
     launch: Callable[[Sequence[str], Path], None] = launch_in_new_console
+    sleep: Callable[[float], None] = time.sleep
 
 
 @dataclass
@@ -377,7 +327,15 @@ def run_diagnose(console: Console, paths: Paths, env: Mapping[str, str]) -> int:
     )
     console.blank()
     if result.returncode == 0:
-        console.ok("All checks passed.")
+        # The health check reports an older setup key as a warning, which fails no check; the
+        # last line must not read as if nothing were left to do.
+        if read_old_setup_keys(paths.state_file).pending:
+            console.warn(
+                "No check failed, but an older setup key still has to be switched off in "
+                "Microsoft Entra (see above)."
+            )
+        else:
+            console.ok("All checks passed.")
         return EXIT_OK
     console.fail("One or more checks failed (see above).", fix=RERUN)
     return EXIT_FAILED
@@ -772,6 +730,7 @@ class Wizard:
     def _login(self) -> Account:
         console, opts, world = self.console, self.options, self.world
         assert self.az is not None
+        tenant = opts.tenant or None
         device_code = opts.device_code or not azcli.has_interactive_desktop(
             world.env, platform=world.platform
         )
@@ -781,15 +740,25 @@ class Wizard:
         else:
             console.info("A Microsoft sign-in window is opening.")
             console.detail("If you don't see it, look behind this window or on the taskbar.")
-        signed_in = self.az.login(tenant=opts.tenant or None, device_code=device_code)
-        if not signed_in and not device_code:
+        outcome = self.az.login(tenant=tenant, device_code=device_code)
+        if outcome == "failed" and not device_code:
             console.warn("That sign-in did not complete.")
             if console.confirm(
                 "Try again with a sign-in code instead?", default=True, key="retry_device_code"
             ):
                 console.info("Open the page shown below on any device and enter the code.")
-                signed_in = self.az.login(tenant=opts.tenant or None, device_code=True)
-        account = self.az.account() if signed_in else None
+                outcome = self.az.login(tenant=tenant, device_code=True)
+        while outcome == "code-expired":
+            # A new code is offered only to someone at the keyboard: unattended, it would run
+            # out unused too.
+            if not console.interactive:
+                raise SetupFailed(_CODE_NOT_USED, fix=_CODE_NOT_USED_FIX)
+            console.warn(_CODE_NOT_USED)
+            if not console.confirm("Get a new code and try again?", default=True):
+                raise SetupFailed("Sign-in did not complete.", fix=_CODE_NOT_USED_FIX)
+            console.info("Open the page shown below on any device and enter the new code.")
+            outcome = self.az.login(tenant=tenant, device_code=True)
+        account = self.az.account() if outcome == "signed-in" else None
         if account is None:
             raise SetupFailed(
                 "Sign-in did not complete.",
@@ -1186,7 +1155,7 @@ class Wizard:
         env_result = self._save_settings(identity, cert)
         memory_result, upload_failed = self._memory(identity, env_result)
         host_report = self._assistants()
-        smoke = self._smoke()
+        smoke = self._smoke(cert)
         return self._finish(
             identity, cert, env_result, memory_result, upload_failed, host_report, smoke
         )
@@ -1223,8 +1192,12 @@ class Wizard:
 
         self._next_step("Connecting setup to your tenant")
         try:
+            previous = state.read_state(paths.state_file)
             notes = state.apply_identity_choice(
-                paths.state_file, self.plan.identity, now=self.world.now()
+                paths.state_file,
+                self.plan.identity,
+                now=self.world.now(),
+                env_values=read_env(paths.env_file),
             )
         except IdentityError as exc:
             raise SetupFailed(str(exc)) from exc
@@ -1232,7 +1205,7 @@ class Wizard:
             console.info(note)
         env = self._provisioning_env()
         try:
-            before = state.read_state(paths.state_file)
+            before = state.read_state(paths.state_file)  # as the identity choice left it
         except IdentityError as exc:
             raise SetupFailed(str(exc)) from exc
         bootstrap = self.helpers.script(
@@ -1249,6 +1222,13 @@ class Wizard:
                     "An app registration with the Provisioner's name already exists in this "
                     "tenant, and setup would not take it over.",
                     fix=_TAKEOVER_REFUSED_FIX,
+                )
+            if outcome == PROVISIONER_APP_CHOICE_REJECTED:
+                raise SetupFailed(_APP_CHOICE_REJECTED, fix=_APP_CHOICE_REJECTED_FIX)
+            if outcome == PROVISIONER_COULD_NOT_CHECK:
+                raise SetupFailed(
+                    f"{_COULD_NOT_READ_ENTRA} Nothing was changed in Microsoft Entra.",
+                    fix=_PROVISIONER_COULD_NOT_CHECK_FIX,
                 )
             raise SetupFailed(
                 "Setup could not get the access it needs in your tenant.",
@@ -1278,7 +1258,12 @@ class Wizard:
         )
         if created.returncode != 0:
             console.show_tail(created)
-            raise SetupFailed("The agent could not be created.")
+            outcome = (marked_line(created.stdout, RESULT_MARKER) or "").strip()
+            if outcome == BLUEPRINT_NOT_FOUND and self.plan.identity.mode == "join":
+                self._forget_missing_blueprint(previous=previous, applied=before)
+            raise self._agent_step_stopped(
+                outcome, blueprint=expected_blueprint, recorded=already_here
+            )
         try:
             self.state = state.read_state(paths.state_file)
         except IdentityError as exc:
@@ -1355,6 +1340,59 @@ class Wizard:
                 raise SetupFailed(str(exc)) from exc
         return identity
 
+    def _agent_step_stopped(self, outcome: str, *, blueprint: str, recorded: bool) -> SetupFailed:
+        """Why the agent step stopped, from the result line create_entra_agent_ids.py printed
+        before it did (*outcome*, "" when it printed none). *blueprint* is the Blueprint App ID
+        this run was for ("" for a new agent); *recorded* says it is the one this computer is
+        set up for, not one given in this run."""
+        account = self.account
+        where = (account.tenant_name or account.tenant_id) if account else ""
+        tenant = f"this tenant ({where})" if where else "this tenant"
+        if outcome == BLUEPRINT_NOT_FOUND:
+            if blueprint:
+                whose = "recorded on this computer" if recorded else "you gave"
+                message = f"The Blueprint App ID {whose} ({blueprint}) does not exist in {tenant}."
+            else:
+                message = f"The agent's Blueprint does not exist in {tenant}."
+            return SetupFailed(message, fix=_BLUEPRINT_NOT_FOUND_FIX)
+        if outcome == BLUEPRINT_COULD_NOT_CHECK:
+            return SetupFailed(
+                f"{_COULD_NOT_READ_ENTRA} Nothing was changed.", fix=_BLUEPRINT_COULD_NOT_CHECK_FIX
+            )
+        if outcome == AGENT_LOOKUP_COULD_NOT_CHECK:
+            return SetupFailed(_COULD_NOT_READ_ENTRA, fix=_AGENT_LOOKUP_COULD_NOT_CHECK_FIX)
+        if outcome == BLUEPRINT_AMBIGUOUS:
+            return SetupFailed(
+                "Several applications in this tenant have the agent's name, and none is recorded "
+                "on this computer, so setup can't tell which one is your agent.",
+                fix=_BLUEPRINT_AMBIGUOUS_FIX,
+            )
+        if outcome == AGENT_USER_WRONG_BLUEPRINT:
+            return SetupFailed(
+                "The name chosen for the agent already belongs to a different agent.",
+                fix=_AGENT_USER_WRONG_BLUEPRINT_FIX,
+            )
+        return SetupFailed("The agent could not be created.")
+
+    def _forget_missing_blueprint(
+        self, *, previous: Mapping[str, str], applied: Mapping[str, str]
+    ) -> None:
+        """The Blueprint this run joins does not exist: put the state file's record of the
+        agent back as it was before this run named that Blueprint (*previous*; *applied* is
+        the file as the identity choice left it). Otherwise the next run, with the right App
+        ID, would be a switch away from an agent that was never there. What the provisioning
+        step recorded in this run stays. A record that can't be put back is left as it is."""
+        try:
+            changed = state.undo_join(self.paths.state_file, before=previous, applied=applied)
+        except (IdentityError, OSError) as exc:
+            self.console.debug(f"Could not put this computer's record back: {exc}")
+            return
+        if changed:
+            self.console.detail(
+                "Setup did not keep that Blueprint App ID: this computer's record of its agent "
+                "is as it was before this run."
+            )
+
     def _sync_sponsors(self, identity: Identity) -> None:
         """Make the directory agree with the choice: add the chosen sponsors who are missing
         from the Agent Identity, read the list back, and say what is true now.
@@ -1427,10 +1465,7 @@ class Wizard:
         """What the state file says now about older setup keys Entra may still trust. A file
         that can't be read is treated like a record that can't: setup can't tell, so it asks
         the person to check."""
-        try:
-            return old_setup_keys(state.read_state(self.paths.state_file))
-        except IdentityError:
-            return OldSetupKeys(unreadable=True)
+        return read_old_setup_keys(self.paths.state_file)
 
     def _say_old_setup_keys(self, note: OldSetupKeys) -> None:
         lines = old_setup_key_lines(note)
@@ -1457,7 +1492,7 @@ class Wizard:
             or "claude" not in self.plan.hosts
             or not launcher.is_file()
             or host_report.todo
-            or smoke in ("sign-in", "keyring", "crashed")
+            or smoke in ("sign-in", "keyring", "crashed", "certificate-pending")
             or not azcli.has_interactive_desktop(world.env, platform=world.platform)
             or _CMD_SPECIAL.search(str(launcher))
         ):
@@ -1635,8 +1670,14 @@ class Wizard:
         report.registered = written
         return report
 
-    def _smoke(self) -> str:
-        """End-to-end test. Returns "pass", "skipped", or why it failed, as a short code."""
+    def _smoke(self, cert: CertOutcome) -> str:
+        """End-to-end test. Returns "pass", "skipped", or why it failed, as a short code.
+
+        When this run registered the certificate on the Blueprint (*cert*), a sign-in that
+        fails at hop 1 because Microsoft Entra does not accept that certificate yet is tried
+        again for about two minutes (NEW_CERT_ATTEMPTS) before the result is reported. Any
+        other result is reported at once.
+        """
         console = self.console
         self._next_step("Testing the agent end to end")
         if self.options.skip_smoke:
@@ -1645,6 +1686,23 @@ class Wizard:
         console.info("Signing in as the agent and reaching Teams...")
         result = self.helpers.snippet(SMOKE_SNIPPET)
         checks = _checks(result.stdout)
+        waiting = cert.registered and _certificate_not_accepted_yet(checks)
+        attempt = 1
+        while waiting and attempt < NEW_CERT_ATTEMPTS:
+            if attempt == 1:
+                console.detail(
+                    "Microsoft Entra has not started accepting the certificate just registered. "
+                    "That can take a minute or two."
+                )
+            attempt += 1
+            console.detail(
+                f"Still waiting for Microsoft Entra ({CERT_NOT_ACCEPTED_CODE}). Trying again in "
+                f"{NEW_CERT_RETRY_SECONDS:.0f}s (attempt {attempt} of {NEW_CERT_ATTEMPTS})"
+            )
+            self.world.sleep(NEW_CERT_RETRY_SECONDS)
+            result = self.helpers.snippet(SMOKE_SNIPPET)
+            checks = _checks(result.stdout)
+            waiting = _certificate_not_accepted_yet(checks)
         if not checks:
             console.fail("The test could not run.")
             console.detail(result.stderr.strip()[-600:])
@@ -1664,6 +1722,8 @@ class Wizard:
                 console.warn(f"{label}: {check.get('detail')}")
         if not any(check.get("status") == "fail" for check in checks):
             return "pass"
+        if waiting:
+            return "certificate-pending"  # still not accepted after the wait
         if checks[0].get("status") == "fail":
             detail = str(checks[0].get("detail", "")).lower()
             return "keyring" if any(marker in detail for marker in _KEYRING_MARKERS) else "sign-in"
@@ -1716,7 +1776,7 @@ class Wizard:
             console.blank()
             self._say_old_setup_keys(old_keys)
         elif self.old_keys.keys:
-            endings = _listed([key.ending for key in self.old_keys.keys])
+            endings = listed([key.ending for key in self.old_keys.keys])
             console.blank()
             console.ok(
                 f"The older setup key ending in {endings} is switched off now: a later step in "
@@ -1740,6 +1800,17 @@ class Wizard:
             console.blank()
             console.warn("The agent could not sign in. This is not a licence delay.")
             console.detail(RERUN)
+        elif smoke == "certificate-pending":
+            console.blank()
+            console.warn(
+                "The agent could not sign in yet: this computer's certificate was registered on "
+                "the agent's Blueprint moments ago, and Microsoft Entra has not started accepting "
+                "it yet."
+            )
+            console.detail(
+                "Run setup again in a few minutes. It continues from here and keeps what "
+                "already works."
+            )
         elif smoke == "teams-not-ready" and self.licence == "none":
             pass  # explained below: there is no licence to wait for
         elif smoke == "teams-not-ready" and self.licence in ("assigned", "existing"):
@@ -1765,10 +1836,17 @@ class Wizard:
             )
         if self.licence == "none" and smoke != "pass":
             console.blank()
-            console.warn(
-                "The agent is set up and can sign in, but it has no Teams licence, so it "
-                "cannot use Teams yet."
-            )
+            if smoke == "teams-not-ready":  # the test saw it sign in; only Teams turned it away
+                console.warn(
+                    "The agent is set up and can sign in, but it has no Teams licence, so it "
+                    "cannot use Teams yet."
+                )
+            elif smoke == "skipped":  # nothing was tested, so nothing is said about signing in
+                console.warn(
+                    "The agent is set up, but it has no Teams licence, so it cannot use Teams yet."
+                )
+            else:  # it could not sign in, or the test did not get that far: said just above
+                console.warn("The agent also has no Teams licence, so it cannot use Teams yet.")
             console.info("     What to do:")
             console.info(
                 "       1. Make a licence that includes Teams available in the tenant (for example"
@@ -1845,6 +1923,27 @@ class Wizard:
         ):
             return EXIT_SMOKE_FAILED  # set up, with something to check
         return EXIT_OK
+
+
+def _certificate_not_accepted_yet(checks: Sequence[Mapping[str, Any]]) -> bool:
+    """Did the sign-in fail at hop 1 because Microsoft Entra does not accept the certificate
+    that signed it (yet)?
+
+    preflight's token check reports a failed hop as ``"<hop> failed - <error>: <description>"``,
+    with the hop as entrabot.tools.teams names it (hop 1 is ``hop1:blueprint``) and the AADSTS
+    code Microsoft Entra starts its description with. Only that code at hop 1 counts: never
+    the words around it, and never the same code at a later hop.
+    """
+    if not checks:
+        return False
+    first = checks[0]
+    detail = str(first.get("detail") or "")
+    return (
+        first.get("name") == _TOKEN_CHECK
+        and first.get("status") == "fail"
+        and detail.startswith("hop1:")
+        and CERT_NOT_ACCEPTED_CODE in _AADSTS.findall(detail)
+    )
 
 
 def _checks(output: str) -> list[dict[str, Any]]:

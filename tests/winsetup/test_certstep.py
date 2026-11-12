@@ -193,6 +193,11 @@ class TestFreshMachine:
         harness.run()
         assert NEW_SHA1 not in harness.out.getvalue()
 
+    def test_a_new_certificate_is_marked_as_registered_by_this_run(self, harness: Harness) -> None:
+        # The end-to-end test gives Microsoft Entra time to accept a certificate that was only
+        # just added to the Blueprint, and only then.
+        assert harness.run().registered
+
 
 class TestExistingCertificate:
     def test_a_registered_certificate_is_reused_and_nothing_is_written(
@@ -205,6 +210,7 @@ class TestExistingCertificate:
         assert not harness.wincert.created
         assert not harness.called("register_windows_blueprint_cert.py")
         assert outcome.sha1_hex == OLD_SHA1 and not outcome.generated
+        assert not outcome.registered  # it was on the Blueprint already
         assert harness.wincert.signed == [OLD_SHA1]  # reuse only what can actually sign
 
     def test_verification_is_asked_about_this_certificate(self, harness: Harness) -> None:
@@ -226,6 +232,7 @@ class TestExistingCertificate:
         assert harness.registered_bytes == [b"\x01\x02\x03\x04"]  # the store's own bytes
         assert (outcome.sha1_hex, outcome.x5t_s256) == (OLD_SHA1, OLD_X5T)
         assert outcome.ksp == "software"
+        assert outcome.registered and not outcome.generated  # added by this run, not made
 
     def test_a_failed_check_changes_nothing(self, harness: Harness) -> None:
         # A failed check says nothing about the Blueprint, so nothing is generated.

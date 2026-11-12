@@ -49,6 +49,13 @@ _ROLES_ONLY = (
     'roleTemplateId: roleTemplateId}, nextLink: "@odata.nextLink"}'
 )
 _GUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+_AADSTS = re.compile(r"AADSTS\d+")
+# How a device-code sign-in ends when nobody used the code before it ran out (about 15
+# minutes). MSAL stops polling at the code's expiry and az reports the last answer it had:
+# AADSTS70016, "authorization pending" (seen verbatim on a real machine). AADSTS70019
+# ("verification code expired") and AADSTS70020 are the expired-code answers. Matched by code,
+# never by the words around it.
+_UNUSED_DEVICE_CODE = frozenset({"AADSTS70016", "AADSTS70019", "AADSTS70020"})
 _CMD_UNSAFE = re.compile(r'[&|<>^%()!"\r\n]')
 _TENANT = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$")
 _BATCH_SUFFIXES = (".cmd", ".bat")
@@ -117,6 +124,10 @@ class AmbiguousUser(AzError):
 class Privileges:
     level: Literal["enough", "partial", "none", "unknown"]
     message: str
+
+
+# How a sign-in ended. "code-expired": a device code that nobody used before it ran out.
+LoginOutcome = Literal["signed-in", "code-expired", "failed"]
 
 
 def validate_tenant(value: str) -> str | None:
@@ -428,15 +439,26 @@ class AzCli:
             tenant_domain=str(data.get("tenantDefaultDomain") or ""),
         )
 
-    def login(self, *, tenant: str | None, device_code: bool) -> bool:
+    def login(self, *, tenant: str | None, device_code: bool) -> LoginOutcome:
         """Sign in. ``--allow-no-subscriptions`` because most tenants a person administers
-        have no Azure subscription, and plain ``az login`` refuses those."""
+        have no Azure subscription, and plain ``az login`` refuses those.
+
+        The browser sign-in runs as an interactive child: it talks to the person directly,
+        and only its exit code comes back. A device-code sign-in needs nothing typed into it,
+        so it is streamed instead: the page and the code are on screen as az prints them, and
+        what it printed can be read afterwards, which is how a code that ran out unused is
+        told from any other failure.
+        """
         args = ["login", "--allow-no-subscriptions", "--output", "none"]
         if tenant:
             args += ["--tenant", tenant]
-        if device_code:
-            args.append("--use-device-code")
-        return self.run(args, interactive=True).returncode == 0
+        if not device_code:
+            return "signed-in" if self.run(args, interactive=True).returncode == 0 else "failed"
+        result = self._console.run(self._argv([*args, "--use-device-code"]))
+        if result.returncode == 0:
+            return "signed-in"
+        codes = set(_AADSTS.findall(f"{result.stdout}\n{result.stderr}"))
+        return "code-expired" if codes & _UNUSED_DEVICE_CODE else "failed"
 
     def subscriptions(self, tenant_id: str) -> list[Subscription]:
         """Enabled Azure subscriptions in *tenant_id* (tenant-level placeholders excluded)."""

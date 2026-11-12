@@ -347,9 +347,16 @@ class TestAccount:
 
 
 class TestLogin:
+    # How az login ends, seen verbatim on a real machine, when nobody used the device code
+    # before it ran out: MSAL stops polling at the code's expiry and az reports the last answer.
+    UNUSED_CODE = (
+        "ERROR: AADSTS70016: OAuth 2.0 device flow error. Authorization is pending. Continue "
+        "polling. Trace ID: 0b1c Correlation ID: 2d3e Timestamp: 2026-11-12 09:15:00Z"
+    )
+
     def test_login_never_requires_a_subscription(self) -> None:
         spawn = FakeSpawn()
-        assert _az(spawn).login(tenant=None, device_code=False) is True
+        assert _az(spawn).login(tenant=None, device_code=False) == "signed-in"
         request = spawn.calls[0]
         assert request.argv[:3] == ["az", "login", "--allow-no-subscriptions"]
         assert "--use-device-code" not in request.argv and "--tenant" not in request.argv
@@ -364,7 +371,54 @@ class TestLogin:
     def test_a_failed_login_is_false(self) -> None:
         spawn = FakeSpawn()
         spawn.on("login", Reply(returncode=1))
-        assert _az(spawn).login(tenant=None, device_code=False) is False
+        assert _az(spawn).login(tenant=None, device_code=False) == "failed"
+
+    def test_a_device_code_sign_in_is_read_as_well_as_shown(self) -> None:
+        # Started as an interactive child, az writes straight to the terminal and nothing it
+        # says can be read back, so how the sign-in ended could not be told apart.
+        spawn = FakeSpawn()
+        prompt = (
+            "To sign in, use a web browser to open the page https://microsoft.com/devicelogin "
+            "and enter the code F7KQXBRZ3 to authenticate."
+        )
+        spawn.on("login", Reply(stderr=prompt))
+        console, out = make_console(spawn=spawn)
+        az = AzCli(AzLocation(command=("az",), bin_dir=Path("/x"), source="path"), console)
+        assert az.login(tenant=None, device_code=True) == "signed-in"
+        request = spawn.calls[0]
+        assert not request.interactive and request.input_text is None
+        assert prompt in out.getvalue()  # the person still sees the page and the code
+
+    @pytest.mark.parametrize("code", ["AADSTS70016", "AADSTS70019", "AADSTS70020"])
+    def test_a_device_code_nobody_used_in_time_is_told_apart(self, code: str) -> None:
+        spawn = FakeSpawn()
+        spawn.on("login", Reply(returncode=1, stderr=self.UNUSED_CODE.replace("AADSTS70016", code)))
+        assert _az(spawn).login(tenant=None, device_code=True) == "code-expired"
+
+    @pytest.mark.parametrize(
+        "stderr",
+        [
+            "ERROR: AADSTS50097: Device authentication is required.",
+            # Another code that merely starts with the same digits is another answer.
+            "ERROR: AADSTS700160: something else entirely.",
+            "",
+        ],
+        ids=["managed-devices-only", "longer-code", "no-reason"],
+    )
+    def test_any_other_failed_device_code_sign_in_is_a_failure(self, stderr: str) -> None:
+        spawn = FakeSpawn()
+        spawn.on("login", Reply(returncode=1, stderr=stderr))
+        assert _az(spawn).login(tenant=None, device_code=True) == "failed"
+
+    def test_the_words_alone_are_not_a_code(self) -> None:
+        spawn = FakeSpawn()
+        spawn.on("login", Reply(returncode=1, stderr="ERROR: Authorization is pending."))
+        assert _az(spawn).login(tenant=None, device_code=True) == "failed"
+
+    def test_a_browser_sign_in_is_never_read_as_an_unused_code(self) -> None:
+        spawn = FakeSpawn()
+        spawn.on("login", Reply(returncode=1, stderr=self.UNUSED_CODE))
+        assert _az(spawn).login(tenant=None, device_code=False) == "failed"
 
     @pytest.mark.parametrize(
         "value", ["werner.ac", "contoso.onmicrosoft.com", "0f3c1c7e-1111-2222-3333-444455556666"]

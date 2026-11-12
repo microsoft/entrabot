@@ -1007,3 +1007,729 @@ class TestTheBlueprintThisRunIsFor:
         assert "ERROR:" in capsys.readouterr().out
         assert lookup.graph.writes == []  # nothing created or changed in the directory
         assert lookup.state == before  # nor in the state file
+
+
+# ---------------------------------------------------------------------------
+# What a stop prints for the setup front ends
+# ---------------------------------------------------------------------------
+
+# The Windows setup wizard recognises exactly these lines (another change teaches it to), so they
+# are pinned here as well as there.
+MARKERS = {
+    "BLUEPRINT_NOT_FOUND_MARKER": "ENTRABOT_RESULT=blueprint-not-found",
+    "BLUEPRINT_COULD_NOT_CHECK_MARKER": "ENTRABOT_RESULT=blueprint-could-not-check",
+    "BLUEPRINT_AMBIGUOUS_MARKER": "ENTRABOT_RESULT=blueprint-ambiguous",
+    "AGENT_USER_WRONG_BLUEPRINT_MARKER": "ENTRABOT_RESULT=agent-user-wrong-blueprint",
+    "AGENT_LOOKUP_COULD_NOT_CHECK_MARKER": "ENTRABOT_RESULT=agent-lookup-could-not-check",
+}
+BLUEPRINT_NOT_FOUND = MARKERS["BLUEPRINT_NOT_FOUND_MARKER"]
+BLUEPRINT_COULD_NOT_CHECK = MARKERS["BLUEPRINT_COULD_NOT_CHECK_MARKER"]
+BLUEPRINT_AMBIGUOUS = MARKERS["BLUEPRINT_AMBIGUOUS_MARKER"]
+WRONG_BLUEPRINT = MARKERS["AGENT_USER_WRONG_BLUEPRINT_MARKER"]
+AGENT_COULD_NOT_CHECK = MARKERS["AGENT_LOOKUP_COULD_NOT_CHECK_MARKER"]
+
+
+def _the_one_marker(out: str) -> str:
+    """The marker line a stop printed: exactly one, alone on its line, and the operator's
+    message starts on the very next line."""
+    lines = out.splitlines()
+    marked = [line for line in lines if "ENTRABOT_RESULT=" in line]
+    assert len(marked) == 1, out
+    after = lines.index(marked[0]) + 1
+    assert after < len(lines) and lines[after].startswith("  ERROR: "), out
+    return marked[0]
+
+
+class TestStopsSayWhichOutcomeItWas:
+    def test_the_markers_are_the_lines_the_windows_wizard_matches(
+        self, agent_ids_module: ModuleType
+    ) -> None:
+        from entrabot.winsetup.helpers import RESULT_MARKER
+
+        for name, line in MARKERS.items():
+            assert getattr(agent_ids_module, name) == line
+            assert line.startswith(RESULT_MARKER)
+
+    @pytest.mark.parametrize(
+        ("recorded", "answers", "marker"),
+        [
+            (
+                {"BLUEPRINT_APP_ID": BLUEPRINT_OURS},
+                {_by_app_id(BLUEPRINT_OURS): _resp(200, {"value": []})},
+                BLUEPRINT_NOT_FOUND,
+            ),
+            (
+                {"BLUEPRINT_OBJECT_ID": OURS_OBJECT},
+                {f"/applications/{OURS_OBJECT}": _resp(404, {"error": {"code": "NotFound"}})},
+                BLUEPRINT_NOT_FOUND,
+            ),
+            # A recorded value that is not an ID can't name any Blueprint: same remedy as
+            # not found (give the right App ID), and waiting would not help.
+            ({"BLUEPRINT_APP_ID": "not-an-app-id"}, {}, BLUEPRINT_NOT_FOUND),
+            (
+                {"BLUEPRINT_APP_ID": BLUEPRINT_OURS},
+                {_by_app_id(BLUEPRINT_OURS): _resp(503, {})},
+                BLUEPRINT_COULD_NOT_CHECK,
+            ),
+            (
+                {"BLUEPRINT_APP_ID": BLUEPRINT_OURS},
+                {_by_app_id(BLUEPRINT_OURS): requests.exceptions.ReadTimeout("slow")},
+                BLUEPRINT_COULD_NOT_CHECK,
+            ),
+            (
+                {"BLUEPRINT_APP_ID": BLUEPRINT_OURS},
+                {_by_app_id(BLUEPRINT_OURS): _resp(200, {})},
+                BLUEPRINT_COULD_NOT_CHECK,
+            ),
+            (
+                {"BLUEPRINT_OBJECT_ID": OURS_OBJECT},
+                {f"/applications/{OURS_OBJECT}": _resp(503, {})},
+                BLUEPRINT_COULD_NOT_CHECK,
+            ),
+            ({}, {BY_NAME: _resp(500, {})}, BLUEPRINT_COULD_NOT_CHECK),
+            (
+                {},
+                {
+                    BY_NAME: _resp(
+                        200,
+                        {
+                            "value": [_blueprint(BLUEPRINT_OURS, OURS_OBJECT)],
+                            "@odata.nextLink": "https://graph.microsoft.com/beta/applications?x",
+                        },
+                    )
+                },
+                BLUEPRINT_COULD_NOT_CHECK,
+            ),
+            (
+                {},
+                {
+                    BY_NAME: _resp(
+                        200,
+                        {
+                            "value": [
+                                _blueprint(BLUEPRINT_OURS, OURS_OBJECT),
+                                _blueprint(BLUEPRINT_OTHER, OTHER_OBJECT),
+                            ]
+                        },
+                    )
+                },
+                BLUEPRINT_AMBIGUOUS,
+            ),
+        ],
+        ids=[
+            "app-id-not-found",
+            "object-id-not-found",
+            "not-an-id",
+            "app-id-503",
+            "app-id-timeout",
+            "app-id-unreadable",
+            "object-id-503",
+            "name-search-failed",
+            "name-search-paged",
+            "several-with-the-name",
+        ],
+    )
+    def test_every_blueprint_stop_prints_its_marker_once_right_before_the_message(
+        self,
+        lookup: Lookup,
+        capsys: pytest.CaptureFixture[str],
+        recorded: dict[str, str],
+        answers: dict[str, object],
+        marker: str,
+    ) -> None:
+        lookup.state.update(recorded)
+        for path, reply in answers.items():
+            lookup.answer(path, reply)
+
+        assert lookup.module.main() == 1
+
+        assert _the_one_marker(capsys.readouterr().out) == marker
+
+    def test_a_run_that_completes_prints_no_marker(
+        self, run: AgentRun, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        run.answer(_by_upn(AGENT_UPN), _resp(200, {"value": [_agent_user(OUR_AI_OBJECT)]}))
+        run.answer(
+            f"/servicePrincipals/{OUR_AI_OBJECT}",
+            _resp(200, _identity(OUR_AI_OBJECT, OUR_AI_APP, BLUEPRINT_OURS)),
+        )
+
+        assert run.module.main() == 0
+
+        assert "ENTRABOT_RESULT=" not in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Which Agent Identity and Agent User a run is for
+# ---------------------------------------------------------------------------
+
+AGENT_UPN = "entrabot-agent-sati@contoso.onmicrosoft.com"
+OUR_AI_OBJECT = "cccccccc-0000-4000-8000-00000000000c"
+OUR_AI_APP = "cccccccc-1111-4000-8000-00000000000c"
+THEIR_AI_OBJECT = "dddddddd-0000-4000-8000-00000000000d"
+THEIR_AI_APP = "dddddddd-1111-4000-8000-00000000000d"
+AGENT_USER_OBJECT = "eeeeeeee-0000-4000-8000-00000000000e"
+NEW_AI_OBJECT = "ffffffff-0000-4000-8000-00000000000f"
+NEW_AI_APP = "ffffffff-1111-4000-8000-00000000000f"
+NEW_USER_OBJECT = "abababab-0000-4000-8000-0000000000ab"
+CREATE_IDENTITY = "/servicePrincipals/microsoft.graph.agentIdentity"
+CREATE_PRINCIPAL = "/servicePrincipals/microsoft.graph.agentIdentityBlueprintPrincipal"
+CREATE_USER = "/users"
+GRANTS = (
+    "grant_agent_identity_app_permissions",
+    "grant_agent_user_consent",
+    "grant_agent_user_storage_consent",
+    "assign_license_to_agent_user",
+)
+
+
+def _by_upn(upn: str) -> str:
+    return (
+        f"/users?$filter=userPrincipalName eq '{upn}'"
+        "&$select=id,userPrincipalName,displayName,identityParentId,mailNickname,accountEnabled"
+    )
+
+
+def _identity_named(name: str) -> str:
+    return f"/servicePrincipals?$filter=displayName eq '{name}'"
+
+
+def _users_of(identity_object_id: str) -> str:
+    return f"/users?$filter=identityParentId eq '{identity_object_id}'"
+
+
+def _agent_user(parent: str | None = THEIR_AI_OBJECT) -> dict:
+    user = {"id": AGENT_USER_OBJECT, "userPrincipalName": AGENT_UPN, "displayName": "EntraBot"}
+    if parent is not None:
+        user["identityParentId"] = parent
+    return user
+
+
+def _identity(object_id: str, app_id: str, blueprint: str) -> dict:
+    return {
+        "@odata.type": "#microsoft.graph.agentIdentity",
+        "id": object_id,
+        "appId": app_id,
+        "displayName": DISPLAY_NAME,
+        "agentIdentityBlueprintId": blueprint,
+        "servicePrincipalType": "ServiceIdentity",
+    }
+
+
+@dataclass
+class AgentRun:
+    lookup: Lookup
+    granted: list[tuple[str, ...]]
+
+    @property
+    def module(self) -> ModuleType:
+        return self.lookup.module
+
+    @property
+    def state(self) -> dict[str, str]:
+        return self.lookup.state
+
+    @property
+    def graph(self) -> FakeGraph:
+        return self.lookup.graph
+
+    def answer(self, path: str, reply: object, *, method: str = "GET") -> None:
+        self.lookup.answer(path, reply, method=method)
+
+
+def _agent_world(lookup: Lookup, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
+    """What main() needs past the Blueprint, with nothing real behind it. The grants and the
+    licence are recorded, not made (they would call Graph directly), and the Agent User's
+    sign-in name is set here: importing the script loads this checkout's .env, which may name
+    a real one."""
+    granted: list[tuple[str, ...]] = []
+
+    def recorder(name: str) -> object:
+        def record(_token: str, *args: str, **_kwargs: object) -> None:
+            granted.append((name, *args))
+
+        return record
+
+    for name in GRANTS:
+        monkeypatch.setattr(lookup.module, name, recorder(name))
+    monkeypatch.setattr(lookup.module, "_agent_display_name", lambda: DISPLAY_NAME)
+    monkeypatch.setattr(lookup.module, "time", SimpleNamespace(sleep=lambda _seconds: None))
+    monkeypatch.setenv("ENTRABOT_AGENT_USER_UPN", AGENT_UPN)
+    monkeypatch.delenv("_ENTRABOT_UPN_SUFFIX", raising=False)
+    return granted
+
+
+@pytest.fixture
+def run(lookup: Lookup, monkeypatch: pytest.MonkeyPatch) -> AgentRun:
+    """main() on a machine joining Blueprint OURS, as setup.sh --use-blueprint leaves it: that
+    App ID recorded, and an Agent User sign-in name in the environment."""
+    granted = _agent_world(lookup, monkeypatch)
+    lookup.state["BLUEPRINT_APP_ID"] = BLUEPRINT_OURS
+    lookup.answer(
+        _by_app_id(BLUEPRINT_OURS),
+        _resp(200, {"value": [_blueprint(BLUEPRINT_OURS, OURS_OBJECT)]}),
+    )
+    lookup.answer(_principal(BLUEPRINT_OURS), _resp(200, {"value": [{"id": "bp-sp"}]}))
+    return AgentRun(lookup, granted)
+
+
+class TestAnAgentUserFoundByItsSignInName:
+    """The defect: an Agent User found by its sign-in name was reused, with its parent Agent
+    Identity, whatever Blueprint they belong to. setup.sh --use-blueprint=X keeps the previous
+    agent's ENTRABOT_AGENT_USER_UPN in .env, and the script loads .env, so joining Blueprint X
+    on a machine set up for another agent took that agent's Agent Identity and Agent User,
+    granted consents, an app role and a licence on them, and recorded them next to X."""
+
+    def test_one_of_another_blueprint_stops_the_run_before_anything_is_granted_or_recorded(
+        self, run: AgentRun, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        run.answer(_by_upn(AGENT_UPN), _resp(200, {"value": [_agent_user(THEIR_AI_OBJECT)]}))
+        run.answer(
+            f"/servicePrincipals/{THEIR_AI_OBJECT}",
+            _resp(200, _identity(THEIR_AI_OBJECT, THEIR_AI_APP, BLUEPRINT_OTHER)),
+        )
+        before = dict(run.state)
+
+        assert run.module.main() == 1
+
+        out = capsys.readouterr().out
+        assert _the_one_marker(out) == WRONG_BLUEPRINT
+        message = out[out.index(WRONG_BLUEPRINT) :]
+        # Names the Agent User, the Blueprint it belongs to and the one asked for ...
+        assert AGENT_UPN in message
+        assert BLUEPRINT_OTHER in message and BLUEPRINT_OURS in message
+        assert "Nothing was created or changed" in message
+        # ... and both ways on: join that Blueprint, or give this agent another name.
+        assert f"--use-blueprint={BLUEPRINT_OTHER}" in message
+        assert f"-UseBlueprint {BLUEPRINT_OTHER}" in message
+        assert "--with-upn-suffix=NAME" in message and "-UpnSuffix NAME" in message
+        assert run.granted == []
+        assert run.graph.writes == []
+        assert run.state == before  # not even this run's own Blueprint object ID
+
+    @pytest.mark.parametrize(
+        "blueprint_as_graph_has_it",
+        [BLUEPRINT_OURS, BLUEPRINT_OURS.upper()],
+        ids=["same", "other-letter-case"],
+    )
+    def test_one_of_this_blueprint_is_reused_as_before(
+        self,
+        run: AgentRun,
+        capsys: pytest.CaptureFixture[str],
+        blueprint_as_graph_has_it: str,
+    ) -> None:
+        run.answer(_by_upn(AGENT_UPN), _resp(200, {"value": [_agent_user(OUR_AI_OBJECT)]}))
+        run.answer(
+            f"/servicePrincipals/{OUR_AI_OBJECT}",
+            _resp(200, _identity(OUR_AI_OBJECT, OUR_AI_APP, blueprint_as_graph_has_it)),
+        )
+
+        assert run.module.main() == 0
+
+        assert run.state == {
+            "BLUEPRINT_APP_ID": BLUEPRINT_OURS,
+            "BLUEPRINT_OBJECT_ID": OURS_OBJECT,
+            "AGENT_ID": OUR_AI_APP,
+            "AGENT_OBJECT_ID": OUR_AI_OBJECT,
+            "AGENT_USER_ID": AGENT_USER_OBJECT,
+            "AGENT_USER_UPN": AGENT_UPN,
+        }
+        assert run.granted == [
+            ("grant_agent_identity_app_permissions", OUR_AI_OBJECT),
+            ("grant_agent_user_consent", OUR_AI_OBJECT, AGENT_USER_OBJECT),
+            ("grant_agent_user_storage_consent", OUR_AI_OBJECT, AGENT_USER_OBJECT),
+            ("assign_license_to_agent_user", AGENT_USER_OBJECT),
+        ]
+        assert run.graph.writes == []  # the chain exists: nothing is created
+        assert "Reusing existing Agent User" in capsys.readouterr().out
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            _resp(503, {}),
+            _resp(403, {"error": {"code": "Authorization_RequestDenied"}}),
+            requests.exceptions.ReadTimeout("read timed out"),
+            _not_json(200),
+            # The Agent Identity is there, but which Blueprint it belongs to is not.
+            _resp(200, {"id": THEIR_AI_OBJECT, "appId": THEIR_AI_APP, "displayName": "x"}),
+            _resp(
+                200, {"id": THEIR_AI_OBJECT, "appId": THEIR_AI_APP, "agentIdentityBlueprintId": ""}
+            ),
+            # This run's Blueprint, but no App ID to record as the agent's.
+            _resp(200, {"id": THEIR_AI_OBJECT, "agentIdentityBlueprintId": BLUEPRINT_OURS}),
+            # Gone, or not listed yet: either way it says nothing about which Blueprint.
+            _resp(404, {"error": {"code": "Request_ResourceNotFound"}}),
+        ],
+        ids=[
+            "503",
+            "forbidden",
+            "timeout",
+            "not-json",
+            "no-blueprint-property",
+            "empty-blueprint-property",
+            "no-app-id",
+            "parent-404",
+        ],
+    )
+    def test_one_whose_blueprint_cannot_be_read_stops_as_could_not_check(
+        self, run: AgentRun, capsys: pytest.CaptureFixture[str], reply: object
+    ) -> None:
+        run.answer(_by_upn(AGENT_UPN), _resp(200, {"value": [_agent_user(THEIR_AI_OBJECT)]}))
+        run.answer(f"/servicePrincipals/{THEIR_AI_OBJECT}", reply)
+        before = dict(run.state)
+
+        assert run.module.main() == 1
+
+        out = capsys.readouterr().out
+        assert _the_one_marker(out) == AGENT_COULD_NOT_CHECK
+        assert f"Could not check which Blueprint the Agent User {AGENT_UPN} belongs to" in out
+        assert run.granted == []
+        assert run.graph.writes == []
+        assert run.state == before
+
+    @pytest.mark.parametrize(
+        "user",
+        [_agent_user(parent=None), {**_agent_user(), "identityParentId": "not-an-object-id"}],
+        ids=["no-parent", "parent-not-an-id"],
+    )
+    def test_one_that_names_no_agent_identity_stops_as_could_not_check(
+        self, run: AgentRun, capsys: pytest.CaptureFixture[str], user: dict
+    ) -> None:
+        # An ordinary account can hold the name too. Nothing is asked about a parent it does
+        # not name: an unexpected call fails the test.
+        run.answer(_by_upn(AGENT_UPN), _resp(200, {"value": [user]}))
+
+        assert run.module.main() == 1
+
+        out = capsys.readouterr().out
+        assert _the_one_marker(out) == AGENT_COULD_NOT_CHECK
+        assert f"Could not check which Blueprint the Agent User {AGENT_UPN} belongs to" in out
+        assert run.granted == [] and run.graph.writes == []
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            _resp(503, {}),
+            _resp(429, {"error": {"code": "TooManyRequests"}}),
+            _resp(403, {"error": {"code": "Authorization_RequestDenied"}}),
+            requests.exceptions.ConnectionError("no route to host"),
+            _not_json(200),
+            _resp(200, {"unexpected": "shape"}),
+            _resp(200, {"value": [{"userPrincipalName": AGENT_UPN}]}),  # no object ID
+        ],
+        ids=["503", "throttled", "forbidden", "network", "not-json", "no-value-list", "no-id"],
+    )
+    def test_a_search_by_sign_in_name_that_fails_stops_before_anything_is_created(
+        self, run: AgentRun, capsys: pytest.CaptureFixture[str], reply: object
+    ) -> None:
+        # The old code read a failure here as "no such user", went on to create a second
+        # Agent Identity, and then collided on the name.
+        run.answer(_by_upn(AGENT_UPN), reply)
+        before = dict(run.state)
+
+        assert run.module.main() == 1
+
+        out = capsys.readouterr().out
+        assert _the_one_marker(out) == AGENT_COULD_NOT_CHECK
+        assert f"Could not check whether an Agent User named {AGENT_UPN} exists" in out
+        assert "does not exist" not in out  # "could not check" is not "not found"
+        assert run.graph.calls == [("GET", _by_app_id(BLUEPRINT_OURS)), ("GET", _by_upn(AGENT_UPN))]
+        assert run.granted == []
+        assert run.state == before
+
+    def test_with_none_of_that_name_the_agent_identity_and_user_are_created(
+        self, run: AgentRun, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        run.answer(_by_upn(AGENT_UPN), _resp(200, {"value": []}))
+        # This host's Agent Identity under another Blueprint has the same name: not ours.
+        run.answer(
+            _identity_named(DISPLAY_NAME),
+            _resp(200, {"value": [_identity(THEIR_AI_OBJECT, THEIR_AI_APP, BLUEPRINT_OTHER)]}),
+        )
+        run.answer(
+            CREATE_IDENTITY, _resp(201, {"appId": NEW_AI_APP, "id": NEW_AI_OBJECT}), method="POST"
+        )
+        run.answer(_users_of(NEW_AI_OBJECT), _resp(200, {"value": []}))
+        run.answer(
+            CREATE_USER,
+            _resp(201, {"id": NEW_USER_OBJECT, "userPrincipalName": AGENT_UPN}),
+            method="POST",
+        )
+
+        assert run.module.main() == 0
+
+        assert run.graph.writes == [("POST", CREATE_IDENTITY), ("POST", CREATE_USER)]
+        assert run.state["AGENT_OBJECT_ID"] == NEW_AI_OBJECT
+        assert run.state["AGENT_USER_ID"] == NEW_USER_OBJECT
+        assert ("grant_agent_user_consent", NEW_AI_OBJECT, NEW_USER_OBJECT) in run.granted
+        assert "ENTRABOT_RESULT=" not in capsys.readouterr().out
+
+
+def _identity_search_fails(run: AgentRun) -> None:
+    run.answer(_by_upn(AGENT_UPN), _resp(200, {"value": []}))
+    run.answer(_identity_named(DISPLAY_NAME), _resp(503, {}))
+
+
+def _recorded_identity_cannot_be_checked(run: AgentRun) -> None:
+    run.state["AGENT_ID"] = OUR_AI_APP
+    run.answer(_by_upn(AGENT_UPN), _resp(200, {"value": []}))
+    run.answer(_principal(OUR_AI_APP), requests.exceptions.ReadTimeout("slow"))
+
+
+def _user_search_fails(run: AgentRun) -> None:
+    run.answer(_by_upn(AGENT_UPN), _resp(200, {"value": []}))
+    run.answer(
+        _identity_named(DISPLAY_NAME),
+        _resp(200, {"value": [_identity(OUR_AI_OBJECT, OUR_AI_APP, BLUEPRINT_OURS)]}),
+    )
+    run.answer(_users_of(OUR_AI_OBJECT), _resp(400, {"error": {"code": "BadRequest"}}))
+
+
+def _recorded_user_cannot_be_checked(run: AgentRun) -> None:
+    run.state["AGENT_USER_ID"] = AGENT_USER_OBJECT
+    run.answer(_by_upn(AGENT_UPN), _resp(200, {"value": []}))
+    run.answer(
+        _identity_named(DISPLAY_NAME),
+        _resp(200, {"value": [_identity(OUR_AI_OBJECT, OUR_AI_APP, BLUEPRINT_OURS)]}),
+    )
+    run.answer(f"/users/{AGENT_USER_OBJECT}", _resp(503, {}))
+
+
+class TestLookupsThatFailNeverReadAsNone:
+    """The defect: find_existing_agent_identity and find_existing_agent_user took a failed
+    Graph call for "there is none", and the run went on to create a second Agent Identity for
+    this machine, or an Agent User that then collided."""
+
+    @pytest.mark.parametrize(
+        "setup",
+        [
+            _identity_search_fails,
+            _recorded_identity_cannot_be_checked,
+            _user_search_fails,
+            _recorded_user_cannot_be_checked,
+        ],
+        ids=["identity-by-name", "recorded-identity", "user-by-identity", "recorded-user"],
+    )
+    def test_each_stops_before_anything_is_created_with_one_marker(
+        self, run: AgentRun, capsys: pytest.CaptureFixture[str], setup: object
+    ) -> None:
+        setup(run)  # type: ignore[operator]
+
+        assert run.module.main() == 1
+
+        out = capsys.readouterr().out
+        assert _the_one_marker(out) == AGENT_COULD_NOT_CHECK
+        assert "Could not check" in out
+        assert run.graph.writes == []
+        assert run.granted == []
+        assert "AGENT_USER_UPN" not in run.state
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            _resp(503, {}),
+            requests.exceptions.ReadTimeout("slow"),
+            _not_json(200),
+            _resp(200, {"unexpected": "shape"}),
+            # A match with no IDs could not be recorded.
+            _resp(
+                200,
+                {
+                    "value": [
+                        {"displayName": DISPLAY_NAME, "agentIdentityBlueprintId": BLUEPRINT_OURS}
+                    ]
+                },
+            ),
+            # Only a whole list says there is none.
+            _resp(
+                200,
+                {
+                    "value": [_identity(THEIR_AI_OBJECT, THEIR_AI_APP, BLUEPRINT_OTHER)],
+                    "@odata.nextLink": "https://graph.microsoft.com/beta/servicePrincipals?x",
+                },
+            ),
+        ],
+        ids=["503", "timeout", "not-json", "no-value-list", "no-ids", "more-pages"],
+    )
+    def test_an_agent_identity_search_that_fails_raises_instead_of_returning_none(
+        self, lookup: Lookup, reply: object
+    ) -> None:
+        lookup.answer(_identity_named(DISPLAY_NAME), reply)
+
+        with pytest.raises(lookup.module.AgentLookupError) as stopped:
+            lookup.module.find_existing_agent_identity("tok", DISPLAY_NAME, BLUEPRINT_OURS)
+
+        assert stopped.value.marker == AGENT_COULD_NOT_CHECK
+        message = str(stopped.value)
+        assert "Could not check whether this machine already has an Agent Identity" in message
+        assert BLUEPRINT_OURS in message
+
+    def test_a_recorded_agent_identity_that_could_not_be_checked_is_not_searched_past(
+        self, lookup: Lookup
+    ) -> None:
+        lookup.answer(_principal(OUR_AI_APP), _resp(503, {}))
+        lookup.answer(_identity_named(DISPLAY_NAME), _resp(200, {"value": []}))
+
+        with pytest.raises(lookup.module.AgentLookupError) as stopped:
+            lookup.module.find_existing_agent_identity(
+                "tok", DISPLAY_NAME, BLUEPRINT_OURS, stored_app_id=OUR_AI_APP
+            )
+
+        assert OUR_AI_APP in str(stopped.value)
+        assert lookup.graph.calls == [("GET", _principal(OUR_AI_APP))]
+
+    def test_a_recorded_agent_identity_graph_says_is_gone_is_looked_for_by_name(
+        self, lookup: Lookup
+    ) -> None:
+        lookup.answer(_principal(OUR_AI_APP), _resp(200, {"value": []}))
+        lookup.answer(
+            _identity_named(DISPLAY_NAME),
+            _resp(200, {"value": [_identity(NEW_AI_OBJECT, NEW_AI_APP, BLUEPRINT_OURS)]}),
+        )
+
+        found = lookup.module.find_existing_agent_identity(
+            "tok", DISPLAY_NAME, BLUEPRINT_OURS, stored_app_id=OUR_AI_APP
+        )
+
+        assert found is not None and found["id"] == NEW_AI_OBJECT
+
+    def test_creating_an_agent_identity_stops_before_the_post(
+        self, lookup: Lookup, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(lookup.module, "_agent_display_name", lambda: DISPLAY_NAME)
+        lookup.answer(_identity_named(DISPLAY_NAME), _resp(503, {}))
+
+        with pytest.raises(lookup.module.AgentLookupError):
+            lookup.module.create_agent_identity("tok", BLUEPRINT_OURS)
+
+        assert lookup.graph.writes == []
+        assert lookup.state == {}
+
+    @pytest.mark.parametrize(
+        "reply",
+        [_resp(503, {}), requests.exceptions.ReadTimeout("slow"), _not_json(200)],
+        ids=["503", "timeout", "not-json"],
+    )
+    def test_a_recorded_agent_user_that_could_not_be_checked_raises(
+        self, lookup: Lookup, reply: object
+    ) -> None:
+        lookup.state["AGENT_USER_ID"] = AGENT_USER_OBJECT
+        lookup.answer(f"/users/{AGENT_USER_OBJECT}", reply)
+        lookup.answer(_users_of(OUR_AI_OBJECT), _resp(200, {"value": []}))
+
+        with pytest.raises(lookup.module.AgentLookupError) as stopped:
+            lookup.module.find_existing_agent_user("tok", OUR_AI_OBJECT)
+
+        assert stopped.value.marker == AGENT_COULD_NOT_CHECK
+        assert AGENT_USER_OBJECT in str(stopped.value)
+        assert lookup.graph.calls == [("GET", f"/users/{AGENT_USER_OBJECT}")]
+
+    def test_a_recorded_agent_user_graph_says_is_gone_is_looked_for_by_its_agent_identity(
+        self, lookup: Lookup, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        lookup.state["AGENT_USER_ID"] = AGENT_USER_OBJECT
+        lookup.answer(f"/users/{AGENT_USER_OBJECT}", _resp(404, {"error": {"code": "NotFound"}}))
+        lookup.answer(_users_of(OUR_AI_OBJECT), _resp(200, {"value": []}))
+
+        assert lookup.module.find_existing_agent_user("tok", OUR_AI_OBJECT) is None
+        assert "Stored AGENT_USER_ID not found" in capsys.readouterr().out
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            _resp(503, {}),
+            _resp(400, {"error": {"code": "Request_UnsupportedQuery"}}),
+            requests.exceptions.ConnectionError("down"),
+            _not_json(200),
+            _resp(200, {"value": [{"userPrincipalName": AGENT_UPN}]}),  # no object ID
+        ],
+        ids=["503", "unsupported-query", "network", "not-json", "no-id"],
+    )
+    def test_an_agent_user_search_that_fails_raises_instead_of_returning_none(
+        self, lookup: Lookup, reply: object
+    ) -> None:
+        lookup.answer(_users_of(OUR_AI_OBJECT), reply)
+
+        with pytest.raises(lookup.module.AgentLookupError) as stopped:
+            lookup.module.find_existing_agent_user("tok", OUR_AI_OBJECT)
+
+        assert stopped.value.marker == AGENT_COULD_NOT_CHECK
+        assert (
+            f"Could not check whether Agent Identity {OUR_AI_OBJECT} already has an Agent User"
+            in str(stopped.value)
+        )
+
+    def test_creating_an_agent_user_stops_before_the_post(
+        self, lookup: Lookup, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ENTRABOT_AGENT_USER_UPN", AGENT_UPN)
+        monkeypatch.delenv("_ENTRABOT_UPN_SUFFIX", raising=False)
+        lookup.answer(_users_of(OUR_AI_OBJECT), _resp(503, {}))
+
+        with pytest.raises(lookup.module.AgentLookupError):
+            lookup.module.create_agent_user("tok", OUR_AI_OBJECT)
+
+        assert lookup.graph.writes == []
+        assert lookup.state == {}
+
+    def test_an_agent_user_search_that_finds_none_is_none(self, lookup: Lookup) -> None:
+        lookup.answer(_users_of(OUR_AI_OBJECT), _resp(200, {"value": []}))
+
+        assert lookup.module.find_existing_agent_user("tok", OUR_AI_OBJECT) is None
+
+    def test_the_sign_in_name_matches_in_any_letter_case(self, lookup: Lookup) -> None:
+        lookup.answer(_by_upn(AGENT_UPN.upper()), _resp(200, {"value": [_agent_user()]}))
+
+        found = lookup.module.find_existing_agent_user_by_upn("tok", AGENT_UPN.upper())
+
+        assert found is not None and found["id"] == AGENT_USER_OBJECT
+
+    def test_no_user_with_the_sign_in_name_is_none(self, lookup: Lookup) -> None:
+        lookup.answer(_by_upn(AGENT_UPN), _resp(200, {"value": []}))
+
+        assert lookup.module.find_existing_agent_user_by_upn("tok", AGENT_UPN) is None
+
+
+class TestANewChainLooksNothingUp:
+    def test_everything_is_created_with_no_lookup_and_no_stop(
+        self,
+        lookup: Lookup,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        granted = _agent_world(lookup, monkeypatch)
+        monkeypatch.setattr(lookup.module, "_FORCE_NEW", True)
+        # What the previous agent left recorded: none of it is looked up.
+        lookup.state.update(
+            BLUEPRINT_APP_ID=BLUEPRINT_OTHER,
+            AGENT_ID=THEIR_AI_APP,
+            AGENT_USER_ID=AGENT_USER_OBJECT,
+        )
+        lookup.answer(
+            CREATE_BLUEPRINT, _resp(201, _blueprint(BLUEPRINT_OURS, OURS_OBJECT)), method="POST"
+        )
+        lookup.answer(_principal(BLUEPRINT_OURS), _resp(200, {"value": []}))
+        lookup.answer(CREATE_PRINCIPAL, _resp(201, {"id": "bp-sp"}), method="POST")
+        lookup.answer(
+            CREATE_IDENTITY, _resp(201, {"appId": NEW_AI_APP, "id": NEW_AI_OBJECT}), method="POST"
+        )
+        lookup.answer(
+            CREATE_USER,
+            _resp(201, {"id": NEW_USER_OBJECT, "userPrincipalName": AGENT_UPN}),
+            method="POST",
+        )
+
+        assert lookup.module.main() == 0
+
+        # The one read is the BlueprintPrincipal check that follows creating the Blueprint.
+        assert [call for call in lookup.graph.calls if call[0] == "GET"] == [
+            ("GET", _principal(BLUEPRINT_OURS))
+        ]
+        assert lookup.graph.writes == [
+            ("POST", CREATE_BLUEPRINT),
+            ("POST", CREATE_PRINCIPAL),
+            ("POST", CREATE_IDENTITY),
+            ("POST", CREATE_USER),
+        ]
+        assert ("assign_license_to_agent_user", NEW_USER_OBJECT) in granted
+        assert "ENTRABOT_RESULT=" not in capsys.readouterr().out

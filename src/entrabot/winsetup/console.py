@@ -68,6 +68,17 @@ class RunResult(subprocess.CompletedProcess[str]):
 # A launcher starts the process, feeds each output line to a callback, and returns the exit code.
 Spawn = Callable[[RunRequest, Callable[[str], None], Callable[[str], None]], int]
 
+# How a helper says how it ended: a line of its own that starts with this (helpers.RESULT_MARKER,
+# which is spelled out here because helpers imports this module; a test keeps the two equal).
+# The wizard reads it from the result. It is never shown on screen; the log keeps it.
+RESULT_LINE = "ENTRABOT_RESULT="
+
+
+def _for_people(line: str) -> bool:
+    """Is *line* something a person should see, rather than a result line for the wizard?"""
+    return not line.startswith(RESULT_LINE)
+
+
 _JWT = re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")
 _SHA1_HEX = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{40}(?![0-9A-Fa-f])")
 _SHA256_HEX = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{64}(?![0-9A-Fa-f])")
@@ -560,12 +571,12 @@ class Console:
             if sensitive:
                 return
             all_lines.append(line)
-            self._line(f"     {line}", "dim", show=not (capture or hidden))
+            self._line(f"     {line}", "dim", show=not (capture or hidden) and _for_people(line))
 
         def on_stderr(line: str) -> None:
             stderr_lines.append(line)
             all_lines.append(line)
-            self._line(f"     {line}", "dim", show=not hidden)
+            self._line(f"     {line}", "dim", show=not hidden and _for_people(line))
 
         def on_idle(elapsed: float) -> None:
             minutes, seconds = divmod(int(elapsed), 60)
@@ -588,10 +599,12 @@ class Console:
 
     def show_tail(self, result: subprocess.CompletedProcess[str], *, lines: int = 25) -> None:
         """After a failed child: put the end of what it printed on screen, and say where the
-        rest is. Nothing is repeated when the stream was on screen already."""
+        rest is. Nothing is repeated when the stream was on screen already. Result lines are
+        left out before the tail is cut, so they never take the place of a line worth reading."""
         output = getattr(result, "output", "") or (result.stdout or "") + (result.stderr or "")
         if not getattr(result, "shown", False):
-            for line in [item for item in output.splitlines() if item.strip()][-lines:]:
+            readable = [item for item in output.splitlines() if item.strip() and _for_people(item)]
+            for line in readable[-lines:]:
                 self._line(f"     {line}", "dim", log=False)  # the log has it already
         if self.log_file is not None:
             self._line(f"     The full output is in the setup log: {self.log_file}", "dim")

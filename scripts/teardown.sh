@@ -4,7 +4,8 @@
 #   1. Agent User (must go first — child of Agent Identity)
 #   2. Agent Identity (service principal)
 #   3. Blueprint (app registration — also deletes BlueprintPrincipal)
-#   4. Provisioner app registration
+#   4. Provisioner app registration: the one recorded for this machine in
+#      .entrabot-state.json, by its application ID, never one found by name
 #   5. Local state (.env, .entrabot-state.json, legacy keychain)
 set -euo pipefail
 
@@ -117,6 +118,34 @@ AGENT_OBJECT_ID="${ENTRABOT_AGENT_OBJECT_ID:-$(_read_state AGENT_OBJECT_ID)}"
 BLUEPRINT_APP_ID="${ENTRABOT_BLUEPRINT_APP_ID:-$(_read_state BLUEPRINT_APP_ID)}"
 BLUEPRINT_OBJECT_ID="${ENTRABOT_BLUEPRINT_OBJECT_ID:-$(_read_state BLUEPRINT_OBJECT_ID)}"
 
+# The Provisioner app setup created or took over for this machine, by the application ID recorded
+# in .entrabot-state.json. It is the only app teardown deletes. Display names are not unique (anyone
+# who may register applications can give an app the Provisioner's), so an app found by name may be
+# somebody else's, and a Provisioner holds tenant-wide Microsoft Graph permissions.
+PROV_APP_ID="$(_read_state PROVISIONER_CLIENT_ID)"
+PROV_APP_ID_NOT_AN_ID=""
+if [ -n "$PROV_APP_ID" ] && ! [[ "$PROV_APP_ID" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]; then
+    # az ad app delete --id also takes an identifier URI: hand it nothing but an application ID.
+    PROV_APP_ID_NOT_AN_ID="$PROV_APP_ID"
+    PROV_APP_ID=""
+fi
+
+# When no recorded Provisioner app is to be deleted: say so, and how to delete one by hand.
+no_recorded_provisioner() {
+    if [ -n "$PROV_APP_ID_NOT_AN_ID" ]; then
+        echo -e "  ${YELLOW}⚠️  PROVISIONER_CLIENT_ID in .entrabot-state.json is not an application ID, so no Provisioner app is deleted.${NC}"
+        printf '     It is: %s\n' "$PROV_APP_ID_NOT_AN_ID"
+    else
+        echo -e "  ${YELLOW}⚠️  No Provisioner app is recorded for this machine in .entrabot-state.json, so none is deleted.${NC}"
+    fi
+    echo "     Teardown never deletes an app found by its name: another app can have the same name."
+    echo "     To delete this machine's Provisioner app yourself, find its application ID in the Entra"
+    echo "     admin center (App registrations > All applications: 'EntraBot Agent ID Provisioner', or"
+    echo "     'EntraBot Provisioner' from older setups), check that it is the one setup created for"
+    echo "     this machine, then run:"
+    echo "       az ad app delete --id <PROVISIONER_APP_ID>"
+}
+
 # Check if there's anything to do
 HAS_ENTRA_RESOURCES=false
 HAS_LOCAL_STATE=false
@@ -127,21 +156,15 @@ fi
 if [ -f .env ] || [ -f .entrabot-state.json ]; then
     HAS_LOCAL_STATE=true
 fi
-
-# Check for provisioner apps in Entra (only if logged in)
-PROV_FOUND=false
-if az account show &>/dev/null; then
-    for PROV_NAME in "EntraBot Provisioner" "EntraBot Agent ID Provisioner"; do
-        PROV_CHECK=$(az ad app list --display-name "$PROV_NAME" --query "[0].id" -o tsv) || true
-        if [ -n "$PROV_CHECK" ]; then
-            PROV_FOUND=true
-            HAS_ENTRA_RESOURCES=true
-        fi
-    done
+if [ -n "$PROV_APP_ID" ]; then
+    HAS_ENTRA_RESOURCES=true
 fi
 
 if [ "$HAS_ENTRA_RESOURCES" = false ] && [ "$HAS_LOCAL_STATE" = false ]; then
     echo -e "${GREEN}Nothing to clean up.${NC} No Entra resources or local state found."
+    if [ "$PRESERVE_PROVISIONER" = false ]; then
+        no_recorded_provisioner
+    fi
     exit 0
 fi
 
@@ -159,13 +182,18 @@ if [ "$HAS_ENTRA_RESOURCES" = true ]; then
     [ -n "$AGENT_USER_ID" ]    && echo "    Agent User:     $AGENT_USER_ID"
     [ -n "$AGENT_OBJECT_ID" ]  && echo "    Agent Identity: $AGENT_OBJECT_ID"
     [ -n "$BLUEPRINT_APP_ID" ] && echo "    Blueprint:      $BLUEPRINT_APP_ID"
-    [ "$PROV_FOUND" = true ]   && echo "    Provisioner:    (found by name)"
+    if [ -n "$PROV_APP_ID" ] && [ "$PRESERVE_PROVISIONER" = false ]; then
+        echo "    Provisioner:    $PROV_APP_ID (recorded in .entrabot-state.json)"
+    fi
 fi
 if [ "$HAS_LOCAL_STATE" = true ]; then
     echo "  Local state:"
     [ -f .env ]                  && echo "    .env"
     [ -f .entrabot-state.json ]  && echo "    .entrabot-state.json"
     [ "$PRESERVE_LOCAL_STATE" = true ] && echo "    (preserved by --preserve-local-state)"
+fi
+if [ -z "$PROV_APP_ID" ] && [ "$PRESERVE_PROVISIONER" = false ]; then
+    echo "  Provisioner app: no application ID recorded for this machine, so none will be deleted (see below)"
 fi
 echo "  Cloud storage: not deleted by teardown.sh"
 [ "$PRESERVE_PROVISIONER" = true ] && echo "  Provisioner app: preserved by --preserve-provisioner"
@@ -313,23 +341,25 @@ else
 fi
 
 # ── 4. Delete Provisioner app LAST (needed it for steps 2-3) ─────────────
+# Only the one recorded for this machine (PROV_APP_ID above), by its application ID.
 # Provisioner is a regular app — az CLI works fine here
 
-for PROV_NAME in "EntraBot Provisioner" "EntraBot Agent ID Provisioner"; do
-    if [ "$PRESERVE_PROVISIONER" = true ]; then
-        echo -e "  ${YELLOW}⚠️  Preserving Provisioner app ($PROV_NAME)${NC}"
-        continue
+if [ "$PRESERVE_PROVISIONER" = true ]; then
+    if [ -n "$PROV_APP_ID" ]; then
+        echo -e "  ${YELLOW}⚠️  Preserving Provisioner app ($PROV_APP_ID)${NC}"
+    else
+        echo -e "  ${YELLOW}⚠️  Preserving Provisioner app${NC}"
     fi
-    PROV_OBJ=$(az ad app list --display-name "$PROV_NAME" \
-        --query "[0].id" -o tsv 2>/dev/null) || true
-    if [ -n "$PROV_OBJ" ]; then
-        if az ad app delete --id "$PROV_OBJ" 2>/dev/null; then
-            echo -e "  ${GREEN}✅ Deleted Provisioner app ($PROV_NAME)${NC}"
-        else
-            echo -e "  ${YELLOW}⚠️  Could not delete Provisioner app ($PROV_NAME)${NC}"
-        fi
+elif [ -n "$PROV_APP_ID" ]; then
+    if az ad app delete --id "$PROV_APP_ID"; then
+        echo -e "  ${GREEN}✅ Deleted Provisioner app ($PROV_APP_ID)${NC}"
+    else
+        echo -e "  ${YELLOW}⚠️  Could not delete Provisioner app ($PROV_APP_ID): see the az error above${NC}"
+        echo "     Once that is fixed, delete it with: az ad app delete --id $PROV_APP_ID"
     fi
-done
+else
+    no_recorded_provisioner
+fi
 
 # ── 5. Clean up local state ───────────────────────────────────────────────
 

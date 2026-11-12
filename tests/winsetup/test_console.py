@@ -406,6 +406,97 @@ class TestSummaryOutput:
         assert thumbprint not in out.getvalue() and "...CAFE" in out.getvalue()
 
 
+class TestResultMarkers:
+    """A helper says how it ended with a line of its own, ``ENTRABOT_RESULT=<what>``. That line
+    is for the wizard, which reads it from the result; people never need to see it. The setup
+    log keeps it, as it keeps everything a helper prints."""
+
+    MARKER = "ENTRABOT_RESULT=provisioner-could-not-check"
+
+    def _console(self, tmp_path: Path, reply: Reply) -> tuple[Console, io.StringIO, Path]:
+        spawn = FakeSpawn()
+        spawn.default = reply
+        out = io.StringIO()
+        log = tmp_path / "setup.log"
+        console = Console(
+            stdin=io.StringIO(), stdout=out, spawn=spawn, color=False, unicode=False, log_file=log
+        )
+        return console, out, log
+
+    def test_the_marker_is_the_one_the_helpers_print(self) -> None:
+        from entrabot.winsetup import console as console_module
+        from entrabot.winsetup.helpers import RESULT_MARKER
+
+        assert console_module.RESULT_LINE == RESULT_MARKER
+
+    def test_a_tail_leaves_marker_lines_out_and_the_log_keeps_them(self, tmp_path: Path) -> None:
+        console, out, log = self._console(
+            tmp_path,
+            Reply(
+                returncode=1,
+                stdout=f"  Could not look up the app\n{self.MARKER}\nERROR: Could not look\n",
+            ),
+        )
+        result = console.run(["helper"], summary=True)
+        console.show_tail(result)
+        console.close()
+        shown = out.getvalue()
+        assert "Could not look up the app" in shown and "ERROR: Could not look" in shown
+        assert "ENTRABOT_RESULT" not in shown
+        assert self.MARKER in log.read_text(encoding="utf-8")
+        assert self.MARKER in result.stdout  # what the wizard reads it from
+
+    def test_leaving_markers_out_costs_the_tail_no_real_line(self, tmp_path: Path) -> None:
+        # 30 real lines with markers among them and after them: the tail is still the last
+        # 25 real lines, all of them.
+        lines = []
+        for n in range(1, 31):
+            lines.append(f"line {n:02d}")
+            if n % 5 == 0:
+                lines.append(f"ENTRABOT_RESULT=step-{n}")
+        console, out, _ = self._console(
+            tmp_path, Reply(returncode=1, stdout="\n".join(lines) + f"\n{self.MARKER}\n")
+        )
+        console.show_tail(console.run(["helper"], summary=True))
+        shown = out.getvalue()
+        assert all(f"line {n:02d}" in shown for n in range(6, 31))
+        assert "line 05" not in shown
+        assert "ENTRABOT_RESULT" not in shown
+
+    def test_markers_on_stderr_are_left_out_too(self, tmp_path: Path) -> None:
+        console, out, _ = self._console(
+            tmp_path, Reply(returncode=1, stderr=f"{self.MARKER}\nERROR: boom\n")
+        )
+        console.show_tail(console.run(["helper"], summary=True))
+        assert "ERROR: boom" in out.getvalue() and "ENTRABOT_RESULT" not in out.getvalue()
+
+    def test_only_a_line_that_starts_with_the_marker_is_one(self, tmp_path: Path) -> None:
+        console, out, _ = self._console(
+            tmp_path, Reply(returncode=1, stdout=f"  echo {self.MARKER}\n")
+        )
+        console.show_tail(console.run(["helper"], summary=True))
+        assert f"echo {self.MARKER}" in out.getvalue()
+
+    @pytest.mark.parametrize("verbose", [False, True])
+    def test_output_shown_as_it_arrives_leaves_marker_lines_out(
+        self, tmp_path: Path, verbose: bool
+    ) -> None:
+        # A helper whose output is on screen while it runs (the certificate step's), or any
+        # helper in verbose mode.
+        console, out, log = self._console(
+            tmp_path,
+            Reply(stdout=f"working\n{self.MARKER}\n", stderr="ENTRABOT_RESULT=on-stderr\n"),
+        )
+        console.verbose = verbose
+        result = console.run(["helper"], summary=verbose)
+        console.close()
+        assert "working" in out.getvalue()
+        assert "ENTRABOT_RESULT" not in out.getvalue()
+        logged = log.read_text(encoding="utf-8")
+        assert self.MARKER in logged and "ENTRABOT_RESULT=on-stderr" in logged
+        assert self.MARKER in result.stdout
+
+
 def test_a_child_whose_output_is_hidden_still_gets_a_heartbeat() -> None:
     # The helper prints steadily, but none of it is on screen, so to the person watching it is
     # silent. The heartbeat follows what they can see.

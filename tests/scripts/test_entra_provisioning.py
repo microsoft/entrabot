@@ -479,6 +479,11 @@ VERIFIED = "ENTRABOT_PROVISIONER_APP_ID_VERIFIED"
 # Printed on a line of its own when an existing app is not taken over; the Windows setup
 # wizard looks for it (tests/winsetup/test_wizard.py pins the same text).
 TAKEOVER_REFUSED = "ENTRABOT_RESULT=provisioner-takeover-refused"
+# Printed the same way just before the error when the app named in
+# ENTRABOT_PROVISIONER_APP_ID_VERIFIED is not accepted, and when setup could not read from
+# Microsoft Entra what it needed to decide. The wizard pins the same text.
+APP_CHOICE_REJECTED = "ENTRABOT_RESULT=provisioner-app-choice-rejected"
+COULD_NOT_CHECK = "ENTRABOT_RESULT=provisioner-could-not-check"
 GRAPH_APP = "00000003-0000-0000-c000-000000000000"
 GRAPH_SP = "99999999-0000-0000-0000-000000000003"  # Graph's service principal in this tenant
 LOOKALIKE_SP = "99999999-0000-0000-0000-0000000000ff"  # someone's app, named "Microsoft Graph"
@@ -507,6 +512,17 @@ FIRST_ADMIN_USER = {
     "id": FIRST_ADMIN,
     "userPrincipalName": "first-admin@contoso.com",
 }
+
+
+def _markers(out: str) -> list[str]:
+    """The result lines a run printed, for the wizard: each alone on its line."""
+    return [line for line in out.splitlines() if line.startswith("ENTRABOT_RESULT=")]
+
+
+def test_the_markers_are_the_lines_the_wizard_looks_for(provisioning_module) -> None:
+    assert provisioning_module.TAKEOVER_REFUSED_MARKER == TAKEOVER_REFUSED
+    assert provisioning_module.APP_CHOICE_REJECTED_MARKER == APP_CHOICE_REJECTED
+    assert provisioning_module.COULD_NOT_CHECK_MARKER == COULD_NOT_CHECK
 
 
 def _app(app_id: str = APP, object_id: str = APP_OBJECT, **overrides: Any) -> dict[str, Any]:
@@ -797,6 +813,7 @@ def test_an_app_someone_else_owns_is_not_taken_over(
     assert f"set {VERIFIED}" in out or f"{VERIFIED} to its application ID" in out
     assert "delete or rename" in out
     assert TAKEOVER_REFUSED in out.splitlines(), "on a line of its own, for the wizard"
+    assert _markers(out) == [TAKEOVER_REFUSED], "and no other result"
 
 
 def test_two_apps_with_the_name_are_not_taken_over(
@@ -960,6 +977,7 @@ def test_a_search_that_fails_creates_nothing(
     out = _refused(entra, capsys)
 
     assert "az login" in out
+    assert _markers(out) == [COULD_NOT_CHECK]
 
 
 def test_text_from_the_directory_is_printed_without_control_characters(
@@ -1161,6 +1179,25 @@ def test_an_approval_withdrawn_before_the_permission_step_takes_nothing_over(
 
     assert _consented(entra) == []
     assert "1 of the permissions setup needs" in out
+    # Setup did read the approval: it no longer covers what setup needs, which an
+    # administrator fixes. Not "could not check", so the wizard keeps its administrator text.
+    assert _markers(out) == []
+
+
+def test_an_approval_that_cannot_be_read_again_is_could_not_check(
+    entra: SimpleNamespace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Approved when the app was examined; the second read, just before setup goes on, fails.
+    _second_machine(entra)
+    entra.directory.assignments[SP_OBJECT] = _Replies(
+        _granted(GRAPH_ROLE, GRAPH_ROLE_2), "ERROR: Forbidden"
+    )
+
+    out = _refused(entra, capsys)
+
+    assert "Could not read the admin consent" in out and "ERROR: Forbidden" in out
+    assert _consented(entra) == []
+    assert _markers(out) == [COULD_NOT_CHECK]
 
 
 @pytest.mark.parametrize("unreadable", ["owners", "signed_in_user"])
@@ -1240,6 +1277,20 @@ def test_a_named_app_that_does_not_exist_is_refused(
     assert OTHER_APP in out and VERIFIED in out
     assert not entra.directory.looked_at_owners(), "the app with the name is not used instead"
     assert TAKEOVER_REFUSED not in out
+    assert _markers(out) == [APP_CHOICE_REJECTED]
+
+
+def test_a_named_app_listed_more_than_once_is_refused(
+    entra: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # An application ID is unique; a directory that lists two can't say which one was meant.
+    entra.directory.apps = [_app(), _app(object_id=OTHER_APP_OBJECT)]
+    monkeypatch.setenv(VERIFIED, APP)
+
+    out = _refused(entra, capsys)
+
+    assert "returned 2 app registrations with the application ID" in out
+    assert _markers(out) == [APP_CHOICE_REJECTED]
 
 
 def test_a_named_app_that_cannot_be_looked_up_is_refused(
@@ -1251,6 +1302,8 @@ def test_a_named_app_that_cannot_be_looked_up_is_refused(
     out = _refused(entra, capsys)
 
     assert "AADSTS50076" in out and APP in out
+    # The value may be right: setup could not ask Entra. Not a rejected choice.
+    assert _markers(out) == [COULD_NOT_CHECK]
 
 
 def test_a_value_that_is_not_an_application_id_is_refused_without_repeating_it(
@@ -1264,6 +1317,7 @@ def test_a_value_that_is_not_an_application_id_is_refused_without_repeating_it(
     assert VERIFIED in out
     assert "s3cr3t" not in out
     assert entra.directory.calls == []
+    assert _markers(out) == [APP_CHOICE_REJECTED]
 
 
 def test_a_recorded_app_is_used_as_before_without_looking_at_owners(
@@ -1294,3 +1348,79 @@ def test_a_named_app_that_contradicts_the_recorded_one_is_refused(
 
     assert APP in out and OTHER_APP in out and VERIFIED in out
     assert entra.state["PROVISIONER_CERT_THUMBPRINT"] == "thumb"
+    assert _markers(out) == [APP_CHOICE_REJECTED]
+
+
+# ─── the result line comes just before the error, as the wizard shows it ─────
+
+
+def _bootstrap(entra: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> int:
+    """Run the script as setup runs it: ``python scripts/entra_provisioning.py``."""
+    monkeypatch.setattr(entra.module, "build_required_permission_values", lambda: REQUIRED)
+    return entra.module.bootstrap_cli()
+
+
+@pytest.mark.parametrize(
+    ("arrange", "marker", "error"),
+    [
+        (
+            lambda entra, monkeypatch: monkeypatch.setenv(VERIFIED, "not-an-application-id"),
+            APP_CHOICE_REJECTED,
+            f"ERROR: {VERIFIED} is set, but not to an application ID",
+        ),
+        (
+            lambda entra, monkeypatch: setattr(entra.directory, "list_error", "ERROR: offline"),
+            COULD_NOT_CHECK,
+            f"ERROR: Could not look for an existing '{NAME}' app registration",
+        ),
+    ],
+    ids=["choice_rejected", "could_not_check"],
+)
+def test_the_result_line_is_alone_on_its_line_just_before_the_error(
+    entra: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    arrange: Any,
+    marker: str,
+    error: str,
+) -> None:
+    arrange(entra, monkeypatch)
+
+    assert _bootstrap(entra, monkeypatch) == 1
+
+    lines = capsys.readouterr().out.splitlines()
+    assert lines.count(marker) == 1
+    assert lines[lines.index(marker) + 1].startswith(error)
+    assert _markers("\n".join(lines)) == [marker]
+
+
+def test_a_recorded_app_whose_existence_cannot_be_checked_is_could_not_check(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    state = _stale_setup(provisioning_module, monkeypatch, "unknown")
+    _Keystore(provisioning_module, monkeypatch, PEM_BUNDLE)
+
+    with pytest.raises(provisioning_module.ProvisionerBootstrapError, match="[Cc]ould not check"):
+        provisioning_module.ensure_app_registration(["Application.ReadWrite.All"])
+
+    assert _markers(capsys.readouterr().out) == [COULD_NOT_CHECK]
+    assert state["PROVISIONER_CLIENT_ID"] == "old-client-id"
+
+
+def test_an_administrator_problem_prints_no_result_line(
+    entra: SimpleNamespace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The wizard keeps its "needs an administrator" text for this, as for any unmarked stop.
+    def create_refused(args: list[str], capture: bool = True) -> tuple[int, str, str]:
+        if args[:3] == ["ad", "app", "create"]:
+            return 1, "", "ERROR: Insufficient privileges to complete the operation."
+        return _Directory.run_az(entra.directory, args, capture)
+
+    entra.module.run_az = create_refused
+
+    with pytest.raises(entra.module.ProvisionerBootstrapError):
+        _ensure(entra)
+
+    out = capsys.readouterr().out
+    assert "requires an Entra administrator" in out
+    assert _markers(out) == []

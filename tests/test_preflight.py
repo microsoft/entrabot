@@ -30,6 +30,7 @@ from entrabot.preflight import (
     Check,
     check_copilot_license_availability,
     check_mcp_configs,
+    check_old_setup_keys,
     check_persona_sati_mcp,
     check_state_file,
     check_teams_license_availability,
@@ -1009,6 +1010,138 @@ class TestRunDiagnostics:
         assert "Teams scope (/me/chats)" in names
         assert "Claude Code MCP config" in names
         assert PERSONA_CHECK in names
+
+
+# ─── older setup keys ────────────────────────────────────────────────────────
+#
+# An older install kept the Provisioner's private key in a plain file. When setup could not take
+# that key's certificate off the Provisioner app (tenant-wide Graph permissions), it recorded it
+# in the state file: PROVISIONER_CERT_REVOKE_PENDING (lowercase SHA-1 thumbprints) and
+# PROVISIONER_CERT_REVOKE_PENDING_EXPIRES (their expiry dates, in the same order). Setup retries
+# on every run; until then the health check says so.
+
+PENDING = "PROVISIONER_CERT_REVOKE_PENDING"
+PENDING_EXPIRES = "PROVISIONER_CERT_REVOKE_PENDING_EXPIRES"
+OLD_KEY_SHA1 = "c3f1a2b4d5e6f708192a3b4c5d6e7f8091a2b3c4"
+THIS_COMPUTERS_KEY_SHA1 = "77aa88bb99cc00dd11ee22ff33aa44bb55cc66dd"
+OLD_KEYS_CHECK = "Older setup keys"
+
+
+def _set_up_state(tmp_path: Path, **values: str) -> Path:
+    state = tmp_path / ".entrabot-state.json"
+    state.write_text(
+        json.dumps(
+            {
+                "BLUEPRINT_APP_ID": "x",
+                "AGENT_ID": "y",
+                "AGENT_USER_ID": "z",
+                "PROVISIONER_CLIENT_ID": "prov-app",
+                "PROVISIONER_CERT_THUMBPRINT": THIS_COMPUTERS_KEY_SHA1,
+                **values,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return state
+
+
+def _pending(tmp_path: Path) -> Path:
+    return _set_up_state(tmp_path, **{PENDING: OLD_KEY_SHA1, PENDING_EXPIRES: "2027-02-01"})
+
+
+class TestCheckOldSetupKeys:
+    def test_nothing_recorded_adds_nothing(self, tmp_path: Path) -> None:
+        assert check_old_setup_keys(_set_up_state(tmp_path)) is None
+        assert check_old_setup_keys(tmp_path / "missing.json") is None
+
+    def test_a_pending_key_is_a_warning_that_names_it_and_where_to_remove_it(
+        self, tmp_path: Path
+    ) -> None:
+        check = check_old_setup_keys(_pending(tmp_path))
+
+        assert check is not None
+        assert check.name == OLD_KEYS_CHECK and check.status == "warn"
+        assert (
+            "An older setup key for this computer could not be switched off in Microsoft Entra: "
+            "the certificate whose thumbprint ends in B3C4 (expires 2027-02-01)." in check.detail
+        )
+        remediation = check.remediation or ""
+        assert (
+            "Microsoft Entra admin center (https://entra.microsoft.com): App registrations > "
+            "'EntraBot Agent ID Provisioner' (application ID prov-app) > Certificates & secrets "
+            "> Certificates." in remediation
+        )
+        assert remediation.endswith("Setup will try again the next time it runs.")
+
+    @pytest.mark.parametrize("broken", ["an entry", "the file"])
+    def test_a_record_that_cannot_be_read_is_a_warning_that_says_so(
+        self, tmp_path: Path, broken: str
+    ) -> None:
+        if broken == "an entry":
+            state = _set_up_state(tmp_path, **{PENDING: "not-a-thumbprint"})
+        else:
+            state = tmp_path / ".entrabot-state.json"
+            state.write_text("{half written", encoding="utf-8")
+
+        check = check_old_setup_keys(state)
+
+        assert check is not None and check.status == "warn"
+        assert check.detail.startswith(
+            "Setup could not read its record of older setup keys for this computer."
+        )
+        assert "can't account for" in (check.remediation or "")
+
+    def test_it_is_a_warning_not_a_failed_health_check(self, tmp_path: Path) -> None:
+        check = check_old_setup_keys(_pending(tmp_path))
+        assert check is not None
+        assert overall_exit_code([check]) == 0
+        rendered = format_report([check], color=False)
+        assert rendered.startswith("[ WARN ] Older setup keys: An older setup key")
+        assert "→ Remove it by hand in the Microsoft Entra admin center" in rendered
+
+    def test_no_full_thumbprint_is_reported(self, tmp_path: Path) -> None:
+        check = check_old_setup_keys(_pending(tmp_path))
+        assert check is not None
+        text = (format_report([check], color=False) + repr(check)).lower()
+        for full in (OLD_KEY_SHA1, THIS_COMPUTERS_KEY_SHA1):
+            assert full not in text and full[:36] not in text
+
+    @pytest.mark.parametrize("windows", [False, True])
+    def test_it_is_checked_on_every_platform(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, windows: bool
+    ) -> None:
+        # The keys are only written on Windows, but a state file can travel; the check reads
+        # what is there wherever it runs.
+        monkeypatch.setattr("entrabot.preflight._is_windows", lambda: windows)
+        assert check_old_setup_keys(_pending(tmp_path)) is not None
+
+    def _diagnose(self, state: Path) -> list[Check]:
+        with (
+            patch(
+                "entrabot.preflight.acquire_agent_user_token",
+                side_effect=AgentIDNotAvailable("no cert"),
+            ),
+            patch(
+                "entrabot.preflight._check_cert_in_keystore",
+                return_value=Check(name="Blueprint cert in OS keystore", status="pass", detail="x"),
+            ),
+        ):
+            return run_diagnostics(
+                _config_complete(),
+                state_path=state,
+                expected_binary=state.parent / "bin" / "entrabot-mcp",
+                claude_mcp_path=state.parent / "absent.json",
+                copilot_mcp_path=state.parent / "absent2.json",
+            )
+
+    def test_diagnostics_report_it_right_after_the_state_file(self, tmp_path: Path) -> None:
+        names = [check.name for check in self._diagnose(_pending(tmp_path))]
+        assert names[:3] == ["State file", OLD_KEYS_CHECK, "Blueprint cert in OS keystore"]
+
+    def test_diagnostics_with_nothing_pending_print_nothing_new(self, tmp_path: Path) -> None:
+        names = [check.name for check in self._diagnose(_set_up_state(tmp_path))]
+        assert OLD_KEYS_CHECK not in names
+        assert names[:2] == ["State file", "Blueprint cert in OS keystore"]
 
 
 # ─── format_report rendering ─────────────────────────────────────────────────

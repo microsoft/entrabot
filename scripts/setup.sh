@@ -387,6 +387,16 @@ for line in text.splitlines():
 ' "$PROJECT_ROOT/.env" "$1"
 }
 
+# ── Helper: do two IDs name the same directory object? ─────────────────────
+#
+# Microsoft Entra IDs are GUIDs, the same in either letter case. Empty matches nothing.
+# (bash 3.2, the macOS one, has no ${var,,}.)
+
+same_id() {
+    [ -n "$1" ] && [ "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" = \
+        "$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')" ]
+}
+
 # ════════════════════════════════════════════════════════════════════════════
 # Step 1: Verify prerequisites
 # ════════════════════════════════════════════════════════════════════════════
@@ -778,17 +788,20 @@ fi
 #   (a) Fresh machine / no state — just record BLUEPRINT_APP_ID; the rest of
 #       the script discovers everything under it.
 #   (b) Existing state pointing at a DIFFERENT Blueprint — treat this as a
-#       switch. create_entra_agent_ids.find_existing_blueprint() prefers the
-#       cached BLUEPRINT_OBJECT_ID over the APP_ID filter, so if we only
-#       rewrote BLUEPRINT_APP_ID the stale OBJECT_ID would silently pin us
-#       back to the old Blueprint. Wipe all identity-derived state to force
-#       fresh discovery against the new Blueprint. Keep PROVISIONER_* (the
-#       helper app is machine-scoped, unaffected by the switch).
+#       switch. create_entra_agent_ids.py goes by the recorded BLUEPRINT_APP_ID
+#       alone (a leftover BLUEPRINT_OBJECT_ID can no longer pin it to the old
+#       Blueprint), but everything else recorded belongs to the old agent: its
+#       Agent Identity, Agent User and certificate thumbprint. Wipe all
+#       identity-derived state so they are rediscovered under the new
+#       Blueprint. Keep PROVISIONER_* and TENANT_ID (the helper app is
+#       machine-scoped, unaffected by the switch).
+# The Agent User UPN in .env needs the same care, below.
+HIDE_ENV_AGENT_USER_UPN=false
 if [ -n "$USE_BLUEPRINT" ] && [ "$NEW_CHAIN" = false ]; then
     STATE_FILE="$PROJECT_ROOT/.entrabot-state.json"
     CURRENT_BP=$(read_state "BLUEPRINT_APP_ID")
 
-    if [ -n "$CURRENT_BP" ] && [ "$CURRENT_BP" != "$USE_BLUEPRINT" ]; then
+    if [ -n "$CURRENT_BP" ] && ! same_id "$CURRENT_BP" "$USE_BLUEPRINT"; then
         BACKUP="$STATE_FILE.bak.$(date +%Y%m%d-%H%M%S)"
         cp "$STATE_FILE" "$BACKUP"
         echo -e "  ${YELLOW}Switching Blueprint: ${CURRENT_BP} → ${USE_BLUEPRINT}${NC}"
@@ -821,12 +834,28 @@ sf.write_text(json.dumps(data, indent=2))
 "
         echo "  State file updated with Blueprint ID"
     fi
+    # Which Agent User. Step 7 writes .env's ENTRABOT_AGENT_USER_UPN together with the
+    # Blueprint it belongs to, and create_entra_agent_ids.py loads .env for any variable that
+    # is not set. So unless --agent-user-upn or --with-upn-suffix names one, a run for a
+    # Blueprint other than the one .env names hands the helper that variable set but empty
+    # (Step 5): otherwise the previous agent's Agent User would be looked for under this one.
     if [ -n "$AGENT_USER_UPN" ]; then
         export ENTRABOT_AGENT_USER_UPN="$AGENT_USER_UPN"
         echo -e "  ${GREEN}Using existing Agent User UPN: ${AGENT_USER_UPN}${NC}"
     elif [ -n "$UPN_SUFFIX" ]; then
         export _ENTRABOT_UPN_SUFFIX="$UPN_SUFFIX"
         echo -e "  ${GREEN}Using existing Agent User suffix: ${UPN_SUFFIX}${NC}"
+    else
+        ENV_BLUEPRINT_APP_ID=$(read_env_value ENTRABOT_BLUEPRINT_APP_ID)
+        if ! same_id "$ENV_BLUEPRINT_APP_ID" "$USE_BLUEPRINT"; then
+            HIDE_ENV_AGENT_USER_UPN=true
+            ENV_AGENT_USER_UPN=$(read_env_value ENTRABOT_AGENT_USER_UPN)
+            if [ -n "$ENV_AGENT_USER_UPN" ]; then
+                echo -e "  ${YELLOW}Not reusing the Agent User named in .env (${ENV_AGENT_USER_UPN}):${NC}"
+                echo -e "  ${YELLOW}.env was written for Blueprint ${ENV_BLUEPRINT_APP_ID:-(none recorded)}, not ${USE_BLUEPRINT}.${NC}"
+                echo -e "  ${YELLOW}To use one of ${USE_BLUEPRINT}'s Agent Users, pass --agent-user-upn=UPN or --with-upn-suffix=NAME.${NC}"
+            fi
+        fi
     fi
     # From here create_entra_agent_ids.py discovers Agent Identity + Agent User
     # under the chosen Blueprint. Step 6 generates/reuses a cert as appropriate.
@@ -898,7 +927,15 @@ success "Provisioner app ready"
 step 5 "Creating Entra Agent Identities + Agent User"
 
 echo "  Running create_entra_agent_ids.py..."
-if ! "$SCRIPT_PYTHON" "$SCRIPT_DIR/create_entra_agent_ids.py"; then
+CREATE_AGENT=("$SCRIPT_PYTHON" "$SCRIPT_DIR/create_entra_agent_ids.py")
+if [ "$HIDE_ENV_AGENT_USER_UPN" = true ]; then
+    # Set but empty, for the helper alone, so its .env load can't bring back the previous
+    # agent's UPN (see --use-blueprint above). Later steps, the smoke test among them, read
+    # the .env Step 7 writes; an empty value left set would also turn off the smoke test's
+    # check that the token is this agent's.
+    CREATE_AGENT=(env "ENTRABOT_AGENT_USER_UPN=" "${CREATE_AGENT[@]}")
+fi
+if ! "${CREATE_AGENT[@]}"; then
     fail "Agent Identity provisioning failed. Check errors above."
 fi
 
@@ -913,6 +950,16 @@ PROV_CLIENT_ID=$(read_state "PROVISIONER_CLIENT_ID")
 
 if [ -z "$BLUEPRINT_APP_ID" ] || [ -z "$AGENT_ID" ]; then
     fail "Agent Identity provisioning completed but IDs not found in state file"
+fi
+
+# Defence in depth, as the Windows wizard has: the steps below configure the Blueprint recorded
+# here (Work IQ) and register this machine's certificate on it, so it must be the one
+# --use-blueprint asked for. create_entra_agent_ids.py never takes another, so this should not
+# fire.
+if [ -n "$USE_BLUEPRINT" ] && ! same_id "$BLUEPRINT_APP_ID" "$USE_BLUEPRINT"; then
+    err "You asked to join Blueprint $USE_BLUEPRINT, but create_entra_agent_ids.py recorded Blueprint $BLUEPRINT_APP_ID in .entrabot-state.json."
+    echo "     Setup stopped before this machine's certificate step: no certificate was registered on either Blueprint, and .env was not written."
+    fail "Check that $USE_BLUEPRINT is the right Blueprint App ID, then run ./scripts/setup.sh --use-blueprint=$USE_BLUEPRINT again."
 fi
 
 success "Blueprint: $BLUEPRINT_APP_ID"

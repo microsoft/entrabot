@@ -59,6 +59,17 @@ No positional arguments.
   `PROVISIONER_CERT_THUMBPRINT`, `BLUEPRINT_APP_ID`, `BLUEPRINT_OBJECT_ID`,
   `BLUEPRINT_CERT_THUMBPRINT`, `AGENT_ID`, `AGENT_OBJECT_ID`,
   `AGENT_USER_ID`, `AGENT_USER_UPN`, and `AGENT_USER_WORK_IQ_LICENSE_SKU`.
+  The text report and `--json` show the full thumbprints of the current
+  Provisioner and Blueprint certificates.
+- Reads setup's record of older setup keys (`PROVISIONER_CERT_REVOKE_PENDING`
+  and `PROVISIONER_CERT_REVOKE_PENDING_EXPIRES`) for the **Older setup keys**
+  health check, on every platform (Windows setup writes the record). It warns
+  while an older setup key that setup could not switch off in Microsoft Entra is
+  still waiting to be removed from the Provisioner app, naming it by the last
+  four characters of its thumbprint and its expiry date, with where in the
+  Microsoft Entra admin center to remove it. A record it cannot read is a
+  warning too. Otherwise the check is `PASS`, or `SKIP` when no Provisioner app
+  is recorded. These two keys are not part of the `state` object in `--json`.
 - Reads storage configuration from the process environment / `.env` via
   `entrabot.config.get_config()`.
 - Issues read-only Graph GET requests (no writes to Graph or local state):
@@ -82,8 +93,8 @@ No positional arguments.
 - Otherwise returns `1` when `(--strict or --health-only)` is true **and**
   at least one health check has `status == "fail"`.
 - Returns `0` in every other case — including runs where checks report
-  `warn` or `skip` but no `fail`, and non-strict, non-health-only runs
-  regardless of check outcomes.
+  `warn` or `skip` but no `fail` (an older setup key still waiting is a
+  `warn`), and non-strict, non-health-only runs regardless of check outcomes.
 - `--help` exits `0` (argparse default).
 
 ## Common failures
@@ -97,6 +108,12 @@ No positional arguments.
   `BLUEPRINT_CERT_THUMBPRINT` doesn't match any key credential currently
   on the Blueprint app, typically after an out-of-band cert rotation; see
   [`verify_blueprint_cert.py`](../auth-and-certs/verify-blueprint-cert-py.md).
+- **"Older setup keys" check warns** — Windows setup moved this machine off an
+  older setup key file but could not take that key's certificate off the
+  Provisioner app, and a copy of the file can still get tokens for it. Remove the
+  certificate where the check says, or run Windows setup again, which retries.
+  See
+  [Windows troubleshooting](../../../troubleshooting/windows.md#an-older-setup-key-for-this-computer-could-not-be-switched-off-in-microsoft-entra).
 - **"Sponsors" / "Licenses" / "Permissions" checks fail** — use
   [`add_agent_sponsor.py`](../provisioning/add-agent-sponsor-py.md),
   [`assign_agent_user_licenses.py`](../provisioning/assign-agent-user-licenses-py.md),

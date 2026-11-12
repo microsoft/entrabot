@@ -35,6 +35,7 @@ from entra_provisioning import (  # noqa: E402
 # fmt: on
 from entrabot.config import get_config  # noqa: E402
 from entrabot.graph_helpers import GRAPH_BETA, GRAPH_V1, graph_request  # noqa: E402
+from entrabot.winsetup import oldkeys  # noqa: E402
 
 
 @dataclass
@@ -160,6 +161,37 @@ def _local_certificate_checks(state: dict[str, str | None]) -> list[Check]:
         return [Check("Local certificate", "warn", f"Could not check: {exc}")]
     status = {"ok": "pass", "expiring": "warn"}.get(health.status, "fail")
     return [Check("Local certificate", status, health.message)]
+
+
+# What the older-setup-key check reads, the way setup and its health check read it
+# (entrabot.winsetup.oldkeys). Not in _STATE_KEYS: those are shown in full, and of an older
+# key's thumbprint only the last four characters are ever shown.
+_OLD_SETUP_KEY_STATE = (
+    oldkeys.REVOKE_PENDING,
+    oldkeys.REVOKE_PENDING_EXPIRES,
+    "PROVISIONER_CLIENT_ID",
+    "PROVISIONER_CERT_THUMBPRINT",
+)
+
+
+def _old_setup_key_checks() -> list[Check]:
+    """Older setup keys that setup could not switch off in Microsoft Entra.
+
+    An older install kept the Provisioner's private key in a plain file. Setup records the
+    certificate it could not take off the Provisioner app, which can manage applications in
+    the tenant, and retries on every run. Until then this warns: never a failure, because the
+    agent signs in either way. Skipped, like the other checks, when the state names no
+    Provisioner app and records nothing. Not tied to the platform: the keys are written on
+    Windows, but the state file is read wherever this runs.
+    """
+    name = oldkeys.CHECK_NAME
+    recorded = {key: get_state(key) for key in _OLD_SETUP_KEY_STATE}
+    finding = oldkeys.old_setup_key_check(oldkeys.old_setup_keys(recorded))
+    if finding is not None:
+        return [Check(name, "warn", f"{finding.detail} {finding.fix}")]
+    if not recorded["PROVISIONER_CLIENT_ID"]:
+        return [Check(name, "skip", "No setup (Provisioner) app is recorded on this machine")]
+    return [Check(name, "pass", "No older setup key is waiting to be switched off")]
 
 
 def _graph_list(
@@ -456,6 +488,7 @@ def _snapshot(token: str) -> dict[str, object]:
         key_credentials_error,
     )
     checks.extend(_local_certificate_checks(state))
+    checks.extend(_old_setup_key_checks())
     failed = sum(1 for check in checks if check.status == "fail")
     warned = sum(1 for check in checks if check.status == "warn")
     passed = sum(1 for check in checks if check.status == "pass")

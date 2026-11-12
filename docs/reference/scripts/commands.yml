@@ -121,7 +121,7 @@ commands:
     category: teardown
     page: reference/scripts/teardown/teardown-sh.md
     platforms: [macos, linux]
-    summary: Removes everything setup.sh creates — Agent User, Agent Identity, Blueprint (and its BlueprintPrincipal), the Provisioner app, and local state — with --dry-run, targeted --agent-user-upn, and --preserve-provisioner / --preserve-local-state flags.
+    summary: Removes everything setup.sh creates — Agent User, Agent Identity, Blueprint (and its BlueprintPrincipal), the Provisioner app recorded for this machine (by application ID, never by name), and local state — with --dry-run, targeted --agent-user-upn, and --preserve-provisioner / --preserve-local-state flags.
   - id: teardown-windows-ps1
     path: scripts/teardown-windows.ps1
     category: teardown

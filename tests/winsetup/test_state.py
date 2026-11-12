@@ -17,9 +17,11 @@ from entrabot.winsetup.state import (
     IdentityChoice,
     IdentityError,
     apply_identity_choice,
+    certificate_recorded_on,
     default_suffix,
     identity_environment,
     read_state,
+    undo_join,
     validate_app_id,
     validate_suffix,
     validate_upn,
@@ -153,6 +155,178 @@ class TestJoinBlueprint:
     def test_join_needs_an_app_id(self, tmp_path: Path) -> None:
         with pytest.raises(IdentityError):
             apply_identity_choice(_state_file(tmp_path), IdentityChoice(mode="join"), now=NOW)
+
+
+OTHER_BP = "33333333-3333-3333-3333-333333333333"
+BACKED_UP = (
+    "Switching agents. Backed up the previous record to .entrabot-state.json.bak.20261111-093015."
+)
+NOT_REVOKED = (
+    "This machine's certificate on the previous Blueprint is NOT revoked. Ask an administrator "
+    "to remove it if this machine should lose access to that agent."
+)
+# What .env holds once setup has registered this computer's certificate on OLD_BP.
+CERT_ENV = {
+    "ENTRABOT_BLUEPRINT_APP_ID": OLD_BP,
+    "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT": "n" * 43,
+    "ENTRABOT_BLUEPRINT_CERT_SHA1": "A" * 40,
+}
+
+
+class TestTheSwitchWarnsOnlyAboutACertificateThatIsRecorded:
+    """Seen on a real machine: a run had recorded a Blueprint App ID that did not exist, and
+    stopped, as it should. The next run, with the right App ID, was a switch, and said this
+    machine's certificate on the previous Blueprint was not revoked. No certificate was ever
+    made for that Blueprint."""
+
+    @staticmethod
+    def _switch(
+        tmp_path: Path,
+        env_values: dict[str, str] | None,
+        state: dict[str, str] = FULL_STATE,
+    ) -> list[str]:
+        return apply_identity_choice(
+            _state_file(tmp_path, state),
+            IdentityChoice(mode="join", blueprint_app_id=NEW_BP),
+            now=NOW,
+            env_values=env_values,
+        )
+
+    def test_a_certificate_env_records_for_the_previous_blueprint_is_warned_about(
+        self, tmp_path: Path
+    ) -> None:
+        assert self._switch(tmp_path, CERT_ENV) == [BACKED_UP, NOT_REVOKED]
+
+    @pytest.mark.parametrize(
+        "only", ["ENTRABOT_BLUEPRINT_CERT_SHA1", "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT"]
+    )
+    def test_either_thumbprint_is_a_certificate(self, tmp_path: Path, only: str) -> None:
+        env = {"ENTRABOT_BLUEPRINT_APP_ID": OLD_BP, only: CERT_ENV[only]}
+        assert self._switch(tmp_path, env) == [BACKED_UP, NOT_REVOKED]
+
+    def test_the_blueprint_in_other_letter_case_is_the_same_blueprint(self, tmp_path: Path) -> None:
+        state = {**FULL_STATE, "BLUEPRINT_APP_ID": "abcdef01-2345-4678-9abc-def012345678"}
+        env = {**CERT_ENV, "ENTRABOT_BLUEPRINT_APP_ID": "ABCDEF01-2345-4678-9ABC-DEF012345678"}
+        assert self._switch(tmp_path, env, state) == [BACKED_UP, NOT_REVOKED]
+
+    def test_a_certificate_env_names_no_blueprint_for_could_be_on_this_one(
+        self, tmp_path: Path
+    ) -> None:
+        # Nothing ties it to another Blueprint, so it is not ruled out.
+        env = {"ENTRABOT_BLUEPRINT_CERT_SHA1": "A" * 40}
+        assert self._switch(tmp_path, env) == [BACKED_UP, NOT_REVOKED]
+
+    def test_a_certificate_the_state_file_records_is_warned_about(self, tmp_path: Path) -> None:
+        # scripts/register_blueprint_cert.py (setup.sh) records it there once it is registered.
+        state = {**FULL_STATE, "BLUEPRINT_CERT_THUMBPRINT": "C" * 40}
+        assert self._switch(tmp_path, {}, state) == [BACKED_UP, NOT_REVOKED]
+
+    @pytest.mark.parametrize(
+        "env",
+        [
+            {},
+            {"ENTRABOT_BLUEPRINT_APP_ID": OLD_BP},
+            {"ENTRABOT_BLUEPRINT_APP_ID": OLD_BP, "ENTRABOT_BLUEPRINT_CERT_SHA1": "   "},
+            {**CERT_ENV, "ENTRABOT_BLUEPRINT_APP_ID": OTHER_BP},
+        ],
+        ids=["nothing-saved", "no-certificate", "blank", "another-blueprints-certificate"],
+    )
+    def test_without_one_it_only_says_the_record_was_backed_up(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        assert self._switch(tmp_path, env) == [BACKED_UP]
+        assert (tmp_path / ".entrabot-state.json.bak.20261111-093015").is_file()
+
+    def test_a_caller_that_cannot_say_what_env_records_still_gets_the_warning(
+        self, tmp_path: Path
+    ) -> None:
+        assert self._switch(tmp_path, None) == [BACKED_UP, NOT_REVOKED]
+
+    def test_the_rule_on_its_own(self) -> None:
+        assert certificate_recorded_on(OLD_BP, state=FULL_STATE, env_values=CERT_ENV)
+        assert not certificate_recorded_on(NEW_BP, state=FULL_STATE, env_values=CERT_ENV)
+        assert not certificate_recorded_on(OLD_BP, state=FULL_STATE, env_values={})
+        # A state file's certificate belongs to the Blueprint that record names.
+        recorded = {**FULL_STATE, "BLUEPRINT_CERT_THUMBPRINT": "C" * 40}
+        assert certificate_recorded_on(OLD_BP, state=recorded, env_values={})
+        assert not certificate_recorded_on(NEW_BP, state=recorded, env_values={})
+
+
+class TestUndoJoin:
+    """A run that joins a Blueprint App ID records it before the agent step looks it up. When
+    that Blueprint does not exist, the record goes back to what it was, so the next run is not
+    a switch away from an agent that was never there. What the provisioning step recorded in
+    the same run (the Provisioner app, this computer's setup key, an old key still to switch
+    off, the tenant) is kept as it is now."""
+
+    @staticmethod
+    def _join(path: Path, app_id: str = NEW_BP) -> tuple[dict[str, str], dict[str, str]]:
+        """The state before the join, and as the join left it."""
+        before = read_state(path)
+        apply_identity_choice(
+            path, IdentityChoice(mode="join", blueprint_app_id=app_id), now=NOW, env_values={}
+        )
+        return before, read_state(path)
+
+    @staticmethod
+    def _provisioning_writes(path: Path, **values: str) -> dict[str, str]:
+        written = {**read_state(path), **values}
+        path.write_text(json.dumps(written), encoding="utf-8")
+        return written
+
+    def test_a_fresh_machine_keeps_only_what_the_provisioning_step_recorded(
+        self, tmp_path: Path
+    ) -> None:
+        path = _state_file(tmp_path, None)
+        before, applied = self._join(path)
+        self._provisioning_writes(path, PROVISIONER_CLIENT_ID="prov-app", TENANT_ID="tenant")
+
+        assert undo_join(path, before=before, applied=applied) is True
+
+        assert read_state(path) == {"PROVISIONER_CLIENT_ID": "prov-app", "TENANT_ID": "tenant"}
+
+    def test_a_switch_puts_the_previous_agent_back_beside_the_provisioner_as_it_is_now(
+        self, tmp_path: Path
+    ) -> None:
+        path = _state_file(tmp_path)
+        before, applied = self._join(path)
+        # In the same run the provisioning step moved this computer to a new setup key and
+        # recorded an old one it could not switch off yet.
+        self._provisioning_writes(
+            path,
+            PROVISIONER_CERT_THUMBPRINT="new-thumb",
+            PROVISIONER_CERT_REVOKE_PENDING="old-thumb",
+        )
+
+        assert undo_join(path, before=before, applied=applied) is True
+
+        assert read_state(path) == {
+            **FULL_STATE,
+            "PROVISIONER_CERT_THUMBPRINT": "new-thumb",
+            "PROVISIONER_CERT_REVOKE_PENDING": "old-thumb",
+        }
+        # The backup the switch made stays where it is.
+        assert (tmp_path / ".entrabot-state.json.bak.20261111-093015").is_file()
+
+    def test_an_agent_record_something_else_wrote_to_since_is_left_alone(
+        self, tmp_path: Path
+    ) -> None:
+        path = _state_file(tmp_path, None)
+        before, applied = self._join(path)
+        changed = self._provisioning_writes(path, BLUEPRINT_OBJECT_ID="bp-object")
+
+        assert undo_join(path, before=before, applied=applied) is False
+
+        assert read_state(path) == changed
+
+    def test_the_blueprint_this_computer_already_had_is_not_undone(self, tmp_path: Path) -> None:
+        path = _state_file(tmp_path)
+        before, applied = self._join(path, OLD_BP)
+        unchanged = path.read_bytes()
+
+        assert undo_join(path, before=before, applied=applied) is False
+
+        assert path.read_bytes() == unchanged
 
 
 class TestContinue:

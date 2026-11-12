@@ -18,7 +18,9 @@ Three entry points:
   the three-hop token mint, the agent's Graph identity, and Teams scope.
 * :func:`run_diagnostics` — ``./scripts/setup.sh --diagnose`` short-circuit.
   Superset of the smoke checks plus state file, cert keystore, MCP wiring, and
-  :func:`check_persona_sati_mcp` (optional, never fails).
+  :func:`check_persona_sati_mcp` (optional, never fails). An older setup key that
+  setup could not switch off (:func:`check_old_setup_keys`) is a warning, listed
+  only when the state file records one.
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ import httpx
 from entrabot.config import EntraBotConfig
 from entrabot.errors import AgentIDNotAvailable, TokenExchangeError
 from entrabot.tools.teams import acquire_agent_user_token
+from entrabot.winsetup import oldkeys
 
 CheckStatus = Literal["pass", "warn", "fail", "skip"]
 
@@ -442,6 +445,25 @@ def check_state_file(path: Path) -> Check:
         name="State file",
         status="pass",
         detail=f"{path} has all required keys.",
+    )
+
+
+def check_old_setup_keys(path: Path) -> Check | None:
+    """Older setup keys that setup could not switch off in Microsoft Entra, from the state
+    file's record of them (``entrabot.winsetup.oldkeys``, which setup and ``status`` read too).
+
+    An older install kept the Provisioner's private key in a plain file, and the Provisioner
+    app can manage applications across the tenant, so a certificate still listed there is
+    reported: a ``warn`` naming it by the end of its thumbprint, never a failure of sign-in
+    health. A record that can't be read is a ``warn`` too. None when nothing is recorded, so
+    nothing is added to the report. The keys are written on Windows, but the state file is
+    read wherever this runs.
+    """
+    finding = oldkeys.old_setup_key_check(oldkeys.read_old_setup_keys(path))
+    if finding is None:
+        return None
+    return Check(
+        name=oldkeys.CHECK_NAME, status="warn", detail=finding.detail, remediation=finding.fix
     )
 
 
@@ -890,6 +912,9 @@ def run_diagnostics(
     """
     checks: list[Check] = []
     checks.append(check_state_file(state_path))
+    old_setup_keys = check_old_setup_keys(state_path)
+    if old_setup_keys is not None:
+        checks.append(old_setup_keys)
     checks.append(_check_cert_in_keystore(config))
     checks.extend(run_smoke_checks(config, transport=transport))
     checks.extend(
@@ -941,6 +966,7 @@ __all__ = [
     "TEAMS_CAPABLE_SKUS",
     "check_copilot_license_availability",
     "check_mcp_configs",
+    "check_old_setup_keys",
     "check_persona_sati_mcp",
     "check_state_file",
     "check_teams_license_availability",

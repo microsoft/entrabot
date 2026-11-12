@@ -46,6 +46,9 @@ class CertOutcome:
     generated: bool
     unconfirmed: bool
     tpm_fallback_reason: str | None
+    # This run added the certificate to the Blueprint: a new one, or one of this computer's
+    # that was not on it yet. Microsoft Entra may take a while to accept it for sign-in.
+    registered: bool = False
 
     @property
     def protection(self) -> str:
@@ -86,7 +89,13 @@ def _usable(cert: Any, wincert: Any, now: datetime) -> str | None:
 
 
 def _outcome(
-    cert: Any, now: datetime, *, generated: bool, unconfirmed: bool, tpm_reason: str | None
+    cert: Any,
+    now: datetime,
+    *,
+    generated: bool,
+    unconfirmed: bool,
+    tpm_reason: str | None,
+    registered: bool,
 ) -> CertOutcome:
     return CertOutcome(
         sha1_hex=cert.sha1_hex,
@@ -97,6 +106,7 @@ def _outcome(
         generated=generated,
         unconfirmed=unconfirmed,
         tpm_fallback_reason=tpm_reason,
+        registered=registered,
     )
 
 
@@ -193,7 +203,12 @@ def ensure_blueprint_cert(
             )
 
     outcome = _outcome(
-        cert, now, generated=generated, unconfirmed=unconfirmed, tpm_reason=tpm_reason
+        cert,
+        now,
+        generated=generated,
+        unconfirmed=unconfirmed,
+        tpm_reason=tpm_reason,
+        registered=needs_registering,
     )
     if unconfirmed:
         console.warn("Microsoft Entra has not confirmed the certificate yet.")

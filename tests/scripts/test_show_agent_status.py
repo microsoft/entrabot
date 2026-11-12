@@ -353,6 +353,97 @@ class TestWindowsCertificateSources:
         assert local["status"] == "warn" and "certificate store" in local["detail"]
 
 
+class TestOlderSetupKeys:
+    """An older install kept the Provisioner's private key in a plain file. When setup could
+    not take that key's certificate off the Provisioner app, it recorded it in the state file
+    (PROVISIONER_CERT_REVOKE_PENDING, with its expiry in PROVISIONER_CERT_REVOKE_PENDING_EXPIRES)
+    and retries on every run. Until then the status says so: a warning, not a failed check."""
+
+    OLD_KEY_SHA1 = "c3f1a2b4d5e6f708192a3b4c5d6e7f8091a2b3c4"
+    PENDING = {
+        "PROVISIONER_CERT_REVOKE_PENDING": OLD_KEY_SHA1,
+        "PROVISIONER_CERT_REVOKE_PENDING_EXPIRES": "2027-02-01",
+    }
+    NAME = "Older setup keys"
+
+    def _snapshot(self, monkeypatch, state, *, windows=False):
+        _load_module()
+        monkeypatch.setattr(status_mod, "get_state", lambda key: state.get(key))
+        monkeypatch.setattr(status_mod, "graph_request", _fake_graph)
+        monkeypatch.setattr(status_mod, "_is_windows", lambda: windows)
+        return status_mod._snapshot("tok")
+
+    def _check(self, snapshot):
+        return next(c for c in snapshot["health"]["checks"] if c["name"] == self.NAME)
+
+    def _main(self, monkeypatch, state, argv):
+        _load_module()
+        monkeypatch.setattr(status_mod, "get_existing_graph_token", lambda: "tok")
+        monkeypatch.setattr(status_mod, "get_state", lambda key: state.get(key))
+        monkeypatch.setattr(status_mod, "graph_request", _fake_graph)
+        return status_mod.main(argv)
+
+    @pytest.mark.parametrize("windows", [False, True])
+    def test_a_pending_key_is_a_warning_that_names_it_and_where_to_remove_it(
+        self, monkeypatch, windows
+    ):
+        # Not tied to the platform: the state file says what it says wherever status runs.
+        check = self._check(self._snapshot(monkeypatch, {**STATE, **self.PENDING}, windows=windows))
+
+        assert check["status"] == "warn"
+        assert set(check) == {"name", "status", "detail"}  # the shape of every other check
+        detail = check["detail"]
+        assert "could not be switched off in Microsoft Entra" in detail
+        assert "the certificate whose thumbprint ends in B3C4 (expires 2027-02-01)" in detail
+        assert (
+            "Microsoft Entra admin center (https://entra.microsoft.com): App registrations > "
+            "'EntraBot Agent ID Provisioner' (application ID prov-777) > Certificates & secrets "
+            "> Certificates." in detail
+        )
+        assert detail.endswith("Setup will try again the next time it runs.")
+
+    def test_it_is_a_warning_even_for_strict(self, monkeypatch, capsys):
+        rc = self._main(monkeypatch, {**STATE, **self.PENDING}, ["--json", "--strict"])
+
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["health"]["failed"] == 0 and data["health"]["warnings"] >= 1
+        assert self.NAME in [check["name"] for check in data["health"]["checks"]]
+
+    @pytest.mark.parametrize("argv", [["--json"], ["--health-only"], []])
+    def test_no_full_thumbprint_of_the_older_key_is_printed(self, monkeypatch, capsys, argv):
+        self._main(monkeypatch, {**STATE, **self.PENDING}, argv)
+
+        out = capsys.readouterr().out
+        assert "B3C4" in out
+        assert self.OLD_KEY_SHA1 not in out.lower() and self.OLD_KEY_SHA1[:36] not in out.lower()
+
+    def test_a_record_that_cannot_be_read_is_a_warning_that_says_so(self, monkeypatch):
+        state = {**STATE, "PROVISIONER_CERT_REVOKE_PENDING": "not-a-thumbprint"}
+
+        check = self._check(self._snapshot(monkeypatch, state))
+
+        assert check["status"] == "warn"
+        assert check["detail"].startswith(
+            "Setup could not read its record of older setup keys for this computer."
+        )
+
+    def test_nothing_pending_passes(self, monkeypatch):
+        check = self._check(self._snapshot(monkeypatch, STATE))
+        assert check == {
+            "name": self.NAME,
+            "status": "pass",
+            "detail": "No older setup key is waiting to be switched off",
+        }
+
+    def test_with_no_provisioner_app_recorded_it_is_skipped_like_the_other_checks(
+        self, monkeypatch
+    ):
+        check = self._check(self._snapshot(monkeypatch, {"TENANT_ID": "tenant-111"}))
+        assert check["status"] == "skip"
+        assert check["detail"] == "No setup (Provisioner) app is recorded on this machine"
+
+
 class _Stream:
     """A stand-in for stdout that says whether it is a terminal."""
 

@@ -48,7 +48,8 @@ variables:
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `ENTRABOT_NEW_CHAIN` | unset | When `1`, skips every reuse lookup and forces a fresh chain. `setup.sh --new` sets this. |
-| `_ENTRABOT_UPN_SUFFIX` | empty | Appended to the Agent User `mailNickname`/display name so a forced-new chain does not collide on the unique-UPN constraint. |
+| `_ENTRABOT_UPN_SUFFIX` | empty | The Agent User's sign-in name becomes `entrabot-agent-<suffix>@<domain>` (and its display name `EntraBot Agent (<suffix>)`), so a forced-new chain does not collide on the unique-UPN constraint. Outranks `ENTRABOT_AGENT_USER_UPN`. |
+| `ENTRABOT_AGENT_USER_UPN` | unset | The Agent User's sign-in name, used when no suffix is set. Like every setting, it is read from `.env` when the environment does not set it, so an earlier setup's value counts. `setup.sh --use-blueprint` sets it empty for this script when `.env` was written for another Blueprint. With neither, the name is `entrabot-agent@<domain>`. |
 | `ENTRABOT_ASSIGN_TEAMS_LICENSE` | `1` | Assign a Teams-capable SKU to the Agent User. |
 | `ENTRABOT_ASSIGN_WORK_IQ_LICENSE` | unset | When `1`, also assign a Microsoft 365 Copilot (Work IQ) SKU. |
 
@@ -106,12 +107,34 @@ so a later stage can resume from a partially provisioned chain.
 - **Exit 1** — the Provisioner token could not be obtained
   (`ProvisionerBootstrapError`), the Blueprint recorded for this machine does
   not exist or could not be checked, more than one application has the
-  Blueprint's name and none is recorded, the delegated Graph consent grant failed (a
+  Blueprint's name and none is recorded, an existing Agent User with the
+  sign-in name this run wants belongs to a different Blueprint, a lookup of the
+  agent's Agent Identity or Agent User could not be completed, the delegated
+  Graph consent grant failed (a
   blocking error, because the third hop cannot mint an Agent User token without
   it), or a create call failed after its retries. Token responses are checked
   for an `"error"` key and for a leaked `Directory.AccessAsUser.All` scope
   before proceeding, and a `403` on Agent User creation is reported as a missing
-  `AgentIdUser.ReadWrite.IdentityParentedBy` grant.
+  `AgentIdUser.ReadWrite.IdentityParentedBy` grant. The stops that come from a
+  lookup print a result line first (below).
+
+### Result lines
+
+Each stop that comes from a lookup prints one line of its own just before its
+message, naming the outcome:
+
+| Line | Why the run stopped |
+| --- | --- |
+| `ENTRABOT_RESULT=blueprint-not-found` | The Blueprint recorded for this machine does not exist in this tenant, or the recorded value is not an ID. |
+| `ENTRABOT_RESULT=blueprint-could-not-check` | Graph could not say whether the recorded Blueprint exists, or the search by name could not be completed. |
+| `ENTRABOT_RESULT=blueprint-ambiguous` | No Blueprint is recorded, and more than one application has the Blueprint's name. |
+| `ENTRABOT_RESULT=agent-user-wrong-blueprint` | The Agent User with the sign-in name this run wants belongs to a different Blueprint. |
+| `ENTRABOT_RESULT=agent-lookup-could-not-check` | A lookup of the agent's Agent Identity or Agent User could not be completed, including which Blueprint an existing Agent User belongs to. |
+
+The Windows setup wizard reads this line to explain the stop in its own words,
+and keeps it off the screen (the setup log has it). `setup.sh` shows the
+script's output as it is. Other failures, such as a create call or the consent
+grant failing, print no result line, and neither does a run that completes.
 
 ## Idempotency and resume
 
@@ -122,14 +145,56 @@ before creating or changing anything and never looks for another Blueprint by
 name. Display names are not unique, so a name match could be a different
 agent's Blueprint. Only when no Blueprint is recorded at all does the script
 search by display name; one exact match is used, none means a new Blueprint is
-created, and more than one stops the run and lists them. Before creating a new chain, the script also
-searches the tenant for an existing Agent User by intended UPN and reuses it
-(and its parent Agent Identity) rather than colliding on the unique-UPN
-constraint — which lets a second device or a lost state file re-attach to an
-existing chain. Set `ENTRABOT_NEW_CHAIN=1` to bypass every reuse path.
+created, and more than one stops the run and lists them.
+
+Before it creates an Agent Identity, the script searches the tenant for an
+existing Agent User with the sign-in name this run wants (see
+`ENTRABOT_AGENT_USER_UPN` and `_ENTRABOT_UPN_SUFFIX` above). It reuses that
+Agent User, and its parent Agent Identity, only when the Agent Identity belongs
+to this run's Blueprint: its `agentIdentityBlueprintId` is the Blueprint's App
+ID. That lets a second device, or a machine that lost its state file, re-attach
+to its agent instead of colliding on the unique sign-in name. An Agent User of a
+different Blueprint stops the run before anything is created, granted or
+recorded; the message names both Blueprints and says how to join that one or
+give this agent another name. A Blueprint this run would create has no Agent
+Users yet, so with none recorded or found, an existing Agent User of that name
+always stops the run. If the script cannot read which Blueprint the Agent User
+belongs to, it stops as "could not check"; so does a `404` for its Agent
+Identity, which may be too new to be listed.
+
+Every lookup tells "there is none" from "could not check". Only Graph saying so
+counts as "there is none": an empty list, or `404` for an object recorded in
+the state file. An HTTP error, a request that fails, an answer the script
+cannot read, or a partial list without it (Graph returned more than one page)
+stops the run before the object it was looking for is created. The search by
+sign-in name and the check above run before anything is created or recorded.
+The Agent Identity and Agent User lookups run after the Blueprint is recorded
+(or, for a new agent, created), so their message says what was not created.
+Run the script again once the cause is fixed; it continues from what is
+recorded. Set `ENTRABOT_NEW_CHAIN=1` to bypass every lookup.
 
 ## Common failures
 
+- **`The Agent User <upn> belongs to a different Blueprint`** — the sign-in
+  name this run looks for is another agent's: the one `--agent-user-upn` or
+  `--with-upn-suffix` asked for (`-AgentUserUpn` or `-UpnSuffix` on Windows),
+  the one an earlier setup left in `.env`, or the default
+  `entrabot-agent@<domain>`. Nothing was created or changed. Join that agent's
+  Blueprint, or give this agent's Agent User another name; the message prints
+  both commands. See
+  [Setup and authentication](../../../troubleshooting/setup-and-authentication.md#setup-stops-because-the-agent-user-belongs-to-a-different-blueprint).
+- **`Could not check ...`** — Graph did not answer a lookup the run needs.
+  This is usually throttling or a network problem: run setup again in a few
+  minutes. If it keeps failing with HTTP `401` or `403`, the Provisioner app is
+  missing a permission or its admin consent: run setup again as a tenant
+  administrator. The message says what was not created.
+- **`... does not exist in this tenant`**, or **`N applications in this tenant
+  are named 'EntraBot Code Agent'`** — the Blueprint recorded for this machine
+  is not in the tenant you are signed in to (a mistyped ID, another tenant, a
+  deleted Blueprint, or one created minutes ago that is not listed yet), or no
+  Blueprint is recorded and several applications have its name. Nothing was
+  changed. Run setup again with the right Blueprint App ID
+  (`setup.sh --use-blueprint=APP_ID`, `-UseBlueprint APP_ID` on Windows).
 - **`Directory.AccessAsUser.All` in the response** — an `az` CLI token reached
   an Agent Identity API. Confirm the Provisioner certificate token is in use and
   admin consent is granted for the Provisioner app.

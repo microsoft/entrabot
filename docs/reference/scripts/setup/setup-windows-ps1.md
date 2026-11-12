@@ -168,10 +168,18 @@ The wizard, in order:
    existing app registration with the Provisioner's name only under the rule
    described for [`setup.sh`](setup-sh.md#which-app-registration-is-the-provisioner);
    otherwise setup stops here with exit `1`, having changed nothing in Microsoft
-   Entra. If an older setup key could not be switched off on the Provisioner
+   Entra. It also stops here, with nothing changed in Microsoft Entra, when the
+   app `ENTRABOT_PROVISIONER_APP_ID_VERIFIED` names is not accepted, or when it
+   could not read from Microsoft Entra what it needed to decide. If an older
+   setup key could not be switched off on the Provisioner
    app, setup says so here, on screen, and again on the finish screen.
 6. Creates or connects the agent, assigns a Teams-capable licence when one is
-   free, and adds the chosen sponsors.
+   free, and adds the chosen sponsors. When joining or continuing an agent, an
+   existing Agent User with the chosen name is reused only when it belongs to
+   that agent's Blueprint. Setup stops here with exit `1`, before this PC's
+   certificate step, when the Blueprint does not exist in the tenant, the name
+   belongs to a different agent, or it could not read from Microsoft Entra what
+   it needed, and says which.
 7. Creates this PC's Blueprint certificate, or reuses the existing one if it is
    in date and can sign, and registers it on the Blueprint beside other
    machines' certificates. The key is non-exportable and is held by the TPM
@@ -190,12 +198,17 @@ The wizard, in order:
 It writes a log to `%LOCALAPPDATA%\entrabot\logs\setup-<date>-<time>.log`.
 
 With `-Diagnose`, none of the above runs. The same end-to-end checks are
-reported and nothing is changed.
+reported and nothing is changed. An older setup key that is still waiting to be
+switched off in Microsoft Entra is listed after the state file check, as an
+"Older setup keys" warning, which fails no check. The closing line is then "No
+check failed, but an older setup key still has to be switched off in Microsoft
+Entra (see above)." instead of "All checks passed.".
 
 ## Exit behavior
 
 - `0` — set up and the end-to-end test passed; or `-Help`; or `-BootstrapOnly`
-  finished. With `-Diagnose`: every check passed.
+  finished. With `-Diagnose`: no check failed. Warnings, such as an older setup
+  key still waiting, do not change it.
 - `1` — failed. The message says what failed and what to do. With `-Diagnose`:
   a check failed, or the folder is not set up.
 - `2` — conflicting parameters (reported before anything is installed), or an

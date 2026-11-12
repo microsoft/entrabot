@@ -119,9 +119,9 @@ Notes:
   (`PROVISIONER_CLIENT_ID`), and setup's note about the certificates still to
   remove (`PROVISIONER_CERT_REVOKE_PENDING` and
   `PROVISIONER_CERT_REVOKE_PENDING_EXPIRES`); the backup keeps the whole file.
-  Setup's next run reads the note and tries again. While that file exists,
-  `status-windows.ps1` treats the folder as set up and runs its full report
-  instead of saying the folder is not connected.
+  Setup's next run reads the note and tries again. While that file is all there
+  is, `status-windows.ps1` says the folder is not connected to an agent, names
+  the key that is still waiting on a second line, and exits `1`.
 - If a private key cannot be deleted, the report says so, with how to remove it
   by hand, and teardown exits `1`. A certificate is reported as deleted with its
   key only when both are gone.
