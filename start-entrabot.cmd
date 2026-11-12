@@ -49,7 +49,15 @@ rem under Program Files by itself; a copy installed just for your account needs 
 rem out. Set for this window only, and only when you have not set it yourself.
 if not defined CLAUDE_CODE_GIT_BASH_PATH if not exist "%ProgramFiles%\Git\bin\bash.exe" if exist "%LOCALAPPDATA%\Programs\Git\bin\bash.exe" set "CLAUDE_CODE_GIT_BASH_PATH=%LOCALAPPDATA%\Programs\Git\bin\bash.exe"
 
-rem 4. Start Claude Code. A .cmd shim (an npm install) has to be started with CALL; the
+rem 4. Say what Claude Code asks the first time, here, in the window the questions
+rem appear in. Plain words only: no character cmd treats as an operator or a variable.
+echo Starting your Entrabot agent in Claude Code.
+echo First time? Claude Code asks whether to trust this folder, whether to use
+echo the "entrabot" MCP server, and whether to load a development channel.
+echo Answer yes to each. Then say:  Who are you?
+echo.
+
+rem 5. Start Claude Code. A .cmd shim (an npm install) has to be started with CALL; the
 rem native claude.exe must not be, because CALL re-reads the line and would change
 rem percent signs and carets in your arguments.
 set "EB_CALL="

@@ -4,13 +4,25 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from entrabot.winsetup.azcli import AzCli, AzLocation
 from entrabot.winsetup.helpers import Helpers, Paths
-from entrabot.winsetup.workiq import WorkIqError, configure_work_iq, find_a365
+from entrabot.winsetup.workiq import (
+    A365_INSTALL_HINT,
+    INSTALL_COMMAND,
+    WorkIqError,
+    WorkIqTools,
+    configure_work_iq,
+    find_a365,
+    find_pwsh,
+    find_tools,
+    use_tools,
+    word_tools_configured,
+)
 from tests.winsetup.fakes import FakeSpawn, Reply, make_console, script, words
 
 A365 = Path("C:/Users/x/.dotnet/tools/a365.exe")
@@ -198,6 +210,76 @@ def test_a_failed_helper_stops_the_step(tmp_path: Path) -> None:
         configure_work_iq(**kwargs)
 
 
+# From a real run (Windows 11, over SSH): the sign-in window could not open, and a365 said so
+# in MSAL's words. The last screen gets plain ones; the log keeps a365's.
+MSAL_FAILURE = (
+    "ERROR: MSAL authentication failed: Unknown Status: Unexpected Error: 0xffffffff800703f0\n"
+    "ERROR: Interactive authentication failed: Failed to acquire token\n"
+    "ERROR: Exception type: Microsoft.Agents.A365.DevTools.Cli.Services."
+    "MsalAuthenticationFailedException\n"
+)
+
+
+@pytest.mark.parametrize("failing", [("develop", "add-mcp-servers"), ("setup", "permissions")])
+def test_a_sign_in_failure_has_a_plain_reason(tmp_path: Path, failing: tuple[str, str]) -> None:
+    spawn, kwargs = _setup(tmp_path)
+    spawn.on(words(*failing), Reply(returncode=1, stdout=MSAL_FAILURE))
+    with pytest.raises(WorkIqError) as raised:
+        configure_work_iq(**kwargs)
+    assert raised.value.signed_in is False
+    assert raised.value.reason == "the Agent 365 tool could not sign in to Microsoft"
+    assert "MSAL" not in raised.value.reason
+
+
+def test_another_failure_has_a_short_reason(tmp_path: Path) -> None:
+    spawn, kwargs = _setup(tmp_path)
+    spawn.on(words("setup", "permissions"), Reply(returncode=1, stdout="ERROR: 500\n"))
+    with pytest.raises(WorkIqError) as raised:
+        configure_work_iq(**kwargs)
+    assert raised.value.signed_in is True
+    assert raised.value.reason == "one of the steps that switch them on did not finish"
+
+
+def test_the_first_step_talks_to_the_person_so_its_failure_points_at_the_screen(
+    tmp_path: Path,
+) -> None:
+    # 'a365 setup requirements' runs in the person's terminal (it may ask before changing the
+    # app registration), so setup cannot read what it printed.
+    spawn, kwargs = _setup(tmp_path)
+    spawn.on(words("setup", "requirements"), Reply(returncode=1))
+    with pytest.raises(WorkIqError) as raised:
+        configure_work_iq(**kwargs)
+    assert "its messages are on the screen above" in raised.value.reason
+
+
+@pytest.mark.parametrize("before", [None, '{"mcpServers":[{"mcpServerName":"mcp_WordServer"}]}'])
+def test_a_failed_attempt_leaves_the_projects_work_iq_files_as_they_were(
+    tmp_path: Path, before: str | None
+) -> None:
+    # Otherwise a manifest that a365 filled in before a later step failed would make the next
+    # run (and the agent) think Word, Excel and OneDrive files were switched on.
+    spawn, kwargs = _setup(tmp_path)
+    manifest, config = tmp_path / "ToolingManifest.json", tmp_path / "a365.config.json"
+    if before is not None:
+        manifest.write_text(before, encoding="utf-8")
+        config.write_text('{"tenantId": "old"}', encoding="utf-8")
+
+    def add_servers(_request: object) -> Reply:
+        manifest.write_text('{"mcpServers":[{"mcpServerName":"mcp_WordServer","new":1}]}')
+        return Reply()
+
+    spawn.on(words("develop", "add-mcp-servers"), add_servers)
+    spawn.on(words("setup", "permissions"), Reply(returncode=1))
+    with pytest.raises(WorkIqError):
+        configure_work_iq(**kwargs)
+    if before is None:
+        assert not manifest.exists() and not config.exists()
+        assert not word_tools_configured(tmp_path)
+    else:
+        assert manifest.read_text(encoding="utf-8") == before
+        assert config.read_text(encoding="utf-8") == '{"tenantId": "old"}'
+
+
 class TestFindA365:
     def test_on_path(self) -> None:
         assert find_a365({}, which=lambda name: "C:/tools/a365.exe") == Path("C:/tools/a365.exe")
@@ -211,3 +293,144 @@ class TestFindA365:
 
     def test_missing_is_none(self) -> None:
         assert find_a365({}, which=lambda name: None) is None
+
+    def test_entrabots_own_copy_is_found(self, tmp_path: Path) -> None:
+        # Where scripts\prereqs-windows.ps1 -WithWorkIq installs it without admin rights.
+        exe = _file(tmp_path / "data" / "tools" / "a365" / "a365.exe")
+        found = find_a365({}, which=lambda name: None, data_root=tmp_path / "data")
+        assert found == exe
+
+    def test_one_the_person_installed_comes_first(self, tmp_path: Path) -> None:
+        _file(tmp_path / "data" / "tools" / "a365" / "a365.exe")
+        global_tool = _file(tmp_path / ".dotnet" / "tools" / "a365.exe")
+        found = find_a365(
+            {"USERPROFILE": str(tmp_path)}, which=lambda name: None, data_root=tmp_path / "data"
+        )
+        assert found == global_tool
+
+
+def _file(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"")
+    return path
+
+
+class TestTheToolsWorkIqNeeds:
+    """The a365 CLI, and PowerShell 7 for its permissions step (docs: setup-windows-ps1.md)."""
+
+    def test_powershell_7_on_path(self) -> None:
+        tools = find_tools({}, which=lambda name: f"C:/bin/{name}.exe")
+        assert tools.pwsh == Path("C:/bin/pwsh.exe") and tools.missing == []
+
+    @pytest.mark.parametrize(
+        "where",
+        [
+            ("ProgramFiles", "PowerShell/7/pwsh.exe"),
+            ("LOCALAPPDATA", "Microsoft/WindowsApps/pwsh.exe"),
+        ],
+        ids=["msi", "msix-alias"],
+    )
+    def test_a_just_installed_powershell_7_is_found_without_path(
+        self, tmp_path: Path, where: tuple[str, str]
+    ) -> None:
+        variable, relative = where
+        pwsh = _file(tmp_path / relative)
+        assert find_pwsh({variable: str(tmp_path)}, which=lambda name: None) == pwsh
+
+    def test_what_is_missing_is_named(self) -> None:
+        assert find_tools({}, which=lambda name: None).missing == [
+            "the Microsoft Agent 365 CLI",
+            "PowerShell 7",
+        ]
+        only_a365 = find_tools({}, which=lambda name: "C:/a365.exe" if name == "a365" else None)
+        assert only_a365.missing == ["PowerShell 7"]
+
+    def test_tools_found_off_path_are_put_on_the_path_the_a365_steps_get(
+        self, tmp_path: Path
+    ) -> None:
+        a365 = _file(tmp_path / "profile" / ".dotnet" / "tools" / "a365.exe")
+        pwsh = _file(tmp_path / "pf" / "PowerShell" / "7" / "pwsh.exe")
+        system = str(tmp_path / "Windows")
+        env = {"PATH": system}
+        use_tools(env, WorkIqTools(a365=a365, pwsh=pwsh), which=lambda name: None)
+        assert env["PATH"].split(os.pathsep) == [str(pwsh.parent), str(a365.parent), system]
+        use_tools(env, WorkIqTools(a365=a365, pwsh=pwsh), which=lambda name: None)
+        assert env["PATH"].split(os.pathsep) == [str(pwsh.parent), str(a365.parent), system]
+        assert "DOTNET_ROOT" not in env  # a365 the person installed finds its own .NET
+
+    def test_tools_already_on_path_leave_it_alone(self, tmp_path: Path) -> None:
+        env = {"PATH": str(tmp_path / "Windows")}
+        tools = WorkIqTools(a365=tmp_path / "bin" / "a365.exe", pwsh=tmp_path / "bin" / "pwsh.exe")
+        use_tools(env, tools, which=lambda name: str(tmp_path / "bin" / name))
+        assert env["PATH"] == str(tmp_path / "Windows")
+
+
+class TestEntrabotsOwnDotnet:
+    """The helper installs the .NET SDK and a365 under %LOCALAPPDATA%\\entrabot\\tools when
+    the PC has no SDK, without admin rights. a365.exe is a .NET apphost: started by its own
+    .exe it finds a runtime outside Program Files only through DOTNET_ROOT (Microsoft Learn,
+    ".NET environment variables")."""
+
+    def _private(self, tmp_path: Path) -> tuple[Path, Path]:
+        data = tmp_path / "data"
+        return (
+            _file(data / "tools" / "a365" / "a365.exe"),
+            _file(data / "tools" / "dotnet" / "dotnet.exe"),
+        )
+
+    def test_its_own_a365_runs_on_its_own_dotnet(self, tmp_path: Path) -> None:
+        a365, dotnet = self._private(tmp_path)
+        _file(tmp_path / "pwsh" / "pwsh.exe")
+        tools = find_tools(
+            {"LOCALAPPDATA": str(tmp_path / "nowhere")},
+            which=lambda name: str(tmp_path / "pwsh" / "pwsh.exe") if name == "pwsh" else None,
+            data_root=tmp_path / "data",
+        )
+        assert tools.a365 == a365 and tools.dotnet_root == dotnet.parent
+        assert tools.missing == []
+
+    def test_the_a365_steps_get_dotnet_root_and_dotnet_first_on_path(self, tmp_path: Path) -> None:
+        a365, dotnet = self._private(tmp_path)
+        env = {
+            "PATH": "C-Windows",
+            "DOTNET_ROOT_X64": "C-somewhere-else",  # would win over DOTNET_ROOT
+            "DOTNET_ROOT(x86)": "C-x86",
+        }
+        tools = WorkIqTools(a365=a365, pwsh=tmp_path / "pwsh.exe", dotnet_root=dotnet.parent)
+        use_tools(env, tools, which=lambda name: "on-path" if name == "pwsh" else None)
+        assert env["DOTNET_ROOT"] == str(dotnet.parent)
+        assert "DOTNET_ROOT_X64" not in env and "DOTNET_ROOT(x86)" not in env
+        assert env["PATH"].split(os.pathsep) == [str(dotnet.parent), str(a365.parent), "C-Windows"]
+
+    def test_without_its_own_dotnet_nothing_is_pointed_at_it(self, tmp_path: Path) -> None:
+        # a365 installed into Entrabot's folder with an SDK the PC already had: that SDK's
+        # runtime is registered for the whole PC, and DOTNET_ROOT would hide it.
+        a365 = _file(tmp_path / "data" / "tools" / "a365" / "a365.exe")
+        tools = find_tools({}, which=lambda name: None, data_root=tmp_path / "data")
+        assert tools.a365 == a365 and tools.dotnet_root is None
+
+    def test_an_a365_the_person_installed_is_not_given_entrabots_dotnet(
+        self, tmp_path: Path
+    ) -> None:
+        self._private(tmp_path)
+        tools = find_tools(
+            {},
+            which=lambda name: "C:/bin/a365.exe" if name == "a365" else None,
+            data_root=tmp_path / "data",
+        )
+        assert tools.a365 == Path("C:/bin/a365.exe") and tools.dotnet_root is None
+
+
+class TestTheInstallHint:
+    def test_it_is_the_repos_helper_not_a_manual_download(self) -> None:
+        assert (
+            "powershell -ExecutionPolicy Bypass -File scripts\\prereqs-windows.ps1 -WithWorkIq"
+            in A365_INSTALL_HINT
+        )
+        assert "dotnet.microsoft.com" not in A365_INSTALL_HINT
+        assert "dotnet tool install" not in A365_INSTALL_HINT
+        # What the helper really installs, and that nobody needs to be an administrator.
+        for tool in (".NET SDK", "Agent 365 CLI", "PowerShell 7"):
+            assert tool in A365_INSTALL_HINT
+        assert INSTALL_COMMAND in A365_INSTALL_HINT
+        assert "no administrator rights" in A365_INSTALL_HINT

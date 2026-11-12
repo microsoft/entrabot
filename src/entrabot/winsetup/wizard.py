@@ -2,13 +2,17 @@
 
 The run has two halves. The first only looks and asks: this computer, the sign-in, which
 agent, who it works for, where its memory lives. Nothing in the tenant or on disk changes
-until the person confirms the review screen. The second half does the work, one step at a
-time, and every step is safe to run again: re-running setup is the repair path.
+until the person confirms the review screen, apart from tools the person agrees to install
+(the Azure CLI, the tools Word, Excel and OneDrive files need). The second half does the work,
+one step at a time, and every step is safe to run again: re-running setup is the repair path.
+After the last step, and before the summary, the licence walkthrough (``licences``) can get
+the agent the Microsoft 365 licences it still lacks.
 
 Exit codes: 0 done, 1 failed, 2 usage or a missing answer under ``--yes``, 3 set up but with
 something to check (the end-to-end test failed, a sponsor could not be confirmed, Claude Code
-is too old for the project's safety checks, or an older setup key could not be switched off in
-Microsoft Entra), 130 cancelled.
+is too old for the project's safety checks, an older setup key could not be switched off in
+Microsoft Entra, or Word, Excel and OneDrive files were asked for and do not work yet: their
+tools are not installed, or the agent has no Microsoft 365 Copilot licence), 130 cancelled.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ import re
 import shutil
 import subprocess
 import sys
+import textwrap
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -27,11 +32,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from entrabot.licensing import Report, friendly_name
 from entrabot.winsetup import (
     agentsponsors,
     azcli,
     certstep,
     hosts,
+    licences,
     memory,
     sponsors,
     state,
@@ -213,6 +220,23 @@ def licence_outcome(
     return "unknown"
 
 
+def copilot_outcome(
+    output: str, before: Mapping[str, str], after: Mapping[str, str]
+) -> LicenceOutcome:
+    """What happened to the agent's Microsoft 365 Copilot licence, when Work IQ asked
+    ``create_entra_agent_ids.py`` for one: the same four answers as :func:`licence_outcome`."""
+    if "No Microsoft 365 Copilot licenses found" in output or "No subscribed SKUs found" in output:
+        return "none"
+    if "already has Work IQ license" in output or "already has Teams and Work IQ" in output:
+        return "existing"
+    if "Work IQ license assigned" in output:
+        return "assigned"
+    sku = after.get("AGENT_USER_WORK_IQ_LICENSE_SKU", "")
+    if sku:
+        return "existing" if before.get("AGENT_USER_WORK_IQ_LICENSE_SKU", "") == sku else "assigned"
+    return "unknown"
+
+
 class SetupFailed(Exception):
     """A step failed. *fix* says what to do about it."""
 
@@ -252,9 +276,24 @@ class Options:
 
 
 START_SCRIPT = "start-entrabot.cmd"
+# End-to-end test results after which the agent is not offered a start, or things to try.
+_CANNOT_START = ("sign-in", "keyring", "crashed", "certificate-pending")
+# What Claude Code asks the first time it opens this folder, in the order it asks. Worded
+# by what each question is about: Claude Code's own wording changes between versions.
+FIRST_START_QUESTIONS = (
+    "if this PC has not used it before, then whether to trust this folder, whether to use",
+    'the "entrabot" MCP server, and whether to load a development channel. Say yes to each:',
+    "the folder is the one you just set up, the server is your agent, and the channel is how",
+    "Teams messages reach it.",
+)
 # Characters cmd.exe gives a meaning to even inside quotes. A launcher under such a folder is
 # left for the person to double-click (Explorer starts it correctly).
 _CMD_SPECIAL = re.compile(r"[&^%!()]")
+
+
+def _wrapped(text: str) -> list[str]:
+    """*text* as lines that fit under a thing to check on the last screen."""
+    return textwrap.wrap(text, width=86, break_on_hyphens=False, break_long_words=False)
 
 
 def launch_in_new_console(argv: Sequence[str], cwd: Path) -> None:
@@ -298,7 +337,15 @@ class Plan:
     memory_label: str = ""
     subscription: Subscription | None = None
     location: str = ""
-    work_iq: bool = False
+    work_iq: bool = False  # switched on in this run: its tools are there
+    work_iq_asked: bool = False  # asked for, on the command line or at the question
+    # Why it is off although asked for: "not-installed" (nobody to ask), "declined" (the
+    # install was), "failed" (the install did not leave the tools there), "config-failed"
+    # (a configuration step failed; the agent's own setup carried on).
+    work_iq_off: str = ""
+    # Asked for in a session with no desktop: one a365 step opens a sign-in window, so the
+    # tools may be installed but nothing is configured.
+    work_iq_no_desktop: bool = False
     a365: Path | None = None
     hosts: list[str] = field(default_factory=lambda: list(hosts.KNOWN_HOSTS))
 
@@ -357,6 +404,16 @@ class Wizard:
         self.state: dict[str, str] = {}
         self.env_values: dict[str, str] = {}
         self.licence: LicenceOutcome = "unknown"
+        self.copilot: LicenceOutcome = "unknown"  # Microsoft 365 Copilot, for Work IQ
+        self.work_iq_failure: workiq.WorkIqError | None = None  # why configuring it failed
+        # What setup did on this PC before the review screen, in words: the review says it.
+        self.done_before_review: list[str] = []
+        # What the organization has, as the licence walkthrough last read it: the last
+        # screen's advice is for what the organization has when this says.
+        self.licence_report: Report | None = None
+        # The kinds of licence ("teams", "copilot") whose advice the walkthrough showed: the
+        # last screen points back to it rather than printing it again.
+        self.licence_explained: set[str] = set()
         # Who the agent takes instructions from in Teams, as the directory says: before
         # anything changes (None when it can't be known yet), and after the sync.
         self.current_sponsors: list[DirectorySponsor] | None = None
@@ -691,6 +748,7 @@ class Wizard:
                 )
             except AzError as exc:
                 raise SetupFailed(str(exc)) from exc
+            self.done_before_review.append("installed the Azure CLI")
         az = self.az = AzCli(location, console)
         self.helpers = Helpers(console, self.paths, az.child_env(world.env))
 
@@ -1096,29 +1154,127 @@ class Wizard:
         return next(item for item in self.subscriptions if item.id == picked)
 
     def _decide_work_iq(self) -> None:
-        console, plan = self.console, self.plan
+        console, plan, world = self.console, self.plan, self.world
         asked_by_flag = self.options.configure_work_iq
         wanted = asked_by_flag
         if not wanted and (console.interactive or "work_iq" in console.answers):
+            console.info(
+                "The agent can also read and edit Word, Excel and OneDrive files for you (Work IQ)."
+            )
+            console.info("For that it needs one more licence of its own: Microsoft 365 Copilot.")
+            console.info("Most people skip this.")
             wanted = console.confirm(
-                "Also let the agent read and edit Word, Excel and OneDrive files (Work IQ)? "
-                "Most people skip this",
-                default=False,
-                key="work_iq",
+                "Switch on Word, Excel and OneDrive files?", default=False, key="work_iq"
             )
         if not wanted:
             return
-        plan.a365 = workiq.find_a365(self.world.env, which=self.world.which)
-        if plan.a365 is None:
-            if asked_by_flag:
-                raise SetupFailed(
-                    "Work IQ was asked for, but its tools are not installed. Nothing was changed.",
-                    fix=workiq.A365_INSTALL_HINT,
-                )
-            console.warn("Work IQ needs tools that are not installed, so it is skipped for now.")
-            console.detail(workiq.A365_INSTALL_HINT)
+        plan.work_iq_asked = True
+        tools = workiq.find_tools(world.env, which=world.which, data_root=self.paths.data_root)
+        if tools.missing and asked_by_flag:
+            raise SetupFailed(
+                "Word, Excel and OneDrive files (Work IQ) were asked for, but the tools they need "
+                "are not installed on this PC. Nothing was changed.",
+                fix=workiq.A365_INSTALL_HINT,
+            )
+        desktop = azcli.has_interactive_desktop(world.env, platform=world.platform)
+        if not desktop:
+            # Said before the install is offered, so the person knows what they agree to.
+            plan.work_iq_no_desktop = True
+            console.warn(
+                "Word, Excel and OneDrive files can only be switched on from this PC's own desktop:"
+            )
+            console.info(
+                "     one of their steps opens a Microsoft sign-in window, which this session "
+                "cannot show."
+            )
+        if tools.missing:
+            tools = self._install_work_iq_tools(tools, desktop=desktop)
+            if tools.missing:
+                return
+        if not desktop:
+            console.detail(
+                "They stay off until setup runs at the desktop. What to do is at the end."
+            )
             return
+        plan.a365 = tools.a365
+        # Just installed, they are not on this process's PATH: the a365 steps start
+        # PowerShell 7 by name, and Entrabot's own a365 needs to be told where its .NET is.
+        workiq.use_tools(self.helpers.base_env, tools, which=world.which)
         plan.work_iq = True
+
+    def _install_work_iq_tools(
+        self, tools: workiq.WorkIqTools, *, desktop: bool = True
+    ) -> workiq.WorkIqTools:
+        """Offer to install what Word, Excel and OneDrive files need with the repo's helper,
+        the way Git and Claude Code are offered. Returns what is there afterwards. Without a
+        *desktop* they cannot be switched on in this run, but installing them now makes the
+        run at the desktop quick."""
+        console, plan, world = self.console, self.plan, self.world
+        if desktop:
+            console.warn("Word, Excel and OneDrive files need tools that are not on this PC yet:")
+            console.info(f"     {listed(tools.missing)}.")
+        else:
+            console.info(f"     Their tools are not on this PC yet: {listed(tools.missing)}.")
+        helper_present = (self.paths.scripts / hosts.PREREQS_HELPER).is_file()
+        if not helper_present or not (console.interactive or "install_work_iq" in console.answers):
+            plan.work_iq_off = "not-installed"
+            console.detail("They stay off for now. What to do is at the end.")
+            return tools
+        # Measured on a Windows 11 VM as a standard user: the .NET SDK in about a minute, the
+        # Agent 365 CLI after it, about 900 MB in all. PowerShell 7 comes from winget.
+        offer = [
+            "Setup can install them now with scripts\\prereqs-windows.ps1, for your account "
+            "only. It needs no administrator rights and takes a few minutes."
+            if desktop
+            else "Setup can still install them now with scripts\\prereqs-windows.ps1, so that "
+            "switching them on later at the desktop is quick: for your account only, with no "
+            "administrator rights, in a few minutes."
+        ]
+        if tools.a365 is None:
+            offer.append(
+                "The Microsoft Agent 365 CLI, and the .NET SDK it runs on if this PC has none, go "
+                "in Entrabot's own folder (about 1 GB)."
+            )
+        if tools.pwsh is None:
+            offer.append("PowerShell 7 comes from winget.")
+        offer.append("Anything already there is left alone.")
+        for line in textwrap.wrap(" ".join(offer), width=88, break_on_hyphens=False):
+            console.info(line)
+        if not console.confirm("Install them now?", default=True, key="install_work_iq"):
+            plan.work_iq_off = "declined"
+            console.detail(
+                "Word, Excel and OneDrive files stay off for now. What to do is at the end."
+            )
+            return tools
+        finished = hosts.run_prereqs_helper(
+            self.paths, console, self.helpers.base_env, ["-WithWorkIq"]
+        )
+        tools = workiq.find_tools(world.env, which=world.which, data_root=self.paths.data_root)
+        self.done_before_review.append(
+            "installed the tools for Word, Excel and OneDrive files"
+            if finished and not tools.missing
+            else "tried to install the tools for Word, Excel and OneDrive files"
+        )
+        if not finished or tools.missing:
+            plan.work_iq_off = "failed"
+            console.warn(
+                "The install did not finish, so Word, Excel and OneDrive files stay off for now."
+            )
+            console.detail("Its messages above say what is missing. What to do is at the end.")
+            return tools
+        console.ok("Installed the tools for Word, Excel and OneDrive files")
+        return tools
+
+    def _work_iq_label(self) -> str:
+        """Work IQ, for the review screen."""
+        plan = self.plan
+        if plan.work_iq:
+            return "yes (Word, Excel and OneDrive files)"
+        if plan.work_iq_no_desktop:
+            return "no: only from this PC's own desktop (what to do is at the end)"
+        if plan.work_iq_asked:
+            return "no: its tools are not installed (what to do is at the end)"
+        return "no"
 
     def _review(self) -> None:
         console, plan = self.console, self.plan
@@ -1140,10 +1296,19 @@ class Wizard:
         console.info(f"Agent:       {agent}")
         console.info(f"Will take instructions in Teams from: {self._sponsor_line()}")
         console.info(f"Memory:      {plan.memory_label}")
-        console.info(f"Work IQ:     {'yes' if plan.work_iq else 'no'}")
+        console.info(f"Work IQ:     {self._work_iq_label()}")
         console.info(f"Assistants:  {', '.join(names[host] for host in plan.hosts)}")
         console.blank()
-        console.info("Nothing has been changed yet.")
+        if self.done_before_review:
+            # True to what happened: the tenant is untouched, this PC has new tools.
+            for line in textwrap.wrap(
+                "Nothing has been changed in your tenant yet. On this PC setup has only "
+                f"{listed(self.done_before_review)}.",
+                width=88,
+            ):
+                console.info(line)
+        else:
+            console.info("Nothing has been changed yet.")
         if not console.confirm("Start setting up?", default=True, key="start"):
             raise Cancelled("declined at review")
 
@@ -1156,6 +1321,9 @@ class Wizard:
         memory_result, upload_failed = self._memory(identity, env_result)
         host_report = self._assistants()
         smoke = self._smoke(cert)
+        # Optional, so after everything the agent needs is in place and tested.
+        self._work_iq(identity)
+        self._licences(identity, smoke)
         return self._finish(
             identity, cert, env_result, memory_result, upload_failed, host_report, smoke
         )
@@ -1310,7 +1478,10 @@ class Wizard:
         )
         sku = self.state.get("AGENT_USER_LICENSE_SKU", "")
         if self.licence == "assigned":
-            console.ok(f"Teams licence assigned ({sku})" if sku else "Teams licence assigned")
+            # By a name a person knows; the part number goes to the log only.
+            named = f" ({friendly_name(sku)})" if sku else ""
+            console.ok(f"Teams licence assigned{named}")
+            console.debug(f"Teams licence part number: {sku or 'not recorded'}")
             console.detail("Teams and the mailbox take 10-15 minutes to become available.")
         elif self.licence == "existing":
             console.ok("The agent already has a Teams licence")
@@ -1320,25 +1491,53 @@ class Wizard:
                 "Setup carries on. The agent will work, but not in Teams, until it has one. "
                 "What to do is at the end."
             )
+        if self.plan.work_iq and identity.agent_user_id:
+            self.copilot = copilot_outcome(created.stdout + created.stderr, before, self.state)
+            copilot_sku = self.state.get("AGENT_USER_WORK_IQ_LICENSE_SKU", "")
+            if self.copilot == "assigned":
+                console.ok("Microsoft 365 Copilot licence assigned")
+                console.debug(
+                    f"Microsoft 365 Copilot licence part number: {copilot_sku or 'not recorded'}"
+                )
+            elif self.copilot == "existing":
+                console.ok("The agent already has a Microsoft 365 Copilot licence")
+            elif self.copilot == "none":
+                console.warn(
+                    "The agent has no Microsoft 365 Copilot licence: none is free in this tenant."
+                )
+                console.detail("Word, Excel and OneDrive files need it. What to do is at the end.")
 
         self._sync_sponsors(identity)
-
-        if self.plan.work_iq and self.plan.a365 is not None:
-            try:
-                workiq.configure_work_iq(
-                    paths=paths,
-                    helpers=self.helpers,
-                    console=console,
-                    az=self.az,
-                    a365=self.plan.a365,
-                    tenant_id=self.account.tenant_id,
-                    blueprint_app_id=identity.blueprint_app_id,
-                    blueprint_object_id=identity.blueprint_object_id,
-                    agent_id=identity.agent_id,
-                )
-            except workiq.WorkIqError as exc:
-                raise SetupFailed(str(exc)) from exc
         return identity
+
+    def _work_iq(self, identity: Identity) -> None:
+        """After the end-to-end test, not a numbered step: point the Agent 365 tooling at the
+        agent and grant it Work IQ. A failure never stops setup: Word, Excel and OneDrive
+        files stay off, and the last screen says why and what to do."""
+        plan, console = self.plan, self.console
+        if not plan.work_iq or plan.a365 is None:
+            return
+        assert self.account is not None and self.az is not None
+        console.section("Word, Excel and OneDrive files")
+        try:
+            workiq.configure_work_iq(
+                paths=self.paths,
+                helpers=self.helpers,
+                console=console,
+                az=self.az,
+                a365=plan.a365,
+                tenant_id=self.account.tenant_id,
+                blueprint_app_id=identity.blueprint_app_id,
+                blueprint_object_id=identity.blueprint_object_id,
+                agent_id=identity.agent_id,
+            )
+        except workiq.WorkIqError as exc:
+            plan.work_iq = False
+            plan.work_iq_off = "config-failed"
+            self.work_iq_failure = exc
+            console.warn("Word, Excel and OneDrive files could not be switched on.")
+            console.detail(str(exc))
+            console.detail("Setup carries on without them. What to do is at the end.")
 
     def _agent_step_stopped(self, outcome: str, *, blueprint: str, recorded: bool) -> SetupFailed:
         """Why the agent step stopped, from the result line create_entra_agent_ids.py printed
@@ -1481,6 +1680,61 @@ class Wizard:
         program = hosts.claude_program(host_report.claude, self.world.which)
         return f"{program} {hosts.START_ARGUMENTS}"
 
+    def _things_to_try(self) -> None:
+        """What to ask the agent once it answers, by what this agent can actually do: Teams
+        and mail follow its licence, and the Word tools exist only with Work IQ."""
+        console = self.console
+
+        def under(text: str) -> None:  # a line under a suggestion, below its first word
+            console.detail(f" {text}")  # detail indents five; a suggestion's words start at six
+
+        def note(text: str) -> None:  # a line of its own, level with the suggestions' dashes
+            console.info(f"  {text}")
+
+        console.blank()
+        console.info("Things to try next. Say them to the agent:")
+        if self.licence == "none":
+            # Mail needs a licence as much as Teams does: one line for both, for later.
+            note(
+                "- Once the agent has its licence (see above), ask it to message you in Teams "
+                "and email you."
+            )
+        else:
+            note("- Send me a Teams message to say hello.")
+            under("Then answer it in Teams. The agent sees your reply.")
+            if self.licence == "assigned":
+                under("If Teams doesn't answer straight away: a new licence takes 10-15 minutes.")
+            note("- Send me an email that says what you can do.")
+            under("Needs a licence that includes Outlook mail.")
+        plan = self.plan
+        if plan.work_iq and self.copilot in ("assigned", "existing"):
+            note("- Create a Word document called Hello and share it with me.")
+            if self.copilot == "assigned":
+                under("A new Microsoft 365 Copilot licence can take 10-15 minutes.")
+        elif plan.work_iq:
+            note("Word, Excel and OneDrive files are switched on, but they need the agent's")
+            note("Microsoft 365 Copilot licence first (see above).")
+        elif plan.work_iq_asked:
+            note(
+                "Word, Excel and OneDrive files were asked for but are not switched on yet (see "
+                "above)."
+            )
+        elif workiq.word_tools_configured(self.paths.project_root):
+            note("- Create a Word document called Hello and share it with me.")
+        else:
+            note(
+                "Word, Excel and OneDrive files are not switched on. To add them, run setup "
+                "again and"
+            )
+            note("answer yes to that question.")
+        console.info(
+            "  The agent can use only the Microsoft 365 products it has a licence for. An "
+            "administrator"
+        )
+        console.info(
+            "  gives it one in the Microsoft 365 admin center:  https://admin.microsoft.com"
+        )
+
     def _offer_to_start(self, host_report: hosts.HostReport, smoke: str) -> None:
         """Interactively, offer to open the agent in its own window. Never unattended, and
         only when it can actually start: the launcher is there, nothing is left to install,
@@ -1492,7 +1746,7 @@ class Wizard:
             or "claude" not in self.plan.hosts
             or not launcher.is_file()
             or host_report.todo
-            or smoke in ("sign-in", "keyring", "crashed", "certificate-pending")
+            or smoke in _CANNOT_START
             or not azcli.has_interactive_desktop(world.env, platform=world.platform)
             or _CMD_SPECIAL.search(str(launcher))
         ):
@@ -1729,6 +1983,126 @@ class Wizard:
             return "keyring" if any(marker in detail for marker in _KEYRING_MARKERS) else "sign-in"
         return "teams-not-ready"
 
+    def _licences(self, identity: Identity, smoke: str) -> None:
+        """After the end-to-end test, before the summary: the licence walkthrough (not a
+        numbered step), when the agent lacks a licence that includes Teams, or the Microsoft
+        365 Copilot licence that Word, Excel and OneDrive files need, once they are switched
+        on in this setup (asked for but left off, Copilot is not mentioned). Offered only to
+        someone at the keyboard (or by its answer key) and only when the agent could sign in.
+        Otherwise the organization's licences are only read, so the last screen can say what
+        to do about what it has."""
+        if not identity.agent_user_id:
+            return
+        need_teams = smoke != "pass" and (
+            self.licence == "none" or (self.licence == "unknown" and smoke == "teams-not-ready")
+        )
+        need_copilot = self.plan.work_iq and self.copilot not in ("assigned", "existing")
+        if not (need_teams or need_copilot):
+            return
+        console, env = self.console, self._tenant_env()
+        offered = smoke in ("pass", "teams-not-ready", "skipped") and (
+            console.interactive or licences.OFFER_KEY in console.answers
+        )
+        if not offered:
+            report = self.licence_report = licences.read_quietly(self.helpers, env)
+            if report is not None and need_teams and report.agent_has("teams"):
+                self.licence = "existing"
+            if report is not None and need_copilot and report.agent_has("copilot"):
+                self.copilot = "existing"
+            return
+        outcome = licences.walk_through(
+            console, self.helpers, env, teams=need_teams, copilot=need_copilot
+        )
+        self.licence_report = outcome.report
+        self.licence_explained = set(outcome.explained)
+        known: dict[str, LicenceOutcome] = {"assigned": "assigned", "had": "existing"}
+        self.licence = known.get(outcome.teams, self.licence)
+        self.copilot = known.get(outcome.copilot, self.copilot)
+        try:  # what the walkthrough recorded, for anything that reads it after this
+            self.state = state.read_state(self.paths.state_file)
+        except IdentityError as exc:
+            console.debug(f"Could not read the state file again: {exc}")
+
+    def _work_iq_needs_the_desktop(self) -> tuple[str, list[str]]:
+        """The last screen's reminder after a run without a desktop: what was installed, and
+        that the switch-on has to happen at the desktop."""
+        missing = self.plan.work_iq_off in ("not-installed", "declined", "failed")
+        body: list[str] = []
+        if missing:
+            body += [
+                "Their tools are not installed yet either. To install them:",
+                f"  {workiq.INSTALL_COMMAND}",
+            ]
+        body += _wrapped(
+            "Sign in at this PC's own desktop (or with Remote Desktop) and run setup again there, "
+            "answering yes to the Word, Excel and OneDrive question."
+            + ("" if missing else " Their tools are installed, so that run is quick.")
+        )
+        return (
+            "Word, Excel and OneDrive files were asked for, but they can only be switched on from "
+            "this PC's own desktop: one of their steps opens a Microsoft sign-in window.",
+            body,
+        )
+
+    def _work_iq_did_not_finish(self, failure: workiq.WorkIqError) -> tuple[str, list[str]]:
+        """The last screen's reminder after a configuration step failed: why in plain words,
+        what to do, and where the details are."""
+        reason = failure.reason[:1].upper() + failure.reason[1:]
+        if not reason.endswith("."):
+            reason += "."
+        again = (
+            "Run setup again at this PC's own desktop, sign in when the Microsoft window opens, "
+            "and answer yes to the Word, Excel and OneDrive question."
+            if not failure.signed_in
+            else "Run setup again and answer yes to the Word, Excel and OneDrive question."
+        )
+        body = [*_wrapped(reason), *_wrapped(again)]
+        if self.console.log_file:
+            body += ["The details are in the setup log:", f"  {self.console.log_file}"]
+        return (
+            "Word, Excel and OneDrive files were asked for, but they are not switched on.",
+            body,
+        )
+
+    def _work_iq_attention(self) -> tuple[str, list[str]] | None:
+        """Word, Excel and OneDrive files were asked for and do not work yet: why, and what
+        to do. None when they work, or were not asked for."""
+        plan = self.plan
+        if plan.work_iq_asked and not plan.work_iq and plan.work_iq_no_desktop:
+            return self._work_iq_needs_the_desktop()
+        if plan.work_iq_asked and not plan.work_iq and self.work_iq_failure is not None:
+            return self._work_iq_did_not_finish(self.work_iq_failure)
+        if plan.work_iq_asked and not plan.work_iq:
+            why = {
+                "declined": "you chose not to install the tools they need",
+                "failed": "the tools they need could not be installed",
+            }.get(plan.work_iq_off, "the tools they need are not installed on this PC")
+            return (
+                "Word, Excel and OneDrive files were asked for, but they are not switched on: "
+                f"{why}.",
+                [
+                    "To switch them on, install the tools:",
+                    f"  {workiq.INSTALL_COMMAND}",
+                    "then run setup again and answer yes to the Word, Excel and OneDrive question.",
+                ],
+            )
+        if plan.work_iq and self.copilot not in ("assigned", "existing"):
+            if self.copilot == "unknown" and self.licence_report is None:
+                headline = (
+                    "Word, Excel and OneDrive files are switched on, but setup could not check "
+                    f"that the agent has the {licences.whole('Microsoft 365 Copilot')} licence "
+                    "they need."
+                )
+            else:
+                headline = (
+                    "Word, Excel and OneDrive files are switched on, but the agent has no "
+                    f"{licences.whole('Microsoft 365 Copilot')} licence, which they need."
+                )
+            return headline, licences.last_screen_lines(
+                self.licence_report, "copilot", shown="copilot" in self.licence_explained
+            )
+        return None
+
     def _finish(
         self,
         identity: Identity,
@@ -1747,12 +2121,14 @@ class Wizard:
         old_keys = self._read_old_setup_keys()
         if self.old_keys.unreadable and not old_keys.unreadable:
             old_keys = replace(old_keys, unreadable=True)
+        work_iq_attention = self._work_iq_attention()
         healthy = (
             smoke in ("pass", "skipped")
             and not upload_failed
             and not self.sponsor_attention
             and not host_report.attention
             and not old_keys.pending
+            and work_iq_attention is None
         )
         console.banner(
             "Entrabot is set up" if healthy else "Setup finished, with something to check"
@@ -1847,19 +2223,14 @@ class Wizard:
                 )
             else:  # it could not sign in, or the test did not get that far: said just above
                 console.warn("The agent also has no Teams licence, so it cannot use Teams yet.")
-            console.info("     What to do:")
-            console.info(
-                "       1. Make a licence that includes Teams available in the tenant (for example"
-            )
-            console.info(
-                "          Microsoft 365 Business Basic, E3, E5 or Teams Essentials). A billing or"
-            )
-            console.info(
-                "          licence administrator does this in the Microsoft 365 admin center:"
-            )
-            console.info("          https://admin.microsoft.com  >  Billing  >  Licenses")
-            console.info("       2. Run setup again. It gives the agent the licence by itself.")
-            console.info("     Then check with:  scripts\\setup-windows.cmd -Diagnose")
+            # For what this organization has, when setup could read it (licences.py); in a
+            # line or two when the walkthrough above already said it.
+            shown = "teams" in self.licence_explained
+            for line in licences.last_screen_lines(self.licence_report, "teams", shown=shown):
+                console.info(f"     {line}")
+        if work_iq_attention is not None:
+            console.blank()
+            licences.say(console, *work_iq_attention)
         for reason in host_report.attention:
             console.blank()
             console.warn(reason)
@@ -1880,28 +2251,30 @@ class Wizard:
             number += 1
             console.info(f"  {number}. {item}")
         launcher = paths.project_root / START_SCRIPT
-        first_words = (
-            "Who are you?"  # Teams can't answer until the agent has a licence
-            if self.licence == "none"
-            else "Who are you? Send me a Teams message to say hello."
-        )
         if "claude" not in self.plan.hosts:
             console.info(
                 f"  {number + 1}. Open GitHub Copilot CLI in {paths.project_root}. "
                 "The agent's tools load by themselves."
             )
-        elif launcher.is_file():
-            console.info(f"  {number + 1}. Double-click {START_SCRIPT} in {paths.project_root}")
-            console.detail(f"     (or, in a terminal there:  {self._claude_command(host_report)})")
-            console.info(f"  {number + 2}. Then say:  {first_words}")
+            number += 1
         else:
-            console.info(f"  {number + 1}. Open a terminal in {paths.project_root} and run:")
-            console.info(f"       {self._claude_command(host_report)}")
-            console.info(f"  {number + 2}. Then say:  {first_words}")
-        if self.licence == "assigned":
-            console.detail(
-                "If Teams doesn't answer straight away: a new licence takes 10-15 minutes."
+            if launcher.is_file():
+                console.info(f"  {number + 1}. Double-click {START_SCRIPT} in {paths.project_root}")
+                # Under the step's words: detail indents five, the words start at seven.
+                console.detail(f"  (or, in a terminal there:  {self._claude_command(host_report)})")
+            else:
+                console.info(f"  {number + 1}. Open a terminal in {paths.project_root} and run:")
+                console.info(f"       {self._claude_command(host_report)}")
+            console.info(
+                f"  {number + 2}. Answer Claude Code's questions. The first time, it asks you to "
+                "sign in to Claude"
             )
+            for line in FIRST_START_QUESTIONS:
+                console.info(f"     {line}")
+            number += 2
+        console.info(f"  {number + 1}. Then say:  Who are you?")
+        if smoke not in _CANNOT_START:
+            self._things_to_try()
         console.blank()
         console.info("Later:")
         console.info("  Health check:       scripts\\setup-windows.cmd -Diagnose")
@@ -1920,6 +2293,7 @@ class Wizard:
             or self.sponsor_attention
             or host_report.attention
             or old_keys.pending
+            or work_iq_attention is not None
         ):
             return EXIT_SMOKE_FAILED  # set up, with something to check
         return EXIT_OK

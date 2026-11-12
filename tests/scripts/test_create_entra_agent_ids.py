@@ -12,6 +12,7 @@ intended Blueprint.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -586,6 +587,106 @@ class TestAssignLicenseToAgentUser:
         assert "Work IQ provisioning can take 10-15 minutes" in output
         assert "Teams/mailbox and Work IQ provisioning can take 10-15 minutes" not in output
         assert state == {"AGENT_USER_WORK_IQ_LICENSE_SKU": "MICROSOFT_365_COPILOT"}
+
+
+def _sku_with_plans(sku_id: str, part: str, plans: list[str], *, free: int = 2) -> dict:
+    return {
+        "skuId": sku_id,
+        "skuPartNumber": part,
+        "appliesTo": "User",
+        "prepaidUnits": {"enabled": free + 1},
+        "consumedUnits": 1,
+        "servicePlans": [{"servicePlanName": name, "appliesTo": "User"} for name in plans],
+    }
+
+
+class TestTheTeamsLicenceIsRecognisedByWhatItContains:
+    """The licence step used a list of part numbers. It counted "Microsoft 365 E5 Extra
+    Features" (no Teams) as Teams, and missed Microsoft 365 Business Basic and Premium."""
+
+    def _run(
+        self,
+        agent_ids_module: ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+        skus: list[dict],
+        existing: list[str],
+    ) -> tuple[list[str], dict[str, str]]:
+        assigned: list[str] = []
+        state: dict[str, str] = {}
+
+        def fake_graph_request(method, path, token, **kw):
+            if path == "/users/agent-user-id?$select=assignedLicenses":
+                return _resp(200, {"assignedLicenses": [{"skuId": item} for item in existing]})
+            if path == "/subscribedSkus":
+                return _resp(200, {"value": skus})
+            if path == "/users/agent-user-id":
+                return _resp(204, {})
+            if path == "/users/agent-user-id/assignLicense":
+                assigned.append(kw["json_body"]["addLicenses"][0]["skuId"])
+                return _resp(200, {})
+            raise AssertionError(f"unexpected Graph call: {method} {path}")
+
+        monkeypatch.setattr(agent_ids_module, "graph_request", fake_graph_request)
+        monkeypatch.setattr(agent_ids_module, "set_state", state.__setitem__)
+        agent_ids_module.assign_license_to_agent_user("token", "agent-user-id")
+        return assigned, state
+
+    def test_an_agent_with_only_e5_extra_features_still_gets_teams(
+        self, agent_ids_module, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        skus = [
+            _sku_with_plans("extra", "M365_E5_SUITE_COMPONENTS", ["CLIPCHAMP", "MICROSOFT_LOOP"]),
+            _sku_with_plans("spb", "SPB", ["TEAMS1", "EXCHANGE_S_STANDARD", "SHAREPOINTSTANDARD"]),
+        ]
+        assigned, state = self._run(agent_ids_module, monkeypatch, skus, existing=["extra"])
+        assert assigned == ["spb"] and state == {"AGENT_USER_LICENSE_SKU": "SPB"}
+
+    def test_the_licence_that_also_brings_mail_and_files_is_chosen(
+        self, agent_ids_module, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        skus = [
+            _sku_with_plans("ess", "Teams_Ess", ["TeamsEss"]),
+            _sku_with_plans("basic", "O365_BUSINESS_ESSENTIALS", ["TEAMS1", "EXCHANGE_S_STANDARD"]),
+            _sku_with_plans("spb", "SPB", ["TEAMS1", "EXCHANGE_S_STANDARD", "SHAREPOINTSTANDARD"]),
+        ]
+        assigned, _state = self._run(agent_ids_module, monkeypatch, skus, existing=[])
+        assert assigned == ["spb"]
+
+    @pytest.mark.parametrize(
+        "sku",
+        [
+            _sku_with_plans(
+                "e3nt",
+                "Microsoft_365_E3_(no_Teams)",
+                ["MESH_AVATARS_FOR_TEAMS", "CDS_O365_P2", "EXCHANGE_S_ENTERPRISE"],
+            ),
+            _sku_with_plans("dev", "MCOCAP", ["TEAMS1", "MCOEV"]),
+            _sku_with_plans("rooms", "Microsoft_Teams_Rooms_Pro", ["TEAMS1", "MCOEV"]),
+        ],
+        ids=["no-teams-suite", "shared-devices", "rooms"],
+    )
+    def test_a_licence_without_teams_for_a_person_is_never_assigned_as_one(
+        self,
+        agent_ids_module,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        sku: dict,
+    ) -> None:
+        assigned, state = self._run(agent_ids_module, monkeypatch, [sku], existing=[])
+        assert assigned == [] and state == {}
+        assert "No Teams-capable licenses found with available seats." in capsys.readouterr().out
+
+    def test_an_agent_with_a_teams_licence_by_its_plans_is_left_alone(
+        self,
+        agent_ids_module,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        skus = [_sku_with_plans("basic", "SMB_BUSINESS_ESSENTIALS", ["TEAMS1"])]
+        assigned, _state = self._run(agent_ids_module, monkeypatch, skus, existing=["basic"])
+        assert assigned == []
+        out = capsys.readouterr().out
+        assert "already has Teams-capable license: SMB_BUSINESS_ESSENTIALS" in out
 
 
 # ---------------------------------------------------------------------------
@@ -1733,3 +1834,252 @@ class TestANewChainLooksNothingUp:
         ]
         assert ("assign_license_to_agent_user", NEW_USER_OBJECT) in granted
         assert "ENTRABOT_RESULT=" not in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# The licence on its own: what the Windows wizard's licence walkthrough runs
+# ---------------------------------------------------------------------------
+
+LICENCE_MARKERS = {
+    "LICENCE_ASSIGNED_MARKER": "ENTRABOT_RESULT=licence-assigned",
+    "LICENCE_ALREADY_ASSIGNED_MARKER": "ENTRABOT_RESULT=licence-already-assigned",
+    "LICENCE_NO_FREE_SEAT_MARKER": "ENTRABOT_RESULT=licence-no-free-seat",
+    "LICENCE_NOT_FOUND_MARKER": "ENTRABOT_RESULT=licence-not-found",
+    "LICENCE_ASSIGN_FAILED_MARKER": "ENTRABOT_RESULT=licence-assign-failed",
+    "LICENCE_COULD_NOT_READ_MARKER": "ENTRABOT_RESULT=licence-could-not-read",
+}
+TEAMS_SKU = "11111111-aaaa-4000-8000-000000000001"
+COPILOT_SKU = "22222222-aaaa-4000-8000-000000000002"
+DEVICE_SKU = "33333333-aaaa-4000-8000-000000000003"
+ASSIGNED_TO_AGENT = f"/users/{AGENT_USER_OBJECT}?$select=assignedLicenses"
+BUSINESS_PREMIUM = _sku_with_plans(
+    TEAMS_SKU, "SPB", ["TEAMS1", "EXCHANGE_S_STANDARD", "SHAREPOINTSTANDARD"], free=1
+)
+COPILOT = _sku_with_plans(COPILOT_SKU, "Microsoft_365_Copilot", ["M365_COPILOT_APPS"], free=1)
+SHARED_DEVICES = _sku_with_plans(DEVICE_SKU, "MCOCAP", ["TEAMS1", "MCOEV"], free=4)
+
+
+@pytest.fixture
+def licences(lookup: Lookup, monkeypatch: pytest.MonkeyPatch) -> Lookup:
+    """A machine whose agent exists: its Agent User is recorded, and no retry really waits."""
+    lookup.state["AGENT_USER_ID"] = AGENT_USER_OBJECT
+    monkeypatch.setattr(lookup.module, "time", SimpleNamespace(sleep=lambda _seconds: None))
+    return lookup
+
+
+def _result_lines(out: str) -> list[str]:
+    return [line for line in out.splitlines() if line.startswith("ENTRABOT_RESULT=")]
+
+
+class TestTheLicenceOnItsOwn:
+    def test_the_markers_are_the_lines_the_windows_wizard_matches(
+        self, agent_ids_module: ModuleType
+    ) -> None:
+        from entrabot.winsetup import licences
+
+        for name, line in LICENCE_MARKERS.items():
+            assert getattr(agent_ids_module, name) == line
+        assert {line.split("=", 1)[1] for line in LICENCE_MARKERS.values()} == {
+            licences.ASSIGNED,
+            licences.ALREADY_ASSIGNED,
+            licences.NO_FREE_SEAT,
+            licences.NOT_FOUND,
+            licences.ASSIGN_FAILED,
+            licences.COULD_NOT_READ,
+        }
+
+    def test_the_report_says_what_the_tenant_and_the_agent_have_and_changes_nothing(
+        self, licences: Lookup, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from entrabot.licensing import Report
+
+        licences.answer("/subscribedSkus", _resp(200, {"value": [BUSINESS_PREMIUM, COPILOT]}))
+        licences.answer(
+            ASSIGNED_TO_AGENT, _resp(200, {"assignedLicenses": [{"skuId": COPILOT_SKU}]})
+        )
+        state = dict(licences.state)
+
+        assert licences.module.main(["--licence-report"]) == 0
+
+        (line,) = _result_lines(capsys.readouterr().out)
+        report = Report.from_json(json.loads(line.split("=", 1)[1]))
+        assert report.agent == (COPILOT_SKU,)
+        assert [product.name for product in report.free_for("teams")] == [
+            "Microsoft 365 Business Premium"
+        ]
+        assert report.agent_has("copilot") and not report.agent_has("teams")
+        assert licences.graph.writes == [] and licences.state == state
+
+    @pytest.mark.parametrize(
+        "broken",
+        ["/subscribedSkus", ASSIGNED_TO_AGENT],
+    )
+    def test_a_report_that_cannot_be_read_says_so(
+        self, licences: Lookup, capsys: pytest.CaptureFixture[str], broken: str
+    ) -> None:
+        licences.answer("/subscribedSkus", _resp(200, {"value": [BUSINESS_PREMIUM]}))
+        licences.answer(ASSIGNED_TO_AGENT, _resp(200, {"assignedLicenses": []}))
+        licences.answer(broken, _resp(403, {"error": {"code": "Authorization_RequestDenied"}}))
+
+        assert licences.module.main(["--licence-report"]) == 1
+
+        out = capsys.readouterr().out
+        assert _the_one_marker(out) == LICENCE_MARKERS["LICENCE_COULD_NOT_READ_MARKER"]
+        assert "HTTP 403" in out
+
+    def test_without_a_recorded_agent_user_nothing_is_asked(
+        self, licences: Lookup, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        del licences.state["AGENT_USER_ID"]
+
+        assert licences.module.main(["--licence-report"]) == 1
+
+        assert _the_one_marker(capsys.readouterr().out) == (
+            LICENCE_MARKERS["LICENCE_COULD_NOT_READ_MARKER"]
+        )
+        assert licences.graph.calls == []
+
+    def test_without_the_provisioner_token_nothing_is_asked(
+        self,
+        licences: Lookup,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        def no_token() -> str:
+            raise licences.module.ProvisionerBootstrapError("no Provisioner app is recorded")
+
+        monkeypatch.setattr(licences.module, "get_existing_graph_token", no_token)
+
+        assert licences.module.main(["--licence-report"]) == 1
+
+        out = capsys.readouterr().out
+        assert _the_one_marker(out) == LICENCE_MARKERS["LICENCE_COULD_NOT_READ_MARKER"]
+        assert "no Provisioner app is recorded" in out and licences.graph.calls == []
+
+    def _assignable(self, licences: Lookup, *skus: dict, agent: list[str] | None = None) -> None:
+        licences.answer("/subscribedSkus", _resp(200, {"value": list(skus)}))
+        licences.answer(
+            ASSIGNED_TO_AGENT,
+            _resp(200, {"assignedLicenses": [{"skuId": item} for item in agent or []]}),
+        )
+        licences.answer(f"/users/{AGENT_USER_OBJECT}", _resp(204, {}), method="PATCH")
+        licences.answer(
+            f"/users/{AGENT_USER_OBJECT}/assignLicense", _resp(200, {}), method="POST"
+        )
+
+    def test_a_teams_licence_is_given_after_the_usage_location_and_recorded(
+        self, licences: Lookup, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._assignable(licences, BUSINESS_PREMIUM, COPILOT)
+
+        assert licences.module.main(["--assign-licence", TEAMS_SKU]) == 0
+
+        assert _result_lines(capsys.readouterr().out) == [
+            LICENCE_MARKERS["LICENCE_ASSIGNED_MARKER"]
+        ]
+        assert licences.graph.writes == [
+            ("PATCH", f"/users/{AGENT_USER_OBJECT}"),
+            ("POST", f"/users/{AGENT_USER_OBJECT}/assignLicense"),
+        ]
+        assert licences.state["AGENT_USER_LICENSE_SKU"] == "SPB"
+        assert "AGENT_USER_WORK_IQ_LICENSE_SKU" not in licences.state
+
+    def test_the_licence_given_is_the_one_asked_for(
+        self, licences: Lookup, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._assignable(licences, BUSINESS_PREMIUM, COPILOT)
+        sent: list[dict] = []
+        graph = licences.graph
+
+        def recording(method: str, path: str, token: str, json_body=None, **kwargs):  # noqa: ANN001, ANN202
+            if path.endswith("/assignLicense"):
+                sent.append(json_body)
+            return graph(method, path, token, json_body, **kwargs)
+
+        monkeypatch.setattr(licences.module, "graph_request", recording)
+
+        assert licences.module.main(["--assign-licence", COPILOT_SKU]) == 0
+
+        assert sent == [{"addLicenses": [{"skuId": COPILOT_SKU}], "removeLicenses": []}]
+        assert licences.state["AGENT_USER_WORK_IQ_LICENSE_SKU"] == "Microsoft_365_Copilot"
+        assert "AGENT_USER_LICENSE_SKU" not in licences.state
+
+    def test_a_licence_the_agent_already_has_is_recorded_and_not_given_again(
+        self, licences: Lookup, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._assignable(licences, BUSINESS_PREMIUM, agent=[TEAMS_SKU])
+
+        assert licences.module.main(["--assign-licence", TEAMS_SKU]) == 0
+
+        assert _result_lines(capsys.readouterr().out) == [
+            LICENCE_MARKERS["LICENCE_ALREADY_ASSIGNED_MARKER"]
+        ]
+        assert licences.graph.writes == []
+        assert licences.state["AGENT_USER_LICENSE_SKU"] == "SPB"
+
+    def test_no_free_seat_is_said_before_anything_changes(
+        self, licences: Lookup, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        full = dict(BUSINESS_PREMIUM, consumedUnits=2, prepaidUnits={"enabled": 2})
+        self._assignable(licences, full)
+
+        assert licences.module.main(["--assign-licence", TEAMS_SKU]) == 1
+
+        assert _the_one_marker(capsys.readouterr().out) == (
+            LICENCE_MARKERS["LICENCE_NO_FREE_SEAT_MARKER"]
+        )
+        assert licences.graph.writes == []
+
+    @pytest.mark.parametrize(
+        "asked",
+        [DEVICE_SKU, "44444444-aaaa-4000-8000-000000000004", "not-an-id"],
+        ids=["shared-devices", "not-in-the-tenant", "not-an-id"],
+    )
+    def test_a_licence_that_is_not_one_for_the_agent_is_never_given(
+        self, licences: Lookup, capsys: pytest.CaptureFixture[str], asked: str
+    ) -> None:
+        self._assignable(licences, BUSINESS_PREMIUM, SHARED_DEVICES)
+
+        assert licences.module.main(["--assign-licence", asked]) == 1
+
+        assert _the_one_marker(capsys.readouterr().out) == (
+            LICENCE_MARKERS["LICENCE_NOT_FOUND_MARKER"]
+        )
+        assert licences.graph.writes == []
+
+    def test_a_refused_assignment_says_so(
+        self, licences: Lookup, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._assignable(licences, BUSINESS_PREMIUM)
+        licences.answer(
+            f"/users/{AGENT_USER_OBJECT}/assignLicense",
+            _resp(400, {"error": {"code": "Request_BadRequest"}}),
+            method="POST",
+        )
+
+        assert licences.module.main(["--assign-licence", TEAMS_SKU]) == 1
+
+        out = capsys.readouterr().out
+        assert _the_one_marker(out) == LICENCE_MARKERS["LICENCE_ASSIGN_FAILED_MARKER"]
+        assert "AGENT_USER_LICENSE_SKU" not in licences.state
+
+    def test_a_usage_location_that_cannot_be_set_stops_before_the_assignment(
+        self, licences: Lookup, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._assignable(licences, BUSINESS_PREMIUM)
+        licences.answer(f"/users/{AGENT_USER_OBJECT}", _resp(404, {}), method="PATCH")
+
+        assert licences.module.main(["--assign-licence", TEAMS_SKU]) == 1
+
+        out = capsys.readouterr().out
+        assert _the_one_marker(out) == LICENCE_MARKERS["LICENCE_ASSIGN_FAILED_MARKER"]
+        assert ("POST", f"/users/{AGENT_USER_OBJECT}/assignLicense") not in licences.graph.calls
+
+    def test_with_no_arguments_it_is_the_full_run_as_before(
+        self, agent_ids_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ran: list[str] = []
+        monkeypatch.setattr(agent_ids_module, "get_existing_graph_token", lambda: "tok")
+        monkeypatch.setattr(agent_ids_module, "_provision", lambda token: ran.append(token))
+        assert agent_ids_module.main() == 0
+        assert ran == ["tok"]

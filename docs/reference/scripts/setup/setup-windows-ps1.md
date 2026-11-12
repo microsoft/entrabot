@@ -98,10 +98,16 @@ Sign-in:
 
 Other:
 
-- `-ConfigureA365WorkIq` — also set up Microsoft Agent 365 Work IQ. Needs the
-  `a365` CLI; see [`prereqs-windows.ps1 -WithWorkIq`](prereqs-windows-ps1.md).
-  One of the `a365` steps also requires PowerShell 7, which nothing else in
-  setup needs.
+- `-ConfigureA365WorkIq` — also switch on Word, Excel and OneDrive files
+  (Microsoft Agent 365 Work IQ). Needs the `a365` CLI and PowerShell 7, which
+  one `a365` step requires; install both, with no administrator rights, with
+  [`prereqs-windows.ps1 -WithWorkIq`](prereqs-windows-ps1.md). Unattended, a
+  missing tool stops setup with exit `1` before anything is changed;
+  interactively, answering yes to the Word, Excel and OneDrive question offers
+  to install them. Switching them on needs this PC's own desktop (or Remote
+  Desktop), because one `a365` step opens a Microsoft sign-in window; in a
+  session without one, such as SSH, setup does not try (see Effects). The
+  agent also needs a Microsoft 365 Copilot licence for them.
 - `-Hosts <LIST>` — which assistants to register with: `claude`, `copilot`, or
   `claude,copilot` (the default).
 - `-SkipSmoke` — skip the end-to-end test.
@@ -160,9 +166,21 @@ The wizard, in order:
    version unannounced). Either way it is used only once `az version` answers.
    It then checks the account's directory roles and warns if they look
    insufficient.
-3. Asks its questions (agent, sponsor, memory, Work IQ).
-4. Shows a review screen. **Nothing in the tenant or on the PC is changed
-   before this is confirmed.**
+3. Asks its questions (agent, sponsor, memory, Work IQ). Before the Work IQ
+   yes/no it says what that is: Word, Excel and OneDrive files, which need a
+   Microsoft 365 Copilot licence for the agent. When the answer is yes and
+   the tools are missing, it offers to install them with
+   [`prereqs-windows.ps1 -WithWorkIq`](prereqs-windows-ps1.md), for your account
+   only and with no administrator rights (Enter means yes). Declined or failed,
+   Work IQ stays off, the review screen says so, and the finish screen says
+   what to do. In a session without a desktop (SSH, for example) it says first
+   that they can only be switched on from the PC's own desktop, then still
+   offers the install, so that the run at the desktop is quick; Work IQ stays
+   off in this run, and no Copilot licence is assigned.
+4. Shows a review screen. **Nothing in the tenant is changed before this is
+   confirmed**, and nothing on the PC apart from tools you agreed to install
+   (the Azure CLI, the tools for Word, Excel and OneDrive files); the review
+   screen says which.
 5. Connects setup to the tenant: the Provisioner app registration and this PC's
    Provisioner certificate. A PC with no Provisioner app recorded takes over an
    existing app registration with the Provisioner's name only under the rule
@@ -173,8 +191,10 @@ The wizard, in order:
    could not read from Microsoft Entra what it needed to decide. If an older
    setup key could not be switched off on the Provisioner
    app, setup says so here, on screen, and again on the finish screen.
-6. Creates or connects the agent, assigns a Teams-capable licence when one is
-   free, and adds the chosen sponsors. When joining or continuing an agent, an
+6. Creates or connects the agent, assigns a licence that includes Teams when
+   one is free (preferring one that also brings mail and files, and a
+   Microsoft 365 Copilot licence too when Work IQ is on), and adds the chosen
+   sponsors. When joining or continuing an agent, an
    existing Agent User with the chosen name is reused only when it belongs to
    that agent's Blueprint. Setup stops here with exit `1`, before this PC's
    certificate step, when the Blueprint does not exist in the tenant, the name
@@ -195,6 +215,43 @@ The wizard, in order:
     update command, as something to check.
 11. Tests the agent end to end: sign-in, identity, and Teams.
 
+Then, not as numbered steps:
+
+**Word, Excel and OneDrive files**, when they were switched on in step 3 at a
+desktop: setup points the Agent 365 tooling at the agent's Blueprint and grants
+it Work IQ, with `a365 setup requirements` (in your terminal: it may open a
+Microsoft sign-in window and ask before changing the Agent 365 CLI app
+registration), `a365 develop add-mcp-servers`, the Work IQ permission grant,
+`a365 setup permissions mcp`, and a check of the tooling manifest. It comes
+after the end-to-end test, so nothing optional sits in front of the steps the
+agent needs. **A failure here never stops setup**: Word, Excel and OneDrive
+files stay off, `ToolingManifest.json` and `a365.config.json` are put back the
+way they were, and the finish screen says why in plain words (for example,
+that the Agent 365 tool could not sign in to Microsoft) and where the setup log
+is. A Microsoft 365 Copilot licence given to the agent in step 6 stays with it.
+
+**The licence walkthrough**,
+("Licences for Microsoft 365"). It runs when the agent could sign in and still
+has no licence that includes Teams, or no Microsoft 365 Copilot licence while
+Work IQ is switched on in this run. Interactively (or with its answer key) it:
+
+- offers to walk you through it, then shows the organization's licences and
+  what each gives the agent (Teams, mail, files), with how many are free;
+- gives the agent a free one when you say yes, suggesting the one with mail and
+  files and letting you pick another;
+- otherwise says who can add a licence or free one and where in the
+  Microsoft 365 admin center, or what to get when nothing includes Teams, then
+  checks again each time you press Enter, until you type `s` or ten checks;
+- when Teams is left for later, stops there (the Copilot part waits for it).
+
+Unattended it only reads the organization's licences, so the finish screen can
+say what to do about what the organization has. Reading and assigning run in
+[`create_entra_agent_ids.py`](../provisioning/create-entra-agent-ids-py.md)'s
+licence-only mode, with the setup (Provisioner) credential; your own sign-in
+never changes the agent's account. Every product is shown by the name the admin
+center uses, or, for a product Microsoft's reference does not list, a readable
+form of its part number; part numbers go to the log.
+
 It writes a log to `%LOCALAPPDATA%\entrabot\logs\setup-<date>-<time>.log`.
 
 With `-Diagnose`, none of the above runs. The same end-to-end checks are
@@ -214,9 +271,13 @@ Entra (see above)." instead of "All checks passed.".
 - `2` — conflicting parameters (reported before anything is installed), or an
   answer was missing under `-Yes`.
 - `3` — set up, but something needs checking: the end-to-end test failed (for
-  example, the agent has no Teams licence), a sponsor could not be added,
-  Claude Code is older than 2.1.295, or an older setup key could not be switched
-  off in Microsoft Entra.
+  example, the agent has no Teams licence, or one given in this run has not
+  reached Teams yet), a sponsor could not be added, Claude Code is older than
+  2.1.295, an older setup key could not be switched off in Microsoft Entra, or
+  Word, Excel and OneDrive files were asked for and do not work yet (their tools
+  are not installed, the session has no desktop to switch them on from, a step
+  that switches them on failed, or the agent has no Microsoft 365 Copilot
+  licence).
 - `130` — cancelled, with Ctrl+C or "no" at the review screen.
 - `-Status` — the exit code of `status-windows.ps1`.
 

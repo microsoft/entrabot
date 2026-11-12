@@ -110,6 +110,22 @@ class TestBehaviourAsWritten:
         assert 'set "EB_RC=%ERRORLEVEL%"' in code[launch:]
         assert re.search(r"(?m)^exit /b %EB_RC%\s*$", code[launch:])
 
+    def test_says_what_claude_code_asks_the_first_time_before_starting_it(self) -> None:
+        # The window that opens is the one the questions appear in, so the note is here
+        # and not only on setup's last screen.
+        code = _code()
+        note = [line for line in code.splitlines() if line.startswith("echo ")]
+        text = "\n".join(note)
+        assert "trust this folder" in text
+        assert 'the "entrabot" MCP server' in text
+        assert "development channel" in text
+        assert "Who are you?" in text
+        assert code.index("development channel") < code.index(LAUNCH)
+        # Plain echo lines only: nothing cmd would treat as an operator or a variable.
+        heads_up = [line for line in note if "EB_" not in line and "prereqs" not in line]
+        for line in heads_up:
+            assert not re.search(r"[&|<>^%!()]", line), line
+
     def test_uses_call_only_for_a_cmd_shim(self) -> None:
         # npm installs claude.cmd, which needs `call`; the native claude.exe must not get
         # it, because `call` re-reads the line and would mangle "%" and "^" in arguments.
@@ -222,6 +238,8 @@ class TestRunsOnWindows:
         assert result.returncode == 0, result.stdout + result.stderr
         # (No closing bracket: with no extra arguments cmd may keep a trailing space.)
         assert "ARGS=[--dangerously-load-development-channels server:entrabot" in result.stdout
+        assert "Answer yes" in result.stdout and "Who are you?" in result.stdout
+        assert result.stdout.index("Who are you?") < result.stdout.index("ARGS=[")
         # The temp folder can be reported in its 8.3 short form, so compare the tail only.
         cwd = next(line for line in result.stdout.splitlines() if line.startswith("CWD=["))
         assert cwd.lower().endswith("\\entrabot]")

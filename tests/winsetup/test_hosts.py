@@ -19,9 +19,31 @@ from entrabot.winsetup.hosts import (
     hook_self_test,
     parse_hosts,
     register_mcp,
+    run_prereqs_helper,
     session_start_hooks,
 )
 from tests.winsetup.fakes import FakeSpawn, Reply, make_console, program
+
+
+class TestThePrereqsHelper:
+    """The one way setup installs extras: the repo's helper, through the in-box PowerShell."""
+
+    def test_it_runs_the_switches_it_is_given_and_reports_its_exit_code(
+        self, tmp_path: Path
+    ) -> None:
+        paths = _project(tmp_path)
+        spawn = FakeSpawn()
+        spawn.on(program("powershell.exe"), Reply(returncode=0))
+        console, _ = make_console(spawn=spawn, typed="")
+        env = {"SystemRoot": "C:\\Windows", "PSModulePath": "C:\\pwsh7\\Modules", "KEEP": "1"}
+        assert run_prereqs_helper(paths, console, env, ["-WithWorkIq"]) is True
+        (call,) = spawn.calls
+        assert program("powershell.exe")(call) and call.interactive
+        assert call.argv[1:5] == ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]
+        assert Path(call.argv[5]).name == "prereqs-windows.ps1" and call.argv[6:] == ["-WithWorkIq"]
+        assert call.env is not None and "PSModulePath" not in call.env and call.env["KEEP"] == "1"
+        spawn.on(program("powershell.exe"), Reply(returncode=1))
+        assert run_prereqs_helper(paths, console, env, ["-WithWorkIq"]) is False
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HOOK_COMMAND = (

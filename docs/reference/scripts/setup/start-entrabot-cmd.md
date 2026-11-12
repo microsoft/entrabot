@@ -40,7 +40,11 @@ Anything after the file name is passed on to Claude Code.
    your account (`%LOCALAPPDATA%\Programs\Git`) but not under
    `%ProgramFiles%\Git`, it sets that variable for this window so Claude Code
    finds it.
-5. Runs:
+5. Says what Claude Code asks the first time, in the window where the
+   questions appear: whether to trust this folder, whether to use the
+   `entrabot` MCP server, and whether to load a development channel. Answer yes
+   to each, then say *Who are you?*
+6. Runs:
 
    ```bat
    claude --dangerously-load-development-channels server:entrabot
@@ -64,6 +68,10 @@ screen.
   missing. See [Windows troubleshooting](../../../troubleshooting/windows.md).
 - **"another instance is already running"** — another assistant on this PC
   already has the Entrabot server open. Close it first.
+- **Claude Code asks about the folder, the `entrabot` server or a development
+  channel** — that is its first start in this folder. Answer yes to each: the
+  folder is the one setup set up, the server is your agent, and the channel is
+  how Teams messages reach it.
 
 ## Related commands
 

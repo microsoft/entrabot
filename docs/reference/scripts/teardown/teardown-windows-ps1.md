@@ -76,7 +76,7 @@ Entra, then asks. The suggested answer is No.
 | The agent (Agent User, Agent Identity, Blueprint) | Kept | Deleted | Kept |
 | An old setup (Provisioner) certificate that setup noted it could not remove (`PROVISIONER_CERT_REVOKE_PENDING` in `.entrabot-state.json`) | Removed from the Provisioner app. If that fails, listed under "Still to do" with where to remove it by hand | Same, once the agent is gone | Same |
 | This PC's setup (Provisioner) certificate | Retired: removed from the Provisioner app and deleted from this PC with its private key. Kept if another Entrabot agent on this PC still needs it, or with `-KeepSetupCredential` | Same | Same |
-| `%LOCALAPPDATA%\entrabot` (local memory, logs, private Python and Azure CLI) | Kept | Kept | Deleted, except the Python this command is running from |
+| `%LOCALAPPDATA%\entrabot` (local memory, logs, private Python and Azure CLI, and the .NET SDK and Agent 365 CLI that setup installs for Word, Excel and OneDrive files) | Kept | Kept | Deleted, except the Python this command is running from |
 | `start-entrabot.cmd`, your `PATH`, the agent's sponsors, cloud storage | Never touched | Never touched | Never touched |
 
 Notes:

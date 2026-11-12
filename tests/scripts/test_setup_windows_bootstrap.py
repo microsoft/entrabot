@@ -574,9 +574,11 @@ class TestPrereqsIsOptional:
     def test_nothing_is_installed_without_a_switch(self) -> None:
         code = _code(PREREQS_PS1)
         # No unconditional installs of the things setup now handles itself.
-        assert "Microsoft.PowerShell" not in code
         assert "Python.Python" not in code
         assert "Microsoft.AzureCLI" not in code
+        # PowerShell 7 only for Work IQ, whose Agent 365 CLI needs it for one of its steps.
+        work_iq = code[code.index("if ($WithWorkIq) {") : code.index("if ($WithBuildTools) {")]
+        assert code.count("'Microsoft.PowerShell'") == work_iq.count("'Microsoft.PowerShell'") == 1
 
     def test_claude_code_uses_the_documented_native_installer(self) -> None:
         code = _code(PREREQS_PS1)
@@ -666,11 +668,55 @@ class TestPrereqsIsOptional:
         code = _code(PREREQS_PS1)
         git_block = code[code.index("if ($WithGit) {") : code.index("if ($WithClaudeCode) {")]
         claude_block = code[code.index("if ($WithClaudeCode) {") : code.index("if ($WithWorkIq) {")]
+        work_iq = code[code.index("if ($WithWorkIq) {") : code.index("if ($WithBuildTools) {")]
         # After every install route the tool is looked up (and run) again.
         assert git_block.count("Find-GitBash") >= 2
         assert claude_block.count("Find-ClaudeCode") >= 2
+        assert work_iq.count("Find-A365") >= 2 and work_iq.count("Get-DotnetSdk") >= 2
         assert "$failed += 'Git for Windows'" in git_block
         assert "$failed += 'Claude Code'" in claude_block
+        assert "'--version'" in _function(code, "Get-VersionLine")
+        assert "Get-VersionLine" in _function(code, "Find-A365")
+        assert "'--list-sdks'" in _function(code, "Get-DotnetSdk")
+
+    def test_work_iq_needs_neither_winget_nor_admin_for_dotnet_and_a365(self) -> None:
+        # From a real run as a standard user over SSH: `winget install Microsoft.DotNet.SDK.9`
+        # exited 1459 (it needs elevation and a desktop), so Work IQ stayed off.
+        code = _code(PREREQS_PS1)
+        assert "Microsoft.DotNet.SDK" not in code
+        assert "$DotnetInstallUrl = 'https://dot.net/v1/dotnet-install.ps1'" in code
+        assert "$MicrosoftPublisher = 'Microsoft Corporation'" in code
+        install = _function(code, "Install-PrivateDotnet")
+        # Microsoft's script is checked (Authenticode, signed by Microsoft) before it runs,
+        # and runs in its own in-box Windows PowerShell with nothing put on PATH.
+        assert install.index("Save-VerifiedDownload") < install.index("& $shell @installArgs")
+        assert "-Organization $MicrosoftPublisher" in install
+        for argument in ("'-Channel', $DotnetChannel", "'-InstallDir', $Folder", "'-NoPath'"):
+            assert argument in install
+        assert "System32\\WindowsPowerShell\\v1.0\\powershell.exe" in install
+        assert "$env:PSModulePath = $null" in install
+        a365 = _function(code, "Install-A365")
+        a365 = a365[: a365.index("\nif ($Help) {")]  # the last function before the main body
+        assert "'--tool-path', $Folder" in a365 and "--global" not in a365
+        assert "'--allow-roll-forward'" in a365  # a .NET 10 SDK runs a365 whatever it targets
+        assert "entrabot\\tools" in _function(code, "Get-WorkIqToolFolders")
+
+    def test_dotnet_is_the_long_term_support_release(self) -> None:
+        # .NET 8 and 9 reached end of support on 10 November 2026 (Microsoft Learn, "Releases
+        # and support for .NET"); the Agent 365 CLI needs .NET 8 or later.
+        code = _code(PREREQS_PS1)
+        assert "$DotnetChannel = '10.0'" in code
+        assert "$DotnetMinimumMajor = 8" in code
+
+    def test_entrabots_own_dotnet_is_named_for_a365_and_sends_no_telemetry(self) -> None:
+        use = _function(_code(PREREQS_PS1), "Use-DotnetSdk")
+        assert "$env:DOTNET_ROOT = $Sdk.Root" in use
+        for wins in ("DOTNET_ROOT_X64", "DOTNET_ROOT_X86", "DOTNET_ROOT_ARM64", "DOTNET_ROOT(x86)"):
+            assert wins in use  # cleared: each would win over DOTNET_ROOT
+        assert "$env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'" in use
+        find = _function(_code(PREREQS_PS1), "Find-A365")
+        saved = find.index("$savedRoot = $env:DOTNET_ROOT")
+        assert saved < find.index("$env:DOTNET_ROOT = $savedRoot")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1875,6 +1921,63 @@ class TestPrereqsHelpers:
         )
         assert (value or None) == expected
 
+    @pytest.mark.parametrize(
+        ("subject", "trusted"),
+        [
+            # The signer of dotnet-install.ps1, as Get-AuthenticodeSignature reported it.
+            (
+                "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US",
+                True,
+            ),
+            ("CN=Microsoft Corporation, O=Microsoft Corporation Ltd, C=US", False),
+            ("CN=Microsoft Corporation, O=Contoso, C=US", False),
+            ('CN="x, O=Microsoft Corporation, y", O=Contoso, C=US', False),
+        ],
+    )
+    def test_the_dotnet_install_script_must_be_signed_by_microsoft(
+        self, shell: str, subject: str, trusted: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("EB_SUBJECT", subject)
+        value = self._ps(
+            shell,
+            "Test-TrustedPublisher -Status 'Valid' -Subject $env:EB_SUBJECT"
+            " -Organization $MicrosoftPublisher",
+        )
+        assert value is trusted
+
+    @pytest.mark.parametrize(
+        ("listing", "major"),
+        [
+            ("9.0.321 [C:\\Users\\a\\AppData\\Local\\entrabot\\tools\\dotnet\\sdk]", 9),
+            (
+                "8.0.404 [C:\\Program Files\\dotnet\\sdk]\n"
+                "10.0.100 [C:\\Program Files\\dotnet\\sdk]",
+                10,
+            ),
+            ("", 0),
+            ("No .NET SDKs were found.", 0),
+        ],
+        ids=["one", "newest-of-two", "none", "message"],
+    )
+    def test_the_newest_sdk_is_read_from_dotnets_own_listing(
+        self, shell: str, listing: str, major: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("EB_LISTING", listing)
+        value = self._ps(
+            shell, "Get-DotnetSdkMajor -Listing ([string]$env:EB_LISTING).Split([char]10)"
+        )
+        assert value == major
+
+    def test_work_iq_tools_go_in_entrabots_own_folder(self, shell: str) -> None:
+        value = self._ps(
+            shell, "Get-WorkIqToolFolders -LocalAppData 'C:\\Users\\a\\AppData\\Local'"
+        )
+        assert value == {
+            "Dotnet": r"C:\Users\a\AppData\Local\entrabot\tools\dotnet",
+            "A365": r"C:\Users\a\AppData\Local\entrabot\tools\a365",
+        }
+        assert self._ps(shell, "Get-WorkIqToolFolders -LocalAppData ''") is None
+
     def test_git_bash_candidates_in_claude_codes_order(self, shell: str) -> None:
         value = self._ps(
             shell,
@@ -2086,3 +2189,165 @@ function Install-ClaudeCode { return $true }
         assert "FAILED:            Git for Windows" in result.stdout
         assert "FAILED:            Claude Code" in result.stdout
         assert "[ok] Git for Windows" not in result.stdout
+
+
+def _ps_bool(value: bool) -> str:
+    return "$true" if value else "$false"
+
+
+def _work_iq_stubs(
+    *,
+    pwsh: bool = True,
+    winget: bool = True,
+    a365: bool = True,
+    sdk: bool = True,
+    dotnet_installs: bool = True,
+    a365_runs_after_install: bool = True,
+) -> str:
+    """The Work IQ block with the machine replaced: a365, a .NET SDK and PowerShell 7 there or
+    not, winget usable or not, and every install only said (and remembered)."""
+    return _COMMON_STUBS + f"""
+$script:have = @{{ a365 = {_ps_bool(a365)}; sdk = {_ps_bool(sdk)}; pwsh = {_ps_bool(pwsh)} }}
+function Test-CommandExists {{ param([string]$Name) return [bool]$script:have[$Name] }}
+function Test-WingetWorks {{ return {_ps_bool(winget)} }}
+function Install-WithWinget {{
+    param([string]$Id, [string[]]$Extra = @())
+    Write-Host "SIM winget $Id"
+    if ($Id -eq 'Microsoft.PowerShell') {{ $script:have['pwsh'] = $true }}
+    return $true
+}}
+function Find-A365 {{
+    param([string]$PrivateFolder, [string]$PrivateDotnet)
+    if (-not $script:have['a365']) {{ return $null }}
+    return @{{ Path = (Join-WindowsPath $PrivateFolder 'a365.exe'); Version = '2.0.4+6b9a2a1b83' }}
+}}
+function Get-DotnetSdk {{
+    param([string]$PrivateFolder)
+    if (-not $script:have['sdk']) {{ return $null }}
+    $exe = Join-WindowsPath $PrivateFolder 'dotnet.exe'
+    return @{{ Exe = $exe; Root = $PrivateFolder; Major = 10 }}
+}}
+function Install-PrivateDotnet {{
+    param([string]$Folder)
+    Write-Host "SIM dotnet-install into $Folder"
+    if (-not {_ps_bool(dotnet_installs)}) {{ return $false }}
+    $script:have['sdk'] = $true
+    return $true
+}}
+function Use-DotnetSdk {{ param($Sdk) Write-Host "SIM use $($Sdk.Exe)" }}
+function Install-A365 {{
+    param($Sdk, [string]$Folder)
+    Write-Host "SIM a365 into $Folder with $($Sdk.Exe)"
+    if ({_ps_bool(a365_runs_after_install)}) {{ $script:have['a365'] = $true }}
+    return $true
+}}
+function dotnet {{ Write-Host "SIM dotnet $args"; $global:LASTEXITCODE = 0 }}
+"""
+
+
+_TOOLS = r"C:\Users\a\AppData\Local\entrabot\tools"
+
+
+@posix_only
+@pytest.mark.parametrize("shell", shell_params)
+class TestPrereqsWorkIq:
+    """-WithWorkIq installs everything Word, Excel and OneDrive files need, PowerShell 7 too:
+    one Agent 365 CLI step needs it, and the setup wizard offers this switch for Work IQ."""
+
+    def test_a_missing_powershell_7_is_installed_with_winget(
+        self, shell: str, tmp_path: Path
+    ) -> None:
+        result = _run_prereqs_with_stubs(
+            tmp_path, shell, _work_iq_stubs(pwsh=False, winget=True), "-WithWorkIq"
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.stderr == ""
+        assert "SIM winget Microsoft.PowerShell" in result.stdout
+        assert "[ok] PowerShell 7 installed" in result.stdout
+        assert "newly installed:   PowerShell 7" in result.stdout
+
+    def test_one_already_there_is_left_alone(self, shell: str, tmp_path: Path) -> None:
+        result = _run_prereqs_with_stubs(
+            tmp_path, shell, _work_iq_stubs(pwsh=True, winget=True), "-WithWorkIq"
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "SIM winget Microsoft.PowerShell" not in result.stdout
+        assert "[ok] PowerShell 7 is already installed" in result.stdout
+
+    def test_without_winget_it_says_where_to_get_it_and_fails(
+        self, shell: str, tmp_path: Path
+    ) -> None:
+        result = _run_prereqs_with_stubs(
+            tmp_path, shell, _work_iq_stubs(pwsh=False, winget=False), "-WithWorkIq"
+        )
+        assert result.returncode == 1
+        assert "SIM winget" not in result.stdout
+        assert (
+            "Install PowerShell 7 from "
+            "https://learn.microsoft.com/powershell/scripting/install/install-powershell-on-windows"
+        ) in result.stdout
+        assert "FAILED:            PowerShell 7" in result.stdout
+
+    def test_an_a365_that_runs_is_left_alone(self, shell: str, tmp_path: Path) -> None:
+        result = _run_prereqs_with_stubs(tmp_path, shell, _work_iq_stubs(), "-WithWorkIq")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.stderr == ""
+        assert "[ok] The Agent 365 CLI is already installed:" in result.stdout
+        assert "2.0.4+6b9a2a1b83" in result.stdout
+        assert "SIM dotnet-install" not in result.stdout and "SIM a365 into" not in result.stdout
+        assert "already installed: Agent 365 CLI (a365)" in result.stdout
+
+    def test_with_a_dotnet_sdk_a365_goes_into_entrabots_folder_with_it(
+        self, shell: str, tmp_path: Path
+    ) -> None:
+        result = _run_prereqs_with_stubs(
+            tmp_path, shell, _work_iq_stubs(a365=False), "-WithWorkIq"
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.stderr == ""
+        assert "SIM dotnet-install" not in result.stdout  # the SDK there is used as it is
+        assert f"SIM a365 into {_TOOLS}\\a365 with {_TOOLS}\\dotnet\\dotnet.exe" in result.stdout
+        assert "newly installed:   Agent 365 CLI (a365)" in result.stdout
+        assert "SIM winget" not in result.stdout  # never winget for .NET or a365
+
+    def test_without_one_dotnet_is_installed_there_first(self, shell: str, tmp_path: Path) -> None:
+        result = _run_prereqs_with_stubs(
+            tmp_path, shell, _work_iq_stubs(a365=False, sdk=False), "-WithWorkIq"
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.stderr == ""
+        out = result.stdout
+        assert out.index(f"SIM dotnet-install into {_TOOLS}\\dotnet") < out.index("SIM a365 into")
+        assert out.index("SIM use") < out.index("SIM a365 into")  # DOTNET_ROOT before a365 runs
+        assert "newly installed:   .NET SDK" in out
+        assert "newly installed:   Agent 365 CLI (a365)" in out
+        assert "SIM winget" not in out
+
+    def test_a_dotnet_that_cannot_be_installed_stops_a365_too(
+        self, shell: str, tmp_path: Path
+    ) -> None:
+        stubs = _work_iq_stubs(a365=False, sdk=False, dotnet_installs=False)
+        result = _run_prereqs_with_stubs(tmp_path, shell, stubs, "-WithWorkIq")
+        assert result.returncode == 1
+        assert "SIM a365 into" not in result.stdout
+        assert "FAILED:            .NET SDK" in result.stdout
+        assert "FAILED:            Agent 365 CLI (a365)" in result.stdout
+        assert "https://learn.microsoft.com/dotnet/core/install/windows" in result.stdout
+
+    def test_an_a365_that_does_not_run_after_its_install_is_a_failure(
+        self, shell: str, tmp_path: Path
+    ) -> None:
+        stubs = _work_iq_stubs(a365=False, a365_runs_after_install=False)
+        result = _run_prereqs_with_stubs(tmp_path, shell, stubs, "-WithWorkIq")
+        assert result.returncode == 1
+        assert "FAILED:            Agent 365 CLI (a365)" in result.stdout
+        assert "newly installed:   Agent 365 CLI" not in result.stdout
+
+    def test_winget_is_only_checked_when_powershell_7_is_missing(
+        self, shell: str, tmp_path: Path
+    ) -> None:
+        result = _run_prereqs_with_stubs(
+            tmp_path, shell, _work_iq_stubs(pwsh=True, winget=False), "-WithWorkIq"
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "winget) is not usable" not in result.stdout

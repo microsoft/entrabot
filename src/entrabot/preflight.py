@@ -40,6 +40,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from entrabot import licensing
 from entrabot.config import EntraBotConfig
 from entrabot.errors import AgentIDNotAvailable, TokenExchangeError
 from entrabot.tools.teams import acquire_agent_user_token
@@ -48,33 +49,12 @@ from entrabot.winsetup import oldkeys
 CheckStatus = Literal["pass", "warn", "fail", "skip"]
 
 
-# Teams-capable SKUs. The single source of truth — ``scripts/create_entra_agent_ids.py``
-# imports this constant. Union of every SKU part number we have observed assigning
-# Teams to a user, including M365 E3/E5, Business Premium, Developer Pack, and
-# the standalone Teams SKUs.
-TEAMS_CAPABLE_SKUS: tuple[str, ...] = (
-    "ENTERPRISEPREMIUM",  # M365 E5 / Office 365 E5
-    "ENTERPRISEPACK",  # Office 365 E3
-    "SPE_E3",  # M365 E3
-    "SPE_E5",  # M365 E5 (alternate part number)
-    "SPE_F1",  # M365 F1 (frontline)
-    "STANDARDPACK",  # Office 365 E1
-    "DEVELOPERPACK",  # Office 365 E3 Developer
-    "DEVELOPERPACK_E5",  # M365 E5 Developer
-    "M365_BUSINESS_PREMIUM",  # M365 Business Premium
-    "O365_BUSINESS_PREMIUM",  # O365 Business Premium (legacy name)
-    "Microsoft_Teams_Enterprise",
-    "Microsoft_Teams_Essentials",
-    "TEAMS_ESSENTIALS_AAD",
-    "TEAMS_EXPLORATORY",
-    "TEAMS_PREMIUM",
-    "M365_E5_SUITE_COMPONENTS",
-)
-
-COPILOT_CAPABLE_SKUS: tuple[str, ...] = (
-    "MICROSOFT_365_COPILOT",
-    "Microsoft_365_Copilot",
-)
+# Which products include Teams, or Microsoft 365 Copilot, is decided in entrabot.licensing
+# from each product's service plans. These name lists are its fallback for an answer that
+# carries no service plans, kept importable from here for scripts/create_entra_agent_ids.py
+# and scripts/assign_agent_user_licenses.py.
+TEAMS_CAPABLE_SKUS: tuple[str, ...] = licensing.TEAMS_CAPABLE_SKUS
+COPILOT_CAPABLE_SKUS: tuple[str, ...] = licensing.COPILOT_CAPABLE_SKUS
 
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
@@ -151,14 +131,9 @@ def check_teams_license_availability(
     skus = resp.json().get("value", []) or []
     available: list[tuple[str, int]] = []
     for sku in skus:
-        part = sku.get("skuPartNumber", "")
-        if part not in TEAMS_CAPABLE_SKUS:
-            continue
-        prepaid = (sku.get("prepaidUnits") or {}).get("enabled", 0) or 0
-        consumed = sku.get("consumedUnits", 0) or 0
-        free = prepaid - consumed
-        if free > 0:
-            available.append((part, free))
+        product = licensing.describe(sku) if isinstance(sku, dict) else None
+        if product is not None and product.teams and product.free > 0:
+            available.append((product.part_number, product.free))
 
     if available:
         descs = ", ".join(f"{part} ({free} free)" for part, free in available)
@@ -207,14 +182,9 @@ def check_copilot_license_availability(
 
     available: list[tuple[str, int]] = []
     for sku in resp.json().get("value", []) or []:
-        part = sku.get("skuPartNumber", "")
-        if part not in COPILOT_CAPABLE_SKUS:
-            continue
-        prepaid = (sku.get("prepaidUnits") or {}).get("enabled", 0) or 0
-        consumed = sku.get("consumedUnits", 0) or 0
-        free = prepaid - consumed
-        if free > 0:
-            available.append((part, free))
+        product = licensing.describe(sku) if isinstance(sku, dict) else None
+        if product is not None and product.copilot and product.free > 0:
+            available.append((product.part_number, product.free))
 
     if available:
         descs = ", ".join(f"{part} ({free} free)" for part, free in available)

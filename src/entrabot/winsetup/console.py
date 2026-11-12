@@ -395,6 +395,11 @@ class Console:
         self.blank()
         self._line(f"[{number}/{total}] {title}", "bold", "cyan")
 
+    def section(self, title: str) -> None:
+        """A heading for a part of the run that is not one of its numbered steps."""
+        self.blank()
+        self._line(title, "bold", "cyan")
+
     def info(self, message: str) -> None:
         self._line("\n".join(f"  {part}" for part in message.split("\n")))
 

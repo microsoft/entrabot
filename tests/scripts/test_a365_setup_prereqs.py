@@ -9,17 +9,38 @@ def read_script(path: str) -> str:
     return (REPO_ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_windows_prereqs_installs_dotnet_and_a365_cli() -> None:
+def test_windows_prereqs_installs_dotnet_and_a365_cli_for_the_account_only() -> None:
+    # From a real run as a standard user: winget's .NET SDK installer needs elevation (it
+    # exited 1459), so Work IQ stayed off. The SDK, when the PC has none, and the a365 CLI now
+    # go under %LOCALAPPDATA%\entrabot\tools, with no winget and no administrator rights.
     script = read_script("scripts/prereqs-windows.ps1")
 
-    assert "Microsoft.DotNet.SDK.9" in script
+    assert "Microsoft.DotNet.SDK" not in script
+    assert "https://dot.net/v1/dotnet-install.ps1" in script
     assert "Microsoft.Agents.A365.DevTools.Cli" in script
-    assert "dotnet tool install --global Microsoft.Agents.A365.DevTools.Cli" in script
-    assert "dotnet tool update --global Microsoft.Agents.A365.DevTools.Cli" in script
-    assert "a365" in script
+    assert "'--tool-path'" in script
+    assert "dotnet tool install --global" not in script
+    # An a365 the person installed as a global tool is still kept up to date.
+    assert "dotnet tool update --global $A365Package" in script
     # Opt-in: none of it runs unless -WithWorkIq is passed.
     assert "[switch]$WithWorkIq" in script
-    assert script.index("if ($WithWorkIq) {") < script.index("Microsoft.DotNet.SDK.9")
+    assert script.index("if ($WithWorkIq) {") < script.index("Install-PrivateDotnet -Folder")
+
+
+def test_winget_runs_attached_to_the_window_so_its_progress_bar_draws_in_place() -> None:
+    # From a desktop run: winget's output went through a PowerShell pipe, which printed every
+    # redraw of its progress bar as a new line of mis-decoded characters. winget now runs
+    # attached to the window, and its exit code is read from the process.
+    script = read_script("scripts/prereqs-windows.ps1")
+    body = script[script.index("function Install-WithWinget {") :]
+    body = body[: body.index("\n}")]
+
+    assert "| Out-Host" not in body
+    for word in ("Start-Process", "-NoNewWindow", "-Wait", "-PassThru"):
+        assert word in body
+    assert "Test-WingetSuccess -ExitCode $process.ExitCode" in body
+    # An argument with spaces (the build tools' --override) still arrives as one argument.
+    assert "-match '\\s'" in body
 
 
 def test_windows_setup_does_not_require_a365_cli_unless_work_iq_is_requested() -> None:

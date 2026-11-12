@@ -106,6 +106,14 @@ class TestOutput:
         assert "[ok] fine" in text and "[!!] careful" in text and "[xx] broken" in text
         assert "Do this." in text
 
+    def test_a_section_is_a_heading_without_a_step_number(self, tmp_path: Path) -> None:
+        console, out = make_console(log_file=tmp_path / "setup.log")
+        console.info("before")
+        console.section("Licences for Microsoft 365")
+        console.close()
+        assert out.getvalue() == "  before\n\nLicences for Microsoft 365\n"
+        assert "Licences for Microsoft 365" in (tmp_path / "setup.log").read_text("utf-8")
+
     def test_a_terminal_that_cannot_encode_a_character_never_raises(self) -> None:
         class Cp1252(io.TextIOWrapper):
             pass

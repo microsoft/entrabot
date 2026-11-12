@@ -553,7 +553,9 @@ class _Teardown:
             console.warn(f"It will ALSO delete Entrabot's data folder: {self.paths.data_root}")
             console.bullet(
                 "The agent's local memory and logs, and Entrabot's private copies of Python "
-                "and the Azure CLI. The project's .venv will need setup to rebuild it."
+                "and the Azure CLI, and of the .NET SDK and the Microsoft Agent 365 CLI if "
+                "setup installed them for Word, Excel and OneDrive files. The project's .venv "
+                "will need setup to rebuild it."
             )
         console.blank()
         if not self.delete_agent:

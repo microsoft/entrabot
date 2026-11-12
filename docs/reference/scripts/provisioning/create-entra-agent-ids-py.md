@@ -40,17 +40,22 @@ only to identify the human sponsor and to bootstrap the Provisioner app.
 
 ```bash
 python3 scripts/create_entra_agent_ids.py
+
+# Licence only (the Windows setup wizard's licence walkthrough uses these)
+python3 scripts/create_entra_agent_ids.py --licence-report
+python3 scripts/create_entra_agent_ids.py --assign-licence <sku-id>
 ```
 
-The script takes no command-line flags; behavior is controlled by environment
-variables:
+With no option it is the full run, controlled by environment variables. The two
+options, which cannot be combined, handle the Agent User's licence on its own
+and change nothing else; see [Licence only](#licence-only).
 
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `ENTRABOT_NEW_CHAIN` | unset | When `1`, skips every reuse lookup and forces a fresh chain. `setup.sh --new` sets this. |
 | `_ENTRABOT_UPN_SUFFIX` | empty | The Agent User's sign-in name becomes `entrabot-agent-<suffix>@<domain>` (and its display name `EntraBot Agent (<suffix>)`), so a forced-new chain does not collide on the unique-UPN constraint. Outranks `ENTRABOT_AGENT_USER_UPN`. |
 | `ENTRABOT_AGENT_USER_UPN` | unset | The Agent User's sign-in name, used when no suffix is set. Like every setting, it is read from `.env` when the environment does not set it, so an earlier setup's value counts. `setup.sh --use-blueprint` sets it empty for this script when `.env` was written for another Blueprint. With neither, the name is `entrabot-agent@<domain>`. |
-| `ENTRABOT_ASSIGN_TEAMS_LICENSE` | `1` | Assign a Teams-capable SKU to the Agent User. |
+| `ENTRABOT_ASSIGN_TEAMS_LICENSE` | `1` | Assign a licence that includes Teams to the Agent User. |
 | `ENTRABOT_ASSIGN_WORK_IQ_LICENSE` | unset | When `1`, also assign a Microsoft 365 Copilot (Work IQ) SKU. |
 
 ## Effects
@@ -86,11 +91,43 @@ file and Graph for an existing object before creating anything:
   parallel storage hop for cloud-hosted operational memory. Non-fatal when the
   Storage service principal is absent from the tenant.
 - **Licenses** — reads `/v1.0/subscribedSkus` and assigns via
-  `POST /v1.0/users/{id}/assignLicense`. Teams-capable SKUs are assigned by
-  default; Copilot (Work IQ) SKUs are opt-in.
+  `POST /v1.0/users/{id}/assignLicense`, after setting the Agent User's usage
+  location. A licence that includes Teams is assigned by default, preferring
+  one that also brings mail and files; Microsoft 365 Copilot (Work IQ) is
+  opt-in. What a product includes is read from its service plans: Teams is the
+  Microsoft Teams plan itself (`TEAMS1`, `TeamsEss`, or a government Teams
+  plan), so a "(no Teams)" suite, whose plans are only named after Teams, does
+  not count, and neither do meeting-room and shared-device licences. Copilot is
+  `M365_COPILOT_APPS` or `M365_COPILOT_BUSINESS_CHAT`, except Copilot for one
+  line of work. When Graph lists no service plans, a list of known part
+  numbers is used instead.
 
 All identifiers are written to `.entrabot-state.json` as each stage completes,
 so a later stage can resume from a partially provisioned chain.
+
+### Licence only
+
+Both options need an Agent User recorded in `.entrabot-state.json` and the
+Provisioner's token, as the full run does; they never use an Azure CLI token.
+
+- **`--licence-report`** — changes nothing. Reads `/v1.0/subscribedSkus` and
+  the Agent User's assigned licences, and prints one line,
+  `ENTRABOT_RESULT=` followed by JSON: every product with its name, what it
+  includes (Teams, mailbox, files, Copilot), how many licences it has and how
+  many are assigned, and which of them the Agent User has. A product is named
+  the way the Microsoft 365 admin center names it when Microsoft's licensing
+  reference lists it; otherwise by a readable form of its part number.
+- **`--assign-licence <sku-id>`** — gives the Agent User that one product,
+  with the full run's own steps: usage location first, then `assignLicense`,
+  then the state file's `AGENT_USER_LICENSE_SKU` (or
+  `AGENT_USER_WORK_IQ_LICENSE_SKU` for Copilot). It prints one of
+  `ENTRABOT_RESULT=licence-assigned`, `licence-already-assigned`,
+  `licence-no-free-seat`, `licence-not-found`, `licence-assign-failed` or
+  `licence-could-not-read` on a line of its own and, when it stops, a sentence
+  saying why. Nothing is changed when it stops before the assignment.
+
+Each exits `0` when it did what it says and `1` with `licence-could-not-read`
+(or the assignment's own marker) otherwise.
 
 ## Exit behavior
 
@@ -205,7 +242,9 @@ recorded. Set `ENTRABOT_NEW_CHAIN=1` to bypass every lookup.
   hop.
 - **No subscribed SKUs / no available seats** — license assignment is reported
   and skipped; assign a license later with
-  [`assign_agent_user_licenses.py`](assign-agent-user-licenses-py.md).
+  [`assign_agent_user_licenses.py`](assign-agent-user-licenses-py.md), or on
+  Windows run `scripts\setup-windows.cmd` again, whose licence walkthrough
+  shows what the organization has and gives the agent a free one.
 
 ## Related commands
 

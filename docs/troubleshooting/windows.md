@@ -126,15 +126,75 @@ Setup exits with code 1, at the step that creates your agent.
 
 ## "No Teams licence", or `Graph returned 403 for /me/chats`
 
-**Cause.** The agent has no licence that includes Teams. Setup looks for a free Teams-capable licence in the tenant and assigns it; if none is free, the agent is still created and can sign in, but Teams refuses it. Setup then ends with exit code 3.
+**Cause.** The agent has no licence that includes Teams. Like a person, the agent's user account needs a licence of its own. Setup gives it a free one by itself, preferring one that also brings mail and files. When none is free, the agent is still created and can sign in, but Teams refuses it, and setup ends with exit code 3.
 
-**Fix.**
+A licence counts as including Teams when it carries the Microsoft Teams service plan. The "(no Teams)" suites sold since April 2024 do not, even though some of their plans are named after Teams, and neither do licences for meeting rooms and shared devices.
 
-1. Make a licence that includes Teams available in the tenant (Microsoft 365 admin center, <https://admin.microsoft.com>).
-2. Run `scripts\setup-windows.cmd` again. It assigns the licence itself.
-3. Check with `scripts\setup-windows.cmd -Diagnose`.
+**Fix.** Run `scripts\setup-windows.cmd` again, answering its questions yourself (not with `-Yes`; an SSH session is fine). After the end-to-end test it offers to walk you through it, under **Licences for Microsoft 365**:
 
-A licence that was just assigned takes 10-15 minutes to reach Teams. If setup says a licence was assigned and Teams still returns 403, wait and run `-Diagnose` again.
+- It shows your organization's licences, what each gives the agent (Teams, mail, files) and how many are free, then gives the agent a free one when you say yes. With several, it suggests the one with mail and files, and you can pick another.
+- When every licence that includes Teams is in use, it says the two ways out:
+    - **Add a licence.** A billing administrator does this in the Microsoft 365 admin center (<https://admin.microsoft.com>): **Billing > Your products**, the product, then **Buy licenses**. If your organization buys through a partner, ask them instead.
+    - **Free one** from someone who no longer needs it. A licence or user administrator does this under **Billing > Licenses**: the product, the person, then **Unassign licenses**. When that licence includes their mailbox, their mail is kept for 30 days and then deleted.
+- When nothing in the organization includes Teams, it lists what does (Microsoft 365 Business Basic, Standard or Premium; Microsoft Teams Essentials; Microsoft Teams Enterprise or, in the EEA and Switzerland, Microsoft Teams EEA, with a "(no Teams)" suite) and says a billing administrator buys one in the admin center under **Marketplace**.
+- Press Enter when that is done and setup checks again; type `s` to leave it for later. Its last screen then points back to these steps instead of repeating them.
+
+These menu names are the admin center's **Dashboard view**, which most people see. In the **simplified view**, the products are under **Subscriptions** and new ones under **Billing > Add more products**; a button at the top of the admin center switches between the views. The roles are as Microsoft Learn names them: buying needs at least a Billing Administrator (with a Microsoft Customer Agreement, a billing account or billing profile owner or contributor); assigning and unassigning need at least a License Administrator or User Administrator.
+
+Run unattended (`-Yes`), setup asks nothing; it reads what the organization has, changes nothing, and the last screen says what to do about it. Then run setup again, which assigns the licence by itself, and check with `scripts\setup-windows.cmd -Diagnose`.
+
+A licence that was just assigned takes 10-15 minutes to reach Teams. If setup says a licence was assigned and Teams still returns 403, wait and run `-Diagnose` again. A bought licence can be assigned at once.
+
+## "Word, Excel and OneDrive files were asked for, but they are not switched on: ... the tools they need"
+
+Setup ends with exit code 3.
+
+**Cause.** Word, Excel and OneDrive files (Microsoft Agent 365 Work IQ) need two tools on this PC: the Microsoft Agent 365 CLI (`a365`), which runs on the .NET SDK, and PowerShell 7, which one `a365` step uses. They were missing, and the install was declined or did not finish.
+
+**Fix.** Install them for your account, with no administrator rights:
+
+```bat
+powershell -ExecutionPolicy Bypass -File scripts\prereqs-windows.ps1 -WithWorkIq
+```
+
+then run `scripts\setup-windows.cmd` again and answer yes to the Word, Excel and OneDrive question. When you answer yes and the tools are missing, setup offers to run that command for you. The Agent 365 CLI, and the .NET SDK when the PC has none, go in `%LOCALAPPDATA%\entrabot\tools` (about 1 GB; a few minutes); PowerShell 7 comes from `winget`. If the helper reports a failure, its messages say which tool and where to get it. See [`prereqs-windows.ps1`](../reference/scripts/setup/prereqs-windows-ps1.md).
+
+Run unattended with `-ConfigureA365WorkIq`, setup stops with exit code 1 before changing anything when the tools are missing, and prints the same command.
+
+To run Entrabot's own copy of `a365` by hand, first set `DOTNET_ROOT=%LOCALAPPDATA%\entrabot\tools\dotnet`; without it, `a365.exe` cannot find its .NET.
+
+## "... they can only be switched on from this PC's own desktop"
+
+Setup ends with exit code 3. The rest of setup is done.
+
+**Cause.** One of the steps that switch on Word, Excel and OneDrive files (`a365 setup requirements`) signs in to Microsoft through a sign-in window (on Windows, the Web Account Manager). A session without a desktop, such as SSH, cannot show that window, so setup does not try. On a real run over SSH, `a365` failed with `MsalAuthenticationFailedException` there. Setup says so when you answer yes to the Word, Excel and OneDrive question, before it offers to install their tools; it still installs them if you agree, and it gives the agent no Microsoft 365 Copilot licence in that run.
+
+**Fix.** Sign in at the PC's own desktop, or with Remote Desktop, and run `scripts\setup-windows.cmd` again there, answering yes to the Word, Excel and OneDrive question. With the tools already installed, that run is quick. Word, Excel and OneDrive files cannot be switched on over SSH or in any other session without a desktop.
+
+## "Word, Excel and OneDrive files were asked for, but they are not switched on."
+
+Setup ends with exit code 3. The rest of setup is done.
+
+**Cause.** A step that switches them on failed. These steps run after the end-to-end test, and a failure there never stops setup. The reason under the message says what happened:
+
+- *The Agent 365 tool could not sign in to Microsoft.* `a365` reported a failed sign-in.
+- *The Agent 365 tool's first step, which signs in and checks the tenant, did not finish.* `a365 setup requirements` runs in your terminal, so its own messages are on the screen above, where it ran, rather than in the log.
+- *The 'Agent 365 CLI' app registration was not found in this tenant.* Setup points the Agent 365 tooling at your tenant's own app registration named **Agent 365 CLI**, and there is none.
+- *One of the steps that switch them on did not finish*, or *... could not grant all of their permissions*: see the setup log, whose path the message gives.
+
+Setup puts `ToolingManifest.json` and `a365.config.json` back the way they were, so neither setup's next run nor the agent takes Word, Excel and OneDrive files to be on.
+
+**Fix.** Run `scripts\setup-windows.cmd` again at the PC's own desktop and answer yes to the Word, Excel and OneDrive question; sign in when the Microsoft window opens, and answer `a365`'s own questions. For the missing app registration, run `a365 setup requirements` once, choose **C** to create it, then run setup again (for Entrabot's own copy of `a365`, set `DOTNET_ROOT` first, as above). Switching them on needs a Global Administrator, because `a365 setup permissions mcp` grants permissions.
+
+A Microsoft 365 Copilot licence that setup gave the agent earlier in the same run (at the step that creates the agent) stays assigned when a later step fails; the next run uses it.
+
+## "Word, Excel and OneDrive files are switched on, but the agent has no Microsoft 365 Copilot licence"
+
+Setup ends with exit code 3.
+
+**Cause.** The agent's Work IQ tools need a Microsoft 365 Copilot licence of its own. Setup gives it a free one by itself, at the step that creates the agent, in every run that switches Word, Excel and OneDrive files on; none was free.
+
+**Fix.** As for a missing Teams licence above: setup's licence walkthrough shows your Microsoft 365 Copilot licences and gives the agent a free one, or says how to add or free one. It comes after the Teams licence, and only when Word, Excel and OneDrive files are switched on in that run. Then run setup again and answer yes to the Word, Excel and OneDrive question; it gives the agent the licence by itself. A new Copilot licence can take 10-15 minutes before the files tools work.
 
 ## The agent ignores a person in Teams
 

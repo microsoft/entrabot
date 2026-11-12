@@ -28,17 +28,30 @@ Each of those stops prints one line, ENTRABOT_RESULT=<outcome> (the *_MARKER con
 its own, just before its message. ENTRABOT_NEW_CHAIN=1 skips every lookup and creates a fresh
 chain.
 
+The licence on its own, for an agent that already exists (the Windows setup wizard's licence
+walkthrough runs these; the agent's IDs come from .entrabot-state.json):
+    python3 scripts/create_entra_agent_ids.py --licence-report
+        What the tenant has and which of it the Agent User has, as one ENTRABOT_RESULT=<JSON>
+        line (entrabot.licensing.Report). Changes nothing.
+    python3 scripts/create_entra_agent_ids.py --assign-licence SKU_ID
+        Gives the Agent User that one product, the way the full run does: its usage location
+        first, then the assignment, then the part number recorded in the state file. Ends with
+        one of the LICENCE_*_MARKER lines.
+
 Prerequisites:
     - az login has been run
     - pip install azure-identity requests
 """
 
+import argparse
+import json
 import os
 import platform
 import re
 import socket
 import sys
 import time
+from collections.abc import Sequence
 
 import requests
 
@@ -61,8 +74,11 @@ from entra_provisioning import (  # noqa: E402 — sys.path insert precedes this
 
 # The repo root is one directory up; src/ contains the entrabot package.
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent / "src"))
+# entrabot.preflight imports entrabot.config, which loads .env into this process: the Agent
+# User's sign-in name can come from there (ENTRABOT_AGENT_USER_UPN). Imported for that.
+import entrabot.preflight  # noqa: E402, F401
+from entrabot import licensing  # noqa: E402
 from entrabot.graph_helpers import GRAPH_V1, graph_request, odata_escape  # noqa: E402
-from entrabot.preflight import COPILOT_CAPABLE_SKUS, TEAMS_CAPABLE_SKUS  # noqa: E402
 
 BLUEPRINT_DISPLAY_NAME = "EntraBot Code Agent"
 
@@ -89,6 +105,15 @@ BLUEPRINT_COULD_NOT_CHECK_MARKER = "ENTRABOT_RESULT=blueprint-could-not-check"
 BLUEPRINT_AMBIGUOUS_MARKER = "ENTRABOT_RESULT=blueprint-ambiguous"
 AGENT_USER_WRONG_BLUEPRINT_MARKER = "ENTRABOT_RESULT=agent-user-wrong-blueprint"
 AGENT_LOOKUP_COULD_NOT_CHECK_MARKER = "ENTRABOT_RESULT=agent-lookup-could-not-check"
+# How the licence on its own (--assign-licence, --licence-report) ended. The wizard's licence
+# walkthrough (src/entrabot/winsetup/licences.py) recognises these; tests pin both sides.
+LICENCE_ASSIGNED_MARKER = "ENTRABOT_RESULT=licence-assigned"
+LICENCE_ALREADY_ASSIGNED_MARKER = "ENTRABOT_RESULT=licence-already-assigned"
+LICENCE_NO_FREE_SEAT_MARKER = "ENTRABOT_RESULT=licence-no-free-seat"
+LICENCE_NOT_FOUND_MARKER = "ENTRABOT_RESULT=licence-not-found"
+LICENCE_ASSIGN_FAILED_MARKER = "ENTRABOT_RESULT=licence-assign-failed"
+LICENCE_COULD_NOT_READ_MARKER = "ENTRABOT_RESULT=licence-could-not-read"
+_RESULT_PREFIX = "ENTRABOT_RESULT="
 
 
 class ProvisioningStop(RuntimeError):
@@ -1333,12 +1358,13 @@ def grant_agent_user_storage_consent(
 # ---------------------------------------------------------------------------
 # License assignment
 # ---------------------------------------------------------------------------
-# License SKU constants are imported from entrabot.preflight — single source of
-# truth so setup.sh's preflight checks and actual assignment use the same lists.
+# What a product includes (Teams, Microsoft 365 Copilot) is read by entrabot.licensing from
+# its service plans, the same reading setup.sh's preflight checks and the Windows wizard use.
 
 
 def _get_available_skus(token: str) -> list[dict]:
-    """Get all subscribed SKUs with available licenses."""
+    """Get all subscribed SKUs with available licenses, each with what it includes
+    (``product``, an entrabot.licensing.Product)."""
     resp = graph_request("GET", "/subscribedSkus", token)
     if resp.status_code != 200:
         print(f"  WARNING: Could not list subscribed SKUs ({resp.status_code})")
@@ -1347,17 +1373,16 @@ def _get_available_skus(token: str) -> list[dict]:
     skus = resp.json().get("value", [])
     available = []
     for sku in skus:
-        enabled = sku.get("prepaidUnits", {}).get("enabled", 0)
-        consumed = sku.get("consumedUnits", 0)
-        remaining = enabled - consumed
-        if remaining > 0:
+        product = licensing.describe(sku)
+        if product.free > 0:
             available.append(
                 {
                     "skuId": sku["skuId"],
                     "skuPartNumber": sku.get("skuPartNumber", ""),
                     "displayName": sku.get("skuPartNumber", sku["skuId"]),
-                    "remaining": remaining,
-                    "total": enabled,
+                    "remaining": product.free,
+                    "total": product.total,
+                    "product": product,
                 }
             )
     return available
@@ -1382,15 +1407,13 @@ def _check_existing_licenses(token: str, user_id: str) -> list[str]:
     return []
 
 
-def _get_all_sku_part_numbers(token: str) -> dict[str, str] | None:
+def _get_subscribed_products(token: str) -> dict[str, licensing.Product] | None:
+    """Every subscribed SKU by skuId, with what it includes; None when Graph can't say."""
     resp = graph_request("GET", "/subscribedSkus", token)
     if resp.status_code != 200:
         print(f"  WARNING: Could not resolve subscribed SKU names ({resp.status_code})")
         return None
-    return {
-        sku["skuId"]: sku.get("skuPartNumber", sku["skuId"])
-        for sku in resp.json().get("value", [])
-    }
+    return {sku["skuId"]: licensing.describe(sku) for sku in resp.json().get("value", [])}
 
 
 def _ensure_usage_location(token: str, agent_user_id: str) -> bool:
@@ -1452,29 +1475,33 @@ def assign_license_to_agent_user(
         return
 
     existing_sku_ids = _check_existing_licenses(token, agent_user_id)
-    sku_id_to_name = _get_all_sku_part_numbers(token)
-    if existing_sku_ids and sku_id_to_name is None:
+    subscribed = _get_subscribed_products(token)
+    if existing_sku_ids and subscribed is None:
         print("  WARNING: Could not resolve existing Agent User license SKU names.")
         print("  Skipping automatic license assignment to avoid duplicate assignment.")
         print("  Re-run setup.sh after Graph /subscribedSkus is available.")
         return
-    sku_id_to_name = sku_id_to_name or {}
-    existing_names = [sku_id_to_name.get(sid, sid) for sid in existing_sku_ids]
-    has_teams = any(name in TEAMS_CAPABLE_SKUS for name in existing_names)
-    has_copilot = any(name in COPILOT_CAPABLE_SKUS for name in existing_names)
+    subscribed = subscribed or {}
+    existing = [subscribed.get(sid) for sid in existing_sku_ids]
+    existing_names = [
+        product.part_number if product is not None else sid
+        for product, sid in zip(existing, existing_sku_ids, strict=True)
+    ]
+    teams_names = [product.part_number for product in existing if product and product.teams]
+    copilot_names = [product.part_number for product in existing if product and product.copilot]
+    has_teams = bool(teams_names)
+    has_copilot = bool(copilot_names)
 
     if existing_sku_ids:
         if has_teams:
-            teams_name = next(n for n in existing_names if n in TEAMS_CAPABLE_SKUS)
-            print(f"  [skip] Agent User already has Teams-capable license: {teams_name}")
+            print(f"  [skip] Agent User already has Teams-capable license: {teams_names[0]}")
         else:
             print(f"  Agent User has {len(existing_sku_ids)} license(s) but none include Teams:")
             for name in existing_names:
                 print(f"    - {name}")
             print("  Will assign a Teams-capable license...")
         if has_copilot:
-            copilot_name = next(n for n in existing_names if n in COPILOT_CAPABLE_SKUS)
-            print(f"  [skip] Agent User already has Work IQ license: {copilot_name}")
+            print(f"  [skip] Agent User already has Work IQ license: {copilot_names[0]}")
 
     if (not assign_teams or has_teams) and (not assign_work_iq or has_copilot):
         if assign_teams and assign_work_iq:
@@ -1498,7 +1525,11 @@ def assign_license_to_agent_user(
     assigned_teams = False
     assigned_copilot = False
     if assign_teams and not has_teams:
-        teams_skus = [s for s in all_skus if s["skuPartNumber"] in TEAMS_CAPABLE_SKUS]
+        # A product that also brings the agent mail and files first; otherwise Graph's order.
+        teams_skus = sorted(
+            (s for s in all_skus if s["product"].teams),
+            key=lambda s: licensing.preference(s["product"], "teams"),
+        )
         if not teams_skus:
             print("  No Teams-capable licenses found with available seats.")
             print("  Available SKUs in this tenant:")
@@ -1519,7 +1550,10 @@ def assign_license_to_agent_user(
                     f" ({chosen['remaining']}/{chosen['total']} available)"
                 )
             else:
-                print("  Teams-capable licenses available; auto-selecting first available:")
+                print(
+                    "  Teams-capable licenses available; choosing the first (mail and files "
+                    "count first):"
+                )
                 for i, sku in enumerate(teams_skus, 1):
                     print(
                         f"    {i}. {sku['displayName']}"
@@ -1530,7 +1564,7 @@ def assign_license_to_agent_user(
                 assigned_teams = True
 
     if assign_work_iq and not has_copilot:
-        copilot_skus = [s for s in all_skus if s["skuPartNumber"] in COPILOT_CAPABLE_SKUS]
+        copilot_skus = [s for s in all_skus if s["product"].copilot]
         if not copilot_skus:
             print("  No Microsoft 365 Copilot licenses found with available seats.")
             print("  Work IQ MCP servers require Microsoft 365 Copilot for the Agent User.")
@@ -1554,11 +1588,141 @@ def assign_license_to_agent_user(
 
 
 # ---------------------------------------------------------------------------
+# The licence on its own
+# ---------------------------------------------------------------------------
+
+
+def read_licences(token: str, agent_user_id: str) -> licensing.Report:
+    """What the tenant subscribes to, and which of it the Agent User has. Reads only.
+    Anything Graph does not answer readably raises :class:`_NoAnswer`."""
+    skus = _value_list(_answer(token, "/subscribedSkus"))
+    assigned = _answer(token, f"/users/{agent_user_id}?$select=assignedLicenses").get(
+        "assignedLicenses"
+    )
+    if not isinstance(assigned, list):
+        raise _NoAnswer(_UNREADABLE)
+    return licensing.Report.from_graph(skus, assigned)
+
+
+def _record_licence(product: licensing.Product) -> None:
+    """Record *product* in the state file the way the full run does."""
+    if product.teams:
+        set_state("AGENT_USER_LICENSE_SKU", product.part_number)
+    if product.copilot:
+        set_state("AGENT_USER_WORK_IQ_LICENSE_SKU", product.part_number)
+
+
+def assign_one_licence(token: str, agent_user_id: str, sku_id: str) -> str:
+    """Give the Agent User the one product *sku_id*, with the full run's own steps: usage
+    location, then the assignment (both retried), then the record. Returns the marker line;
+    a stop raises :class:`ProvisioningStop` before anything is changed, unless it says so."""
+    if not _ID.match(sku_id):
+        raise ProvisioningStop(
+            f"  ERROR: {sku_id!r} is not a product ID. Nothing was changed.",
+            LICENCE_NOT_FOUND_MARKER,
+        )
+    try:
+        report = read_licences(token, agent_user_id)
+    except _NoAnswer as exc:
+        raise ProvisioningStop(
+            f"  ERROR: The licences could not be read: {exc}. Nothing was changed.",
+            LICENCE_COULD_NOT_READ_MARKER,
+        ) from exc
+    product = next((item for item in report.products if _same_id(item.sku_id, sku_id)), None)
+    if product is None or not product.for_people:
+        raise ProvisioningStop(
+            f"  ERROR: {sku_id} is not a licence this tenant can give a user. Nothing was "
+            "changed.",
+            LICENCE_NOT_FOUND_MARKER,
+        )
+    if any(_same_id(item, sku_id) for item in report.agent):
+        _record_licence(product)
+        print(f"  [skip] The Agent User already has {product.name} ({product.part_number}).")
+        return LICENCE_ALREADY_ASSIGNED_MARKER
+    if product.free <= 0:
+        raise ProvisioningStop(
+            f"  ERROR: Every {product.name} licence is assigned ({product.used} of "
+            f"{product.total}). Nothing was changed.",
+            LICENCE_NO_FREE_SEAT_MARKER,
+        )
+    if not _ensure_usage_location(token, agent_user_id):
+        raise ProvisioningStop(
+            "  ERROR: The Agent User's usage location could not be set, so no licence was "
+            "assigned.",
+            LICENCE_ASSIGN_FAILED_MARKER,
+        )
+    label = "Teams-capable" if product.teams else "Work IQ" if product.copilot else "Microsoft 365"
+    sku = {"skuId": product.sku_id, "displayName": product.part_number}
+    if not _assign_license(token, agent_user_id, sku, label):
+        raise ProvisioningStop(
+            f"  ERROR: Microsoft Graph did not assign {product.name} (see above). Its usage "
+            "location was set; nothing else was changed.",
+            LICENCE_ASSIGN_FAILED_MARKER,
+        )
+    _record_licence(product)
+    return LICENCE_ASSIGNED_MARKER
+
+
+def _licence_only(*, report: bool, assign: str | None) -> int:
+    agent_user_id = str(get_state("AGENT_USER_ID") or "").strip()
+    try:
+        if not _ID.match(agent_user_id):
+            raise ProvisioningStop(
+                "  ERROR: No Agent User is recorded in .entrabot-state.json, so there is no "
+                "account to look at. Run setup first.",
+                LICENCE_COULD_NOT_READ_MARKER,
+            )
+        try:
+            token = get_existing_graph_token()
+        except ProvisionerBootstrapError as exc:
+            raise ProvisioningStop(f"  ERROR: {exc}", LICENCE_COULD_NOT_READ_MARKER) from exc
+        if report:
+            try:
+                found = read_licences(token, agent_user_id)
+            except _NoAnswer as exc:
+                raise ProvisioningStop(
+                    f"  ERROR: The licences could not be read: {exc}.",
+                    LICENCE_COULD_NOT_READ_MARKER,
+                ) from exc
+            print(_RESULT_PREFIX + json.dumps(found.to_json()))
+            return 0
+        print(assign_one_licence(token, agent_user_id, assign or ""))
+        return 0
+    except ProvisioningStop as exc:
+        print(exc.marker)  # alone on its line, for the setup front ends
+        print(exc)
+        return 1
+
+
+def _arguments(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Create or repair the agent's identity chain in Microsoft Entra. With no "
+        "option, the full run; the options below handle the Agent User's licence on its own."
+    )
+    only = parser.add_mutually_exclusive_group()
+    only.add_argument(
+        "--licence-report",
+        action="store_true",
+        help="Print what the tenant subscribes to and which of it the Agent User has.",
+    )
+    only.add_argument(
+        "--assign-licence",
+        metavar="SKU_ID",
+        help="Give the Agent User this one product (usage location first).",
+    )
+    return parser.parse_args(list(argv))
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 
-def main() -> int:
+def main(argv: Sequence[str] = ()) -> int:
+    args = _arguments(argv)
+    if args.licence_report or args.assign_licence is not None:
+        return _licence_only(report=args.licence_report, assign=args.assign_licence)
+
     print("=" * 60)
     print("EntraBot — Entra Agent Identity Provisioning")
     print("=" * 60)
@@ -1653,4 +1817,4 @@ def _provision(token: str) -> None:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

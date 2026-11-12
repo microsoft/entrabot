@@ -156,6 +156,47 @@ class TestCheckTeamsLicenseAvailability:
 
         assert result.status == "skip"
 
+    @staticmethod
+    def _with_plans(part: str, plans: list[str], *, free: int = 2) -> dict:
+        return {
+            "skuId": f"id-{part}",
+            "skuPartNumber": part,
+            "appliesTo": "User",
+            "prepaidUnits": {"enabled": free},
+            "consumedUnits": 0,
+            "servicePlans": [
+                {"servicePlanName": name, "appliesTo": "User", "provisioningStatus": "Success"}
+                for name in plans
+            ],
+        }
+
+    def _check(self, *skus: dict) -> Check:
+        with respx.mock:
+            respx.get(self.SUBSCRIBED_SKUS_URL).mock(
+                return_value=httpx.Response(200, json={"value": list(skus)})
+            )
+            return check_teams_license_availability("fake-token")
+
+    def test_a_product_with_the_teams_plan_counts_whatever_its_part_number(self) -> None:
+        # Microsoft 365 Business Basic: not on the old name list under this part number.
+        result = self._check(
+            self._with_plans("SMB_BUSINESS_ESSENTIALS", ["TEAMS1", "EXCHANGE_S_STANDARD"])
+        )
+        assert result.status == "pass" and "SMB_BUSINESS_ESSENTIALS (2 free)" in result.detail
+
+    def test_a_no_teams_suite_does_not_count_though_plans_are_named_after_teams(self) -> None:
+        plans = ["MESH_AVATARS_FOR_TEAMS", "CDS_O365_P2", "EXCHANGE_S_ENTERPRISE"]
+        assert self._check(self._with_plans("Microsoft_365_E3_(no_Teams)", plans)).status == "warn"
+
+    def test_the_e5_extra_features_licence_does_not_count(self) -> None:
+        # It was on the old name list, and includes no Teams.
+        result = self._check(self._with_plans("M365_E5_SUITE_COMPONENTS", ["CLIPCHAMP"]))
+        assert result.status == "warn"
+
+    def test_a_shared_device_licence_does_not_count(self) -> None:
+        result = self._check(self._with_plans("MCOCAP", ["TEAMS1", "MCOEV"]))
+        assert result.status == "warn"
+
 
 class TestCheckCopilotLicenseAvailability:
     SUBSCRIBED_SKUS_URL = "https://graph.microsoft.com/v1.0/subscribedSkus"
@@ -243,6 +284,23 @@ class TestCheckCopilotLicenseAvailability:
         result = check_copilot_license_availability("fake-token", transport=transport)
 
         assert result.status == "skip"
+
+    def test_copilot_under_another_part_number_counts_by_its_plans(self) -> None:
+        # "Microsoft Copilot for Microsoft 365" (M365_Copilot) is not on the name list.
+        sku = {
+            "skuId": "copilot-sku",
+            "skuPartNumber": "M365_Copilot",
+            "prepaidUnits": {"enabled": 2},
+            "consumedUnits": 1,
+            "servicePlans": [{"servicePlanName": "M365_COPILOT_APPS", "appliesTo": "User"}],
+        }
+        with respx.mock:
+            respx.get(self.SUBSCRIBED_SKUS_URL).mock(
+                return_value=httpx.Response(200, json={"value": [sku]})
+            )
+            result = check_copilot_license_availability("fake-token")
+
+        assert result.status == "pass" and "M365_Copilot (1 free)" in result.detail
 
 
 # ─── Phase 2: smoke checks ───────────────────────────────────────────────────

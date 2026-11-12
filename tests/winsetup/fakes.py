@@ -170,6 +170,117 @@ def program(name: str) -> Callable[[RunRequest], bool]:
     return lambda request: PureWindowsPath(request.argv[0]).name.lower() == name.lower()
 
 
+# Service plans of common products, trimmed from Microsoft's "Product names and service plan
+# identifiers for licensing" reference to the ones that decide what a product includes.
+BUSINESS_PLANS = ("TEAMS1", "EXCHANGE_S_STANDARD", "SHAREPOINTSTANDARD", "SHAREPOINTWAC")
+E3_PLANS = ("TEAMS1", "EXCHANGE_S_ENTERPRISE", "SHAREPOINTENTERPRISE", "SHAREPOINTWAC")
+E3_NO_TEAMS_PLANS = ("MESH_AVATARS_FOR_TEAMS", "CDS_O365_P2", "EXCHANGE_S_ENTERPRISE")
+TEAMS_ESSENTIALS_PLANS = ("TeamsEss",)
+COPILOT_PLANS = ("M365_COPILOT_APPS", "M365_COPILOT_TEAMS", "M365_COPILOT_BUSINESS_CHAT")
+POWER_BI_PLANS = ("BI_AZURE_P2", "EXCHANGE_S_FOUNDATION")
+
+
+def tenant_sku(
+    sku_id: str, part: str, plans: Sequence[str], *, total: int = 5, used: int = 0
+) -> dict[str, object]:
+    """One entry of Graph's subscribedSkus answer."""
+    return {
+        "skuId": sku_id,
+        "skuPartNumber": part,
+        "appliesTo": "User",
+        "capabilityStatus": "Enabled",
+        "prepaidUnits": {"enabled": total, "suspended": 0, "warning": 0},
+        "consumedUnits": used,
+        "servicePlans": [
+            {"servicePlanName": name, "appliesTo": "User", "provisioningStatus": "Success"}
+            for name in plans
+        ],
+    }
+
+
+@dataclass
+class FakeLicences:
+    """Stands in for ``create_entra_agent_ids.py --licence-report`` and ``--assign-licence``:
+    the tenant's products and the agent's licences, in memory, answered the way the script
+    prints them. Attach it before anything else that matches that script."""
+
+    skus: list[dict[str, object]] = field(default_factory=list)
+    agent: list[str] = field(default_factory=list)  # skuIds the agent has
+    state_file: Path | None = None  # where an assignment is recorded, as the script does
+    unreadable: str = ""  # the report fails with this message
+    refuse: str = ""  # every assignment fails with this message
+    taken: set[str] = field(default_factory=set)  # the last seat goes to someone else first
+    before_report: Callable[[int], None] | None = None  # called with the report's number
+    reports: int = 0
+    assigned: list[str] = field(default_factory=list)
+
+    def matches(self, request: RunRequest) -> bool:
+        argv = request.argv
+        named = any(Path(arg).name == "create_entra_agent_ids.py" for arg in argv[:3])
+        return named and ("--licence-report" in argv or "--assign-licence" in argv)
+
+    def attach(self, spawn: FakeSpawn) -> None:
+        spawn.on(self.matches, self)
+
+    def report_json(self) -> str:
+        from entrabot.licensing import Report
+
+        assigned = [{"skuId": sku_id, "disabledPlans": []} for sku_id in self.agent]
+        return json.dumps(Report.from_graph(self.skus, assigned).to_json())
+
+    def __call__(self, request: RunRequest) -> Reply:
+        if "--licence-report" in request.argv:
+            self.reports += 1
+            if self.before_report is not None:
+                self.before_report(self.reports)
+            if self.unreadable:
+                return Reply(
+                    returncode=1,
+                    stdout=f"ENTRABOT_RESULT=licence-could-not-read\n  ERROR: {self.unreadable}\n",
+                )
+            return Reply(stdout="ENTRABOT_RESULT=" + self.report_json() + "\n")
+        return self._assign(request.argv[request.argv.index("--assign-licence") + 1])
+
+    def _assign(self, sku_id: str) -> Reply:
+        from entrabot.licensing import describe
+
+        sku = next((item for item in self.skus if item["skuId"] == sku_id), None)
+        if sku is None:
+            return Reply(returncode=1, stdout="ENTRABOT_RESULT=licence-not-found\n  ERROR: no\n")
+        if sku_id in self.agent:
+            return Reply(stdout="ENTRABOT_RESULT=licence-already-assigned\n")
+        product = describe(sku)
+        if product.free <= 0 or sku_id in self.taken:
+            self.taken.discard(sku_id)
+            sku["consumedUnits"] = product.total  # someone else has it now
+            return Reply(
+                returncode=1, stdout="ENTRABOT_RESULT=licence-no-free-seat\n  ERROR: all used\n"
+            )
+        if self.refuse:
+            return Reply(
+                returncode=1,
+                stdout=(
+                    f"  WARNING: license assignment failed after retries (400)\n"
+                    f"  Response: {self.refuse}\n"
+                    "ENTRABOT_RESULT=licence-assign-failed\n"
+                    "  ERROR: Microsoft Graph did not assign it (see above).\n"
+                ),
+            )
+        sku["consumedUnits"] = product.used + 1
+        self.agent.append(sku_id)
+        self.assigned.append(sku_id)
+        if self.state_file is not None:
+            recorded = (
+                json.loads(self.state_file.read_text("utf-8")) if self.state_file.exists() else {}
+            )
+            if product.teams:
+                recorded["AGENT_USER_LICENSE_SKU"] = product.part_number
+            if product.copilot:
+                recorded["AGENT_USER_WORK_IQ_LICENSE_SKU"] = product.part_number
+            self.state_file.write_text(json.dumps(recorded), encoding="utf-8")
+        return Reply(stdout="  [done] license assigned\nENTRABOT_RESULT=licence-assigned\n")
+
+
 @dataclass
 class FakeDirectory:
     """Answers ``az rest`` calls to Microsoft Graph ``/users`` the way Graph would.

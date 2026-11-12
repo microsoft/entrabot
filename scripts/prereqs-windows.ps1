@@ -11,17 +11,23 @@
                       project's safety hooks through Git Bash, so it is needed if you use
                       Claude Code. No administrator rights and no winget required.
     -WithClaudeCode   Claude Code, using its official installer.
-    -WithWorkIq       .NET SDK and the Microsoft Agent 365 CLI (a365), needed only for
-                      scripts\setup-windows.cmd -ConfigureA365WorkIq.
+    -WithWorkIq       What Word, Excel and OneDrive files (Work IQ) need, for your account
+                      only: the Microsoft Agent 365 CLI (a365) and, when this PC has no
+                      .NET SDK 8 or later, the .NET SDK it runs on. Both go in
+                      %LOCALAPPDATA%\entrabot\tools (about 1 GB), with no administrator
+                      rights and no winget. Also PowerShell 7, which one a365 step needs,
+                      from winget.
     -WithBuildTools   Visual Studio Build Tools (C++), about 6 GB. Only needed if setup
                       reports that a package had to be compiled.
 
   Run with no switch to see this summary. Safe to re-run: anything already installed is
   left alone. Each switch only reports success when the tool actually runs afterwards.
-  The setup wizard calls -WithGit and -WithClaudeCode for you when you ask it to.
+  The setup wizard calls -WithGit, -WithClaudeCode and -WithWorkIq for you when you ask
+  it to.
 
-  Works on the Windows PowerShell 5.1 that ships with Windows. -WithWorkIq and
-  -WithBuildTools use winget and their installers may ask for administrator approval.
+  Works on the Windows PowerShell 5.1 that ships with Windows. -WithBuildTools uses
+  winget, and its installer asks for administrator approval; -WithWorkIq uses winget for
+  PowerShell 7 only.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\prereqs-windows.ps1 -WithGit -WithClaudeCode
@@ -71,6 +77,17 @@ if ($PSVersionTable.PSVersion.Major -lt 6) {
 $PinnedGitVersion = '2.56.1'
 # Git for Windows releases are signed by the project's maintainer.
 $GitPublisher = 'Johannes Schindelin'
+
+# -WithWorkIq. Microsoft's dotnet-install script installs the .NET SDK into a folder of its
+# choosing with no administrator rights (Microsoft Learn, "dotnet-install scripts
+# reference"); it is run only when Windows says Microsoft signed it. The SDK comes from the
+# long-term support release, which still gets security fixes: .NET 8 and 9 reached the end
+# of their support in November 2026. The Agent 365 CLI needs .NET 8 or later.
+$DotnetInstallUrl = 'https://dot.net/v1/dotnet-install.ps1'
+$DotnetChannel = '10.0'
+$DotnetMinimumMajor = 8
+$MicrosoftPublisher = 'Microsoft Corporation'
+$A365Package = 'Microsoft.Agents.A365.DevTools.Cli'
 
 function Test-WingetSuccess {
     # winget reports "already installed" and "nothing newer" as non-zero exit codes.
@@ -305,6 +322,30 @@ function Get-UserPathWithEntry {
 function Test-CommandExists {
     param([string]$Name)
     return ($null -ne (Get-Command $Name -ErrorAction SilentlyContinue))
+}
+
+function Get-WorkIqToolFolders {
+    # Where -WithWorkIq installs the Agent 365 CLI, and the .NET SDK it runs on when the PC
+    # has none: Entrabot's own data folder, beside its private Python and Azure CLI. Nothing
+    # there goes on PATH; setup looks there by itself, and teardown -PurgeData removes it.
+    param([string]$LocalAppData)
+    if (-not $LocalAppData) { return $null }
+    $tools = Join-WindowsPath $LocalAppData 'entrabot\tools'
+    return @{ Dotnet = (Join-WindowsPath $tools 'dotnet'); A365 = (Join-WindowsPath $tools 'a365') }
+}
+
+function Get-DotnetSdkMajor {
+    # The newest SDK's major version in "dotnet --list-sdks" output, whose lines read like
+    # "9.0.321 [C:\...\sdk]"; 0 when it lists none.
+    param([string[]]$Listing)
+    $newest = 0
+    foreach ($line in @($Listing)) {
+        if ([string]$line -match '^\s*(\d+)\.\d+\.\d+') {
+            $major = [int]$Matches[1]
+            if ($major -gt $newest) { $newest = $major }
+        }
+    }
+    return $newest
 }
 
 # Dot-source guard: `. scripts\prereqs-windows.ps1` loads the functions and stops here.
@@ -549,13 +590,146 @@ function Test-WingetWorks {
 }
 
 function Install-WithWinget {
-    # Returns $true when the package is installed afterwards.
+    # Returns $true when the package is installed afterwards. winget runs attached to this
+    # window, not through a pipe: piped, every redraw of its progress bar became a new line
+    # of mis-decoded characters. An argument with spaces is quoted so it stays one argument.
     param([string]$Id, [string[]]$Extra = @())
     $winget = Get-Command winget -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     $wingetArgs = @('install', '--id', $Id, '--exact', '--source', 'winget',
         '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity') + $Extra
-    & $winget.Path @wingetArgs | Out-Host   # keep installer output off this function's return value
-    return (Test-WingetSuccess -ExitCode $LASTEXITCODE)
+    $line = @($wingetArgs | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
+    $process = Start-Process -FilePath $winget.Path -ArgumentList $line -NoNewWindow -Wait -PassThru
+    return (Test-WingetSuccess -ExitCode $process.ExitCode)
+}
+
+function Get-DotnetSdk {
+    # A .NET SDK the Agent 365 CLI can be installed with (8 or later), judged by running it:
+    # @{ Exe; Root; Major } or $null. Entrabot's own copy first, then the dotnet on PATH.
+    # Root is set for Entrabot's own copy only: what it runs needs DOTNET_ROOT to find it.
+    param([string]$PrivateFolder)
+    $candidates = @()
+    if ($PrivateFolder) {
+        $candidates += @{ Exe = (Join-WindowsPath $PrivateFolder 'dotnet.exe'); Root = $PrivateFolder }
+    }
+    $onPath = Get-Command dotnet -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($onPath) { $candidates += @{ Exe = [string]$onPath.Path; Root = '' } }
+    foreach ($candidate in $candidates) {
+        try {
+            # Test-Path also throws for a drive that is not there; inside the try on purpose.
+            if (-not (Test-Path -LiteralPath $candidate.Exe -PathType Leaf)) { continue }
+            $listing = @(& $candidate.Exe '--list-sdks')
+            if ($LASTEXITCODE -ne 0) { continue }
+        } catch {
+            continue
+        }
+        $major = Get-DotnetSdkMajor -Listing $listing
+        if ($major -ge $DotnetMinimumMajor) {
+            return @{ Exe = $candidate.Exe; Root = $candidate.Root; Major = $major }
+        }
+    }
+    return $null
+}
+
+function Use-DotnetSdk {
+    # Make $Sdk the dotnet that this script, and what it starts, use: first on PATH; for
+    # Entrabot's own copy also DOTNET_ROOT, which a .NET program started by its own .exe
+    # (a365.exe is one) needs to find a runtime not installed for the whole PC, with the
+    # variables that would win over DOTNET_ROOT cleared. And no telemetry from these steps.
+    param($Sdk)
+    $folder = Get-WindowsParent $Sdk.Exe
+    if ($folder -and -not (@($env:Path -split ';') -contains $folder)) { $env:Path = "$folder;$env:Path" }
+    if ($Sdk.Root) {
+        $env:DOTNET_ROOT = $Sdk.Root
+        foreach ($name in @('DOTNET_ROOT_X64', 'DOTNET_ROOT_X86', 'DOTNET_ROOT_ARM64', 'DOTNET_ROOT(x86)')) {
+            if (Test-Path -LiteralPath "Env:$name") { Remove-Item -LiteralPath "Env:$name" }
+        }
+    }
+    $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+    $env:DOTNET_NOLOGO = '1'
+}
+
+function Find-A365 {
+    # An Agent 365 CLI that runs: @{ Path; Version } or $null. One on PATH or in the .NET
+    # global tools folder, then Entrabot's own copy, run with Entrabot's own .NET if there.
+    param([string]$PrivateFolder, [string]$PrivateDotnet)
+    $candidates = @()
+    $onPath = Get-Command a365 -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($onPath) { $candidates += [string]$onPath.Path }
+    if ($env:USERPROFILE) { $candidates += (Join-WindowsPath $env:USERPROFILE '.dotnet\tools\a365.exe') }
+    foreach ($candidate in $candidates) {
+        $version = Get-VersionLine -Exe $candidate
+        if ($version) { return @{ Path = $candidate; Version = $version } }
+    }
+    if (-not $PrivateFolder) { return $null }
+    $ownCopy = Join-WindowsPath $PrivateFolder 'a365.exe'
+    $savedRoot = $env:DOTNET_ROOT
+    try {
+        $ownDotnet = ''
+        if ($PrivateDotnet) { $ownDotnet = Join-WindowsPath $PrivateDotnet 'dotnet.exe' }
+        if ($ownDotnet -and (Test-Path -LiteralPath $ownDotnet -PathType Leaf)) { $env:DOTNET_ROOT = $PrivateDotnet }
+        $version = Get-VersionLine -Exe $ownCopy
+    } catch {
+        $version = ''
+    } finally {
+        $env:DOTNET_ROOT = $savedRoot
+    }
+    if ($version) { return @{ Path = $ownCopy; Version = $version } }
+    return $null
+}
+
+function Install-PrivateDotnet {
+    # The .NET SDK for this account only, into $Folder, with Microsoft's dotnet-install
+    # script: no administrator rights, no winget, nothing put on PATH (-NoPath). The script
+    # runs only when Windows says Microsoft signed it, in its own in-box Windows PowerShell,
+    # so this script's strict settings cannot interfere with it.
+    param([string]$Folder)
+    $download = New-DownloadFolder
+    try {
+        $installScript = Join-Path $download 'dotnet-install.ps1'
+        Write-Info "Downloading Microsoft's .NET install script ($DotnetInstallUrl)..."
+        if (-not (Save-VerifiedDownload -Url $DotnetInstallUrl -Destination $installScript -Organization $MicrosoftPublisher)) {
+            return $false
+        }
+        Write-Info "Installing the .NET SDK $DotnetChannel for your account in $Folder (about 1 GB, a minute or two)..."
+        $shell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $installArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $installScript,
+            '-Channel', $DotnetChannel, '-InstallDir', $Folder, '-NoPath')
+        # Started through cmd.exe or Python from a PowerShell 7 terminal, this script has
+        # PowerShell 7's PSModulePath; with none, the child builds its own.
+        $savedModulePath = $env:PSModulePath
+        try {
+            $env:PSModulePath = $null
+            & $shell @installArgs | Out-Host
+            return ($LASTEXITCODE -eq 0)
+        } finally {
+            $env:PSModulePath = $savedModulePath
+        }
+    } catch {
+        Write-Note "The .NET SDK could not be installed: $($_.Exception.Message)"
+        return $false
+    } finally {
+        if (Test-Path -LiteralPath $download) { Remove-Item -LiteralPath $download -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Install-A365 {
+    # The Agent 365 CLI for this account only, into $Folder, with $Sdk. An SDK 9 or later
+    # lets it run on a newer .NET than it was built for (--allow-roll-forward), so the .NET
+    # 10 SDK installed here runs it whatever .NET it targets. $true when dotnet says it worked.
+    param($Sdk, [string]$Folder)
+    try {
+        if (Test-Path -LiteralPath (Join-WindowsPath $Folder 'a365.exe') -PathType Leaf) {
+            # A copy that does not run (it was looked for first): take it out, then install.
+            & $Sdk.Exe tool uninstall $A365Package --tool-path $Folder | Out-Host
+        }
+        $toolArgs = @('tool', 'install', $A365Package, '--tool-path', $Folder)
+        if ($Sdk.Major -ge 9) { $toolArgs += '--allow-roll-forward' }
+        & $Sdk.Exe @toolArgs | Out-Host
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        Write-Note "The Agent 365 CLI could not be installed: $($_.Exception.Message)"
+        return $false
+    }
 }
 
 if ($Help) {
@@ -587,7 +761,7 @@ if (-not ($WithGit -or $WithClaudeCode -or $WithWorkIq -or $WithBuildTools)) {
     Write-Host "  This helper installs optional extras, one switch each:"
     Write-Host "    -WithGit          Git for Windows (Claude Code runs Entrabot's hooks in Git Bash)"
     Write-Host "    -WithClaudeCode   Claude Code"
-    Write-Host "    -WithWorkIq       .NET SDK + Microsoft Agent 365 CLI (a365) for Work IQ"
+    Write-Host "    -WithWorkIq       Agent 365 CLI (a365) + .NET SDK + PowerShell 7, for Work IQ"
     Write-Host "    -WithBuildTools   Visual Studio Build Tools, C++ (about 6 GB; rarely needed)"
     Write-Host ""
     Write-Host "  Example:"
@@ -596,7 +770,12 @@ if (-not ($WithGit -or $WithClaudeCode -or $WithWorkIq -or $WithBuildTools)) {
     exit 0
 }
 
-$needsWinget = ($WithWorkIq -or $WithBuildTools)
+# winget is for -WithBuildTools, and for -WithWorkIq only when PowerShell 7 is missing.
+$needsWinget = [bool]$WithBuildTools
+if ($WithWorkIq -and -not $needsWinget) {
+    Update-SessionPath
+    $needsWinget = -not (Test-CommandExists 'pwsh')
+}
 $wingetWorks = $false
 if ($needsWinget) {
     $wingetWorks = Test-WingetWorks
@@ -674,46 +853,84 @@ if ($WithClaudeCode) {
     }
 }
 
-# ---- Work IQ: .NET SDK + Microsoft Agent 365 CLI ----------------------------------
+# ---- Work IQ: Microsoft Agent 365 CLI (and the .NET SDK it runs on) + PowerShell 7 --
+# No winget and no administrator rights for .NET or a365: ones this PC already has are used
+# as they are; otherwise both go under %LOCALAPPDATA%\entrabot\tools. Measured on a
+# Windows 11 VM as a standard user over SSH: the SDK in about a minute, about 900 MB in all.
 if ($WithWorkIq) {
-    Write-Step ".NET SDK (needed by the Microsoft Agent 365 CLI)"
+    Write-Step "Microsoft Agent 365 CLI (a365), and the .NET SDK it runs on"
     Update-SessionPath
-    if (Test-CommandExists 'dotnet') {
-        Write-Ok ".NET SDK is already installed"
-        $present += '.NET SDK'
-    } elseif (-not $wingetWorks) {
-        Write-Err "Install the .NET SDK 9 from https://dotnet.microsoft.com/download"
-        $failed += '.NET SDK'
-    } elseif (Install-WithWinget -Id 'Microsoft.DotNet.SDK.9') {
-        Update-SessionPath
-        Write-Ok ".NET SDK 9 installed"
-        $installed += '.NET SDK 9'
+    $workIqFolders = Get-WorkIqToolFolders -LocalAppData $env:LOCALAPPDATA
+    if ($null -eq $workIqFolders) {
+        Write-Err "LOCALAPPDATA is not set for this account, so there is nowhere to put the Agent 365 CLI."
+        $failed += 'Agent 365 CLI (a365)'
     } else {
-        Write-Err "The .NET SDK could not be installed. Get it from https://dotnet.microsoft.com/download"
-        $failed += '.NET SDK'
+        $a365 = Find-A365 -PrivateFolder $workIqFolders.A365 -PrivateDotnet $workIqFolders.Dotnet
+        if ($a365) {
+            Write-Ok "The Agent 365 CLI is already installed: $($a365.Path) ($($a365.Version))"
+            $present += 'Agent 365 CLI (a365)'
+            # One the person installed as a .NET global tool is kept up to date, as before.
+            $globalTool = ''
+            if ($env:USERPROFILE) { $globalTool = Join-WindowsPath $env:USERPROFILE '.dotnet\tools\a365.exe' }
+            if ($globalTool -and ($a365.Path -ieq $globalTool) -and (Test-CommandExists 'dotnet')) {
+                Write-Info "Checking for a newer Agent 365 CLI..."
+                & dotnet tool update --global $A365Package
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Note "The Agent 365 CLI could not be updated (exit code $LASTEXITCODE). Continuing with the installed version."
+                }
+            }
+        } else {
+            $sdk = Get-DotnetSdk -PrivateFolder $workIqFolders.Dotnet
+            if ($sdk) {
+                Write-Ok ".NET SDK $($sdk.Major) is already installed: $($sdk.Exe)"
+                $present += '.NET SDK'
+            } elseif (Install-PrivateDotnet -Folder $workIqFolders.Dotnet) {
+                $sdk = Get-DotnetSdk -PrivateFolder $workIqFolders.Dotnet
+                if ($sdk) {
+                    Write-Ok ".NET SDK $($sdk.Major) installed for your account: $($sdk.Exe)"
+                    $installed += '.NET SDK'
+                }
+            }
+            if (-not $sdk) {
+                Write-Err "The .NET SDK could not be installed, so neither could the Agent 365 CLI. See https://learn.microsoft.com/dotnet/core/install/windows, then run this again."
+                $failed += '.NET SDK'
+                $failed += 'Agent 365 CLI (a365)'
+            } else {
+                Use-DotnetSdk -Sdk $sdk
+                Write-Info "Installing the Agent 365 CLI for your account in $($workIqFolders.A365)..."
+                $toolInstalled = Install-A365 -Sdk $sdk -Folder $workIqFolders.A365
+                $a365 = Find-A365 -PrivateFolder $workIqFolders.A365 -PrivateDotnet $workIqFolders.Dotnet
+                if ($a365) {
+                    Write-Ok "Agent 365 CLI installed for your account: $($a365.Path) ($($a365.Version))"
+                    $installed += 'Agent 365 CLI (a365)'
+                } else {
+                    if ($toolInstalled) { Write-Note "dotnet said it was installed, but the Agent 365 CLI does not run." }
+                    Write-Err "The Agent 365 CLI could not be installed. See https://learn.microsoft.com/microsoft-agent-365/developer/agent-365-cli"
+                    $failed += 'Agent 365 CLI (a365)'
+                }
+            }
+        }
     }
 
-    Write-Step "Microsoft Agent 365 CLI (a365)"
-    if (-not (Test-CommandExists 'dotnet')) {
-        Write-Err "dotnet is not available, so the a365 CLI cannot be installed."
-        $failed += 'Agent 365 CLI (a365)'
-    } elseif (Test-CommandExists 'a365') {
-        Write-Info "a365 is already installed; checking for an update..."
-        & dotnet tool update --global Microsoft.Agents.A365.DevTools.Cli
-        if ($LASTEXITCODE -ne 0) {
-            Write-Note "a365 is installed but could not be updated (exit code $LASTEXITCODE). Continuing with the installed version."
-        }
-        $present += 'Agent 365 CLI (a365)'
+    # One a365 step (setup permissions) runs in PowerShell 7. Nothing else here needs it.
+    Write-Step "PowerShell 7 (needed by one Microsoft Agent 365 CLI step)"
+    $pwshUrl = 'https://learn.microsoft.com/powershell/scripting/install/install-powershell-on-windows'
+    Update-SessionPath
+    if (Test-CommandExists 'pwsh') {
+        Write-Ok "PowerShell 7 is already installed"
+        $present += 'PowerShell 7'
+    } elseif (-not $wingetWorks) {
+        Write-Err "Install PowerShell 7 from $pwshUrl"
+        $failed += 'PowerShell 7'
     } else {
-        & dotnet tool install --global Microsoft.Agents.A365.DevTools.Cli
-        $toolExit = $LASTEXITCODE
+        $pwshInstalled = Install-WithWinget -Id 'Microsoft.PowerShell'
         Update-SessionPath
-        if ($toolExit -eq 0 -and (Test-CommandExists 'a365')) {
-            Write-Ok "a365 installed"
-            $installed += 'Agent 365 CLI (a365)'
+        if ($pwshInstalled -and (Test-CommandExists 'pwsh')) {
+            Write-Ok "PowerShell 7 installed"
+            $installed += 'PowerShell 7'
         } else {
-            Write-Err "a365 could not be installed (dotnet tool install exited with $toolExit)."
-            $failed += 'Agent 365 CLI (a365)'
+            Write-Err "PowerShell 7 could not be installed. Get it from $pwshUrl"
+            $failed += 'PowerShell 7'
         }
     }
 }

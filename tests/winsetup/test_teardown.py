@@ -1303,3 +1303,20 @@ class TestPurgeData:
         _, out = tear_down(project, purge_data=True, running_from=[])
 
         assert out.index("data folder") < out.index("Removed this computer's certificate")
+
+    def test_purge_takes_the_tools_word_excel_and_onedrive_files_got(
+        self, project: Project
+    ) -> None:
+        # scripts\prereqs-windows.ps1 -WithWorkIq installs these without admin rights, under
+        # the data folder, and puts nothing on PATH: deleting the folders is all there is.
+        data = project.paths.data_root
+        for folder in ("dotnet", "a365"):
+            (data / "tools" / folder).mkdir(parents=True)
+            (data / "tools" / folder / f"{folder}.exe").write_text("", encoding="utf-8")
+
+        code, out = tear_down(project, purge_data=True, running_from=[])
+
+        assert code == teardown.EXIT_OK
+        assert not (data / "tools").exists()
+        plan = out[: out.index("Removed this computer's certificate")]
+        assert "the .NET SDK and the Microsoft Agent 365 CLI" in " ".join(plan.split())

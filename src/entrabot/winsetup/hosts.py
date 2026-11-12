@@ -291,11 +291,12 @@ _GIT = _Missing("Git for Windows", "-WithGit", GIT_URL)
 _CLAUDE = _Missing("Claude Code", "-WithClaudeCode", CLAUDE_URL)
 
 
-def _run_prereqs_helper(
-    paths: Paths, console: Console, env: Mapping[str, str], missing: Sequence[_Missing]
+def run_prereqs_helper(
+    paths: Paths, console: Console, env: Mapping[str, str], switches: Sequence[str]
 ) -> bool:
-    """Install *missing* with ``scripts\\prereqs-windows.ps1``, through the in-box Windows
-    PowerShell. The helper talks to the person itself (progress, a permission prompt)."""
+    """Run ``scripts\\prereqs-windows.ps1`` with *switches* (``-WithGit``, ``-WithWorkIq``...)
+    through the in-box Windows PowerShell. The helper talks to the person itself (progress, a
+    permission prompt). True when it says everything asked for is installed and runs."""
     powershell, child_env = windows_powershell(env)
     result = console.run(
         [
@@ -305,7 +306,7 @@ def _run_prereqs_helper(
             "Bypass",
             "-File",
             str(paths.scripts / PREREQS_HELPER),
-            *(item.flag for item in missing),
+            *switches,
         ],
         env=child_env,
         cwd=paths.project_root,
@@ -398,7 +399,7 @@ def check_hosts(
             and can_ask
             and console.confirm(f"Install {names} now?", default=True, key="install_hosts")
         ):
-            finished = _run_prereqs_helper(paths, console, environ, missing)
+            finished = run_prereqs_helper(paths, console, environ, [item.flag for item in missing])
             missing = look()
             if not finished or missing:
                 console.warn("The installer did not finish everything.")

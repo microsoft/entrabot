@@ -71,7 +71,7 @@ commands:
     category: setup
     page: reference/scripts/setup/setup-windows-ps1.md
     platforms: [windows]
-    summary: Windows setup. A bootstrap that needs nothing installed first (Windows PowerShell 5.1, no admin rights) — finds or downloads Python, builds the venv, then starts the setup wizard (python -m entrabot.winsetup), which signs in, creates or joins the agent, creates and registers a non-exportable certificate (TPM first), writes .env, registers the MCP server, and tests sign-in. Interactive by default; -Yes plus parameters for unattended runs; -Diagnose is read-only.
+    summary: Windows setup. A bootstrap that needs nothing installed first (Windows PowerShell 5.1, no admin rights) — finds or downloads Python, builds the venv, then starts the setup wizard (python -m entrabot.winsetup), which signs in, creates or joins the agent, creates and registers a non-exportable certificate (TPM first), writes .env, registers the MCP server, tests sign-in, then walks the person through getting the agent a licence when it has none and, at the PC's own desktop, switches on Word, Excel and OneDrive files if asked. Interactive by default; -Yes plus parameters for unattended runs; -Diagnose is read-only.
   - id: setup-windows-cmd
     path: scripts/setup-windows.cmd
     category: setup
@@ -83,7 +83,7 @@ commands:
     category: setup
     page: reference/scripts/setup/start-entrabot-cmd.md
     platforms: [windows]
-    summary: Starts the agent on Windows, and the file to double-click after setup. Finds Claude Code (on PATH or where its installer puts it), points it at a per-user Git Bash when needed, and runs claude --dangerously-load-development-channels server:entrabot in the project folder.
+    summary: Starts the agent on Windows, and the file to double-click after setup. Finds Claude Code (on PATH or where its installer puts it), points it at a per-user Git Bash when needed, says what Claude Code asks the first time, and runs claude --dangerously-load-development-channels server:entrabot in the project folder.
   - id: prereqs-macos-sh
     path: scripts/prereqs-macos.sh
     category: setup
@@ -95,7 +95,7 @@ commands:
     category: setup
     page: reference/scripts/setup/prereqs-windows-ps1.md
     platforms: [windows]
-    summary: Optional Windows extras, installed only on request — -WithGit and -WithClaudeCode (per-user, no admin rights or winget), -WithWorkIq (.NET SDK and the a365 CLI), -WithBuildTools (VS Build Tools). Not a required step before setup. Runs from Windows PowerShell 5.1 and is safe to re-run.
+    summary: Optional Windows extras, installed only on request — -WithGit and -WithClaudeCode (per-user, no admin rights or winget), -WithWorkIq (the a365 CLI, and the .NET SDK it runs on when the PC has none, per-user under %LOCALAPPDATA%\entrabot\tools with no admin rights; PowerShell 7 with winget), -WithBuildTools (VS Build Tools). Not a required step before setup. Runs from Windows PowerShell 5.1 and is safe to re-run.
   - id: setup-delegated-sh
     path: scripts/setup_delegated.sh
     category: setup
@@ -147,7 +147,7 @@ commands:
     category: provisioning
     page: reference/scripts/provisioning/create-entra-agent-ids-py.md
     platforms: [macos, linux, windows]
-    summary: Creates the Blueprint, BlueprintPrincipal, Agent Identity, and Agent User in Entra (via the Provisioner cert token, never az CLI tokens) and persists the resulting IDs to .entrabot-state.json; idempotent on re-run.
+    summary: Creates the Blueprint, BlueprintPrincipal, Agent Identity, and Agent User in Entra (via the Provisioner cert token, never az CLI tokens) and persists the resulting IDs to .entrabot-state.json; idempotent on re-run. --licence-report and --assign-licence handle the Agent User's licence on its own.
   - id: add-agent-sponsor-py
     path: scripts/add_agent_sponsor.py
     category: provisioning

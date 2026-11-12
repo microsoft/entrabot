@@ -10,14 +10,23 @@ class A365Error(EntraBotError):
 
 
 class A365ManifestNotFoundError(A365Error):
-    """No ToolingManifest.json could be found."""
+    """No ToolingManifest.json could be found: Work IQ was never set up for this agent.
+
+    The message goes back to the agent as the tool's error, and the agent passes it on, so it
+    says plainly what is wrong and what the person does about it.
+    """
 
     def __init__(self, searched_paths: list[str]) -> None:
         self.searched_paths = searched_paths
         joined = ", ".join(searched_paths)
         super().__init__(
-            "Agent 365 ToolingManifest.json not found. Run "
-            "`a365 develop add-mcp-servers mcp_WordServer` or set "
+            "Word, Excel and OneDrive files are not switched on for this agent (its Agent 365 "
+            "Work IQ tooling manifest, ToolingManifest.json, was not found). These tools are "
+            "not available until then. To switch them on: on Windows, run "
+            "scripts\\setup-windows.cmd again and answer yes to the Word, Excel and OneDrive "
+            "question; on macOS or Linux, run ./scripts/setup.sh --configure-a365-work-iq, or "
+            "`a365 develop add-mcp-servers mcp_WordServer`. The agent also needs a Microsoft 365 "
+            "Copilot licence for them. To use a manifest somewhere else, set "
             f"ENTRABOT_A365_TOOLING_MANIFEST. Searched: {joined}"
         )
 
