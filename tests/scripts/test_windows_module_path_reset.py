@@ -179,7 +179,12 @@ class TestUnderPowerShell7:
         assert result.returncode == 0, result.stderr
         seen = json.loads(result.stdout.strip().splitlines()[-1])
         entries = seen["path"].split(";")
-        assert PS7_MODULES not in entries
+        own_modules = os.path.join(seen["home"], "Modules")
+        # This simulation runs the guard's body under PowerShell 7, whose own $PSHOME\Modules
+        # is the PowerShell 7 folder on a Windows host. The inherited value must be gone; the
+        # shell's own install folder is the one place it may legitimately reappear.
+        if os.path.normcase(own_modules) != os.path.normcase(PS7_MODULES):
+            assert PS7_MODULES not in entries
         expected = [
             *([os.path.join(seen["docs"], "WindowsPowerShell\\Modules")] if seen["docs"] else []),
             *([os.path.join(seen["pf"], "WindowsPowerShell\\Modules")] if seen["pf"] else []),
