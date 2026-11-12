@@ -56,9 +56,13 @@ grant exist. All calls use the v1.0 Graph endpoint.
 - **OAuth grants** — an `oauth2PermissionGrant` with
   `clientId` = Blueprint service principal,
   `consentType` = `AllPrincipals`, and `resourceId` = the resource service
-  principal. An existing grant that lacks the required scope is `PATCH`ed to
-  merge it in; a create that conflicts with an already-existing entry is read
-  back and merged rather than treated as an error.
+  principal. Entra keeps one grant per client and resource, so all of a
+  resource's scopes are written in one request: a new grant is created with
+  every scope, and an existing grant that lacks any of them is `PATCH`ed once to
+  merge them in. A `PATCH` answered with `404` is tried again after 5, 10, 15
+  and 20 seconds, because a grant created moments ago can be listed before it
+  can be updated. A create that conflicts with an already-existing entry is
+  read back and merged rather than treated as an error.
 
 Each stage prints whether it created, updated, or skipped the object, so a
 re-run reports the current materialized state without implying a stale history.
@@ -78,6 +82,9 @@ re-run reports the current materialized state without implying a stale history.
   configuring Work IQ so the Blueprint and its service principal exist.
 - **Create conflict on a grant** — the grant already exists; the script reads it
   back and merges the scope, so this is handled rather than fatal.
+- **`patch ... OAuth grant failed (404)`** — Microsoft Graph could not find a
+  grant it had just listed, even after the retries. Run the script again; it
+  picks up from the grants that exist.
 
 ## Related commands
 

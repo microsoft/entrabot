@@ -89,19 +89,10 @@ def test_creates_missing_resource_sps_and_blueprint_grants() -> None:
             "clientId": "blueprint-sp",
             "consentType": "AllPrincipals",
             "resourceId": f"sp-{module.A365_AGENT_TOOLS_APP_ID[:4]}",
-            "scope": "McpServers.OneDriveSharepoint.All",
-        },
-        {
-            "clientId": "blueprint-sp",
-            "consentType": "AllPrincipals",
-            "resourceId": f"sp-{module.A365_AGENT_TOOLS_APP_ID[:4]}",
-            "scope": "McpServers.Excel.All",
-        },
-        {
-            "clientId": "blueprint-sp",
-            "consentType": "AllPrincipals",
-            "resourceId": f"sp-{module.A365_AGENT_TOOLS_APP_ID[:4]}",
-            "scope": "McpServersMetadata.Read.All",
+            "scope": (
+                "McpServers.Excel.All McpServers.OneDriveSharepoint.All "
+                "McpServersMetadata.Read.All"
+            ),
         },
         {
             "clientId": "blueprint-sp",
@@ -145,9 +136,12 @@ def test_patches_existing_grant_when_scope_is_missing() -> None:
     )
 
     assert patch_bodies == [
-        {"scope": "McpServers.OneDriveSharepoint.All Old.Scope"},
-        {"scope": "McpServers.Excel.All Old.Scope"},
-        {"scope": "McpServersMetadata.Read.All Old.Scope"},
+        {
+            "scope": (
+                "McpServers.Excel.All McpServers.OneDriveSharepoint.All "
+                "McpServersMetadata.Read.All Old.Scope"
+            )
+        },
     ]
 
 
@@ -237,17 +231,95 @@ def test_existing_tenant_gains_excel_scope_without_losing_others() -> None:
     assert grants["word-sp"]["scope"] == "Tools.ListInvoke.All"
 
 
+def _not_found() -> FakeResponse:
+    return FakeResponse(404, {"error": {"code": "Request_ResourceNotFound"}})
+
+
+def test_a_new_agent_gets_each_resources_scopes_in_one_write() -> None:
+    # From a real run on a new agent: the grant for the first scope was created, and the PATCH
+    # that added the next scope to it moments later got 404 (Entra could not read the new
+    # grant yet), so Word, Excel and OneDrive files were never switched on. Entra keeps one
+    # grant per client and resource, so all of a resource's scopes now go in one write.
+    module = load_module()
+    grants: dict[str, dict[str, str]] = {}
+    writes: list[str] = []
+    stored = _stateful_grant_request(grants)
+
+    def request(method: str, url: str, **kwargs: Any) -> FakeResponse:
+        if method in ("POST", "PATCH") and "oauth2PermissionGrants" in url:
+            writes.append(method)
+        if method == "PATCH":
+            return _not_found()  # a grant created moments ago
+        return stored(method, url, **kwargs)
+
+    module.ensure_a365_work_iq_permissions(
+        token="token",
+        blueprint_app_id="blueprint-app",
+        request=request,
+        sleep=lambda _seconds: None,
+    )
+
+    assert writes == ["POST", "POST"]
+    assert set(grants["agent-tools-sp"]["scope"].split()) == AGENT_TOOLS_SCOPES
+    assert grants["word-sp"]["scope"] == "Tools.ListInvoke.All"
+
+
+def test_a_grant_that_cannot_be_updated_yet_is_tried_again() -> None:
+    module = load_module()
+    grants = {
+        "agent-tools-sp": {"id": "grant-agent-tools", "scope": "McpServers.OneDriveSharepoint.All"},
+        "word-sp": {"id": "grant-word", "scope": "Tools.ListInvoke.All"},
+    }
+    stored = _stateful_grant_request(grants)
+    refused = 0
+    sleeps: list[float] = []
+
+    def request(method: str, url: str, **kwargs: Any) -> FakeResponse:
+        nonlocal refused
+        if method == "PATCH" and refused < 2:
+            refused += 1
+            return _not_found()
+        return stored(method, url, **kwargs)
+
+    module.ensure_a365_work_iq_permissions(
+        token="token",
+        blueprint_app_id="blueprint-app",
+        request=request,
+        sleep=sleeps.append,
+    )
+
+    assert sleeps == [5, 10]
+    assert set(grants["agent-tools-sp"]["scope"].split()) == AGENT_TOOLS_SCOPES
+
+
+def test_a_grant_that_never_becomes_updatable_is_an_error_not_a_hang() -> None:
+    module = load_module()
+    grants = {
+        "agent-tools-sp": {"id": "grant-agent-tools", "scope": "McpServers.OneDriveSharepoint.All"},
+    }
+    stored = _stateful_grant_request(grants)
+    sleeps: list[float] = []
+
+    def request(method: str, url: str, **kwargs: Any) -> FakeResponse:
+        if method == "PATCH":
+            return _not_found()
+        return stored(method, url, **kwargs)
+
+    with pytest.raises(module.A365PermissionError, match=r"patch Agent 365 tools OAuth grant"):
+        module.ensure_a365_work_iq_permissions(
+            token="token",
+            blueprint_app_id="blueprint-app",
+            request=request,
+            sleep=sleeps.append,
+        )
+    assert sleeps == [5, 10, 15, 20]
+
+
 def test_post_conflict_requeries_and_patches_existing_grant() -> None:
     module = load_module()
     grant_queries = 0
     patch_bodies: list[dict[str, str]] = []
     sleeps: list[float] = []
-    resource = module.RequiredResource(
-        app_id=module.A365_AGENT_TOOLS_APP_ID,
-        display_name="Agent 365 Tools metadata",
-        scope="McpServersMetadata.Read.All",
-    )
-
     def request(method: str, url: str, **kwargs: Any) -> FakeResponse:
         nonlocal grant_queries
         body = kwargs.get("json")
@@ -283,7 +355,8 @@ def test_post_conflict_requeries_and_patches_existing_grant() -> None:
         raise AssertionError(f"unexpected request: {method} {url} {body}")
 
     module._ensure_oauth_grant(
-        resource,
+        "Agent 365 tools",
+        ("McpServersMetadata.Read.All",),
         blueprint_sp_object_id="blueprint-sp",
         resource_sp_object_id="agent-tools-sp",
         token="token",

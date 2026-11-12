@@ -51,6 +51,8 @@
 
 ### Fixed
 
+- Granting the Work IQ permissions failed on a new agent (`patch Agent 365 Excel tools OAuth grant failed (404)`), so Word, Excel and OneDrive files were never switched on: the three Agent 365 tools permissions share one grant, and each was added with its own write to a grant created moments before. `ensure_a365_work_iq_permissions.py` now writes each resource's permissions in one request and tries again when Microsoft Graph cannot yet update a new grant. Affects macOS and Linux setup too.
+- `prereqs-windows.ps1` printed a new line of unreadable characters for every redraw of `winget`'s progress bar. `winget` now runs attached to the window.
 - The Windows setup wizard dropped a "yes" to Work IQ when its tools were missing, with one line saying it was skipped: it now offers to install them, and the last screen says when Word, Excel and OneDrive files were asked for but are not on (exit `3`).
 - A failed Work IQ step stopped Windows setup at the step that creates the agent (exit `1`), before this PC's certificate, settings and assistant registration, and running setup again hit the same step.
 - The Teams licence list counted two products that do not include Teams (`M365_E5_SUITE_COMPONENTS`, Microsoft 365 E5 Extra Features, and Teams Premium, an add-on to Teams) and missed common ones, among them Microsoft 365 Business Premium's real part number (`SPB`), Business Basic, Teams Essentials (`Teams_Ess`) and the current Teams Enterprise.

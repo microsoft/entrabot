@@ -155,19 +155,27 @@ Licences and Word, Excel and OneDrive files, on the same machine against a real 
 - On a repair run, the step that creates the agent saying it has no Teams licence and no Microsoft 365 Copilot licence because none is free.
 - `a365 setup requirements` failing to sign in over SSH, which is why setup no longer runs the Word, Excel and OneDrive steps without a desktop.
 
+At the PC's own desktop, through Remote Desktop, on the same machine and tenant, starting from an account with nothing of Entrabot's on it:
+
+- Double-clicking `scripts\setup-windows.cmd`, the Microsoft sign-in window, and a full run to the last screen.
+- The Word, Excel and OneDrive tools installing with no administrator prompt, PowerShell 7 through `winget` included.
+- `a365 setup requirements` and `a365 develop add-mcp-servers`, which signed in through the sign-in window and succeeded.
+- The step after them, which grants the Work IQ permissions, failing on a new agent: Microsoft Graph answered 404 when a second permission was added to a grant created moments before. Setup carried on and said so on the last screen, as intended. That step now writes each resource's permissions once and tries again on a 404; the change has unit tests only.
+- The licence walkthrough with "check again" and "skip", and "Start your agent now?" opening the agent in its own window.
+- `start-entrabot.cmd` starting a signed-in Claude Code session that loaded the agent's tools (on an earlier build).
+- Teardown with `-DeleteAgent -PurgeData`, over SSH.
+
 Not yet tested:
 
-- The Word, Excel and OneDrive configuration steps themselves (`a365 setup requirements`, `develop add-mcp-servers`, `setup permissions mcp`): they need a desktop session, and have been run with unit tests only.
+- The rest of the Word, Excel and OneDrive configuration (`a365 setup permissions mcp` and the final check of the tooling manifest): no run on a real machine has reached them yet. So Word, Excel and OneDrive files have not been switched on end to end on Windows.
+- `winget` drawing its progress bar in place: on the desktop run it printed a new line for every redraw, and the change that runs it attached to the window has not been seen on Windows.
 - Giving the agent a licence through the walkthrough, and the Microsoft 365 Copilot path; unit tests only.
 - Changes made after those runs, covered by unit tests: the last screen pointing back to the walkthrough instead of repeating its advice; Microsoft 365 Copilot mentioned only when Word, Excel and OneDrive files are switched on; product names for products Microsoft's reference does not list; the Word, Excel and OneDrive steps running after the end-to-end test, a failure there never stopping setup, and their being skipped in a session without a desktop; and the review screen naming what was installed before it.
 
 - Windows on ARM64, and Windows 10.
 - Physical TPM chips (only a virtual TPM was used).
 - PCs joined to Entra or managed by Intune, and tenants with Conditional Access.
-- A desktop session: double-clicking the scripts, the browser sign-in window, and the "Start your agent now?" window.
-- `start-entrabot.cmd` starting a signed-in Claude Code session.
 - Cloud memory set up through the wizard.
-- Teardown with `-PurgeData`.
 - The fixes made after a security review (the Claude Code version check, the hooks' UTF-8 input, the persona-sati token command lookup, revoking an older setup key file, and the teardown and rotation safeguards). They are covered by unit tests, but the end-to-end run above was done before them.
 - The rule for taking over an existing Provisioner app, the on-screen warning about an older setup key, teardown's one-write certificate removal and its retry of an older setup key, and the sponsor search by sign-in name. They are covered by unit tests only and have not been run against a real tenant.
 - The check that an existing Agent User belongs to the agent's Blueprint before it is reused, the stops when Microsoft Entra could not be read, the wizard's explanations of why it stopped, and the health checks' warning about an older setup key. They are covered by unit tests and have not all been run against a real tenant.
