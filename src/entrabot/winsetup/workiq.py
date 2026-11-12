@@ -311,8 +311,10 @@ def _configure(
 ) -> None:
     console.info("Configuring Microsoft Agent 365 Work IQ (Word, OneDrive/SharePoint, Excel).")
     console.detail(
-        "A Microsoft sign-in may open. If asked to create the Agent 365 CLI app, choose C."
+        "Microsoft's Agent 365 tool signs in through Windows, in a window of its own, and may"
     )
+    console.detail("ask more than once. That is separate from the sign-in in your browser.")
+    console.detail("If asked to create the Agent 365 CLI app, choose C.")
 
     manifest = paths.project_root / "ToolingManifest.json"
     if not manifest.is_file():

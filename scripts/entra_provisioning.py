@@ -932,9 +932,28 @@ def _az_command(args: list[str]) -> tuple[list[str] | str, dict[str, str] | None
     return " ".join(_quote_for_cmd(part) for part in [az_bin, *args]), None
 
 
+# How ``az login`` signs in on Windows: the Windows account broker (the CLI's default
+# there) or the browser. Same name as ``entrabot.winsetup.azcli.BROKER_SETTING``.
+AZ_BROKER_SETTING = "AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"
+
+
+def _az_env(env: dict[str, str] | None) -> dict[str, str] | None:
+    """The environment for ``az``. On Windows it is told to use the browser sign-in, which
+    is the one the setup wizard makes, unless the person set the choice themselves: a
+    script run by hand would otherwise look for a sign-in held by the Windows account
+    broker and find none."""
+    if sys.platform != "win32":
+        return env
+    result = dict(os.environ if env is None else env)
+    if not any(name.upper() == AZ_BROKER_SETTING for name in result):
+        result[AZ_BROKER_SETTING] = "false"
+    return result
+
+
 def run_az(args: list[str], capture: bool = True) -> tuple[int, str, str]:
     """Run an az CLI command, return (returncode, stdout, stderr)."""
     command, env = _az_command(args)
+    env = _az_env(env)
     result = subprocess.run(  # noqa: S603 — az with a fixed argument list
         command, capture_output=capture, text=True, errors="replace", env=env
     )

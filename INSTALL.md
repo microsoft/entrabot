@@ -265,7 +265,7 @@ Start with `scripts\setup-windows.cmd -Diagnose`. Running
 |---------|-----|
 | "Entrabot setup cannot start on this PC" | Group Policy blocks PowerShell scripts. Ask IT to allow locally created scripts for your account |
 | Setup ends with "no Teams licence", or `403` on `/me/chats` | Make a Teams-capable licence available in the tenant, then run setup again |
-| The sign-in window never appears | Look behind the setup window, or run `scripts\setup-windows.cmd -DeviceCode` |
+| The sign-in page never appears | Look for a new tab or window in your browser, or run `scripts\setup-windows.cmd -DeviceCode` |
 | Setup says your account lacks admin rights | Sign in as a Global Administrator or Privileged Role Administrator |
 | Claude Code blocks every edit or Teams message | Git for Windows is missing: `scripts\prereqs-windows.ps1 -WithGit` |
 | `claude` is not recognized | Use `start-entrabot.cmd`, or run `scripts\prereqs-windows.ps1 -WithClaudeCode` |

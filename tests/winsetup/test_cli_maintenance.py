@@ -79,7 +79,9 @@ class TestDispatch:
 
         assert code == 3
         assert seen["paths"].project_root == tmp_path.resolve()
-        assert seen["world"] is world
+        # The caller's world, with the one addition every command gets: browser sign-in.
+        assert seen["world"].platform == world.platform
+        assert seen["world"].env == {**world.env, "AZURE_CORE_ENABLE_BROKER_ON_WINDOWS": "false"}
         assert seen["console"].assume_yes is True and seen["console"].verbose is True
         assert seen["console"].log_file.name.startswith("rotate-cert-")
         assert seen["console"].log_file.parent == tmp_path / "data" / "entrabot" / "logs"

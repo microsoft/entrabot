@@ -165,6 +165,28 @@ class TestRunAzOnWindows:
 
         assert captured["command"] == [str(python), "-m", "azure.cli", "account", "show"]
 
+    def test_az_uses_the_browser_sign_in_not_the_windows_account_broker(
+        self, ep: Any, captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Setup signs in through the browser, so a script run by hand has to look for that
+        # sign-in too, not for one held by the Windows account broker.
+        monkeypatch.delenv("AZURE_CORE_ENABLE_BROKER_ON_WINDOWS", raising=False)
+        monkeypatch.setattr(ep.shutil, "which", lambda name: "az.exe")
+
+        ep.run_az(["account", "show"])
+
+        assert captured["kwargs"]["env"]["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"] == "false"
+
+    def test_a_broker_choice_the_person_made_is_kept(
+        self, ep: Any, captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AZURE_CORE_ENABLE_BROKER_ON_WINDOWS", "true")
+        monkeypatch.setattr(ep.shutil, "which", lambda name: "az.exe")
+
+        ep.run_az(["account", "show"])
+
+        assert captured["kwargs"]["env"]["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"] == "true"
+
     def test_unknown_layout_goes_through_the_shim_with_metacharacters_quoted(
         self, ep: Any, captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

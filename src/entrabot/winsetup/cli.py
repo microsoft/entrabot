@@ -18,10 +18,11 @@ import argparse
 import contextlib
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from entrabot.winsetup import rotation, status, teardown
+from entrabot.winsetup import azcli, rotation, status, teardown
 from entrabot.winsetup.console import Console
 from entrabot.winsetup.helpers import Paths, default_data_root
 from entrabot.winsetup.wizard import EXIT_CANCELLED, Options, Wizard, World, run_diagnose
@@ -227,6 +228,8 @@ def _with_default_command(argv: Sequence[str]) -> list[str]:
 def main(argv: Sequence[str] | None = None, *, world: World | None = None) -> int:
     args = build_parser().parse_args(_with_default_command(sys.argv[1:] if argv is None else argv))
     world = world or World()
+    # Every command signs in the same way: through the browser (see azcli.sign_in_env).
+    world = replace(world, env=azcli.sign_in_env(world.env, platform=world.platform))
     # A console that can't draw a character gets a replacement, never a traceback.
     for stream in (sys.stdout, sys.stderr):
         with contextlib.suppress(AttributeError, ValueError, OSError):

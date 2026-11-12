@@ -285,7 +285,7 @@ Entra (see above)." instead of "All checks passed.".
 
 See [Windows troubleshooting](../../../troubleshooting/windows.md). The most
 common are a missing Teams licence (exit `3`), an account without the needed
-directory rights, and a sign-in window hidden behind another window (use
+directory rights, and a sign-in page that opened in a browser window you are not looking at (use
 `-DeviceCode`). If an existing Provisioner app is not taken over (exit `1`), see
 [Setup will not take over an existing Provisioner app registration](../../../troubleshooting/setup-and-authentication.md#setup-will-not-take-over-an-existing-provisioner-app-registration).
 

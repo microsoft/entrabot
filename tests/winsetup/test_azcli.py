@@ -490,6 +490,29 @@ class TestSearchUserOrder:
         )
 
 
+class TestBrowserSignIn:
+    """From a desktop run on a PC its organization does not manage: the Windows account broker
+    asked at every sign-in whether to remember the account and manage the device. The Azure
+    CLI is told to use the browser instead."""
+
+    def test_windows_gets_the_browser(self) -> None:
+        env = azcli.sign_in_env({"PATH": "x"}, platform="win32")
+        assert env == {"PATH": "x", "AZURE_CORE_ENABLE_BROKER_ON_WINDOWS": "false"}
+
+    def test_a_choice_the_person_made_is_kept_whatever_its_case(self) -> None:
+        for name in ("AZURE_CORE_ENABLE_BROKER_ON_WINDOWS", "azure_core_enable_broker_on_windows"):
+            env = azcli.sign_in_env({name: "true"}, platform="win32")
+            assert env == {name: "true"}
+
+    def test_other_systems_are_left_alone(self) -> None:
+        assert azcli.sign_in_env({"PATH": "x"}, platform="darwin") == {"PATH": "x"}
+
+    def test_the_given_mapping_is_not_changed(self) -> None:
+        given = {"PATH": "x"}
+        azcli.sign_in_env(given, platform="win32")
+        assert given == {"PATH": "x"}
+
+
 class TestInteractiveDesktop:
     def test_an_ssh_session_has_no_desktop(self) -> None:
         # Measured on Windows 11: SESSIONNAME is empty and SSH_CONNECTION is set.

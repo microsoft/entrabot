@@ -125,6 +125,27 @@ class TestMain:
         assert "setup.sh" in capsys.readouterr().out
         assert (tmp_path / "s.log").is_file()  # the run is logged where it was told to
 
+    def test_every_command_signs_in_through_the_browser(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, object] = {}
+
+        class Stub:
+            def __init__(self, _options: object, console: object, _paths: object, world: World):
+                seen["world"] = world
+
+            def run(self) -> int:
+                return 0
+
+        monkeypatch.setattr(cli, "Wizard", Stub)
+        world = World(env={"HOME": str(tmp_path)}, platform="win32")
+        log = str(tmp_path / "s.log")
+        assert main(["--project-root", str(tmp_path), "--yes", "--log-file", log], world=world) == 0
+        used = seen["world"]
+        assert isinstance(used, World)
+        assert used.env["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"] == "false"
+        assert "AZURE_CORE_ENABLE_BROKER_ON_WINDOWS" not in world.env  # the caller's is untouched
+
     def test_diagnose_on_a_machine_that_was_never_set_up(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

@@ -36,11 +36,17 @@ The setup log holds everything the helper scripts printed. The screen shows a on
 
 **Fix.** Install Python 3.12 from <https://www.python.org/downloads/> ("Install Now"; administrator rights are not needed), then run setup again. Do not use the Python from the Microsoft Store.
 
-## The sign-in window never appears
+## Windows asks to manage the device, or "Device management could not be enabled"
 
-**Cause.** The Microsoft sign-in window opened behind another window, or the PC has no desktop session to show it on.
+**Cause.** A sign-in went through the Windows account sign-in window (the Web Account Manager). On a PC your organization does not manage, Windows then offers to remember the account for all apps and to let the organization manage the device, and that can fail. Setup's own sign-in no longer uses that window; Microsoft's Agent 365 tool, which runs when you switch on Word, Excel and OneDrive files, still does, and can ask more than once.
 
-**Fix.** Look behind the setup window and on the taskbar. Or sign in with a code instead:
+**Fix.** The sign-in itself has worked. Choose "No, sign in to this app only" to go on without registering the PC; the Agent 365 tool may then ask you to sign in again for each of its steps.
+
+## The sign-in page never appears
+
+**Cause.** Setup opens the Microsoft sign-in page in your browser. It opened in a browser window you are not looking at, or the PC has no desktop session to show it on.
+
+**Fix.** Look for a new tab or window in your browser. Or sign in with a code instead:
 
 ```bat
 scripts\setup-windows.cmd -DeviceCode

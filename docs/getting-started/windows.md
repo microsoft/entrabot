@@ -36,7 +36,7 @@ Running `scripts\setup-windows.cmd` again is how you repair or change a setup. I
 | Question | Suggested answer | Notes |
 |---|---|---|
 | Install the Azure CLI? | Yes | Only asked if it is missing. If your account is a local administrator and `winget` is present, setup installs it with `winget` (the standard install, for the whole PC; Windows may ask for permission). Otherwise, or if that does not work, a private copy goes into Entrabot's data folder. |
-| Use this account? | Yes | Shown when you are already signed in. Otherwise a Microsoft sign-in window opens. |
+| Use this account? | Yes | Shown when you are already signed in and that sign-in still works. Otherwise your browser opens for you to sign in to Microsoft. |
 | How do you want to set up your agent? | Create a new agent | Or join an agent that already exists, using its Blueprint App ID. On a PC that is already set up, the suggested answer is to continue with that agent. |
 | Short name for your agent | Your Windows user name | The agent's address becomes `entrabot-agent-<name>@<your domain>`. |
 | The agent's sponsor | You | The people the agent takes instructions from in Teams. When joining an existing agent, the suggested answer keeps its current sponsors. |
@@ -50,7 +50,9 @@ Running `scripts\setup-windows.cmd` again is how you repair or change a setup. I
 | Press Enter when that is done ..., or type s to skip | Enter | When no licence is free: after someone adds or frees one, Enter checks again; `s` leaves it for later. |
 | Start your agent now? | Yes | Only asked at the PC's own desktop, when everything needed to start is in place. |
 
-In a remote session (SSH, for example) setup signs in with a device code instead of a sign-in window: it prints a web address and a short code to enter there. Word, Excel and OneDrive files are the exception: on Windows their tool signs in through a sign-in window, which failed over SSH in testing, so in a session without a desktop setup leaves them off and says to run it again at the desktop.
+Setup signs in through your browser, not through the Windows account sign-in window (the Web Account Manager): on a PC your organization does not manage, that window asks at every sign-in whether Windows should remember the account and manage the device. To use it anyway, set the environment variable `AZURE_CORE_ENABLE_BROKER_ON_WINDOWS` to `true` before running setup. Microsoft's Agent 365 tool, which runs only when you switch on Word, Excel and OneDrive files, still signs in through the Windows window and can ask more than once; setup cannot change that.
+
+In a remote session (SSH, for example) setup signs in with a device code instead of the browser: it prints a web address and a short code to enter there. Word, Excel and OneDrive files are the exception: on Windows their tool signs in through a sign-in window, which failed over SSH in testing, so in a session without a desktop setup leaves them off and says to run it again at the desktop.
 
 Setup then creates or connects the agent, creates this PC's certificate, saves settings, registers the agent with Claude Code and GitHub Copilot CLI, and tests that the agent can sign in and reach Teams. After that test, and only if you switched them on, it sets up Word, Excel and OneDrive files; a failure there never stops setup, and the last screen says why and what to do.
 
@@ -157,9 +159,9 @@ Licences and Word, Excel and OneDrive files, on the same machine against a real 
 
 At the PC's own desktop, through Remote Desktop, on the same machine and tenant, starting from an account with nothing of Entrabot's on it:
 
-- Double-clicking `scripts\setup-windows.cmd`, the Microsoft sign-in window, and a full run to the last screen.
+- Double-clicking `scripts\setup-windows.cmd`, signing in (through the Windows account sign-in window, which setup used then), and a full run to the last screen.
 - The Word, Excel and OneDrive tools installing with no administrator prompt, PowerShell 7 through `winget` included.
-- `a365 setup requirements` and `a365 develop add-mcp-servers`, which signed in through the sign-in window and succeeded.
+- `a365 setup requirements` and `a365 develop add-mcp-servers`, which signed in through the Windows account sign-in window and succeeded. Together with setup's own sign-in that was four sign-in prompts on a PC its organization does not manage.
 - The step after them, which grants the Work IQ permissions, failing on a new agent: Microsoft Graph answered 404 when a second permission was added to a grant created moments before. Setup carried on and said so on the last screen, as intended. That step now writes each resource's permissions once and tries again on a 404; the change has unit tests only.
 - The licence walkthrough with "check again" and "skip", and "Start your agent now?" opening the agent in its own window.
 - `start-entrabot.cmd` starting a signed-in Claude Code session that loaded the agent's tools (on an earlier build).
@@ -168,6 +170,7 @@ At the PC's own desktop, through Remote Desktop, on the same machine and tenant,
 Not yet tested:
 
 - The rest of the Word, Excel and OneDrive configuration (`a365 setup permissions mcp` and the final check of the tooling manifest): no run on a real machine has reached them yet. So Word, Excel and OneDrive files have not been switched on end to end on Windows.
+- Setup's sign-in through the browser at a desktop: it replaced the Windows account sign-in window after the desktop run, and has unit tests only.
 - `winget` drawing its progress bar in place: on the desktop run it printed a new line for every redraw, and the change that runs it attached to the window has not been seen on Windows.
 - Giving the agent a licence through the walkthrough, and the Microsoft 365 Copilot path; unit tests only.
 - Changes made after those runs, covered by unit tests: the last screen pointing back to the walkthrough instead of repeating its advice; Microsoft 365 Copilot mentioned only when Word, Excel and OneDrive files are switched on; product names for products Microsoft's reference does not list; the Word, Excel and OneDrive steps running after the end-to-end test, a failure there never stopping setup, and their being skipped in a session without a desktop; and the review screen naming what was installed before it.

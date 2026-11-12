@@ -755,6 +755,15 @@ class Wizard:
         account = az.account()
         if account is not None and opts.tenant and not self._in_tenant(account, opts.tenant):
             account = None  # signed in somewhere else than the tenant that was asked for
+        if account is not None and az.graph_token() is None:
+            # az still lists the account, but it cannot get a token for it any more: the
+            # session ended or was revoked, or it was made through the Windows account
+            # broker, which setup no longer uses. Offering it would fail a step later.
+            console.info(
+                f"The earlier sign-in as {account.user} can no longer be used, so setup asks "
+                "you to sign in again."
+            )
+            account = None
         if account is not None:
             console.info(
                 f"Already signed in as {account.user} ({account.tenant_name or account.tenant_id})."
@@ -796,8 +805,8 @@ class Wizard:
             console.info("You will get a short code. Open the page shown below on any device,")
             console.info("enter the code, and sign in with your work account.")
         else:
-            console.info("A Microsoft sign-in window is opening.")
-            console.detail("If you don't see it, look behind this window or on the taskbar.")
+            console.info("Your browser is opening so you can sign in to Microsoft.")
+            console.detail("If you don't see it, look for a new browser tab or window.")
         outcome = self.az.login(tenant=tenant, device_code=device_code)
         if outcome == "failed" and not device_code:
             console.warn("That sign-in did not complete.")

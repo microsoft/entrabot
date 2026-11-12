@@ -136,6 +136,29 @@ def validate_tenant(value: str) -> str | None:
     return "A tenant is a domain (contoso.com) or a tenant ID (a GUID)."
 
 
+# The Azure CLI setting, as an environment variable, that picks how ``az login`` signs in on
+# Windows: the Windows account broker (WAM, the CLI's default there) or the browser.
+BROKER_SETTING = "AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"
+
+
+def sign_in_env(env: Mapping[str, str], *, platform: str | None = None) -> dict[str, str]:
+    """*env* with the Azure CLI told to sign in through the browser on Windows.
+
+    On a PC its organization does not manage, the Windows account broker asks at every
+    sign-in whether Windows should remember the account and manage the device; saying yes
+    can fail, and a sign-in "for this app only" is remembered by nothing else. The browser
+    shows the sign-in page people know and keeps the session for the next time. Every ``az``
+    the Windows tooling starts gets the same setting, so they all look for the same sign-in.
+    A value the person set themselves is kept.
+    """
+    result = dict(env)
+    if (platform or sys.platform) != "win32":
+        return result
+    if not any(name.upper() == BROKER_SETTING for name in result):
+        result[BROKER_SETTING] = "false"
+    return result
+
+
 def has_interactive_desktop(env: Mapping[str, str], *, platform: str | None = None) -> bool:
     """Can a sign-in window be shown to the person running setup?
 

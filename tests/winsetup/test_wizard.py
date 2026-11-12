@@ -990,6 +990,31 @@ class TestSignIn:
         assert "--allow-no-subscriptions" in login.argv and login.interactive
         assert "--use-device-code" not in login.argv  # a desktop session gets the browser
 
+    def test_at_a_desktop_the_person_is_told_their_browser_opens(self, world: Scenario) -> None:
+        world.signed_in = False
+        assert world.run(new_chain=True, upn_suffix="sati") == 0
+        assert "Your browser is opening" in world.out
+        assert "sign-in window is opening" not in world.out
+
+    def test_a_sign_in_that_can_no_longer_get_a_token_is_done_again(self, world: Scenario) -> None:
+        # Seen on the test machine: az still listed the account, but every token request
+        # failed (the session had been revoked). A sign-in made through the Windows account
+        # broker looks the same once setup uses the browser.
+        def token(_request: RunRequest) -> Reply:
+            if not world.az("login"):
+                return Reply(returncode=1, stderr="ERROR: InteractionRequired: sign in again")
+            return Reply(stdout=json.dumps({"accessToken": "tok"}))
+
+        world.spawn.on(words("account", "get-access-token"), token)
+        assert world.run(typed="\n" * 40) == 0, world.out
+        assert len(world.az("login")) == 1
+        assert "can no longer be used" in world.out
+        assert "Use this account?" not in world.out  # there is nothing to choose
+
+    def test_a_sign_in_that_still_works_is_offered_as_before(self, world: Scenario) -> None:
+        assert world.run(typed="\n" * 40) == 0, world.out
+        assert "Use this account?" in world.out and world.az("login") == []
+
     def test_an_ssh_session_gets_a_device_code_automatically(self, world: Scenario) -> None:
         world.signed_in = False
         world.env.update({"SESSIONNAME": "", "SSH_CONNECTION": "10.0.0.4 51000 10.0.0.5 22"})
