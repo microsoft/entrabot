@@ -32,21 +32,22 @@ Use `--agent-user-upn=<existing-upn>` or `--with-upn-suffix=<label>` when the Bl
 
 ## Windows
 
-Use PowerShell 7 (`pwsh`), not Windows PowerShell 5.1:
+Nothing needs installing first. Download or clone the repository, then double-click `scripts\setup-windows.cmd`, or run it from a terminal:
 
-```powershell
+```bat
 git clone https://github.com/microsoft/entrabot.git
 cd entrabot
-pwsh -File scripts/setup-windows.ps1 -NewChain -UpnSuffix workstation
+scripts\setup-windows.cmd
 ```
 
-For an existing Blueprint:
+Setup asks a few questions (each has a suggested answer), signs you in to Microsoft, and creates the agent. To answer up front instead:
 
-```powershell
-pwsh -File scripts/setup-windows.ps1 -UseBlueprint <blueprint-app-id>
+```bat
+scripts\setup-windows.cmd -NewChain -UpnSuffix workstation -Yes
+scripts\setup-windows.cmd -UseBlueprint <blueprint-app-id> -Yes
 ```
 
-Windows setup prefers a TPM-backed CNG key and falls back to a software-protected key when TPM provisioning is unavailable. See the [full installation guide](https://github.com/microsoft/entrabot/blob/main/INSTALL.md) for prerequisites and troubleshooting.
+The agent's signing key is created in the PC's TPM when the TPM accepts it, and in the Windows software key store otherwise. Either way it cannot be exported. See [Windows installation](windows.md) for what setup asks, what it installs, and its limits.
 
 ## Verify the identity
 
@@ -56,8 +57,8 @@ Windows setup prefers a TPM-backed CNG key and falls back to a software-protecte
 
 On Windows:
 
-```powershell
-pwsh -File status-windows.ps1 -HealthOnly -Strict
+```bat
+scripts\setup-windows.cmd -Diagnose
 ```
 
 A healthy Agent User token has `idtyp=user`, the Agent User's `oid`, and Microsoft Graph as its audience. The Agent Identity and Agent User are separate objects and should both appear in status output.
@@ -70,11 +71,14 @@ The setup script registers Entrabot with supported MCP hosts. For Claude Code ch
 claude --dangerously-load-development-channels server:entrabot
 ```
 
+On Windows, double-click `start-entrabot.cmd` in the Entrabot folder. It runs the same command.
+
 Then ask the host to call `whoami`. It should report the Agent User identity, not your human account.
 
 ## Next steps
 
 - [Prerequisites](prerequisites.md)
+- [Windows installation](windows.md)
 - [Setup script options](../reference/scripts/setup/setup-sh.md)
 - [Token flow](../reference/token-flows.md)
 - [Troubleshooting](../troubleshooting/index.md)

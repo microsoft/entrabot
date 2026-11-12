@@ -35,14 +35,26 @@ def test_setup_status_delegates_to_root_status_wrapper() -> None:
 
 
 def test_windows_status_wrapper_runs_consolidated_status_script() -> None:
+    # The wrapper hands over to `python -m entrabot.winsetup status`, which starts
+    # scripts/show_agent_status.py with the project's interpreter (tests/winsetup/test_status.py).
     script = read_script("status-windows.ps1")
 
-    assert "show_agent_status.py" in script
-    assert "$StatusScript" in script
+    assert "show_agent_status.py" in script  # named in the help, so a reader can find it
+    assert "'status', '--project-root', $ProjectRoot" in script
+    assert "$handoff = @('-m', 'entrabot.winsetup') + " in script
     assert "--health-only" in script
     assert "--json" in script
     assert "--strict" in script
-    assert "@ForwardArgs" in script
+    assert "& $venvPython @handoff" in script
+
+
+def test_windows_status_wrapper_installs_nothing() -> None:
+    # It used to create a venv and pip-install on demand, hiding errors behind 2>$null.
+    script = read_script("status-windows.ps1")
+
+    assert "pip" not in script
+    assert "-m venv" not in script
+    assert "2>$null" not in script
 
 
 def test_windows_setup_status_delegates_to_status_wrapper() -> None:

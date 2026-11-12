@@ -8,6 +8,7 @@ dependency on ``python-dotenv``).
 
 from __future__ import annotations
 
+import locale
 import os
 import shutil
 import sys
@@ -115,8 +116,28 @@ def check_legacy_data_dir(*, home: Path | None = None) -> None:
     if _has_content(legacy) and not _has_content(target):
         raise RuntimeError(
             f"Legacy entrabot data found at {legacy} but target "
-            f"{target} is empty. Run setup-windows.cmd --migrate to move it."
+            f"{target} is empty. Run scripts\\setup-windows.cmd to move it "
+            "(the move is automatic)."
         )
+
+
+def _read_dotenv_text(env_path: Path) -> str:
+    """Return the text of ``.env``, which is UTF-8 with or without a byte-order mark.
+
+    The encoding is named because the platform default is wrong on Windows. There it is the
+    ANSI code page, which turns an accented UPN into mojibake, and it keeps the byte-order
+    mark that Notepad and Windows PowerShell 5.1 add, as part of the first key: that setting
+    (the tenant ID, as setup writes the file) then goes missing without a word.
+
+    A file saved by hand in the ANSI code page isn't valid UTF-8. Loading is best-effort and
+    runs at import, so that file is read in the platform's encoding, as every file was before,
+    instead of stopping the server with a decode error.
+    """
+    raw = env_path.read_bytes()
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return raw.decode(locale.getpreferredencoding(False), errors="replace")
 
 
 def _load_dotenv() -> None:
@@ -124,7 +145,7 @@ def _load_dotenv() -> None:
     env_path = Path(__file__).resolve().parents[2] / ".env"
     if not env_path.is_file():
         return
-    for line in env_path.read_text().splitlines():
+    for line in _read_dotenv_text(env_path).splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue

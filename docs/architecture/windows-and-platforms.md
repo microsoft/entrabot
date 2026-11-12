@@ -17,7 +17,7 @@ Every platform module (`platform/mac.py`, `platform/linux.py`, `platform/windows
 |---|---|---|
 | **macOS** | Keychain via `keyring` (`keyring.backends.macOS.Keyring`) | PEM private key stored in Keychain, retrieved into the process and signed in-process via `cryptography` |
 | **Linux** | Secret Service / KWallet / libsecret via `keyring`, restricted to an explicit allowlist (`keyring.backends.SecretService.Keyring`, `keyring.backends.kwallet.DBusKeyring`, `keyring.backends.libsecret.Keyring`) | Same PEM-retrieved-and-signed-in-process model as macOS |
-| **Windows** | Windows Credential Manager via `keyring` (`keyring.backends.Windows.WinVaultKeyring`), for generic string secrets (MSAL cache markers, refresh tokens) | Blueprint certificate lives in `Cert:\CurrentUser\My`; the private key is a **non-exportable** CNG key, signed through `ncrypt.dll`, backed by the Microsoft Platform Crypto Provider (TPM) when available, falling back to the Microsoft Software Key Storage Provider otherwise |
+| **Windows** | Windows Credential Manager via `keyring` (`keyring.backends.Windows.WinVaultKeyring`). Nothing on the agent's sign-in path uses it on Windows | Blueprint certificate lives in `Cert:\CurrentUser\My`; the private key is a **non-exportable** CNG key, signed in-process through `ncrypt.dll`. It is created on the Microsoft Platform Crypto Provider (TPM) when the TPM accepts a key, and on the Microsoft Software Key Storage Provider otherwise. Setup's own Provisioner key is stored the same way |
 
 The Mac/Linux and Windows certificate paths are not equivalent in strength — see [Security Boundaries](security-boundaries.md) for why the Mac/Linux PEM-in-process model is not hardware-backed or non-exportable the way the Windows CNG path is.
 
@@ -26,7 +26,7 @@ The Mac/Linux and Windows certificate paths are not equivalent in strength — s
 Windows configuration carries two distinct certificate thumbprints, and they must not be confused:
 
 - **`ENTRABOT_BLUEPRINT_CERT_THUMBPRINT`** — the base64url-encoded SHA-256 (`x5t#S256`) of the DER certificate, computed by `auth/certificate.py::compute_cert_thumbprint()`. This goes in the JWT assertion header on every platform, Windows included.
-- **`ENTRABOT_BLUEPRINT_CERT_SHA1`** — the 40-character hex SHA-1 thumbprint of the certificate. Windows-only; used to locate the certificate in `Cert:\CurrentUser\My` and to identify the CNG key for `ncrypt.dll` signing (`auth/cncrypt_signer.py`, `platform/windows.py::find_cert_by_thumbprint`).
+- **`ENTRABOT_BLUEPRINT_CERT_SHA1`** — the 40-character hex SHA-1 thumbprint of the certificate. Windows-only; used to locate the certificate in `Cert:\CurrentUser\My` and to identify the CNG key for `ncrypt.dll` signing (`auth/cncrypt_signer.py`, `platform/wincert.py::find_cert`).
 
 Both are written to `.env` by the Windows setup flow. The JWT header always carries the SHA-256 `x5t#S256` value regardless of platform; the SHA-1 value exists purely for Windows certificate-store lookup and has no equivalent need on macOS/Linux, where the PEM itself is the lookup key in the OS keystore.
 
@@ -39,10 +39,12 @@ Both are written to `.env` by the Windows setup flow. The JWT header always carr
 
 **Windows:**
 
-- `scripts/prereqs-windows.ps1` — installs PowerShell 7+, Python 3.12+, git, Azure CLI, .NET SDK + Agent 365 DevTools CLI, and Visual Studio Build Tools with the C++ workload (needed to compile native Python extensions such as `cryptography`'s). Runs from the PowerShell 5.1 that ships with Windows, so it doesn't require pwsh to already be installed.
-- `scripts/setup-windows.ps1` (and its `setup-windows.cmd` launcher) — the Windows equivalent of `setup.sh`: same provisioning chain, but makes sure the Blueprint certificate is registered: it reuses or registers the certificate already named in `.env`, or generates one via `generate_windows_cert.py` and adds it to the Blueprint with `register_windows_blueprint_cert.py` (keeping other machines' certificates), then writes both thumbprints described above into `.env`.
-- `scripts/generate_windows_cert.py` — wraps `New-SelfSignedCertificate` with fixed crypto parameters, auto-detects TPM availability and falls back to the software KSP, and returns the SHA-1 thumbprint, SHA-256 `x5t#S256` thumbprint, and public DER bytes needed to register the cert on the Blueprint app.
-- `scripts/rotate_cert_windows.py` — cert rotation logic used by `deploy-windows.ps1`: PATCHes the new certificate onto the Blueprint, smoke-tests token acquisition, and on failure rolls back in three steps (re-PATCH the old DER, restore the previous thumbprints in `.env`, invalidate the MSAL cache so a stale-signed token isn't presented after rollback).
+- `scripts/setup-windows.cmd` — the entry point. It runs `scripts/setup-windows.ps1` with the Windows PowerShell 5.1 that ships with Windows. Nothing has to be installed first: no PowerShell 7, no `winget`, no administrator rights.
+- `scripts/setup-windows.ps1` — a bootstrap only. It finds Python 3.12 or newer, or downloads a private, signature-checked copy; builds `.venv`; installs Entrabot; then starts the setup wizard.
+- `python -m entrabot.winsetup` (`src/entrabot/winsetup/`) — the setup wizard, and the Windows equivalent of `setup.sh`: sign-in, the same provisioning chain, the certificate, `.env`, MCP registration, and an end-to-end test. It is interactive by default and scriptable with `-Yes` plus parameters. It also provides `diagnose`, `rotate-cert`, `teardown` and `status`, which `setup-windows.ps1 -Diagnose`, `deploy-windows.ps1`, `teardown-windows.ps1` and `status-windows.ps1` call.
+- `src/entrabot/platform/wincert.py` — the Windows key lifecycle: create a certificate with a non-exportable key (TPM first, by creating a key and signing with it; software key store otherwise), find it, test-sign it, delete it together with its key. `scripts/generate_windows_cert.py` is a command-line wrapper over it.
+- `scripts/prereqs-windows.ps1` — optional extras on request (Git for Windows, Claude Code, Work IQ tools, Visual Studio Build Tools). It is not a required step.
+- `start-entrabot.cmd` — starts the agent in Claude Code.
 
 Per-script usage: [`setup.sh` reference](../reference/scripts/setup/setup-sh.md), [`prereqs-macos.sh` reference](../reference/scripts/setup/prereqs-macos-sh.md), [`setup-windows.ps1` reference](../reference/scripts/setup/setup-windows-ps1.md), [`prereqs-windows.ps1` reference](../reference/scripts/setup/prereqs-windows-ps1.md), [`generate_windows_cert.py` reference](../reference/scripts/auth-and-certs/generate-windows-cert-py.md), [`rotate_cert_windows.py` reference](../reference/scripts/auth-and-certs/rotate-cert-windows-py.md).
 

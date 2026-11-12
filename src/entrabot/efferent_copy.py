@@ -46,6 +46,7 @@ import inspect
 import json
 import logging
 import os
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -348,8 +349,11 @@ def _load_peers_from_config(path: Path) -> list[dict]:
     if not path.exists():
         return []
     try:
-        data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+        # Named, because the platform default is the ANSI code page on Windows, where a
+        # profile path such as C:\Users\José would come back garbled. "-sig" also accepts
+        # the byte-order mark that Windows PowerShell 5.1 writes and json.loads rejects.
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
         log.warning("efferent-copy: could not read %s: %s", path, exc)
         return []
     servers = data.get("mcpServers") or {}
@@ -535,7 +539,7 @@ def _wrapper_self_ref_target(script_path: Path) -> Path | None:
     try:
         if script_path.stat().st_size > SELF_REF_MAX_BYTES:
             return None
-        text = script_path.read_text(errors="replace")
+        text = script_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
 
@@ -556,6 +560,23 @@ def _wrapper_self_ref_target(script_path: Path) -> Path | None:
     return None
 
 
+_IS_WINDOWS = sys.platform == "win32"
+
+
+def _program_key(path: Path) -> str:
+    """Return *path* in a form that is equal for every spelling of the same program."""
+    text = str(path)
+    if not _IS_WINDOWS:
+        return text
+    text = text.casefold()
+    return text.removesuffix(".exe")
+
+
+def _same_program(left: Path, right: Path) -> bool:
+    """True if two resolved paths name the same program on this platform."""
+    return _program_key(left) == _program_key(right)
+
+
 def _is_self_referential_peer(peer: dict) -> bool:
     """True if the peer's stdio command points back at *this* process.
 
@@ -574,12 +595,15 @@ def _is_self_referential_peer(peer: dict) -> bool:
     swapping ``.mcp.json``'s command to a stderr-capture wrapper
     bypassed the path-only check and reintroduced the cascade.
 
+    On Windows the two spellings of one file are allowed for: names are
+    case-insensitive there, and pip's console-script launcher strips
+    ``.exe`` from ``sys.argv[0]``, so the running ``entrabot-mcp`` never
+    names itself the way ``.mcp.json`` names ``entrabot-mcp.exe``.
+
     Non-stdio peers return False immediately; stdio peers with no
     ``command`` field also return False (the transport construction
     will fail elsewhere).
     """
-    import sys
-
     transport = (peer.get("type") or peer.get("transport") or "").lower()
     if transport != "stdio":
         return False
@@ -600,7 +624,7 @@ def _is_self_referential_peer(peer: dict) -> bool:
     def _matches_running(path: Path) -> bool:
         for cand in candidates:
             try:
-                if Path(cand).resolve() == path:
+                if _same_program(Path(cand).resolve(), path):
                     return True
             except (OSError, ValueError):
                 continue

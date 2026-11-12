@@ -17,14 +17,21 @@ def test_windows_prereqs_installs_dotnet_and_a365_cli() -> None:
     assert "dotnet tool install --global Microsoft.Agents.A365.DevTools.Cli" in script
     assert "dotnet tool update --global Microsoft.Agents.A365.DevTools.Cli" in script
     assert "a365" in script
+    # Opt-in: none of it runs unless -WithWorkIq is passed.
+    assert "[switch]$WithWorkIq" in script
+    assert script.index("if ($WithWorkIq) {") < script.index("Microsoft.DotNet.SDK.9")
 
 
-def test_windows_setup_probes_a365_cli() -> None:
+def test_windows_setup_does_not_require_a365_cli_unless_work_iq_is_requested() -> None:
+    # The a365 CLI (and the .NET SDK behind it) used to be a hard prerequisite of every
+    # Windows setup, so a blocked NuGet feed blocked setup for people who never wanted
+    # Work IQ. The bootstrap no longer probes for it; it only forwards the request.
     script = read_script("scripts/setup-windows.ps1")
 
-    assert "a365" in script
-    assert "Found: python, az, git, pwsh, a365" in script
-    assert "scripts\\prereqs-windows.ps1" in script
+    assert "Found: python, az, git, pwsh, a365" not in script
+    assert "Get-Command a365" not in script
+    assert "'--configure-a365-work-iq'" in script
+    assert "scripts\\prereqs-windows.ps1 -WithWorkIq" in script
 
 
 def test_unix_setup_can_install_a365_cli_when_requested() -> None:
@@ -129,50 +136,24 @@ def test_unix_setup_preflights_copilot_license_for_work_iq() -> None:
     assert "ENTRABOT_ASSIGN_WORK_IQ_LICENSE=1" in script
 
 
-def test_windows_setup_assigns_work_iq_license_only_for_a365_configuration() -> None:
-    script = read_script("scripts/setup-windows.ps1")
-
-    assert "ENTRABOT_ASSIGN_WORK_IQ_LICENSE" in script
-    assert "if ($ConfigureA365WorkIq)" in script
-
-
-def test_windows_setup_can_run_interactive_a365_work_iq_configuration() -> None:
+def test_windows_setup_forwards_work_iq_configuration_to_the_wizard() -> None:
+    # Work IQ configuration itself (license assignment, a365 CLI calls and their order)
+    # moved out of PowerShell into the Python wizard, entrabot.winsetup, where it is unit
+    # tested. The bootstrap's whole job is to pass the request through.
     script = read_script("scripts/setup-windows.ps1")
 
     assert "[switch]$ConfigureA365WorkIq" in script
-    assert '[string]$A365AgentName = "EntraBot Code Agent"' in script
     assert '[string]$AgentUserUpn = ""' in script
-    assert "Ensure-A365ToolingManifest" in script
-    assert "'{\"mcpServers\":[]}'" in script
-    assert "Write-A365Config" in script
-    assert 'az ad sp show --id $AgentId --query displayName -o tsv' in script
-    assert '$config["agentBlueprintId"] = $BlueprintAppId' in script
-    assert '$config["agentIdentityDisplayName"] = $AgentIdentityDisplayName' in script
-    assert '$config["deploymentProjectPath"] = $ProjectRoot' in script
     assert (
-        '$A365WorkIqMcpServers = @("mcp_WordServer", "mcp_ODSPRemoteServer", "mcp_ExcelServer")'
-        in script
-    )
-    assert (
-        "a365 develop add-mcp-servers $A365WorkIqMcpServers "
-        "--project-path $ProjectRoot"
-        in script
-    )
-    assert "a365 setup requirements" in script
-    assert "a365 setup blueprint --agent-name $A365AgentName" not in script
-    assert "a365 setup permissions mcp --agent-name $A365AgentName" not in script
-    assert "a365 setup permissions mcp" in script
-    assert "$permissionsOutput = a365 setup permissions mcp 2>&1" in script
-    assert "OAuth2 grants failed" in script
-    assert "ensure_a365_work_iq_permissions.py" in script
-    assert "'--blueprint-app-id', $BlueprintAppId" in script
-    config_call = script.index("Write-A365Config")
-    requirements_call = script.index("a365 setup requirements", config_call)
-    preflight_call = script.index("ensure_a365_work_iq_permissions.py", config_call)
-    permissions_call = script.index("a365 setup permissions mcp", config_call)
-    assert config_call < requirements_call < preflight_call < permissions_call
-    assert script.index("Step 5 \"Provisioning Entra Agent Identity\"") < script.index(
-        "if ($ConfigureA365WorkIq)"
-    )
-    assert "spike_a365_work_iq.py" in script
-    assert 'Success "A365 Work IQ Word and Excel manifest configured"' in script
+        "if (Test-BoundSwitch $Bound 'ConfigureA365WorkIq') "
+        "{ $list.Add('--configure-a365-work-iq') }"
+    ) in script
+    assert "a365 setup" not in script
+    assert "ENTRABOT_ASSIGN_WORK_IQ_LICENSE" not in script
+
+
+def test_windows_setup_keeps_accepting_the_deprecated_a365_agent_name() -> None:
+    script = read_script("scripts/setup-windows.ps1")
+
+    assert "[string]$A365AgentName" in script
+    assert "-A365AgentName is deprecated and ignored" in script

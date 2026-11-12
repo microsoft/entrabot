@@ -46,8 +46,15 @@ def _fail_after_exclusive_create(monkeypatch: pytest.MonkeyPatch, fail_on: str) 
     real_open = open
 
     class _FailingFile:
-        def __init__(self, target: Path | int, mode: str) -> None:
-            self._file = real_open(target, mode)  # a path, or the temp file's descriptor
+        def __init__(
+            self,
+            target: Path | int,
+            mode: str,
+            encoding: str | None = None,
+            newline: str | None = None,
+        ) -> None:
+            # A path, or the temp file's descriptor.
+            self._file = real_open(target, mode, encoding=encoding, newline=newline)
 
         def __enter__(self) -> _FailingFile:
             return self
@@ -869,3 +876,156 @@ class TestAssertBackendConfig:
         monkeypatch.delenv("ENTRABOT_KEEP_MEMORY_LOCAL", raising=False)
         with pytest.raises(BackendMisconfiguredError):
             assert_backend_config()
+
+
+# ---------------------------------------------------------------------------
+# Text encoding: always UTF-8, never the platform default (issue #60)
+# ---------------------------------------------------------------------------
+# What the daily summary really writes: emoji headings, plus names and punctuation that the
+# Windows ANSI code page either can't encode or encodes differently from UTF-8.
+_NON_ASCII = "<h2>🎯 Needs you</h2><p>✅ José — “naïve” café ☕ 東京 👀</p>\n"
+
+
+class TestLocalBackendIsUtf8OnAnyLocale:
+    """``LocalBackend`` must not depend on the process's locale encoding.
+
+    On Windows that is cp1252, which can't encode an emoji: the daily summary raised
+    ``UnicodeEncodeError`` while archiving and so was never sent. These tests make a
+    missing ``encoding=`` behave here the way it does there.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _windows_locale(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tests.locale_codec import force_locale_codec
+
+        force_locale_codec(monkeypatch)
+
+    def test_overwrite_round_trips_non_ascii(self, tmp_path: Path) -> None:
+        b = LocalBackend(tmp_path)
+        b.write_text("summaries/2026-04-16.html", _NON_ASCII)
+        assert b.read_text("summaries/2026-04-16.html") == _NON_ASCII
+
+    def test_file_on_disk_is_utf8(self, tmp_path: Path) -> None:
+        """The bytes are UTF-8, so a local store and a blob store hold the same thing."""
+        b = LocalBackend(tmp_path)
+        b.write_text("k", "✅ café")
+        assert (tmp_path / "k").read_bytes() == "✅ café".encode()
+
+    def test_etag_read_round_trips_non_ascii(self, tmp_path: Path) -> None:
+        b = LocalBackend(tmp_path)
+        etag = b.write_text("k", _NON_ASCII)
+        assert b.read_text_with_etag("k") == (_NON_ASCII, etag)
+
+    def test_conditional_overwrite_round_trips_non_ascii(self, tmp_path: Path) -> None:
+        b = LocalBackend(tmp_path)
+        etag = b.write_text("k", _NON_ASCII)
+        b.write_text("k", _NON_ASCII + "more ✅", if_match=etag)
+        assert b.read_text("k") == _NON_ASCII + "more ✅"
+
+    def test_create_only_round_trips_non_ascii(self, tmp_path: Path) -> None:
+        b = LocalBackend(tmp_path)
+        b.write_text("k", _NON_ASCII, if_absent=True)
+        assert b.read_text("k") == _NON_ASCII
+
+    def test_create_only_without_hard_links_round_trips_non_ascii(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The exclusive-create fallback for a volume that can't hard-link writes UTF-8 too."""
+
+        def no_hard_links(src: object, dst: object) -> None:
+            raise OSError(errno.EPERM, "hard links not supported")
+
+        monkeypatch.setattr(os, "link", no_hard_links)
+        b = LocalBackend(tmp_path)
+        b.write_text("k", _NON_ASCII, if_absent=True)
+        assert b.read_text("k") == _NON_ASCII
+
+    def test_append_round_trips_non_ascii(self, tmp_path: Path) -> None:
+        b = LocalBackend(tmp_path)
+        b.append_text("log.jsonl", "ligne un — é\n")
+        b.append_text("log.jsonl", "line two 🎯\n")
+        assert b.read_text("log.jsonl") == "ligne un — é\nline two 🎯\n"
+
+    def test_reads_a_utf8_file_written_by_something_else(self, tmp_path: Path) -> None:
+        """A file another tool wrote as UTF-8 is read as UTF-8, not as mojibake."""
+        (tmp_path / "k").write_bytes("naïve ✅".encode())
+        assert LocalBackend(tmp_path).read_text("k") == "naïve ✅"
+
+
+class TestLocalBackendWritesExactBytes:
+    """The bytes on disk are the text that was written, on every platform.
+
+    Windows text mode turns ``"\\n"`` into ``"\\r\\n"`` on the way out. A local store then
+    held different bytes from a blob store with the same content, and a memory file pulled
+    from the cloud differed from its cloud copy, so the next sync saw a change nobody made.
+    These tests make a write that names no ``newline`` behave here the way it does there.
+    """
+
+    TEXT = "line one\nline two\n\nlast line, no newline"
+
+    @pytest.fixture(autouse=True)
+    def _windows_newlines(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tests.locale_codec import force_windows_newlines
+
+        force_windows_newlines(monkeypatch)
+
+    def test_overwrite(self, tmp_path: Path) -> None:
+        LocalBackend(tmp_path).write_text("k", self.TEXT)
+        assert (tmp_path / "k").read_bytes() == self.TEXT.encode()
+
+    def test_conditional_overwrite(self, tmp_path: Path) -> None:
+        b = LocalBackend(tmp_path)
+        etag = b.write_text("k", "old\n")
+        b.write_text("k", self.TEXT, if_match=etag)
+        assert (tmp_path / "k").read_bytes() == self.TEXT.encode()
+
+    def test_create_only(self, tmp_path: Path) -> None:
+        LocalBackend(tmp_path).write_text("k", self.TEXT, if_absent=True)
+        assert (tmp_path / "k").read_bytes() == self.TEXT.encode()
+
+    def test_create_only_without_hard_links(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def no_hard_links(src: object, dst: object) -> None:
+            raise OSError(errno.EPERM, "hard links not supported")
+
+        monkeypatch.setattr(os, "link", no_hard_links)
+        LocalBackend(tmp_path).write_text("k", self.TEXT, if_absent=True)
+        assert (tmp_path / "k").read_bytes() == self.TEXT.encode()
+
+    def test_append(self, tmp_path: Path) -> None:
+        b = LocalBackend(tmp_path)
+        b.append_text("log.jsonl", '{"n": 1}\n')
+        b.append_text("log.jsonl", '{"n": 2}\n')
+        assert (tmp_path / "log.jsonl").read_bytes() == b'{"n": 1}\n{"n": 2}\n'
+
+    def test_carriage_returns_in_the_text_are_not_doubled(self, tmp_path: Path) -> None:
+        """Translated, ``"\\r\\n"`` in the text reached the disk as ``"\\r\\r\\n"``."""
+        LocalBackend(tmp_path).write_text("k", "a\r\nb\n")
+        assert (tmp_path / "k").read_bytes() == b"a\r\nb\n"
+
+    def test_etag_from_a_write_matches_the_etag_from_a_read(self, tmp_path: Path) -> None:
+        b = LocalBackend(tmp_path)
+        etag = b.write_text("k", self.TEXT)
+        assert b.read_text_with_etag("k") == (self.TEXT, etag)
+
+    def test_file_written_with_crlf_by_an_older_version_still_reads(self, tmp_path: Path) -> None:
+        """Reads stay tolerant: a store written on Windows before this has CRLF in it."""
+        (tmp_path / "log.jsonl").write_bytes(b'{"n": 1}\r\n{"n": 2}\r\n')
+        b = LocalBackend(tmp_path)
+        assert b.read_text("log.jsonl") == '{"n": 1}\n{"n": 2}\n'
+        b.append_text("log.jsonl", '{"n": 3}\n')
+        assert b.read_text("log.jsonl") == '{"n": 1}\n{"n": 2}\n{"n": 3}\n'
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises real Windows text-mode defaults")
+def test_local_backend_is_utf8_and_byte_exact_on_real_windows(tmp_path: Path) -> None:
+    """No simulation: here the locale encoding is an ANSI code page and ``os.linesep`` is CRLF."""
+    b = LocalBackend(tmp_path)
+    b.write_text("summaries/day.html", _NON_ASCII)
+    b.append_text("summaries/day.html", "🎯\n")
+    b.write_text("created.txt", "one\ntwo\n", if_absent=True)
+
+    assert b.read_text("summaries/day.html") == _NON_ASCII + "🎯\n"
+    assert (tmp_path / "summaries" / "day.html").read_bytes() == (_NON_ASCII + "🎯\n").encode()
+    assert (tmp_path / "created.txt").read_bytes() == b"one\ntwo\n"

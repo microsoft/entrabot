@@ -39,6 +39,14 @@ from entrabot.preflight import (
     run_smoke_checks,
 )
 
+
+@pytest.fixture(autouse=True)
+def _not_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remediation text names the platform's own setup script. These tests assert the
+    macOS/Linux wording, so pin it; ``TestWindows`` turns Windows on explicitly."""
+    monkeypatch.setattr("entrabot.preflight._is_windows", lambda: False)
+
+
 # ─── Phase 1: license preflight ──────────────────────────────────────────────
 
 
@@ -486,11 +494,7 @@ class TestCheckMcpConfigs:
         copilot_cfg = tmp_path / "copilot.json"
         copilot_cfg.write_text(
             json.dumps(
-                {
-                    "mcpServers": {
-                        "entrabot": {"command": "/other/worktree/.venv/bin/entrabot-mcp"}
-                    }
-                }
+                {"mcpServers": {"entrabot": {"command": "/other/worktree/.venv/bin/entrabot-mcp"}}}
             )
         )
 
@@ -807,6 +811,148 @@ class TestCheckPersonaSatiMcp:
         assert result.status == "pass"
 
 
+class TestPersonaTokenCommandForms:
+    """The check accepts every form of PERSONA_SATI_MCP_TOKEN_COMMAND the running server
+    accepts (``mcp_server._persona_token_words``): a program with arguments, and on Windows
+    a script or an unquoted path with spaces. It used to treat the whole value as one
+    executable, so a working setup was reported as "not found"."""
+
+    ENTRY = {"type": "sse", "url": "https://persona.example/sse"}
+
+    def _check(self, tmp_path: Path, command: str, extra: dict[str, str] | None = None) -> Check:
+        env = {"PERSONA_SATI_MCP_TOKEN_COMMAND": command, **(extra or {})}
+        return check_persona_sati_mcp(_write_mcp(tmp_path, self.ENTRY, env))
+
+    @POSIX_ONLY
+    def test_a_program_with_arguments_passes(self, tmp_path: Path) -> None:
+        launcher = _launcher(tmp_path / "bin")
+
+        result = self._check(tmp_path, f"{launcher} --audience api://persona --tenant t1")
+
+        assert result.status == "pass", result.detail
+
+    @POSIX_ONLY
+    def test_a_quoted_program_with_spaces_in_its_path_passes(self, tmp_path: Path) -> None:
+        launcher = _launcher(tmp_path / "my tools")
+
+        result = self._check(tmp_path, f'"{launcher}" --audience "api://persona sati"')
+
+        assert result.status == "pass", result.detail
+
+    @POSIX_ONLY
+    def test_an_unquoted_path_with_spaces_and_no_arguments_still_passes(
+        self, tmp_path: Path
+    ) -> None:
+        # The whole value is tried as one program first, as the server does.
+        launcher = _launcher(tmp_path / "my tools")
+
+        assert self._check(tmp_path, str(launcher)).status == "pass"
+
+    @POSIX_ONLY
+    def test_a_bare_name_with_arguments_is_found_on_the_entrys_own_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        launcher = _launcher(tmp_path / "bin")
+        monkeypatch.setenv("PATH", str(tmp_path / "elsewhere"))
+
+        result = self._check(tmp_path, f"{launcher.name} --flag", {"PATH": str(launcher.parent)})
+
+        assert result.status == "pass", result.detail
+
+    def test_a_missing_program_with_arguments_warns_without_echoing_them(
+        self, tmp_path: Path
+    ) -> None:
+        result = self._check(tmp_path, "/no/such/token-cli --client-secret hunter2")
+
+        assert result.status == "warn"
+        assert "PERSONA_SATI_MCP_TOKEN_COMMAND" in result.detail
+        assert "not found" in result.detail
+        assert "hunter2" not in _text(result)
+        assert "/no/such/token-cli" not in _text(result)
+
+    @POSIX_ONLY
+    def test_an_unbalanced_quote_warns(self, tmp_path: Path) -> None:
+        launcher = _launcher(tmp_path / "bin")
+
+        assert self._check(tmp_path, f'{launcher} --scope "api://persona').status == "warn"
+
+    @POSIX_ONLY
+    def test_posix_does_not_guess_at_an_unquoted_path_with_spaces_and_arguments(
+        self, tmp_path: Path
+    ) -> None:
+        # The server splits by shell rules here, so the program would be ".../my".
+        launcher = _launcher(tmp_path / "my tools")
+
+        assert self._check(tmp_path, f"{launcher} --flag").status == "warn"
+
+    @POSIX_ONLY  # Windows rules, simulated on a POSIX host with real files
+    @pytest.mark.parametrize("name", ["get-token.ps1", "get-token.py", "get-token.cmd"])
+    def test_on_windows_a_script_is_a_program_even_without_an_executable_bit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+    ) -> None:
+        script = tmp_path / "bin" / name
+        script.parent.mkdir()
+        script.write_text("", encoding="utf-8")
+        script.chmod(0o644)
+        monkeypatch.setattr("entrabot.preflight._is_windows", lambda: True)
+
+        result = self._check(tmp_path, f"{script} -Audience api://persona")
+
+        assert result.status == "pass", result.detail
+
+    @POSIX_ONLY
+    def test_on_windows_an_unquoted_path_with_spaces_and_arguments_passes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        script = tmp_path / "Program Files" / "persona" / "token.cmd"
+        script.parent.mkdir(parents=True)
+        script.write_text("", encoding="utf-8")
+        monkeypatch.setattr("entrabot.preflight._is_windows", lambda: True)
+
+        result = self._check(tmp_path, f'{script} --flag "a b"')
+
+        assert result.status == "pass", result.detail
+
+    @POSIX_ONLY
+    def test_on_windows_a_program_that_does_not_exist_still_warns(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("entrabot.preflight._is_windows", lambda: True)
+
+        result = self._check(tmp_path, f"{tmp_path}/nowhere/token.ps1 --flag")
+
+        assert result.status == "warn"
+        assert "not found" in result.detail
+
+    def test_checking_never_runs_the_command(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import subprocess
+
+        def _boom(*args: object, **kwargs: object) -> None:
+            raise AssertionError("the token command must not be run by a health check")
+
+        for name in ("run", "check_output", "Popen", "call"):
+            monkeypatch.setattr(subprocess, name, _boom)
+        launcher = _launcher(tmp_path / "bin")
+
+        self._check(tmp_path, f"{launcher} --flag")
+
+    def test_checking_never_imports_the_server(self) -> None:
+        # Importing entrabot.mcp_server builds the server, which runs the token command and
+        # contacts persona-sati. A health check must do neither.
+        import subprocess
+
+        code = (
+            "import sys, entrabot.preflight; "
+            "sys.exit(1 if 'entrabot.mcp_server' in sys.modules else 0)"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, timeout=60, check=False
+        )
+        assert result.returncode == 0, result.stderr
+
+
 class TestRunDiagnostics:
     def test_aggregates_all_checks(self, tmp_path: Path) -> None:
         # Just smoke-test that run_diagnostics returns a superset of smoke checks
@@ -899,3 +1045,235 @@ class TestFormatReport:
             "MICROSOFT_365_COPILOT",
             "Microsoft_365_Copilot",
         )
+
+
+# ─── Windows ─────────────────────────────────────────────────────────────────
+
+
+class TestWindows:
+    """On Windows the key is a CNG key found by the SHA-1 in .env, the setup script is
+    ``scripts\\setup-windows.cmd``, and the MCP binary is under ``.venv\\Scripts``."""
+
+    SHA1 = "0123456789ABCDEF0123456789ABCDEF01234567"
+
+    @pytest.fixture(autouse=True)
+    def _windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from entrabot import preflight
+
+        monkeypatch.setattr(preflight, "_is_windows", lambda: True)
+
+        def no_keyring() -> None:
+            raise AssertionError("Credential Manager must not be used on Windows")
+
+        monkeypatch.setattr("entrabot.platform.get_credential_store", no_keyring)
+
+    def _config(self, **overrides: object) -> EntraBotConfig:
+        values: dict[str, object] = {
+            "tenant_id": "t",
+            "blueprint_app_id": "b",
+            "blueprint_cert_thumbprint": "x" * 43,
+            "blueprint_cert_sha1": self.SHA1,
+        }
+        values.update(overrides)
+        return EntraBotConfig(**values)  # type: ignore[arg-type]
+
+    def _health(self, status: str, message: str = "") -> object:
+        from entrabot.platform import wincert
+
+        return wincert.CertHealth(
+            status=status, days_left=9, not_after=None, message=message or f"cert is {status}"
+        )
+
+    def _cert_check(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        status: str,
+        *,
+        sign_error: Exception | None = None,
+        config: EntraBotConfig | None = None,
+    ) -> Check:
+        from entrabot import preflight
+        from entrabot.platform import wincert
+
+        signed: list[str] = []
+
+        def test_sign(sha1: str) -> None:
+            signed.append(sha1)
+            if sign_error:
+                raise sign_error
+
+        monkeypatch.setattr(wincert, "cert_health", lambda sha1: self._health(status))
+        monkeypatch.setattr(wincert, "test_sign", test_sign)
+        result = preflight._check_cert_in_keystore(config or self._config())
+        self.signed = signed
+        return result
+
+    def test_present_in_date_and_signing_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        result = self._cert_check(monkeypatch, "ok")
+        assert result.status == "pass"
+        assert self.signed == [self.SHA1]
+        assert self.SHA1 not in result.detail
+
+    def test_expiring_is_a_warning_with_what_to_do(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        result = self._cert_check(monkeypatch, "expiring")
+        assert result.status == "warn"
+        assert "setup-windows.cmd" in (result.remediation or "")
+
+    @pytest.mark.parametrize("status", ["missing", "expired", "no_private_key", "not_yet_valid"])
+    def test_unusable_certificate_fails_without_trying_to_sign(
+        self, monkeypatch: pytest.MonkeyPatch, status: str
+    ) -> None:
+        result = self._cert_check(monkeypatch, status)
+        assert result.status == "fail"
+        assert result.detail == f"cert is {status}"
+        assert "setup-windows.cmd" in (result.remediation or "")
+        assert "setup.sh" not in (result.remediation or "")
+        assert self.signed == []
+
+    def test_a_key_that_cannot_sign_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from entrabot.platform import wincert
+
+        result = self._cert_check(
+            monkeypatch, "ok", sign_error=wincert.WinCertError("the key is not usable here")
+        )
+        assert result.status == "fail"
+        assert "the key is not usable here" in result.detail
+
+    def test_store_error_is_a_failure_not_a_crash(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from entrabot import preflight
+        from entrabot.platform import wincert
+
+        def broken(sha1: str) -> None:
+            raise wincert.WinCertError("could not open the certificate store")
+
+        monkeypatch.setattr(wincert, "cert_health", broken)
+        result = preflight._check_cert_in_keystore(self._config())
+        assert result.status == "fail" and "certificate store" in result.detail
+
+    def test_no_config_is_a_skip(self) -> None:
+        from entrabot import preflight
+
+        assert preflight._check_cert_in_keystore().status == "skip"
+
+    def test_run_diagnostics_hands_the_config_to_the_certificate_check(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from entrabot import preflight
+
+        seen: list[object] = []
+
+        def record(config: EntraBotConfig | None = None) -> Check:
+            seen.append(config)
+            return Check(name="Blueprint cert in OS keystore", status="pass", detail="ok")
+
+        monkeypatch.setattr(preflight, "_check_cert_in_keystore", record)
+        monkeypatch.setattr(
+            preflight,
+            "acquire_agent_user_token",
+            lambda config: (_ for _ in ()).throw(AgentIDNotAvailable("no cert")),
+        )
+        config = self._config()
+        run_diagnostics(
+            config,
+            state_path=tmp_path / "missing.json",
+            expected_binary=tmp_path / "x",
+            claude_mcp_path=tmp_path / "a.json",
+            copilot_mcp_path=tmp_path / "b.json",
+        )
+        assert seen == [config]
+
+    def test_remediation_names_the_windows_setup_script(self, tmp_path: Path) -> None:
+        missing = check_state_file(tmp_path / "nope.json")
+        assert "scripts\\setup-windows.cmd" in (missing.remediation or "")
+        assert "setup.sh" not in (missing.remediation or "")
+
+        with patch(
+            "entrabot.preflight.acquire_agent_user_token",
+            side_effect=TokenExchangeError(hop="Hop 1", error="invalid_client", description="x"),
+        ):
+            token_check = run_smoke_checks(self._config())[0]
+        assert "setup-windows.cmd -Diagnose" in (token_check.remediation or "")
+        assert "setup.sh" not in (token_check.remediation or "")
+
+        mcp = check_mcp_configs(
+            expected_binary=tmp_path / "x.exe",
+            claude_path=tmp_path / "absent.json",
+            copilot_path=tmp_path / "absent2.json",
+        )
+        for check in mcp:
+            assert "setup.sh" not in (check.remediation or "")
+
+    def test_default_expected_binary(self, tmp_path: Path) -> None:
+        from entrabot import preflight
+
+        assert preflight.default_expected_binary(tmp_path) == (
+            tmp_path / ".venv" / "Scripts" / "entrabot-mcp.exe"
+        )
+
+    def test_mcp_command_matches_whatever_its_case_or_exe_suffix(self, tmp_path: Path) -> None:
+        expected = tmp_path / ".venv" / "Scripts" / "entrabot-mcp.exe"
+        expected.parent.mkdir(parents=True)
+        expected.write_bytes(b"")
+        claude = tmp_path / ".mcp.json"
+        for command in (
+            str(expected),
+            str(expected).upper(),
+            str(expected)[: -len(".exe")],
+            ".venv/Scripts/entrabot-mcp.exe",
+        ):
+            claude.write_text(
+                json.dumps({"mcpServers": {"entrabot": {"command": command}}}), encoding="utf-8"
+            )
+            checks = check_mcp_configs(
+                expected_binary=expected, claude_path=claude, copilot_path=tmp_path / "none.json"
+            )
+            assert checks[0].status == "pass", (command, checks[0])
+
+
+class TestPosixExpectedBinary:
+    def test_default_expected_binary(self, tmp_path: Path) -> None:
+        from entrabot import preflight
+
+        assert preflight.default_expected_binary(tmp_path) == (
+            tmp_path / ".venv" / "bin" / "entrabot-mcp"
+        )
+
+    def test_case_still_matters_off_windows(self, tmp_path: Path) -> None:
+        from entrabot import preflight
+
+        assert preflight._comparable("/Repo/.venv/bin/entrabot-mcp") != preflight._comparable(
+            "/repo/.venv/bin/entrabot-mcp"
+        )
+
+
+class TestFileEncodings:
+    """These files are UTF-8 whatever the machine's ANSI code page is, and a Windows
+    editor may have put a byte-order mark in front."""
+
+    def test_state_file_with_a_bom_is_read(self, tmp_path: Path) -> None:
+        state = tmp_path / ".entrabot-state.json"
+        body = json.dumps({"BLUEPRINT_APP_ID": "x", "AGENT_ID": "y", "AGENT_USER_ID": "z"})
+        state.write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
+        assert check_state_file(state).status == "pass"
+
+    def test_mcp_config_with_a_non_ascii_path_under_a_windows_code_page(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tests.locale_codec import force_locale_codec
+
+        home = tmp_path / "José Łukasz"
+        expected = home / ".venv" / "bin" / "entrabot-mcp"
+        expected.parent.mkdir(parents=True)
+        expected.write_bytes(b"")
+        claude = home / ".mcp.json"
+        claude.write_bytes(
+            json.dumps(
+                {"mcpServers": {"entrabot": {"command": str(expected)}}}, ensure_ascii=False
+            ).encode("utf-8")
+        )
+        force_locale_codec(monkeypatch)
+
+        checks = check_mcp_configs(
+            expected_binary=expected, claude_path=claude, copilot_path=tmp_path / "none.json"
+        )
+        assert checks[0].status == "pass", checks[0]

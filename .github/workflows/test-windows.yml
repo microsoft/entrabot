@@ -41,3 +41,118 @@ jobs:
 
       - name: Lint
         run: ruff check .
+
+      # ── Windows setup: the parts no Mac can check ──────────────────────────
+      # A stock Windows PC has Windows PowerShell 5.1 and nothing else, so the
+      # setup entry point must parse and run there. `shell: powershell` is 5.1,
+      # `shell: pwsh` is 7.
+
+      - name: Every .ps1 parses under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $failed = $false
+          foreach ($file in @(git ls-files '*.ps1')) {
+            $errors = $null; $tokens = $null
+            $path = (Resolve-Path -LiteralPath $file).Path
+            [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+            foreach ($e in @($errors)) {
+              Write-Host "::error file=$file,line=$($e.Extent.StartLineNumber)::$($e.Message)"
+              $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
+          Write-Host "All .ps1 files parse under PowerShell $($PSVersionTable.PSVersion)"
+
+      - name: Every .ps1 parses under PowerShell 7
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($file in @(git ls-files '*.ps1')) {
+            $errors = $null; $tokens = $null
+            $path = (Resolve-Path -LiteralPath $file).Path
+            [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+            foreach ($e in @($errors)) {
+              Write-Host "::error file=$file,line=$($e.Extent.StartLineNumber)::$($e.Message)"
+              $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
+          Write-Host "All .ps1 files parse under PowerShell $($PSVersionTable.PSVersion)"
+
+      - name: Windows entry points are ASCII-only
+        # 5.1 reads a BOM-less script in the ANSI code page, and cmd.exe reads a
+        # batch file in the OEM one: one non-ASCII character there is a parse
+        # error on a customer's machine.
+        shell: powershell
+        run: |
+          $files = 'scripts/setup-windows.ps1', 'scripts/prereqs-windows.ps1', 'scripts/setup-windows.cmd', 'scripts/deploy-windows.ps1', 'scripts/teardown-windows.ps1', 'status-windows.ps1', 'start-entrabot.cmd', 'scripts/hooks/run-hook.sh'
+          foreach ($file in $files) {
+            $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $file).Path)
+            $bad = @($bytes | Where-Object { $_ -gt 127 })
+            if ($bad.Count -gt 0) {
+              Write-Host "::error file=$file::$($bad.Count) non-ASCII byte(s)"
+              exit 1
+            }
+          }
+          Write-Host "ASCII-only: $($files -join ', ')"
+
+      - name: Bootstrap helper functions work under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . .\scripts\setup-windows.ps1
+          function Assert-Equal($actual, $expected, $what) {
+            if ($actual -ne $expected) { throw "$what expected '$expected' but got '$actual'" }
+          }
+          $argv = @(Get-WizardArguments -Bound @{ NewChain = $true; UpnSuffix = 'ci'; Sponsor = @('a@x.com,b@x.com'); KeepMemoryLocal = $true; Yes = $true } -ProjectRoot "C:\it's here\entrabot")
+          Assert-Equal ($argv -join '|') "setup|--project-root|C:\it's here\entrabot|--new-chain|--upn-suffix|ci|--sponsor|a@x.com|--sponsor|b@x.com|--memory|local|--yes" 'wizard arguments'
+          Assert-Equal (@(Get-WizardArguments -Bound @{ Diagnose = $true } -ProjectRoot 'C:\x') -join '|') 'diagnose|--project-root|C:\x' 'diagnose arguments'
+          Assert-Equal (Test-PythonVersionOk -Text '3.12.10') $true 'Python 3.12 accepted'
+          Assert-Equal (Test-PythonVersionOk -Text '3.11.9') $false 'Python 3.11 rejected'
+          Assert-Equal (Test-StoreAliasPath -Path "$env:LOCALAPPDATA\Microsoft\WindowsApps\python.exe") $true 'Store alias rejected'
+          Assert-Equal (Test-DifferentAccount -CurrentSid 'S-1-5-21-1-500' -SessionOwnerSid '' -Elevated $true) $false 'no desktop owner means no refusal'
+          Assert-Equal (@(Get-ParameterProblems -Bound @{ NewChain = $true; UseBlueprint = 'x' }).Count) 1 'conflicting parameters'
+          . .\scripts\prereqs-windows.ps1
+          Assert-Equal (Test-WingetSuccess -ExitCode (-1978335135)) $true 'winget already-installed code'
+          Write-Host "Bootstrap helpers OK under PowerShell $($PSVersionTable.PSVersion)"
+
+      - name: Bootstrap runs end to end through setup-windows.cmd (Windows PowerShell 5.1)
+        # The real double-click path, stopped before the wizard: find Python,
+        # create .venv, pip install, migrate. No Azure, no prompts.
+        shell: cmd
+        run: |
+          call scripts\setup-windows.cmd -BootstrapOnly -Yes 2> "%RUNNER_TEMP%\bootstrap-stderr.txt"
+          if errorlevel 1 exit /b 1
+          rem A successful bootstrap writes nothing to the error stream.
+          for %%F in ("%RUNNER_TEMP%\bootstrap-stderr.txt") do set "EB_STDERR_BYTES=%%~zF"
+          if not "%EB_STDERR_BYTES%"=="0" type "%RUNNER_TEMP%\bootstrap-stderr.txt"
+          if not "%EB_STDERR_BYTES%"=="0" exit /b 1
+          .venv\Scripts\python.exe -c "import entrabot, azure.identity; print('bootstrap venv imports entrabot')"
+          if errorlevel 1 exit /b 1
+          rem A second run must not reinstall anything.
+          call scripts\setup-windows.cmd -BootstrapOnly -Yes > "%RUNNER_TEMP%\bootstrap-rerun.txt" 2>&1
+          if errorlevel 1 exit /b 1
+          type "%RUNNER_TEMP%\bootstrap-rerun.txt"
+          findstr /C:"Entrabot is already installed here" "%RUNNER_TEMP%\bootstrap-rerun.txt" > nul
+          if errorlevel 1 exit /b 1
+
+      - name: Claude Code hooks run through Git Bash, as Claude Code runs them on Windows
+        shell: bash
+        run: |
+          export CLAUDE_PROJECT_DIR="$(cygpath -w "$PWD")"
+          hook='ENTRABOT_HOOK=require_body_prompt.py; . "$CLAUDE_PROJECT_DIR/scripts/hooks/run-hook.sh"'
+          # An ungated tool is allowed (exit 0).
+          echo '{"tool_name":"mcp__entrabot__whoami"}' | bash -c "$hook"
+          # A gated tool with no body prompt loaded is blocked (exit 2).
+          set +e
+          echo '{"tool_name":"mcp__entrabot__send_teams_message"}' | bash -c "$hook"
+          code=$?
+          set -e
+          if [ "$code" -ne 2 ]; then echo "::error::expected the gate to block with exit 2, got $code"; exit 1; fi
+          # A launcher that cannot be found must never look like "allow" (exit 0).
+          set +e
+          echo '{}' | CLAUDE_PROJECT_DIR="$(cygpath -w "$RUNNER_TEMP")" "$BASH" -c "$hook"
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then echo "::error::a missing launcher exited 0 (fails open)"; exit 1; fi
+          echo "hook launcher OK through Git Bash"

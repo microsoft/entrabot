@@ -47,6 +47,10 @@ python scripts/show_agent_status.py --help
   has no visible effect on output, only on the exit code. Implied by
   `--health-only`.
 
+The health labels are coloured only when standard output is a terminal that can
+draw colour. Piped or captured output is plain text, and the `NO_COLOR`
+environment variable turns colour off.
+
 No positional arguments.
 
 ## Effects
@@ -100,7 +104,7 @@ No positional arguments.
 
 ## Related commands
 
-- [`status.sh`](status-sh.md) / [`status-windows.ps1`](status-windows-ps1.md) — thin wrappers that bootstrap the venv and call this command.
+- [`status.sh`](status-sh.md) / [`status-windows.ps1`](status-windows-ps1.md) — thin wrappers that call this command. `status.sh` bootstraps the venv if needed; `status-windows.ps1` does not, and asks you to run setup instead.
 - [`health_check.py`](health-check-py.md) — compatibility wrapper that forwards to `--health-only`.
 - [`show_permissions.py`](show-permissions-py.md) — a focused view of just the permission grants, using the same Provisioner-cert token.
 - Platform docs: [Agent Identity Blueprints and Users](../../../platform-docs/agent-id-blueprints-and-users.md)

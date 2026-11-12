@@ -86,6 +86,20 @@ _TEMP_FILE_NAME = re.compile(r"\.tmp-[0-9a-f]{16}")
 # replace fails with PermissionError while something is reading the file. Reads are short, so
 # it is retried briefly. Elsewhere that error means what it says, so it isn't.
 _REPLACE_CAN_BE_BLOCKED = sys.platform == "win32"
+
+# Every local file is UTF-8, whatever the platform. Left to the default, Windows uses its ANSI
+# code page (cp1252), which can't encode an emoji: the daily summary's headings raised
+# UnicodeEncodeError while it was archived, before it was sent. It also keeps a local store
+# and a blob store byte-for-byte alike, which the local-to-cloud migration relies on.
+TEXT_ENCODING = "utf-8"
+
+# Every write puts the text on disk exactly as given: a "\n" stays one byte. Left to the
+# default, Windows text mode writes it as "\r\n" (and a "\r\n" as "\r\r\n"), so a local
+# store held different bytes from a blob store with the same content, and a memory file
+# pulled from the cloud differed from the copy it came from. Passed to every text-mode open
+# that writes. Reads pass nothing: by default they accept either line ending, which a store
+# written on Windows before this still has.
+TEXT_NEWLINE = "\n"
 _REPLACE_ATTEMPTS = 5
 _REPLACE_RETRY_SECONDS = 0.05
 
@@ -127,16 +141,17 @@ def _publish_atomically(path: Path, content: str, key: str, *, create_only: bool
     crash can't leave a readable copy behind. A key created this way is 0o600 as well.
 
     The temp file is always removed, so a failed write leaves the old value (or no key)
-    and nothing else behind. The caller holds ``_LOCAL_WRITE_LOCK``. The text encoding is
-    the default one, exactly as ``Path.write_text`` used.
+    and nothing else behind. The caller holds ``_LOCAL_WRITE_LOCK``. The text is written as
+    UTF-8 and byte for byte (see ``TEXT_ENCODING`` and ``TEXT_NEWLINE``), never in the
+    platform's default encoding or with its line endings.
     """
     temp = path.with_name(f".tmp-{secrets.token_hex(8)}")
     try:
         # Owner-only from the first byte, and exclusive so an existing name is refused. O_BINARY
-        # exists only on Windows, where it stops the C runtime translating newlines a second time
-        # under the text wrapper (``open`` adds it itself).
+        # exists only on Windows, where it stops the C runtime translating newlines underneath
+        # the text wrapper (``open`` adds it itself).
         fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding=TEXT_ENCODING, newline=TEXT_NEWLINE) as fh:
             fh.write(content)
             fh.flush()
             os.fsync(fh.fileno())
@@ -186,7 +201,7 @@ def _create_exclusively(path: Path, content: str, key: str) -> None:
     except FileExistsError as exc:
         raise ConcurrencyError(f"write_text({key!r}) refused: key exists") from exc
     try:
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding=TEXT_ENCODING, newline=TEXT_NEWLINE) as fh:
             fh.write(content)
     except BaseException:
         try:
@@ -272,13 +287,13 @@ class LocalBackend:
         p = self._path(key)
         if not p.exists():
             return None
-        return p.read_text()
+        return p.read_text(encoding=TEXT_ENCODING)
 
     def read_text_with_etag(self, key: str) -> tuple[str | None, str | None]:
         p = self._path(key)
         if not p.exists():
             return None, None
-        content = p.read_text()
+        content = p.read_text(encoding=TEXT_ENCODING)
         return content, _content_etag(content)
 
     def write_text(
@@ -297,7 +312,7 @@ class LocalBackend:
         with _LOCAL_WRITE_LOCK:
             if if_match is not None:
                 # Conditional write: current content hash must equal if_match.
-                current = _content_etag(p.read_text()) if p.exists() else None
+                current = _content_etag(p.read_text(encoding=TEXT_ENCODING)) if p.exists() else None
                 if current != if_match:
                     raise ConcurrencyError(
                         f"write_text({key!r}) refused: If-Match={if_match!r} is stale "
@@ -310,7 +325,7 @@ class LocalBackend:
     def append_text(self, key: str, content: str) -> None:
         p = self._path(key)
         p.parent.mkdir(parents=True, exist_ok=True)
-        with open(p, "a") as fh:
+        with open(p, "a", encoding=TEXT_ENCODING, newline=TEXT_NEWLINE) as fh:
             fh.write(content)
 
     def exists(self, key: str) -> bool:

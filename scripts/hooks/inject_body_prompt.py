@@ -76,8 +76,10 @@ def main() -> int:
     # Consume stdin so Claude Code doesn't block writing to us, but
     # malformed input is not fatal — the hook has no parameters from
     # the payload; it only reads the project dir from env.
-    with contextlib.suppress(OSError):
-        sys.stdin.read()
+    # Read the raw bytes: decoding them in the locale's code page (cp1252 on Windows)
+    # raises on ordinary UTF-8 input, and the content is not needed anyway.
+    with contextlib.suppress(Exception):
+        getattr(sys.stdin, "buffer", sys.stdin).read()
 
     # Derive project root from __file__ so this script is self-locating
     # regardless of clone path — no CLAUDE_PROJECT_DIR env var needed.
@@ -143,5 +145,13 @@ def main() -> int:
     return 0
 
 
+def run() -> int:
+    """``main()``, failing soft: a broken injector must never break a session."""
+    try:
+        return main()
+    except Exception:
+        return 0
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run())

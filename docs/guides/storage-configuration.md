@@ -101,6 +101,23 @@ Setup rewrites `.env` on every run, but it reads the old file first and keeps th
 
 Cloud memory counts as set only when both `ENTRABOT_BLOB_ENDPOINT` and `ENTRABOT_BLOB_CONTAINER` are present and `ENTRABOT_KEEP_MEMORY_LOCAL` is not `true`, `1`, or `yes`. A run for a different Agent User, such as `--new`, carries nothing over; pass `--use-cloud-memory` for it. Setup writes the rest of `.env` from scratch, so lines you added by hand are dropped.
 
+### On Windows
+
+The Windows setup wizard asks where the agent should keep its memory. Cloud memory is offered only when the signed-in account has an Azure subscription in the tenant. The same choices as parameters:
+
+| `setup.sh` | `scripts\setup-windows.cmd` |
+|---|---|
+| `--use-cloud-memory` | `-UseCloudMemory` |
+| `--keep-memory-local` | `-KeepMemoryLocal` |
+| `--with-storage-account=NAME` | `-WithStorageAccount NAME` |
+| `--with-container=NAME` | `-WithContainer NAME` |
+| `--create-new-storage` | `-CreateNewStorage` |
+| (none) | `-Location REGION`, `-Subscription ID_OR_NAME` |
+
+The rules above apply unchanged: a re-run for the same agent keeps its memory setting, and a different agent inherits nothing. If cloud provisioning fails on a PC that was not on cloud memory, the wizard says so and asks whether to continue with local memory; it never falls back silently. When local memory already holds data, the wizard offers to copy it to the cloud.
+
+Setting up cloud memory through the Windows wizard has not yet been tested against a real subscription.
+
 ### The storage-scope token
 
 The `BlobBackend` authenticates to Azure Blob via an Agent-User-scoped OAuth token for `https://storage.azure.com/.default`. The three-hop flow is parallel to the Graph-scoped flow used by the Teams tools, minted on demand via `acquire_agent_user_storage_token(config)`. Nothing about this is delegated back to you or to `az login`; the Agent User is the data plane principal.

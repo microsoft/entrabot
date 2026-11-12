@@ -173,14 +173,16 @@ def is_windows() -> bool:
     return os.name == "nt"
 
 
+WINDOWS_POWERSHELL = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]
+
+
 def setup_command(ctx: SmokeContext) -> list[str]:
     if is_windows():
+        # The in-box Windows PowerShell, exactly as scripts/setup-windows.cmd starts it:
+        # setup no longer needs PowerShell 7. -Yes makes the wizard unattended, so every
+        # answer it would ask for is passed as a flag.
         cmd = [
-            "pwsh",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-NoProfile",
-            "-File",
+            *WINDOWS_POWERSHELL,
             "scripts/setup-windows.ps1",
             "-NewChain",
             "-AgentUserUpn",
@@ -190,7 +192,10 @@ def setup_command(ctx: SmokeContext) -> list[str]:
             ctx.storage_account,
             "-WithContainer",
             ctx.container,
+            "-Yes",
         ]
+        if ctx.sponsor_upn:
+            cmd += ["-Sponsor", ctx.sponsor_upn]
     else:
         cmd = [
             "./scripts/setup.sh",
@@ -209,20 +214,13 @@ def setup_command(ctx: SmokeContext) -> list[str]:
 
 def status_health_command() -> list[str]:
     if is_windows():
-        return [
-            "pwsh",
-            "-NoProfile",
-            "-File",
-            "scripts/setup-windows.ps1",
-            "-Status",
-            "-HealthOnly",
-        ]
+        return [*WINDOWS_POWERSHELL, "scripts/setup-windows.ps1", "-Status", "-HealthOnly"]
     return ["./scripts/setup.sh", "--status", "--health-only"]
 
 
 def status_json_command() -> list[str]:
     if is_windows():
-        return ["pwsh", "-NoProfile", "-File", "scripts/setup-windows.ps1", "-Status", "-Json"]
+        return [*WINDOWS_POWERSHELL, "scripts/setup-windows.ps1", "-Status", "-Json"]
     return ["./scripts/setup.sh", "--status", "--json"]
 
 

@@ -1,10 +1,14 @@
-"""Pre-flight, smoke, and diagnose checks for setup.sh.
+"""Pre-flight, smoke, and diagnose checks for setup (setup.sh and the Windows wizard).
 
 Designed for a non-technical operator (e.g., a VP) running ``./scripts/setup.sh``
-once: they should either see a green confirmation that the install works end-to-end,
-or a precise pointer to the broken hop. setup.sh shells out to short Python
-one-liners that import from this module, so the logic itself is unit-testable
-without bash.
+or ``scripts\\setup-windows.cmd`` once: they should either see a green confirmation
+that the install works end-to-end, or a precise pointer to the broken hop. setup.sh
+shells out to short Python one-liners that import from this module, and the Windows
+wizard calls it directly, so the logic itself is unit-testable without a shell.
+
+Remediation text names the setup script of the platform it runs on, and the
+certificate check looks where that platform keeps the key: the OS keystore on
+macOS/Linux, the certificate store (a non-exportable CNG key) on Windows.
 
 Three entry points:
 
@@ -21,8 +25,11 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
+import shlex
 import shutil
 import socket
+import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -72,6 +79,31 @@ LICENSE_PURCHASE_URL = (
     "https://admin.microsoft.com/Adminportal/Home#/catalog"
     " (or any Teams-capable license: M365 Business Premium, E3, E5, etc.)"
 )
+
+
+def _is_windows() -> bool:
+    return sys.platform == "win32"
+
+
+def _setup_name() -> str:
+    """The setup script's name, as someone would say it."""
+    return "setup-windows.cmd" if _is_windows() else "setup.sh"
+
+
+def _setup_command() -> str:
+    """The setup command to run from the repository root."""
+    return r"scripts\setup-windows.cmd" if _is_windows() else "./scripts/setup.sh"
+
+
+def _diagnose_command() -> str:
+    return f"{_setup_command()} -Diagnose" if _is_windows() else "./scripts/setup.sh --diagnose"
+
+
+def default_expected_binary(project_root: Path) -> Path:
+    """Where setup installs the MCP server binary for this platform."""
+    if _is_windows():
+        return project_root / ".venv" / "Scripts" / "entrabot-mcp.exe"
+    return project_root / ".venv" / "bin" / "entrabot-mcp"
 
 
 @dataclass(frozen=True)
@@ -137,13 +169,13 @@ def check_teams_license_availability(
         name="Teams license availability",
         status="warn",
         detail=(
-            "No Teams-capable SKU has free seats in this tenant. setup.sh will "
+            f"No Teams-capable SKU has free seats in this tenant. {_setup_name()} will "
             "still complete, but the agent user can't sign into Teams without "
             "a license."
         ),
         remediation=(
             f"Buy a Teams-capable license at {LICENSE_PURCHASE_URL} and re-run "
-            "setup.sh, or assign an existing license manually before testing."
+            f"{_setup_name()}, or assign an existing license manually before testing."
         ),
     )
 
@@ -197,7 +229,7 @@ def check_copilot_license_availability(
             "MCP servers require Microsoft 365 Copilot for the calling Agent User."
         ),
         remediation=(
-            "Buy or free a Microsoft 365 Copilot license and re-run setup.sh, "
+            f"Buy or free a Microsoft 365 Copilot license and re-run {_setup_name()}, "
             "or assign it manually before testing Work IQ Word."
         ),
     )
@@ -216,7 +248,7 @@ def _token_mint_check(config: EntraBotConfig) -> tuple[Check, str | None]:
                 status="fail",
                 detail=f"Agent identity not bootstrapped: {exc}",
                 remediation=(
-                    "Run ./scripts/setup.sh end-to-end — the state file or certificate is missing."
+                    f"Run {_setup_command()} end-to-end — the state file or certificate is missing."
                 ),
             ),
             None,
@@ -228,7 +260,7 @@ def _token_mint_check(config: EntraBotConfig) -> tuple[Check, str | None]:
                 status="fail",
                 detail=f"{exc.hop} failed — {exc.error}: {exc.description}",
                 remediation=(
-                    "Re-run ./scripts/setup.sh --diagnose to see which hop failed "
+                    f"Re-run {_diagnose_command()} to see which hop failed "
                     "and consult docs/troubleshooting/setup-and-authentication.md."
                 ),
             ),
@@ -290,7 +322,7 @@ def _me_identity_check(
             detail=(f"Token belongs to {upn!r}, expected {config.agent_user_upn!r}."),
             remediation=(
                 "The .env state file points at a different agent user than "
-                "the token resolves to. Re-run setup.sh."
+                f"the token resolves to. Re-run {_setup_name()}."
             ),
         )
 
@@ -327,7 +359,7 @@ def _chats_scope_check(token: str, *, transport: httpx.BaseTransport | None = No
             detail=f"Graph returned {resp.status_code} for /me/chats.",
             remediation=(
                 "Teams replication can take 10-15 minutes after license "
-                "assignment. Wait, then re-run ./scripts/setup.sh --diagnose. "
+                f"assignment. Wait, then re-run {_diagnose_command()}. "
                 "If the failure persists, check that the agent user has a "
                 "Teams-capable license assigned."
             ),
@@ -384,16 +416,17 @@ def check_state_file(path: Path) -> Check:
             name="State file",
             status="fail",
             detail=f"{path} does not exist.",
-            remediation="Run ./scripts/setup.sh — provisioning has not been completed.",
+            remediation=f"Run {_setup_command()} — provisioning has not been completed.",
         )
     try:
-        data = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError) as exc:
+        # UTF-8 whatever the machine's code page; a Windows editor may add a BOM.
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (ValueError, OSError) as exc:
         return Check(
             name="State file",
             status="fail",
             detail=f"{path} is unreadable: {exc}",
-            remediation="Delete the file and re-run ./scripts/setup.sh.",
+            remediation=f"Delete the file and re-run {_setup_command()}.",
         )
 
     missing = [key for key in _REQUIRED_STATE_KEYS if not data.get(key)]
@@ -402,7 +435,7 @@ def check_state_file(path: Path) -> Check:
             name="State file",
             status="fail",
             detail=f"Missing keys: {', '.join(missing)}",
-            remediation="Re-run ./scripts/setup.sh to repopulate the state file.",
+            remediation=f"Re-run {_setup_command()} to repopulate the state file.",
         )
 
     return Check(
@@ -412,8 +445,57 @@ def check_state_file(path: Path) -> Check:
     )
 
 
-def _check_cert_in_keystore() -> Check:
+_CERT_CHECK_NAME = "Blueprint cert in OS keystore"
+
+
+def _check_cert_in_windows_store(config: EntraBotConfig | None) -> Check:
+    """Windows: the certificate named in .env is in this user's store, in date, and
+    its (non-exportable) key actually signs. Credential Manager is not involved."""
+    if config is None:
+        return Check(
+            name=_CERT_CHECK_NAME,
+            status="skip",
+            detail="No configuration to check the certificate against.",
+        )
+    from entrabot.platform import wincert
+
+    remediation = f"Run {_setup_command()} as the user who runs Entrabot."
+    sha1 = config.blueprint_cert_sha1
+    try:
+        health = wincert.cert_health(sha1)
+    except Exception as exc:  # noqa: BLE001 — a diagnostic must report, not crash
+        return Check(
+            name=_CERT_CHECK_NAME,
+            status="fail",
+            detail=f"Could not read the certificate store: {exc}",
+            remediation=remediation,
+        )
+    if not health.usable:
+        return Check(
+            name=_CERT_CHECK_NAME, status="fail", detail=health.message, remediation=remediation
+        )
+    try:
+        wincert.test_sign(sha1 or "")
+    except wincert.WinCertError as exc:
+        return Check(name=_CERT_CHECK_NAME, status="fail", detail=str(exc), remediation=remediation)
+    if health.status == "expiring":
+        return Check(
+            name=_CERT_CHECK_NAME,
+            status="warn",
+            detail=health.message,
+            remediation=f"Re-run {_setup_command()} to renew the certificate before it expires.",
+        )
+    return Check(
+        name=_CERT_CHECK_NAME,
+        status="pass",
+        detail=f"{health.message} Its private key signs.",
+    )
+
+
+def _check_cert_in_keystore(config: EntraBotConfig | None = None) -> Check:
     """Default cert presence check. Tests patch this for hermeticity."""
+    if _is_windows():
+        return _check_cert_in_windows_store(config)
     try:
         from entrabot.platform import get_credential_store
     except Exception as exc:  # pragma: no cover — import failures are platform-level
@@ -430,7 +512,7 @@ def _check_cert_in_keystore() -> Check:
             name="Blueprint cert in OS keystore",
             status="fail",
             detail=f"Keystore error: {exc}",
-            remediation="Re-run ./scripts/setup.sh to re-generate and store the cert.",
+            remediation=f"Re-run {_setup_command()} to re-generate and store the cert.",
         )
 
     if not pem:
@@ -438,7 +520,7 @@ def _check_cert_in_keystore() -> Check:
             name="Blueprint cert in OS keystore",
             status="fail",
             detail="No blueprint-private-key in OS keystore.",
-            remediation="Re-run ./scripts/setup.sh to regenerate the certificate.",
+            remediation=f"Re-run {_setup_command()} to regenerate the certificate.",
         )
 
     return Check(
@@ -450,8 +532,10 @@ def _check_cert_in_keystore() -> Check:
 
 def _read_mcp_command(path: Path) -> str | None:
     try:
-        data = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (ValueError, OSError):
+        return None
+    if not isinstance(data, dict):
         return None
     servers = data.get("mcpServers") or {}
     entry = servers.get("entrabot") or {}
@@ -475,9 +559,24 @@ def _paths_equivalent(observed: str, expected: Path, config_path: Path) -> bool:
     else:
         obs_path = obs_path.resolve()
     try:
-        return obs_path == expected.resolve()
+        resolved_expected = expected.resolve()
     except (OSError, RuntimeError):
-        return obs_path == expected
+        resolved_expected = expected
+    return _comparable(obs_path) == _comparable(resolved_expected)
+
+
+def _comparable(path: Path | str) -> str:
+    """A path in the form two spellings of the same file agree on.
+
+    Windows paths don't distinguish case or slash direction, and ``entrabot-mcp``
+    runs ``entrabot-mcp.exe``. Elsewhere the path is compared as written.
+    """
+    text = str(path)
+    if _is_windows():
+        text = text.replace("\\", "/").lower()
+        if text.endswith(".exe"):
+            text = text[: -len(".exe")]
+    return text
 
 
 def check_mcp_configs(
@@ -501,7 +600,7 @@ def check_mcp_configs(
                 name="Claude Code MCP config",
                 status="fail",
                 detail=f"{claude_path} not found.",
-                remediation="Re-run ./scripts/setup.sh to write .mcp.json.",
+                remediation=f"Re-run {_setup_command()} to write .mcp.json.",
             )
         )
     else:
@@ -512,7 +611,7 @@ def check_mcp_configs(
                     name="Claude Code MCP config",
                     status="fail",
                     detail=f"{claude_path} has no entrabot entry.",
-                    remediation="Re-run ./scripts/setup.sh to write .mcp.json.",
+                    remediation=f"Re-run {_setup_command()} to write .mcp.json.",
                 )
             )
         elif not _paths_equivalent(cmd, expected_binary, claude_path):
@@ -522,7 +621,8 @@ def check_mcp_configs(
                     status="fail",
                     detail=(f"Entry points at {cmd!r}, expected {expected!r}. Worktree drift?"),
                     remediation=(
-                        "Re-run ./scripts/setup.sh from the main checkout to rewrite the MCP entry."
+                        f"Re-run {_setup_command()} from the main checkout to rewrite "
+                        "the MCP entry."
                     ),
                 )
             )
@@ -543,7 +643,7 @@ def check_mcp_configs(
                 status="warn",
                 detail=f"{copilot_path} not found (Copilot CLI not installed?).",
                 remediation=(
-                    "Install Copilot CLI and re-run setup.sh to wire it up, "
+                    f"Install Copilot CLI and re-run {_setup_name()} to wire it up, "
                     "or ignore if you only use Claude Code."
                 ),
             )
@@ -556,7 +656,7 @@ def check_mcp_configs(
                     name="Copilot CLI MCP config",
                     status="warn",
                     detail=f"{copilot_path} has no entrabot entry.",
-                    remediation="Re-run ./scripts/setup.sh.",
+                    remediation=f"Re-run {_setup_command()}.",
                 )
             )
         elif not _paths_equivalent(cmd, expected_binary, copilot_path):
@@ -572,7 +672,7 @@ def check_mcp_configs(
                         "Possibly pointing at another checkout/worktree."
                     ),
                     remediation=(
-                        "Re-run ./scripts/setup.sh from the checkout you want "
+                        f"Re-run {_setup_command()} from the checkout you want "
                         "Copilot to use, or ignore if intentional."
                     ),
                 )
@@ -607,17 +707,86 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
-def _is_executable(command: str, base: Path, env: object) -> bool:
-    """True if ``command`` is a runnable file.
+def _find_program(command: str, base: Path, env: object, *, any_file: bool = False) -> str | None:
+    """The runnable file ``command`` names, or None.
 
     Relative paths resolve against ``base``. Bare names are looked up on the ``PATH`` in
     the entry's own ``env``, because that's what the host runs them with, or on this
-    process's ``PATH`` if the entry doesn't set one.
+    process's ``PATH`` if the entry doesn't set one. ``any_file`` also accepts a file that
+    isn't marked executable: Windows has no executable bit, and there ``which`` goes by
+    ``PATHEXT``, which never lists ``.ps1`` and may not list ``.py``.
     """
     bare = "/" not in command and "\\" not in command
     path = env.get("PATH") if isinstance(env, dict) else None
+    path = path if isinstance(path, str) else None
     target = command if bare else str(base / command)
-    return shutil.which(target, path=path if isinstance(path, str) else None) is not None
+    found = shutil.which(target, path=path)
+    if found is None and any_file:
+        found = shutil.which(target, mode=os.F_OK, path=path)
+    return found
+
+
+def _is_executable(command: str, base: Path, env: object) -> bool:
+    """True if ``command`` is a runnable file (see :func:`_find_program`)."""
+    return _find_program(command, base, env) is not None
+
+
+def _windows_leading_parts(command: str) -> list[str]:
+    r"""Every leading part of a Windows command line that could be its program, longest
+    first: ``C:\Program Files\x\t.cmd --flag`` gives that whole text, then
+    ``C:\Program Files\x\t.cmd``, then ``C:\Program``. A quoted part counts only when
+    it is one quoted word, and is returned without its quotes. An unbalanced quote gives
+    nothing: that is not something to guess at.
+    """
+    ends: list[int] = []
+    quoted = False
+    for index, char in enumerate(command):
+        if char == '"':
+            quoted = not quoted
+        elif char.isspace() and not quoted and index > 0 and not command[index - 1].isspace():
+            ends.append(index)
+    if quoted:
+        return []
+    ends.append(len(command))
+    parts: list[str] = []
+    for end in reversed(ends):
+        candidate = command[:end].strip()
+        if '"' in candidate:
+            if not (candidate.count('"') == 2 and candidate[0] == candidate[-1] == '"'):
+                continue
+            candidate = candidate[1:-1]
+        if candidate:
+            parts.append(candidate)
+    return parts
+
+
+def _token_command_runs(command: str, base: Path, env: object) -> bool:
+    """True if the server could start ``PERSONA_SATI_MCP_TOKEN_COMMAND``.
+
+    This follows ``entrabot.mcp_server._persona_token_words``, which decides what the
+    server actually starts: the whole value as one program first (so a path with spaces
+    needs no quoting), otherwise a program followed by arguments, split by the platform's
+    rules. On POSIX that is shell quoting. On Windows the program is the longest leading
+    part that names a file, and a script (``.ps1``, ``.py``) counts, because the server
+    hands those to their interpreter.
+
+    The rule is restated here rather than imported: importing ``entrabot.mcp_server``
+    builds the server, which runs this very command and contacts persona-sati, and a
+    health check must do neither. Nothing here runs the command.
+    """
+    windows = _is_windows()
+    if _find_program(command, base, env, any_file=windows) is not None:
+        return True
+    if windows:
+        return any(
+            _find_program(part, base, env, any_file=True) is not None
+            for part in _windows_leading_parts(command)
+        )
+    try:
+        words = shlex.split(command)
+    except ValueError:  # an unbalanced quote
+        return False
+    return bool(words) and _find_program(words[0], base, env) is not None
 
 
 def check_persona_sati_mcp(claude_path: Path) -> Check:
@@ -629,7 +798,7 @@ def check_persona_sati_mcp(claude_path: Path) -> Check:
     """
     name = "persona-sati MCP (optional)"
     try:
-        servers = json.loads(claude_path.read_text(encoding="utf-8")).get("mcpServers") or {}
+        servers = json.loads(claude_path.read_text(encoding="utf-8-sig")).get("mcpServers") or {}
         entry, entrabot = servers.get("persona-sati"), servers.get("entrabot")
     except (OSError, ValueError, AttributeError):  # missing, unparsable, or wrong shape
         entry = entrabot = None
@@ -686,7 +855,8 @@ def check_persona_sati_mcp(claude_path: Path) -> Check:
     for var in ("PERSONA_SATI_MCP_URL", _TOKEN_ENV):
         if _is_placeholder(env.get(var)):
             problems.append(f"{var} in the entrabot env is an unfilled placeholder")
-    if token and not _is_placeholder(token) and not _is_executable(token, claude_path.parent, env):
+    runnable = _token_command_runs(token, claude_path.parent, env) if token else False
+    if token and not _is_placeholder(token) and not runnable:
         problems.append(f"{_TOKEN_ENV} in the entrabot env was not found or is not executable")
 
     if not problems:
@@ -713,10 +883,14 @@ def run_diagnostics(
     copilot_mcp_path: Path,
     transport: httpx.BaseTransport | None = None,
 ) -> list[Check]:
-    """Full health check for ``./scripts/setup.sh --diagnose``."""
+    """Full health check for ``./scripts/setup.sh --diagnose`` and the Windows wizard.
+
+    ``expected_binary`` is the MCP server setup installed; see
+    :func:`default_expected_binary`.
+    """
     checks: list[Check] = []
     checks.append(check_state_file(state_path))
-    checks.append(_check_cert_in_keystore())
+    checks.append(_check_cert_in_keystore(config))
     checks.extend(run_smoke_checks(config, transport=transport))
     checks.extend(
         check_mcp_configs(
@@ -770,6 +944,7 @@ __all__ = [
     "check_persona_sati_mcp",
     "check_state_file",
     "check_teams_license_availability",
+    "default_expected_binary",
     "format_report",
     "overall_exit_code",
     "run_diagnostics",

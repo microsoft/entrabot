@@ -49,13 +49,18 @@ Not a CLI. The main functions are:
   to send. A pure function; `remove_all_existing=True` returns only the new entry. Expired
   entries are kept like any other: nothing is pruned.
 - `register_key_credential(...)` — fetch, merge, `PATCH`, then confirm by reading back.
-- `swap_key_credential(...)` — one step of a Windows rotation. Drops only the entries
-  whose key material matches the old or new certificate and adds the given one.
+- `remove_key_credential(*, object_id, token, x5t_s256=None, sha1_hex=None, ...)` — remove
+  one certificate, identified by its key material, and keep every other machine's. The
+  write counts only once a read shows that certificate gone and the others still there. A
+  certificate that isn't registered is not an error. Windows rotation and teardown use it.
+- `swap_key_credential(...)` — used only by the older `rotate_cert_windows.rotate()`
+  library function. Drops only the entries whose key material matches the old or new
+  certificate and adds the given one.
 
 ## Effects
 
-`fetch_key_credentials` is read-only. `register_key_credential` and
-`swap_key_credential` update the Blueprint's `keyCredentials` through Graph v1.0. Every
+`fetch_key_credentials` is read-only. `register_key_credential`, `remove_key_credential`
+and `swap_key_credential` update the Blueprint's `keyCredentials` through Graph v1.0. Every
 request has a bounded timeout, and the module changes nothing locally.
 
 ## Exit behavior
@@ -94,8 +99,8 @@ code and message, never the token or key material.
 
 - [`register_blueprint_cert.py`](register-blueprint-cert-py.md) — registers this
   machine's certificate on macOS and Linux.
-- [`rotate_cert_windows.py`](rotate-cert-windows-py.md) — the Windows rotation that uses
-  `swap_key_credential`.
+- [`deploy-windows.ps1`](../setup/deploy-windows-ps1.md) — the Windows rotation, which
+  uses `register_key_credential` and then `remove_key_credential`.
 - [`verify_blueprint_cert.py`](verify-blueprint-cert-py.md),
   [`find_local_blueprint_cert.py`](find-local-blueprint-cert-py.md), and
   [`list_blueprint_certs.py`](list-blueprint-certs-py.md) — the read-only checks built on

@@ -99,11 +99,16 @@ macOS/Linux:
 ./scripts/setup.sh --configure-a365-work-iq
 ```
 
-Windows (PowerShell):
+Windows:
 
-```powershell
-.\scripts\setup-windows.ps1 -ConfigureA365WorkIq
+```bat
+scripts\setup-windows.cmd -ConfigureA365WorkIq
 ```
+
+On Windows this needs the `a365` CLI, which `scripts\prereqs-windows.ps1 -WithWorkIq`
+installs, and PowerShell 7, which one of the `a365` steps requires and which you install
+yourself. The rest of Windows setup needs neither. Work IQ setup through the Windows
+wizard has not yet been tested end to end.
 
 See [`setup.sh` reference](../reference/scripts/setup/setup-sh.md) and
 [`setup-windows.ps1` reference](../reference/scripts/setup/setup-windows-ps1.md).

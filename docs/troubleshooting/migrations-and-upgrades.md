@@ -13,8 +13,8 @@ creating a new chain:
 
 === "Windows"
 
-    ```powershell
-    scripts\setup-windows.cmd -UseBlueprint <blueprint-app-id>
+    ```bat
+    scripts\setup-windows.cmd
     ```
 
 Re-running setup repairs or merges current permissions, consent, certificate
@@ -39,16 +39,16 @@ See [Storage troubleshooting](storage.md).
 The current root is `%LOCALAPPDATA%\entrabot`; the legacy root is
 `%USERPROFILE%\.entrabot`.
 
-If only the legacy root has data:
+If only the legacy root has data, run setup. It moves the folder for you:
 
-```powershell
-scripts\setup-windows.cmd -UseBlueprint <blueprint-app-id>
+```bat
+scripts\setup-windows.cmd
 ```
 
-`-Migrate` is a compatibility-only switch on `setup-windows.ps1`; normal setup
-runs the legacy migration every time. If you hit a legacy/current directory
-conflict, preserve both, determine which has the current logs and cursor state,
-choose one authoritative root, then rerun normal setup.
+`-Migrate` is accepted and ignored; the move happens on every setup run that needs it.
+If both roots have data, setup uses the current root, leaves the legacy one untouched,
+and says so. Nothing is merged or deleted. Compare the two, work out which has the
+current logs and cursor state, and move what you still need by hand.
 
 ## Teams replays self-authored messages after an identity rename
 
@@ -94,13 +94,14 @@ Do not preserve the old secret in `.env`, shell history, logs, or backup notes.
 Run:
 
 ```powershell
-pwsh -File scripts\deploy-windows.ps1
+powershell -ExecutionPolicy Bypass -File scripts\deploy-windows.ps1
 ```
 
-The rotation is transactional: register the new public certificate, update
-both thumbprints, smoke-test Agent User authentication, then remove the old
-certificate. A failed smoke test restores the old registration and local
-values. See [Windows troubleshooting](windows.md).
+The old certificate stays in use until the new one is proven: rotation creates a new
+certificate, adds it to the Blueprint beside the old one, signs the agent in with it,
+switches `.env`, and only then removes the old certificate from the Blueprint and from
+this PC. If it fails before the switch, the new certificate is undone and nothing else
+changes. Restart the assistant afterwards. See [Windows troubleshooting](windows.md).
 
 ## Upgrading to shared poll state
 
@@ -172,11 +173,12 @@ After pulling an upgrade:
 
 === "Windows"
 
-    ```powershell
-    .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-    scripts\setup-windows.cmd -UseBlueprint <blueprint-app-id>
-    .\status-windows.ps1 -HealthOnly -Strict
+    ```bat
+    scripts\setup-windows.cmd
+    scripts\setup-windows.cmd -Diagnose
     ```
+
+    Setup reinstalls Entrabot's packages when `pyproject.toml` has changed.
 
 Health status validates the Provisioner-visible resource chain. `whoami`
 validates the identity and token held by the newly restarted MCP runtime.

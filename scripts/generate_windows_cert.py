@@ -1,21 +1,27 @@
-"""Generate the Blueprint cert on Windows.
+"""Generate a signing certificate for the Blueprint on Windows.
 
-Wraps ``New-SelfSignedCertificate`` with hard-locked crypto parameters.
-Auto-detects TPM availability and falls
-back to the software KSP. Returns the SHA-1 thumbprint, the SHA-256
-b64url JWT thumbprint, and the public DER bytes ready for upload to
-the Blueprint app.
+A thin command line over ``entrabot.platform.wincert``, which owns the key
+lifecycle: the key is created in the TPM when that works and in the software key
+store otherwise, is always non-exportable, and has signed once before this script
+reports success. It needs neither a newer PowerShell nor elevation, and it does not
+probe for a TPM: it tries one.
 
-Why a Python helper around PowerShell, instead of inlining in
-``setup-windows.ps1``? Three reasons:
+Usage:
+    python scripts/generate_windows_cert.py [--subject CN=...] [--days N]
+        [--ksp {tpm,software}] [--friendly-name NAME] [--export-der PATH]
 
-1. The cert generation is the one Windows-only flow that pytest can
-   meaningfully validate (we mock subprocess and assert that the
-   crypto flags land verbatim).
-2. The thumbprint extraction needs strict validation (regex) — the
-   ``setup.sh`` Mac path was bitten by stdout corruption (Learning
-   #29); same defense lives here.
-3. ``rotate_cert_windows.py`` reuses this helper.
+``--ksp`` pins the key store and disables the fallback: ``--ksp tpm`` fails if the
+TPM can't be used.
+
+Standard output is machine-readable and is all that callers parse:
+
+    thumbprint=<40 uppercase hex, identifies the cert in Cert:\\CurrentUser\\My>
+    ksp=<tpm|software>
+    x5t_s256=<43-character base64url SHA-256 of the DER>
+
+Everything meant for a person goes to stderr.
+
+Exit codes: 0 created, 1 failed (nothing usable was left behind), 2 usage.
 """
 
 from __future__ import annotations
@@ -23,32 +29,22 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
-import re
-import subprocess  # noqa: S404 — subprocess is the whole point
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-THUMBPRINT_RE = re.compile(r"^[A-F0-9]{40}$")
+from entrabot.platform import wincert
 
-KSP_TPM = "tpm"
-KSP_SOFTWARE = "software"
+KSP_TPM = wincert.KSP_TPM
+KSP_SOFTWARE = wincert.KSP_SOFTWARE
 VALID_KSPS = {KSP_TPM, KSP_SOFTWARE}
 
-PROVIDER_TPM = "Microsoft Platform Crypto Provider"
-PROVIDER_SOFTWARE = "Microsoft Software Key Storage Provider"
+DEFAULT_SUBJECT = "CN=entrabot-blueprint"
+DEFAULT_FRIENDLY_NAME = "Entrabot Blueprint"
 
 
 class GenerateCertError(RuntimeError):
-    pass
-
-
-class PowerShellError(GenerateCertError):
-    pass
-
-
-class ThumbprintValidationError(GenerateCertError):
-    pass
+    """The certificate could not be created or read back."""
 
 
 @dataclass(frozen=True)
@@ -58,102 +54,39 @@ class GenerateResult:
     der_path: Path | None = None  # public cert DER, if exported
 
 
-def _run_pwsh(script: str) -> subprocess.CompletedProcess:
-    """Invoke pwsh -NoProfile -Command <script>. Returns the result."""
-    return subprocess.run(  # noqa: S603 — fixed argv, controlled inputs
-        ["pwsh", "-NoProfile", "-NonInteractive", "-Command", script],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+def generate(
+    *,
+    subject: str,
+    days_valid: int,
+    ksp: str,
+    friendly_name: str = DEFAULT_FRIENDLY_NAME,
+) -> GenerateResult:
+    """Create a certificate on exactly this key store. No fallback.
 
-
-def probe_tpm_ready() -> bool:
-    """True iff ``Get-Tpm`` reports the TPM is present and ready.
-
-    Falls back to ``False`` on any error — the caller picks the software
-    KSP and logs the fallback reason.
-    """
-    result = _run_pwsh("(Get-Tpm).TpmReady")
-    if result.returncode != 0:
-        return False
-    return result.stdout.strip().lower() == "true"
-
-
-def _build_command(*, subject: str, days_valid: int, ksp: str) -> list[str]:
-    provider = PROVIDER_TPM if ksp == KSP_TPM else PROVIDER_SOFTWARE
-    # NonExportable is the meaningful guarantee for the TPM path; harmless
-    # to set on the software path too — DPAPI binds the private key to the
-    # user profile either way. We add it on TPM because the plan's threat
-    # model assumes the TPM key is the strongest baseline.
-    extra = "-KeyExportPolicy NonExportable " if ksp == KSP_TPM else ""
-    pwsh_block = (
-        "$ErrorActionPreference = 'Stop'; "
-        f"$cert = New-SelfSignedCertificate -Subject '{subject}' "
-        f"-CertStoreLocation Cert:\\CurrentUser\\My "
-        f"-Provider '{provider}' "
-        f"{extra}"
-        # ── HARD-LOCKED CRYPTO PARAMS (D9) ────────────────────────────
-        "-KeyAlgorithm RSA "
-        "-KeyLength 2048 "
-        "-HashAlgorithm SHA256 "
-        "-KeyUsage DigitalSignature "
-        "-KeyUsageProperty Sign "
-        # ───────────────────────────────────────────────────────────────
-        f"-NotAfter (Get-Date).AddDays({days_valid}); "
-        "Write-Output $cert.Thumbprint"
-    )
-    return ["pwsh", "-NoProfile", "-NonInteractive", "-Command", pwsh_block]
-
-
-def generate(*, subject: str, days_valid: int, ksp: str) -> GenerateResult:
-    """Generate a Blueprint cert in ``Cert:\\CurrentUser\\My``.
-
-    Args:
-        subject: ``Subject`` for ``New-SelfSignedCertificate`` (e.g.,
-            ``"CN=entrabot-blueprint"``).
-        days_valid: lifetime in days.
-        ksp: ``"tpm"`` or ``"software"``. The caller decides; this
-            function does not auto-fallback (use ``probe_tpm_ready``
-            first).
-
-    Returns:
-        :class:`GenerateResult` with the SHA-1 thumbprint and the
-        chosen KSP.
+    Raises:
+        ValueError: ``ksp`` is not ``"tpm"`` or ``"software"``.
+        GenerateCertError: the certificate could not be created or its key can't sign.
     """
     if ksp not in VALID_KSPS:
         raise ValueError(f"ksp must be one of {sorted(VALID_KSPS)}, got: {ksp!r}")
-
-    cmd = _build_command(subject=subject, days_valid=days_valid, ksp=ksp)
-    result = subprocess.run(  # noqa: S603 — fixed argv, validated args
-        cmd, capture_output=True, text=True, check=False
-    )
-    if result.returncode != 0:
-        raise PowerShellError(
-            f"New-SelfSignedCertificate failed: {result.stderr.strip() or '(no stderr)'}"
+    try:
+        cert = wincert.create_signing_cert_with_ksp(
+            subject=subject, friendly_name=friendly_name, days=days_valid, ksp=ksp
         )
-
-    raw = result.stdout.strip()
-    if "\n" in raw or "\r" in raw:
-        raise ThumbprintValidationError(
-            f"thumbprint stdout contains line breaks (corruption suspected): {raw!r}"
-        )
-    if not THUMBPRINT_RE.match(raw):
-        raise ThumbprintValidationError(f"thumbprint validation failed — not 40 hex chars: {raw!r}")
-
-    return GenerateResult(thumbprint=raw, ksp=ksp)
+    except wincert.WinCertError as exc:
+        raise GenerateCertError(str(exc)) from exc
+    return GenerateResult(thumbprint=cert.sha1_hex, ksp=cert.ksp)
 
 
 def export_der(thumbprint: str, dest: Path) -> Path:
-    """Export the public cert DER bytes for upload to the Blueprint app."""
-    pwsh = (
-        "$ErrorActionPreference = 'Stop'; "
-        f"$c = Get-Item Cert:\\CurrentUser\\My\\{thumbprint}; "
-        f"[IO.File]::WriteAllBytes('{dest}', $c.GetRawCertData())"
-    )
-    result = _run_pwsh(pwsh)
-    if result.returncode != 0:
-        raise PowerShellError(f"Cert export failed: {result.stderr.strip() or '(no stderr)'}")
+    """Write the certificate's public DER, read in-process from the store."""
+    try:
+        cert = wincert.find_cert(thumbprint)
+    except wincert.WinCertError as exc:
+        raise GenerateCertError(str(exc)) from exc
+    if cert is None:
+        raise GenerateCertError("The certificate is not in this user's certificate store.")
+    dest.write_bytes(cert.der)
     return dest
 
 
@@ -164,32 +97,50 @@ def compute_x5t_s256(der_bytes: bytes) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--subject", default="CN=entrabot-blueprint")
+    parser = argparse.ArgumentParser(
+        description="Create a non-exportable signing certificate in Cert:\\CurrentUser\\My."
+    )
+    parser.add_argument("--subject", default=DEFAULT_SUBJECT)
     parser.add_argument("--days", type=int, default=365)
     parser.add_argument(
         "--ksp",
         choices=sorted(VALID_KSPS),
         default=None,
-        help="If omitted, auto-probes TPM and falls back to software.",
+        help="Pin the key store. If omitted, the TPM is tried first, then software.",
     )
+    parser.add_argument("--friendly-name", default=DEFAULT_FRIENDLY_NAME)
     parser.add_argument("--export-der", type=Path, default=None)
     args = parser.parse_args(argv)
 
-    ksp = args.ksp
-    if ksp is None:
-        ksp = KSP_TPM if probe_tpm_ready() else KSP_SOFTWARE
-        print(f"TPM probe: chose KSP={ksp}", file=sys.stderr)
+    try:
+        if args.ksp is None:
+            cert, reason = wincert.create_signing_cert(
+                subject=args.subject,
+                friendly_name=args.friendly_name,
+                days=args.days,
+                prefer_tpm=True,
+            )
+            if reason:
+                print(
+                    f"  TPM not used: {reason}. The key is in the software key store.",
+                    file=sys.stderr,
+                )
+        else:
+            cert = wincert.create_signing_cert_with_ksp(
+                subject=args.subject,
+                friendly_name=args.friendly_name,
+                days=args.days,
+                ksp=args.ksp,
+            )
+        if args.export_der is not None:
+            args.export_der.write_bytes(cert.der)
+    except (wincert.WinCertError, OSError) as exc:
+        print(f"  ERROR: {exc}", file=sys.stderr)
+        return 1
 
-    result = generate(subject=args.subject, days_valid=args.days, ksp=ksp)
-    print(f"thumbprint={result.thumbprint}")
-    print(f"ksp={result.ksp}")
-
-    if args.export_der is not None:
-        export_der(result.thumbprint, args.export_der)
-        der = args.export_der.read_bytes()
-        print(f"x5t_s256={compute_x5t_s256(der)}")
-
+    print(f"thumbprint={cert.sha1_hex}")
+    print(f"ksp={cert.ksp}")
+    print(f"x5t_s256={cert.x5t_s256}")
     return 0
 
 

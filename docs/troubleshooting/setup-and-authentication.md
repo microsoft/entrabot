@@ -18,11 +18,15 @@ command is safe on a configured machine. Pass `--teams-user` or `--switch-user` 
 change the sponsor, or `--keep-memory-local` to go back to local storage. Setup writes the
 rest of `.env` from scratch, so lines you added by hand are dropped.
 
-For Windows, use the native Windows launcher:
+On Windows, run setup again with no parameters. It recognises the agent this PC is
+already set up for, keeps its sponsors and memory setting, and repairs what is broken:
 
-```powershell
-scripts\setup-windows.cmd -UseBlueprint <blueprint-app-id>
+```bat
+scripts\setup-windows.cmd
 ```
+
+Pass `-Sponsor <email>` to add a sponsor, `-KeepMemoryLocal` to go back to local
+storage, or `-UseBlueprint <blueprint-app-id>` to connect this PC to a different agent.
 
 If setup reports that provisioning succeeded but the smoke test failed, allow
 time for a newly assigned Teams or Exchange license to propagate, then run:
@@ -68,7 +72,7 @@ Check:
 4. On Windows, both certificate thumbprint variables are present.
 5. The MCP host was restarted after configuration changed.
 
-Use `./status.sh` or `.\status-windows.ps1` for resource-chain health, then
+Use `./status.sh`, or on Windows `scripts\setup-windows.cmd -Diagnose`, for resource-chain health, then
 `whoami` for the active runtime session.
 
 ## Three-hop authentication fails

@@ -212,3 +212,87 @@ class TestBlock:
             env_overrides={"ENTRABOT_KEEP_MEMORY_LOCAL": "1"},
         )
         assert result.returncode == 2, result.stderr
+
+
+def _load_hook_module():
+    """Import the hook script as a module, for the checks that need no subprocess."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("block_local_memory_write", HOOK_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestWindowsPathSpelling:
+    """Windows file names are case-insensitive, so one memory file has many spellings.
+
+    The check compared path parts exactly. A path with a lowercase drive letter, or any
+    other difference in case from what ``Path.home()`` reports, named the same file and was
+    let through. ``PureWindowsPath`` makes the Windows rules testable on any platform.
+    """
+
+    ROOT = r"C:\Users\Jo\.claude\projects"
+
+    @pytest.mark.parametrize(
+        "spelling",
+        [
+            r"C:\Users\Jo\.claude\projects\my-slug\memory\note.md",
+            r"c:\Users\Jo\.claude\projects\my-slug\memory\note.md",
+            r"C:\USERS\JO\.CLAUDE\PROJECTS\my-slug\MEMORY\note.md",
+            r"c:/users/jo/.claude/projects/my-slug/Memory/sub/note.md",
+        ],
+    )
+    def test_every_spelling_of_a_memory_path_is_recognised(self, spelling: str) -> None:
+        from pathlib import PureWindowsPath
+
+        hook = _load_hook_module()
+
+        assert hook._is_memory_path_under(
+            PureWindowsPath(spelling), PureWindowsPath(self.ROOT), ignore_case=True
+        )
+
+    @pytest.mark.parametrize(
+        "elsewhere",
+        [
+            r"c:\Users\Jo\.claude\projects\my-slug\notes\memory.md",
+            r"c:\Users\Someone\.claude\projects\my-slug\memory\note.md",
+            r"d:\Users\Jo\.claude\projects\my-slug\memory\note.md",
+            r"c:\Users\Jo\.claude\projects\memory",
+        ],
+    )
+    def test_other_paths_are_still_not_memory(self, elsewhere: str) -> None:
+        from pathlib import PureWindowsPath
+
+        hook = _load_hook_module()
+
+        assert not hook._is_memory_path_under(
+            PureWindowsPath(elsewhere), PureWindowsPath(self.ROOT), ignore_case=True
+        )
+
+    def test_comparison_stays_exact_where_names_are_case_sensitive(self) -> None:
+        from pathlib import PurePosixPath
+
+        hook = _load_hook_module()
+        root = PurePosixPath("/home/jo/.claude/projects")
+
+        assert hook._is_memory_path_under(
+            PurePosixPath("/home/jo/.claude/projects/slug/memory/n.md"), root, ignore_case=False
+        )
+        assert not hook._is_memory_path_under(
+            PurePosixPath("/home/jo/.claude/projects/slug/Memory/n.md"), root, ignore_case=False
+        )
+        assert not hook._is_memory_path_under(
+            PurePosixPath("/home/JO/.claude/projects/slug/memory/n.md"), root, ignore_case=False
+        )
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="needs real Windows paths")
+    def test_lowercase_drive_and_mixed_case_are_blocked_on_real_windows(self) -> None:
+        path = _home_memory_path()
+        respelled = path[0].swapcase() + path[1:].replace("memory", "MEMORY")
+        assert respelled != path
+
+        result = _run_hook({"tool_name": "Write", "tool_input": {"file_path": respelled}})
+
+        assert result.returncode == 2, result.stderr

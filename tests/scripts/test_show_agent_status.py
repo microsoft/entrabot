@@ -29,6 +29,25 @@ def _load_module():
     spec.loader.exec_module(status_mod)
 
 
+@pytest.fixture(autouse=True)
+def _local_certificate_is_healthy(monkeypatch):
+    """These tests mock a fully healthy agent: state, token and Graph. On Windows the
+    status also looks in the real certificate store, so mock that too, or the result
+    depends on what the test machine happens to hold. Patched on ``wincert`` itself
+    because each test re-executes the status module, which would undo a patch there.
+    ``TestWindowsCertificateSources`` covers the check's own outcomes on every platform.
+    """
+    from entrabot.platform import wincert
+
+    monkeypatch.setattr(
+        wincert,
+        "cert_health",
+        lambda sha1: wincert.CertHealth(
+            status="ok", days_left=300, not_after=None, message="certificate is ok"
+        ),
+    )
+
+
 def _json_resp(status: int, body: dict | None = None) -> MagicMock:
     r = MagicMock()
     r.status_code = status
@@ -59,6 +78,10 @@ _FAKE_CERT_THUMB = (
     base64.urlsafe_b64encode(hashlib.sha256(_FAKE_CERT_DER).digest()).rstrip(b"=").decode()
 )
 STATE["BLUEPRINT_CERT_THUMBPRINT"] = _FAKE_CERT_THUMB
+
+from entrabot.platform import wincert as _wincert  # noqa: E402
+
+_REAL_CERT_HEALTH = _wincert.cert_health
 
 SPONSORS = [
     {
@@ -183,9 +206,7 @@ class TestShowStatusJson:
         assert data["health"]["failed"] == 0
         assert data["licenses"][0]["skuPartNumber"] == "ENTERPRISEPACK"
         assert data["permissions"][0]["resourceName"] == "Microsoft Graph"
-        assert (
-            data["key_credentials"][0]["displayName"] == "EntraBot Device Certificate - TestHost"
-        )
+        assert data["key_credentials"][0]["displayName"] == "EntraBot Device Certificate - TestHost"
         assert data["key_credentials"][0]["matchesLocalBlueprintCert"] is True
 
 
@@ -235,3 +256,212 @@ class TestCLIHelp:
         with pytest.raises(SystemExit) as exc:
             status_mod.main(["--help"])
         assert exc.value.code == 0
+
+
+class TestWindowsCertificateSources:
+    """Windows setup records the Blueprint certificate in .env, not in the state file,
+    and the key lives in the certificate store."""
+
+    def _snapshot(self, monkeypatch, *, state=None, windows=False, health=None):
+        _load_module()
+        values = dict(STATE if state is None else state)
+        monkeypatch.setattr(status_mod, "get_state", lambda key: values.get(key))
+        monkeypatch.setattr(status_mod, "graph_request", _fake_graph)
+        monkeypatch.setattr(status_mod, "_is_windows", lambda: windows)
+        if health is not None:
+            from entrabot.platform import wincert
+
+            monkeypatch.setattr(wincert, "cert_health", lambda sha1: health)
+        return status_mod._snapshot("tok")
+
+    def _check(self, snapshot, name):
+        return next(c for c in snapshot["health"]["checks"] if c["name"] == name)
+
+    def test_thumbprint_from_env_counts_as_the_local_certificate(self, monkeypatch):
+        state = {k: v for k, v in STATE.items() if k != "BLUEPRINT_CERT_THUMBPRINT"}
+        monkeypatch.setenv("ENTRABOT_BLUEPRINT_CERT_THUMBPRINT", _FAKE_CERT_THUMB)
+
+        snapshot = self._snapshot(monkeypatch, state=state)
+
+        certificate = self._check(snapshot, "Certificate")
+        assert certificate["status"] == "pass", certificate
+        assert snapshot["key_credentials"][0]["matchesLocalBlueprintCert"] is True
+
+    def test_no_local_key_check_off_windows(self, monkeypatch):
+        snapshot = self._snapshot(monkeypatch, windows=False)
+        assert "Local certificate" not in {c["name"] for c in snapshot["health"]["checks"]}
+
+    @pytest.mark.parametrize(
+        ("status", "expected"),
+        [("ok", "pass"), ("expiring", "warn"), ("expired", "fail"), ("missing", "fail")],
+    )
+    def test_windows_reports_the_local_certificate_and_its_expiry(
+        self, monkeypatch, status, expected
+    ):
+        from entrabot.platform import wincert
+
+        health = wincert.CertHealth(
+            status=status, days_left=12, not_after=None, message=f"certificate is {status}"
+        )
+        snapshot = self._snapshot(monkeypatch, windows=True, health=health)
+
+        local = self._check(snapshot, "Local certificate")
+        assert local["status"] == expected
+        assert local["detail"] == f"certificate is {status}"
+
+    def test_windows_with_nothing_configured_skips_like_the_other_checks(self, monkeypatch):
+        monkeypatch.delenv("ENTRABOT_BLUEPRINT_CERT_SHA1", raising=False)
+        snapshot = self._snapshot(monkeypatch, state={"TENANT_ID": "tenant-111"}, windows=True)
+
+        local = self._check(snapshot, "Local certificate")
+        assert local["status"] == "skip"
+        assert self._check(snapshot, "Certificate")["status"] == "skip"
+
+    def test_windows_with_a_blueprint_but_no_certificate_configured_fails(self, monkeypatch):
+        # The agent is provisioned but this machine can't sign for it: a real failure.
+        from entrabot.platform import wincert
+
+        monkeypatch.delenv("ENTRABOT_BLUEPRINT_CERT_SHA1", raising=False)
+        monkeypatch.setattr(wincert, "cert_health", _REAL_CERT_HEALTH)
+        snapshot = self._snapshot(monkeypatch, windows=True)
+
+        local = self._check(snapshot, "Local certificate")
+        assert local["status"] == "fail"
+        assert "ENTRABOT_BLUEPRINT_CERT_SHA1" in local["detail"]
+        assert snapshot["health"]["failed"] >= 1
+
+    def test_mocked_healthy_agent_has_no_failures_on_windows(self, monkeypatch):
+        # What test_json_output asserts, made explicit for Windows on every platform.
+        snapshot = self._snapshot(monkeypatch, windows=True)
+        assert self._check(snapshot, "Local certificate")["status"] == "pass"
+        assert snapshot["health"]["failed"] == 0
+
+    def test_windows_store_failure_is_a_warning_not_a_crash(self, monkeypatch):
+        from entrabot.platform import wincert
+
+        _load_module()
+        monkeypatch.setattr(status_mod, "get_state", lambda key: STATE.get(key))
+        monkeypatch.setattr(status_mod, "graph_request", _fake_graph)
+        monkeypatch.setattr(status_mod, "_is_windows", lambda: True)
+
+        def broken(sha1):
+            raise wincert.WinCertError("could not open the certificate store")
+
+        monkeypatch.setattr(wincert, "cert_health", broken)
+        snapshot = status_mod._snapshot("tok")
+        local = self._check(snapshot, "Local certificate")
+        assert local["status"] == "warn" and "certificate store" in local["detail"]
+
+
+class _Stream:
+    """A stand-in for stdout that says whether it is a terminal."""
+
+    def __init__(self, tty: bool) -> None:
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+
+class TestColourOnlyWhereItCanBeDrawn:
+    """The PASS/FAIL labels are coloured with ANSI escapes. Written to a pipe, a file, an SSH
+    session's captured output or a classic Windows console without VT processing, those
+    escapes arrive as literal ``[32mPASS[0m``. Colour is for a terminal that can draw it."""
+
+    def _healthy_run(self, argv: list[str]) -> int:
+        _load_module()
+        with (
+            patch.object(status_mod, "get_existing_graph_token", return_value="tok"),
+            patch.object(status_mod, "get_state", side_effect=lambda key: STATE.get(key)),
+            patch.object(status_mod, "graph_request", side_effect=_fake_graph),
+        ):
+            return status_mod.main(argv)
+
+    def test_output_that_is_not_a_terminal_gets_plain_labels(self, capsys):
+        self._healthy_run(["--health-only"])
+
+        out = capsys.readouterr().out
+        assert "\033" not in out
+        assert "PASS" in out
+
+    def test_the_full_report_is_plain_too(self, capsys):
+        self._healthy_run([])
+
+        assert "\033" not in capsys.readouterr().out
+
+    def test_a_terminal_gets_colour(self, capsys, monkeypatch):
+        _load_module()
+        monkeypatch.setattr(status_mod, "_use_color", lambda stream=None: True)
+        with (
+            patch.object(status_mod, "get_existing_graph_token", return_value="tok"),
+            patch.object(status_mod, "get_state", side_effect=lambda key: STATE.get(key)),
+            patch.object(status_mod, "graph_request", side_effect=_fake_graph),
+        ):
+            status_mod.main(["--health-only"])
+
+        assert "\033[32mPASS\033[0m" in capsys.readouterr().out
+
+    def test_json_is_never_coloured(self, capsys, monkeypatch):
+        _load_module()
+        monkeypatch.setattr(status_mod, "_use_color", lambda stream=None: True)
+        with (
+            patch.object(status_mod, "get_existing_graph_token", return_value="tok"),
+            patch.object(status_mod, "get_state", side_effect=lambda key: STATE.get(key)),
+            patch.object(status_mod, "graph_request", side_effect=_fake_graph),
+        ):
+            status_mod.main(["--json"])
+
+        out = capsys.readouterr().out
+        assert "\033" not in out
+        json.loads(out)
+
+    def test_not_a_terminal_means_no_colour(self, monkeypatch):
+        _load_module()
+        monkeypatch.delenv("NO_COLOR", raising=False)
+
+        assert status_mod._use_color(_Stream(tty=False)) is False
+
+    def test_no_color_is_honoured_even_on_a_terminal(self, monkeypatch):
+        _load_module()
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(status_mod, "_is_windows", lambda: False)
+
+        assert status_mod._use_color(_Stream(tty=True)) is False
+
+    def test_a_posix_terminal_gets_colour(self, monkeypatch):
+        _load_module()
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setattr(status_mod, "_is_windows", lambda: False)
+
+        assert status_mod._use_color(_Stream(tty=True)) is True
+
+    @pytest.mark.parametrize(("vt_enabled", "expected"), [(True, True), (False, False)])
+    def test_a_classic_windows_console_gets_colour_only_if_vt_can_be_enabled(
+        self, monkeypatch, vt_enabled, expected
+    ):
+        _load_module()
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.delenv("WT_SESSION", raising=False)
+        monkeypatch.setattr(status_mod, "_is_windows", lambda: True)
+        monkeypatch.setattr(status_mod, "_enable_windows_vt", lambda: vt_enabled)
+
+        assert status_mod._use_color(_Stream(tty=True)) is expected
+
+    def test_windows_terminal_gets_colour_without_asking(self, monkeypatch):
+        _load_module()
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setenv("WT_SESSION", "abc")
+        monkeypatch.setattr(status_mod, "_is_windows", lambda: True)
+
+        def _boom() -> bool:
+            raise AssertionError("Windows Terminal always draws colour; no need to ask")
+
+        monkeypatch.setattr(status_mod, "_enable_windows_vt", _boom)
+
+        assert status_mod._use_color(_Stream(tty=True)) is True
+
+    def test_a_stream_that_cannot_say_is_treated_as_not_a_terminal(self, monkeypatch):
+        _load_module()
+        monkeypatch.delenv("NO_COLOR", raising=False)
+
+        assert status_mod._use_color(object()) is False

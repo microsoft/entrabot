@@ -490,3 +490,42 @@ class TestNextRunAt:
         now = datetime(2026, 4, 17, 0, 0, tzinfo=UTC)
         nxt = next_run_at(now=now)
         assert nxt == datetime(2026, 4, 18, 0, 0, tzinfo=UTC)
+
+
+class TestArchiveOnWindowsLocale:
+    """The summary is full of emoji and people's names, and Windows defaults to cp1252.
+
+    Archiving happens before sending, so an archive that can't encode the HTML meant the
+    daily summary email never went out on a Windows machine using local memory.
+    """
+
+    def test_archives_the_real_rendered_summary(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from entrabot.storage.backend import get_backend
+        from tests.locale_codec import force_locale_codec, force_windows_newlines
+
+        force_locale_codec(monkeypatch)
+        force_windows_newlines(monkeypatch)
+        buckets = {
+            "needs_you": [
+                _entry(
+                    ts="2026-04-16T10:00:00+00:00",
+                    channel="teams",
+                    direction="inbound",
+                    sender="José",
+                    summary="José asked about the Zürich offsite — “urgent”",
+                )
+            ],
+            "handled": [],
+            "heads_up": [],
+        }
+        html = render_summary_html(buckets, day="2026-04-16")
+        assert not html.isascii(), "the rendered summary is expected to carry emoji headings"
+
+        key = archive_summary(day="2026-04-16", html=html, buckets=buckets)
+
+        assert "\n" in html, "the rendered summary is expected to span lines"
+        assert get_backend().read_text(key) == html
+        # Byte for byte what a blob store would hold: UTF-8, and no "\r" added on Windows.
+        assert (tmp_data_dir / key).read_bytes() == html.encode("utf-8")

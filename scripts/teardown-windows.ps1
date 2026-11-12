@@ -1,92 +1,138 @@
-﻿<#
+<#
 .SYNOPSIS
-  EntraBot — Windows teardown. Reverse of setup-windows.ps1.
+  Entrabot - disconnect this computer from the agent (Windows).
 
 .DESCRIPTION
-  Removes:
-    - Blueprint cert(s) from Cert:\CurrentUser\My matching the
-      Subject CN=entrabot-blueprint.
-    - %LOCALAPPDATA%\entrabot\ data dir.
-    - .env BLUEPRINT_CERT_* lines (preserves the rest of the file).
-    - MSAL cache.
-    - MCP registration entries from .mcp.json and Copilot's mcp-config.json.
+  By default this DISCONNECTS THIS COMPUTER and nothing else:
 
-  Does NOT delete the Entra app registrations (Blueprint / Agent
-  Identity / Agent User) — those persist in the tenant. Use the
-  cleanup-orphans.sh equivalent in the cloud admin portal.
+    - This computer's certificate is removed from the agent's Blueprint in Microsoft
+      Entra, so it stops being trusted now instead of when it expires. The agent's other
+      computers keep working.
+    - The certificate and its private key are deleted from this computer. It is chosen by
+      the thumbprint in .env, so another agent's certificate is never touched.
+    - The "entrabot" entry is removed from .mcp.json and from GitHub Copilot CLI's
+      mcp-config.json. Every other entry is kept.
+    - .env and .entrabot-state.json are backed up next to the originals, then removed.
+    - This computer's setup (Provisioner) certificate is retired: removed from the
+      Provisioner app in Microsoft Entra and deleted here with its private key. Setup signs
+      in with it and it can manage applications in your tenant, so it should not stay on a
+      computer you are done with. It is kept only if another Entrabot agent on this
+      computer still uses it, or if you pass -KeepSetupCredential.
+
+  The agent itself, its memory, and Entrabot's data folder are NOT touched unless you ask:
+
+    -DeleteAgent   also deletes the agent from your tenant (Agent User, Agent Identity,
+                   Blueprint) for every computer that uses it. This cannot be undone.
+    -PurgeData     also deletes Entrabot's data folder on this computer
+                   (%LOCALAPPDATA%\entrabot): local memory, logs, and Entrabot's private
+                   copies of Python and the Azure CLI. The project's .venv then needs
+                   scripts\setup-windows.cmd to rebuild it.
+
+  It says what it will remove and asks first. If Microsoft Entra cannot be reached, the
+  local cleanup still completes and the report says exactly what is still listed there and
+  how to remove it.
+
+  This script is a thin wrapper. The work is done by:
+      python -m entrabot.winsetup teardown
+  It runs on the Windows PowerShell 5.1 that ships with Windows, and on PowerShell 7.
+
+  Exit codes: 0 done or nothing to do, 1 finished with something left to do, 2 usage,
+  130 cancelled.
+
+.PARAMETER DeleteAgent
+  Also delete the agent from the tenant. Cannot be undone.
+
+.PARAMETER PurgeData
+  Also delete Entrabot's data folder on this computer.
+
+.PARAMETER KeepSetupCredential
+  Keep this computer's setup (Provisioner) certificate. Use it when you are about to set
+  this computer up again; otherwise let teardown retire it.
+
+.PARAMETER Yes
+  Do not ask. Only the scopes named by the other parameters are removed.
+
+.PARAMETER Force
+  Older name for -Yes.
+
+.PARAMETER Help
+  Show this help.
+
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\teardown-windows.ps1
+
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\teardown-windows.ps1 -DeleteAgent
 #>
 
-[CmdletBinding()]
-param([switch]$Force, [switch]$Help)
+[CmdletBinding(PositionalBinding = $false)]
+param(
+    [switch]$DeleteAgent,
+    [switch]$PurgeData,
+    [switch]$KeepSetupCredential,
+    [switch]$Yes,
+    [switch]$Force,
+    [switch]$Help
+)
 
-# Detect the "blue Windows PowerShell 5.1 vs black PowerShell 7" trap before
-# strict mode trips on PS-7-only automatic variables ($IsWindows, $IsLinux).
-if ($PSVersionTable.PSVersion.Major -lt 7) {
-    Write-Host ""
-    Write-Host "ERROR: This script needs PowerShell 7+, but you launched it from" -ForegroundColor Red
-    Write-Host "       Windows PowerShell $($PSVersionTable.PSVersion)." -ForegroundColor Red
-    Write-Host ""
-    Write-Host "Two different products on Windows — easy to confuse:" -ForegroundColor Yellow
-    Write-Host "  - 'Windows PowerShell' (blue icon, pre-installed) is 5.1, NOT this." -ForegroundColor Yellow
-    Write-Host "  - 'PowerShell' / pwsh (black icon, separate install) is 7+, USE THIS." -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "How to fix:" -ForegroundColor Cyan
-    Write-Host "  Close this window. Open Start, type 'pwsh' (NOT 'PowerShell'),"
-    Write-Host "  pick the result with the BLACK icon, and re-run the same command."
-    Write-Host ""
-    Write-Host "  If pwsh is missing, run scripts\prereqs-windows.ps1 first to install it."
-    Write-Host ""
+# Windows PowerShell 5.1 writes progress records as CLIXML to stderr when its output is
+# not a console. Nothing here needs a progress bar.
+$ProgressPreference = 'SilentlyContinue'
+
+# =============================================================================
+# Pure helpers, loadable by the tests (dot-source this file). This file must stay
+# ASCII-only: Windows PowerShell 5.1 reads a file without a byte-order mark in the
+# ANSI code page, where one non-ASCII character is a parse error.
+# =============================================================================
+
+function Get-TeardownArguments {
+    # The argument list handed to `python -m entrabot.winsetup`. Values are separate
+    # array elements, so nothing is ever quoted by hand.
+    param(
+        [string]$ProjectRoot,
+        [bool]$DeleteAgent,
+        [bool]$PurgeData,
+        [bool]$KeepSetupCredential,
+        [bool]$AssumeYes,
+        [bool]$ShowEverything
+    )
+    $list = @('teardown', '--project-root', $ProjectRoot)
+    if ($DeleteAgent) { $list += '--delete-agent' }
+    if ($PurgeData) { $list += '--purge-data' }
+    if ($KeepSetupCredential) { $list += '--keep-setup-credential' }
+    if ($AssumeYes) { $list += '--yes' }
+    if ($ShowEverything) { $list += '--verbose' }
+    return $list
+}
+
+if ($MyInvocation.InvocationName -eq '.' -or $env:ENTRABOT_SETUP_FUNCTIONS_ONLY -eq '1') { return }
+
+if ($Help) {
+    Get-Help $PSCommandPath -Detailed
+    exit 0
+}
+
+$showEverything = ($VerbosePreference -ne 'SilentlyContinue')
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+# Strict mode makes reading $LASTEXITCODE an error until some native command has set it.
+$global:LASTEXITCODE = 0
+
+if ($env:OS -ne 'Windows_NT') {
+    Write-Host "ERROR: teardown-windows.ps1 must run on Windows. On macOS or Linux run scripts/teardown.sh." -ForegroundColor Red
     exit 1
 }
 
-$ErrorActionPreference = 'Stop'
-Set-StrictMode -Version Latest
-
-if ($Help) { Get-Help $PSCommandPath -Detailed; exit 0 }
-if (-not $IsWindows) { throw "teardown-windows.ps1 must run on Windows." }
-
 $ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
-
-if (-not $Force) {
-    $resp = Read-Host "Remove all local entrabot state on this machine? [y/N]"
-    if ($resp -notmatch '^[Yy]') { Write-Host "aborted."; exit 0 }
+$venvPython = Join-Path (Join-Path $ProjectRoot '.venv') 'Scripts\python.exe'
+if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
+    Write-Host "ERROR: Entrabot is not installed in this folder (no .venv), so there is nothing here for teardown to run with. Run scripts\setup-windows.cmd -BootstrapOnly, then run teardown again." -ForegroundColor Red
+    exit 1
 }
 
-# Remove certs by Subject — safer than thumbprint (which may be stale).
-Get-ChildItem Cert:\CurrentUser\My |
-    Where-Object { $_.Subject -eq 'CN=entrabot-blueprint' } |
-    ForEach-Object {
-        Write-Host "Removing cert $($_.Thumbprint)..."
-        Remove-Item $_.PSPath -Force
-    }
-
-# Local data dir.
-$dataDir = Join-Path $env:LOCALAPPDATA 'entrabot'
-if (Test-Path $dataDir) {
-    Write-Host "Removing $dataDir..."
-    Remove-Item -Recurse -Force $dataDir
-}
-
-# .env: strip BLUEPRINT_CERT_* lines but keep the rest.
-$envPath = Join-Path $ProjectRoot '.env'
-if (Test-Path $envPath) {
-    $kept = Get-Content $envPath | Where-Object {
-        $_ -notmatch '^(ENTRABOT_BLUEPRINT_CERT_THUMBPRINT|ENTRABOT_BLUEPRINT_CERT_SHA1|ENTRABOT_BLUEPRINT_KSP)='
-    }
-    $kept | Set-Content $envPath -Encoding utf8
-    Write-Host "Stripped BLUEPRINT_CERT_* from .env."
-}
-
-# Remove entrabot MCP entries (no unregister CLI; edit JSON directly).
-$VenvPython = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
-$pyExe = if (Test-Path $VenvPython) { $VenvPython } else { 'python' }
-$claudeMcp = Join-Path $ProjectRoot '.mcp.json'
-$copilotMcp = if ($env:COPILOT_HOME) { Join-Path $env:COPILOT_HOME 'mcp-config.json' } `
-              else { Join-Path $env:USERPROFILE '.copilot\mcp-config.json' }
-foreach ($target in @($claudeMcp, $copilotMcp)) {
-    if (Test-Path $target) {
-        & $pyExe -c "import json,sys,pathlib; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text() or '{}'); d.get('mcpServers',{}).pop('entrabot',None); p.write_text(json.dumps(d, indent=2))" $target
-    }
-}
-
-Write-Host "Teardown complete." -ForegroundColor Green
+$assumeYes = ([bool]$Yes) -or ([bool]$Force)
+$env:PYTHONUTF8 = '1'
+$env:PYTHONIOENCODING = 'utf-8'
+$handoff = @('-m', 'entrabot.winsetup') + @(Get-TeardownArguments -ProjectRoot $ProjectRoot -DeleteAgent ([bool]$DeleteAgent) -PurgeData ([bool]$PurgeData) -KeepSetupCredential ([bool]$KeepSetupCredential) -AssumeYes $assumeYes -ShowEverything $showEverything)
+& $venvPython @handoff
+exit $LASTEXITCODE

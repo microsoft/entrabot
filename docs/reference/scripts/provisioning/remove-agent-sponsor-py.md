@@ -35,14 +35,14 @@ python3 scripts/remove_agent_sponsor.py user@example.com --agent-object-id <AGEN
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `email` (positional) | yes | The sponsor's email address or UPN. |
+| `email` (positional) | yes | The sponsor's email address or UPN, or their Entra object ID. |
 | `--agent-object-id <id>` | no | Override the Agent Identity object ID read from `.entrabot-state.json`. |
 
 ## Effects
 
 - Mints a Provisioner Graph token from the certificate in the OS keystore.
-- Resolves the email/UPN to a directory user object (by `userPrincipalName`,
-  `mail`, `otherMails`, or `proxyAddresses`).
+- Resolves the argument to a directory user object: an object ID directly, an
+  address by `userPrincipalName`, `mail`, `otherMails`, or `proxyAddresses`.
 - Reads the current sponsor collection via
   `GET /beta/servicePrincipals/{agent}/microsoft.graph.agentIdentity/sponsors`.
 - Removes the resolved user via

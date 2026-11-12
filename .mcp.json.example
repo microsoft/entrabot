@@ -8,7 +8,7 @@
         "PERSONA_SATI_MCP_URL": "<your persona-sati base URL>",
         "PERSONA_SATI_MCP_TOKEN_COMMAND": "<absolute path to your persona-sati token command>"
       },
-      "description": "EntraBot Agent Identity — Teams tools + background DM/email poll"
+      "description": "EntraBot Agent Identity — Teams tools + background DM/email poll. On Windows the command is the absolute path to .venv\\Scripts\\entrabot-mcp.exe (backslashes doubled in JSON); scripts\\setup-windows.cmd writes this entry for you."
     },
     "persona-sati": {
       "type": "stdio",

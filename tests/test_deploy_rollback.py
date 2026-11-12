@@ -175,3 +175,70 @@ class TestRollbackPatchAlsoFails:
             )
 
         delete_old.assert_not_called()
+
+
+class TestSupportedEntryPoint:
+    """Running the script is the supported rotation: `python -m entrabot.winsetup rotate-cert`.
+
+    The transactional ``rotate()`` above is kept as a library for its callers. It removes
+    the old certificate in the same write that adds the new one, so it is not what
+    ``scripts/deploy-windows.ps1`` runs any more.
+    """
+
+    def test_main_runs_the_rotation_for_this_project_folder(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from entrabot.winsetup import cli
+
+        seen: list[list[str]] = []
+
+        def fake_main(argv: list[str]) -> int:
+            seen.append(list(argv))
+            return 3
+
+        monkeypatch.setattr(cli, "main", fake_main)
+
+        code = rotate_cert_windows.main(["--yes", "--verbose"])
+
+        assert code == 3
+        repo_root = str(_THIS.parents[1])
+        assert seen == [["rotate-cert", "--project-root", repo_root, "--yes", "--verbose"]]
+
+    def test_main_takes_only_the_rotation_flags(self) -> None:
+        with pytest.raises(SystemExit) as exit_info:
+            rotate_cert_windows.main(["--delete-agent"])
+        assert exit_info.value.code == 2
+
+
+class TestEnvFileIsUtf8OnAnyLocale:
+    """The settings file is UTF-8 (setup writes it that way). Read with the Windows ANSI code
+    page, a non-ASCII address elsewhere in the file stopped the rotation: the UTF-8 bytes of
+    an accented capital such as A-acute are not valid cp1252."""
+
+    def test_other_lines_survive_a_patch_on_a_cp1252_machine(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tests.locale_codec import force_locale_codec
+
+        env = tmp_path / ".env"
+        env.write_bytes(
+            "ENTRABOT_HUMAN_UPN=Ángel.Íñigo@zürich.example\n"
+            "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=ORIG\n"
+            "ENTRABOT_BLUEPRINT_CERT_SHA1=0000\n".encode()
+        )
+        force_locale_codec(monkeypatch)
+
+        rotate_cert_windows._patch_env(env, x5t="NEW", sha1="1111")
+
+        assert env.read_bytes() == (
+            "ENTRABOT_HUMAN_UPN=Ángel.Íñigo@zürich.example\n"
+            "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=NEW\n"
+            "ENTRABOT_BLUEPRINT_CERT_SHA1=1111\n".encode()
+        )
+        assert rotate_cert_windows._read_orig_thumbprints(env) == ("NEW", "1111")
+
+    def test_a_byte_order_mark_does_not_hide_the_first_key(self, tmp_path: Path) -> None:
+        env = tmp_path / ".env"
+        env.write_bytes(b"\xef\xbb\xbfENTRABOT_BLUEPRINT_CERT_THUMBPRINT=ORIG\n")
+
+        assert rotate_cert_windows._read_orig_thumbprints(env) == ("ORIG", "")

@@ -155,3 +155,93 @@ def test_stdout_stays_empty_and_the_token_never_appears(
     captured = capsys.readouterr()
     assert captured.out == "" and "Ensuring 25" in captured.err
     assert FAKE_TOKEN not in captured.err
+
+
+# --sha1: the certificate is read from the certificate store in-process, so no DER file
+# (and no path that could contain an apostrophe) is involved.
+
+SHA1 = "0123456789ABCDEF0123456789ABCDEF01234567"
+
+
+def _store_cert(der: bytes) -> Any:
+    from datetime import UTC, datetime, timedelta
+
+    from entrabot.platform import wincert
+
+    now = datetime.now(UTC)
+    return wincert.StoreCert(
+        sha1_hex=SHA1,
+        x5t_s256="x" * 43,
+        der=der,
+        subject="CN=entrabot-blueprint",
+        friendly_name="Entrabot Blueprint",
+        not_before=now - timedelta(minutes=10),
+        not_after=now + timedelta(days=365),
+        has_private_key=True,
+        ksp="tpm",
+    )
+
+
+@pytest.fixture
+def run_sha1(monkeypatch: Patch) -> Callable[..., tuple[int, FakeGraph]]:
+    from entrabot.platform import wincert
+
+    monkeypatch.setattr(
+        reg, "get_bootstrap_graph_token", lambda *, wait_for_propagation=True: FAKE_TOKEN
+    )
+    monkeypatch.setattr(socket, "gethostname", lambda: "fake-host.local")
+
+    def go(*entries: dict[str, Any], found: Any = "default", **graph: Any) -> tuple[int, FakeGraph]:
+        cert = _store_cert(THIS.der) if found == "default" else found
+        if isinstance(cert, Exception):
+            monkeypatch.setattr(wincert, "find_cert", raising(cert))
+        else:
+            monkeypatch.setattr(wincert, "find_cert", lambda sha1: cert)
+        fake = use_fake_graph(monkeypatch, FakeGraph(entries, **graph))
+        argv = ["--blueprint-object-id", FAKE_OBJECT_ID, "--sha1", SHA1]
+        return reg.main(argv, sleep=lambda _seconds: None), fake
+
+    return go
+
+
+def test_sha1_registers_the_certificate_from_the_store(
+    run_sha1: Callable[..., tuple[int, FakeGraph]], capsys: Capture
+) -> None:
+    code, graph = run_sha1(*EXISTING)
+
+    assert code == OK
+    assert graph.patch_bodies[0][2]["key"] == THIS.b64
+    assert SHA1 not in capsys.readouterr().err
+
+
+def test_sha1_not_in_the_store_is_a_usage_error_and_nothing_is_sent(
+    run_sha1: Callable[..., tuple[int, FakeGraph]], capsys: Capture
+) -> None:
+    code, graph = run_sha1(*EXISTING, found=None)
+
+    assert code == USAGE
+    assert graph.requests == []
+    err = capsys.readouterr().err
+    assert "certificate store" in err and SHA1 not in err
+
+
+def test_sha1_store_failure_is_a_usage_error(
+    run_sha1: Callable[..., tuple[int, FakeGraph]], capsys: Capture
+) -> None:
+    from entrabot.platform import wincert
+
+    code, graph = run_sha1(*EXISTING, found=wincert.WinCertError("Windows only"))
+
+    assert code == USAGE
+    assert graph.requests == []
+    assert "Windows only" in capsys.readouterr().err
+
+
+def test_exactly_one_of_der_and_sha1_is_required(tmp_path: Path) -> None:
+    der = tmp_path / "machine.cer"
+    der.write_bytes(THIS.der)
+    with pytest.raises(SystemExit) as neither:
+        reg.main(["--blueprint-object-id", FAKE_OBJECT_ID])
+    with pytest.raises(SystemExit) as both:
+        reg.main(["--blueprint-object-id", FAKE_OBJECT_ID, "--der", str(der), "--sha1", SHA1])
+    assert neither.value.code == 2 and both.value.code == 2

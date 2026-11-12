@@ -1,7 +1,7 @@
 # Installing EntraBot
 
-Platform-specific setup instructions. Run the prerequisites step first, then
-the one-command setup for your platform.
+Platform-specific setup instructions. On macOS, run the prerequisites step
+first, then the one-command setup. On Windows there is only the setup command.
 
 ---
 
@@ -17,76 +17,111 @@ the one-command setup for your platform.
 
 ## Windows
 
-### Prerequisites
-
-Run the automated prerequisite installer from any PowerShell terminal (5.1 or 7):
-
-```powershell
-.\scripts\prereqs-windows.ps1
-```
-
-This checks for and installs (via winget):
-
-| Tool | Why |
-|------|-----|
-| PowerShell 7+ | Required by setup-windows.ps1 |
-| Python 3.12+ | Runtime (rejects Microsoft Store stub) |
-| Git | Source control |
-| Azure CLI (`az`) | Entra provisioning |
-| VS Build Tools (C++ workload) | Compiles native Python packages (cffi, cryptography) |
-
-> **Note:** VS Build Tools is ~6 GB and takes 5–10 minutes. Use `-SkipBuildTools`
-> if you already have Visual Studio installed with the C++ workload.
-
-After prereqs install, **close and reopen your terminal** so PATH updates take
-effect.
+There is no prerequisites step. Nothing has to be installed first: no
+PowerShell 7, Python, Azure CLI, `winget`, or administrator rights on the PC.
 
 ### Setup
 
-From PowerShell 7 (`pwsh`), in the repo root:
+Double-click `scripts\setup-windows.cmd`, or run it from a terminal in the repo
+root:
 
-```powershell
-.\scripts\setup-windows.ps1 -NewChain -UpnSuffix workstation
+```bat
+scripts\setup-windows.cmd
 ```
 
-This provisions:
-1. Python venv + all dependencies
-2. Entra Agent Identity chain (Blueprint → Agent Identity → Agent User)
-3. Self-signed certificate (TPM-backed if available, otherwise Software KSP)
-4. M365 license assignment
-5. Graph permission grants (Chat, Mail, Files, Storage)
-6. `.env` file with cert thumbprint and agent config
-7. MCP registration for Claude Code (`.mcp.json`) and Copilot CLI (`~/.copilot/mcp-config.json`)
+The setup wizard asks a few questions. Each has a suggested answer; Enter
+accepts it. It then:
+
+1. Finds Python 3.12 or newer, or downloads a private, signature-checked copy,
+   and builds the project's `.venv`
+2. Signs you in to Microsoft (installing a private copy of the Azure CLI if
+   there is none)
+3. Creates or joins the Entra Agent Identity chain (Blueprint → Agent Identity
+   → Agent User), assigns a Teams-capable licence when one is free, and grants
+   the Graph permissions
+4. Creates this PC's certificate, with a non-exportable key, and registers it
+5. Writes `.env`, restricted to your account
+6. Registers the MCP server for Claude Code (`.mcp.json`) and Copilot CLI
+   (`~/.copilot/mcp-config.json`), and offers to install Git for Windows and
+   Claude Code if they are missing
+7. Tests that the agent can sign in and reach Teams
+
+Nothing is changed in your tenant until you confirm the review screen.
+Running setup again repairs or changes an existing setup.
+
+What you need: a Microsoft 365 tenant, an account that administers it (granting
+admin consent needs a Global Administrator or Privileged Role Administrator),
+and a free licence that includes Teams for the agent.
+
+#### Start the agent
+
+Double-click `start-entrabot.cmd` in the repo root.
 
 #### Certificate storage
 
-| Machine type | Key Storage Provider | Security |
+| The PC's TPM | Where the key is created | Protection |
 |---|---|---|
-| TPM 2.0 present (`Get-Tpm` → Ready) | Microsoft Platform Crypto Provider | Key never leaves hardware |
-| No TPM / VM | Microsoft Software Key Storage Provider | DPAPI-encrypted, bound to user profile |
+| Accepts a key | Microsoft Platform Crypto Provider | Non-exportable; the key never leaves the hardware |
+| Absent, or refuses the key | Microsoft Software Key Storage Provider | Non-exportable; protected by your Windows account |
 
-Both are at least as strong as the macOS Keychain baseline.
+Setup finds out by creating a key, which needs no administrator rights. The
+finish screen says which one you got.
 
 #### Common flags
 
-```powershell
-# Reuse an existing Blueprint from another machine
-.\scripts\setup-windows.ps1 -UseBlueprint <app-id>
+```bat
+rem Unattended: a new agent
+scripts\setup-windows.cmd -NewChain -UpnSuffix workstation -Yes
 
-# Enable Azure Blob Storage for operational data
-.\scripts\setup-windows.ps1 -NewChain -UpnSuffix workstation -UseCloudMemory
+rem Reuse an existing Blueprint from another machine
+scripts\setup-windows.cmd -UseBlueprint <app-id> -Yes
+
+rem Azure Blob Storage for operational data
+scripts\setup-windows.cmd -NewChain -UpnSuffix workstation -UseCloudMemory
+
+rem Check an existing setup. Changes nothing.
+scripts\setup-windows.cmd -Diagnose
 ```
+
+Full guide, every question the wizard asks, and what has and has not been
+tested: [docs/getting-started/windows.md](docs/getting-started/windows.md).
+
+### Optional extras
+
+`scripts\prereqs-windows.ps1` installs extras on request. It is not required
+before setup.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\prereqs-windows.ps1 -WithGit -WithClaudeCode
+```
+
+| Switch | Installs |
+|--------|----------|
+| `-WithGit` | Git for Windows, for your account. Claude Code needs it for this repo's hooks |
+| `-WithClaudeCode` | Claude Code |
+| `-WithWorkIq` | .NET SDK and the Microsoft Agent 365 CLI, for `-ConfigureA365WorkIq` |
+| `-WithBuildTools` | VS Build Tools (C++ workload, ~6 GB). Only if setup reports a package had to be compiled |
+
+### Certificate rotation
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\deploy-windows.ps1
+```
+
+The current certificate stays in use until the new one is proven to work.
 
 ### Teardown
 
 ```powershell
-.\scripts\teardown-windows.ps1
+powershell -ExecutionPolicy Bypass -File scripts\teardown-windows.ps1
 ```
 
-Removes Blueprint certificates from the Windows Certificate Store, deletes
-`%LOCALAPPDATA%\entrabot`, removes certificate settings from `.env`, and
-unregisters the MCP servers. It does **not** delete the tenant-side Agent User,
-Agent Identity, or Blueprint.
+Disconnects this PC: removes its certificate from the agent's Blueprint and
+from the Windows certificate store, removes the `entrabot` MCP entries, backs
+up then removes `.env` and `.entrabot-state.json`, and retires this PC's setup
+certificate (`-KeepSetupCredential` keeps it). It keeps the
+tenant-side Agent User, Agent Identity, and Blueprint unless you add
+`-DeleteAgent`, and keeps `%LOCALAPPDATA%\entrabot` unless you add `-PurgeData`.
 
 ---
 
@@ -181,12 +216,17 @@ accessed via the `keyring` Python package. Requires an active D-Bus session
 
 ## Verify Installation
 
-After setup completes on any platform, verify the three-hop flow works:
+Setup ends with this check on every platform. To run it again on Windows:
+
+```bat
+scripts\setup-windows.cmd -Diagnose
+```
+
+On macOS or Linux, verify the three-hop flow works:
 
 ```bash
 # Activate the venv
-# Windows: .\.venv\Scripts\Activate.ps1
-# Mac/Linux: source .venv/bin/activate
+source .venv/bin/activate
 
 # Test three-hop token acquisition
 python - <<'PY'
@@ -205,7 +245,8 @@ You should see a 40-character token prefix. If you get an AADSTS error, check:
 
 ### Boot the MCP server
 
-**Claude Code:** Open the project — it auto-loads from `.mcp.json`.
+**Claude Code:** Open the project — it auto-loads from `.mcp.json`. On Windows,
+double-click `start-entrabot.cmd`.
 
 **Copilot CLI:** Run `copilot` from the repo directory — it loads from
 `~/.copilot/mcp-config.json`.
@@ -216,13 +257,22 @@ You should see a 40-character token prefix. If you get an AADSTS error, check:
 
 ### Windows
 
+Start with `scripts\setup-windows.cmd -Diagnose`. Running
+`scripts\setup-windows.cmd` again repairs most problems.
+
 | Problem | Fix |
 |---------|-----|
-| `pip install` fails with "Microsoft Visual C++ required" | Run `prereqs-windows.ps1` — it installs VS Build Tools |
-| `entrabot-mcp.exe` locked during reinstall | Kill stale processes: `Get-Process entrabot-mcp \| Stop-Process` |
-| Python is the Microsoft Store stub | Install real Python via `winget install Python.Python.3.12` |
-| `Get-Tpm` requires admin | Use non-elevated PowerShell — the script falls back to Software KSP automatically |
-| 36 "missing YAML frontmatter" skill errors | Run from the correct repo directory; skill symlinks don't work on Windows |
+| "Entrabot setup cannot start on this PC" | Group Policy blocks PowerShell scripts. Ask IT to allow locally created scripts for your account |
+| Setup ends with "no Teams licence", or `403` on `/me/chats` | Make a Teams-capable licence available in the tenant, then run setup again |
+| The sign-in window never appears | Look behind the setup window, or run `scripts\setup-windows.cmd -DeviceCode` |
+| Setup says your account lacks admin rights | Sign in as a Global Administrator or Privileged Role Administrator |
+| Claude Code blocks every edit or Teams message | Git for Windows is missing: `scripts\prereqs-windows.ps1 -WithGit` |
+| `claude` is not recognized | Use `start-entrabot.cmd`, or run `scripts\prereqs-windows.ps1 -WithClaudeCode` |
+| "another instance is already running" | One Entrabot server per PC. Close the other assistant first |
+| The agent ignores someone in Teams | Add them as a sponsor: `scripts\setup-windows.cmd -Sponsor person@example.com` |
+| Certificate expired or missing | Run setup again. To replace one before it expires: `scripts\deploy-windows.ps1` |
+
+More, with causes: [docs/troubleshooting/windows.md](docs/troubleshooting/windows.md).
 
 ### macOS
 
@@ -244,4 +294,4 @@ You should see a 40-character token prefix. If you get an AADSTS error, check:
 |---------|-----|
 | AADSTS700024 (client assertion invalid) | Cert thumbprint mismatch — re-run setup to regenerate |
 | 403 on `wait_for_sponsor_dm` | Agent Identity missing `Application.Read.All` — re-run provisioning or grant manually |
-| MCP server exits silently | Check `~/.entrabot/logs/entrabot.log` for errors |
+| MCP server exits silently | Check `~/.entrabot/logs/entrabot.log` for errors (`%LOCALAPPDATA%\entrabot\logs` on Windows) |

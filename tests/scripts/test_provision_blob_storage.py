@@ -138,7 +138,7 @@ class TestEndToEndProvisionAllNew:
         all_calls = [c.args[0] for c in m.call_args_list]
         assert any(args[:3] == ["group", "create", "--name"] for args in all_calls)
         assert any(args[:3] == ["storage", "account", "create"] for args in all_calls)
-        assert any(args[:3] == ["storage", "container", "create"] for args in all_calls)
+        assert any(args[:3] == ["storage", "container-rm", "create"] for args in all_calls)
         assert any(args[:3] == ["role", "assignment", "create"] for args in all_calls)
 
     def test_idempotent_when_everything_exists(self) -> None:
@@ -158,7 +158,7 @@ class TestEndToEndProvisionAllNew:
         all_calls = [c.args[0] for c in m.call_args_list]
         assert not any(args[:3] == ["group", "create", "--name"] for args in all_calls)
         assert not any(args[:3] == ["storage", "account", "create"] for args in all_calls)
-        assert not any(args[:3] == ["storage", "container", "create"] for args in all_calls)
+        assert not any(args[:3] == ["storage", "container-rm", "create"] for args in all_calls)
 
 
 class TestExistingAccountInOtherResourceGroup:
@@ -410,3 +410,94 @@ class TestMainMutex:
         assert rc == 0
         assert m.call_args.kwargs["create_new_storage"] is True
         assert m.call_args.kwargs["storage_account"] is None
+
+
+class TestContainerUsesTheManagementPlane:
+    """The container is created through Azure Resource Manager, not the blob data plane.
+
+    ``az storage container create --auth-mode login`` is a data operation: Microsoft's docs
+    say an account Owner still needs an explicit data role for it, and it fails outright when
+    the account's firewall blocks the caller. The person running setup is a subscription
+    Owner or Contributor, which is exactly what the management-plane command needs.
+    """
+
+    def test_show_and_create_go_through_container_rm_in_the_accounts_group(self) -> None:
+        results = [
+            _ok(),  # account show
+            _err("not found"),  # container-rm show
+            _ok(),  # container-rm create
+            _ok('"/subscriptions/sub/resourceGroups/entrabot-rg/providers/x/acct"'),
+            _ok(),  # role assignment create
+        ]
+        with patch.object(provision_blob_storage, "_run_az", side_effect=results) as m:
+            provision_blob_storage.provision(tenant_id="tid-123", agent_user_object_id="oid-abc")
+        calls = [c.args[0] for c in m.call_args_list]
+        show, create = calls[1], calls[2]
+        for args in (show, create):
+            assert args[:2] == ["storage", "container-rm"]
+            assert args[args.index("--resource-group") + 1] == "entrabot-rg"
+            assert "--auth-mode" not in args
+        assert not any(args[:2] == ["storage", "container"] for args in calls)
+
+    def test_the_account_id_is_read_as_json(self) -> None:
+        with patch.object(
+            provision_blob_storage, "_run_az", return_value=_ok('"/subscriptions/s/acct"\n')
+        ) as m:
+            assert provision_blob_storage.get_storage_account_id("acct", "rg") == (
+                "/subscriptions/s/acct"
+            )
+        assert m.call_args.args[0][-2:] == ["-o", "json"]  # JSON, never TSV
+
+
+class TestSubscription:
+    def test_every_az_call_targets_the_chosen_subscription(self) -> None:
+        seen: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **_kwargs: object) -> MagicMock:
+            seen.append(cmd)
+            if cmd[1:4] == ["storage", "account", "show"] and "--query" in cmd:
+                return _ok('"/subscriptions/sub-9/acct"')
+            return _ok("[]")
+
+        with patch.object(provision_blob_storage.subprocess, "run", side_effect=fake_run):
+            provision_blob_storage.provision(
+                tenant_id="tid-123", agent_user_object_id="oid-abc", subscription="sub-9"
+            )
+        assert seen
+        for cmd in seen:
+            assert cmd[cmd.index("--subscription") + 1] == "sub-9"
+
+    def test_no_subscription_means_the_cli_default(self) -> None:
+        seen: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **_kwargs: object) -> MagicMock:
+            seen.append(cmd)
+            return _ok('"/subscriptions/x/acct"')
+
+        with patch.object(provision_blob_storage.subprocess, "run", side_effect=fake_run):
+            provision_blob_storage.provision(tenant_id="tid-123", agent_user_object_id="oid-abc")
+        assert not any("--subscription" in cmd for cmd in seen)
+
+    def test_cli_threads_subscription_and_location_through(self) -> None:
+        with patch.object(
+            provision_blob_storage, "provision", return_value=("https://x", "c")
+        ) as m:
+            rc = provision_blob_storage.main(
+                ["--tenant-id", "t", "--agent-user-object-id", "o", "--subscription", "sub-9",
+                 "--location", "westus2"]
+            )
+        assert rc == 0
+        assert m.call_args.kwargs["subscription"] == "sub-9"
+        assert m.call_args.kwargs["location"] == "westus2"
+
+
+def test_progress_lines_never_raise_on_a_console_that_cannot_encode_them() -> None:
+    # A cp1252 console can't draw the bullet and check mark the progress lines use.
+    import io
+
+    stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict")
+    with patch.object(provision_blob_storage.sys, "stderr", stream):
+        provision_blob_storage._eprint("  \u2022 Ensuring container...")
+        provision_blob_storage._eprint("    \u2713 created")
+    stream.flush()
+    assert b"created" in stream.buffer.getvalue()

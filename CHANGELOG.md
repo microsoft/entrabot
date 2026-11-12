@@ -10,9 +10,24 @@
 - `list_workbook_worksheets` and `read_workbook_range` for bounded, read-only Excel access through Microsoft Graph, bringing the MCP surface to 39 tools.
 - Work IQ Excel adapter with `read_excel_workbook`, `create_excel_workbook`, `add_excel_comment`, and `reply_to_excel_comment`, bringing the MCP surface to 43 tools. Work IQ setup now adds `mcp_ExcelServer` and requests `McpServers.Excel.All`.
 - Windows status tooling and expanded Windows setup/teardown guidance.
+- Windows setup wizard. `scripts\setup-windows.cmd` is now the single entry point and can be double-clicked. It runs on the Windows PowerShell 5.1 that ships with Windows and needs no administrator rights, PowerShell 7, `winget`, or pre-installed Python or Azure CLI: it finds Python or downloads a private copy, checked against a pinned SHA-512 checksum and the Python Software Foundation's signature, builds `.venv`, and starts `python -m entrabot.winsetup`, which signs in (browser, or device code in a remote session), creates or joins the agent, sets sponsors, offers local or cloud memory, shows a review screen before changing anything, and tests the result. `-Yes` plus parameters runs it unattended; `-Diagnose` checks an existing setup and changes nothing. Exit codes are `0`, `1`, `2` (usage), `3` (set up, something to check), `130` (cancelled).
+- `start-entrabot.cmd` starts the agent in Claude Code on Windows, bringing the supported operator commands to 46.
+- `scripts\prereqs-windows.ps1 -WithGit` and `-WithClaudeCode` install Git for Windows and Claude Code for the current user without administrator rights or `winget`, verifying the Git download's signature before running it.
+- `entrabot.platform.wincert`, the Windows certificate and key lifecycle: create with a non-exportable key (TPM first), find, test-sign, and delete together with the key.
+- `blueprint_certs.remove_key_credential` removes one machine's certificate from a Blueprint, keeps the others, and confirms by read-back. `register_windows_blueprint_cert.py --sha1` registers a certificate straight from the certificate store.
 
 ### Changed
 
+- **Breaking:** `scripts\prereqs-windows.ps1` is no longer a required step and installs nothing by default. It installs extras only on request (`-WithGit`, `-WithClaudeCode`, `-WithWorkIq`, `-WithBuildTools`). Visual Studio Build Tools, the .NET SDK and the `a365` CLI are no longer needed unless Work IQ is requested or a package has to be compiled.
+- **Breaking:** `scripts\teardown-windows.ps1` now disconnects this PC by default: it removes this PC's certificate from the Blueprint and deletes it locally with its key, selected by thumbprint rather than by subject, and retires this PC's setup (Provisioner) certificate, removing it from the Provisioner app and deleting it locally with its key, unless another Entrabot agent on the PC still needs it or `-KeepSetupCredential` is given. It no longer deletes `%LOCALAPPDATA%\entrabot` unless `-PurgeData` is given, and `-DeleteAgent` deletes the agent itself.
+- `scripts\deploy-windows.ps1` rotation keeps the current certificate in use until the new one has signed the agent in, and reports `0` rotated, `1` failed, or `3` rotated with cleanup pending. `scripts\setup-windows.ps1`, `deploy-windows.ps1`, `teardown-windows.ps1` and `status-windows.ps1` all run on Windows PowerShell 5.1; `status-windows.ps1` no longer installs anything.
+- On Windows, the TPM is chosen by creating a key and signing with it instead of asking `Get-Tpm`, the key is non-exportable in the software key store as well, and the certificate carries no TLS usages. The Provisioner key is stored the same way; an existing Provisioner PEM file under `%LOCALAPPDATA%\entrabot` is replaced and deleted the next time setup runs.
+- The Windows setup wizard adds each chosen sponsor on the agent's directory object, which is the list the agent obeys at runtime, and never removes one. When joining or continuing an agent with no sponsor named, it adds nobody and lists the current sponsors.
+- `add_agent_sponsor.py` and `remove_agent_sponsor.py` accept an Entra object ID as well as an address.
+- Status output colours its `PASS`/`WARN`/`FAIL` labels only on a terminal that can draw colour, and honours `NO_COLOR`. `status-windows.ps1` in a folder that is not connected to an agent says so in one line (a small JSON object with `-Json`) and exits `1`.
+- Claude Code hooks run through one cross-platform launcher (`scripts/hooks/run-hook.sh`), pinned to `bash`, with a 20-second timeout. The two gates now block when the hook cannot run. Claude Code on Windows needs Git for Windows for these hooks.
+- A second Entrabot server on one Windows PC now exits, as on macOS and Linux; before, the single-instance lock did nothing on Windows.
+- `.gitattributes` pins `.cmd`, `.bat` and `.ps1` files to CRLF and `.sh` files to LF.
 - Blueprint, BlueprintPrincipal, and Agent Identity creation now use the dedicated Microsoft Graph v1.0 subtype endpoints; Agent User creation remains on beta.
 - The public docs site was reorganized into nine task-oriented sections; plans, specs, and investigations were moved to non-published `engineering-history/`; source-audited MCP and script references were added; and legacy URLs redirect to current pages.
 - GitHub Pages builds run in strict mode.
@@ -28,6 +43,19 @@
 
 ### Fixed
 
+- `setup-windows.ps1 -NewChain`, `-UseBlueprint` and `-UpnSuffix` were passed to a helper that ignores command-line arguments, so they had no effect: in a tenant that already had an Entrabot agent, setup could attach to that agent instead of creating a new one. The wizard now passes them the way the helper reads them.
+- On Windows a standard user always got a software key, because `Get-Tpm` returns blank values without elevation. Keys are now created in the TPM when it accepts them, with no elevation.
+- The Windows Provisioner private key is no longer written to disk as a PEM file.
+- Windows certificate rotation was rebuilt. The previous flow removed the old certificate in the same write that added the new one, leaving no working certificate while Microsoft Entra took up the new one, and its smoke test signed with the old certificate rather than the new one.
+- Deleting a Windows certificate now deletes its private key as well, instead of leaving it in the key store.
+- `.env` on Windows is restricted by replacing its access list with a single entry, and setup reports the file as private only after reading the permissions back. `icacls /inheritance:r` left explicit entries for other accounts in place.
+- The Claude Code hooks called `python3`, which a standard Windows Python install does not provide, so the gates could not run on Windows.
+- The daily summary could never be archived, and so never sent, on Windows with local memory: storage wrote text in the system code page and translated line endings. Storage now writes UTF-8 with LF on every platform.
+- A byte-order mark at the start of `.env` no longer hides its first key.
+- The persona-sati token command can be a `.ps1`, `.py` or `.cmd` file, or a command with arguments, on Windows.
+- Windows health checks no longer fail for the wrong reason: the certificate check looks in the Windows certificate store, and remediation text names `scripts\setup-windows.cmd`.
+- The Windows provisioning helper no longer routes Graph URLs containing parentheses through `az.cmd`.
+- The Windows setup wizard finds a sponsor whose address is not their sign-in name, such as a personal Microsoft account that administers the tenant (its directory sign-in name is the `#EXT#` form and its `mail` field is empty). When more than one person matches it lists them instead of picking one.
 - Two instances on one container can no longer push the same email: each poll claims its window of mail with a compare-and-swap before pushing.
 - A failed Graph read during a chat's bootstrap no longer leaves it with no watermark, which could push up to 10 old messages on the next cycle.
 - `bootstrap_body_state` reports the real watched-chat count on a cloud backend, and `null` rather than `0` if the list can't be read ([#64](https://github.com/microsoft/entrabot/issues/64)).
@@ -46,11 +74,20 @@
 - Forged `<external_content>` text can no longer bypass the authoritative XPIA boundary.
 - A UTC-midnight-dependent test no longer fails intermittently on Windows CI.
 - Work IQ Word and ODSP tool output now passes model-facing content only through the XPIA boundary, and Word comments are no longer dropped from the parsed result.
+- `teardown-windows.ps1` no longer takes a certificate off the Blueprint just because `.env` names it. A certificate that is not in this PC's certificate store may be another PC's (a copied or shared `.env`), so it is left on the Blueprint: with `-Yes` it is left and reported, and interactively you are asked, default No. A certificate left behind by an interrupted rotation (`ENTRABOT_BLUEPRINT_CERT_RETIRING_SHA1`) is cleaned up too. A private key that could not be deleted is reported as such, never as deleted, and teardown exits `1`.
+- `deploy-windows.ps1` refuses to rotate unattended without `-Yes` (exit `2`), and removes the old certificate from the Blueprint only from a read of the list that shows the new one. If Microsoft Entra has not listed the new certificate yet, the old one is left and rotation exits `3`; running it again finishes the cleanup.
 
 ### Removed
 
 - Bot Gateway mode and its M365 Agents SDK dependency (ADR-006).
 - The unused Claude pull-request review workflow.
+
+### Security
+
+- Windows setup checks the Claude Code version. The two hook gates block a tool call when they fail to start only on Claude Code 2.1.295 or later; on an older version setup warns, prints the update command, and finishes with something to check (exit `3`).
+- The Claude Code hooks read their input as UTF-8 on every platform, and the two gates block on any unexpected error, including input they cannot decode, instead of exiting `1`. On Windows a non-ASCII character in the input crashed the hooks, and a non-ASCII profile path let local memory writes through.
+- On Windows the persona-sati token command must be an absolute path or a program on `PATH`. A relative path, or a program found only in the current folder, is refused, and a `.ps1` script runs under the in-box Windows PowerShell, never a `pwsh` or `powershell` found by name.
+- When Windows setup moves off an older install's Provisioner key file, it now also removes that file's certificate from the Provisioner app, so a copy of the file stops working. If the removal fails, setup still finishes, says in the setup log which certificate to remove (last four characters of its thumbprint, and its expiry) and where, and tries again on the next run.
 
 ## v0.1 — 2026-05-21
 
@@ -97,7 +134,7 @@ First public release. Reference implementation for Microsoft Entra Agent ID and 
 
 ### Known limitations
 
-- **Windows port is acceptance-tested on one ARM64 VM only.** Verified end-to-end (cert provisioning, three-hop CNG signing, MCP registration, Teams DM round-trip) but not exercised on broad hardware, intel x64, or in long-running sessions.
+- **Windows port is acceptance-tested on one ARM64 VM only.** (At that release; see Unreleased for the current Windows verification scope.) Verified end-to-end (cert provisioning, three-hop CNG signing, MCP registration, Teams DM round-trip) but not exercised on broad hardware, intel x64, or in long-running sessions.
 - **Bot Gateway needs live Azure Bot Service registration.** The local server + Dev Tunnel path works; the productized "bot has its own Teams app identity" path needs an Azure Bot resource and Teams app manifest signed in a tenant.
 - **Persona-sati 12h MCP bearer refresh** is open (draft PR persona-sati#47 paused at Agent Blueprint OAuth client constraints). Affects only sessions that connect to persona-sati after the 12h boundary; restart the MCP host to recover.
 - **Agent Identity provisioning omits `Application.Read.All`**, which `wait_for_sponsor_dm` needs to call the sponsors API. Manual grant required as a workaround until `scripts/create_entra_agent_ids.py` is updated.

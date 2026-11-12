@@ -176,6 +176,6 @@ class TestCheckLegacyDataDir:
         with (
             patch.object(config.sys, "platform", "win32"),
             patch.dict(os.environ, {"LOCALAPPDATA": str(local)}, clear=False),
-            pytest.raises(RuntimeError, match="setup-windows.cmd --migrate"),
+            pytest.raises(RuntimeError, match=r"Run scripts\\setup-windows\.cmd"),
         ):
             config.check_legacy_data_dir(home=tmp_path)

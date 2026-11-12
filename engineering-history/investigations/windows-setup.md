@@ -1,5 +1,31 @@
 # Windows setup runbook
 
+> **Superseded (2026-11-11). Kept as history; do not follow the commands below.**
+> Windows setup is now a single step, `scripts\setup-windows.cmd`, which starts a
+> setup wizard. The current guide is `docs/getting-started/windows.md`, with
+> `docs/troubleshooting/windows.md` and `docs/platform-docs/platform-windows.md`.
+> What changed relative to this page:
+>
+> - **Prerequisites.** None. PowerShell 7, Python on PATH, the Azure CLI and `git`
+>   are no longer required first, and no administrator rights on the PC are needed.
+>   The `Application Administrator` role named below is not enough to create an
+>   agent: granting admin consent needs a Global Administrator or Privileged Role
+>   Administrator.
+> - **The setup command.** `.\scripts\setup-windows.cmd --new --with-upn-suffix=winagent`
+>   was never valid for the PowerShell script, which takes `-NewChain -UpnSuffix`.
+>   The wrapper never elevated; it only lifted the execution policy, and it now
+>   uses the in-box Windows PowerShell, not `pwsh`.
+> - **TPM.** The key store is no longer chosen by probing with `Get-Tpm`, which
+>   reports nothing without elevation. Setup creates a key in the TPM and falls
+>   back to the software key store if that fails. The key is non-exportable either way.
+> - **`.env` lock.** `icacls /grant:r {USER}:M` left other accounts' explicit
+>   entries in place. The access list is now replaced with a single entry.
+> - **Final summary.** Setup no longer prints the certificate's SHA-1.
+> - **Rotation and teardown.** Both were rebuilt; see their reference pages under
+>   `docs/reference/scripts/`. Teardown no longer deletes the data folder by default.
+> - **Legacy data.** When both data folders have content, setup now uses the
+>   current one, leaves the old one untouched, and says so, instead of halting.
+
 > This page supersedes earlier exploratory Windows porting drafts,
 > including `docs/architecture/next-windows-dev-environment.md`. The
 > implementation those drafts discussed shipped via PR landing the

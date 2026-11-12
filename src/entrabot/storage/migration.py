@@ -37,7 +37,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from entrabot.storage.backend import MemoryBackend, is_temp_file_name
+from entrabot.storage.backend import TEXT_ENCODING, MemoryBackend, is_temp_file_name
 from entrabot.tools.poll_state import (
     EMAIL_CURSOR_KEY,
     LEGACY_DEFAULT_CHAT_KEY,
@@ -123,7 +123,7 @@ def _migrate_one_source(
             if target.exists(key):
                 report.skipped += 1
                 continue
-            content = path.read_text()
+            content = path.read_text(encoding=TEXT_ENCODING)
         except Exception as exc:  # noqa: BLE001 — record + continue
             report.errors.append((key, str(exc)))
             continue

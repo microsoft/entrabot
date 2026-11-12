@@ -70,16 +70,96 @@ _REQUIRED_STATE_KEYS = [
     "PROVISIONER_CERT_THUMBPRINT",
 ]
 
-_STATUS_ICON = {
-    "pass": "\033[32mPASS\033[0m",
-    "fail": "\033[31mFAIL\033[0m",
-    "warn": "\033[33mWARN\033[0m",
-    "skip": "\033[90mSKIP\033[0m",
-}
+# ANSI colour of each health label, used only where the terminal can draw it.
+_STATUS_COLOR = {"pass": "32", "fail": "31", "warn": "33", "skip": "90"}
+
+
+def _is_windows() -> bool:
+    return sys.platform == "win32"
+
+
+def _enable_windows_vt() -> bool:
+    """Turn on ANSI colour in a classic Windows console. True when it worked.
+
+    The setup wizard's own check, so both draw colour in exactly the same places.
+    """
+    from entrabot.winsetup.console import _enable_windows_vt as enable
+
+    return enable()
+
+
+def _use_color(stream: object = None) -> bool:
+    """Should the health labels be coloured on *stream* (default: stdout)?
+
+    Only on a terminal that can draw it. Written to a pipe, a file, a captured SSH
+    session or a classic Windows console without VT processing, the escapes arrive as
+    literal ``[32mPASS[0m``. ``NO_COLOR`` (https://no-color.org) always wins.
+    """
+    stream = sys.stdout if stream is None else stream
+    if os.environ.get("NO_COLOR"):
+        return False
+    try:
+        if not stream.isatty():  # type: ignore[attr-defined]
+            return False
+    except (AttributeError, ValueError):
+        return False
+    if not _is_windows():
+        return True
+    # Windows Terminal always draws colour; a classic console only once VT is switched on.
+    return bool(os.environ.get("WT_SESSION")) or _enable_windows_vt()
+
+
+def _status_label(status: str, *, color: bool) -> str:
+    code = _STATUS_COLOR.get(status)
+    if code is None:
+        return status
+    label = status.upper()
+    return f"\033[{code}m{label}\033[0m" if color else label
+
+
+def _configured(attribute: str, env_name: str) -> str | None:
+    """A value from the runtime configuration (.env), which is where Windows setup
+    records the Blueprint certificate; the state file never carries it there."""
+    try:
+        value = getattr(get_config(), attribute, None)
+    except Exception:
+        value = None
+    return value or os.environ.get(env_name) or None
 
 
 def _read_all_state() -> dict[str, str | None]:
-    return {key: get_state(key) for key in _STATE_KEYS}
+    state = {key: get_state(key) for key in _STATE_KEYS}
+    if not state.get("BLUEPRINT_CERT_THUMBPRINT"):
+        state["BLUEPRINT_CERT_THUMBPRINT"] = _configured(
+            "blueprint_cert_thumbprint", "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT"
+        )
+    return state
+
+
+def _local_certificate_checks(state: dict[str, str | None]) -> list[Check]:
+    """Windows: is the certificate named in .env in this user's store, keyed, in date?
+
+    A registered certificate is no use if its key isn't on this machine or it has
+    expired, and neither shows up in what Graph returns.
+
+    Skipped, like the Blueprint's own certificate check, when no Blueprint is set up
+    here at all. With a Blueprint but no certificate configured it fails: the agent
+    exists and this machine can't sign for it.
+    """
+    if not _is_windows():
+        return []
+    from entrabot.platform import wincert
+
+    sha1 = _configured("blueprint_cert_sha1", "ENTRABOT_BLUEPRINT_CERT_SHA1")
+    has_blueprint = bool(state.get("BLUEPRINT_OBJECT_ID") or state.get("BLUEPRINT_APP_ID"))
+    if not sha1 and not has_blueprint:
+        return [Check("Local certificate", "skip", "No Blueprint is configured on this machine")]
+    try:
+        health = wincert.cert_health(sha1)
+    except wincert.WinCertError as exc:
+        return [Check("Local certificate", "warn", f"Could not check: {exc}")]
+    status = {"ok": "pass", "expiring": "warn"}.get(health.status, "fail")
+    return [Check("Local certificate", status, health.message)]
 
 
 def _graph_list(
@@ -375,6 +455,7 @@ def _snapshot(token: str) -> dict[str, object]:
         key_credentials,
         key_credentials_error,
     )
+    checks.extend(_local_certificate_checks(state))
     failed = sum(1 for check in checks if check.status == "fail")
     warned = sum(1 for check in checks if check.status == "warn")
     passed = sum(1 for check in checks if check.status == "pass")
@@ -428,8 +509,9 @@ def _print_health(snapshot: dict[str, object], *, title: bool = True) -> None:
     health = snapshot["health"]
     if title:
         print("\n=== EntraBot Health Check ===\n")
+    color = _use_color()
     for check in health["checks"]:
-        icon = _STATUS_ICON.get(check["status"], check["status"])
+        icon = _status_label(check["status"], color=color)
         print(f"  {icon}  {check['name']}")
         if check["detail"]:
             print(f"        {check['detail']}")

@@ -10,9 +10,10 @@ Part of the [auth-and-certs command reference](../index.md#auth-and-certs).
 
 Provides a clean bearer token for the Provisioner app so operators can make
 ad-hoc Graph calls (for example with `curl`) without any client-secret path. The
-certificate private key is read in memory only — from the OS keystore on
-macOS/Linux, or from an ACL-locked file under `%LOCALAPPDATA%\entrabot\` on
-Windows — nothing is written to disk beyond that existing store. It replaces
+certificate private key never touches disk. On macOS/Linux it is read from the
+OS keystore in memory only. On Windows it is a non-exportable key in the
+current user's certificate store (TPM-held where the TPM accepts it) and the
+token request is signed in place; the key is never read. It replaces
 older curl-with-client-secret flows. See
 [Token flows](../../token-flows.md) and [Auth](../../api/auth.md) for how tokens
 are acquired.
@@ -20,8 +21,9 @@ are acquired.
 ## Requirements
 
 - The Provisioner app must already be bootstrapped, with its certificate
-  private key available: in the OS keystore on macOS/Linux, or in
-  `%LOCALAPPDATA%\entrabot\provisioner-cert-<account>.pem` on Windows. This
+  private key available: in the OS keystore on macOS/Linux, or as the
+  `Entrabot Provisioner <tenant id>` certificate in `Cert:\CurrentUser\My` on
+  Windows. This
   command uses the existing-only token helper and never creates or repairs the
   Provisioner app.
 - A Python environment with the provisioning dependencies installed.
@@ -46,8 +48,9 @@ None.
 
 ## Effects
 
-1. Reads the Provisioner certificate private key in memory only, from the OS
-   keystore on macOS/Linux or from the Windows file-backed store.
+1. Reads the Provisioner certificate private key in memory only from the OS
+   keystore on macOS/Linux. On Windows, signs with the certificate-store key
+   without reading it.
 2. Acquires a Graph access token via the certificate credential, redirecting the
    helper's diagnostic prints to stderr so stdout carries only the token.
 3. Prints the token to stdout. Nothing is written to disk.
@@ -76,8 +79,9 @@ None.
 - **Provisioner not bootstrapped** — the token helper raises a bootstrap error;
   run [`setup.sh`](../setup/setup-sh.md) to provision it first.
 - **Keystore unavailable** — the certificate private key cannot be read (locked
-  keychain, wrong host, missing key, or, on Windows, a missing/inaccessible
-  `%LOCALAPPDATA%\entrabot\provisioner-cert-<account>.pem` file).
+  keychain, wrong host, missing key, or, on Windows, the Provisioner
+  certificate is missing from this user's certificate store; run
+  `scripts\setup-windows.cmd` to create it).
 
 ## Related commands
 

@@ -27,6 +27,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import re
 import socket
 import sys
 import time
@@ -74,6 +75,15 @@ class KeyCredentialsReadError(BlueprintCertError):
     def __init__(self, message: str, *, status: int | None = None) -> None:
         super().__init__(message)
         self.status = status
+
+
+class RequiredCertificateMissingError(KeyCredentialsReadError):
+    """A certificate the caller said must stay was not on the list Graph returned.
+
+    Nothing was sent. A list that does not show a certificate known to be registered is a
+    list that can't be trusted to write back: replacing ``keyCredentials`` with it would
+    drop that certificate.
+    """
 
 
 class RegistrationRejectedError(BlueprintCertError):
@@ -188,6 +198,17 @@ class RegistrationResult:
 
     thumbprint: str
     prior: tuple[KeyCredential, ...]
+    current: tuple[KeyCredential, ...]
+
+
+@dataclass(frozen=True)
+class RemovalResult:
+    """A removal that was confirmed by reading it back.
+
+    ``removed`` is empty when the certificate wasn't on the Blueprint to begin with.
+    """
+
+    removed: tuple[KeyCredential, ...]
     current: tuple[KeyCredential, ...]
 
 
@@ -447,6 +468,176 @@ def register_key_credential(
     raise RegistrationUnconfirmedError(
         f"Could not confirm the certificate update after {attempts} read(s). "
         f"{write_problem}{read_problem}Not seen on the Blueprint: {names}.",
+        missing=missing,
+    )
+
+
+def _is_certificate(
+    credential: KeyCredential, *, x5t_s256: str | None, sha1_hex: str | None
+) -> bool:
+    der = credential.der
+    if der is None:
+        return False
+    if x5t_s256 and thumbprint_of_der(der) == x5t_s256:
+        return True
+    return bool(sha1_hex) and hashlib.sha1(der).hexdigest().upper() == sha1_hex.upper()  # noqa: S324
+
+
+_SHA1_HEX = re.compile(r"^[0-9A-Fa-f]{40}$")
+
+
+def _holds(credential: KeyCredential, thumbprint: str) -> bool:
+    """Whether *credential* is the certificate with this thumbprint: 40 hex characters are
+    the SHA-1 (the Windows thumbprint), anything else the base64url SHA-256 (``x5t#S256``)."""
+    if _SHA1_HEX.match(thumbprint):
+        return _is_certificate(credential, x5t_s256=None, sha1_hex=thumbprint)
+    return _is_certificate(credential, x5t_s256=thumbprint, sha1_hex=None)
+
+
+def _not_listed(credentials: Sequence[KeyCredential], thumbprints: Sequence[str]) -> list[str]:
+    return [
+        thumbprint
+        for thumbprint in thumbprints
+        if not any(_holds(credential, thumbprint) for credential in credentials)
+    ]
+
+
+def remove_key_credential(
+    *,
+    object_id: str,
+    token: str,
+    x5t_s256: str | None = None,
+    sha1_hex: str | None = None,
+    must_keep: Sequence[str] = (),
+    attempts: int = VERIFY_ATTEMPTS,
+    delay_seconds: float = VERIFY_DELAY_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> RemovalResult:
+    """Remove one certificate from the Blueprint, keeping every other machine's.
+
+    The certificate is identified by its key material: ``x5t_s256`` (base64url SHA-256
+    of the DER) and/or ``sha1_hex`` (the Windows thumbprint). Display names are never
+    used to decide which entry is which. Every entry holding that certificate goes;
+    all others are sent back exactly as Graph returned them, and the write counts only
+    once a read shows the certificate gone and the others still there.
+
+    A certificate that isn't registered is not an error: nothing is sent and
+    ``removed`` is empty.
+
+    ``must_keep`` names certificates (by either thumbprint) that are known to be
+    registered and must still be there afterwards. The list written back is the list
+    that was read, and Graph can take a minute to show a certificate that was just
+    added, so a read that doesn't show one of them is not written back: the read is
+    repeated, up to ``attempts`` times, and if it never shows them nothing is sent.
+    Rotation uses this for the certificate it added moments earlier.
+
+    Raises:
+        ValueError: neither thumbprint was given, or the certificate to remove is
+            also in ``must_keep``.
+        KeyCredentialsReadError: the read before the write failed, or the certificate
+            wasn't found while another entry's key material couldn't be read, so it
+            can't be ruled out. Nothing was sent.
+        RequiredCertificateMissingError: a ``must_keep`` certificate never appeared on
+            the list that was read. Nothing was sent.
+        RegistrationRejectedError: Graph refused the write. Nothing changed.
+        RegistrationUnconfirmedError: the write may have landed but couldn't be
+            confirmed.
+    """
+    if not x5t_s256 and not sha1_hex:
+        raise ValueError("a certificate thumbprint (x5t_s256 or sha1_hex) is required")
+    required = [item.strip() for item in must_keep if item and item.strip()]
+    both = "the certificate to remove is also named in must_keep"
+    targets = {x5t_s256 or "", (sha1_hex or "").upper()} - {""}
+    if any(item in targets or item.upper() in targets for item in required):
+        raise ValueError(both)
+
+    prior = fetch_key_credentials(object_id, token)
+    absent = _not_listed(prior, required)
+    reads = 1
+    while absent and reads < attempts:
+        sleep(delay_seconds)
+        prior = fetch_key_credentials(object_id, token)
+        absent = _not_listed(prior, required)
+        reads += 1
+    if absent:
+        raise RequiredCertificateMissingError(
+            f"{len(absent)} certificate(s) that must stay on the Blueprint were not on the "
+            f"list Microsoft Graph returned after {reads} read(s). A certificate added "
+            "moments ago can take a minute to appear. Nothing was changed."
+        )
+
+    removed = [c for c in prior if _is_certificate(c, x5t_s256=x5t_s256, sha1_hex=sha1_hex)]
+    if any(_holds(credential, item) for credential in removed for item in required):
+        raise ValueError(both)  # the same certificate, named by its other thumbprint
+    if not removed:
+        unreadable = unreadable_certificates(prior)
+        if unreadable:
+            raise KeyCredentialsReadError(
+                f"the key material of {len(unreadable)} certificate(s) couldn't be read, so "
+                "the certificate may still be registered"
+            )
+        return RemovalResult(removed=(), current=tuple(prior))
+
+    kept = [c for c in prior if c not in removed]
+
+    write_problem = ""
+    try:
+        response = _patch_key_credentials(object_id, token, kept)
+    except httpx.HTTPError as exc:
+        write_problem = f"The PATCH didn't complete ({type(exc).__name__}). "
+    else:
+        if 400 <= response.status_code < 500:
+            raise RegistrationRejectedError(
+                f"Graph refused the update with {response.status_code} ({_error_detail(response)})",
+                status=response.status_code,
+            )
+        if not response.is_success:
+            write_problem = f"Graph answered the PATCH with {response.status_code}. "
+
+    still_listed = True
+    missing: tuple[str, ...] = ()
+    required_gone: list[str] = []
+    read_problem = ""
+    for attempt in range(attempts):
+        if attempt:
+            sleep(delay_seconds)
+        try:
+            current = fetch_key_credentials(object_id, token)
+        except KeyCredentialsReadError as exc:
+            read_problem = f"The last read failed: {exc}. "
+            continue
+        read_problem = ""
+        still_listed = any(
+            _is_certificate(c, x5t_s256=x5t_s256, sha1_hex=sha1_hex) for c in current
+        )
+        current_ids = {c.key_id for c in current}
+        current_thumbprints = {c.thumbprint for c in current}
+        # Kept if its keyId survived or, since Graph may reissue keyId when key is
+        # resent, if the same certificate is still on the list.
+        missing = tuple(
+            c.display_name
+            for c in kept
+            if c.key_id not in current_ids
+            and (c.thumbprint is None or c.thumbprint not in current_thumbprints)
+        )
+        required_gone = _not_listed(current, required)
+        if not still_listed and not missing and not required_gone:
+            return RemovalResult(removed=tuple(removed), current=tuple(current))
+
+    problems = []
+    if required_gone:
+        problems.append(
+            f"{len(required_gone)} certificate(s) that must stay on the Blueprint are not "
+            "listed any more."
+        )
+    if still_listed:
+        problems.append("The certificate is still listed on the Blueprint.")
+    if missing:
+        names = ", ".join(f"'{name}'" for name in missing)
+        problems.append(f"Not seen on the Blueprint any more: {names}.")
+    raise RegistrationUnconfirmedError(
+        f"Could not confirm the certificate removal after {attempts} read(s). "
+        f"{write_problem}{read_problem}{' '.join(problems)}",
         missing=missing,
     )
 

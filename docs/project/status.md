@@ -12,8 +12,9 @@
 - Two authenticated session types: certificate-backed Agent User and MSAL delegated.
 - Autonomous four-resource provisioning chain: Agent Identity Blueprint → BlueprintPrincipal → Agent Identity → Agent User.
 - Blueprint, BlueprintPrincipal, and Agent Identity are created through the dedicated Microsoft Graph v1.0 subtype endpoints; Agent User creation uses Graph beta.
-- Certificate private keys are stored in the OS keystore (Keychain, Windows CNG (via the certificate store), or Linux Secret Service).
+- Certificate private keys are stored in the OS keystore (Keychain, Linux Secret Service, or the Windows certificate store). On Windows both the Blueprint key and setup's Provisioner key are non-exportable CNG keys, created in the TPM when the TPM accepts a key and in the software key store otherwise; no key material is on disk.
 - Several machines can share a Blueprint: attaching one adds its certificate and keeps the others. `setup.sh --remove-all-existing-certs` is the only way to replace them all. Windows setup registers its certificate the same way, and re-running it registers a certificate an earlier version left unregistered.
+- Windows certificate rotation (`scripts\deploy-windows.ps1`) keeps the current certificate in use until the new one has signed the agent in, then removes the old one from the Blueprint and deletes it locally with its key.
 
 ### Microsoft 365
 
@@ -34,11 +35,13 @@
 - Local operational storage by default, with Azure Blob Storage available as an opt-in.
 - With Blob Storage, all shared operational state, including the watched-chat list and email cursor, lives in the container. Instances on one container share it, and exactly one instance pushes a given email.
 - Setup and teardown flows for macOS, Linux, and Windows.
-- Windows support is acceptance-tested on Windows 11 ARM64.
+- Windows setup is one step: `scripts\setup-windows.cmd` runs on the Windows PowerShell 5.1 that ships with Windows, needs no administrator rights, PowerShell 7, `winget` or pre-installed Python, and starts an interactive wizard that can also run unattended (`-Yes` plus parameters). `-Diagnose` checks an existing setup without changing it. `start-entrabot.cmd` starts the agent.
+- Windows runtime: storage files are UTF-8 and byte-identical across platforms, only one Entrabot server runs per PC, `.env` tolerates a byte-order mark, the persona-sati token command may be a `.ps1`, `.py` or `.cmd` file with arguments (found by absolute path or on `PATH`, never in the current folder), and the Claude Code hooks run through one cross-platform launcher, read their input as UTF-8, and have gates that block when a hook cannot run (on Claude Code 2.1.295 or later, which setup checks for).
+- **What the Windows work was verified on.** One configuration: Windows 11 Enterprise 25H2 (x64) in an Azure virtual machine with a virtual TPM 2.0, non-administrator local accounts, driven over SSH. Exercised there: fresh-PC bootstrap; new-agent setup; joining an existing Blueprint; re-run and repair; the interactive wizard in a real terminal; `-Diagnose`; TPM key creation, signing and deletion; the three-hop sign-in; starting the MCP server and calling `whoami`; the single-entry `.env` permission, read back; directory sponsors, including lookup of a personal Microsoft account by its `#EXT#` sign-in name; the Claude Code hooks under Git Bash; the Git for Windows and Claude Code installs and the `PATH` entry for Claude Code; status; certificate rotation; teardown in its default mode and with `-DeleteAgent`; and the full test suite on Windows (4208 passed, 226 skipped, 0 failed). An earlier version of Windows setup was acceptance-tested on Windows 11 ARM64; the current setup has not been run there.
 
 ### Documentation and operations
 
-- Public site with nine task-oriented sections and source-audited references for all registered MCP tools and all 45 supported operator commands.
+- Public site with nine task-oriented sections and source-audited references for all registered MCP tools and all 46 supported operator commands.
 - Legacy URLs redirect to current pages; plans, specs, investigations, and research are retained only under non-published `engineering-history/`.
 
 ## Active development
@@ -50,7 +53,13 @@
 - Entrabot is a research implementation, not a production-ready tenant service.
 - Agent User provisioning still depends on Microsoft Graph beta.
 - Live smoke tests provision real Entra, Azure, and Microsoft 365 resources and send a real Teams message, so they run manually rather than in CI until an isolated tenant and non-human CI identity are available.
-- Windows end-to-end coverage is narrower than macOS and currently centered on Windows 11 ARM64.
+- Windows end-to-end coverage is narrower than macOS. Not yet tested with the current setup: Windows on ARM64; Windows 10; physical TPM chips (only a virtual TPM was used); PCs joined to Entra or managed by Intune, and tenants with Conditional Access; a desktop session (double-clicking the scripts, the browser sign-in window, the "Start your agent now?" window); `start-entrabot.cmd` starting a signed-in Claude Code session; cloud memory and Work IQ set up through the Windows wizard; and `teardown-windows.ps1 -PurgeData`. Broader acceptance coverage is tracked in [#105](https://github.com/microsoft/entrabot/issues/105).
+- The Windows fixes made after a security review (the Claude Code version check, UTF-8 hook input and gates that block on any error, the persona-sati token command lookup, revoking an older setup key file on the Provisioner app, teardown leaving a certificate that is not in this PC's store, rotation waiting for the new certificate to be listed, and the pinned checksum for the private Python download) are covered by unit tests but have NOT been re-run on a real Windows machine. The end-to-end verification described above predates them.
+- Setting up an agent needs an Entra administrator on every platform. Granting admin consent needs a Global Administrator or Privileged Role Administrator, and joining an existing agent from another machine still needs directory rights, because each machine adds its own credential to the Provisioner app and the Blueprint. A person without those rights cannot set up an agent by themselves; there is no "administrator prepares, user joins" flow yet.
+- An agent needs a licence that includes Teams to use Teams. Setup completes without one, says so, and exits with a "something to check" code.
+- On Windows, Claude Code needs Git for Windows to run this repository's hooks. Without it the hook gates block edits and Teams sends.
+- In a Windows remote session (SSH), Windows Credential Manager and MSI-based installers are unavailable. Setup does not depend on either; this is why it uses private copies of Python and the Azure CLI when they are missing.
+- Local storage files are read and written as UTF-8 ([#60](https://github.com/microsoft/entrabot/issues/60)) and the single-instance lock now also holds on Windows, with its file descriptor closed on every error path ([#59](https://github.com/microsoft/entrabot/issues/59)). Both issues are still open pending review of these changes.
 - Legacy Graph file comments are not the same as Word UI comments; use the Work IQ Word tools for document comments.
 - Work IQ Excel (`mcp_ExcelServer`) is in the live Agent 365 catalog but not on Microsoft Learn, and the CLI warns of a "legacy ATG audience", so its tools may change. It requires `McpServers.Excel.All` on the Blueprint.
 - `ENTRABOT_FILES_DENIED_SITES` is checked against Graph's reported site only for the workbook and Work IQ Excel tools. The Work IQ Word and ODSP tools don't apply it, and `read_file` and `add_file_comment` check the `site_id` the caller supplies.
