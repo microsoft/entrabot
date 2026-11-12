@@ -54,6 +54,7 @@ TEAMS_CAPABLE_SKUS: tuple[str, ...] = (
     "M365_BUSINESS_PREMIUM",  # M365 Business Premium
     "O365_BUSINESS_PREMIUM",  # O365 Business Premium (legacy name)
     "Microsoft_Teams_Enterprise",
+    "Microsoft_Teams_Enterprise_New",
     "Microsoft_Teams_Essentials",
     "TEAMS_ESSENTIALS_AAD",
     "TEAMS_EXPLORATORY",
