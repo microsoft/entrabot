@@ -771,6 +771,8 @@ class Wizard:
                 f"The earlier sign-in as {account.user} can no longer be used, so setup asks "
                 "you to sign in again."
             )
+            # Signing in again is not enough: az would go on sending the old token.
+            az.forget(account.user)
             account = None
         if account is not None:
             console.info(
@@ -780,11 +782,28 @@ class Wizard:
                 account = None
         if account is None:
             account = self._login()
-            me = None  # whoever just signed in, read below
+            me = az.me()
+            if me is None:
+                # A sign-in made this minute that the directory refuses: something older is
+                # still in az's cache. One clean start, then stop: nothing has been changed.
+                console.info(
+                    "Microsoft did not accept that sign-in for the directory. Setup clears "
+                    "what the Azure CLI remembered and asks you to sign in once more."
+                )
+                az.forget_everyone()
+                account = self._login()
+                me = az.me()
+            if me is None:
+                raise SetupFailed(
+                    "Microsoft is not accepting this sign-in for requests to your directory.",
+                    fix="Nothing has been changed. Wait a few minutes and run setup again. If "
+                    "it keeps happening, your organization may be ending the session (a "
+                    "sign-in risk or Conditional Access policy): ask your administrator.",
+                )
         self.account = account
         console.ok(f"Signed in as {account.user} ({account.tenant_name or account.tenant_id})")
 
-        self.me = me or az.me()
+        self.me = me
         self.subscriptions = az.subscriptions(account.tenant_id)
         self._check_tenant(account)
         self._check_privileges()

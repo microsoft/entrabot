@@ -162,15 +162,16 @@ At the PC's own desktop, through Remote Desktop, on the same machine and tenant,
 - Double-clicking `scripts\setup-windows.cmd`, signing in (through the Windows account sign-in window, which setup used then), and a full run to the last screen.
 - The Word, Excel and OneDrive tools installing with no administrator prompt, PowerShell 7 through `winget` included.
 - `a365 setup requirements` and `a365 develop add-mcp-servers`, which signed in through the Windows account sign-in window and succeeded. Together with setup's own sign-in that was four sign-in prompts on a PC its organization does not manage.
-- The step after them, which grants the Work IQ permissions, failing on a new agent: Microsoft Graph answered 404 when a second permission was added to a grant created moments before. Setup carried on and said so on the last screen, as intended. That step now writes each resource's permissions once and tries again on a 404; the change has unit tests only.
+- The step after them, which grants the Work IQ permissions, failing on a new agent: Microsoft Graph answered 404 when a second permission was added to a grant created moments before. Setup carried on and said so on the last screen, as intended. That step now writes each resource's permissions once and tries again on a 404.
 - The licence walkthrough with "check again" and "skip", and "Start your agent now?" opening the agent in its own window.
 - `start-entrabot.cmd` starting a signed-in Claude Code session that loaded the agent's tools (on an earlier build).
 - Teardown with `-DeleteAgent -PurgeData`, over SSH.
+- Setup's sign-in through the browser was run at the desktop and worked. The run still failed at the next step, because the Azure CLI went on sending a day-old Microsoft Graph token that the organization had since revoked; with that token removed from the CLI's cache by hand, the same sign-in carried a full repair run over SSH. Setup now removes the old sign-in itself before asking for a new one; that removal has unit tests only.
+- The step that grants the Work IQ permissions, after its fix, against the half-made grant the failed run left: it added the two missing permissions in one write and created the Word grant, and a second run changed nothing.
 
 Not yet tested:
 
 - The rest of the Word, Excel and OneDrive configuration (`a365 setup permissions mcp` and the final check of the tooling manifest): no run on a real machine has reached them yet. So Word, Excel and OneDrive files have not been switched on end to end on Windows.
-- Setup's sign-in through the browser at a desktop: it replaced the Windows account sign-in window after the desktop run, and has unit tests only.
 - `winget` drawing its progress bar in place: on the desktop run it printed a new line for every redraw, and the change that runs it attached to the window has not been seen on Windows.
 - Giving the agent a licence through the walkthrough, and the Microsoft 365 Copilot path; unit tests only.
 - Changes made after those runs, covered by unit tests: the last screen pointing back to the walkthrough instead of repeating its advice; Microsoft 365 Copilot mentioned only when Word, Excel and OneDrive files are switched on; product names for products Microsoft's reference does not list; the Word, Excel and OneDrive steps running after the end-to-end test, a failure there never stopping setup, and their being skipped in a session without a desktop; and the review screen naming what was installed before it.

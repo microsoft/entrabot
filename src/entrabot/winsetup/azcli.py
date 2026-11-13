@@ -500,6 +500,22 @@ class AzCli:
         codes = set(_AADSTS.findall(f"{result.stdout}\n{result.stderr}"))
         return "code-expired" if codes & _UNUSED_DEVICE_CODE else "failed"
 
+    def forget(self, username: str) -> None:
+        """Remove *username*'s sign-in and every token az keeps for it.
+
+        Needed before signing in again after the organization ended a session: az keeps a
+        day-long Microsoft Graph token in its cache, and a new sign-in does not replace it
+        (measured: a browser sign-in succeeded and az still sent the token issued the day
+        before, which Graph refused). A failure here is not one for the caller: the sign-in
+        that follows is what counts.
+        """
+        self.run(["logout", "--username", username])
+
+    def forget_everyone(self) -> None:
+        """Remove every sign-in and token az holds for this Windows account. The clean start
+        for when removing one account's sign-in was not enough."""
+        self.run(["account", "clear"])
+
     def subscriptions(self, tenant_id: str) -> list[Subscription]:
         """Enabled Azure subscriptions in *tenant_id* (tenant-level placeholders excluded)."""
         data = self.try_json(["account", "list"])

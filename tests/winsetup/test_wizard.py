@@ -1005,19 +1005,38 @@ class TestSignIn:
         "InteractionRequired and code: TokenIssuedBeforeRevocationTimestamp"
     )
 
-    def _session_ended(self, world: Scenario) -> None:
+    def _session_ended(self, world: Scenario, *, cleared_by: str = "logout") -> None:
         """As on the test machine after the organization ended the session: az still lists
-        the account and still hands out its cached token, but Microsoft Graph refuses it."""
+        the account, and Microsoft Graph refuses the day-long token az keeps in its cache.
+        Signing in again does not replace that token (measured: a fresh browser sign-in, and
+        az still sent the token issued the day before). Only removing it first does:
+        ``az logout`` for the account, or ``az account clear``."""
         me = json.dumps(
             {"id": "admin-object", "userPrincipalName": "admin@werner.ac", "userType": "Member"}
         )
+        state = {"stale": True, "removed": False}
 
         def signed_in_user(_request: RunRequest) -> Reply:
-            if not world.az("login"):
+            if state["stale"]:
                 return Reply(returncode=1, stderr=self._REVOKED)
             return Reply(stdout=me)
 
+        def removed(_request: RunRequest) -> Reply:
+            state["removed"] = True
+            world.signed_in = False
+            return Reply()
+
+        def login(_request: RunRequest) -> Reply:
+            world.signed_in = True
+            if state["removed"]:
+                state["stale"] = False
+            return Reply()
+
         world.spawn.on(words("ad", "signed-in-user", "show"), signed_in_user)
+        world.spawn.on(words("account", "clear"), removed)
+        if cleared_by == "logout":
+            world.spawn.on(words("logout"), removed)
+        world.spawn.on(words("login"), login)
 
     def test_a_sign_in_microsoft_no_longer_accepts_is_done_again(self, world: Scenario) -> None:
         # From a desktop run: "Already signed in as ... Use this account?" was offered, the
@@ -1029,13 +1048,43 @@ class TestSignIn:
         assert "Use this account?" not in world.out  # there is nothing to choose
         assert "Your browser is opening" in world.out
 
+    def test_the_old_sign_in_is_removed_before_the_new_one(self, world: Scenario) -> None:
+        # From the next desktop run: the browser sign-in worked, and setup still failed,
+        # because az went on sending the old token. It has to be removed first.
+        self._session_ended(world)
+        assert world.run(typed="\n" * 40) == 0, world.out
+        (logout,) = world.az("logout")
+        assert logout.argv[-2:] == ["--username", "admin@werner.ac"]
+        calls = world.spawn.calls
+        assert calls.index(logout) < calls.index(world.az("login")[0])
+        assert world.ran("entra_provisioning.py")  # and setup went on
+
+    def test_a_new_sign_in_that_is_still_refused_gets_one_clean_start(
+        self, world: Scenario
+    ) -> None:
+        self._session_ended(world, cleared_by="account clear")  # logout was not enough here
+        assert world.run(typed="\n" * 40) == 0, world.out
+        assert len(world.az("account", "clear")) == 1 and len(world.az("login")) == 2
+        assert "sign in once more" in world.out
+
+    def test_a_sign_in_microsoft_keeps_refusing_stops_setup_before_anything_changes(
+        self, world: Scenario
+    ) -> None:
+        world.spawn.on(
+            words("ad", "signed-in-user", "show"), Reply(returncode=1, stderr=self._REVOKED)
+        )
+        assert world.run(typed="\n" * 40) == 1
+        assert "Microsoft is not accepting this sign-in" in world.out
+        assert not world.mutated() and not world.ran("entra_provisioning.py")
+        assert len(world.az("login")) == 2  # one clean start, then it stops asking
+
     def test_a_cached_token_is_not_taken_as_proof_of_a_working_sign_in(
         self, world: Scenario
     ) -> None:
         self._session_ended(world)
         assert world.run(typed="\n" * 40) == 0, world.out
         before_login = world.spawn.calls[: world.spawn.calls.index(world.az("login")[0])]
-        assert any(call.argv[-5:-2] == ["ad", "signed-in-user", "show"] for call in before_login)
+        assert any(words("ad", "signed-in-user", "show")(call) for call in before_login)
 
     def test_a_session_that_ends_during_setup_is_said_in_plain_words(self, world: Scenario) -> None:
         world.spawn.on(
