@@ -554,8 +554,8 @@ class _Teardown:
             console.bullet(
                 "The agent's local memory and logs, and Entrabot's private copies of Python "
                 "and the Azure CLI, and of the .NET SDK and the Microsoft Agent 365 CLI if "
-                "setup installed them for Word, Excel and OneDrive files. The project's .venv "
-                "will need setup to rebuild it."
+                "an earlier version of setup installed them. The project's .venv will need "
+                "setup to rebuild it."
             )
         console.blank()
         if not self.delete_agent:

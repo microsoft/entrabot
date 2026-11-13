@@ -124,6 +124,9 @@ CREATE_CHATTER = (
 HOOK_OUTPUT = json.dumps({"hookSpecificOutput": {"additionalContext": "body"}})
 
 
+AGENT_TOOLS_AUDIENCE = "ea9ffc3e-8a23-4a7d-836d-234d7c7565c1"
+
+
 def _checks(checks: list[dict]) -> Reply:
     return Reply(stdout=CHECKS_MARKER + json.dumps(checks))
 
@@ -145,8 +148,12 @@ class Scenario:
     # The tenant's licences, for the licence walkthrough (create_entra_agent_ids.py's
     # --licence-report and --assign-licence).
     licences: FakeLicences = field(default_factory=FakeLicences)
-    work_iq_tools: bool = False  # the a365 CLI and PowerShell 7 are installed
-    helper_installs_work_iq: bool = True  # prereqs-windows.ps1 -WithWorkIq installs them
+    # Word, Excel and OneDrive files: what the permission script answers (grants and the
+    # Blueprint's inheritable permissions, with the Provisioner credential), and how many of
+    # setup's checks pass before the agent's tokens carry the scopes (0: none within the wait).
+    work_iq_permissions: Reply = field(default_factory=Reply)
+    work_iq_honoured_after: int = 1
+    work_iq_checks: int = 0
     directory: FakeDirectory = field(
         default_factory=lambda: FakeDirectory(users=[dict(PAT), dict(ADMIN_USER)])
     )
@@ -290,6 +297,8 @@ class Scenario:
         on(script("create_entra_agent_ids.py"), create)
         self.licences.state_file = self.state_file
         self.licences.attach(self.spawn)  # after the agent step: the licence-only calls
+        on(script("ensure_a365_work_iq_permissions.py"), lambda _r: self.work_iq_permissions)
+        on(snippet("work_iq_token_scopes"), self.work_iq_check)
         on(script("verify_blueprint_cert.py"), Reply())
         on(script("register_windows_blueprint_cert.py"), Reply())
         on(
@@ -376,19 +385,20 @@ class Scenario:
     def sponsor_calls(self) -> list[RunRequest]:
         return [call for call in self.spawn.calls if snippet("_add_sponsor")(call)]
 
-    @property
-    def installed_a365(self) -> Path:
-        """Where the helper puts the Agent 365 CLI: Entrabot's own folder, no admin rights."""
-        return self.tmp_path / "localappdata" / "entrabot" / "tools" / "a365" / "a365.exe"
-
-    @property
-    def installed_dotnet(self) -> Path:
-        """...and the .NET SDK it runs on, when the PC has none."""
-        return self.tmp_path / "localappdata" / "entrabot" / "tools" / "dotnet" / "dotnet.exe"
-
-    @property
-    def installed_pwsh(self) -> Path:
-        return self.tmp_path / "localappdata" / "Microsoft" / "WindowsApps" / "pwsh.exe"
+    def work_iq_check(self, request: RunRequest) -> Reply:
+        """Stands in for setup's check, as the agent, of the scopes in its Work IQ tokens."""
+        self.work_iq_checks += 1
+        honoured = 0 < self.work_iq_honoured_after <= self.work_iq_checks
+        results = [
+            {
+                "audience": audience,
+                "ok": honoured,
+                "missing": [] if honoured else ["Tools.ListInvoke.All"],
+                "error": "" if honoured else "invalid_grant: AADSTS65001: has not consented",
+            }
+            for audience in ("c2d0c2b6-8013-4346-9f8b-b81d3b754a29", AGENT_TOOLS_AUDIENCE)
+        ]
+        return Reply(stdout=RESULT_MARKER + json.dumps(results))
 
     def install_helper(self, request: RunRequest) -> Reply:
         """Stands in for scripts\\prereqs-windows.ps1: puts each tool where its installer does."""
@@ -396,12 +406,6 @@ class Scenario:
             exe = self.tmp_path / "profile" / ".local" / "bin" / "claude.exe"
             exe.parent.mkdir(parents=True, exist_ok=True)
             exe.write_bytes(b"")
-        if "-WithWorkIq" in request.argv:
-            if not self.helper_installs_work_iq:
-                return Reply(returncode=1)
-            for exe in (self.installed_a365, self.installed_dotnet, self.installed_pwsh):
-                exe.parent.mkdir(parents=True, exist_ok=True)
-                exe.write_bytes(b"")
         return Reply()
 
     def which(self, name: str) -> str | None:
@@ -410,21 +414,7 @@ class Scenario:
         claude = self.tmp_path / "tools" / "claude.exe"
         if name == "claude" and claude.exists():
             return str(claude)
-        if name in ("a365", "pwsh") and self.work_iq_tools:
-            return str(self.tmp_path / "tools" / f"{name}.exe")
         return None
-
-    def with_work_iq_tools(self) -> None:
-        """The a365 CLI and PowerShell 7 on PATH, and a tenant where a365's lookups succeed."""
-        self.work_iq_tools = True
-        for name in ("a365.exe", "pwsh.exe"):
-            (self.tmp_path / "tools" / name).write_bytes(b"")
-        self.a365_lookups()
-
-    def a365_lookups(self) -> None:
-        """The tenant answers the Work IQ step's own lookups (its CLI app, the agent's name)."""
-        self.spawn.on(words("ad", "app", "list"), Reply(stdout=json.dumps([{"appId": "cli"}])))
-        self.spawn.on(words("ad", "sp", "show"), Reply(stdout=json.dumps({"displayName": "A"})))
 
     def run(
         self,
@@ -1463,13 +1453,18 @@ class TestFailures:
         assert world.run(new_chain=True, upn_suffix="sati", platform="darwin") == 1
         assert "setup.sh" in world.out and world.spawn.calls == []
 
-    def test_work_iq_without_its_tools_stops_before_anything_changes(self, world: Scenario) -> None:
-        assert world.run(new_chain=True, upn_suffix="sati", configure_work_iq=True) == 1
-        assert not world.mutated()
-        # The fix is the repo's helper, which installs what is missing; never a download page.
-        assert "scripts\\prereqs-windows.ps1 -WithWorkIq" in world.out
-        assert "dotnet.microsoft.com" not in world.out
-        assert not any("-WithWorkIq" in call.argv for call in world.spawn.calls)  # unattended
+    def test_work_iq_asked_for_unattended_needs_no_tools(self, world: Scenario) -> None:
+        # It used to stop here for want of the Agent 365 CLI, .NET and PowerShell 7.
+        assert world.run(new_chain=True, upn_suffix="sati", configure_work_iq=True) == 0, world.out
+        assert not any("-WithWorkIq" in call.argv for call in world.spawn.calls)
+        assert not any("a365" in Path(call.argv[0]).name.lower() for call in world.spawn.calls)
+        # A later run that does not ask for Work IQ must not assign a Copilot licence.
+        world.env["ENTRABOT_ASSIGN_WORK_IQ_LICENSE"] = "1"
+        assert world.run(new_chain=True, upn_suffix="sati") == 0
+        for helper in ("entra_provisioning.py", "create_entra_agent_ids.py"):
+            request = world.ran(helper)[-1]
+            assert request.env is not None
+            assert "ENTRABOT_ASSIGN_WORK_IQ_LICENSE" not in request.env
 
 
 class TestTheAgentStepSaysWhyItStopped:
@@ -2032,7 +2027,6 @@ class TestHostAdvice:
     def test_a_copilot_licence_just_assigned_is_said_without_its_part_number(
         self, world: Scenario
     ) -> None:
-        world.with_work_iq_tools()
         assert world.run(new_chain=True, upn_suffix="sati", configure_work_iq=True) == 0
         assert "[ok] Microsoft 365 Copilot licence assigned" in world.out
         assert "Microsoft_365_Copilot" not in world.out and "Microsoft_365_Copilot" in world.log
@@ -2105,18 +2099,6 @@ class TestMoreChoices:
         assert "nobody@werner.ac" in world.out and not world.mutated()
         assert "object ID" in world.out  # what to do about it
 
-    def test_work_iq_chosen_without_its_tools_and_nobody_to_ask_is_skipped_not_fatal(
-        self, world: Scenario
-    ) -> None:
-        # Answers but no keyboard: nothing is installed without being asked, setup carries on,
-        # and the last screen says it was asked for and is off.
-        answers = {"identity": "new", "upn_suffix": "sati", "work_iq": "yes"}
-        assert world.run(answers=answers) == 3
-        assert "stay off for now" in world.out
-        assert not any("-WithWorkIq" in call.argv for call in world.spawn.calls)
-        request = world.ran("create_entra_agent_ids.py")[0]
-        assert request.env is not None and "ENTRABOT_ASSIGN_WORK_IQ_LICENSE" not in request.env
-
     def test_a_work_iq_licence_request_left_in_the_shell_is_not_inherited(
         self, world: Scenario
     ) -> None:
@@ -2129,130 +2111,86 @@ class TestMoreChoices:
             assert request.env is not None
             assert "ENTRABOT_ASSIGN_WORK_IQ_LICENSE" not in request.env
 
-    def test_work_iq_with_its_tools_runs_after_the_agent_exists(self, world: Scenario) -> None:
-        world.with_work_iq_tools()
-        a365 = world.tmp_path / "tools" / "a365.exe"
+    def test_work_iq_is_switched_on_by_setup_itself(self, world: Scenario) -> None:
+        # No Agent 365 CLI, .NET or PowerShell 7, and no Windows sign-in window: setup writes
+        # the manifest Microsoft's tool wrote, gives the Blueprint the permissions with the
+        # Provisioner credential, and checks as the agent that Microsoft honours them.
         assert world.run(new_chain=True, upn_suffix="sati", configure_work_iq=True) == 0, world.out
+        manifest = json.loads((world.root / "ToolingManifest.json").read_text("utf-8"))
+        assert [entry["mcpServerName"] for entry in manifest["mcpServers"]] == [
+            "mcp_WordServer",
+            "mcp_ODSPRemoteServer",
+            "mcp_ExcelServer",
+        ]
+        assert not (world.root / "a365.config.json").exists()
+        (permissions,) = world.ran("ensure_a365_work_iq_permissions.py")
+        assert permissions.argv[-2:] == ["--blueprint-app-id", BP_APP]
+        assert world.work_iq_checks == 1
         request = world.ran("create_entra_agent_ids.py")[0]
         assert request.env is not None and request.env["ENTRABOT_ASSIGN_WORK_IQ_LICENSE"] == "1"
-        order = [call.argv for call in world.spawn.calls]
-        created = next(
-            i
-            for i, argv in enumerate(order)
-            if argv[1:2] and argv[1].endswith("create_entra_agent_ids.py")
-        )
-        requirements = next(
-            i for i, argv in enumerate(order) if argv[:3] == [str(a365), "setup", "requirements"]
-        )
-        assert created < requirements
-        assert (
-            json.loads((world.root / "a365.config.json").read_text("utf-8"))["agentBlueprintId"]
-            == BP_APP
-        )
-
-    def test_a_failed_work_iq_step_never_stops_the_rest_of_setup(self, world: Scenario) -> None:
-        # From a real run over SSH: 'a365 setup requirements' could not sign in and setup
-        # stopped at step 6, with no certificate, no settings and nothing registered; running
-        # it again hit the same wall.
-        world.with_work_iq_tools()
-        world.spawn.on(words("ad", "app", "list"), Reply(stdout="[]"))  # no Agent 365 CLI app
-        assert world.run(new_chain=True, upn_suffix="sati", configure_work_iq=True) == 3
-        assert world.wincert.created and world.env_file.exists()
-        assert (world.root / ".mcp.json").exists()
-        last = _flat(_last_screen(world))
-        assert last.startswith("Setup finished, with something to check")
-        assert "Word, Excel and OneDrive files were asked for, but they are not switched on" in last
-        assert "Agent 365 CLI" in last  # what was missing, in setup's own words
-        things = last[last.index("Things to try next") : last.index("Later:")]
-        assert "Create a Word document" not in things
-        assert "were asked for but are not switched on yet" in things
-        # The failed attempt left nothing behind that says Work IQ is on.
-        assert not (world.root / "ToolingManifest.json").exists()
-        assert not (world.root / "a365.config.json").exists()
-
-    def test_a_sign_in_failure_is_said_in_plain_words_with_the_log(self, world: Scenario) -> None:
-        world.with_work_iq_tools()
-        world.spawn.on(words("setup", "permissions"), Reply(returncode=1, stdout=MSAL_OUTPUT))
-        assert world.run(new_chain=True, upn_suffix="sati", configure_work_iq=True) == 3
-        last = _last_screen(world)
-        assert "The Agent 365 tool could not sign in to Microsoft." in _flat(last)
-        assert "at this PC's own desktop" in _flat(last)
-        assert "The details are in the setup log:" in last and "setup.log" in last
-        assert "MsalAuthenticationFailedException" not in last
-        assert "MsalAuthenticationFailedException" in world.log
+        assert "Word, Excel and OneDrive files are switched on" in world.out
 
     def test_the_work_iq_steps_wait_until_the_agent_is_set_up_and_tested(
         self, world: Scenario
     ) -> None:
         # Nothing optional sits in front of the steps the agent needs.
-        world.with_work_iq_tools()
-        a365 = str(world.tmp_path / "tools" / "a365.exe")
         assert world.run(new_chain=True, upn_suffix="sati", configure_work_iq=True) == 0
         calls = world.spawn.calls
         smoke = next(i for i, call in enumerate(calls) if snippet("run_smoke_checks")(call))
-        first = next(i for i, call in enumerate(calls) if call.argv[0] == a365)
-        assert smoke < first
-        assert world.out.index("[11/11]") < world.out.index("Configuring Microsoft Agent 365")
+        permissions = next(
+            i for i, call in enumerate(calls) if script("ensure_a365_work_iq_permissions.py")(call)
+        )
+        assert smoke < permissions
+        assert world.out.index("[11/11]") < world.out.index("\nWord, Excel and OneDrive files\n")
 
-
-MSAL_OUTPUT = (
-    "ERROR: MSAL authentication failed: Unknown Status: Unexpected Error: 0xffffffff800703f0\n"
-    "ERROR: Interactive authentication failed: Failed to acquire token\n"
-    "ERROR: Exception type: Microsoft.Agents.A365.DevTools.Cli.Services."
-    "MsalAuthenticationFailedException\n"
-)
-
-
-class TestWorkIqNeedsTheDesktop:
-    """From a real run over SSH: the a365 sign-in window cannot open in a session without a
-    desktop. Setup no longer tries there, and says so before offering the install."""
-
-    def _over_ssh(self, world: Scenario) -> None:
+    def test_it_works_over_ssh_too(self, world: Scenario) -> None:
         world.env["SESSIONNAME"] = ""
         world.env["SSH_CONNECTION"] = "10.0.0.2 50000 10.0.0.1 22"
+        assert world.run(new_chain=True, upn_suffix="sati", configure_work_iq=True) == 0, world.out
+        assert world.work_iq_checks == 1
 
-    def test_the_tools_are_installed_but_nothing_is_configured(self, world: Scenario) -> None:
-        self._over_ssh(world)
-        answers = {"identity": "new", "upn_suffix": "sati", "work_iq": "yes"}
-        assert world.run(answers=answers, typed="\n" * 40) == 3, world.out
-        out = world.out
-        said = out.index("can only be switched on from this PC's own desktop")
-        assert said < out.index("Install them now?")  # known before agreeing to the install
-        assert "so that switching them on later at the desktop is quick" in _flat(out)
-        assert any("-WithWorkIq" in call.argv for call in world.spawn.calls)
-        assert not [call for call in world.spawn.calls if "a365" in Path(call.argv[0]).name]
-        assert "Work IQ:     no: only from this PC's own desktop" in out
-        last = _flat(_last_screen(world))
-        assert "they can only be switched on from this PC's own desktop" in last
-        assert "Remote Desktop" in last
-        assert "answering yes to the Word, Excel and OneDrive question" in last
-        assert "Their tools are installed, so that run is quick." in last
-        things = last[last.index("Things to try next") : last.index("Later:")]
-        assert "Create a Word document" not in things
-        # Its Copilot licence waits for the run that switches them on.
-        request = world.ran("create_entra_agent_ids.py")[0]
-        assert request.env is not None and "ENTRABOT_ASSIGN_WORK_IQ_LICENSE" not in request.env
-        assert WALKTHROUGH not in out
-
-    def test_declined_the_last_screen_has_the_install_command_too(self, world: Scenario) -> None:
-        self._over_ssh(world)
-        answers = {
-            "identity": "new",
-            "upn_suffix": "sati",
-            "work_iq": "yes",
-            "install_work_iq": "no",
-        }
-        assert world.run(answers=answers, typed="\n" * 40) == 3
-        last = _flat(_last_screen(world))
-        assert "can only be switched on from this PC's own desktop" in last
-        assert workiq_command() in last and "so that run is quick" not in last
-
-    def test_unattended_with_the_tools_there_it_is_said_at_the_end(self, world: Scenario) -> None:
-        self._over_ssh(world)
-        world.with_work_iq_tools()
+    def test_a_failed_permissions_step_never_stops_the_rest_of_setup(self, world: Scenario) -> None:
+        world.work_iq_permissions = Reply(
+            returncode=1,
+            stderr="ERROR: write the inheritable permissions for Agent 365 tools failed (403)",
+        )
         assert world.run(new_chain=True, upn_suffix="sati", configure_work_iq=True) == 3
-        assert not [call for call in world.spawn.calls if "a365" in Path(call.argv[0]).name]
-        assert "can only be switched on from this PC's own desktop" in _flat(_last_screen(world))
+        assert world.wincert.created and world.env_file.exists()
+        assert (world.root / ".mcp.json").exists()
+        last = _last_screen(world)
+        flat = _flat(last)
+        assert (
+            "Word, Excel and OneDrive files were asked for, but they are not switched on." in flat
+        )
+        assert "Setup could not give the agent's Blueprint the permissions they need." in flat
+        assert "The details are in the setup log:" in last and "setup.log" in last
+        assert "(403)" not in last and "(403)" in world.log
+        things = flat[flat.index("Things to try next") : flat.index("Later:")]
+        assert "were asked for but are not switched on yet" in things
+        # The failed attempt left nothing behind that says Work IQ is on.
+        assert not (world.root / "ToolingManifest.json").exists()
+        assert world.work_iq_checks == 0
+
+    def test_set_up_but_not_honoured_yet_is_a_thing_to_check(self, world: Scenario) -> None:
+        # Measured on a real tenant: the token service took 20 to 45 seconds to honour the
+        # Blueprint's new entries. Setup waits about two minutes, then says how to check.
+        world.work_iq_honoured_after = 0  # not within setup's wait
+        assert world.run(new_chain=True, upn_suffix="sati", configure_work_iq=True) == 3
+        assert world.work_iq_checks > 2 and 90 <= sum(world.slept) <= 150
+        assert "Still waiting for Microsoft" in world.out  # a visible heartbeat
+        flat = _flat(_last_screen(world))
+        assert (
+            "Word, Excel and OneDrive files are set up, but Microsoft has not started honouring "
+            "them for the agent yet." in flat
+        )
+        assert "scripts\\setup-windows.cmd -Diagnose" in flat
+        assert (world.root / "ToolingManifest.json").exists()  # kept: the setup is done
+
+    def test_honoured_after_a_little_while_is_switched_on(self, world: Scenario) -> None:
+        world.work_iq_honoured_after = 3
+        assert world.run(new_chain=True, upn_suffix="sati", configure_work_iq=True) == 0, world.out
+        assert world.work_iq_checks == 3
+        assert "Word, Excel and OneDrive files are switched on" in world.out
 
 
 class TestCloudMemoryEdges:
@@ -2924,9 +2862,6 @@ class TestFirstStartAndThingsToTry:
     def _finish(self, world: Scenario) -> str:
         return world.out[world.out.index("To start your agent:") :]
 
-    def _with_work_iq_tools(self, world: Scenario) -> None:
-        world.with_work_iq_tools()
-
     def test_claude_codes_first_start_questions_are_explained(self, world: Scenario) -> None:
         assert world.run(new_chain=True, upn_suffix="sati") == 0
         finish = self._finish(world)
@@ -2996,7 +2931,6 @@ class TestFirstStartAndThingsToTry:
         assert "run setup again" in finish
 
     def test_with_work_iq_a_word_document_is_suggested(self, world: Scenario) -> None:
-        self._with_work_iq_tools(world)
         assert world.run(new_chain=True, upn_suffix="sati", configure_work_iq=True) == 0, world.out
         finish = self._finish(world)
         assert "Create a Word document called Hello and share it with me." in finish
@@ -3548,18 +3482,18 @@ class TestTheLicenceWalkthrough:
     def test_copilot_is_left_out_while_word_excel_and_onedrive_stay_off(
         self, world: Scenario
     ) -> None:
-        # From a real run: the tools could not be installed, so Work IQ stayed off, yet the
-        # walkthrough talked about Copilot and listed it first.
+        # From a real run: Work IQ stayed off, yet the walkthrough talked about Copilot and
+        # listed it first. Here it stays off because its permissions step failed.
         self._no_licence(
             world,
             tenant_sku(COPILOT_ID, "Microsoft_365_Copilot", COPILOT_PLANS, total=3, used=3),
             tenant_sku(E3_ID, "SPE_E3", E3_PLANS, total=4, used=4),
         )
+        world.work_iq_permissions = Reply(returncode=1)
         answers = {
             "identity": "new",
             "upn_suffix": "sati",
             "work_iq": "yes",
-            "install_work_iq": "no",
             "licence_recheck": "s",
         }
         assert world.run(answers=answers, typed="\n" * 40) == 3
@@ -3609,7 +3543,6 @@ class TestTheLicenceWalkthrough:
 
 class TestTheCopilotLicence:
     def _work_iq(self, world: Scenario, copilot: str) -> None:
-        world.with_work_iq_tools()
         world.copilot = copilot
 
     def test_the_agent_step_says_what_happened_to_it(self, world: Scenario) -> None:
@@ -3651,15 +3584,14 @@ class TestTheCopilotLicence:
         assert "Microsoft 365 Copilot licence first" in _flat(things)
 
 
-class TestWorkIqToolsAreOfferedNotDropped:
+class TestTheWorkIqQuestion:
     """From a desktop run: yes to Word, Excel and OneDrive, then "Work IQ needs tools that are
-    not installed, so it is skipped for now", nothing more about it, and later the agent's
-    Word tool failed. The person thought it was switched on."""
+    not installed, so it is skipped for now", and later the agent's Word tool failed. Setup
+    now switches them on itself; the question still says what they need first."""
 
     def test_the_question_says_what_it_is_and_what_it_needs_before_asking(
         self, world: Scenario
     ) -> None:
-        world.with_work_iq_tools()
         world.run(typed="\n" * 40)
         out = world.out
         question = out.index("Switch on Word, Excel and OneDrive files? [y/N]")
@@ -3667,96 +3599,24 @@ class TestWorkIqToolsAreOfferedNotDropped:
         assert explained != -1
         assert "Microsoft 365 Copilot" in out[explained:question]
 
-    def test_missing_tools_are_installed_on_enter_and_work_iq_goes_on(
-        self, world: Scenario
-    ) -> None:
-        world.a365_lookups()
+    def test_yes_switches_them_on_with_nothing_to_install(self, world: Scenario) -> None:
         answers = {"identity": "new", "upn_suffix": "sati", "work_iq": "yes"}
         assert world.run(answers=answers, typed="\n" * 40) == 0, world.out
-        helper = next(call for call in world.spawn.calls if "-WithWorkIq" in call.argv)
-        assert helper.interactive and Path(helper.argv[5]).name == "prereqs-windows.ps1"
-        assert helper.argv[6:] == ["-WithWorkIq"]
-        out = world.out
-        offer = out[out.index("not on this PC yet") : out.index("Install them now?")]
-        assert ".NET SDK" in offer and "Agent 365 CLI" in offer and "PowerShell 7" in offer
-        # From a real run: winget's .NET installer needed elevation and failed. The helper
-        # installs for the account only now, and the offer says so, with size and time.
-        offer = _flat(offer)
-        assert "no administrator rights" in offer and "administrator approval" not in offer
-        assert "about 1 GB" in offer and "a few minutes" in offer
-        # The a365 steps ran, with the tools the helper just installed on their PATH, and
-        # a365.exe pointed at the .NET the helper installed for it.
-        a365 = [call for call in world.spawn.calls if call.argv[0] == str(world.installed_a365)]
-        assert a365 and a365[0].argv[1:3] == ["setup", "requirements"]
-        for call in a365:
-            assert call.env is not None
-            assert call.env["DOTNET_ROOT"] == str(world.installed_dotnet.parent)
-            path = call.env["PATH"].split(os.pathsep)
-            assert path[0] == str(world.installed_dotnet.parent)
-            assert str(world.installed_pwsh.parent) in path
-        assert "were asked for" not in world.out
-
-    def test_declining_the_install_is_said_at_the_end_as_something_to_check(
-        self, world: Scenario
-    ) -> None:
-        answers = {
-            "identity": "new",
-            "upn_suffix": "sati",
-            "work_iq": "yes",
-            "install_work_iq": "no",
-        }
-        assert world.run(answers=answers, typed="\n" * 40) == 3
         assert not any("-WithWorkIq" in call.argv for call in world.spawn.calls)
-        # Its Copilot licence only matters once it is on: no walkthrough for it now.
-        assert WALKTHROUGH not in world.out and world.licences.reports == 0
-        last = _flat(_last_screen(world))
-        assert last.startswith("Setup finished, with something to check")
-        assert "Word, Excel and OneDrive files were asked for, but they are not switched on" in last
-        assert workiq_command() in last and "answer yes to the Word, Excel and OneDrive" in last
-        things = last[last.index("Things to try next") : last.index("Later:")]
-        assert "were asked for but are not switched on yet" in things
-
-    def test_an_install_that_does_not_finish_is_said_at_the_end_too(self, world: Scenario) -> None:
-        world.helper_installs_work_iq = False
-        answers = {"identity": "new", "upn_suffix": "sati", "work_iq": "yes"}
-        assert world.run(answers=answers, typed="\n" * 40) == 3
-        assert "The install did not finish, so Word, Excel and OneDrive files" in world.out
-        assert "Word, Excel and OneDrive files were asked for" in _flat(_last_screen(world))
-
-    def test_the_review_says_what_was_installed_before_it(self, world: Scenario) -> None:
-        # "Nothing has been changed yet." was untrue moments after an install.
-        world.a365_lookups()
-        answers = {"identity": "new", "upn_suffix": "sati", "work_iq": "yes", "start": "no"}
-        assert world.run(answers=answers, typed="\n" * 40) == 130
-        review = _flat(world.out[world.out.index("[4/11] Review") :])
-        assert "Nothing has been changed yet." not in review
-        assert "Nothing has been changed in your tenant yet." in review
-        assert (
-            "On this PC setup has only installed the tools for Word, Excel and OneDrive files."
-            in review
-        )
-        assert not world.mutated()
-
-    def test_an_install_that_did_not_finish_is_said_as_tried(self, world: Scenario) -> None:
-        world.helper_installs_work_iq = False
-        answers = {"identity": "new", "upn_suffix": "sati", "work_iq": "yes", "start": "no"}
-        assert world.run(answers=answers, typed="\n" * 40) == 130
-        review = _flat(world.out[world.out.index("[4/11] Review") :])
-        assert "only tried to install the tools for Word, Excel and OneDrive files" in review
+        assert "Install them now?" not in world.out
+        assert "own desktop" not in world.out
+        assert world.ran("ensure_a365_work_iq_permissions.py")
+        things = _last_screen(world)
+        things = things[things.index("Things to try next") : things.index("Later:")]
+        assert "Create a Word document called Hello and share it with me." in things
 
     def test_the_review_says_whether_it_is_on(self, world: Scenario) -> None:
         answers = {
             "identity": "new",
             "upn_suffix": "sati",
             "work_iq": "yes",
-            "install_work_iq": "no",
             "start": "no",
         }
         assert world.run(answers=answers, typed="\n" * 40) == 130
-        assert "Work IQ:     no: its tools are not installed" in world.out
-
-
-def workiq_command() -> str:
-    from entrabot.winsetup.workiq import INSTALL_COMMAND
-
-    return INSTALL_COMMAND
+        assert "Work IQ:     yes (Word, Excel and OneDrive files)" in world.out
+        assert "Nothing has been changed yet." in world.out

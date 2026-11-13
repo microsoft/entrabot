@@ -1468,3 +1468,130 @@ class TestFileEncodings:
             expected_binary=expected, claude_path=claude, copilot_path=tmp_path / "none.json"
         )
         assert checks[0].status == "pass", checks[0]
+
+
+# ─── Work IQ: does Microsoft honour the agent's permissions for Word, Excel and OneDrive? ───
+
+
+def _jwt(claims: dict[str, object]) -> str:
+    import base64
+
+    def part(data: dict[str, object]) -> str:
+        return base64.urlsafe_b64encode(json.dumps(data).encode()).decode().rstrip("=")
+
+    return f"{part({'alg': 'none'})}.{part(claims)}.signature"
+
+
+WORD_AUDIENCE = "c2d0c2b6-8013-4346-9f8b-b81d3b754a29"
+TOOLS_AUDIENCE = "ea9ffc3e-8a23-4a7d-836d-234d7c7565c1"
+
+
+def _work_iq_manifest(tmp_path: Path) -> Path:
+    from entrabot.a365.catalog import manifest_entry, setup_servers
+
+    path = tmp_path / "ToolingManifest.json"
+    entries = [manifest_entry(server) for server in setup_servers()]
+    path.write_text(json.dumps({"mcpServers": entries}), encoding="utf-8")
+    return path
+
+
+class TestWorkIqTokenScopes:
+    """The check that replaced the manifest 'spike': a token as the agent for each audience in
+    the manifest, the way the runtime asks, and the scopes it carries."""
+
+    def test_each_audience_is_asked_for_the_way_the_runtime_asks(self, tmp_path: Path) -> None:
+        from entrabot.preflight import work_iq_token_scopes
+
+        asked: list[str] = []
+
+        def acquire(config: EntraBotConfig, *, resource_scope: str) -> str:
+            asked.append(resource_scope)
+            scopes = {
+                f"{WORD_AUDIENCE}/.default": "Tools.ListInvoke.All",
+                f"{TOOLS_AUDIENCE}/.default": (
+                    "McpServers.Excel.All McpServers.OneDriveSharepoint.All "
+                    "McpServersMetadata.Read.All"
+                ),
+            }[resource_scope]
+            return _jwt({"scp": scopes})
+
+        results = work_iq_token_scopes(
+            _config_complete(), _work_iq_manifest(tmp_path), acquire=acquire
+        )
+        assert sorted(asked) == sorted(
+            [f"{WORD_AUDIENCE}/.default", f"{TOOLS_AUDIENCE}/.default"]
+        )
+        assert results == [
+            {"audience": WORD_AUDIENCE, "ok": True, "missing": [], "error": ""},
+            {"audience": TOOLS_AUDIENCE, "ok": True, "missing": [], "error": ""},
+        ]
+
+    def test_a_missing_scope_is_named_and_no_token_is_returned(self, tmp_path: Path) -> None:
+        from entrabot.preflight import work_iq_token_scopes
+
+        token = _jwt({"scp": "McpServers.Excel.All"})
+        results = work_iq_token_scopes(
+            _config_complete(),
+            _work_iq_manifest(tmp_path),
+            acquire=lambda config, *, resource_scope: token,
+        )
+        tools = next(item for item in results if item["audience"] == TOOLS_AUDIENCE)
+        assert tools["ok"] is False and tools["missing"] == ["McpServers.OneDriveSharepoint.All"]
+        assert token not in json.dumps(results)
+
+    def test_not_consented_yet_is_a_result_not_a_crash(self, tmp_path: Path) -> None:
+        from entrabot.preflight import work_iq_token_scopes
+
+        def refuse(config: EntraBotConfig, *, resource_scope: str) -> str:
+            raise TokenExchangeError(
+                "hop3:agent_user", "invalid_grant", "AADSTS65001: The user or administrator "
+                "has not consented to use the application."
+            )
+
+        results = work_iq_token_scopes(
+            _config_complete(), _work_iq_manifest(tmp_path), acquire=refuse
+        )
+        assert all(item["ok"] is False for item in results)
+        assert "AADSTS65001" in str(results[0]["error"])
+
+
+class TestWorkIqDiagnosis:
+    def test_without_a_manifest_there_is_nothing_to_check(self, tmp_path: Path) -> None:
+        from entrabot.preflight import check_work_iq_tokens
+
+        assert check_work_iq_tokens(_config_complete(), tmp_path / "ToolingManifest.json") is None
+
+    def test_honoured_is_a_pass(self, tmp_path: Path) -> None:
+        from entrabot.preflight import check_work_iq_tokens
+
+        def acquire(config: EntraBotConfig, *, resource_scope: str) -> str:
+            return _jwt(
+                {
+                    "scp": "Tools.ListInvoke.All McpServers.Excel.All "
+                    "McpServers.OneDriveSharepoint.All"
+                }
+            )
+
+        check = check_work_iq_tokens(
+            _config_complete(), _work_iq_manifest(tmp_path), acquire=acquire
+        )
+        assert check is not None and check.status == "pass"
+
+    def test_not_honoured_yet_is_a_warning_with_what_to_do(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from entrabot import preflight
+        from entrabot.preflight import check_work_iq_tokens
+
+        monkeypatch.setattr(preflight, "_is_windows", lambda: True)
+
+        def refuse(config: EntraBotConfig, *, resource_scope: str) -> str:
+            raise TokenExchangeError("hop3:agent_user", "invalid_grant", "AADSTS65001: not yet")
+
+        check = check_work_iq_tokens(
+            _config_complete(), _work_iq_manifest(tmp_path), acquire=refuse
+        )
+        assert check is not None and check.status == "warn"  # optional: never fails -Diagnose
+        assert "AADSTS65001" in check.detail
+        assert check.remediation is not None
+        assert "scripts\\setup-windows.cmd -Diagnose" in check.remediation

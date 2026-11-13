@@ -25,6 +25,7 @@ Three entry points:
 
 from __future__ import annotations
 
+import base64
 import ipaddress
 import json
 import os
@@ -32,7 +33,7 @@ import shlex
 import shutil
 import socket
 import sys
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -375,6 +376,105 @@ def run_smoke_checks(
     checks.append(_me_identity_check(config, token, transport=transport))
     checks.append(_chats_scope_check(token, transport=transport))
     return checks
+
+
+# ─── Work IQ: Word, Excel and OneDrive files ─────────────────────────────────
+
+WORK_IQ_CHECK_NAME = "Word, Excel and OneDrive files"
+
+
+def _token_scopes(token: str) -> list[str]:
+    """The ``scp`` claim of an access token, read without checking its signature: only to
+    see which scopes Microsoft put in it. The token itself never leaves this function."""
+    try:
+        payload = token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except (IndexError, ValueError):
+        return []
+    scopes = claims.get("scp") if isinstance(claims, dict) else None
+    return scopes.split() if isinstance(scopes, str) else []
+
+
+def work_iq_token_scopes(
+    config: EntraBotConfig,
+    manifest_path: Path,
+    *,
+    acquire: Callable[..., str] | None = None,
+) -> list[dict[str, object]]:
+    """For each audience in the Work IQ manifest at *manifest_path*: whether a token the agent
+    gets for it, the way the runtime asks (``<audience>/.default``), carries every scope the
+    manifest needs there. Results only; no token is returned, printed or logged."""
+    from entrabot.a365.manifest import load_manifest
+
+    manifest = load_manifest(manifest_path)
+    needed: dict[str, list[str]] = {}
+    for server in {id(server): server for server in manifest.servers.values()}.values():
+        scopes = needed.setdefault(server.audience, [])
+        if server.scope not in scopes:
+            scopes.append(server.scope)
+    get_token = acquire or acquire_agent_user_token
+    results: list[dict[str, object]] = []
+    for audience, scopes in needed.items():
+        try:
+            token = get_token(config, resource_scope=f"{audience}/.default")
+        except TokenExchangeError as exc:
+            error = f"{exc.error}: {exc.description}"[:300]
+            results.append({"audience": audience, "ok": False, "missing": scopes, "error": error})
+            continue
+        except Exception as exc:  # noqa: BLE001 - reported, never raised: this only looks
+            error = f"{type(exc).__name__}: {exc}"[:300]
+            results.append({"audience": audience, "ok": False, "missing": scopes, "error": error})
+            continue
+        have = set(_token_scopes(token))
+        missing = [scope for scope in scopes if scope not in have]
+        results.append({"audience": audience, "ok": not missing, "missing": missing, "error": ""})
+    return results
+
+
+def check_work_iq_tokens(
+    config: EntraBotConfig,
+    manifest_path: Path,
+    *,
+    acquire: Callable[..., str] | None = None,
+) -> Check | None:
+    """Diagnostics: when Word, Excel and OneDrive files are set up here (a Work IQ manifest),
+    whether Microsoft honours them for the agent. A warning, never a failure: they are
+    optional. None when there is nothing to check."""
+    if not manifest_path.is_file():
+        return None
+    try:
+        results = work_iq_token_scopes(config, manifest_path, acquire=acquire)
+    except Exception as exc:  # noqa: BLE001 - an unreadable manifest is something to say
+        return Check(
+            name=WORK_IQ_CHECK_NAME,
+            status="warn",
+            detail=f"{manifest_path.name} could not be read: {exc}",
+            remediation=f"Run {_setup_command()} again and answer yes to Word, Excel and OneDrive.",
+        )
+    if not results:
+        return None
+    if all(item["ok"] for item in results):
+        return Check(
+            name=WORK_IQ_CHECK_NAME,
+            status="pass",
+            detail="The agent's tokens carry every scope they need.",
+        )
+    problems = [
+        f"{item['audience']}: "
+        + (str(item["error"]) if item["error"] else "missing " + " ".join(item["missing"]))
+        for item in results
+        if not item["ok"]
+    ]
+    return Check(
+        name=WORK_IQ_CHECK_NAME,
+        status="warn",
+        detail="Microsoft does not honour them for the agent yet. " + "; ".join(problems),
+        remediation=(
+            "If they were set up in the last few minutes, wait and run "
+            f"{_diagnose_command()} again. Otherwise run {_setup_command()} again and answer "
+            "yes to Word, Excel and OneDrive."
+        ),
+    )
 
 
 # ─── Phase 3: diagnostics extras ─────────────────────────────────────────────
@@ -874,6 +974,7 @@ def run_diagnostics(
     claude_mcp_path: Path,
     copilot_mcp_path: Path,
     transport: httpx.BaseTransport | None = None,
+    work_iq_manifest: Path | None = None,
 ) -> list[Check]:
     """Full health check for ``./scripts/setup.sh --diagnose`` and the Windows wizard.
 
@@ -895,6 +996,10 @@ def run_diagnostics(
         )
     )
     checks.append(check_persona_sati_mcp(claude_mcp_path))
+    if work_iq_manifest is not None:
+        work_iq = check_work_iq_tokens(config, work_iq_manifest)
+        if work_iq is not None:
+            checks.append(work_iq)
     return checks
 
 

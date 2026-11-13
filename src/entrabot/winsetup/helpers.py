@@ -165,9 +165,21 @@ checks = run_diagnostics(
     expected_binary=binary,
     claude_mcp_path=root / ".mcp.json",
     copilot_mcp_path=copilot,
+    work_iq_manifest=root / "ToolingManifest.json",
 )
 print(format_report(checks, color=color == "1"))
 sys.exit(overall_exit_code(checks))
+"""
+
+# Setup's last step for Word, Excel and OneDrive files: does Microsoft honour them for the
+# agent yet? Per audience, from the manifest given as the first argument. No token is printed.
+WORK_IQ_SNIPPET = f"""
+import json, sys
+from pathlib import Path
+from entrabot.config import EntraBotConfig
+from entrabot.preflight import work_iq_token_scopes
+results = work_iq_token_scopes(EntraBotConfig.from_env(), Path(sys.argv[1]))
+print({RESULT_MARKER!r} + json.dumps(results))
 """
 
 LICENSE_SNIPPET = f"""

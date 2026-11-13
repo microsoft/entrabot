@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """Ensure Microsoft Agent 365 Work IQ MCP tenant resources are usable.
 
-The A365 CLI can fail to materialize the first-party resource service
-principals it needs, then still exit successfully after printing
-``OAuth2 grants failed``. This script uses Entrabot's provisioner app token to
-create the resource service principals and Blueprint-wide OAuth grants before
-the CLI runs its own permission step.
+With Entrabot's Provisioner token (never an Azure CLI token), this script gives the agent's
+Blueprint what Word, Excel and OneDrive files need, which is what ``a365 setup permissions mcp``
+does:
+
+1. the resource service principals and the Blueprint-wide OAuth2 permission grants, and
+2. inheritable permissions on the Blueprint (Microsoft Learn, "Configure inheritable
+   permissions for agent identity blueprints"), which let the Blueprint's agents use those
+   grants. With the grants alone, the agent's token request fails with AADSTS65001.
+
+The Windows setup wizard runs it instead of Microsoft's Agent 365 CLI. ``setup.sh`` runs it
+before the CLI's own permission step, where an existing entry that already covers these
+scopes (the CLI sets every scope and role) is left alone, so it changes nothing.
 """
 
 from __future__ import annotations
@@ -17,6 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import quote
 
 import requests
 
@@ -29,12 +37,19 @@ from entra_provisioning import (  # noqa: E402
 
 # The repo root is one directory up; src/ contains the entrabot package.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from entrabot.a365.catalog import (  # noqa: E402
+    AGENT_365_TOOLS_APP_ID,
+    WORK_IQ_WORD_APP_ID,
+    granted_scopes,
+)
 from entrabot.graph_helpers import odata_escape as _odata_escape  # noqa: E402
 
 GRAPH_V1 = "https://graph.microsoft.com/v1.0"
 
-A365_AGENT_TOOLS_APP_ID = "ea9ffc3e-8a23-4a7d-836d-234d7c7565c1"
-A365_WORD_MCP_APP_ID = "c2d0c2b6-8013-4346-9f8b-b81d3b754a29"
+# The resource apps, from the package's catalog: the one source of truth for the manifest
+# setup writes and the permissions it grants.
+A365_AGENT_TOOLS_APP_ID = AGENT_365_TOOLS_APP_ID
+A365_WORD_MCP_APP_ID = WORK_IQ_WORD_APP_ID
 
 
 class ResponseLike(Protocol):
@@ -59,34 +74,16 @@ class RequiredResource:
     scope: str
 
 
-REQUIRED_RESOURCES = (
-    RequiredResource(
-        app_id=A365_AGENT_TOOLS_APP_ID,
-        display_name="Agent 365 OneDrive/SharePoint tools",
-        scope="McpServers.OneDriveSharepoint.All",
-    ),
-    RequiredResource(
-        app_id=A365_AGENT_TOOLS_APP_ID,
-        display_name="Agent 365 Excel tools",
-        scope="McpServers.Excel.All",
-    ),
-    RequiredResource(
-        app_id=A365_AGENT_TOOLS_APP_ID,
-        display_name="Agent 365 Tools metadata",
-        scope="McpServersMetadata.Read.All",
-    ),
-    RequiredResource(
-        app_id=A365_WORD_MCP_APP_ID,
-        display_name="Work IQ Word MCP",
-        scope="Tools.ListInvoke.All",
-    ),
-)
-
-
 RESOURCE_NAMES = {
     A365_AGENT_TOOLS_APP_ID: "Agent 365 tools",
     A365_WORD_MCP_APP_ID: "Work IQ Word MCP",
 }
+
+REQUIRED_RESOURCES = tuple(
+    RequiredResource(app_id=app_id, display_name=RESOURCE_NAMES.get(app_id, app_id), scope=scope)
+    for app_id, scopes in granted_scopes().items()
+    for scope in scopes
+)
 # How long to wait between tries when Entra cannot yet read something written moments ago.
 RETRY_WAITS: tuple[float, ...] = (5, 10, 15, 20)
 
@@ -394,9 +391,205 @@ def ensure_a365_work_iq_permissions(
     print("\n  ✅ A365 Work IQ resource service principals and grants are ready")
 
 
+# ── Inheritable permissions ──────────────────────────────────────────────────────────────────
+
+# Between reading back an entry just written: a read straight after a 201 came back empty on a
+# real tenant. About a minute in all, then it is an error rather than a hang.
+CONFIRM_WAITS: tuple[float, ...] = (2, 3, 5, 10, 15, 20)
+_NO_ROLES = {"@odata.type": "#microsoft.graph.noRoles", "kind": "none"}
+
+
+def _inheritable_url(blueprint_app_id: str) -> str:
+    return (
+        f"{GRAPH_V1}/applications/microsoft.graph.agentIdentityBlueprint/"
+        f"{quote(blueprint_app_id, safe='')}/inheritablePermissions"
+    )
+
+
+def _enumerated(scopes: list[str]) -> dict[str, Any]:
+    return {
+        "@odata.type": "#microsoft.graph.enumeratedScopes",
+        "kind": "enumerated",
+        "scopes": scopes,
+    }
+
+
+def _inheritable_scopes(entry: dict[str, Any] | None) -> tuple[str, list[str]]:
+    """``(kind, scopes)`` of an entry's inheritable scopes: ``allAllowed``, ``enumerated``
+    with its scopes, or something else (``none``, missing)."""
+    if not entry:
+        return "", []
+    raw = entry.get("inheritableScopes")
+    if not isinstance(raw, dict):
+        return "", []
+    kind = str(raw.get("kind") or "")
+    odata_type = str(raw.get("@odata.type") or "").lower()
+    if kind.lower() == "allallowed" or odata_type.endswith("allallowedscopes"):
+        return "allAllowed", []
+    if kind.lower() == "enumerated" or odata_type.endswith("enumeratedscopes"):
+        scopes = raw.get("scopes")
+        return "enumerated", [str(s) for s in scopes] if isinstance(scopes, list) else []
+    return kind or "none", []
+
+
+def _covers(entry: dict[str, Any] | None, scopes: tuple[str, ...]) -> bool:
+    kind, have = _inheritable_scopes(entry)
+    return kind == "allAllowed" or (kind == "enumerated" and set(scopes) <= set(have))
+
+
+def _read_inheritable(
+    blueprint_app_id: str, token: str, *, request: RequestFn
+) -> dict[str, dict[str, Any]]:
+    data = _request(
+        request,
+        "GET",
+        _inheritable_url(blueprint_app_id),
+        token,
+        action="read the Blueprint's inheritable permissions",
+    )
+    values = data.get("value", [])
+    if not isinstance(values, list):
+        raise A365PermissionError("Malformed inheritable permissions response")
+    return {
+        str(item.get("resourceAppId") or "").lower(): item
+        for item in values
+        if isinstance(item, dict) and item.get("resourceAppId")
+    }
+
+
+def _wait_for_entry(
+    app_id: str,
+    scopes: tuple[str, ...],
+    blueprint_app_id: str,
+    token: str,
+    *,
+    request: RequestFn,
+    sleep: SleepFn,
+) -> dict[str, Any] | None:
+    """Read the collection back until the entry for *app_id* covers *scopes*."""
+    for wait in CONFIRM_WAITS:
+        sleep(wait)
+        entry = _read_inheritable(blueprint_app_id, token, request=request).get(app_id.lower())
+        if _covers(entry, scopes):
+            return entry
+    return None
+
+
+def _widen(
+    app_id: str,
+    scopes: tuple[str, ...],
+    entry: dict[str, Any],
+    blueprint_app_id: str,
+    token: str,
+    *,
+    request: RequestFn,
+) -> None:
+    """Add *scopes* to an existing entry, keeping its scopes and leaving its roles alone."""
+    _kind, have = _inheritable_scopes(entry)
+    merged = [*have, *(scope for scope in scopes if scope not in have)]
+    _request(
+        request,
+        "PATCH",
+        f"{_inheritable_url(blueprint_app_id)}/{quote(app_id, safe='')}",
+        token,
+        json_body={"inheritableScopes": _enumerated(merged)},
+        expected=(200, 204),
+        action=f"widen the inheritable permissions for {RESOURCE_NAMES.get(app_id, app_id)}",
+    )
+
+
+def _ensure_inheritable(
+    app_id: str,
+    scopes: tuple[str, ...],
+    blueprint_app_id: str,
+    token: str,
+    *,
+    request: RequestFn,
+    sleep: SleepFn,
+) -> None:
+    """One resource's entry: written if missing, widened if narrower, then read back."""
+    name = RESOURCE_NAMES.get(app_id, app_id)
+    entry = _read_inheritable(blueprint_app_id, token, request=request).get(app_id.lower())
+    if _covers(entry, scopes):
+        print(f"  [skip] {name}: the Blueprint's agents already inherit {' '.join(scopes)}")
+        return
+    if entry is None:
+        response = request(
+            "POST",
+            _inheritable_url(blueprint_app_id),
+            headers=_headers(token),
+            json={
+                "resourceAppId": app_id,
+                "inheritableScopes": _enumerated(list(scopes)),
+                "inheritableRoles": dict(_NO_ROLES),
+            },
+        )
+        if response.status_code == 409:  # it exists, though the read did not show it yet
+            for wait in CONFIRM_WAITS:
+                sleep(wait)
+                entry = _read_inheritable(blueprint_app_id, token, request=request).get(
+                    app_id.lower()
+                )
+                if entry is not None:
+                    break
+            if entry is None:
+                raise A365PermissionError(
+                    f"The inheritable permissions for {name} already exist but could not be "
+                    "read back"
+                )
+            if not _covers(entry, scopes):
+                _widen(app_id, scopes, entry, blueprint_app_id, token, request=request)
+        elif response.status_code not in (200, 201):
+            raise A365PermissionError(
+                f"write the inheritable permissions for {name} failed "
+                f"({response.status_code}): {response.text[:400]}"
+            )
+    else:
+        _widen(app_id, scopes, entry, blueprint_app_id, token, request=request)
+    if (
+        _wait_for_entry(app_id, scopes, blueprint_app_id, token, request=request, sleep=sleep)
+        is None
+    ):
+        raise A365PermissionError(
+            f"The inheritable permissions for {name} were written but could not be read back"
+        )
+    print(f"  [ok] {name}: the Blueprint's agents inherit {' '.join(scopes)}")
+
+
+def ensure_inheritable_permissions(
+    *,
+    token: str,
+    blueprint_app_id: str,
+    request: RequestFn = requests.request,
+    sleep: SleepFn = time.sleep,
+    wanted: dict[str, tuple[str, ...]] | None = None,
+) -> None:
+    """Let the Blueprint's agents inherit the scopes it is granted, least privilege: only
+    those scopes, and no app roles. An entry that already covers them is left alone, and
+    nothing is ever narrowed. Entries are written one at a time, each read back before the
+    next, and all are checked again at the end: a write can be lost when another lands
+    moments later, and one that was is written again."""
+    if not blueprint_app_id.strip():
+        raise A365PermissionError("Blueprint App ID is required")
+    blueprint_app_id = blueprint_app_id.strip()
+    wanted = wanted if wanted is not None else granted_scopes()
+    print("\n--- Letting the Blueprint's agents inherit the Work IQ permissions ---\n")
+    for app_id, scopes in wanted.items():
+        _ensure_inheritable(app_id, scopes, blueprint_app_id, token, request=request, sleep=sleep)
+    entries = _read_inheritable(blueprint_app_id, token, request=request)
+    for app_id, scopes in wanted.items():
+        if not _covers(entries.get(app_id.lower()), scopes):
+            print(f"  [again] {RESOURCE_NAMES.get(app_id, app_id)} was not kept; writing it again")
+            _ensure_inheritable(
+                app_id, scopes, blueprint_app_id, token, request=request, sleep=sleep
+            )
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Ensure A365 Work IQ service principals and OAuth grants."
+        description=(
+            "Ensure the Work IQ service principals, OAuth grants and inheritable permissions."
+        )
     )
     parser.add_argument(
         "--blueprint-app-id",
@@ -416,6 +609,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         token = get_existing_graph_token()
         ensure_a365_work_iq_permissions(token=token, blueprint_app_id=blueprint_app_id)
+        ensure_inheritable_permissions(token=token, blueprint_app_id=blueprint_app_id)
     except (A365PermissionError, ProvisionerBootstrapError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

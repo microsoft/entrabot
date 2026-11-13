@@ -2,17 +2,18 @@
 
 The run has two halves. The first only looks and asks: this computer, the sign-in, which
 agent, who it works for, where its memory lives. Nothing in the tenant or on disk changes
-until the person confirms the review screen, apart from tools the person agrees to install
-(the Azure CLI, the tools Word, Excel and OneDrive files need). The second half does the work,
-one step at a time, and every step is safe to run again: re-running setup is the repair path.
-After the last step, and before the summary, the licence walkthrough (``licences``) can get
-the agent the Microsoft 365 licences it still lacks.
+until the person confirms the review screen, apart from an Azure CLI the person agrees to
+install. The second half does the work, one step at a time, and every step is safe to run
+again: re-running setup is the repair path. After the last step, and before the summary,
+Word, Excel and OneDrive files are switched on when they were asked for (``workiq``), and the
+licence walkthrough (``licences``) can get the agent the Microsoft 365 licences it still lacks.
 
 Exit codes: 0 done, 1 failed, 2 usage or a missing answer under ``--yes``, 3 set up but with
 something to check (the end-to-end test failed, a sponsor could not be confirmed, Claude Code
 is too old for the project's safety checks, an older setup key could not be switched off in
-Microsoft Entra, or Word, Excel and OneDrive files were asked for and do not work yet: their
-tools are not installed, or the agent has no Microsoft 365 Copilot licence), 130 cancelled.
+Microsoft Entra, or Word, Excel and OneDrive files were asked for and do not work yet: a step
+that switches them on failed, Microsoft does not honour them for the agent yet, or the agent
+has no Microsoft 365 Copilot licence), 130 cancelled.
 """
 
 from __future__ import annotations
@@ -343,16 +344,8 @@ class Plan:
     memory_label: str = ""
     subscription: Subscription | None = None
     location: str = ""
-    work_iq: bool = False  # switched on in this run: its tools are there
+    work_iq: bool = False  # to be switched on in this run (off again if a step fails)
     work_iq_asked: bool = False  # asked for, on the command line or at the question
-    # Why it is off although asked for: "not-installed" (nobody to ask), "declined" (the
-    # install was), "failed" (the install did not leave the tools there), "config-failed"
-    # (a configuration step failed; the agent's own setup carried on).
-    work_iq_off: str = ""
-    # Asked for in a session with no desktop: one a365 step opens a sign-in window, so the
-    # tools may be installed but nothing is configured.
-    work_iq_no_desktop: bool = False
-    a365: Path | None = None
     hosts: list[str] = field(default_factory=lambda: list(hosts.KNOWN_HOSTS))
 
 
@@ -411,7 +404,9 @@ class Wizard:
         self.env_values: dict[str, str] = {}
         self.licence: LicenceOutcome = "unknown"
         self.copilot: LicenceOutcome = "unknown"  # Microsoft 365 Copilot, for Work IQ
-        self.work_iq_failure: workiq.WorkIqError | None = None  # why configuring it failed
+        self.work_iq_failure: workiq.WorkIqError | None = None  # why switching it on failed
+        # Set up, but the agent's tokens did not carry the scopes within setup's wait.
+        self.work_iq_pending = False
         # What setup did on this PC before the review screen, in words: the review says it.
         self.done_before_review: list[str] = []
         # What the organization has, as the licence walkthrough last read it: the last
@@ -1191,9 +1186,11 @@ class Wizard:
         return next(item for item in self.subscriptions if item.id == picked)
 
     def _decide_work_iq(self) -> None:
-        console, plan, world = self.console, self.plan, self.world
-        asked_by_flag = self.options.configure_work_iq
-        wanted = asked_by_flag
+        """Word, Excel and OneDrive files: explained first (they need a Microsoft 365 Copilot
+        licence for the agent), then a yes or no. Nothing to install: setup switches them on
+        itself after the end-to-end test, over SSH and unattended too."""
+        console, plan = self.console, self.plan
+        wanted = self.options.configure_work_iq
         if not wanted and (console.interactive or "work_iq" in console.answers):
             console.info(
                 "The agent can also read and edit Word, Excel and OneDrive files for you (Work IQ)."
@@ -1203,115 +1200,13 @@ class Wizard:
             wanted = console.confirm(
                 "Switch on Word, Excel and OneDrive files?", default=False, key="work_iq"
             )
-        if not wanted:
-            return
-        plan.work_iq_asked = True
-        tools = workiq.find_tools(world.env, which=world.which, data_root=self.paths.data_root)
-        if tools.missing and asked_by_flag:
-            raise SetupFailed(
-                "Word, Excel and OneDrive files (Work IQ) were asked for, but the tools they need "
-                "are not installed on this PC. Nothing was changed.",
-                fix=workiq.A365_INSTALL_HINT,
-            )
-        desktop = azcli.has_interactive_desktop(world.env, platform=world.platform)
-        if not desktop:
-            # Said before the install is offered, so the person knows what they agree to.
-            plan.work_iq_no_desktop = True
-            console.warn(
-                "Word, Excel and OneDrive files can only be switched on from this PC's own desktop:"
-            )
-            console.info(
-                "     one of their steps opens a Microsoft sign-in window, which this session "
-                "cannot show."
-            )
-        if tools.missing:
-            tools = self._install_work_iq_tools(tools, desktop=desktop)
-            if tools.missing:
-                return
-        if not desktop:
-            console.detail(
-                "They stay off until setup runs at the desktop. What to do is at the end."
-            )
-            return
-        plan.a365 = tools.a365
-        # Just installed, they are not on this process's PATH: the a365 steps start
-        # PowerShell 7 by name, and Entrabot's own a365 needs to be told where its .NET is.
-        workiq.use_tools(self.helpers.base_env, tools, which=world.which)
-        plan.work_iq = True
-
-    def _install_work_iq_tools(
-        self, tools: workiq.WorkIqTools, *, desktop: bool = True
-    ) -> workiq.WorkIqTools:
-        """Offer to install what Word, Excel and OneDrive files need with the repo's helper,
-        the way Git and Claude Code are offered. Returns what is there afterwards. Without a
-        *desktop* they cannot be switched on in this run, but installing them now makes the
-        run at the desktop quick."""
-        console, plan, world = self.console, self.plan, self.world
-        if desktop:
-            console.warn("Word, Excel and OneDrive files need tools that are not on this PC yet:")
-            console.info(f"     {listed(tools.missing)}.")
-        else:
-            console.info(f"     Their tools are not on this PC yet: {listed(tools.missing)}.")
-        helper_present = (self.paths.scripts / hosts.PREREQS_HELPER).is_file()
-        if not helper_present or not (console.interactive or "install_work_iq" in console.answers):
-            plan.work_iq_off = "not-installed"
-            console.detail("They stay off for now. What to do is at the end.")
-            return tools
-        # Measured on a Windows 11 VM as a standard user: the .NET SDK in about a minute, the
-        # Agent 365 CLI after it, about 900 MB in all. PowerShell 7 comes from winget.
-        offer = [
-            "Setup can install them now with scripts\\prereqs-windows.ps1, for your account "
-            "only. It needs no administrator rights and takes a few minutes."
-            if desktop
-            else "Setup can still install them now with scripts\\prereqs-windows.ps1, so that "
-            "switching them on later at the desktop is quick: for your account only, with no "
-            "administrator rights, in a few minutes."
-        ]
-        if tools.a365 is None:
-            offer.append(
-                "The Microsoft Agent 365 CLI, and the .NET SDK it runs on if this PC has none, go "
-                "in Entrabot's own folder (about 1 GB)."
-            )
-        if tools.pwsh is None:
-            offer.append("PowerShell 7 comes from winget.")
-        offer.append("Anything already there is left alone.")
-        for line in textwrap.wrap(" ".join(offer), width=88, break_on_hyphens=False):
-            console.info(line)
-        if not console.confirm("Install them now?", default=True, key="install_work_iq"):
-            plan.work_iq_off = "declined"
-            console.detail(
-                "Word, Excel and OneDrive files stay off for now. What to do is at the end."
-            )
-            return tools
-        finished = hosts.run_prereqs_helper(
-            self.paths, console, self.helpers.base_env, ["-WithWorkIq"]
-        )
-        tools = workiq.find_tools(world.env, which=world.which, data_root=self.paths.data_root)
-        self.done_before_review.append(
-            "installed the tools for Word, Excel and OneDrive files"
-            if finished and not tools.missing
-            else "tried to install the tools for Word, Excel and OneDrive files"
-        )
-        if not finished or tools.missing:
-            plan.work_iq_off = "failed"
-            console.warn(
-                "The install did not finish, so Word, Excel and OneDrive files stay off for now."
-            )
-            console.detail("Its messages above say what is missing. What to do is at the end.")
-            return tools
-        console.ok("Installed the tools for Word, Excel and OneDrive files")
-        return tools
+        if wanted:
+            plan.work_iq_asked = plan.work_iq = True
 
     def _work_iq_label(self) -> str:
         """Work IQ, for the review screen."""
         plan = self.plan
-        if plan.work_iq:
-            return "yes (Word, Excel and OneDrive files)"
-        if plan.work_iq_no_desktop:
-            return "no: only from this PC's own desktop (what to do is at the end)"
-        if plan.work_iq_asked:
-            return "no: its tools are not installed (what to do is at the end)"
-        return "no"
+        return "yes (Word, Excel and OneDrive files)" if plan.work_iq else "no"
 
     def _review(self) -> None:
         console, plan = self.console, self.plan
@@ -1555,33 +1450,29 @@ class Wizard:
         return identity
 
     def _work_iq(self, identity: Identity) -> None:
-        """After the end-to-end test, not a numbered step: point the Agent 365 tooling at the
-        agent and grant it Work IQ. A failure never stops setup: Word, Excel and OneDrive
-        files stay off, and the last screen says why and what to do."""
+        """After the end-to-end test, not a numbered step: switch Word, Excel and OneDrive
+        files on (:mod:`workiq`). A failure never stops setup: they stay off, and the last
+        screen says why and what to do."""
         plan, console = self.plan, self.console
-        if not plan.work_iq or plan.a365 is None:
+        if not plan.work_iq:
             return
-        assert self.account is not None and self.az is not None
         console.section("Word, Excel and OneDrive files")
         try:
-            workiq.configure_work_iq(
+            outcome = workiq.configure_work_iq(
                 paths=self.paths,
                 helpers=self.helpers,
                 console=console,
-                az=self.az,
-                a365=plan.a365,
-                tenant_id=self.account.tenant_id,
                 blueprint_app_id=identity.blueprint_app_id,
-                blueprint_object_id=identity.blueprint_object_id,
-                agent_id=identity.agent_id,
+                sleep=self.world.sleep,
             )
         except workiq.WorkIqError as exc:
             plan.work_iq = False
-            plan.work_iq_off = "config-failed"
             self.work_iq_failure = exc
             console.warn("Word, Excel and OneDrive files could not be switched on.")
             console.detail(str(exc))
             console.detail("Setup carries on without them. What to do is at the end.")
+            return
+        self.work_iq_pending = outcome == "pending"
 
     def _agent_step_stopped(self, outcome: str, *, blueprint: str, recorded: bool) -> SetupFailed:
         """Why the agent step stopped, from the result line create_entra_agent_ids.py printed
@@ -1753,7 +1644,9 @@ class Wizard:
         plan = self.plan
         if plan.work_iq and self.copilot in ("assigned", "existing"):
             note("- Create a Word document called Hello and share it with me.")
-            if self.copilot == "assigned":
+            if self.work_iq_pending:
+                under("If the agent says it cannot reach Word yet, try again in a few minutes.")
+            elif self.copilot == "assigned":
                 under("A new Microsoft 365 Copilot licence can take 10-15 minutes.")
         elif plan.work_iq:
             note("Word, Excel and OneDrive files are switched on, but they need the agent's")
@@ -2067,40 +1960,16 @@ class Wizard:
         except IdentityError as exc:
             console.debug(f"Could not read the state file again: {exc}")
 
-    def _work_iq_needs_the_desktop(self) -> tuple[str, list[str]]:
-        """The last screen's reminder after a run without a desktop: what was installed, and
-        that the switch-on has to happen at the desktop."""
-        missing = self.plan.work_iq_off in ("not-installed", "declined", "failed")
-        body: list[str] = []
-        if missing:
-            body += [
-                "Their tools are not installed yet either. To install them:",
-                f"  {workiq.INSTALL_COMMAND}",
-            ]
-        body += _wrapped(
-            "Sign in at this PC's own desktop (or with Remote Desktop) and run setup again there, "
-            "answering yes to the Word, Excel and OneDrive question."
-            + ("" if missing else " Their tools are installed, so that run is quick.")
-        )
-        return (
-            "Word, Excel and OneDrive files were asked for, but they can only be switched on from "
-            "this PC's own desktop: one of their steps opens a Microsoft sign-in window.",
-            body,
-        )
-
     def _work_iq_did_not_finish(self, failure: workiq.WorkIqError) -> tuple[str, list[str]]:
-        """The last screen's reminder after a configuration step failed: why in plain words,
-        what to do, and where the details are."""
+        """The last screen's reminder after a step that switches them on failed: why in plain
+        words, what to do, and where the details are."""
         reason = failure.reason[:1].upper() + failure.reason[1:]
         if not reason.endswith("."):
             reason += "."
-        again = (
-            "Run setup again at this PC's own desktop, sign in when the Microsoft window opens, "
-            "and answer yes to the Word, Excel and OneDrive question."
-            if not failure.signed_in
-            else "Run setup again and answer yes to the Word, Excel and OneDrive question."
-        )
-        body = [*_wrapped(reason), *_wrapped(again)]
+        body = [
+            *_wrapped(reason),
+            *_wrapped("Run setup again and answer yes to the Word, Excel and OneDrive question."),
+        ]
         if self.console.log_file:
             body += ["The details are in the setup log:", f"  {self.console.log_file}"]
         return (
@@ -2108,27 +1977,28 @@ class Wizard:
             body,
         )
 
-    def _work_iq_attention(self) -> tuple[str, list[str]] | None:
+    def _work_iq_attention(self) -> list[tuple[str, list[str]]]:
         """Word, Excel and OneDrive files were asked for and do not work yet: why, and what
-        to do. None when they work, or were not asked for."""
+        to do. Empty when they work, or were not asked for."""
         plan = self.plan
-        if plan.work_iq_asked and not plan.work_iq and plan.work_iq_no_desktop:
-            return self._work_iq_needs_the_desktop()
-        if plan.work_iq_asked and not plan.work_iq and self.work_iq_failure is not None:
-            return self._work_iq_did_not_finish(self.work_iq_failure)
         if plan.work_iq_asked and not plan.work_iq:
-            why = {
-                "declined": "you chose not to install the tools they need",
-                "failed": "the tools they need could not be installed",
-            }.get(plan.work_iq_off, "the tools they need are not installed on this PC")
-            return (
-                "Word, Excel and OneDrive files were asked for, but they are not switched on: "
-                f"{why}.",
-                [
-                    "To switch them on, install the tools:",
-                    f"  {workiq.INSTALL_COMMAND}",
-                    "then run setup again and answer yes to the Word, Excel and OneDrive question.",
-                ],
+            failure = self.work_iq_failure or workiq.WorkIqError(
+                "not switched on", reason=workiq.PERMISSIONS_REASON
+            )
+            return [self._work_iq_did_not_finish(failure)]
+        items: list[tuple[str, list[str]]] = []
+        if plan.work_iq and self.work_iq_pending:
+            items.append(
+                (
+                    "Word, Excel and OneDrive files are set up, but Microsoft has not started "
+                    "honouring them for the agent yet.",
+                    _wrapped(
+                        "That usually takes a minute or two after setup gives the permissions. "
+                        "Check with:  scripts\\setup-windows.cmd -Diagnose. If it still says so "
+                        "later, run setup again and answer yes to the Word, Excel and OneDrive "
+                        "question."
+                    ),
+                )
             )
         if plan.work_iq and self.copilot not in ("assigned", "existing"):
             if self.copilot == "unknown" and self.licence_report is None:
@@ -2142,10 +2012,15 @@ class Wizard:
                     "Word, Excel and OneDrive files are switched on, but the agent has no "
                     f"{licences.whole('Microsoft 365 Copilot')} licence, which they need."
                 )
-            return headline, licences.last_screen_lines(
-                self.licence_report, "copilot", shown="copilot" in self.licence_explained
+            items.append(
+                (
+                    headline,
+                    licences.last_screen_lines(
+                        self.licence_report, "copilot", shown="copilot" in self.licence_explained
+                    ),
+                )
             )
-        return None
+        return items
 
     def _finish(
         self,
@@ -2172,7 +2047,7 @@ class Wizard:
             and not self.sponsor_attention
             and not host_report.attention
             and not old_keys.pending
-            and work_iq_attention is None
+            and not work_iq_attention
         )
         console.banner(
             "Entrabot is set up" if healthy else "Setup finished, with something to check"
@@ -2272,9 +2147,9 @@ class Wizard:
             shown = "teams" in self.licence_explained
             for line in licences.last_screen_lines(self.licence_report, "teams", shown=shown):
                 console.info(f"     {line}")
-        if work_iq_attention is not None:
+        for headline, body in work_iq_attention:
             console.blank()
-            licences.say(console, *work_iq_attention)
+            licences.say(console, headline, body)
         for reason in host_report.attention:
             console.blank()
             console.warn(reason)
@@ -2337,7 +2212,7 @@ class Wizard:
             or self.sponsor_attention
             or host_report.attention
             or old_keys.pending
-            or work_iq_attention is not None
+            or work_iq_attention
         ):
             return EXIT_SMOKE_FAILED  # set up, with something to check
         return EXIT_OK

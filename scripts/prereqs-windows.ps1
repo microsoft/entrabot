@@ -11,19 +11,19 @@
                       project's safety hooks through Git Bash, so it is needed if you use
                       Claude Code. No administrator rights and no winget required.
     -WithClaudeCode   Claude Code, using its official installer.
-    -WithWorkIq       What Word, Excel and OneDrive files (Work IQ) need, for your account
-                      only: the Microsoft Agent 365 CLI (a365) and, when this PC has no
-                      .NET SDK 8 or later, the .NET SDK it runs on. Both go in
+    -WithWorkIq       Microsoft's Agent 365 CLI (a365), for using it yourself. Setup does
+                      not need it: it switches Word, Excel and OneDrive files (Work IQ) on by
+                      itself. For your account only: a365 and, when this PC has no .NET
+                      SDK 8 or later, the .NET SDK it runs on, in
                       %LOCALAPPDATA%\entrabot\tools (about 1 GB), with no administrator
-                      rights and no winget. Also PowerShell 7, which one a365 step needs,
+                      rights and no winget; and PowerShell 7, which one a365 step needs,
                       from winget.
     -WithBuildTools   Visual Studio Build Tools (C++), about 6 GB. Only needed if setup
                       reports that a package had to be compiled.
 
   Run with no switch to see this summary. Safe to re-run: anything already installed is
   left alone. Each switch only reports success when the tool actually runs afterwards.
-  The setup wizard calls -WithGit, -WithClaudeCode and -WithWorkIq for you when you ask
-  it to.
+  The setup wizard calls -WithGit and -WithClaudeCode for you when you ask it to.
 
   Works on the Windows PowerShell 5.1 that ships with Windows. -WithBuildTools uses
   winget, and its installer asks for administrator approval; -WithWorkIq uses winget for
@@ -761,7 +761,7 @@ if (-not ($WithGit -or $WithClaudeCode -or $WithWorkIq -or $WithBuildTools)) {
     Write-Host "  This helper installs optional extras, one switch each:"
     Write-Host "    -WithGit          Git for Windows (Claude Code runs Entrabot's hooks in Git Bash)"
     Write-Host "    -WithClaudeCode   Claude Code"
-    Write-Host "    -WithWorkIq       Agent 365 CLI (a365) + .NET SDK + PowerShell 7, for Work IQ"
+    Write-Host "    -WithWorkIq       Agent 365 CLI (a365) + .NET SDK + PowerShell 7 (setup does not need them)"
     Write-Host "    -WithBuildTools   Visual Studio Build Tools, C++ (about 6 GB; rarely needed)"
     Write-Host ""
     Write-Host "  Example:"
