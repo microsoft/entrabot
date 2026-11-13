@@ -204,7 +204,7 @@ Diagnostics and control:
   certificate back along with the new one, then reads the list back to confirm before
   making the new key active and recording the thumbprint. A normal run never removes a
   certificate.
-- Creates `.venv`, installs the package with dev extras, and writes `.env`
+- Creates `.venv` if it is missing and installs the package with its provisioning dependencies there before any provisioning script runs (nothing is installed into the system Python), then later installs the dev extras, and writes `.env`
   (`chmod 600`) with the resulting tenant, Blueprint, Agent Identity, Agent User,
   and human-user identifiers plus the certificate thumbprint.
 - Reads the existing `.env` before rewriting it. When this run is for the same

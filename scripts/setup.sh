@@ -772,19 +772,46 @@ success "Account:    $ACCOUNT_NAME"
 # ════════════════════════════════════════════════════════════════════════════
 # Step 3: Ensure Python dependencies for provisioning scripts
 # ════════════════════════════════════════════════════════════════════════════
-step 3 "Ensuring Python dependencies for provisioning scripts"
+step 3 "Setting up the Python environment for the provisioning scripts"
 
-if [ -d "$PROJECT_ROOT/.venv" ]; then
-    SCRIPT_PYTHON="$PROJECT_ROOT/.venv/bin/python3"
-    if [ ! -f "$SCRIPT_PYTHON" ]; then
-        SCRIPT_PYTHON="$PYTHON"
+# The provisioning scripts import this project (entrabot.*), so it has to be installed
+# before any of them runs. On a machine with no .venv yet they used to be started with the
+# system Python: that died on the import, and installing into the system Python is refused
+# on distributions that manage it (PEP 668). So the environment is made here, first, and
+# nothing is ever installed into the system Python.
+SCRIPT_PYTHON="$PROJECT_ROOT/.venv/bin/python3"
+if [ ! -x "$SCRIPT_PYTHON" ]; then
+    if ! "$PYTHON" -m venv "$PROJECT_ROOT/.venv"; then
+        err "Could not create the Python environment ($PROJECT_ROOT/.venv)."
+        echo "     On Debian or Ubuntu, install the venv module first:  sudo apt install python3-venv" >&2
+        exit 1
     fi
-else
-    SCRIPT_PYTHON="$PYTHON"
+    success "Created .venv"
 fi
 
-"$SCRIPT_PYTHON" -m pip install --quiet azure-identity requests 2>&1 | tail -1 || true
-success "azure-identity and requests available"
+# Install only when something is missing, so a repeat run stays quick. A failed install
+# stops setup with pip's own message; it is never hidden or reported as success.
+if ! "$SCRIPT_PYTHON" - <<'PY'
+import importlib.util
+import sys
+
+
+def have(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except ModuleNotFoundError:
+        return False
+
+
+needed = ("entrabot", "azure.identity", "requests", "keyring", "cryptography")
+sys.exit(0 if all(have(name) for name in needed) else 1)
+PY
+then
+    # Python 3.12+ venvs no longer seed setuptools/wheel; the editable install needs both.
+    "$SCRIPT_PYTHON" -m pip install --quiet --upgrade pip setuptools wheel
+    "$SCRIPT_PYTHON" -m pip install --quiet -e "$PROJECT_ROOT[provisioning]"
+fi
+success "Project and provisioning dependencies installed in .venv"
 
 # ── Validate identity mode ────────────────────────────────────────────────
 if [ "$NEW_CHAIN" = true ] && [ -n "$USE_BLUEPRINT" ]; then

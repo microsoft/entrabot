@@ -65,9 +65,11 @@ No positional arguments.
   `PROVISIONER_CERT_THUMBPRINT`, `BLUEPRINT_APP_ID`, `BLUEPRINT_OBJECT_ID`,
   `BLUEPRINT_CERT_THUMBPRINT`, `AGENT_ID`, `AGENT_OBJECT_ID`,
   `AGENT_USER_ID`, `AGENT_USER_UPN`, and `AGENT_USER_WORK_IQ_LICENSE_SKU`.
-- Shows every certificate thumbprint by its last four characters, in upper
-  case after an ellipsis (`…B3C4`), the form the rest of the tooling uses,
-  unless `--full-thumbprints` is given. That covers the current Provisioner and
+- Shows every certificate thumbprint by its last four characters after an
+  ellipsis (`…B3C4`), the form the rest of the tooling uses, unless
+  `--full-thumbprints` is given. A hex (SHA-1) thumbprint is shown in upper
+  case; a base64 (SHA-256) one keeps its own letters, because their case is
+  part of the value. That covers the current Provisioner and
   Blueprint certificates, each Blueprint key credential's computed SHA-256
   thumbprint and its `customKeyIdentifier` (which Graph sets to the
   certificate's SHA-1 thumbprint), and the **Certificate** check's warning

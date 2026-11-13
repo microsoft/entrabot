@@ -2364,7 +2364,37 @@ def get_graph_token(
         client_id=client_id,
         certificate_data=pem_bundle.encode(),
     )
-    return certificate_credential.get_token("https://graph.microsoft.com/.default").token
+    return _graph_token_once_cert_is_accepted(certificate_credential)
+
+
+def _graph_token_once_cert_is_accepted(certificate_credential: Any) -> str:
+    """A Graph token from *certificate_credential*, waiting while Entra does not accept
+    the certificate yet.
+
+    A certificate registered moments ago is refused with AADSTS700027 until the token
+    endpoint has caught up, which took about a minute on a real first run. Without the
+    wait, setup's next script stopped with a traceback and worked when run again. Any other
+    failure is raised at once. Same wait as the Windows path (``_acquire_graph_token_cng``).
+    """
+    failure = ""
+    for attempt in range(_TOKEN_PROPAGATION_ATTEMPTS):
+        if attempt:
+            print(
+                "  The Provisioner certificate isn't recognised by Entra yet; retrying in "
+                f"{_TOKEN_PROPAGATION_DELAY_SECONDS:.0f}s "
+                f"(attempt {attempt + 1}/{_TOKEN_PROPAGATION_ATTEMPTS})..."
+            )
+            time.sleep(_TOKEN_PROPAGATION_DELAY_SECONDS)
+        try:
+            return certificate_credential.get_token("https://graph.microsoft.com/.default").token
+        except Exception as exc:  # azure-identity's ClientAuthenticationError
+            if "AADSTS700027" not in str(exc):
+                raise
+            failure = str(exc).splitlines()[0][:400]
+    raise ProvisionerBootstrapError(
+        "Entra did not accept the Provisioner certificate after "
+        f"{_TOKEN_PROPAGATION_ATTEMPTS} attempts — {failure}"
+    )
 
 
 def get_bootstrap_graph_token(

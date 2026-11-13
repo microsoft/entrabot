@@ -588,7 +588,10 @@ class TestThumbprintsShowOnlyTheirLastFourCharacters:
 
     @staticmethod
     def _ending(value: str) -> str:
-        return "…" + value[-4:].upper()
+        # Hex (SHA-1) in upper case, as the rest of the tooling shows it; base64 (SHA-256)
+        # as it is, because its letters' case is part of the value.
+        is_hex = all(character in "0123456789abcdefABCDEF" for character in value)
+        return "…" + (value[-4:].upper() if is_hex else value[-4:])
 
     @pytest.mark.parametrize("argv", [[], ["--json"], ["--health-only"]])
     def test_no_full_thumbprint_is_printed(self, monkeypatch, capsys, argv):
@@ -652,6 +655,18 @@ class TestThumbprintsShowOnlyTheirLastFourCharacters:
         assert data["key_credentials"][0]["computedThumbprint"] == _FAKE_CERT_THUMB
         assert data["key_credentials"][0]["customKeyIdentifier"] == self.CUSTOM_KEY_ID
 
+    def test_a_hex_thumbprint_is_shown_in_upper_case(self):
+        _load_module()
+        assert status_mod._shown_thumbprint("ab12cd34" * 5, full=False) == "\u2026CD34"
+
+    def test_a_base64_thumbprint_keeps_its_own_letters(self):
+        # From a real run on Linux: the Blueprint's SHA-256 thumbprint is base64url, where
+        # "b2Eg" and "B2EG" are different endings. The masked form upper-cased it, so it
+        # matched nothing a person could compare it with.
+        _load_module()
+        thumbprint = "Qx7_zvcLJK4z81aR-XsBPibacZmbP5jjG6LOWrlb2Eg"
+        assert status_mod._shown_thumbprint(thumbprint, full=False) == "\u2026b2Eg"
+
     def test_a_thumbprint_that_is_not_recorded_is_still_null_and_na(self, monkeypatch, capsys):
         state = {
             k: v
@@ -678,7 +693,7 @@ class TestThumbprintsShowOnlyTheirLastFourCharacters:
 
         data = json.loads(capsys.readouterr().out)
         (check,) = [c for c in data["health"]["checks"] if c["name"] == "Certificate"]
-        shown = other if full else "…Q9X1"
+        shown = other if full else "…q9X1"
         assert check == {
             "name": "Certificate",
             "status": "warn",

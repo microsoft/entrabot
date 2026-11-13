@@ -24,6 +24,7 @@ import hashlib
 import json
 import os
 import platform
+import string
 import sys
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -93,7 +94,12 @@ def _shown_thumbprint(thumbprint: str | None, *, full: bool) -> str | None:
     """
     if not thumbprint or full:
         return thumbprint
-    return "…" + thumbprint[-4:].upper()
+    ending = thumbprint[-4:]
+    # A hex thumbprint (SHA-1) reads the same in either case, and the rest of the tooling
+    # shows it in upper case. A base64 one (SHA-256) does not: "b2Eg" and "B2EG" differ.
+    if all(character in string.hexdigits for character in thumbprint):
+        ending = ending.upper()
+    return "…" + ending
 
 
 def _is_windows() -> bool:

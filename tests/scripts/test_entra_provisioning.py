@@ -1424,3 +1424,77 @@ def test_an_administrator_problem_prints_no_result_line(
     out = capsys.readouterr().out
     assert "requires an Entra administrator" in out
     assert _markers(out) == []
+
+
+# ── A certificate registered moments ago ─────────────────────────────────────
+# From a real first run on Linux: setup registered a new Provisioner certificate and, a few
+# seconds later, the next script asked Entra for a token with it. Entra had not caught up
+# (AADSTS700027), and setup stopped with a traceback. Running it again a minute later
+# worked. The Windows path already waits; this is the same wait for macOS and Linux.
+
+
+class _NotYet(Exception):
+    """Stands in for azure.core.exceptions.ClientAuthenticationError."""
+
+
+def _credential(module, monkeypatch, answers: list[object], sleeps: list[float]):
+    """A certificate credential whose get_token gives *answers* in turn."""
+    import types
+
+    class _Token:
+        token = "graph-token"
+
+    class _Credential:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def get_token(self, _scope: str) -> _Token:
+            answer = answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return _Token()
+
+    fake = types.ModuleType("azure.identity")
+    fake.CertificateCredential = _Credential
+    monkeypatch.setitem(sys.modules, "azure.identity", fake)
+    monkeypatch.setattr(
+        module, "load_existing_app_registration", lambda: ("client-id", "pem", "tenant-id")
+    )
+    monkeypatch.setattr(module.time, "sleep", sleeps.append)
+
+
+_LAG = "Authentication failed: AADSTS700027: The certificate with identifier used to sign"
+
+
+def test_a_certificate_entra_has_not_accepted_yet_is_waited_for(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sleeps: list[float] = []
+    _credential(provisioning_module, monkeypatch, [_NotYet(_LAG), _NotYet(_LAG), "ok"], sleeps)
+
+    assert provisioning_module.get_existing_graph_token() == "graph-token"
+    assert sleeps == [10.0, 10.0]
+
+
+def test_any_other_token_failure_is_reported_at_once(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sleeps: list[float] = []
+    _credential(
+        provisioning_module, monkeypatch, [_NotYet("AADSTS7000215: invalid client secret")], sleeps
+    )
+
+    with pytest.raises(_NotYet, match="AADSTS7000215"):
+        provisioning_module.get_existing_graph_token()
+    assert sleeps == []
+
+
+def test_a_certificate_entra_never_accepts_stops_with_a_plain_error(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sleeps: list[float] = []
+    _credential(provisioning_module, monkeypatch, [_NotYet(_LAG)] * 20, sleeps)
+
+    with pytest.raises(provisioning_module.ProvisionerBootstrapError, match="did not accept"):
+        provisioning_module.get_existing_graph_token()
+    assert len(sleeps) == provisioning_module._TOKEN_PROPAGATION_ATTEMPTS - 1
