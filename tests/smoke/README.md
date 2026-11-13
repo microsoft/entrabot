@@ -93,6 +93,21 @@ tests/smoke/smokeit.sh \
   --sponsor-upn human@yourtenant.com
 ```
 
+On Windows the runner drives the same entry point a person uses, unattended. It
+runs with the Windows PowerShell 5.1 that ships with Windows; PowerShell 7 is
+not needed:
+
+```text
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-windows.ps1 `
+  -NewChain -AgentUserUpn <upn> -UseCloudMemory -WithStorageAccount <name> `
+  -WithContainer <name> -Yes [-Sponsor <upn>]
+```
+
+`-Yes` means the wizard never asks; every answer is passed as a parameter.
+Status steps use `scripts/setup-windows.ps1 -Status -HealthOnly` and
+`-Status -Json`, and teardown uses `scripts/deprovision_entra_agent_identity.py`
+directly. `--test-a365` is not wired to the Windows setup command.
+
 ## Logs
 
 Every run writes a self-contained log bundle under:

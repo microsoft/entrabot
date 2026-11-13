@@ -1070,3 +1070,109 @@ class TestEndToEnd:
             "args": {"chat_id": "19:abc", "text": "hello"},
         }
         assert post["payload"]["result"] == {"id": "msg-for-19:abc"}
+
+
+# ---------------------------------------------------------------------------
+# Windows: the self-reference check and the .mcp.json read
+# ---------------------------------------------------------------------------
+
+
+class TestSelfReferenceOnWindows:
+    """On Windows the running entry point never spells its own name the way ``.mcp.json`` does.
+
+    Setup registers ``...\\Scripts\\entrabot-mcp.exe``. pip's console-script launcher strips
+    ``.exe`` from ``sys.argv[0]`` before ``main()`` runs, so the two paths differed, the
+    check missed, and the server spawned a copy of itself as an efferent-copy peer at boot.
+    File names there are case-insensitive as well. These run everywhere, with
+    ``_IS_WINDOWS`` as the switch.
+    """
+
+    @pytest.fixture
+    def scripts_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        import sys
+
+        scripts = tmp_path / "venv" / "Scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "entrabot-mcp.exe").write_bytes(b"MZ")
+        # What the launcher leaves in sys.argv[0]: the same path without ".exe".
+        monkeypatch.setattr(sys, "argv", [str(scripts / "entrabot-mcp")])
+        monkeypatch.setattr(sys, "executable", str(scripts / "python.exe"))
+        return scripts
+
+    def test_exe_suffix_does_not_hide_a_self_reference(
+        self, scripts_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(ec, "_IS_WINDOWS", True)
+        peer = {"type": "stdio", "command": str(scripts_dir / "entrabot-mcp.exe")}
+
+        assert ec._is_self_referential_peer(peer) is True
+
+    def test_letter_case_does_not_hide_a_self_reference(
+        self, scripts_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(ec, "_IS_WINDOWS", True)
+        peer = {"type": "stdio", "command": str(scripts_dir / "ENTRABOT-MCP.EXE")}
+
+        assert ec._is_self_referential_peer(peer) is True
+
+    def test_another_program_in_the_same_folder_is_not_self(
+        self, scripts_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(ec, "_IS_WINDOWS", True)
+        (scripts_dir / "persona-sati.exe").write_bytes(b"MZ")
+        peer = {"type": "stdio", "command": str(scripts_dir / "persona-sati.exe")}
+
+        assert ec._is_self_referential_peer(peer) is False
+
+    def test_posix_comparison_stays_exact(
+        self, scripts_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Elsewhere ``entrabot-mcp.exe`` and ``entrabot-mcp`` are two different files."""
+        monkeypatch.setattr(ec, "_IS_WINDOWS", False)
+        peer = {"type": "stdio", "command": str(scripts_dir / "entrabot-mcp.exe")}
+
+        assert ec._is_self_referential_peer(peer) is False
+
+
+class TestConfigIsReadAsUtf8:
+    """``.mcp.json`` is UTF-8, whatever the platform's default text encoding is."""
+
+    def test_non_ascii_path_survives_a_windows_locale(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tests.locale_codec import force_locale_codec
+
+        command = "C:\\Users\\José Müller\\entrabot\\.venv\\Scripts\\entrabot-mcp.exe"
+        cfg = tmp_path / ".mcp.json"
+        cfg.write_bytes(
+            json.dumps(
+                {"mcpServers": {"entrabot": {"type": "stdio", "command": command}}},
+                ensure_ascii=False,
+            ).encode("utf-8")
+        )
+        force_locale_codec(monkeypatch)
+
+        peers = ec._load_peers_from_config(cfg)
+
+        assert peers == [{"name": "entrabot", "type": "stdio", "command": command}]
+
+    def test_byte_order_mark_is_tolerated(self, tmp_path: Path) -> None:
+        """Windows PowerShell 5.1 writes UTF-8 with a BOM, which ``json.loads`` rejects."""
+        cfg = tmp_path / ".mcp.json"
+        cfg.write_bytes(b"\xef\xbb\xbf" + b'{"mcpServers": {"peer": {"type": "sse", "url": "x"}}}')
+
+        assert ec._load_peers_from_config(cfg) == [{"name": "peer", "type": "sse", "url": "x"}]
+
+    def test_wrapper_marker_is_read_as_utf8(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tests.locale_codec import force_locale_codec
+
+        target = tmp_path / "Jürgen" / "entrabot-mcp"
+        target.parent.mkdir()
+        target.write_text("", encoding="utf-8")
+        wrapper = tmp_path / "wrapper.sh"
+        wrapper.write_bytes(f"#!/bin/sh\n# entrabot-self-ref-target: {target}\n".encode())
+        force_locale_codec(monkeypatch)
+
+        assert ec._wrapper_self_ref_target(wrapper) == target.resolve()

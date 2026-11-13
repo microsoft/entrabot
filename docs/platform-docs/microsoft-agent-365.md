@@ -52,10 +52,14 @@ surface; Entrabot maintains its own fail-closed audit log.
 
 ## `ToolingManifest.json` is authoritative
 
-Configure Work IQ servers with the Agent 365 CLI. The generated
-`ToolingManifest.json` supplies each server's URL, audience, and scope.
-Runtime code prefers that manifest over documented values because catalog
-metadata can change.
+The Agent 365 CLI (`a365 develop add-mcp-servers`) generates
+`ToolingManifest.json`. Windows setup writes the same three entries (Word,
+Excel and OneDrive/SharePoint) itself, without the CLI, from the package's
+catalog (`src/entrabot/a365/catalog.py`), and keeps any other entries in the
+file. The manifest supplies each server's URL, audience, and scope. Runtime
+code prefers that manifest over documented values because catalog metadata
+can change; if Microsoft changes a server's URL, audience, or scope, the
+package's catalog has to change with it.
 
 Representative manifest shape:
 
@@ -170,9 +174,11 @@ audience and may not work correctly".
 
 Setup adds `mcp_ExcelServer` to `ToolingManifest.json`, and
 `scripts/ensure_a365_work_iq_permissions.py` adds `McpServers.Excel.All` to the
-Blueprint's grant on the Agent 365 Tools resource. Until that scope is granted,
-calls to the server return `403`. The later `a365 setup permissions mcp` step
-requires PowerShell 7+ and stops at its requirements check without it.
+Blueprint's grant on the Agent 365 Tools resource and to the Blueprint's
+inheritable permissions for it. Until that scope is granted, calls to the
+server return `403`. On macOS and Linux, the later `a365 setup permissions mcp`
+step requires PowerShell 7+ and stops at its requirements check without it;
+Windows setup does not run it.
 
 ## Authentication
 
@@ -192,11 +198,34 @@ A delegated MSAL session is human-attributed: Graph attributes calls to the
 signed-in human, not to the Agent User, so it does not provide Agent User
 attribution. See [Delegated Authentication with MSAL](delegated-auth.md).
 
+### Inheritable permissions
+
+The Blueprint-wide OAuth2 grants are not enough for the Agent User's token.
+The agent inherits the scopes only through the Blueprint's inheritable
+permissions: one entry per resource app, in
+`/v1.0/applications/microsoft.graph.agentIdentityBlueprint/{id}/inheritablePermissions`.
+Without them, the token request for a Work IQ audience fails with
+`AADSTS65001` even with every grant in place. Inherited scopes appear in the
+token's `scp` claim. See Microsoft Learn,
+[Configure inheritable permissions for agent identity blueprints](https://learn.microsoft.com/entra/agent-id/configure-inheritable-permissions-blueprints).
+
+`scripts/ensure_a365_work_iq_permissions.py` writes these entries least
+privilege: only the scopes the manifest needs (`enumeratedScopes`) and no app
+roles (`noRoles`). An entry that already covers them, such as the CLI's
+`allAllowed` one, is left alone; one with fewer scopes is widened, never
+narrowed. On a real tenant, Microsoft's token service took 20 to 45 seconds to
+honour a new entry, so Windows setup checks the agent's tokens for each
+audience for about two minutes, and `scripts\setup-windows.cmd -Diagnose` runs
+the same check.
+
 ## Setup and validation
 
 1. Provision Entrabot's Agent Identity and Agent User.
-2. Use the Agent 365 CLI to add the required Work IQ MCP server and grant its
-   permissions.
+2. Add the Work IQ MCP servers to `ToolingManifest.json` and grant their
+   permissions, including the Blueprint's inheritable permissions. On
+   Windows, setup does this itself (answer yes to the Word, Excel and OneDrive
+   question, or pass `-ConfigureA365WorkIq`); on macOS and Linux,
+   `scripts/setup.sh --configure-a365-work-iq` does it with the Agent 365 CLI.
 3. Keep the generated `ToolingManifest.json` in a location Entrabot
    discovers, or set the configured manifest path.
 4. Run the relevant Word MCP tool and confirm the audit event identifies the

@@ -28,7 +28,6 @@ from tests.scripts._blueprint_cert_helpers import (
     REPO_ROOT,
     block_real_keyring_and_network,
     blueprint_certs,
-    load_script,
 )
 
 SETUP_SH = REPO_ROOT / "scripts" / "setup.sh"
@@ -137,47 +136,51 @@ class TestNothingReplacesTheListByAccident:
         code = [line for line in _read(SETUP_SH).splitlines() if not line.lstrip().startswith("#")]
         assert [line for line in code if "verify_blueprint_cert" in line] == []
 
-    def test_windows_wrapper_goes_through_the_helper(self) -> None:
+    def test_windows_wrapper_holds_no_graph_code_of_its_own(self) -> None:
+        # deploy-windows.ps1 used to carry an inline Python driver that PATCHed the list.
+        # It is now a thin wrapper: rotation lives in entrabot.winsetup.rotation.
         text = _read(DEPLOY_PS1)
-        assert "swap_key_credential" in text
-        assert "httpx.patch" not in text
-        assert "import blueprint_certs" in text
+        assert "'rotate-cert', '--project-root', $ProjectRoot" in text
+        assert "entrabot.winsetup" in text
+        for gone in ("keyCredentials", "httpx", "graph.microsoft.com", "$driver", "swap_key"):
+            assert gone not in text
 
-    def test_windows_driver_passes_both_ders_to_the_helper(self) -> None:
-        text = _read(DEPLOY_PS1)
-        assert "old_der=old_der" in text
-        assert "new_der=new_der" in text
-        assert "der_bytes=der_bytes" in text
+    def test_windows_rotation_adds_and_removes_through_the_helpers(self) -> None:
+        from entrabot.winsetup import directory, rotation
 
-    def test_windows_driver_is_valid_python_that_matches_the_helper(self) -> None:
-        # PowerShell may not be available where this runs, so nothing else executes this
-        # inline code before it reaches a Windows machine. PowerShell expands $Names
-        # inside the here-string, so stand-ins replace them before parsing.
-        here_string = re.search(r'\$driver = @"\r?\n(.*?)\r?\n"@', _read(DEPLOY_PS1), re.DOTALL)
-        assert here_string is not None
-        source = re.sub(r"\$(?:env:)?\w+", "stand-in", here_string.group(1))
-        tree = ast.parse(source)
+        rotation_source = Path(rotation.__file__).read_text(encoding="utf-8")
+        directory_source = Path(directory.__file__).read_text(encoding="utf-8")
+        # Added beside the others by the registration helper (register_key_credential) ...
+        assert '"register_windows_blueprint_cert.py"' in rotation_source
+        # ... and taken off one at a time by remove_key_credential. Neither module builds
+        # a keyCredentials list or PATCHes the application itself.
+        for source in (rotation_source, directory_source):
+            assert "keyCredentials" not in source
+            assert "httpx.patch" not in source
+            assert "swap_key_credential" not in source
 
-        graph_patch = next(
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.FunctionDef) and node.name == "graph_patch"
-        )
-        assert [arg.arg for arg in graph_patch.args.kwonlyargs] == ["token", "der_bytes"]
+    def test_windows_removal_program_is_valid_python_that_matches_the_helper(self) -> None:
+        # Nothing else executes this child program before it reaches a Windows machine.
+        from entrabot.winsetup import directory
 
-        call = graph_patch.body[0].value
-        assert ast.unparse(call.func) == "blueprint_certs.swap_key_credential"
-        keywords = {keyword.arg: None for keyword in call.keywords}
-        inspect.signature(blueprint_certs.swap_key_credential).bind(**keywords)
-
-        rotate_call = next(
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and ast.unparse(node.func) == "rcw.rotate"
-        )
-        rotate_keywords = {keyword.arg: None for keyword in rotate_call.keywords}
-        rotate = load_script("rotate_cert_windows", alias="_rotate_for_driver_check").rotate
-        inspect.signature(rotate).bind(**rotate_keywords)
+        for program in (
+            directory.REMOVE_BLUEPRINT_CREDENTIAL_SNIPPET,
+            directory.REMOVE_PROVISIONER_CREDENTIAL_SNIPPET,
+        ):
+            tree = ast.parse(program)
+            call = next(
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and ast.unparse(node.func) == "blueprint_certs.remove_key_credential"
+            )
+            keywords = {keyword.arg: None for keyword in call.keywords}
+            assert set(keywords) == {"object_id", "token", "sha1_hex", "must_keep"}
+            inspect.signature(blueprint_certs.remove_key_credential).bind(**keywords)
+            # The exceptions it sorts into "nothing changed" exist under those names.
+            for name in ("KeyCredentialsReadError", "RegistrationRejectedError"):
+                assert f"blueprint_certs.{name}" in program
+                assert hasattr(blueprint_certs, name)
 
     def test_teardown_clears_a_pending_key_too(self) -> None:
         assert "blueprint-private-key.pending" in _read(TEARDOWN_SH)

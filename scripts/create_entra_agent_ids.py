@@ -13,16 +13,45 @@ rejected by Agent Identity APIs).
 Usage:
     python3 scripts/create_entra_agent_ids.py
 
+Which Blueprint: the one recorded in .entrabot-state.json, where setup also records the one it
+is asked to join. If that one does not exist, or can't be checked, the run stops (exit 1) before
+changing anything; it never takes another Blueprint by display name. With nothing recorded, an
+existing Blueprint named "EntraBot Code Agent" is used only when it is the only one.
+
+Which Agent User: an existing one with the sign-in name this run wants (ENTRABOT_AGENT_USER_UPN,
+which setup can leave in .env, or one made from _ENTRABOT_UPN_SUFFIX) is reused only when its
+Agent Identity belongs to that Blueprint; one of another Blueprint stops the run before anything
+is created, granted or recorded. Every lookup tells "there is none" from "could not check", and
+"could not check" stops the run before the object in question is created.
+
+Each of those stops prints one line, ENTRABOT_RESULT=<outcome> (the *_MARKER constants below), on
+its own, just before its message. ENTRABOT_NEW_CHAIN=1 skips every lookup and creates a fresh
+chain.
+
+The licence on its own, for an agent that already exists (the Windows setup wizard's licence
+walkthrough runs these; the agent's IDs come from .entrabot-state.json):
+    python3 scripts/create_entra_agent_ids.py --licence-report
+        What the tenant has and which of it the Agent User has, as one ENTRABOT_RESULT=<JSON>
+        line (entrabot.licensing.Report). Changes nothing.
+    python3 scripts/create_entra_agent_ids.py --assign-licence SKU_ID
+        Gives the Agent User that one product, the way the full run does: its usage location
+        first, then the assignment, then the part number recorded in the state file. Ends with
+        one of the LICENCE_*_MARKER lines.
+
 Prerequisites:
     - az login has been run
     - pip install azure-identity requests
 """
 
+import argparse
+import json
 import os
 import platform
+import re
 import socket
 import sys
 import time
+from collections.abc import Sequence
 
 import requests
 
@@ -45,10 +74,75 @@ from entra_provisioning import (  # noqa: E402 — sys.path insert precedes this
 
 # The repo root is one directory up; src/ contains the entrabot package.
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent / "src"))
+# entrabot.preflight imports entrabot.config, which loads .env into this process: the Agent
+# User's sign-in name can come from there (ENTRABOT_AGENT_USER_UPN). Imported for that.
+import entrabot.preflight  # noqa: E402, F401
+from entrabot import licensing  # noqa: E402
 from entrabot.graph_helpers import GRAPH_V1, graph_request, odata_escape  # noqa: E402
-from entrabot.preflight import COPILOT_CAPABLE_SKUS, TEAMS_CAPABLE_SKUS  # noqa: E402
 
 BLUEPRINT_DISPLAY_NAME = "EntraBot Code Agent"
+
+_ID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+_UNREADABLE = "Microsoft Graph's answer could not be read"
+
+# How to go on after a stop, for both setup front ends.
+_HOW_TO_JOIN = (
+    "    macOS/Linux: ./scripts/setup.sh --use-blueprint=APP_ID",
+    "    Windows:     scripts\\setup-windows.cmd -UseBlueprint APP_ID",
+)
+_HOW_TO_START_OVER = (
+    "  To create a new agent instead: ./scripts/setup.sh --new --with-upn-suffix=NAME",
+    "  (Windows: scripts\\setup-windows.cmd -NewChain -UpnSuffix NAME).",
+)
+
+
+# Printed on a line of their own, immediately before the message, when the run stops for one of
+# these reasons: exactly one per stop. The Windows setup wizard (src/entrabot/winsetup) recognises
+# these lines (its ENTRABOT_RESULT= convention, as in entra_provisioning.py), so they are never
+# renamed; tests pin them.
+BLUEPRINT_NOT_FOUND_MARKER = "ENTRABOT_RESULT=blueprint-not-found"
+BLUEPRINT_COULD_NOT_CHECK_MARKER = "ENTRABOT_RESULT=blueprint-could-not-check"
+BLUEPRINT_AMBIGUOUS_MARKER = "ENTRABOT_RESULT=blueprint-ambiguous"
+AGENT_USER_WRONG_BLUEPRINT_MARKER = "ENTRABOT_RESULT=agent-user-wrong-blueprint"
+AGENT_LOOKUP_COULD_NOT_CHECK_MARKER = "ENTRABOT_RESULT=agent-lookup-could-not-check"
+# How the licence on its own (--assign-licence, --licence-report) ended. The wizard's licence
+# walkthrough (src/entrabot/winsetup/licences.py) recognises these; tests pin both sides.
+LICENCE_ASSIGNED_MARKER = "ENTRABOT_RESULT=licence-assigned"
+LICENCE_ALREADY_ASSIGNED_MARKER = "ENTRABOT_RESULT=licence-already-assigned"
+LICENCE_NO_FREE_SEAT_MARKER = "ENTRABOT_RESULT=licence-no-free-seat"
+LICENCE_NOT_FOUND_MARKER = "ENTRABOT_RESULT=licence-not-found"
+LICENCE_ASSIGN_FAILED_MARKER = "ENTRABOT_RESULT=licence-assign-failed"
+LICENCE_COULD_NOT_READ_MARKER = "ENTRABOT_RESULT=licence-could-not-read"
+_RESULT_PREFIX = "ENTRABOT_RESULT="
+
+
+class ProvisioningStop(RuntimeError):
+    """This run can't go on without guessing. The message is for the operator; ``marker`` is
+    the ENTRABOT_RESULT= line that names the outcome for the setup front ends."""
+
+    def __init__(self, message: str, marker: str) -> None:
+        super().__init__(message)
+        self.marker = marker
+
+
+class BlueprintLookupError(ProvisioningStop):
+    """Which Blueprint this run is for can't be settled. The message is for the operator.
+
+    Raised before anything is created or changed, in the directory or in the state file.
+    """
+
+
+class AgentLookupError(ProvisioningStop):
+    """Which Agent Identity or Agent User this run is for can't be settled, or the Agent User
+    with the wanted sign-in name belongs to another Blueprint.
+
+    Raised before the object in question is created or reused; the message says what was not
+    done.
+    """
+
+
+class _NoAnswer(Exception):
+    """Graph gave no answer that settles the question. The message says why."""
 
 
 # ---------------------------------------------------------------------------
@@ -57,42 +151,320 @@ BLUEPRINT_DISPLAY_NAME = "EntraBot Code Agent"
 
 
 def find_existing_blueprint(token: str) -> dict | None:
-    """Find an existing Blueprint by stored IDs, then by display name."""
-    # Try stored object ID first
-    stored_obj_id = get_state("BLUEPRINT_OBJECT_ID")
-    if stored_obj_id:
-        resp = graph_request("GET", f"/applications/{stored_obj_id}", token, retry=False)
-        if resp.status_code == 200:
-            return resp.json()
-        print(f"  [warn] Stored BLUEPRINT_OBJECT_ID not found: {stored_obj_id}")
+    """The Blueprint this run is for, or None when there is none yet and one may be created.
 
-    # Try stored app ID
-    stored_app_id = get_state("BLUEPRINT_APP_ID")
-    if stored_app_id:
-        resp = graph_request(
-            "GET",
-            f"/applications?$filter=appId eq '{odata_escape(stored_app_id)}'",
-            token,
+    A Blueprint recorded in the state file is the only acceptable answer: setup records there
+    the one it is asked to join (``setup.sh --use-blueprint``, ``-UseBlueprint`` on Windows),
+    and every run records the one it found or created. Its App ID decides; the object ID is
+    looked up only when no App ID is recorded. When Graph says that Blueprint does not exist,
+    or the lookup fails for any reason, this stops. It never looks for another Blueprint by
+    name: display names are not unique, and the first match may be somebody else's.
+
+    Only with nothing recorded is a Blueprint looked for by its display name. A single match
+    is used. Several matches stop, listing them; a search that fails stops as well, because
+    "could not check" is not "there is none", and a second Blueprint is not created on the
+    strength of it.
+
+    Raises :class:`BlueprintLookupError`.
+    """
+    app_id = str(get_state("BLUEPRINT_APP_ID") or "").strip()
+    object_id = str(get_state("BLUEPRINT_OBJECT_ID") or "").strip()
+    if app_id:
+        return _recorded_blueprint_by_app_id(token, app_id, object_id)
+    if object_id:
+        return _recorded_blueprint_by_object_id(token, object_id)
+    return _only_blueprint_named(token, BLUEPRINT_DISPLAY_NAME)
+
+
+def _recorded_blueprint_by_app_id(token: str, app_id: str, stored_object_id: str) -> dict:
+    _require_id(app_id, "BLUEPRINT_APP_ID")
+    recorded = f"Blueprint {app_id}"
+    try:
+        resp = _graph_get(token, f"/applications?$filter=appId eq '{odata_escape(app_id)}'")
+        if resp.status_code != 200:
+            raise _NoAnswer(_http_reason(resp))
+        matches = [
+            app
+            for app in _value_list(_json_object(resp))
+            if str(app.get("appId", "")).lower() == app_id.lower()
+        ]
+        if matches and not matches[0].get("id"):
+            raise _NoAnswer(_UNREADABLE)
+    except _NoAnswer as exc:
+        raise BlueprintLookupError(
+            _unreadable(recorded, str(exc)), BLUEPRINT_COULD_NOT_CHECK_MARKER
+        ) from exc
+    if not matches:
+        raise BlueprintLookupError(_not_found(recorded), BLUEPRINT_NOT_FOUND_MARKER)
+    found = matches[0]
+    found_object_id = str(found["id"])
+    if stored_object_id and stored_object_id.lower() != found_object_id.lower():
+        print(
+            f"  [warn] Stored BLUEPRINT_OBJECT_ID {stored_object_id} is not the object ID of "
+            f"Blueprint {app_id}, which is {found_object_id}. The App ID decides, so this run "
+            f"uses {found_object_id}."
         )
+    return found
+
+
+def _recorded_blueprint_by_object_id(token: str, object_id: str) -> dict:
+    _require_id(object_id, "BLUEPRINT_OBJECT_ID")
+    recorded = f"the Blueprint with object ID {object_id}"
+    app: dict | None = None
+    try:
+        resp = _graph_get(token, f"/applications/{object_id}")
         if resp.status_code == 200:
-            values = resp.json().get("value", [])
-            if values:
-                return values[0]
-        print(f"  [warn] Stored BLUEPRINT_APP_ID not found: {stored_app_id}")
+            app = _json_object(resp)
+            if not app.get("appId") or not app.get("id"):
+                raise _NoAnswer(_UNREADABLE)
+        elif resp.status_code != 404:  # GET by ID: 404 is Graph's "no such object"
+            raise _NoAnswer(_http_reason(resp))
+    except _NoAnswer as exc:
+        raise BlueprintLookupError(
+            _unreadable(recorded, str(exc)), BLUEPRINT_COULD_NOT_CHECK_MARKER
+        ) from exc
+    if app is None:
+        raise BlueprintLookupError(_not_found(recorded), BLUEPRINT_NOT_FOUND_MARKER)
+    return app
 
-    # Fall back to display name search
-    resp = graph_request(
-        "GET",
-        f"/applications?$filter=displayName eq '{odata_escape(BLUEPRINT_DISPLAY_NAME)}'",
-        token,
-    )
+
+def _only_blueprint_named(token: str, name: str) -> dict | None:
+    try:
+        resp = _graph_get(token, f"/applications?$filter=displayName eq '{odata_escape(name)}'")
+        if resp.status_code != 200:
+            raise _NoAnswer(_http_reason(resp))
+        body = _json_object(resp)
+        values = _value_list(body)
+        if body.get("@odata.nextLink"):
+            # Only a whole list says how many there are.
+            raise _NoAnswer("Microsoft Graph returned more than one page of applications")
+        matches = [app for app in values if app.get("displayName") == name]
+        if len(matches) == 1 and not (matches[0].get("appId") and matches[0].get("id")):
+            raise _NoAnswer(_UNREADABLE)
+    except _NoAnswer as exc:
+        raise BlueprintLookupError(
+            _search_unreadable(name, str(exc)), BLUEPRINT_COULD_NOT_CHECK_MARKER
+        ) from exc
+    if len(matches) > 1:
+        raise BlueprintLookupError(_ambiguous(name, matches), BLUEPRINT_AMBIGUOUS_MARKER)
+    return matches[0] if matches else None
+
+
+def _graph_get(token: str, path: str) -> requests.Response:
+    """GET *path*. A request that fails before Graph answers raises :class:`_NoAnswer`."""
+    try:
+        return graph_request("GET", path, token)
+    except requests.RequestException as exc:
+        text = str(exc).strip().rstrip(".")
+        detail = f"{type(exc).__name__}: {text}"[:200] if text else type(exc).__name__
+        raise _NoAnswer(f"the request to Microsoft Graph failed ({detail})") from exc
+
+
+def _json_object(resp: requests.Response) -> dict:
+    try:
+        body = resp.json()
+    except ValueError as exc:
+        raise _NoAnswer(_UNREADABLE) from exc
+    if not isinstance(body, dict):
+        raise _NoAnswer(_UNREADABLE)
+    return body
+
+
+def _value_list(body: dict) -> list[dict]:
+    values = body.get("value")
+    if not isinstance(values, list) or not all(isinstance(item, dict) for item in values):
+        raise _NoAnswer(_UNREADABLE)
+    return values
+
+
+def _http_reason(resp: requests.Response) -> str:
+    code = ""
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        code = str(body["error"].get("code") or "")[:80]
+    return f"Microsoft Graph answered HTTP {resp.status_code}" + (f" ({code})" if code else "")
+
+
+def _answer(token: str, path: str) -> dict:
+    """GET *path* and return Graph's JSON object. Anything but a readable 200 raises
+    :class:`_NoAnswer`: a collection query says "none" with an empty list, never with an error."""
+    resp = _graph_get(token, path)
     if resp.status_code != 200:
-        return None
+        raise _NoAnswer(_http_reason(resp))
+    return _json_object(resp)
 
-    for app in resp.json().get("value", []):
-        if app.get("displayName") == BLUEPRINT_DISPLAY_NAME:
-            return app
-    return None
+
+def _object_or_none(token: str, path: str) -> dict | None:
+    """GET one object by its ID: the object, or None when Graph says there is no such object
+    (404). Anything else that is not a readable 200 raises :class:`_NoAnswer`."""
+    resp = _graph_get(token, path)
+    if resp.status_code == 404:
+        return None
+    if resp.status_code != 200:
+        raise _NoAnswer(_http_reason(resp))
+    return _json_object(resp)
+
+
+def _same_id(one: object, other: object) -> bool:
+    """Do two directory IDs name the same object? They are GUIDs, the same in either letter
+    case. An empty or missing ID matches nothing."""
+    first = str(one or "").strip().lower()
+    return bool(first) and first == str(other or "").strip().lower()
+
+
+def _this_tenant() -> str:
+    tenant = str(os.environ.get("ENTRABOT_TENANT_ID") or get_state("TENANT_ID") or "").strip()
+    return f"this tenant ({tenant})" if tenant else "this tenant"
+
+
+def _require_id(value: str, key: str) -> None:
+    if _ID.match(value):
+        return
+    # Reported as not found: a value that is not an ID names no Blueprint, the remedy is the same
+    # (give the right App ID), and running again later would not help.
+    raise BlueprintLookupError(
+        "\n".join(
+            [
+                f"  ERROR: {key} in .entrabot-state.json is {value!r}, which is not an ID",
+                "  (an ID looks like 1a2b3c4d-1234-5678-9abc-def012345678).",
+                "  Nothing was created or changed, and no other Blueprint was looked for by name.",
+                "  Run setup again with the Blueprint's App ID:",
+                *_HOW_TO_JOIN,
+            ]
+        ),
+        BLUEPRINT_NOT_FOUND_MARKER,
+    )
+
+
+def _not_found(recorded: str) -> str:
+    return "\n".join(
+        [
+            f"  ERROR: {recorded[:1].upper()}{recorded[1:]} does not exist in {_this_tenant()}.",
+            "  It is the Blueprint recorded for this machine in .entrabot-state.json, where setup",
+            "  also records the one it is asked to join. The ID may be mistyped, it may belong to",
+            "  a different tenant, or the Blueprint was deleted.",
+            "  Nothing was created or changed, and no other Blueprint was looked for by name.",
+            "  Check the ID and the tenant you are signed in to, then run setup again with the",
+            "  right Blueprint App ID:",
+            *_HOW_TO_JOIN,
+            *_HOW_TO_START_OVER,
+            "  A Blueprint created in the last few minutes may not be listed yet. If so, wait a",
+            "  few minutes and run setup again.",
+        ]
+    )
+
+
+def _unreadable(recorded: str, reason: str) -> str:
+    return "\n".join(
+        [
+            f"  ERROR: Could not check whether {recorded} exists: {reason}.",
+            "  It is the Blueprint recorded for this machine in .entrabot-state.json, where setup",
+            "  also records the one it is asked to join, and the only one this run will use.",
+            "  Nothing was created or changed, and no other Blueprint was looked for by name.",
+            "  This is usually temporary (throttling or a network problem): run setup again in a",
+            "  few minutes. If it keeps failing with HTTP 401 or 403, setup's Provisioner app is",
+            "  missing a permission or its admin consent: run setup again as a tenant",
+            "  administrator.",
+        ]
+    )
+
+
+def _search_unreadable(name: str, reason: str) -> str:
+    return "\n".join(
+        [
+            f"  ERROR: Could not look for an existing Blueprint named '{name}': {reason}.",
+            "  No Blueprint is recorded for this machine, so this run looks for one by name",
+            "  before it creates one, and it does not create one without an answer.",
+            "  Nothing was created or changed. Run setup again in a few minutes, or name the",
+            "  Blueprint to join:",
+            *_HOW_TO_JOIN,
+        ]
+    )
+
+
+def _ambiguous(name: str, matches: list[dict]) -> str:
+    # Oldest first; an application without a creation date goes last.
+    listed = sorted(matches, key=lambda app: str(app.get("createdDateTime") or "~"))
+    return "\n".join(
+        [
+            f"  ERROR: {len(matches)} applications in this tenant are named '{name}', and no",
+            "  Blueprint is recorded for this machine, so this run can't tell which one is",
+            "  this agent's:",
+            *(
+                f"    App ID {app.get('appId') or 'unknown'}   "
+                f"created {app.get('createdDateTime') or 'unknown'}"
+                for app in listed
+            ),
+            "  Nothing was created or changed. To join one of them, run setup again with its",
+            "  App ID:",
+            *_HOW_TO_JOIN,
+            *_HOW_TO_START_OVER,
+        ]
+    )
+
+
+# What a stop in the agent lookups did not do, for the operator's message.
+_NOTHING_CHANGED = "Nothing was created or changed."
+_NO_IDENTITY_CREATED = (
+    "No Agent Identity or Agent User was created, and no permission or licence was granted."
+)
+_NO_USER_CREATED = "No Agent User was created, and no permission or licence was granted."
+
+
+_TRY_AGAIN = (
+    "  This is usually temporary (throttling or a network problem): run setup again in a",
+    "  few minutes. If it keeps failing with HTTP 401 or 403, setup's Provisioner app is",
+    "  missing a permission or its admin consent: run setup again as a tenant",
+    "  administrator.",
+)
+
+
+def _agent_unreadable(
+    question: str, reason: str, consequence: str, advice: tuple[str, ...] = _TRY_AGAIN
+) -> str:
+    return "\n".join(
+        [
+            f"  ERROR: Could not check {question}: {reason}.",
+            "  This run looks for the agent's existing Agent Identity and Agent User before it",
+            '  creates or reuses one, and it does not go on without an answer: "could not check"',
+            '  is not "there is none". Guessing could leave a second Agent Identity behind, or',
+            "  take over another agent's.",
+            f"  {consequence}",
+            *advice,
+        ]
+    )
+
+
+def _wrong_blueprint(upn: str, agent_identity: str, theirs: str, ours: str) -> str:
+    lines = [
+        f"  ERROR: The Agent User {upn} belongs to a different Blueprint",
+        "  from the one this run is for:",
+        f"    its Blueprint:         {theirs}",
+        f"    this run's Blueprint:  {ours or 'a new one, which this run would create'}",
+        f"    its Agent Identity:    {agent_identity}",
+        "  This run looks for an existing Agent User by that sign-in name before it creates one,",
+        "  and it does not take over another Blueprint's agent. The name is the one",
+        "  --agent-user-upn or --with-upn-suffix asked for (-AgentUserUpn or -UpnSuffix on",
+        "  Windows), or the one an earlier setup left in this machine's .env; with none of",
+        "  those, it is entrabot-agent@<domain>.",
+        f"  {_NOTHING_CHANGED}",
+        "  To use that agent on this machine, join its Blueprint instead:",
+        f"    macOS/Linux: ./scripts/setup.sh --use-blueprint={theirs}",
+        f"    Windows:     scripts\\setup-windows.cmd -UseBlueprint {theirs}",
+    ]
+    if ours:
+        lines += [
+            f"  To stay with Blueprint {ours}, give its Agent User a different name:",
+            f"    macOS/Linux: ./scripts/setup.sh --use-blueprint={ours} --with-upn-suffix=NAME",
+            f"    Windows:     scripts\\setup-windows.cmd -UseBlueprint {ours} -UpnSuffix NAME",
+            "  or name one of its Agent Users exactly with --agent-user-upn=UPN (-AgentUserUpn).",
+        ]
+    else:
+        lines += list(_HOW_TO_START_OVER)
+    return "\n".join(lines)
 
 
 def ensure_blueprint_principal(token: str, app_id: str) -> None:
@@ -134,21 +506,38 @@ def ensure_blueprint_principal(token: str, app_id: str) -> None:
 
 
 def create_blueprint(token: str) -> tuple[str, str]:
-    """Create or find the Agent Identity Blueprint. Returns (app_id, object_id)."""
+    """Create or find the Agent Identity Blueprint. Returns (app_id, object_id).
+
+    Raises :class:`BlueprintLookupError`, before anything is created or recorded, when the
+    Blueprint this run is for can't be settled (see :func:`find_existing_blueprint`).
+    """
+    return record_blueprint(token, blueprint_for_this_run(token))
+
+
+def blueprint_for_this_run(token: str) -> dict | None:
+    """The existing Blueprint this run is for, or None when this run creates one. Changes
+    nothing. Raises :class:`BlueprintLookupError` (see :func:`find_existing_blueprint`)."""
     print("\n--- Creating Agent Identity Blueprint ---\n")
 
     if _FORCE_NEW:
         print("  [--new] Skipping existing Blueprint lookup — creating fresh")
-        existing = None
-    else:
-        existing = find_existing_blueprint(token)
+        return None
+    existing = find_existing_blueprint(token)
+    if existing:
+        name = existing.get("displayName", BLUEPRINT_DISPLAY_NAME)
+        print(f"  [skip] Blueprint already exists: {name}")
+        print(f"         App ID:    {existing['appId']}")
+        print(f"         Object ID: {existing['id']}")
+    return existing
+
+
+def record_blueprint(token: str, existing: dict | None) -> tuple[str, str]:
+    """Record *existing* (from :func:`blueprint_for_this_run`) in the state file, or create a
+    new Blueprint when it is None; either way make sure its BlueprintPrincipal exists. Returns
+    (app_id, object_id)."""
     if existing:
         app_id = existing["appId"]
         obj_id = existing["id"]
-        name = existing.get("displayName", BLUEPRINT_DISPLAY_NAME)
-        print(f"  [skip] Blueprint already exists: {name}")
-        print(f"         App ID:    {app_id}")
-        print(f"         Object ID: {obj_id}")
         set_state("BLUEPRINT_APP_ID", app_id)
         set_state("BLUEPRINT_OBJECT_ID", obj_id)
         # Always ensure BlueprintPrincipal exists — previous run may have crashed
@@ -233,38 +622,68 @@ def find_existing_agent_identity(
 
     ``stored_app_id`` is still honoured as a fast path, but only when
     the fetched SP is also scoped to ``blueprint_app_id``.
+
+    None means Graph has said there is none. A lookup that fails, or an answer that can't be
+    read, raises :class:`AgentLookupError` instead: "could not check" is not "there is none",
+    and the caller would create a second Agent Identity for this machine on the strength of it.
     """
-    if stored_app_id:
-        resp = graph_request(
-            "GET",
-            f"/servicePrincipals?$filter=appId eq '{odata_escape(stored_app_id)}'",
-            token,
+    blueprint = f"Blueprint {blueprint_app_id}"
+    stored = str(stored_app_id or "").strip()
+    if stored and not _ID.match(stored):
+        print(f"  [warn] stored AGENT_ID {stored!r} is not an ID; ignoring it and re-discovering.")
+        stored = ""
+    if stored:
+        try:
+            recorded = _value_list(
+                _answer(token, f"/servicePrincipals?$filter=appId eq '{odata_escape(stored)}'")
+            )
+            for sp in recorded:
+                if _same_id(sp.get("agentIdentityBlueprintId"), blueprint_app_id):
+                    return _with_ids(sp)
+        except _NoAnswer as exc:
+            question = (
+                f"whether the Agent Identity recorded for this machine (AGENT_ID {stored}) "
+                f"belongs to {blueprint}"
+            )
+            raise AgentLookupError(
+                _agent_unreadable(question, str(exc), _NO_IDENTITY_CREATED),
+                AGENT_LOOKUP_COULD_NOT_CHECK_MARKER,
+            ) from exc
+        if recorded:
+            print(
+                f"  [warn] stored AGENT_ID={stored} is parented by a "
+                f"different Blueprint; ignoring and re-discovering."
+            )
+
+    try:
+        body = _answer(
+            token, f"/servicePrincipals?$filter=displayName eq '{odata_escape(display_name)}'"
         )
-        if resp.status_code == 200:
-            for sp in resp.json().get("value", []):
-                if sp.get("agentIdentityBlueprintId") == blueprint_app_id:
-                    return sp
-            if resp.json().get("value"):
-                print(
-                    f"  [warn] stored AGENT_ID={stored_app_id} is parented by a "
-                    f"different Blueprint; ignoring and re-discovering."
-                )
-
-    resp = graph_request(
-        "GET",
-        f"/servicePrincipals?$filter=displayName eq '{odata_escape(display_name)}'",
-        token,
-    )
-    if resp.status_code != 200:
-        return None
-
-    for sp in resp.json().get("value", []):
-        if (
-            sp.get("displayName") == display_name
-            and sp.get("agentIdentityBlueprintId") == blueprint_app_id
-        ):
-            return sp
+        for sp in _value_list(body):
+            if sp.get("displayName") == display_name and _same_id(
+                sp.get("agentIdentityBlueprintId"), blueprint_app_id
+            ):
+                return _with_ids(sp)
+        if body.get("@odata.nextLink"):
+            # Only a whole list says there is none.
+            raise _NoAnswer("Microsoft Graph returned more than one page of service principals")
+    except _NoAnswer as exc:
+        question = (
+            f"whether this machine already has an Agent Identity under {blueprint} "
+            f"(one named '{display_name}')"
+        )
+        raise AgentLookupError(
+            _agent_unreadable(question, str(exc), _NO_IDENTITY_CREATED),
+            AGENT_LOOKUP_COULD_NOT_CHECK_MARKER,
+        ) from exc
     return None
+
+
+def _with_ids(found: dict) -> dict:
+    """*found*, an Agent Identity Graph returned, when it has the IDs this run records."""
+    if not found.get("id") or not found.get("appId"):
+        raise _NoAnswer(_UNREADABLE)
+    return found
 
 
 def create_agent_identity(token: str, blueprint_app_id: str) -> tuple[str, str]:
@@ -430,31 +849,57 @@ def find_existing_agent_user(token: str, agent_identity_obj_id: str) -> dict | N
     Identity. Seen in the wild on 2026-04-19 when a name-based lookup
     elsewhere mis-assigned AGENT_ID across Blueprints; defense in
     depth here keeps the damage from propagating.
+
+    None means Graph has said there is none: the stored user is gone (404) or parented
+    elsewhere, and no user is parented by ``agent_identity_obj_id``. A lookup that fails, or an
+    answer that can't be read, raises :class:`AgentLookupError` before the caller creates one.
     """
-    stored_user_id = get_state("AGENT_USER_ID")
+    stored_user_id = str(get_state("AGENT_USER_ID") or "").strip()
+    if stored_user_id and not _ID.match(stored_user_id):
+        print(f"  [warn] Stored AGENT_USER_ID {stored_user_id!r} is not an ID; ignoring it.")
+        stored_user_id = ""
     if stored_user_id:
-        resp = graph_request("GET", f"/users/{stored_user_id}", token, retry=False)
-        if resp.status_code == 200:
-            user = resp.json()
-            if user.get("identityParentId") == agent_identity_obj_id:
-                return user
+        try:
+            user = _object_or_none(token, f"/users/{stored_user_id}")
+            if user is not None and not user.get("id"):
+                raise _NoAnswer(_UNREADABLE)
+        except _NoAnswer as exc:
+            question = (
+                f"whether the Agent User recorded for this machine (AGENT_USER_ID "
+                f"{stored_user_id}) belongs to Agent Identity {agent_identity_obj_id}"
+            )
+            raise AgentLookupError(
+                _agent_unreadable(question, str(exc), _NO_USER_CREATED),
+                AGENT_LOOKUP_COULD_NOT_CHECK_MARKER,
+            ) from exc
+        if user is None:
+            print(f"  [warn] Stored AGENT_USER_ID not found: {stored_user_id}")
+        elif _same_id(user.get("identityParentId"), agent_identity_obj_id):
+            return user
+        else:
             print(
                 f"  [warn] stored AGENT_USER_ID={stored_user_id} is parented by a "
                 f"different Agent Identity; ignoring and re-discovering."
             )
-        else:
-            print(f"  [warn] Stored AGENT_USER_ID not found: {stored_user_id}")
 
     # Search by identityParentId (the Agent Identity's object ID)
-    resp = graph_request(
-        "GET",
-        f"/users?$filter=identityParentId eq '{agent_identity_obj_id}'",
-        token,
-    )
-    if resp.status_code == 200:
-        values = resp.json().get("value", [])
+    try:
+        body = _answer(
+            token, f"/users?$filter=identityParentId eq '{odata_escape(agent_identity_obj_id)}'"
+        )
+        values = _value_list(body)
         if values:
+            if not values[0].get("id"):
+                raise _NoAnswer(_UNREADABLE)
             return values[0]
+        if body.get("@odata.nextLink"):
+            raise _NoAnswer("Microsoft Graph returned more than one page of users")
+    except _NoAnswer as exc:
+        question = f"whether Agent Identity {agent_identity_obj_id} already has an Agent User"
+        raise AgentLookupError(
+            _agent_unreadable(question, str(exc), _NO_USER_CREATED),
+            AGENT_LOOKUP_COULD_NOT_CHECK_MARKER,
+        ) from exc
     return None
 
 
@@ -469,31 +914,91 @@ def find_existing_agent_user_by_upn(token: str, upn: str) -> dict | None:
     2026-04-16.
 
     Returns the user dict (including ``identityParentId``) so the caller
-    can derive the parent Agent Identity already in use.
+    can derive the parent Agent Identity already in use; whether that may be
+    reused is :func:`agent_identity_to_reuse`'s question.
+
+    None means Graph has said no user has that name. A lookup that fails, or an
+    answer that can't be read, raises :class:`AgentLookupError` instead: read as
+    "none", it led to a second Agent Identity and then a collision on the name.
     """
-    resp = graph_request(
-        "GET",
-        (
-            f"/users?$filter=userPrincipalName eq '{odata_escape(upn)}'"
-            "&$select=id,userPrincipalName,displayName,identityParentId,"
-            "mailNickname,accountEnabled"
-        ),
-        token,
+    path = (
+        f"/users?$filter=userPrincipalName eq '{odata_escape(upn)}'"
+        "&$select=id,userPrincipalName,displayName,identityParentId,"
+        "mailNickname,accountEnabled"
     )
-    if resp.status_code != 200:
-        return None
-    for u in resp.json().get("value", []):
-        if u.get("userPrincipalName", "").lower() == upn.lower():
-            return u
+    try:
+        body = _answer(token, path)
+        for user in _value_list(body):
+            if str(user.get("userPrincipalName") or "").lower() == upn.lower():
+                if not user.get("id"):
+                    raise _NoAnswer(_UNREADABLE)
+                return user
+        if body.get("@odata.nextLink"):
+            raise _NoAnswer("Microsoft Graph returned more than one page of users")
+    except _NoAnswer as exc:
+        raise AgentLookupError(
+            _agent_unreadable(
+                f"whether an Agent User named {upn} exists", str(exc), _NOTHING_CHANGED
+            ),
+            AGENT_LOOKUP_COULD_NOT_CHECK_MARKER,
+        ) from exc
     return None
 
 
-def _servicePrincipal_by_object_id(token: str, obj_id: str) -> dict | None:
-    """Fetch a service principal by its object ID, or None on any error."""
-    resp = graph_request("GET", f"/servicePrincipals/{obj_id}", token, retry=False)
-    if resp.status_code == 200:
-        return resp.json()
-    return None
+def agent_identity_to_reuse(token: str, user: dict, blueprint_app_id: str) -> dict:
+    """The parent Agent Identity of *user*, an Agent User found by the sign-in name this run
+    wants, when it belongs to the Blueprint this run is for. *blueprint_app_id* is that
+    Blueprint's App ID, or empty when this run is about to create one.
+
+    An Agent User belongs to one Agent Identity, and that to one Blueprint, for good. Reusing one
+    of another Blueprint would put another agent on this machine: its consents, app role and
+    licence granted again, and its IDs recorded next to this run's Blueprint. So this stops when
+    it belongs to another Blueprint, and when which one can't be read. The Blueprint is the
+    parent's ``agentIdentityBlueprintId`` (the Blueprint's App ID, the property that also scopes
+    :func:`find_existing_agent_identity`), read with ``GET /servicePrincipals/{id}``.
+
+    Raises :class:`AgentLookupError`, before anything is created, granted or recorded.
+    """
+    upn = str(user.get("userPrincipalName") or "")
+    parent_id = str(user.get("identityParentId") or "").strip()
+    advice = _TRY_AGAIN
+    try:
+        if not parent_id:
+            # An ordinary account can have the name too, and waiting would not change that.
+            advice = (
+                "  If that is an ordinary account and not an agent's, give this agent a different",
+                "  name: --with-upn-suffix=NAME (-UpnSuffix NAME on Windows). If it is an agent's",
+                "  Agent User, run setup again in a few minutes.",
+            )
+            raise _NoAnswer("Microsoft Graph's answer names no parent Agent Identity for it")
+        if not _ID.match(parent_id):
+            raise _NoAnswer(_UNREADABLE)
+        parent = _object_or_none(token, f"/servicePrincipals/{parent_id}")
+        if parent is None:
+            raise _NoAnswer(
+                f"its parent Agent Identity {parent_id} was not found (Microsoft Graph answered"
+                " HTTP 404; one created in the last few minutes may not be listed yet)"
+            )
+        theirs = str(parent.get("agentIdentityBlueprintId") or "").strip()
+        if not theirs:
+            raise _NoAnswer(
+                f"Microsoft Graph's answer names no Blueprint for its parent Agent Identity "
+                f"{parent_id}"
+            )
+        if not parent.get("appId"):
+            raise _NoAnswer(_UNREADABLE)
+    except _NoAnswer as exc:
+        question = f"which Blueprint the Agent User {upn} belongs to"
+        raise AgentLookupError(
+            _agent_unreadable(question, str(exc), _NOTHING_CHANGED, advice),
+            AGENT_LOOKUP_COULD_NOT_CHECK_MARKER,
+        ) from exc
+    if not _same_id(theirs, blueprint_app_id):
+        raise AgentLookupError(
+            _wrong_blueprint(upn, parent_id, theirs, blueprint_app_id),
+            AGENT_USER_WRONG_BLUEPRINT_MARKER,
+        )
+    return parent
 
 
 def create_agent_user(
@@ -853,12 +1358,13 @@ def grant_agent_user_storage_consent(
 # ---------------------------------------------------------------------------
 # License assignment
 # ---------------------------------------------------------------------------
-# License SKU constants are imported from entrabot.preflight — single source of
-# truth so setup.sh's preflight checks and actual assignment use the same lists.
+# What a product includes (Teams, Microsoft 365 Copilot) is read by entrabot.licensing from
+# its service plans, the same reading setup.sh's preflight checks and the Windows wizard use.
 
 
 def _get_available_skus(token: str) -> list[dict]:
-    """Get all subscribed SKUs with available licenses."""
+    """Get all subscribed SKUs with available licenses, each with what it includes
+    (``product``, an entrabot.licensing.Product)."""
     resp = graph_request("GET", "/subscribedSkus", token)
     if resp.status_code != 200:
         print(f"  WARNING: Could not list subscribed SKUs ({resp.status_code})")
@@ -867,17 +1373,16 @@ def _get_available_skus(token: str) -> list[dict]:
     skus = resp.json().get("value", [])
     available = []
     for sku in skus:
-        enabled = sku.get("prepaidUnits", {}).get("enabled", 0)
-        consumed = sku.get("consumedUnits", 0)
-        remaining = enabled - consumed
-        if remaining > 0:
+        product = licensing.describe(sku)
+        if product.free > 0:
             available.append(
                 {
                     "skuId": sku["skuId"],
                     "skuPartNumber": sku.get("skuPartNumber", ""),
                     "displayName": sku.get("skuPartNumber", sku["skuId"]),
-                    "remaining": remaining,
-                    "total": enabled,
+                    "remaining": product.free,
+                    "total": product.total,
+                    "product": product,
                 }
             )
     return available
@@ -902,15 +1407,13 @@ def _check_existing_licenses(token: str, user_id: str) -> list[str]:
     return []
 
 
-def _get_all_sku_part_numbers(token: str) -> dict[str, str] | None:
+def _get_subscribed_products(token: str) -> dict[str, licensing.Product] | None:
+    """Every subscribed SKU by skuId, with what it includes; None when Graph can't say."""
     resp = graph_request("GET", "/subscribedSkus", token)
     if resp.status_code != 200:
         print(f"  WARNING: Could not resolve subscribed SKU names ({resp.status_code})")
         return None
-    return {
-        sku["skuId"]: sku.get("skuPartNumber", sku["skuId"])
-        for sku in resp.json().get("value", [])
-    }
+    return {sku["skuId"]: licensing.describe(sku) for sku in resp.json().get("value", [])}
 
 
 def _ensure_usage_location(token: str, agent_user_id: str) -> bool:
@@ -972,29 +1475,33 @@ def assign_license_to_agent_user(
         return
 
     existing_sku_ids = _check_existing_licenses(token, agent_user_id)
-    sku_id_to_name = _get_all_sku_part_numbers(token)
-    if existing_sku_ids and sku_id_to_name is None:
+    subscribed = _get_subscribed_products(token)
+    if existing_sku_ids and subscribed is None:
         print("  WARNING: Could not resolve existing Agent User license SKU names.")
         print("  Skipping automatic license assignment to avoid duplicate assignment.")
         print("  Re-run setup.sh after Graph /subscribedSkus is available.")
         return
-    sku_id_to_name = sku_id_to_name or {}
-    existing_names = [sku_id_to_name.get(sid, sid) for sid in existing_sku_ids]
-    has_teams = any(name in TEAMS_CAPABLE_SKUS for name in existing_names)
-    has_copilot = any(name in COPILOT_CAPABLE_SKUS for name in existing_names)
+    subscribed = subscribed or {}
+    existing = [subscribed.get(sid) for sid in existing_sku_ids]
+    existing_names = [
+        product.part_number if product is not None else sid
+        for product, sid in zip(existing, existing_sku_ids, strict=True)
+    ]
+    teams_names = [product.part_number for product in existing if product and product.teams]
+    copilot_names = [product.part_number for product in existing if product and product.copilot]
+    has_teams = bool(teams_names)
+    has_copilot = bool(copilot_names)
 
     if existing_sku_ids:
         if has_teams:
-            teams_name = next(n for n in existing_names if n in TEAMS_CAPABLE_SKUS)
-            print(f"  [skip] Agent User already has Teams-capable license: {teams_name}")
+            print(f"  [skip] Agent User already has Teams-capable license: {teams_names[0]}")
         else:
             print(f"  Agent User has {len(existing_sku_ids)} license(s) but none include Teams:")
             for name in existing_names:
                 print(f"    - {name}")
             print("  Will assign a Teams-capable license...")
         if has_copilot:
-            copilot_name = next(n for n in existing_names if n in COPILOT_CAPABLE_SKUS)
-            print(f"  [skip] Agent User already has Work IQ license: {copilot_name}")
+            print(f"  [skip] Agent User already has Work IQ license: {copilot_names[0]}")
 
     if (not assign_teams or has_teams) and (not assign_work_iq or has_copilot):
         if assign_teams and assign_work_iq:
@@ -1018,7 +1525,11 @@ def assign_license_to_agent_user(
     assigned_teams = False
     assigned_copilot = False
     if assign_teams and not has_teams:
-        teams_skus = [s for s in all_skus if s["skuPartNumber"] in TEAMS_CAPABLE_SKUS]
+        # A product that also brings the agent mail and files first; otherwise Graph's order.
+        teams_skus = sorted(
+            (s for s in all_skus if s["product"].teams),
+            key=lambda s: licensing.preference(s["product"], "teams"),
+        )
         if not teams_skus:
             print("  No Teams-capable licenses found with available seats.")
             print("  Available SKUs in this tenant:")
@@ -1039,7 +1550,10 @@ def assign_license_to_agent_user(
                     f" ({chosen['remaining']}/{chosen['total']} available)"
                 )
             else:
-                print("  Teams-capable licenses available; auto-selecting first available:")
+                print(
+                    "  Teams-capable licenses available; choosing the first (mail and files "
+                    "count first):"
+                )
                 for i, sku in enumerate(teams_skus, 1):
                     print(
                         f"    {i}. {sku['displayName']}"
@@ -1050,7 +1564,7 @@ def assign_license_to_agent_user(
                 assigned_teams = True
 
     if assign_work_iq and not has_copilot:
-        copilot_skus = [s for s in all_skus if s["skuPartNumber"] in COPILOT_CAPABLE_SKUS]
+        copilot_skus = [s for s in all_skus if s["product"].copilot]
         if not copilot_skus:
             print("  No Microsoft 365 Copilot licenses found with available seats.")
             print("  Work IQ MCP servers require Microsoft 365 Copilot for the Agent User.")
@@ -1074,11 +1588,141 @@ def assign_license_to_agent_user(
 
 
 # ---------------------------------------------------------------------------
+# The licence on its own
+# ---------------------------------------------------------------------------
+
+
+def read_licences(token: str, agent_user_id: str) -> licensing.Report:
+    """What the tenant subscribes to, and which of it the Agent User has. Reads only.
+    Anything Graph does not answer readably raises :class:`_NoAnswer`."""
+    skus = _value_list(_answer(token, "/subscribedSkus"))
+    assigned = _answer(token, f"/users/{agent_user_id}?$select=assignedLicenses").get(
+        "assignedLicenses"
+    )
+    if not isinstance(assigned, list):
+        raise _NoAnswer(_UNREADABLE)
+    return licensing.Report.from_graph(skus, assigned)
+
+
+def _record_licence(product: licensing.Product) -> None:
+    """Record *product* in the state file the way the full run does."""
+    if product.teams:
+        set_state("AGENT_USER_LICENSE_SKU", product.part_number)
+    if product.copilot:
+        set_state("AGENT_USER_WORK_IQ_LICENSE_SKU", product.part_number)
+
+
+def assign_one_licence(token: str, agent_user_id: str, sku_id: str) -> str:
+    """Give the Agent User the one product *sku_id*, with the full run's own steps: usage
+    location, then the assignment (both retried), then the record. Returns the marker line;
+    a stop raises :class:`ProvisioningStop` before anything is changed, unless it says so."""
+    if not _ID.match(sku_id):
+        raise ProvisioningStop(
+            f"  ERROR: {sku_id!r} is not a product ID. Nothing was changed.",
+            LICENCE_NOT_FOUND_MARKER,
+        )
+    try:
+        report = read_licences(token, agent_user_id)
+    except _NoAnswer as exc:
+        raise ProvisioningStop(
+            f"  ERROR: The licences could not be read: {exc}. Nothing was changed.",
+            LICENCE_COULD_NOT_READ_MARKER,
+        ) from exc
+    product = next((item for item in report.products if _same_id(item.sku_id, sku_id)), None)
+    if product is None or not product.for_people:
+        raise ProvisioningStop(
+            f"  ERROR: {sku_id} is not a licence this tenant can give a user. Nothing was "
+            "changed.",
+            LICENCE_NOT_FOUND_MARKER,
+        )
+    if any(_same_id(item, sku_id) for item in report.agent):
+        _record_licence(product)
+        print(f"  [skip] The Agent User already has {product.name} ({product.part_number}).")
+        return LICENCE_ALREADY_ASSIGNED_MARKER
+    if product.free <= 0:
+        raise ProvisioningStop(
+            f"  ERROR: Every {product.name} licence is assigned ({product.used} of "
+            f"{product.total}). Nothing was changed.",
+            LICENCE_NO_FREE_SEAT_MARKER,
+        )
+    if not _ensure_usage_location(token, agent_user_id):
+        raise ProvisioningStop(
+            "  ERROR: The Agent User's usage location could not be set, so no licence was "
+            "assigned.",
+            LICENCE_ASSIGN_FAILED_MARKER,
+        )
+    label = "Teams-capable" if product.teams else "Work IQ" if product.copilot else "Microsoft 365"
+    sku = {"skuId": product.sku_id, "displayName": product.part_number}
+    if not _assign_license(token, agent_user_id, sku, label):
+        raise ProvisioningStop(
+            f"  ERROR: Microsoft Graph did not assign {product.name} (see above). Its usage "
+            "location was set; nothing else was changed.",
+            LICENCE_ASSIGN_FAILED_MARKER,
+        )
+    _record_licence(product)
+    return LICENCE_ASSIGNED_MARKER
+
+
+def _licence_only(*, report: bool, assign: str | None) -> int:
+    agent_user_id = str(get_state("AGENT_USER_ID") or "").strip()
+    try:
+        if not _ID.match(agent_user_id):
+            raise ProvisioningStop(
+                "  ERROR: No Agent User is recorded in .entrabot-state.json, so there is no "
+                "account to look at. Run setup first.",
+                LICENCE_COULD_NOT_READ_MARKER,
+            )
+        try:
+            token = get_existing_graph_token()
+        except ProvisionerBootstrapError as exc:
+            raise ProvisioningStop(f"  ERROR: {exc}", LICENCE_COULD_NOT_READ_MARKER) from exc
+        if report:
+            try:
+                found = read_licences(token, agent_user_id)
+            except _NoAnswer as exc:
+                raise ProvisioningStop(
+                    f"  ERROR: The licences could not be read: {exc}.",
+                    LICENCE_COULD_NOT_READ_MARKER,
+                ) from exc
+            print(_RESULT_PREFIX + json.dumps(found.to_json()))
+            return 0
+        print(assign_one_licence(token, agent_user_id, assign or ""))
+        return 0
+    except ProvisioningStop as exc:
+        print(exc.marker)  # alone on its line, for the setup front ends
+        print(exc)
+        return 1
+
+
+def _arguments(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Create or repair the agent's identity chain in Microsoft Entra. With no "
+        "option, the full run; the options below handle the Agent User's licence on its own."
+    )
+    only = parser.add_mutually_exclusive_group()
+    only.add_argument(
+        "--licence-report",
+        action="store_true",
+        help="Print what the tenant subscribes to and which of it the Agent User has.",
+    )
+    only.add_argument(
+        "--assign-licence",
+        metavar="SKU_ID",
+        help="Give the Agent User this one product (usage location first).",
+    )
+    return parser.parse_args(list(argv))
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 
-def main() -> int:
+def main(argv: Sequence[str] = ()) -> int:
+    args = _arguments(argv)
+    if args.licence_report or args.assign_licence is not None:
+        return _licence_only(report=args.licence_report, assign=args.assign_licence)
+
     print("=" * 60)
     print("EntraBot — Entra Agent Identity Provisioning")
     print("=" * 60)
@@ -1089,33 +1733,58 @@ def main() -> int:
         print(f"ERROR: {exc}")
         return 1
 
-    blueprint_app_id, blueprint_obj_id = create_blueprint(token)
+    try:
+        _provision(token)
+    except ProvisioningStop as exc:
+        print(exc.marker)  # alone on its line, for the setup front ends
+        print(exc)
+        return 1
+    return 0
+
+
+def _provision(token: str) -> None:
+    """Find or create the chain, then grant and license it. Raises :class:`ProvisioningStop`.
+
+    The Blueprint, and whether an Agent User with the wanted sign-in name may be reused, are
+    settled before anything is created or recorded.
+    """
+    blueprint = blueprint_for_this_run(token)
 
     # Check tenant-wide for an existing Agent User by UPN BEFORE provisioning
     # anything new. If the UPN already exists (from a prior run on another
     # machine, or a state-file loss), reuse the Agent User + its parent
     # Agent Identity rather than creating duplicates that would then
-    # collide on the unique-UPN constraint.
+    # collide on the unique-UPN constraint -- but only when that Agent
+    # Identity belongs to this run's Blueprint (agent_identity_to_reuse).
     #
     # When _FORCE_NEW (setup.sh --new), skip this check entirely and use a
     # unique UPN suffix so the new Agent User doesn't collide.
+    reuse: tuple[dict, dict] | None = None
     if _FORCE_NEW:
-        existing_user = None
         _suffix = os.environ.get("_ENTRABOT_UPN_SUFFIX", "")
         if _suffix:
             print(f"  [--new] Will use UPN suffix: {_suffix}")
         else:
             print("  [--new] WARNING: No UPN suffix set — may collide with existing Agent User")
     else:
+        print("\n--- Looking for an existing Agent User ---\n")
         intended_upn = _agent_user_upn(token)
         existing_user = find_existing_agent_user_by_upn(token, intended_upn)
-    if existing_user:
+        if existing_user:
+            wanted = str(blueprint["appId"]) if blueprint else ""  # empty: about to be created
+            reuse = (existing_user, agent_identity_to_reuse(token, existing_user, wanted))
+        else:
+            print(f"  No Agent User is named {intended_upn} yet.")
+
+    blueprint_app_id, blueprint_obj_id = record_blueprint(token, blueprint)
+
+    if reuse:
+        existing_user, sp = reuse
         agent_user_id = existing_user["id"]
         agent_user_upn = existing_user["userPrincipalName"]
-        agent_obj_id = existing_user.get("identityParentId", "")
-        sp = _servicePrincipal_by_object_id(token, agent_obj_id) if agent_obj_id else None
-        agent_id = sp.get("appId", "") if sp else ""
-        parent_name = sp.get("displayName", "?") if sp else "?"
+        agent_obj_id = existing_user["identityParentId"]
+        agent_id = sp["appId"]
+        parent_name = sp.get("displayName", "?")
         print("\n--- Reusing existing Agent User ---\n")
         print(f"  UPN:            {agent_user_upn}")
         print(f"  User Object ID: {agent_user_id}")
@@ -1145,8 +1814,7 @@ def main() -> int:
     print(f"  Agent User UPN:      {agent_user_upn}")
     print(f"  Agent Display Name:  {_agent_display_name()}")
     print("")
-    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

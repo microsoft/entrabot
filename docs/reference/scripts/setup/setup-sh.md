@@ -78,7 +78,13 @@ Identity mode (choose one):
   User are reused. If local state points at a *different* Blueprint, the stale
   identity-derived state is wiped (after a timestamped backup) so discovery re-runs
   cleanly against the new Blueprint. The old machine's cert on the previous
-  Blueprint is **not** revoked automatically.
+  Blueprint is **not** revoked automatically. Unless `--agent-user-upn` or
+  `--with-upn-suffix` names the Agent User, the one `.env` names
+  (`ENTRABOT_AGENT_USER_UPN`) is looked for only when `.env` was written for
+  this same Blueprint (`ENTRABOT_BLUEPRINT_APP_ID`). Otherwise setup runs the
+  agent step without it, and says so. An Agent User found by its
+  sign-in name is reused only when it belongs to this Blueprint; see
+  [`create_entra_agent_ids.py`](../provisioning/create-entra-agent-ids-py.md#idempotency-and-resume).
 - `--remove-all-existing-certs` — used with `--use-blueprint`. Removes **every**
   certificate on the Blueprint, including those of other machines, and replaces them
   with a new one for this machine, even if this machine's current certificate is
@@ -95,9 +101,11 @@ Agent User selection:
 
 - `--with-upn-suffix=NAME` — UPN suffix for the Agent User (required with `--new`
   unless `--agent-user-upn` is given). With `--use-blueprint`, selects an
-  existing suffixed Agent User.
+  existing suffixed Agent User of that Blueprint.
 - `--agent-user-upn=UPN` — explicit Agent User UPN. With `--new`, creates exactly
-  that UPN; with `--use-blueprint`, selects an existing Agent User to reuse.
+  that UPN; with `--use-blueprint`, selects an existing Agent User to reuse. An
+  Agent User of a different Blueprint stops setup at Step 5 with nothing
+  created, granted or recorded.
 - `--switch-user` — run `az login` first so a different signed-in user owns and
   sponsors the agent.
 - `--teams-user=EMAIL` — set a different user (or comma-separated users) as the
@@ -134,8 +142,11 @@ Agent 365 Work IQ:
 - `--with-a365-work-iq` — install or update the Microsoft Agent 365 DevTools CLI
   (`a365`) via `dotnet` global tools (requires a .NET SDK on `PATH`).
 - `--configure-a365-work-iq` — run the interactive Work IQ Word developer setup
-  against the existing Entrabot Blueprint, materialize the Work IQ OAuth grants,
-  and validate the tooling manifest. Requires `pwsh`.
+  against the existing Entrabot Blueprint, materialize the Work IQ OAuth grants
+  and the Blueprint's inheritable permissions
+  ([`ensure_a365_work_iq_permissions.py`](../provisioning/ensure-a365-work-iq-permissions-py.md),
+  before `a365 setup permissions mcp`), and validate the tooling manifest.
+  Requires `pwsh`.
 - `--a365-agent-name=NAME` — deprecated compatibility flag; Work IQ setup now
   reuses the existing Entrabot Blueprint from state.
 
@@ -157,10 +168,16 @@ Diagnostics and control:
 ## Effects
 
 - Verifies `az`, Python ≥ 3.12, and required CLI tools; verifies the Azure login.
-- Bootstraps the Provisioner app via `entra_provisioning.py` and creates or
-  reuses the Blueprint, Agent Identity, and Agent User via
+- Bootstraps the Provisioner app via `entra_provisioning.py` (see
+  [Which app registration is the Provisioner](#which-app-registration-is-the-provisioner))
+  and creates or reuses the Blueprint, Agent Identity, and Agent User via
   [`create_entra_agent_ids.py`](../provisioning/create-entra-agent-ids-py.md)
   (using the Provisioner certificate token, never `az` CLI tokens).
+- With `--use-blueprint`, checks after that step that the Blueprint recorded in
+  `.entrabot-state.json` is the one asked for (in any letter case). If it is
+  not, setup stops (exit `1`) before Work IQ is configured and before the
+  certificate step: no certificate is registered on either Blueprint, and
+  `.env` is not written.
 - Reuses this machine's certificate only when
   [`find_local_blueprint_cert.py`](../auth-and-certs/find-local-blueprint-cert-py.md)
   shows that the local private key matches a certificate still registered on the
@@ -212,12 +229,59 @@ Diagnostics and control:
   Teams tool requires an explicit chat id supplied at runtime. See
   [Messaging and delivery](../../../architecture/messaging-and-delivery.md).
 
+### Which app registration is the Provisioner
+
+`entra_provisioning.py` uses the Provisioner app that an earlier run on this
+machine recorded in `.entrabot-state.json` (`PROVISIONER_CLIENT_ID`). Windows
+setup runs the same script with the same rule. When no app is recorded, or the
+recorded one no longer exists in Microsoft Entra, it looks for app registrations
+named exactly `EntraBot Agent ID Provisioner`:
+
+- **None:** it creates one.
+- **One:** it takes that app over only if doing so grants nobody anything. That
+  is the case when either:
+    - an administrator has already granted it admin consent for every Microsoft
+      Graph permission setup needs, and anything else the app asks for is a
+      Graph application permission that has been granted too. This is the usual
+      case on a second machine, or for a second administrator. Setup then grants
+      no consent in this run; or
+    - nobody else can use it: you are the only owner of the app and of its
+      service principal (or they have no owners), the app has no client secret
+      and no federated credential, its service principal has no credential of
+      its own, every certificate on the app has its private key on this machine,
+      and the app asks for no permission besides setup's Graph application
+      permissions.
+- **More than one, or one that meets neither condition:** setup stops before it
+  changes anything in Microsoft Entra. It lists each app (application ID,
+  creation date, owners) and why it was not used, and exits `1`. Anything setup
+  could not read counts against the app.
+
+The reason: the Provisioner app is granted tenant-wide Microsoft Graph
+application permissions with admin consent, and app names are not unique.
+Anyone allowed to register applications can create an app with this name, and
+taking it over would hand those permissions to whoever controls it.
+
+To use a particular app, set `ENTRABOT_PROVISIONER_APP_ID_VERIFIED` to its
+application (client) ID for one run (see
+[Setup and authentication](../../../troubleshooting/setup-and-authentication.md#setup-will-not-take-over-an-existing-provisioner-app-registration)).
+Setup only checks that an app with that ID exists, then records it and treats it
+as its own: it adds the permissions setup needs and, when any are not yet
+consented, grants admin consent, which covers everything the app asks for. As on
+every run, it also deletes any client secret on the app. Check the app's owners,
+credentials and permissions first. A value that is not an
+application ID, an ID no app has, or an app other than the one this machine
+already has recorded is refused, and nothing is changed. The variable is not
+read from `.env`, and `ENTRABOT_PROVISIONER_APP_ID`, which setup writes to
+`.env`, does not choose the app.
+
 ## Exit behavior
 
 - `0` — setup (or `--status` / `--help`) completed successfully; the smoke test
   either passed or was skipped.
 - `1` — a fatal setup error (for example a missing prerequisite, no Azure login,
-  a failed provisioning step, a certificate check that couldn't complete, a declined
+  a failed provisioning step, an existing Provisioner app that setup would not take
+  over, an agent step that recorded a different Blueprint from the one
+  `--use-blueprint` named, a certificate check that couldn't complete, a declined
   `--remove-all-existing-certs` prompt, `--new` / `--use-blueprint` conflict, or a
   missing required identity mode).
 - `2` — mutually exclusive storage flags, `--new` with
@@ -237,7 +301,28 @@ Diagnostics and control:
   --switch-user`) and retry.
 - **`No identity mode specified`** — pass `--new --with-upn-suffix=NAME` or
   `--use-blueprint=APP_ID`.
-- **`Could not check ...`** — setup couldn't read the Blueprint's certificates or the
+- **`Setup did not take over an existing 'EntraBot Agent ID Provisioner' app
+  registration`** — see
+  [Which app registration is the Provisioner](#which-app-registration-is-the-provisioner)
+  and
+  [Setup and authentication](../../../troubleshooting/setup-and-authentication.md#setup-will-not-take-over-an-existing-provisioner-app-registration).
+- **`Not reusing the Agent User named in .env (...)`** — a warning, not a stop.
+  With `--use-blueprint`, `.env` was written for another Blueprint (or records
+  none), so the Agent User it names is not looked for under this one. To use a
+  particular Agent User of this Blueprint, name it with `--agent-user-upn` or
+  `--with-upn-suffix`. See
+  [Setup and authentication](../../../troubleshooting/setup-and-authentication.md#setup-says-it-is-not-reusing-the-agent-user-named-in-env).
+- **Step 5 stops: `The Agent User ... belongs to a different Blueprint`,
+  `... does not exist in this tenant`, or `Could not check ...`** —
+  `create_entra_agent_ids.py` stopped instead of guessing which agent is this
+  one, before creating the object in question. The line above the message, such
+  as `ENTRABOT_RESULT=blueprint-not-found`, names the outcome for the Windows
+  wizard. See
+  [Setup stops while creating the agent](../../../troubleshooting/setup-and-authentication.md#setup-stops-while-creating-the-agent).
+- **`You asked to join Blueprint ..., but create_entra_agent_ids.py recorded
+  Blueprint ...`** — setup stopped before the certificate step; see
+  [Setup and authentication](../../../troubleshooting/setup-and-authentication.md#setup-stops-because-a-different-blueprint-was-recorded).
+- **`Could not check ...` at the certificate step (Step 6)** — setup couldn't read the Blueprint's certificates or the
   OS credential store (the pending key entry included), so it doesn't know whether this
   machine is already registered. It stops rather than generating a certificate, and
   nothing was changed. Fix the error shown above the message and re-run.

@@ -1,99 +1,75 @@
-# generate_windows_cert.py
+# `scripts/generate_windows_cert.py`
 
-Generate the Blueprint certificate on Windows with hard-locked crypto
-parameters, TPM-first with a software-KSP fallback, returning the thumbprints
-and public certificate needed to register it on the Blueprint app. Windows only.
-
-Part of the [auth-and-certs command reference](../index.md#auth-and-certs).
+Platforms: Windows.
 
 ## Purpose
 
-Wraps `New-SelfSignedCertificate` with fixed cryptographic parameters so the
-Blueprint certificate is always created the same way. The private key is a
-non-exportable CNG key: on the TPM path it is bound to the
-**Microsoft Platform Crypto Provider**; when no TPM is ready it falls back to the
-**Microsoft Software Key Storage Provider**, whose key DPAPI binds to the user
-profile. The certificate is created in `Cert:\CurrentUser\My`. See
-[Windows Platform APIs → Blueprint certificate and non-exportable CNG key](../../../platform-docs/platform-windows.md#blueprint-certificate-and-non-exportable-cng-key)
-and [Two thumbprints, two purposes](../../../platform-docs/platform-windows.md#two-thumbprints-two-purposes).
+`generate_windows_cert.py` creates a signing certificate with a non-exportable
+key in the current user's Windows certificate store. It is a thin command line
+over `entrabot.platform.wincert`, which owns the Windows key lifecycle.
 
-The locked parameters are RSA 2048, SHA-256, `KeyUsage DigitalSignature`, and
-`KeyUsageProperty Sign`. On the TPM path `-KeyExportPolicy NonExportable` is set
-explicitly.
+The setup wizard creates the Blueprint certificate through `wincert` itself, so
+you do not normally run this script. It exists for diagnostics and for other
+tools that need a certificate made the same way.
 
 ## Requirements
 
-- Windows with PowerShell 7 (`pwsh`) on `PATH` and `New-SelfSignedCertificate`
-  available.
-- A TPM is optional; without a ready TPM the command uses the software KSP.
+- Native Windows. It uses the Windows PowerShell 5.1 that ships with Windows;
+  PowerShell 7 is not needed.
+- The project's Python environment (`.venv`).
+- No administrator rights.
 
 ## Usage
 
 ```powershell
-# Auto-probe the TPM, generate, and export the public DER
-python scripts/generate_windows_cert.py --export-der C:\path\to\blueprint.der
-
-# Force the software KSP
-python scripts/generate_windows_cert.py --ksp software
+.\.venv\Scripts\python.exe scripts\generate_windows_cert.py
+.\.venv\Scripts\python.exe scripts\generate_windows_cert.py --ksp software --days 90
+.\.venv\Scripts\python.exe scripts\generate_windows_cert.py --export-der blueprint.cer
 ```
 
 ## Options
 
-- `--subject` — certificate subject. Default `CN=entrabot-blueprint`.
-- `--days` — validity in days. Default `365`.
-- `--ksp {tpm,software}` — key storage provider. If omitted, the command probes
-  `(Get-Tpm).TpmReady` and chooses `tpm` when ready, otherwise `software`,
-  printing `TPM probe: chose KSP=<value>` to stderr.
-- `--export-der PATH` — export the public certificate DER to `PATH` and print its
-  JWT `x5t#S256` thumbprint.
+- `--subject <CN=...>` — certificate subject. Default `CN=entrabot-blueprint`.
+- `--friendly-name <NAME>` — friendly name. Default `Entrabot Blueprint`.
+- `--days <N>` — validity in days. Default `365`.
+- `--ksp {tpm,software}` — use exactly this key store and do not fall back.
+  `--ksp tpm` fails if the TPM cannot be used.
+- `--export-der <PATH>` — also write the public certificate (DER) to this file.
 
 ## Effects
 
-1. Selects the KSP (explicit `--ksp` or TPM auto-probe).
-2. Runs `New-SelfSignedCertificate` with the locked crypto parameters, creating
-   the certificate in `Cert:\CurrentUser\My`.
-3. Validates the returned SHA-1 thumbprint against `^[A-F0-9]{40}$` and rejects
-   any value containing line breaks, guarding against stdout corruption.
-4. Prints to stdout:
-   - `thumbprint=<40-hex SHA-1>` — the store-lookup key used to locate the
-     certificate in `Cert:\CurrentUser\My`.
-   - `ksp=<tpm|software>` — the provider actually used.
-5. With `--export-der`, writes the public DER file and prints
-   `x5t_s256=<base64url SHA-256, no padding>` — the thumbprint carried in the JWT
-   assertion header.
+- Creates an RSA 2048 certificate in `Cert:\CurrentUser\My` with a
+  non-exportable, signature-only key and no TLS usages.
+- Without `--ksp`, tries the TPM first (Microsoft Platform Crypto Provider) by
+  creating the key and signing once with it. If that fails it deletes what it
+  created and uses the Microsoft Software Key Storage Provider, saying why on
+  stderr. It does not probe for a TPM with `Get-Tpm`.
+- Reports success only after the new key has signed once.
+- Prints three machine-readable lines on stdout; everything meant for a person
+  goes to stderr:
 
-The two thumbprints have distinct roles: the SHA-1 hex value is only for
-certificate-store lookup, while the SHA-256 `x5t#S256` value is what goes in the
-JWT header on every platform.
+  ```text
+  thumbprint=<40 uppercase hex characters>
+  ksp=<tpm|software>
+  x5t_s256=<43-character base64url SHA-256 of the DER>
+  ```
+
+- It does not register the certificate anywhere. Use
+  [`register_windows_blueprint_cert.py`](register-windows-blueprint-cert-py.md)
+  for that.
 
 ## Exit behavior
 
-- `0` — the certificate was generated (and exported when requested); outputs are
-  on stdout.
-- Non-zero — the PowerShell certificate generation or export failed, or the
-  returned thumbprint failed validation (line breaks or not 40 hex characters).
-  The failure surfaces as a raised error.
-- `2` — argument-parsing error (for example, an invalid `--ksp` value).
-
-## Security
-
-The private key is non-exportable (TPM-bound, or DPAPI-bound to the user profile
-on the software path) and never leaves the certificate store. Only the public DER
-and the public thumbprints are emitted.
-
-## Common failures
-
-- **`pwsh` not found** — install PowerShell 7 (see the Windows prerequisites).
-- **TPM not ready** — the command silently falls back to the software KSP and
-  notes the choice on stderr.
+- `0` — created.
+- `1` — failed. Nothing usable is left behind.
+- `2` — usage error.
 
 ## Related commands
 
+- [Script reference — Auth and certs](../index.md#auth-and-certs)
 - [`register_windows_blueprint_cert.py`](register-windows-blueprint-cert-py.md) —
-  registers the certificate this creates on the Blueprint.
-- [`rotate_cert_windows.py`](rotate-cert-windows-py.md) — reuses this helper for
-  transactional rotation.
-- [`setup-windows.ps1`](../setup/setup-windows-ps1.md) — first-time Windows
-  provisioning that generates the certificate and registers it on the Blueprint.
-- [`deploy-windows.ps1`](../setup/deploy-windows-ps1.md) — the rotation deploy
-  wrapper.
+  adds the certificate to the Blueprint.
+- [`setup-windows.ps1`](../setup/setup-windows-ps1.md) — creates and registers
+  the certificate as part of setup.
+- [`deploy-windows.ps1`](../setup/deploy-windows-ps1.md) — rotation.
+- [Windows Platform APIs](../../../platform-docs/platform-windows.md).

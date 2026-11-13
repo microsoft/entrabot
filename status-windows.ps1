@@ -1,11 +1,19 @@
 <#
 .SYNOPSIS
-  EntraBot status wrapper for Windows.
+  Entrabot - show the agent's status (Windows).
 
 .DESCRIPTION
-  Ensures the local Python environment exists, installs the EntraBot
-  provisioning dependencies if needed, loads .env, and delegates to the
-  consolidated scripts/show_agent_status.py command.
+  Shows the agent's identity, permissions, licences and health checks. Changes nothing
+  and installs nothing.
+
+  This script is a thin wrapper. The work is done by scripts\show_agent_status.py, run
+  through:
+      python -m entrabot.winsetup status
+  which starts it with the project's own Python environment and the same Azure CLI that
+  setup used. It runs on the Windows PowerShell 5.1 that ships with Windows, and on
+  PowerShell 7. The exit code is the status command's.
+
+  If Entrabot is not installed in this folder yet, run scripts\setup-windows.cmd first.
 
 .PARAMETER Json
   Output machine-readable JSON.
@@ -17,19 +25,19 @@
   Return non-zero when health checks fail.
 
 .PARAMETER Help
-  Show the underlying status command help.
+  Show this help.
 
 .EXAMPLE
-  .\status-windows.ps1
+  powershell -ExecutionPolicy Bypass -File status-windows.ps1
 
 .EXAMPLE
-  .\status-windows.ps1 -HealthOnly
+  powershell -ExecutionPolicy Bypass -File status-windows.ps1 -HealthOnly -Strict
 
 .EXAMPLE
-  .\status-windows.ps1 -Json
+  powershell -ExecutionPolicy Bypass -File status-windows.ps1 -Json
 #>
 
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [switch]$Json,
     [switch]$HealthOnly,
@@ -37,57 +45,75 @@ param(
     [switch]$Help
 )
 
-$ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1 writes progress records as CLIXML to stderr when its output is
+# not a console. Nothing here needs a progress bar.
+$ProgressPreference = 'SilentlyContinue'
+
+# Windows PowerShell started from a PowerShell 7 terminal through anything other than
+# PowerShell 7 itself (cmd.exe, Python, ...) keeps PowerShell 7's module paths, resolves
+# its in-box modules (Microsoft.PowerShell.Utility, ...) to versions it cannot load, and
+# then cannot find Write-Host or Get-FileHash (about_PSModulePath, "Starting Windows
+# PowerShell from PowerShell 7"). So under Windows PowerShell, put back its own default
+# locations for this process, before the first cmdlet that needs a module. No cmdlet is
+# used here: even Join-Path lives in a module. PowerShell 7 builds its own; nothing to do.
+if ($PSVersionTable.PSVersion.Major -lt 6) {
+    $windowsPowerShellModulePaths = @()
+    $documentsFolder = [Environment]::GetFolderPath('MyDocuments')
+    if ($documentsFolder) {
+        $windowsPowerShellModulePaths += [System.IO.Path]::Combine($documentsFolder, 'WindowsPowerShell\Modules')
+    }
+    $programFilesFolder = [Environment]::GetFolderPath('ProgramFiles')
+    if ($programFilesFolder) {
+        $windowsPowerShellModulePaths += [System.IO.Path]::Combine($programFilesFolder, 'WindowsPowerShell\Modules')
+    }
+    $windowsPowerShellModulePaths += [System.IO.Path]::Combine($PSHOME, 'Modules')
+    $env:PSModulePath = $windowsPowerShellModulePaths -join ';'
+}
+
+# =============================================================================
+# Pure helpers, loadable by the tests (dot-source this file). This file must stay
+# ASCII-only: Windows PowerShell 5.1 reads a file without a byte-order mark in the
+# ANSI code page, where one non-ASCII character is a parse error.
+# =============================================================================
+
+function Get-StatusArguments {
+    # The argument list handed to `python -m entrabot.winsetup`. Values are separate
+    # array elements, so nothing is ever quoted by hand.
+    param([string]$ProjectRoot, [bool]$Json, [bool]$HealthOnly, [bool]$Strict)
+    $list = @('status', '--project-root', $ProjectRoot)
+    if ($Json) { $list += '--json' }
+    if ($HealthOnly) { $list += '--health-only' }
+    if ($Strict) { $list += '--strict' }
+    return $list
+}
+
+if ($MyInvocation.InvocationName -eq '.' -or $env:ENTRABOT_SETUP_FUNCTIONS_ONLY -eq '1') { return }
+
+if ($Help) {
+    Get-Help $PSCommandPath -Detailed
+    exit 0
+}
+
 Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+# Strict mode makes reading $LASTEXITCODE an error until some native command has set it.
+$global:LASTEXITCODE = 0
+
+if ($env:OS -ne 'Windows_NT') {
+    # Written to the error stream so a -Json caller never mistakes it for output.
+    [Console]::Error.WriteLine('ERROR: status-windows.ps1 must run on Windows. On macOS or Linux run ./status.sh.')
+    exit 1
+}
 
 $ProjectRoot = Split-Path -Parent $PSCommandPath
-$WindowsVenvPython = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
-$UnixVenvPython = Join-Path $ProjectRoot '.venv/bin/python'
-$VenvPython = if (Test-Path $WindowsVenvPython) { $WindowsVenvPython } elseif (Test-Path $UnixVenvPython) { $UnixVenvPython } else { $WindowsVenvPython }
-
-function Find-Python312 {
-    foreach ($candidate in @('python3.12', 'python3.13', 'python')) {
-        $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
-        if (-not $cmd) { continue }
-        & $cmd.Source -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" 2>$null
-        if ($LASTEXITCODE -eq 0) { return $cmd.Source }
-    }
-    return $null
+$venvPython = Join-Path (Join-Path $ProjectRoot '.venv') 'Scripts\python.exe'
+if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
+    [Console]::Error.WriteLine('ERROR: Entrabot is not installed in this folder yet. Run scripts\setup-windows.cmd first.')
+    exit 1
 }
 
-if (-not (Test-Path $VenvPython)) {
-    $Python = Find-Python312
-    if (-not $Python) {
-        Write-Host "ERROR: Python 3.12+ is required to run EntraBot status." -ForegroundColor Red
-        exit 1
-    }
-    Write-Host "Creating local Python environment at .venv..." -ForegroundColor Yellow
-    & $Python -m venv (Join-Path $ProjectRoot '.venv')
-}
-
-& $VenvPython -c "import azure.identity, entrabot" 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Installing EntraBot status dependencies into .venv..." -ForegroundColor Yellow
-    & $VenvPython -m pip install -e '.[provisioning]'
-}
-
-$EnvPath = Join-Path $ProjectRoot '.env'
-if (Test-Path $EnvPath) {
-    foreach ($line in Get-Content $EnvPath) {
-        if ($line -match '^\s*#' -or $line -notmatch '=') { continue }
-        $parts = $line -split '=', 2
-        if ($parts[0]) {
-            [Environment]::SetEnvironmentVariable($parts[0], $parts[1], 'Process')
-        }
-    }
-}
-
-$ForwardArgs = @()
-if ($Json) { $ForwardArgs += '--json' }
-if ($HealthOnly) { $ForwardArgs += '--health-only' }
-if ($Strict) { $ForwardArgs += '--strict' }
-if ($Help) { $ForwardArgs += '--help' }
-
-$StatusScript = Join-Path (Join-Path $ProjectRoot 'scripts') 'show_agent_status.py'
-& $VenvPython $StatusScript @ForwardArgs
+$env:PYTHONUTF8 = '1'
+$env:PYTHONIOENCODING = 'utf-8'
+$handoff = @('-m', 'entrabot.winsetup') + @(Get-StatusArguments -ProjectRoot $ProjectRoot -Json ([bool]$Json) -HealthOnly ([bool]$HealthOnly) -Strict ([bool]$Strict))
+& $venvPython @handoff
 exit $LASTEXITCODE

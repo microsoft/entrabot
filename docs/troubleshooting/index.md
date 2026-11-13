@@ -10,7 +10,7 @@ problems.
 |---|---|
 | Setup fails, sign-in loops, token exchange names a hop, or the runtime is unauthenticated | [Setup and authentication](setup-and-authentication.md) |
 | Teams messages do not send or arrive, email is missing, or Graph returns 401/403/404/429 | [Teams and email](teams-and-email.md) |
-| PowerShell, certificate-store, TPM, path, or Windows data-directory problem | [Windows](windows.md) |
+| Windows setup stops, the sign-in window is missing, Claude Code blocks edits, a certificate expired, or a sponsor is ignored | [Windows](windows.md) |
 | Blob selection, storage consent, RBAC, migration, or cursor-concurrency problem | [Storage](storage.md) |
 | MCP server will not start, disconnects, or channel push is missing | [MCP connectivity](mcp-connectivity.md) |
 | An upgrade changed state, credentials, cursors, or local paths | [Migrations and upgrades](migrations-and-upgrades.md) |
@@ -37,8 +37,8 @@ Run status and health:
 
 === "Windows"
 
-    ```powershell
-    .\status-windows.ps1 -HealthOnly -Strict
+    ```bat
+    scripts\setup-windows.cmd -Diagnose
     ```
 
 Then call `whoami` from the connected MCP host. A healthy Provisioner status

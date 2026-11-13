@@ -4,130 +4,112 @@ Platforms: Windows.
 
 ## Purpose
 
-`deploy-windows.ps1` is the Windows **Blueprint certificate-rotation**
-wrapper — it is not an application deployment script. It captures the
-current Blueprint certificate's public DER, generates a new certificate,
-hands both to the transactional rotation logic in
-[`rotate_cert_windows.py`](../auth-and-certs/rotate-cert-windows-py.md), and
-only deletes the old certificate from the Windows certificate store after a
-smoke test proves the new one works end to end. A `-Status` flag skips
-rotation entirely and delegates to
+`deploy-windows.ps1` rotates this PC's **Blueprint certificate** — it is not an
+application deployment script. It replaces the certificate this PC uses to sign
+the agent in, and keeps the current one in use until the new one is proven to
+work. A `-Status` flag skips rotation and delegates to
 [`status-windows.ps1`](../operations/status-windows-ps1.md).
+
+It is a thin wrapper; the work is done by
+`python -m entrabot.winsetup rotate-cert`.
 
 ## Requirements
 
-- **PowerShell 7+ (`pwsh`), not Windows PowerShell 5.1** — the script checks
-  `$PSVersionTable.PSVersion.Major` itself (rather than relying on a
-  `#Requires` directive) so it can print an actionable "blue icon vs black
-  icon" message before any PS-7-only syntax runs.
-- Native Windows (`$IsWindows`); the script throws otherwise.
-- A completed [`setup-windows.ps1`](setup-windows-ps1.md) run: the venv at
-  `.venv\Scripts\python.exe` must exist, and `.env` must contain
-  `ENTRABOT_BLUEPRINT_CERT_SHA1` identifying the certificate currently in
-  `Cert:\CurrentUser\My`.
-- Network access to Microsoft Graph for reading and updating `keyCredentials`
-  and for the post-rotation smoke test's three-hop token acquisition. The Graph
-  token this wrapper uses must be able to read the Blueprint application as well as
-  update it; if the read fails, the rotation stops before anything is written.
+- Native Windows, and Windows PowerShell 5.1 (ships with Windows) or
+  PowerShell 7.
+- A completed [`setup-windows.ps1`](setup-windows-ps1.md) run on this PC:
+  `.venv` exists, and `.env` names the current certificate.
+- A signed-in Azure CLI session (setup's is reused) with the rights setup
+  needed.
+- Network access to Microsoft Graph and Microsoft Entra.
 
 ## Usage
 
 ```powershell
-# Rotate the Blueprint certificate
-.\scripts\deploy-windows.ps1
+# Rotate (asks first)
+powershell -ExecutionPolicy Bypass -File scripts\deploy-windows.ps1
+
+# Rotate without asking, showing everything
+powershell -ExecutionPolicy Bypass -File scripts\deploy-windows.ps1 -Yes -Verbose
 
 # Status only — no rotation
-.\scripts\deploy-windows.ps1 -Status
-.\scripts\deploy-windows.ps1 -Status -Json
-.\scripts\deploy-windows.ps1 -Status -HealthOnly -Strict
+powershell -ExecutionPolicy Bypass -File scripts\deploy-windows.ps1 -Status -HealthOnly -Strict
 ```
 
 ## Options
 
-- `-Status` — skip cert rotation and run the consolidated status command via
-  `status-windows.ps1`.
-- `-Json` — with `-Status`, output machine-readable JSON.
-- `-HealthOnly` — with `-Status`, only print health checks.
-- `-Strict` — with `-Status`, return non-zero when health checks fail.
-- `-Help` — print `Get-Help`-based documentation and exit `0`.
+- `-Yes` — do not ask before rotating. Run without a terminal (unattended),
+  rotation refuses to start without it and exits `2`. Finishing an earlier
+  rotation's cleanup creates nothing new, so it does not ask and needs no
+  `-Yes`.
+- `-Verbose` — show everything the helper scripts print.
+- `-Status`, with `-Json`, `-HealthOnly`, `-Strict` — skip rotation and run
+  `status-windows.ps1` with those flags.
+- `-Help` — show help and exit `0`.
 
 ## Effects
 
-1. Reads `ENTRABOT_BLUEPRINT_CERT_SHA1` from `.env` to identify the current
-   certificate.
-2. **Captures the current certificate's public DER before generating the new
-   one** — for a non-exportable TPM-bound key this is the only chance to
-   retrieve public material usable for a rollback PATCH. Writes it to a
-   temporary `.cer` file under `%TEMP%`.
-3. Calls [`generate_windows_cert.py`](../auth-and-certs/generate-windows-cert-py.md)
-   to generate the new certificate (TPM-first, software-KSP fallback),
-   exporting its public DER to a second temporary `.cer` file and capturing
-   its SHA-1 thumbprint and `x5t#S256` JWT thumbprint from stdout.
-4. Builds a Python driver script inline and runs it under the project venv,
-   wiring a Graph callable (which keeps other machines' certificates by swapping
-   only this machine's old and new ones, through
-   [`blueprint_certs.swap_key_credential`](../auth-and-certs/blueprint-certs-py.md)),
-   a smoke-test callable (a fresh
-   `acquire_agent_user_token` call), and a certificate-deletion callable to
-   [`rotate_cert_windows.rotate()`](../auth-and-certs/rotate-cert-windows-py.md),
-   which performs the actual transactional rotation: `PATCH` the new DER,
-   update `.env`, smoke-test, then either delete the old certificate (smoke
-   passes) or roll back the `PATCH` + `.env` + MSAL cache (smoke fails). See
-   that page for the full step-by-step rotation and rollback contract.
-5. Deletes the old certificate from `Cert:\CurrentUser\My` **only after** the
-   rotation module confirms the smoke test passed.
-6. **Does not clean up the temporary old/new `.cer` DER files it writes to
-   `%TEMP%`** — they are left on disk after the run, whether it succeeds or
-   fails.
-7. With `-Status`, none of the above runs; the script instead invokes
-   `status-windows.ps1` with the forwarded status flags and exits with its
-   exit code.
+1. Creates a new certificate on this PC, with a non-exportable key held by the
+   TPM where the TPM accepts one.
+2. Adds its public half to the agent's Blueprint, beside the current
+   certificate. Every other machine's certificate is kept.
+3. Signs the agent in with the new certificate, retrying while Microsoft Entra
+   takes it up.
+4. Switches `.env` to the new certificate.
+5. Removes the old certificate from the Blueprint, and deletes it from this PC
+   together with its private key.
+
+If steps 1-3 fail, the new certificate is undone (removed from the Blueprint if
+it was added, and deleted locally with its key) and nothing else changes. If
+step 5 fails, the agent is already working on the new certificate; running the
+script again finishes the cleanup.
+
+Step 5 writes the Blueprint's certificate list back without the old
+certificate, so it first waits for a read of that list to show the new one
+(Microsoft Entra can take a minute to list a certificate that was just added).
+If the new one is still not listed after about three minutes of reads, nothing
+is written: the old certificate stays on the Blueprint, the script exits `3`,
+and running it again later finishes the job. The old certificate's private key
+is deleted from this PC either way, so the entry left on the Blueprint cannot
+be used. The one leftover a second run cannot fix is a private key that could
+not be deleted; the message says how to remove it by hand.
+
+An expired certificate can still be rotated. If there is no certificate
+configured, or the configured one is no longer in the certificate store, the
+script changes nothing and points to `scripts\setup-windows.cmd`, which repairs
+that case.
+
+It writes a log to `%LOCALAPPDATA%\entrabot\logs\rotate-cert-<date>-<time>.log`.
+Restart your assistant afterwards: the agent reads its certificate when it
+starts.
 
 ## Exit behavior
 
-- `0` — rotation succeeded (new certificate live, old one deleted), or
-  `-Help` was requested.
-- `1` — launched from Windows PowerShell 5.1 (checked before `-Status` and
-  before any rotation logic runs).
-- `1` — not running on Windows, the venv is missing, `.env` has no
-  `ENTRABOT_BLUEPRINT_CERT_SHA1`, `generate_windows_cert.py` failed, or the
-  Python driver raised any of `RotationFailed`, `RotationRolledBack`, or
-  `ManualInterventionRequired` (see the
-  [rotation module's exit behavior](../auth-and-certs/rotate-cert-windows-py.md#exit-behavior)
-  for what each means and what state each leaves `.env`/the certificate
-  store in).
-- `-Status` — exits with whatever code the underlying `status-windows.ps1`
-  invocation returns.
+- `0` — rotated; or an earlier rotation's cleanup was finished; or `-Help`.
+- `1` — failed. The current certificate is still in use.
+- `2` — run unattended without `-Yes`. Nothing was changed.
+- `3` — rotated, but cleanup is pending. Run it again.
+- `130` — cancelled.
+- `1` — `.venv` is missing; run `scripts\setup-windows.cmd` first.
+- `-Status` — the exit code of `status-windows.ps1`.
 
 ## Common failures
 
-- **`This script needs PowerShell 7+`** — launched from the blue-icon
-  Windows PowerShell 5.1; open `pwsh` (black icon) and re-run.
-- **`venv not found`** — run [`setup-windows.ps1`](setup-windows-ps1.md)
-  first.
-- **`ENTRABOT_BLUEPRINT_CERT_SHA1 missing from .env`** — the machine has not
-  completed initial setup, or `.env` was hand-edited; re-run
-  [`setup-windows.ps1`](setup-windows-ps1.md).
-- **Rotation failed with no rollback needed** — reading the Blueprint's
-  certificates or the initial Graph `PATCH` failed; the old certificate is still in
-  the local store and `.env` still points at it.
-- **Rotation rolled back** — the new certificate's smoke test failed after
-  the `PATCH` succeeded; the original certificate, `.env` thumbprints, and
-  MSAL cache were restored automatically. Re-run once the underlying issue
-  (for example, license replication delay) clears.
-- **`ManualInterventionRequired`** — the smoke test failed and then the rollback
-  (its read or its `PATCH`) failed too; `.env` and the MSAL cache are deliberately left as-is for
-  manual triage, since the old DER may be the only public material matching
-  a still-working private key.
+- **"Run scripts\setup-windows.cmd"** — the PC is not set up, or its
+  certificate is missing from the certificate store. Setup creates and
+  registers a new one.
+- **Not signed in** — run `scripts\setup-windows.cmd`, which signs in, then
+  rotate again.
+- **The new certificate was not accepted in time** — exit `1`, with the new
+  certificate undone. Run it again later.
 
 ## Related commands
 
 - [Script reference — Setup](../index.md#setup)
-- [`rotate_cert_windows.py`](../auth-and-certs/rotate-cert-windows-py.md) —
-  the transactional rotation and rollback logic this wrapper drives.
-- [`generate_windows_cert.py`](../auth-and-certs/generate-windows-cert-py.md) —
-  generates the new certificate material.
-- [`setup-windows.ps1`](setup-windows-ps1.md) — first-time Windows
-  provisioning that this wrapper assumes has already run.
-- [`status-windows.ps1`](../operations/status-windows-ps1.md) — status/health
-  reporting reached via `-Status`.
+- [`setup-windows.ps1`](setup-windows-ps1.md) — first-time setup and repair.
+- [`status-windows.ps1`](../operations/status-windows-ps1.md) — status and
+  health, including days to certificate expiry.
+- [`teardown-windows.ps1`](../teardown/teardown-windows-ps1.md) — removes this
+  PC's certificate from the Blueprint.
+- [`rotate_cert_windows.py`](../auth-and-certs/rotate-cert-windows-py.md) — the
+  same rotation, run from Python.

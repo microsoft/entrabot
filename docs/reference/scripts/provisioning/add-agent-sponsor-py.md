@@ -35,16 +35,20 @@ matches the platform requirement that a user reference is expected here.
 python3 scripts/add_agent_sponsor.py user@example.com
 ```
 
-Exactly one positional argument is required: the sponsor's email address or UPN.
+Exactly one positional argument is required: the sponsor's email address or UPN,
+or their Entra object ID. An object ID is looked up directly and always works;
+it is the way to name someone whose address cannot be found, for example a
+personal Microsoft account whose directory sign-in name is the `#EXT#` form.
 The Agent Identity object ID is read from `.entrabot-state.json`; there is no
 command-line flag to override it.
 
 ## Effects
 
 - Mints a Provisioner Graph token from the certificate in the OS keystore.
-- Resolves the email/UPN to a directory user object, trying
-  `userPrincipalName`, `mail`, `otherMails`, and `proxyAddresses` in turn, so
-  both home-tenant users and B2B guests resolve.
+- Resolves the argument to a directory user object. An object ID is fetched
+  directly. An address is tried against `userPrincipalName`, `mail`,
+  `otherMails`, and `proxyAddresses` in turn, so both home-tenant users and B2B
+  guests resolve.
 - Reads the current sponsor collection via
   `GET /beta/servicePrincipals/{agent}/microsoft.graph.agentIdentity/sponsors`.
 - Adds the resolved user via

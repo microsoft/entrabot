@@ -3,10 +3,12 @@
 These run only on the Windows CI runner (and any Windows dev box). They
 exercise the full path:
 
-  generate_windows_cert.generate (real ``New-SelfSignedCertificate``)
+  generate_windows_cert.generate (real ``New-SelfSignedCertificate``, run by the
+      in-box Windows PowerShell through ``entrabot.platform.wincert``)
     → platform.windows.find_cert_by_thumbprint (real Cert: store)
     → cncrypt_signer.sign_pkcs1_sha256 (real CNG ncrypt.dll)
-    → certificate.build_client_assertion (real JWT, manual b64url path)
+    → certificate.build_client_assertion (real JWT, manual b64url path),
+      whose signature is VERIFIED against the certificate's public key
 
 Skipped on Mac/Linux.
 """
@@ -27,7 +29,7 @@ import importlib.util  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 from entrabot.auth import certificate, cncrypt_signer  # noqa: E402
-from entrabot.platform import windows  # noqa: E402
+from entrabot.platform import wincert, windows  # noqa: E402
 
 _HERE = Path(__file__).resolve()
 _GEN_SPEC = importlib.util.spec_from_file_location(
@@ -45,17 +47,11 @@ def fresh_software_cert(tmp_path: Path):
     subject = f"CN=entrabot-test-{int(time.time())}"
     result = _GEN.generate(subject=subject, days_valid=1, ksp="software")
     yield result
-    # Cleanup — don't fail the test if removal fails.
-    import subprocess
+    # Cleanup, with the private key — don't fail the test if removal fails.
+    import contextlib
 
-    cleanup_cmd = (
-        f"Remove-Item Cert:\\CurrentUser\\My\\{result.thumbprint} "
-        f"-ErrorAction SilentlyContinue"
-    )
-    subprocess.run(  # noqa: S603,S607
-        ["pwsh", "-NoProfile", "-Command", cleanup_cmd],
-        check=False,
-    )
+    with contextlib.suppress(wincert.WinCertError):
+        wincert.delete_cert(result.thumbprint)
 
 
 def test_full_signer_chain_software_ksp(fresh_software_cert) -> None:
@@ -82,6 +78,29 @@ def test_full_signer_chain_software_ksp(fresh_software_cert) -> None:
     )
     parts = assertion.split(".")
     assert len(parts) == 3, "JWT must be header.payload.signature"
+
+    # The signature must verify against the certificate's own public key, or Entra
+    # would reject the assertion.
+    import jwt
+    from cryptography import x509
+
+    stored = wincert.find_cert(sha1)
+    assert stored is not None and stored.has_private_key and stored.ksp == "software"
+    public_key = x509.load_der_x509_certificate(stored.der).public_key()
+    claims = jwt.decode(
+        assertion,
+        public_key,
+        algorithms=["RS256"],
+        audience=f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
+    )
+    assert claims["iss"] == "11111111-1111-1111-1111-111111111111"
+
+
+def test_signer_reports_missing_cert_without_the_thumbprint() -> None:
+    bogus = "E" * 40
+    with pytest.raises(cncrypt_signer.CertNotFoundError) as excinfo:
+        cncrypt_signer.sign_pkcs1_sha256(thumbprint=bogus, hash_bytes=b"\x00" * 32)
+    assert bogus not in str(excinfo.value)
 
 
 def test_find_cert_returns_false_for_missing_thumbprint() -> None:

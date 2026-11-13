@@ -16,7 +16,7 @@
 On Windows:
 
 ```powershell
-pwsh -File status-windows.ps1 -HealthOnly -Strict
+powershell -ExecutionPolicy Bypass -File status-windows.ps1 -HealthOnly -Strict
 ```
 
 A healthy Agent User token has `idtyp=user`, the Agent User's `oid`, and Microsoft Graph as its audience. The Agent Identity and Agent User are separate objects and should both appear in status output.
@@ -31,6 +31,14 @@ On macOS or Linux, re-run the full diagnostics without provisioning anything:
 
 It covers the state file, certificate, three-hop token, Graph identity, Teams scope, and the MCP configuration files, and ends with an optional `persona-sati MCP` line. That line reports `SKIP` when `.mcp.json` has no `persona-sati` entry, and never fails the run: a `WARN` means the entry still has an unfilled `<...>` placeholder, points at a launcher or token command that is missing or not executable, or points at a `localhost` address where nothing is listening. A failed local connection does not mean a hosted persona-sati service is down; connect through the client launcher from your persona-sati install, per its own setup documentation. See [MCP connectivity](../troubleshooting/mcp-connectivity.md#persona-sati-does-not-connect).
 
+On Windows, the same checks run with:
+
+```bat
+scripts\setup-windows.cmd -Diagnose
+```
+
+It changes nothing. It exits `0` when every check passes and `1` otherwise.
+
 ## Inspect status directly
 
 ```bash
@@ -44,6 +52,8 @@ This prints the Agent Identity's object ID, the Agent User's UPN, license assign
 ```bash
 claude --dangerously-load-development-channels server:entrabot
 ```
+
+On Windows, double-click `start-entrabot.cmd` in the Entrabot folder. It runs the same command.
 
 Then ask the host to call `whoami` and send a Teams message. Both should report and act as the Agent User identity, not your human account. See [Identity and Token Flow](../architecture/identity-and-token-flow.md) for how the three-hop token exchange makes this possible.
 

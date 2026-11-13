@@ -38,7 +38,7 @@ def _insecure_backend_error():
     )
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Windows uses file-backed store")
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows keeps the key in CNG, not keyring")
 class TestProvisionerKeychainOpsAssertBackend:
     def test_store_cert_asserts_backend_before_writing(
         self, monkeypatch: pytest.MonkeyPatch

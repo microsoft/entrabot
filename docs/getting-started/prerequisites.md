@@ -4,8 +4,9 @@ Entrabot requires:
 
 - A Microsoft 365 development tenant where you can create app registrations and grant admin consent
 - A license that includes Teams and Outlook (E3 or E5 dev tenant licenses work)
-- Python 3.12 or newer
-- `git`
+- On macOS and Linux: Python 3.12 or newer, and `git`
+
+On Windows you install nothing first. Skip this page and go to [Windows](windows.md): the setup script finds or downloads Python and builds the environment itself.
 
 ## Clone and install
 
@@ -19,17 +20,19 @@ source .venv/bin/activate
 python -m pip install -e ".[dev]"
 ```
 
-### Windows (PowerShell)
+### Windows
+
+Nothing to do here. `scripts\setup-windows.cmd` creates `.venv` and installs Entrabot into it. See [Windows](windows.md).
+
+To work on Entrabot's code on Windows, add the development tools to that environment after setup has run once:
 
 ```powershell
-git clone https://github.com/microsoft/entrabot.git
-cd entrabot
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
 ## Verify the install
+
+On macOS and Linux:
 
 ```bash
 pytest -v --tb=short

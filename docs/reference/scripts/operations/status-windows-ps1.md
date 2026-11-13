@@ -1,91 +1,120 @@
 # `status-windows.ps1`
 
+Platforms: Windows.
+
 ## Purpose
 
-Windows PowerShell counterpart to [`status.sh`](status-sh.md). It ensures
-a local Python virtual environment exists, installs the status check's
-dependencies if needed, loads `.env` into the process environment, and
-delegates to [`scripts/show_agent_status.py`](show-agent-status-py.md) —
-the same consolidated Agent Identity status/health command used on
-macOS/Linux.
+`status-windows.ps1` shows the agent's identity, sponsors, permissions,
+licences, certificates and health checks on Windows. It changes nothing and
+installs nothing. It is a thin wrapper over
+[`show_agent_status.py`](show-agent-status-py.md), run through
+`python -m entrabot.winsetup status` so that it uses the project's own Python
+environment and the same Azure CLI that setup used.
 
 ## Requirements
 
-- Windows, running under Windows PowerShell 5.1+ or PowerShell 7+ (`pwsh`).
-- Python 3.12 or 3.13 available as `python3.12`, `python3.13`, or `python`
-  on `PATH` — only needed the first time, to create `.venv`.
-- Everything `show_agent_status.py` itself needs at runtime (a bootstrapped
-  Provisioner app and its certificate in the Windows Certificate Store) —
-  this wrapper only prepares the Python environment, it does not check
-  Agent Identity state.
+- Native Windows, and Windows PowerShell 5.1 (ships with Windows) or
+  PowerShell 7.
+- A completed [`setup-windows.ps1`](../setup/setup-windows-ps1.md) run in this
+  folder.
+- Network access to Microsoft Graph.
 
 ## Usage
 
 ```powershell
-.\status-windows.ps1
-.\status-windows.ps1 -Json
-.\status-windows.ps1 -HealthOnly -Strict
-.\status-windows.ps1 -Help
+powershell -ExecutionPolicy Bypass -File status-windows.ps1
+powershell -ExecutionPolicy Bypass -File status-windows.ps1 -HealthOnly -Strict
+powershell -ExecutionPolicy Bypass -File status-windows.ps1 -Json
 ```
 
 ## Options
 
-| Switch        | Forwarded as     | Meaning                                                      |
-| ------------- | ---------------- | ------------------------------------------------------------- |
-| `-Json`       | `--json`         | Output machine-readable JSON.                                 |
-| `-HealthOnly` | `--health-only`  | Only print health checks.                                     |
-| `-Strict`     | `--strict`       | Return non-zero when health checks fail.                      |
-| `-Help`       | `--help`         | Show the underlying `show_agent_status.py` help.               |
-
-All four are switches (booleans) and default to `$false`; there are no
-positional parameters. See
-[`show_agent_status.py`](show-agent-status-py.md#options) for what each
-forwarded flag actually changes.
+- `-Json` — machine-readable output. Nothing else is printed, so it can be
+  piped.
+- `-HealthOnly` — only the health checks.
+- `-Strict` — return non-zero when a health check fails.
+- `-Help` — show help and exit `0`.
 
 ## Effects
 
-1. Resolves the venv Python path, preferring `.venv\Scripts\python.exe`,
-   falling back to `.venv/bin/python` if only that exists, and defaulting
-   to the Windows path otherwise.
-2. If that path doesn't exist, searches `python3.12`, `python3.13`, then
-   `python` via `Get-Command`, verifying `sys.version_info >= (3, 12)`;
-   prints a red `ERROR: Python 3.12+ is required...` and exits if none
-   qualify, otherwise creates the venv with `& $Python -m venv .venv`.
-3. Checks whether `import azure.identity, entrabot` succeeds in the venv;
-   if `$LASTEXITCODE` is non-zero, installs `.[provisioning]` extras.
-4. If `.env` exists, parses it line by line (skipping comments and lines
-   without `=`) and sets each variable via
-   `[Environment]::SetEnvironmentVariable(..., 'Process')`.
-5. Builds a forwarded-argument array from the switches and invokes the
-   venv's `python.exe` against `scripts/show_agent_status.py`, then exits
-   the wrapper with that call's `$LASTEXITCODE`.
+Read-only. On Windows the health checks include a **Local certificate** check:
+this PC's Blueprint certificate is in the certificate store, has its private
+key, and is in date, with the key store (`tpm` or `software`) and the expiry
+date.
 
-No Graph calls or local-state writes happen in this wrapper itself.
+They also include **Older setup keys**: a `WARN` while an older setup key
+that setup could not switch off in Microsoft Entra is still waiting to be
+removed from the Provisioner app (see
+[Windows troubleshooting](../../../troubleshooting/windows.md#an-older-setup-key-for-this-computer-could-not-be-switched-off-in-microsoft-entra)).
+It names the key by the last four characters of its thumbprint and its expiry
+date, and says where in the Microsoft Entra admin center to remove it.
+Otherwise the check is `PASS`, or `SKIP` when no Provisioner app is recorded.
+A warning never fails a check, so it does not change the exit code, with or
+without `-Strict`.
+
+It never creates the Python environment or installs packages. If `.venv` is
+missing it says to run `scripts\setup-windows.cmd` and stops.
+
+In a folder that has neither `.env` nor `.entrabot-state.json` (a fresh copy, or
+one that teardown has disconnected) it prints one line, "This folder is not
+connected to an agent. Run scripts\setup-windows.cmd to set one up.", and exits
+`1`. With `-Json` that answer is a small JSON object
+(`{"configured": false, "message": ...}`).
+
+Teardown with `-KeepSetupCredential` can leave `.entrabot-state.json` holding
+only setup's note about an older setup key it could not switch off (see
+[`teardown-windows.ps1`](../teardown/teardown-windows-ps1.md)). In a folder with
+no `.env` and only that note it prints two lines and exits `1`, with
+`-HealthOnly` and `-Strict` too: the same "not connected" line, then which key
+is still waiting, for example "An older setup key is still waiting to be
+switched off in Microsoft Entra: the certificate whose thumbprint ends in C0DE
+(expires 2027-02-01). Setup will try again the next time it runs here." With
+`-Json` the answer is one JSON object of this shape:
+
+```json
+{
+  "configured": false,
+  "message": "This folder is not connected to an agent. ...",
+  "old_setup_keys": {
+    "waiting": [{"thumbprint_ends_in": "C0DE", "expires": "2027-02-01"}],
+    "record_unreadable": false,
+    "message": "An older setup key is still waiting to be switched off ..."
+  }
+}
+```
+
+`expires` is `null` when the note does not say. `record_unreadable` is `true`
+when part of the note is not a thumbprint, and the message then asks you to
+check the Provisioner app's certificates by hand. A state file that records
+anything more (a Blueprint, an agent, or this PC's setup certificate), that
+notes no waiting key, or that cannot be read, gets the full report.
+
+`PASS`, `WARN` and `FAIL` labels are coloured only when the output is a
+terminal that can draw colour (Windows Terminal, or a classic console where
+colour can be switched on). When the output is piped, captured, or sent over a
+session that cannot draw it, they are plain text. Setting the `NO_COLOR`
+environment variable turns colour off everywhere.
+
+The text and JSON output show the full thumbprints of this PC's current
+Provisioner and Blueprint certificates. An older setup key is only ever shown
+by the last four characters of its thumbprint.
+
+For a check that also signs the agent in and tests Teams, use
+`scripts\setup-windows.cmd -Diagnose`.
 
 ## Exit behavior
 
-- Exits `1` if no Python 3.12+ interpreter can be found to create `.venv`.
-- `$ErrorActionPreference = 'Stop'` and `Set-StrictMode -Version Latest`
-  mean any other unhandled terminating error in the script (e.g. a broken
-  `.env` line, an inaccessible venv path) aborts execution with a generic
-  non-zero PowerShell exit — the script does not assign it a specific code.
-- Otherwise the script ends with `exit $LASTEXITCODE`, mirroring whatever
-  `scripts/show_agent_status.py` returned (`0` success, `1` on failed
-  strict/health-only checks or a token error).
-
-## Common failures
-
-- **No Python 3.12+ found** — install Python 3.12+ and ensure it's on
-  `PATH`, then re-run.
-- **First run is slow** — expected; creating `.venv` and installing
-  `.[provisioning]` extras only happens once.
-- **Status check itself fails** — see
-  [`show_agent_status.py` → Common failures](show-agent-status-py.md#common-failures).
+- The exit code of `show_agent_status.py`: `0` on success; `1` when a token
+  could not be acquired, or when a health check fails under `-Strict` or
+  `-HealthOnly`. A warning, such as an older setup key still waiting, is not a
+  failure.
+- `1` — `.venv` is missing, or this folder is not connected to an agent,
+  including a folder that holds only setup's note about an older setup key.
 
 ## Related commands
 
-- [`status.sh`](status-sh.md) — macOS/Linux equivalent.
-- [`show_agent_status.py`](show-agent-status-py.md) — the command this wrapper delegates to.
-- [`health_check.py`](health-check-py.md) — health-only compatibility wrapper around the same command.
-- `scripts/setup-windows.ps1 -Status` and `scripts/deploy-windows.ps1 -Status` both forward `-Json`/`-HealthOnly`/`-Strict` to this script; see [`setup-windows.ps1`](../setup/setup-windows-ps1.md) and [`deploy-windows.ps1`](../setup/deploy-windows-ps1.md).
-- [Operations scripts index](../index.md#operations)
+- [Script reference — Operations](../index.md#operations)
+- [`show_agent_status.py`](show-agent-status-py.md) — the script this wraps.
+- [`setup-windows.ps1`](../setup/setup-windows-ps1.md) — `-Diagnose` and
+  `-Status`.
+- [`status.sh`](status-sh.md) — the macOS and Linux equivalent.

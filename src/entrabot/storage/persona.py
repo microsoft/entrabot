@@ -18,7 +18,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from entrabot.storage.backend import MemoryBackend
+from entrabot.storage.backend import TEXT_ENCODING, TEXT_NEWLINE, MemoryBackend
 
 PERSONA_PREFIX = "claude_memory"
 logger = logging.getLogger(__name__)
@@ -93,7 +93,7 @@ class PersonaBackend:
         if not full.exists() or not full.is_file():
             return
         key = f"{self.prefix}{rel.as_posix()}"
-        self._backend.write_text(key, full.read_text())
+        self._backend.write_text(key, full.read_text(encoding=TEXT_ENCODING))
 
     def push_all(self) -> PersonaReport:
         """Upload every file in ``local_root`` that isn't already in the cloud."""
@@ -114,7 +114,7 @@ class PersonaBackend:
                 if self._backend.exists(key):
                     report.skipped += 1
                     continue
-                self._backend.write_text(key, path.read_text())
+                self._backend.write_text(key, path.read_text(encoding=TEXT_ENCODING))
             except Exception as exc:  # noqa: BLE001
                 report.errors.append((key, str(exc)))
                 continue
@@ -148,7 +148,7 @@ class PersonaBackend:
             if content is None:
                 continue
             dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_text(content)
+            dst.write_text(content, encoding=TEXT_ENCODING, newline=TEXT_NEWLINE)
             report.pulled += 1
             report.keys.append(key)
         return report

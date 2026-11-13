@@ -52,7 +52,7 @@ def _check(blueprint_obj_id: str, expected: str) -> int:
     unreadable = unreadable_certificates(credentials)
     if unreadable:
         print(
-            f"  [could-not-check] Thumbprint {expected[:16]}... wasn't found, but the key "
+            "  [could-not-check] The certificate wasn't found, but the key "
             f"material of {len(unreadable)} certificate(s) couldn't be read, so it may "
             "still be registered.",
             file=sys.stderr,
@@ -60,7 +60,7 @@ def _check(blueprint_obj_id: str, expected: str) -> int:
         return EXIT_COULD_NOT_CHECK
 
     print(
-        f"  [cache-desync] cached thumbprint {expected[:16]}... is NOT on the Blueprint "
+        "  [cache-desync] this machine's certificate is NOT on the Blueprint "
         f"(found {len(credentials)} other cert(s)).",
         file=sys.stderr,
     )

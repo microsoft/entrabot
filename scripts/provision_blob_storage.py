@@ -18,7 +18,8 @@ What it does, in order:
      sensible region) and create the account there.
   3. Ensure a container exists for *this* Agent User (named with the
      Agent User's object ID per ADR §"Resolved decisions" #1). Override
-     with ``--with-container NAME``.
+     with ``--with-container NAME``. Created through Azure Resource Manager
+     (``az storage container-rm``), which needs no blob data role.
   4. Assign ``Storage Blob Data Contributor`` to the Agent User on the
      container — scoped to the container, not the account, so each Agent
      User only sees its own slice.
@@ -51,8 +52,19 @@ DEFAULT_LOCATION = "eastus"
 STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE = "Storage Blob Data Contributor"
 
 
+# Appended to every az call by ``_run_az`` when ``provision`` is given a subscription.
+_SUBSCRIPTION_ARGS: list[str] = []
+
+
 def _eprint(*args: object) -> None:
-    print(*args, file=sys.stderr)
+    """Print progress to stderr. A console that can't draw a bullet or check mark (cp1252 on
+    Windows) gets a replacement character instead of a UnicodeEncodeError mid-provisioning."""
+    text = " ".join(str(arg) for arg in args)
+    try:
+        print(text, file=sys.stderr)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stderr, "encoding", None) or "ascii"
+        print(text.encode(encoding, errors="replace").decode(encoding), file=sys.stderr)
 
 
 def _run_az(args: list[str], *, capture: bool = True) -> subprocess.CompletedProcess:
@@ -62,7 +74,7 @@ def _run_az(args: list[str], *, capture: bool = True) -> subprocess.CompletedPro
     stdout and stderr so callers can inspect on failure.
     """
     az_bin = shutil.which("az") or "az"
-    cmd = [az_bin, *args]
+    cmd = [az_bin, *args, *_SUBSCRIPTION_ARGS]
     return subprocess.run(  # noqa: S603 — args are constructed in this module only
         cmd,
         capture_output=capture,
@@ -195,40 +207,30 @@ def ensure_storage_account(name: str, resource_group: str, location: str) -> str
     return resource_group
 
 
-def ensure_container(account: str, container: str) -> None:
+def ensure_container(account: str, container: str, resource_group: str) -> None:
+    """Ensure the container exists, through Azure Resource Manager.
+
+    The data-plane command (``az storage container create --auth-mode login``) needs a blob
+    data role that an account Owner doesn't have by default, and is refused when the account's
+    firewall blocks the caller. ``container-rm`` is a management operation: the Owner or
+    Contributor running setup can always use it.
+    """
     _eprint(f"  • Ensuring container '{container}' on '{account}'...")
-    # --auth-mode login uses the AAD identity instead of account keys
-    res = _run_az(
-        [
-            "storage",
-            "container",
-            "show",
-            "--account-name",
-            account,
-            "--name",
-            container,
-            "--auth-mode",
-            "login",
-        ]
-    )
+    target = [
+        "--storage-account",
+        account,
+        "--resource-group",
+        resource_group,
+        "--name",
+        container,
+    ]
+    res = _run_az(["storage", "container-rm", "show", *target])
     if res.returncode == 0:
         _eprint("    ✓ exists")
         return
-    res = _run_az(
-        [
-            "storage",
-            "container",
-            "create",
-            "--account-name",
-            account,
-            "--name",
-            container,
-            "--auth-mode",
-            "login",
-        ]
-    )
+    res = _run_az(["storage", "container-rm", "create", *target])
     if res.returncode != 0:
-        raise RuntimeError(f"az storage container create failed: {res.stderr.strip()}")
+        raise RuntimeError(f"az storage container-rm create failed: {res.stderr.strip()}")
     _eprint("    ✓ created")
 
 
@@ -245,12 +247,16 @@ def get_storage_account_id(account: str, resource_group: str) -> str:
             "--query",
             "id",
             "-o",
-            "tsv",
+            "json",
         ]
     )
     if res.returncode != 0:
         raise RuntimeError(f"az storage account show failed: {res.stderr.strip()}")
-    return res.stdout.strip()
+    text = res.stdout.strip()
+    try:
+        return str(json.loads(text))
+    except ValueError:
+        return text
 
 
 def assign_container_rbac(
@@ -303,8 +309,12 @@ def provision(
     storage_account: str | None = None,
     container: str | None = None,
     create_new_storage: bool = False,
+    subscription: str | None = None,
 ) -> tuple[str, str]:
     """Run the full provisioning flow.
+
+    *subscription* (an ID or name) targets every ``az`` call at that subscription instead of
+    the CLI's current default, without changing the default for the person's other work.
 
     The storage account name is chosen as follows, in order:
       1. ``storage_account`` argument, if provided (overrides everything).
@@ -340,9 +350,13 @@ def provision(
     else:
         container_name = container_name_for_agent_user(agent_user_object_id)
 
-    account_group = ensure_storage_account(account, RESOURCE_GROUP, location)
-    ensure_container(account, container_name)
-    assign_container_rbac(account, container_name, account_group, agent_user_object_id)
+    _SUBSCRIPTION_ARGS[:] = ["--subscription", subscription] if subscription else []
+    try:
+        account_group = ensure_storage_account(account, RESOURCE_GROUP, location)
+        ensure_container(account, container_name, account_group)
+        assign_container_rbac(account, container_name, account_group, agent_user_object_id)
+    finally:
+        _SUBSCRIPTION_ARGS.clear()
 
     return blob_endpoint_for_account(account), container_name
 
@@ -359,6 +373,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--location", default=DEFAULT_LOCATION, help=f"Azure region (default {DEFAULT_LOCATION})."
+    )
+    parser.add_argument(
+        "--subscription",
+        default=None,
+        metavar="ID_OR_NAME",
+        help="Azure subscription to create the storage in (default: the CLI's current one).",
     )
     parser.add_argument(
         "--with-storage-account",
@@ -403,6 +423,7 @@ def main(argv: list[str] | None = None) -> int:
             storage_account=args.with_storage_account,
             container=args.with_container,
             create_new_storage=args.create_new_storage,
+            subscription=args.subscription,
         )
     except (RuntimeError, ValueError) as exc:
         _eprint(f"ERROR: {exc}")

@@ -263,3 +263,63 @@ class TestXpiaWrapEnableFlag:
             ):
                 cfg = EntraBotConfig.from_env()
             assert cfg.xpia_wrap_enable is True, f"Expected True for '{val}'"
+
+
+class TestLoadDotenvEncoding:
+    """``.env`` is UTF-8, with or without a byte-order mark, on every platform.
+
+    Setup writes it as UTF-8. Windows reads text in its ANSI code page unless told otherwise,
+    and Notepad or Windows PowerShell 5.1 saves UTF-8 with a BOM. Read the default way, the
+    BOM became part of the first key, so that setting (the tenant ID, as setup writes the file)
+    was silently missing, and an accented UPN came back as mojibake.
+    """
+
+    @staticmethod
+    def _load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw: bytes) -> dict[str, str]:
+        from entrabot import config
+        from tests.locale_codec import force_locale_codec
+
+        project = tmp_path / "project"
+        (project / "src" / "entrabot").mkdir(parents=True)
+        (project / ".env").write_bytes(raw)
+        monkeypatch.setattr(config, "__file__", str(project / "src" / "entrabot" / "config.py"))
+        force_locale_codec(monkeypatch)
+        cleaned = {k: v for k, v in os.environ.items() if not k.startswith("ENTRABOT_")}
+        with patch.dict(os.environ, cleaned, clear=True):
+            config._load_dotenv()
+            return {k: v for k, v in os.environ.items() if "ENTRABOT_" in k}
+
+    def test_byte_order_mark_does_not_hide_the_first_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        raw = b"\xef\xbb\xbfENTRABOT_TENANT_ID=tenant-1\r\nENTRABOT_AGENT_ID=agent-1\r\n"
+
+        loaded = self._load(tmp_path, monkeypatch, raw)
+
+        assert loaded == {"ENTRABOT_TENANT_ID": "tenant-1", "ENTRABOT_AGENT_ID": "agent-1"}
+
+    def test_non_ascii_value_survives_a_windows_locale(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        raw = "ENTRABOT_TENANT_ID=tenant-1\nENTRABOT_HUMAN_UPN=josé.müller@contoso.com\n".encode()
+
+        loaded = self._load(tmp_path, monkeypatch, raw)
+
+        assert loaded["ENTRABOT_HUMAN_UPN"] == "josé.müller@contoso.com"
+
+    def test_file_saved_in_the_ansi_code_page_still_loads(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hand edit saved as ANSI isn't valid UTF-8. Loading is best-effort: it must not
+        raise at import, and it reads the file the way it was read before UTF-8 came first."""
+        import locale
+
+        monkeypatch.setattr(locale, "getpreferredencoding", lambda do_setlocale=True: "cp1252")
+        raw = b"ENTRABOT_TENANT_ID=tenant-1\r\nENTRABOT_HUMAN_UPN=jos\xe9@contoso.com\r\n"
+
+        loaded = self._load(tmp_path, monkeypatch, raw)
+
+        assert loaded == {
+            "ENTRABOT_TENANT_ID": "tenant-1",
+            "ENTRABOT_HUMAN_UPN": "josé@contoso.com",
+        }

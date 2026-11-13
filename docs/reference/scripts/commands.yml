@@ -1,4 +1,4 @@
-# Single source of truth for the 45 supported operator-facing commands
+# Single source of truth for the 46 supported operator-facing commands
 # documented on the public site. See tests/docs/test_script_commands_manifest.py
 # for the validation this file must satisfy, and
 # docs/reference/scripts/index.md for the rendered landing page.
@@ -21,7 +21,7 @@ commands:
     category: operations
     page: reference/scripts/operations/status-windows-ps1.md
     platforms: [windows]
-    summary: Windows PowerShell status wrapper — ensures the venv and deps exist, loads .env, and delegates to show_agent_status.py (supports -Json, -HealthOnly, -Strict).
+    summary: Windows status wrapper — runs show_agent_status.py through the project's Python environment (supports -Json, -HealthOnly, -Strict). Read-only; installs nothing. Runs on Windows PowerShell 5.1.
   - id: show-agent-status-py
     path: scripts/show_agent_status.py
     category: operations
@@ -59,7 +59,7 @@ commands:
     platforms: [macos, linux, windows]
     summary: Shows the delegated permission grants (oauth2PermissionGrants) scoped to the Agent Identity's service principal and Agent User. Supports --json.
 
-  # --- Setup (8) ---
+  # --- Setup (9) ---
   - id: setup-sh
     path: scripts/setup.sh
     category: setup
@@ -71,13 +71,19 @@ commands:
     category: setup
     page: reference/scripts/setup/setup-windows-ps1.md
     platforms: [windows]
-    summary: Windows PowerShell counterpart of setup.sh — refuses to run under WSL, probes prereqs, bootstraps the venv, provisions the Agent Identity chain, reuses, registers, or generates and registers (TPM-first, software fallback) the Blueprint cert on the Blueprint, writes .env, and registers the MCP server.
+    summary: Windows setup. A bootstrap that needs nothing installed first (Windows PowerShell 5.1, no admin rights) — finds or downloads Python, builds the venv, then starts the setup wizard (python -m entrabot.winsetup), which signs in, creates or joins the agent, creates and registers a non-exportable certificate (TPM first), writes .env, registers the MCP server, tests sign-in, then walks the person through getting the agent a licence when it has none and switches on Word, Excel and OneDrive files if asked (with no Agent 365 CLI, over SSH and unattended too). Interactive by default; -Yes plus parameters for unattended runs; -Diagnose is read-only.
   - id: setup-windows-cmd
     path: scripts/setup-windows.cmd
     category: setup
     page: reference/scripts/setup/setup-windows-cmd.md
     platforms: [windows]
-    summary: cmd.exe one-liner wrapper that invokes setup-windows.ps1 with the right execution policy so users don't have to pass -ExecutionPolicy themselves.
+    summary: The Windows setup entry point, and the file to double-click. Starts setup-windows.ps1 with the in-box Windows PowerShell and the execution policy lifted for that run, forwards every argument, and explains what to ask IT for when Group Policy blocks scripts.
+  - id: start-entrabot-cmd
+    path: start-entrabot.cmd
+    category: setup
+    page: reference/scripts/setup/start-entrabot-cmd.md
+    platforms: [windows]
+    summary: Starts the agent on Windows, and the file to double-click after setup. Finds Claude Code (on PATH or where its installer puts it), points it at a per-user Git Bash when needed, says what Claude Code asks the first time, and runs claude --dangerously-load-development-channels server:entrabot in the project folder.
   - id: prereqs-macos-sh
     path: scripts/prereqs-macos.sh
     category: setup
@@ -89,7 +95,7 @@ commands:
     category: setup
     page: reference/scripts/setup/prereqs-windows-ps1.md
     platforms: [windows]
-    summary: Installs Windows prerequisites via winget (PowerShell 7+, Python 3.12+, git, Azure CLI, .NET SDK, and VS Build Tools C++ workload) before running setup-windows.ps1. The Agent 365 a365 CLI is installed with `dotnet tool install`, not winget. Runs from Windows PowerShell 5.1 and is safe to re-run.
+    summary: Optional Windows extras, installed only on request — -WithGit and -WithClaudeCode (per-user, no admin rights or winget), -WithWorkIq (Microsoft's a365 CLI for using it yourself, which setup does not need, with the .NET SDK it runs on when the PC has none, per-user under %LOCALAPPDATA%\entrabot\tools with no admin rights and not on PATH; PowerShell 7 with winget), -WithBuildTools (VS Build Tools). Not a required step before setup. Runs from Windows PowerShell 5.1 and is safe to re-run.
   - id: setup-delegated-sh
     path: scripts/setup_delegated.sh
     category: setup
@@ -107,7 +113,7 @@ commands:
     category: setup
     page: reference/scripts/setup/deploy-windows-ps1.md
     platforms: [windows]
-    summary: Windows Blueprint certificate-rotation deploy wrapper around rotate_cert_windows.py — captures the current cert DER, generates a new cert, runs the transactional rotation, and deletes the old cert only after a smoke check passes. A -Status flag instead delegates to status-windows.ps1.
+    summary: Windows Blueprint certificate rotation — adds a new certificate beside the current one, proves it with a real sign-in, switches .env, then removes the old one from the Blueprint and deletes it locally with its key. The current certificate stays in use until the new one works. Exit 0 rotated, 1 failed, 3 rotated with cleanup pending. A -Status flag instead delegates to status-windows.ps1.
 
   # --- Teardown (4) ---
   - id: teardown-sh
@@ -115,13 +121,13 @@ commands:
     category: teardown
     page: reference/scripts/teardown/teardown-sh.md
     platforms: [macos, linux]
-    summary: Removes everything setup.sh creates — Agent User, Agent Identity, Blueprint (and its BlueprintPrincipal), the Provisioner app, and local state — with --dry-run, targeted --agent-user-upn, and --preserve-provisioner / --preserve-local-state flags.
+    summary: Removes everything setup.sh creates — Agent User, Agent Identity, Blueprint (and its BlueprintPrincipal), the Provisioner app recorded for this machine (by application ID, never by name), and local state — with --dry-run, targeted --agent-user-upn, and --preserve-provisioner / --preserve-local-state flags.
   - id: teardown-windows-ps1
     path: scripts/teardown-windows.ps1
     category: teardown
     page: reference/scripts/teardown/teardown-windows-ps1.md
     platforms: [windows]
-    summary: Local-only Windows teardown — removes the Blueprint cert(s) from the CurrentUser store, the entrabot data dir, the BLUEPRINT_CERT_* lines from .env, the MSAL cache, and the MCP registration. It does NOT delete the Entra app registrations; clean those up separately.
+    summary: Disconnects this Windows PC from an agent — removes this PC's certificate from the Blueprint and deletes it locally with its key, removes the entrabot MCP entries, and backs up then removes .env and the state file. The agent and the data folder are kept unless -DeleteAgent or -PurgeData is given.
   - id: deprovision-entra-agent-identity-py
     path: scripts/deprovision_entra_agent_identity.py
     category: teardown
@@ -141,7 +147,7 @@ commands:
     category: provisioning
     page: reference/scripts/provisioning/create-entra-agent-ids-py.md
     platforms: [macos, linux, windows]
-    summary: Creates the Blueprint, BlueprintPrincipal, Agent Identity, and Agent User in Entra (via the Provisioner cert token, never az CLI tokens) and persists the resulting IDs to .entrabot-state.json; idempotent on re-run.
+    summary: Creates the Blueprint, BlueprintPrincipal, Agent Identity, and Agent User in Entra (via the Provisioner cert token, never az CLI tokens) and persists the resulting IDs to .entrabot-state.json; idempotent on re-run. --licence-report and --assign-licence handle the Agent User's licence on its own.
   - id: add-agent-sponsor-py
     path: scripts/add_agent_sponsor.py
     category: provisioning
@@ -171,7 +177,7 @@ commands:
     category: provisioning
     page: reference/scripts/provisioning/ensure-a365-work-iq-permissions-py.md
     platforms: [macos, linux, windows]
-    summary: Materializes the Microsoft Agent 365 Work IQ MCP first-party resource service principals and Blueprint-wide OAuth grants using the Provisioner token, working around the A365 CLI's silent OAuth2-grants-failed exit.
+    summary: Gives the agent's Blueprint what Microsoft Agent 365 Work IQ (Word, Excel and OneDrive files) needs, using the Provisioner token — the first-party resource service principals, the Blueprint-wide OAuth grants, and least-privilege inheritable permissions, each confirmed by reading it back. Windows setup runs it instead of the Agent 365 CLI; setup.sh runs it before the CLI's own permission step, working around the CLI's silent OAuth2-grants-failed exit.
 
   # --- Auth and Certificates (12) ---
   - id: grant-consent-py
@@ -197,7 +203,7 @@ commands:
     category: auth-and-certs
     page: reference/scripts/auth-and-certs/provisioner-token-py.md
     platforms: [macos, linux, windows]
-    summary: Prints a Graph API access token minted with the Provisioner app's certificate (private key read in memory only — from the OS keystore on macOS/Linux, or from an ACL-locked file under %LOCALAPPDATA%\entrabot\ on Windows) for manual Graph calls during debugging. Token on stdout, errors on stderr.
+    summary: Prints a Graph API access token minted with the Provisioner app's certificate (private key read in memory only from the OS keystore on macOS/Linux; signed in place by a non-exportable certificate-store key on Windows) for manual Graph calls during debugging. Token on stdout, errors on stderr.
   - id: find-local-blueprint-cert-py
     path: scripts/find_local_blueprint_cert.py
     category: auth-and-certs
@@ -215,7 +221,7 @@ commands:
     category: auth-and-certs
     page: reference/scripts/auth-and-certs/verify-blueprint-cert-py.md
     platforms: [macos, linux, windows]
-    summary: Checks whether a given thumbprint is still present on a Blueprint app's keyCredentials. setup-windows.ps1 uses it to decide whether to reuse a certificate; setup.sh does not call it. Exit 0 present, 1 checked and not present, 2 usage error, 3 could not check.
+    summary: Checks whether a given thumbprint is still present on a Blueprint app's keyCredentials. The Windows setup wizard uses it to decide whether to reuse a certificate; setup.sh does not call it. Exit 0 present, 1 checked and not present, 2 usage error, 3 could not check.
   - id: register-blueprint-cert-py
     path: scripts/register_blueprint_cert.py
     category: auth-and-certs
@@ -233,19 +239,19 @@ commands:
     category: auth-and-certs
     page: reference/scripts/auth-and-certs/register-windows-blueprint-cert-py.md
     platforms: [windows]
-    summary: Registers this machine's Windows Blueprint certificate (its public DER) on the Blueprint, adding to the existing certificates and keeping every other machine's, and confirms the write by reading it back. Called by setup-windows.ps1. Exit 0 registered, 1 nothing changed, 2 usage error, 3 outcome not confirmed.
+    summary: Registers this machine's Windows Blueprint certificate on the Blueprint (by store thumbprint with --sha1, or from a DER file with --der), adding to the existing certificates and keeping every other machine's, and confirms the write by reading it back. Called by the Windows setup wizard and by rotation. Exit 0 registered, 1 nothing changed, 2 usage error, 3 outcome not confirmed.
   - id: generate-windows-cert-py
     path: scripts/generate_windows_cert.py
     category: auth-and-certs
     page: reference/scripts/auth-and-certs/generate-windows-cert-py.md
     platforms: [windows]
-    summary: Generates the Blueprint cert on Windows by wrapping New-SelfSignedCertificate with locked crypto parameters (TPM-first, software-KSP fallback). A bare invocation prints only the SHA-1 thumbprint and the KSP used; the SHA-256 b64url JWT thumbprint and the public DER for upload to the Blueprint are emitted only when `--export-der` is passed.
+    summary: Creates a signing certificate with a non-exportable key in the Windows certificate store — TPM first (tried by creating a key and signing with it), software key store otherwise. Prints thumbprint=, ksp= and x5t_s256= lines on stdout; --export-der also writes the public DER. A command line over entrabot.platform.wincert; needs no PowerShell 7 or elevation.
   - id: rotate-cert-windows-py
     path: scripts/rotate_cert_windows.py
     category: auth-and-certs
     page: reference/scripts/auth-and-certs/rotate-cert-windows-py.md
     platforms: [windows]
-    summary: Transactional Windows Blueprint cert rotation extracted from deploy-windows.ps1 for testable rollback — swaps the new cert onto the Blueprint, keeping other machines' certs, and, if the smoke check fails, restores the old DER, restores the previous .env thumbprints, and invalidates the MSAL cache.
+    summary: Runs the same Windows Blueprint certificate rotation as deploy-windows.ps1 (python -m entrabot.winsetup rotate-cert) — the current certificate stays in use until the new one is proven. Also keeps the older rotate() library function for existing callers; the command does not use it.
 
   # --- Storage (2) ---
   - id: provision-blob-storage-py

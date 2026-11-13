@@ -60,21 +60,39 @@ See the
 **Windows** operators rotate the Blueprint certificate with:
 
 ```powershell
-pwsh -File scripts/deploy-windows.ps1
+powershell -ExecutionPolicy Bypass -File scripts\deploy-windows.ps1
 ```
 
-This wraps `rotate_cert_windows.py`: it captures the current certificate's
-public DER before generating a new one (the only chance to do so for
-non-exportable TPM-backed keys), swaps the new public certificate onto the
-Blueprint app in place of the old one while keeping other machines'
-certificates, and updates both thumbprints it tracks: the `x5t#S256`
-(SHA-256) used in JWT assertion headers, and the 40-character SHA-1
-thumbprint Windows CNG uses to locate the private key in the certificate
-store. It then runs a smoke test against the new certificate, and rolls back
-the PATCH plus local state if the smoke test fails. See the
-[`deploy-windows.ps1` reference](../reference/scripts/setup/deploy-windows-ps1.md)
-and the
-[`rotate_cert_windows.py` reference](../reference/scripts/auth-and-certs/rotate-cert-windows-py.md).
+The certificate in use stays in use until the new one is proven to work:
+
+1. A new certificate is created on this PC, with its key in the TPM where the TPM
+   accepts one.
+2. Its public half is added to the Blueprint beside the current certificate. Other
+   machines' certificates are kept.
+3. The agent signs in with the new certificate, retrying while Microsoft Entra takes
+   it up.
+4. `.env` switches to the new certificate: both the `x5t#S256` (SHA-256) thumbprint
+   used in JWT assertion headers and the 40-character SHA-1 thumbprint that locates
+   the key in the Windows certificate store.
+5. The old certificate is removed from the Blueprint and deleted from this PC together
+   with its private key.
+
+A failure in steps 1-3 undoes the new certificate and changes nothing else. A failure
+in step 5 leaves the agent working on the new certificate; running the command again
+finishes the cleanup. Restart the assistant afterwards, because the agent reads its
+certificate when it starts. A certificate is valid for one year, and the agent logs a
+warning when 30 days or fewer remain. See the
+[`deploy-windows.ps1` reference](../reference/scripts/setup/deploy-windows-ps1.md).
+
+To disconnect a Windows PC from an agent, run `scripts\teardown-windows.ps1`. It
+removes that PC's certificate from the Blueprint, keeping other machines', and deletes
+it locally with its key; a certificate left by an interrupted rotation comes off in the
+same write. It also retires that PC's setup (Provisioner) certificate
+(removed from the Provisioner app and deleted locally with its key) unless another
+Entrabot agent on the PC still needs it or `-KeepSetupCredential` is given. Before
+that, it tries to remove any older setup certificate that setup noted it could not take
+off the Provisioner app, and reports where to remove it by hand if that fails. See the
+[`teardown-windows.ps1` reference](../reference/scripts/teardown/teardown-windows-ps1.md).
 
 **macOS and Linux** have no automated rotation flow. Setup checks the certificate on
 every run instead. `find_local_blueprint_cert.py` tests whether this machine's private

@@ -38,7 +38,7 @@ entrabot is the device-side glue for a set of platform primitives Microsoft ship
 - **Conditional Access for agents** — GA. Apply CA policies to Agent Identity sign-ins the same way you apply them to users.
 - **ID Protection for agents** — GA. Risk scoring and remediation against the agent's own object.
 - **FastMCP** — the Python MCP server framework. entrabot registers every Teams, Outlook, Files, Word, audit, and identity tool through it.
-- **Three-hop certificate chain** — Blueprint token (cert JWT) → Agent Identity token (federated identity credential) → Agent User token (`user_fic` grant). No client secret in flight. Private key in macOS Keychain, Windows CNG (TPM-backed when available), or Linux Secret Service.
+- **Three-hop certificate chain** — Blueprint token (cert JWT) → Agent Identity token (federated identity credential) → Agent User token (`user_fic` grant). No client secret in flight. Private key in macOS Keychain, a non-exportable Windows CNG key (held by the TPM when the TPM accepts it), or Linux Secret Service.
 
 entrabot connects these. The Blueprint is provisioned via Graph. The Agent User is licensed and visible in Teams. The MCP server runs locally, mints tokens against Entra without a human, and exposes the resulting capability surface to the agent.
 
@@ -86,17 +86,31 @@ Full walkthrough in [`docs/architecture/system-overview.md`](docs/architecture/s
 
 ## Quickstart
 
-Mac or Linux:
+### Windows
+
+Download or clone the repository, then double-click `scripts\setup-windows.cmd`. Or from a terminal:
+
+```bat
+git clone https://github.com/microsoft/entrabot.git
+cd entrabot
+scripts\setup-windows.cmd
+```
+
+Nothing needs installing first: no PowerShell 7, Python, Azure CLI, `winget`, or administrator rights on the PC. Setup asks a few questions (each has a suggested answer), signs you in to Microsoft, creates the agent, and tests it. When it finishes, double-click `start-entrabot.cmd` to start the agent.
+
+What you need: a Microsoft 365 tenant, an account that administers it, and a free licence that includes Teams. To skip the questions, pass the answers: `scripts\setup-windows.cmd -NewChain -UpnSuffix workstation -Yes`. Guide, limits, and what has and has not been tested: [`docs/getting-started/windows.md`](docs/getting-started/windows.md).
+
+### macOS or Linux
 
 ```bash
 git clone https://github.com/microsoft/entrabot.git
 cd entrabot
-./scripts/prereqs-macos.sh   # macOS; see INSTALL.md for Linux/Windows
+./scripts/prereqs-macos.sh   # macOS; see INSTALL.md for Linux
 ./scripts/setup.sh --new --with-upn-suffix=workstation
 claude --dangerously-load-development-channels server:entrabot
 ```
 
-`setup.sh` is idempotent. It provisions the Blueprint, BlueprintPrincipal, Agent Identity, and Agent User; assigns a Teams-capable license; uploads a self-signed certificate to Entra; and writes `.env` plus `.mcp.json` with no secrets on disk. Full walkthrough — including Windows, cloud memory, cross-tenant group chats, and the Work IQ Word setup — is in [`docs/getting-started/quickstart.md`](docs/getting-started/quickstart.md) and [`INSTALL.md`](INSTALL.md).
+Setup is idempotent on every platform. It provisions the Blueprint, BlueprintPrincipal, Agent Identity, and Agent User; assigns a Teams-capable license; uploads a self-signed certificate to Entra; and writes `.env` plus `.mcp.json` with no secrets on disk. Full walkthrough — including cloud memory, cross-tenant group chats, and the Work IQ Word setup — is in [`docs/getting-started/quickstart.md`](docs/getting-started/quickstart.md) and [`INSTALL.md`](INSTALL.md).
 
 ### Launching the agent
 
@@ -107,6 +121,8 @@ The repo isn't published to npm/pypi — your host CLI loads the local stdio MCP
 ```bash
 claude --dangerously-load-development-channels server:entrabot
 ```
+
+On Windows, `start-entrabot.cmd` runs this command for you. Claude Code on Windows also needs Git for Windows for this repo's hooks; setup offers to install both.
 
 The double-dash matters — single-dash silently treats `server:entrabot` as prompt text (Learning #44). `server:entrabot` is the MCP server name from `.mcp.json`, not a publication identifier.
 
@@ -127,7 +143,7 @@ While the agent is blocked waiting on a Teams reply (any host that calls `wait_f
 (•ᴗ•) zZz... listening for Teams DM [42s] (Ctrl+C to break)
 ```
 
-Frames cycle (`ʕ•ᴥ•ʔ waiting on sponsor`, `(´･ω･`) sponsor hasn't replied yet`, `(◕‿◕) still here, still waiting`, …) every ~30s with elapsed time. Ctrl+C breaks out cleanly. Full host-by-host protocol: [`docs/clients/overview.md#sponsor-dm-wait-pattern`](docs/clients/overview.md#sponsor-dm-wait-pattern) and [`prompts/anatomy/channel-discipline.md`](prompts/anatomy/channel-discipline.md). On Windows, use `pwsh -File status-windows.ps1` for the equivalent status surface.
+Frames cycle (`ʕ•ᴥ•ʔ waiting on sponsor`, `(´･ω･`) sponsor hasn't replied yet`, `(◕‿◕) still here, still waiting`, …) every ~30s with elapsed time. Ctrl+C breaks out cleanly. Full host-by-host protocol: [`docs/clients/overview.md#sponsor-dm-wait-pattern`](docs/clients/overview.md#sponsor-dm-wait-pattern) and [`prompts/anatomy/channel-discipline.md`](prompts/anatomy/channel-discipline.md).
 
 After setup, use `./status.sh` as the canonical health and identity check:
 
@@ -135,6 +151,13 @@ After setup, use `./status.sh` as the canonical health and identity check:
 ./status.sh
 ./status.sh --health-only --strict
 ./scripts/setup.sh --status --json   # delegates to ./status.sh
+```
+
+On Windows:
+
+```bat
+scripts\setup-windows.cmd -Diagnose
+powershell -ExecutionPolicy Bypass -File status-windows.ps1 -HealthOnly -Strict
 ```
 
 ---
@@ -169,7 +192,7 @@ This is a research repo, not a production service. It runs reliably on a develop
 - Outlook: background email poll, Purview-encrypted detection, and a daily summary scheduler
 - Files: SharePoint / OneDrive read, write, upload, share — three-stage sponsor authorization on share (sponsor allowlist, active-channel binding, Graph chat membership)
 - Microsoft Agent 365 Work IQ Word: create, read, comment, reply-to-comment
-- Storage: `LocalBackend` (default) and `BlobBackend` (Azure Blob Storage, opt-in via `setup.sh --use-cloud-memory`)
+- Storage: `LocalBackend` (default) and `BlobBackend` (Azure Blob Storage, opt-in via `setup.sh --use-cloud-memory` or the Windows setup wizard)
 - Body-first prompt architecture with optional persona layer from a separate MCP (`persona-sati`)
 - Audit fails closed: if the audit write fails, the action does not proceed
 - `pytest -v --tb=short && ruff check .` gates every commit
@@ -182,7 +205,7 @@ This is a research repo, not a production service. It runs reliably on a develop
 |---|---|
 | macOS | Shipped — Keychain-backed cert storage, full three-hop flow |
 | Linux | Works — Secret Service (libsecret) backend |
-| Windows | Shipped, acceptance-tested on ARM64 Windows 11 — CNG cert storage with TPM-first/software fallback |
+| Windows | Shipped — one-step setup wizard, non-exportable CNG keys (TPM first, software key store otherwise), certificate rotation, teardown. Setup, repair, rotation, status and teardown were run end to end on Windows 11 25H2 x64 with a virtual TPM, as a non-administrator. Not yet tested: ARM64, physical TPMs, Windows 10, Entra-joined or Intune-managed PCs. See [Windows installation](docs/getting-started/windows.md#what-has-been-tested). |
 
 **Open:**
 

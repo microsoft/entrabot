@@ -55,8 +55,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 scripts/hooks/inject_body_prompt.py",
-            "timeout": 5
+            "command": "ENTRABOT_HOOK=inject_body_prompt.py; . \"$CLAUDE_PROJECT_DIR/scripts/hooks/run-hook.sh\"",
+            "shell": "bash",
+            "timeout": 20
           }
         ]
       }
@@ -67,8 +68,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 scripts/hooks/block_local_memory_write.py",
-            "timeout": 5
+            "command": "ENTRABOT_HOOK=block_local_memory_write.py; . \"$CLAUDE_PROJECT_DIR/scripts/hooks/run-hook.sh\"",
+            "shell": "bash",
+            "onFailure": "block",
+            "timeout": 20
           }
         ]
       },
@@ -77,8 +80,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 scripts/hooks/require_body_prompt.py",
-            "timeout": 5
+            "command": "ENTRABOT_HOOK=require_body_prompt.py; . \"$CLAUDE_PROJECT_DIR/scripts/hooks/run-hook.sh\"",
+            "shell": "bash",
+            "onFailure": "block",
+            "timeout": 20
           }
         ]
       },

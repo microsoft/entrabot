@@ -80,20 +80,22 @@ Read the listed documentation before drafting code or a plan that touches the to
   - `agent_user` — three-hop Agent User flow (Blueprint cert → Agent Identity FIC → Agent User `user_fic`)
   - `delegated` — MSAL interactive auth with human's token, messages prefixed `[EntraBot]`
   - `_init_auth` tries three-hop first when a Blueprint app ID + tenant ID are present and `ENTRABOT_SKIP_PROVISIONING` is false; on failure or bypass it falls back to MSAL delegated when `ENTRABOT_CLIENT_ID` is set. `ENTRABOT_MODE` is validated but not currently consumed as a selector.
-- Certificate auth: private key in OS keystore (Keychain/TPM/Keyring), JWT assertion for Hop 1 (ADR-003)
+- Certificate auth: private key in the OS keystore, JWT assertion for Hop 1 (ADR-003). macOS Keychain and Linux keyring hold a PEM; on Windows the key is a non-exportable CNG key in the certificate store (TPM when the TPM accepts a key, software key store otherwise) and signs in place
 - Background tasks: initialization is eagerly scheduled at stdio boot, but each task's own gate decides whether it actually starts.
   - Teams chat poll (5s) — starts whenever `watched_chats` is non-empty, in either authenticated session type; pushes inbound DMs / group-chat messages via `notifications/claude/channel`
   - Email poll (60s) — Agent-User-only; `/me/messages`, filters Teams/M365 noise, detects Purview-encrypted mail
   - Chat auto-discovery (120s) — Agent-User-only; `GET /me/chats`, registers any chat not in `watched_chats`
   - Daily summary scheduler — Agent-User-only; fixed 17:00 UTC-7 triage email of the day's interactions
   - Persona-sati heartbeat (300s) — Agent-User-only; self-skips when `PERSONA_SATI_MCP_URL`/token command are unconfigured
-- **Operational storage is local by default.** Cloud (Azure Blob) is opt-in via `./scripts/setup.sh --use-cloud-memory`; recommended for durability but not required. The backend resolves from env at tool-call time: `KEEP_MEMORY_LOCAL=true` → `LocalBackend`, else `BLOB_ENDPOINT`+`BLOB_CONTAINER` → `BlobBackend`, else `LocalBackend`.
+- **Operational storage is local by default.** Cloud (Azure Blob) is opt-in via `./scripts/setup.sh --use-cloud-memory` (on Windows: the setup wizard's memory question, or `scripts\setup-windows.cmd -UseCloudMemory`); recommended for durability but not required. The backend resolves from env at tool-call time: `KEEP_MEMORY_LOCAL=true` → `LocalBackend`, else `BLOB_ENDPOINT`+`BLOB_CONTAINER` → `BlobBackend`, else `LocalBackend`.
 - All structured data uses `dataclasses` or `pydantic` — no raw dicts
 
 ## Key implementation patterns
 
 - `CredentialStore` implementations under `platform/` keep certificate private keys in the OS
-  keystore through `keyring`.
+  keystore through `keyring` on macOS and Linux. On Windows the Blueprint and Provisioner keys
+  never leave the certificate store (`platform/wincert.py`); Hop 1 signs through CNG and does
+  not touch `keyring` or Credential Manager.
 - The three-hop Teams token flow lives in `acquire_agent_user_token`; Hop 1 uses the certificate
   JWT assertion, and Graph/Work IQ HTTP calls use `httpx` with bounded timeouts.
 - Token renewal combines eager `_ensure_valid_token()` checks with lazy 401 retry through
@@ -280,9 +282,34 @@ claude --dangerously-load-development-channels server:entrabot
 pip install mkdocs-material && mkdocs serve
 ```
 
+Windows (Windows PowerShell 5.1 is enough; no PowerShell 7, admin rights, or prereqs step):
+
+```bat
+rem Setup, repair, or change: the wizard. Builds .venv itself. Add -Yes plus parameters to run unattended.
+scripts\setup-windows.cmd
+
+rem Health check of an existing setup. Changes nothing.
+scripts\setup-windows.cmd -Diagnose
+
+rem Developer tools, after setup has built .venv
+.venv\Scripts\python.exe -m pip install -e ".[dev]"
+
+rem Test + lint (run before every commit)
+.venv\Scripts\python.exe -m pytest -v --tb=short && .venv\Scripts\python.exe -m ruff check .
+
+rem Run with Claude Code channel notifications (needs Git for Windows for the hooks)
+start-entrabot.cmd
+
+rem Status, certificate rotation, disconnect this PC
+powershell -ExecutionPolicy Bypass -File status-windows.ps1 -HealthOnly -Strict
+powershell -ExecutionPolicy Bypass -File scripts\deploy-windows.ps1
+powershell -ExecutionPolicy Bypass -File scripts\teardown-windows.ps1
+```
+
 ## High-Value Repo Areas
 
-- `src/entrabot/platform/`: OS-specific credential storage — `CredentialStore` protocol with Mac/Linux/Windows implementations
+- `src/entrabot/platform/`: OS-specific credential storage — `CredentialStore` protocol with Mac/Linux/Windows implementations, plus `wincert.py`, the Windows certificate and key lifecycle (create with a non-exportable key, TPM first; find; test-sign; delete with the key)
+- `src/entrabot/winsetup/`: the Windows setup wizard (`python -m entrabot.winsetup`: `setup`, `diagnose`, `rotate-cert`, `teardown`, `status`). `scripts/setup-windows.ps1` is only a bootstrap that builds `.venv` and starts it
 - `src/entrabot/auth/`: Certificate-based JWT assertion builder + MSAL delegated auth (localhost redirect + device code fallback)
 - `src/entrabot/a365/`: Microsoft Agent 365 Work IQ provider boundary and Word adapter
 - `src/entrabot/identity/`: Progressive identity state machine (UNAUTHENTICATED → DELEGATED → PROVISIONING → AGENT_USER)

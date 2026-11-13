@@ -325,3 +325,50 @@ class TestMigrationAndPollState:
             "chat_cursors_archive/old.json",
             "chat_id_notes.txt",
         ]
+
+
+def test_migration_reads_local_files_as_utf8_on_any_locale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A UTF-8 local file reaches the target intact even where the default codec is cp1252.
+
+    Issue #60: read with the Windows ANSI code page, an accent became mojibake in the cloud
+    copy and an emoji's bytes could fail to decode, which dropped the file from the migration.
+    """
+    from tests.locale_codec import force_locale_codec
+
+    force_locale_codec(monkeypatch)
+    content = "<h2>🎯 Needs you</h2><p>José — café ✅</p>\n"
+    src = tmp_path / "src"
+    (src / "summaries").mkdir(parents=True)
+    (src / "summaries" / "2026-04-17.html").write_bytes(content.encode())
+    target = LocalBackend(tmp_path / "dst")
+
+    report = migrate_local_to_backend([(src, "")], target)
+
+    assert report.errors == []
+    assert target.read_text("summaries/2026-04-17.html") == content
+
+
+def test_migration_writes_exact_bytes_and_normalises_old_crlf_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What lands in the target is the text itself, with ``"\\n"`` line endings.
+
+    A local store written on Windows before writes were byte-exact has CRLF in it. Reading
+    stays tolerant of that, and the copy must not gain a second ``"\\r"`` on the way out.
+    """
+    from tests.locale_codec import force_windows_newlines
+
+    force_windows_newlines(monkeypatch)
+    src = tmp_path / "src"
+    (src / "interactions").mkdir(parents=True)
+    (src / "interactions" / "old.jsonl").write_bytes(b'{"n": 1}\r\n{"n": 2}\r\n')
+    (src / "interactions" / "new.jsonl").write_bytes(b'{"n": 3}\n')
+    target = LocalBackend(tmp_path / "dst")
+
+    report = migrate_local_to_backend([(src, "")], target)
+
+    assert report.errors == []
+    assert (tmp_path / "dst" / "interactions" / "old.jsonl").read_bytes() == b'{"n": 1}\n{"n": 2}\n'
+    assert (tmp_path / "dst" / "interactions" / "new.jsonl").read_bytes() == b'{"n": 3}\n'

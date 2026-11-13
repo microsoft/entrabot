@@ -1,10 +1,14 @@
-"""Pre-flight, smoke, and diagnose checks for setup.sh.
+"""Pre-flight, smoke, and diagnose checks for setup (setup.sh and the Windows wizard).
 
 Designed for a non-technical operator (e.g., a VP) running ``./scripts/setup.sh``
-once: they should either see a green confirmation that the install works end-to-end,
-or a precise pointer to the broken hop. setup.sh shells out to short Python
-one-liners that import from this module, so the logic itself is unit-testable
-without bash.
+or ``scripts\\setup-windows.cmd`` once: they should either see a green confirmation
+that the install works end-to-end, or a precise pointer to the broken hop. setup.sh
+shells out to short Python one-liners that import from this module, and the Windows
+wizard calls it directly, so the logic itself is unit-testable without a shell.
+
+Remediation text names the setup script of the platform it runs on, and the
+certificate check looks where that platform keeps the key: the OS keystore on
+macOS/Linux, the certificate store (a non-exportable CNG key) on Windows.
 
 Three entry points:
 
@@ -14,16 +18,22 @@ Three entry points:
   the three-hop token mint, the agent's Graph identity, and Teams scope.
 * :func:`run_diagnostics` — ``./scripts/setup.sh --diagnose`` short-circuit.
   Superset of the smoke checks plus state file, cert keystore, MCP wiring, and
-  :func:`check_persona_sati_mcp` (optional, never fails).
+  :func:`check_persona_sati_mcp` (optional, never fails). An older setup key that
+  setup could not switch off (:func:`check_old_setup_keys`) is a warning, listed
+  only when the state file records one.
 """
 
 from __future__ import annotations
 
+import base64
 import ipaddress
 import json
+import os
+import shlex
 import shutil
 import socket
-from collections.abc import Iterable
+import sys
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -31,40 +41,21 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from entrabot import licensing
 from entrabot.config import EntraBotConfig
 from entrabot.errors import AgentIDNotAvailable, TokenExchangeError
 from entrabot.tools.teams import acquire_agent_user_token
+from entrabot.winsetup import oldkeys
 
 CheckStatus = Literal["pass", "warn", "fail", "skip"]
 
 
-# Teams-capable SKUs. The single source of truth — ``scripts/create_entra_agent_ids.py``
-# imports this constant. Union of every SKU part number we have observed assigning
-# Teams to a user, including M365 E3/E5, Business Premium, Developer Pack, and
-# the standalone Teams SKUs.
-TEAMS_CAPABLE_SKUS: tuple[str, ...] = (
-    "ENTERPRISEPREMIUM",  # M365 E5 / Office 365 E5
-    "ENTERPRISEPACK",  # Office 365 E3
-    "SPE_E3",  # M365 E3
-    "SPE_E5",  # M365 E5 (alternate part number)
-    "SPE_F1",  # M365 F1 (frontline)
-    "STANDARDPACK",  # Office 365 E1
-    "DEVELOPERPACK",  # Office 365 E3 Developer
-    "DEVELOPERPACK_E5",  # M365 E5 Developer
-    "M365_BUSINESS_PREMIUM",  # M365 Business Premium
-    "O365_BUSINESS_PREMIUM",  # O365 Business Premium (legacy name)
-    "Microsoft_Teams_Enterprise",
-    "Microsoft_Teams_Essentials",
-    "TEAMS_ESSENTIALS_AAD",
-    "TEAMS_EXPLORATORY",
-    "TEAMS_PREMIUM",
-    "M365_E5_SUITE_COMPONENTS",
-)
-
-COPILOT_CAPABLE_SKUS: tuple[str, ...] = (
-    "MICROSOFT_365_COPILOT",
-    "Microsoft_365_Copilot",
-)
+# Which products include Teams, or Microsoft 365 Copilot, is decided in entrabot.licensing
+# from each product's service plans. These name lists are its fallback for an answer that
+# carries no service plans, kept importable from here for scripts/create_entra_agent_ids.py
+# and scripts/assign_agent_user_licenses.py.
+TEAMS_CAPABLE_SKUS: tuple[str, ...] = licensing.TEAMS_CAPABLE_SKUS
+COPILOT_CAPABLE_SKUS: tuple[str, ...] = licensing.COPILOT_CAPABLE_SKUS
 
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
@@ -72,6 +63,31 @@ LICENSE_PURCHASE_URL = (
     "https://admin.microsoft.com/Adminportal/Home#/catalog"
     " (or any Teams-capable license: M365 Business Premium, E3, E5, etc.)"
 )
+
+
+def _is_windows() -> bool:
+    return sys.platform == "win32"
+
+
+def _setup_name() -> str:
+    """The setup script's name, as someone would say it."""
+    return "setup-windows.cmd" if _is_windows() else "setup.sh"
+
+
+def _setup_command() -> str:
+    """The setup command to run from the repository root."""
+    return r"scripts\setup-windows.cmd" if _is_windows() else "./scripts/setup.sh"
+
+
+def _diagnose_command() -> str:
+    return f"{_setup_command()} -Diagnose" if _is_windows() else "./scripts/setup.sh --diagnose"
+
+
+def default_expected_binary(project_root: Path) -> Path:
+    """Where setup installs the MCP server binary for this platform."""
+    if _is_windows():
+        return project_root / ".venv" / "Scripts" / "entrabot-mcp.exe"
+    return project_root / ".venv" / "bin" / "entrabot-mcp"
 
 
 @dataclass(frozen=True)
@@ -116,14 +132,9 @@ def check_teams_license_availability(
     skus = resp.json().get("value", []) or []
     available: list[tuple[str, int]] = []
     for sku in skus:
-        part = sku.get("skuPartNumber", "")
-        if part not in TEAMS_CAPABLE_SKUS:
-            continue
-        prepaid = (sku.get("prepaidUnits") or {}).get("enabled", 0) or 0
-        consumed = sku.get("consumedUnits", 0) or 0
-        free = prepaid - consumed
-        if free > 0:
-            available.append((part, free))
+        product = licensing.describe(sku) if isinstance(sku, dict) else None
+        if product is not None and product.teams and product.free > 0:
+            available.append((product.part_number, product.free))
 
     if available:
         descs = ", ".join(f"{part} ({free} free)" for part, free in available)
@@ -137,13 +148,13 @@ def check_teams_license_availability(
         name="Teams license availability",
         status="warn",
         detail=(
-            "No Teams-capable SKU has free seats in this tenant. setup.sh will "
+            f"No Teams-capable SKU has free seats in this tenant. {_setup_name()} will "
             "still complete, but the agent user can't sign into Teams without "
             "a license."
         ),
         remediation=(
             f"Buy a Teams-capable license at {LICENSE_PURCHASE_URL} and re-run "
-            "setup.sh, or assign an existing license manually before testing."
+            f"{_setup_name()}, or assign an existing license manually before testing."
         ),
     )
 
@@ -172,14 +183,9 @@ def check_copilot_license_availability(
 
     available: list[tuple[str, int]] = []
     for sku in resp.json().get("value", []) or []:
-        part = sku.get("skuPartNumber", "")
-        if part not in COPILOT_CAPABLE_SKUS:
-            continue
-        prepaid = (sku.get("prepaidUnits") or {}).get("enabled", 0) or 0
-        consumed = sku.get("consumedUnits", 0) or 0
-        free = prepaid - consumed
-        if free > 0:
-            available.append((part, free))
+        product = licensing.describe(sku) if isinstance(sku, dict) else None
+        if product is not None and product.copilot and product.free > 0:
+            available.append((product.part_number, product.free))
 
     if available:
         descs = ", ".join(f"{part} ({free} free)" for part, free in available)
@@ -197,7 +203,7 @@ def check_copilot_license_availability(
             "MCP servers require Microsoft 365 Copilot for the calling Agent User."
         ),
         remediation=(
-            "Buy or free a Microsoft 365 Copilot license and re-run setup.sh, "
+            f"Buy or free a Microsoft 365 Copilot license and re-run {_setup_name()}, "
             "or assign it manually before testing Work IQ Word."
         ),
     )
@@ -216,7 +222,7 @@ def _token_mint_check(config: EntraBotConfig) -> tuple[Check, str | None]:
                 status="fail",
                 detail=f"Agent identity not bootstrapped: {exc}",
                 remediation=(
-                    "Run ./scripts/setup.sh end-to-end — the state file or certificate is missing."
+                    f"Run {_setup_command()} end-to-end — the state file or certificate is missing."
                 ),
             ),
             None,
@@ -228,7 +234,7 @@ def _token_mint_check(config: EntraBotConfig) -> tuple[Check, str | None]:
                 status="fail",
                 detail=f"{exc.hop} failed — {exc.error}: {exc.description}",
                 remediation=(
-                    "Re-run ./scripts/setup.sh --diagnose to see which hop failed "
+                    f"Re-run {_diagnose_command()} to see which hop failed "
                     "and consult docs/troubleshooting/setup-and-authentication.md."
                 ),
             ),
@@ -290,7 +296,7 @@ def _me_identity_check(
             detail=(f"Token belongs to {upn!r}, expected {config.agent_user_upn!r}."),
             remediation=(
                 "The .env state file points at a different agent user than "
-                "the token resolves to. Re-run setup.sh."
+                f"the token resolves to. Re-run {_setup_name()}."
             ),
         )
 
@@ -327,7 +333,7 @@ def _chats_scope_check(token: str, *, transport: httpx.BaseTransport | None = No
             detail=f"Graph returned {resp.status_code} for /me/chats.",
             remediation=(
                 "Teams replication can take 10-15 minutes after license "
-                "assignment. Wait, then re-run ./scripts/setup.sh --diagnose. "
+                f"assignment. Wait, then re-run {_diagnose_command()}. "
                 "If the failure persists, check that the agent user has a "
                 "Teams-capable license assigned."
             ),
@@ -372,6 +378,105 @@ def run_smoke_checks(
     return checks
 
 
+# ─── Work IQ: Word, Excel and OneDrive files ─────────────────────────────────
+
+WORK_IQ_CHECK_NAME = "Word, Excel and OneDrive files"
+
+
+def _token_scopes(token: str) -> list[str]:
+    """The ``scp`` claim of an access token, read without checking its signature: only to
+    see which scopes Microsoft put in it. The token itself never leaves this function."""
+    try:
+        payload = token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except (IndexError, ValueError):
+        return []
+    scopes = claims.get("scp") if isinstance(claims, dict) else None
+    return scopes.split() if isinstance(scopes, str) else []
+
+
+def work_iq_token_scopes(
+    config: EntraBotConfig,
+    manifest_path: Path,
+    *,
+    acquire: Callable[..., str] | None = None,
+) -> list[dict[str, object]]:
+    """For each audience in the Work IQ manifest at *manifest_path*: whether a token the agent
+    gets for it, the way the runtime asks (``<audience>/.default``), carries every scope the
+    manifest needs there. Results only; no token is returned, printed or logged."""
+    from entrabot.a365.manifest import load_manifest
+
+    manifest = load_manifest(manifest_path)
+    needed: dict[str, list[str]] = {}
+    for server in {id(server): server for server in manifest.servers.values()}.values():
+        scopes = needed.setdefault(server.audience, [])
+        if server.scope not in scopes:
+            scopes.append(server.scope)
+    get_token = acquire or acquire_agent_user_token
+    results: list[dict[str, object]] = []
+    for audience, scopes in needed.items():
+        try:
+            token = get_token(config, resource_scope=f"{audience}/.default")
+        except TokenExchangeError as exc:
+            error = f"{exc.error}: {exc.description}"[:300]
+            results.append({"audience": audience, "ok": False, "missing": scopes, "error": error})
+            continue
+        except Exception as exc:  # noqa: BLE001 - reported, never raised: this only looks
+            error = f"{type(exc).__name__}: {exc}"[:300]
+            results.append({"audience": audience, "ok": False, "missing": scopes, "error": error})
+            continue
+        have = set(_token_scopes(token))
+        missing = [scope for scope in scopes if scope not in have]
+        results.append({"audience": audience, "ok": not missing, "missing": missing, "error": ""})
+    return results
+
+
+def check_work_iq_tokens(
+    config: EntraBotConfig,
+    manifest_path: Path,
+    *,
+    acquire: Callable[..., str] | None = None,
+) -> Check | None:
+    """Diagnostics: when Word, Excel and OneDrive files are set up here (a Work IQ manifest),
+    whether Microsoft honours them for the agent. A warning, never a failure: they are
+    optional. None when there is nothing to check."""
+    if not manifest_path.is_file():
+        return None
+    try:
+        results = work_iq_token_scopes(config, manifest_path, acquire=acquire)
+    except Exception as exc:  # noqa: BLE001 - an unreadable manifest is something to say
+        return Check(
+            name=WORK_IQ_CHECK_NAME,
+            status="warn",
+            detail=f"{manifest_path.name} could not be read: {exc}",
+            remediation=f"Run {_setup_command()} again and answer yes to Word, Excel and OneDrive.",
+        )
+    if not results:
+        return None
+    if all(item["ok"] for item in results):
+        return Check(
+            name=WORK_IQ_CHECK_NAME,
+            status="pass",
+            detail="The agent's tokens carry every scope they need.",
+        )
+    problems = [
+        f"{item['audience']}: "
+        + (str(item["error"]) if item["error"] else "missing " + " ".join(item["missing"]))
+        for item in results
+        if not item["ok"]
+    ]
+    return Check(
+        name=WORK_IQ_CHECK_NAME,
+        status="warn",
+        detail="Microsoft does not honour them for the agent yet. " + "; ".join(problems),
+        remediation=(
+            "If they were set up in the last few minutes, wait and run "
+            f"{_diagnose_command()} again. Otherwise run {_setup_command()} again and answer "
+            "yes to Word, Excel and OneDrive."
+        ),
+    )
+
+
 # ─── Phase 3: diagnostics extras ─────────────────────────────────────────────
 
 
@@ -384,16 +489,17 @@ def check_state_file(path: Path) -> Check:
             name="State file",
             status="fail",
             detail=f"{path} does not exist.",
-            remediation="Run ./scripts/setup.sh — provisioning has not been completed.",
+            remediation=f"Run {_setup_command()} — provisioning has not been completed.",
         )
     try:
-        data = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError) as exc:
+        # UTF-8 whatever the machine's code page; a Windows editor may add a BOM.
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (ValueError, OSError) as exc:
         return Check(
             name="State file",
             status="fail",
             detail=f"{path} is unreadable: {exc}",
-            remediation="Delete the file and re-run ./scripts/setup.sh.",
+            remediation=f"Delete the file and re-run {_setup_command()}.",
         )
 
     missing = [key for key in _REQUIRED_STATE_KEYS if not data.get(key)]
@@ -402,7 +508,7 @@ def check_state_file(path: Path) -> Check:
             name="State file",
             status="fail",
             detail=f"Missing keys: {', '.join(missing)}",
-            remediation="Re-run ./scripts/setup.sh to repopulate the state file.",
+            remediation=f"Re-run {_setup_command()} to repopulate the state file.",
         )
 
     return Check(
@@ -412,8 +518,76 @@ def check_state_file(path: Path) -> Check:
     )
 
 
-def _check_cert_in_keystore() -> Check:
+def check_old_setup_keys(path: Path) -> Check | None:
+    """Older setup keys that setup could not switch off in Microsoft Entra, from the state
+    file's record of them (``entrabot.winsetup.oldkeys``, which setup and ``status`` read too).
+
+    An older install kept the Provisioner's private key in a plain file, and the Provisioner
+    app can manage applications across the tenant, so a certificate still listed there is
+    reported: a ``warn`` naming it by the end of its thumbprint, never a failure of sign-in
+    health. A record that can't be read is a ``warn`` too. None when nothing is recorded, so
+    nothing is added to the report. The keys are written on Windows, but the state file is
+    read wherever this runs.
+    """
+    finding = oldkeys.old_setup_key_check(oldkeys.read_old_setup_keys(path))
+    if finding is None:
+        return None
+    return Check(
+        name=oldkeys.CHECK_NAME, status="warn", detail=finding.detail, remediation=finding.fix
+    )
+
+
+_CERT_CHECK_NAME = "Blueprint cert in OS keystore"
+
+
+def _check_cert_in_windows_store(config: EntraBotConfig | None) -> Check:
+    """Windows: the certificate named in .env is in this user's store, in date, and
+    its (non-exportable) key actually signs. Credential Manager is not involved."""
+    if config is None:
+        return Check(
+            name=_CERT_CHECK_NAME,
+            status="skip",
+            detail="No configuration to check the certificate against.",
+        )
+    from entrabot.platform import wincert
+
+    remediation = f"Run {_setup_command()} as the user who runs Entrabot."
+    sha1 = config.blueprint_cert_sha1
+    try:
+        health = wincert.cert_health(sha1)
+    except Exception as exc:  # noqa: BLE001 — a diagnostic must report, not crash
+        return Check(
+            name=_CERT_CHECK_NAME,
+            status="fail",
+            detail=f"Could not read the certificate store: {exc}",
+            remediation=remediation,
+        )
+    if not health.usable:
+        return Check(
+            name=_CERT_CHECK_NAME, status="fail", detail=health.message, remediation=remediation
+        )
+    try:
+        wincert.test_sign(sha1 or "")
+    except wincert.WinCertError as exc:
+        return Check(name=_CERT_CHECK_NAME, status="fail", detail=str(exc), remediation=remediation)
+    if health.status == "expiring":
+        return Check(
+            name=_CERT_CHECK_NAME,
+            status="warn",
+            detail=health.message,
+            remediation=f"Re-run {_setup_command()} to renew the certificate before it expires.",
+        )
+    return Check(
+        name=_CERT_CHECK_NAME,
+        status="pass",
+        detail=f"{health.message} Its private key signs.",
+    )
+
+
+def _check_cert_in_keystore(config: EntraBotConfig | None = None) -> Check:
     """Default cert presence check. Tests patch this for hermeticity."""
+    if _is_windows():
+        return _check_cert_in_windows_store(config)
     try:
         from entrabot.platform import get_credential_store
     except Exception as exc:  # pragma: no cover — import failures are platform-level
@@ -430,7 +604,7 @@ def _check_cert_in_keystore() -> Check:
             name="Blueprint cert in OS keystore",
             status="fail",
             detail=f"Keystore error: {exc}",
-            remediation="Re-run ./scripts/setup.sh to re-generate and store the cert.",
+            remediation=f"Re-run {_setup_command()} to re-generate and store the cert.",
         )
 
     if not pem:
@@ -438,7 +612,7 @@ def _check_cert_in_keystore() -> Check:
             name="Blueprint cert in OS keystore",
             status="fail",
             detail="No blueprint-private-key in OS keystore.",
-            remediation="Re-run ./scripts/setup.sh to regenerate the certificate.",
+            remediation=f"Re-run {_setup_command()} to regenerate the certificate.",
         )
 
     return Check(
@@ -450,8 +624,10 @@ def _check_cert_in_keystore() -> Check:
 
 def _read_mcp_command(path: Path) -> str | None:
     try:
-        data = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (ValueError, OSError):
+        return None
+    if not isinstance(data, dict):
         return None
     servers = data.get("mcpServers") or {}
     entry = servers.get("entrabot") or {}
@@ -475,9 +651,24 @@ def _paths_equivalent(observed: str, expected: Path, config_path: Path) -> bool:
     else:
         obs_path = obs_path.resolve()
     try:
-        return obs_path == expected.resolve()
+        resolved_expected = expected.resolve()
     except (OSError, RuntimeError):
-        return obs_path == expected
+        resolved_expected = expected
+    return _comparable(obs_path) == _comparable(resolved_expected)
+
+
+def _comparable(path: Path | str) -> str:
+    """A path in the form two spellings of the same file agree on.
+
+    Windows paths don't distinguish case or slash direction, and ``entrabot-mcp``
+    runs ``entrabot-mcp.exe``. Elsewhere the path is compared as written.
+    """
+    text = str(path)
+    if _is_windows():
+        text = text.replace("\\", "/").lower()
+        if text.endswith(".exe"):
+            text = text[: -len(".exe")]
+    return text
 
 
 def check_mcp_configs(
@@ -501,7 +692,7 @@ def check_mcp_configs(
                 name="Claude Code MCP config",
                 status="fail",
                 detail=f"{claude_path} not found.",
-                remediation="Re-run ./scripts/setup.sh to write .mcp.json.",
+                remediation=f"Re-run {_setup_command()} to write .mcp.json.",
             )
         )
     else:
@@ -512,7 +703,7 @@ def check_mcp_configs(
                     name="Claude Code MCP config",
                     status="fail",
                     detail=f"{claude_path} has no entrabot entry.",
-                    remediation="Re-run ./scripts/setup.sh to write .mcp.json.",
+                    remediation=f"Re-run {_setup_command()} to write .mcp.json.",
                 )
             )
         elif not _paths_equivalent(cmd, expected_binary, claude_path):
@@ -522,7 +713,8 @@ def check_mcp_configs(
                     status="fail",
                     detail=(f"Entry points at {cmd!r}, expected {expected!r}. Worktree drift?"),
                     remediation=(
-                        "Re-run ./scripts/setup.sh from the main checkout to rewrite the MCP entry."
+                        f"Re-run {_setup_command()} from the main checkout to rewrite "
+                        "the MCP entry."
                     ),
                 )
             )
@@ -543,7 +735,7 @@ def check_mcp_configs(
                 status="warn",
                 detail=f"{copilot_path} not found (Copilot CLI not installed?).",
                 remediation=(
-                    "Install Copilot CLI and re-run setup.sh to wire it up, "
+                    f"Install Copilot CLI and re-run {_setup_name()} to wire it up, "
                     "or ignore if you only use Claude Code."
                 ),
             )
@@ -556,7 +748,7 @@ def check_mcp_configs(
                     name="Copilot CLI MCP config",
                     status="warn",
                     detail=f"{copilot_path} has no entrabot entry.",
-                    remediation="Re-run ./scripts/setup.sh.",
+                    remediation=f"Re-run {_setup_command()}.",
                 )
             )
         elif not _paths_equivalent(cmd, expected_binary, copilot_path):
@@ -572,7 +764,7 @@ def check_mcp_configs(
                         "Possibly pointing at another checkout/worktree."
                     ),
                     remediation=(
-                        "Re-run ./scripts/setup.sh from the checkout you want "
+                        f"Re-run {_setup_command()} from the checkout you want "
                         "Copilot to use, or ignore if intentional."
                     ),
                 )
@@ -607,17 +799,86 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
-def _is_executable(command: str, base: Path, env: object) -> bool:
-    """True if ``command`` is a runnable file.
+def _find_program(command: str, base: Path, env: object, *, any_file: bool = False) -> str | None:
+    """The runnable file ``command`` names, or None.
 
     Relative paths resolve against ``base``. Bare names are looked up on the ``PATH`` in
     the entry's own ``env``, because that's what the host runs them with, or on this
-    process's ``PATH`` if the entry doesn't set one.
+    process's ``PATH`` if the entry doesn't set one. ``any_file`` also accepts a file that
+    isn't marked executable: Windows has no executable bit, and there ``which`` goes by
+    ``PATHEXT``, which never lists ``.ps1`` and may not list ``.py``.
     """
     bare = "/" not in command and "\\" not in command
     path = env.get("PATH") if isinstance(env, dict) else None
+    path = path if isinstance(path, str) else None
     target = command if bare else str(base / command)
-    return shutil.which(target, path=path if isinstance(path, str) else None) is not None
+    found = shutil.which(target, path=path)
+    if found is None and any_file:
+        found = shutil.which(target, mode=os.F_OK, path=path)
+    return found
+
+
+def _is_executable(command: str, base: Path, env: object) -> bool:
+    """True if ``command`` is a runnable file (see :func:`_find_program`)."""
+    return _find_program(command, base, env) is not None
+
+
+def _windows_leading_parts(command: str) -> list[str]:
+    r"""Every leading part of a Windows command line that could be its program, longest
+    first: ``C:\Program Files\x\t.cmd --flag`` gives that whole text, then
+    ``C:\Program Files\x\t.cmd``, then ``C:\Program``. A quoted part counts only when
+    it is one quoted word, and is returned without its quotes. An unbalanced quote gives
+    nothing: that is not something to guess at.
+    """
+    ends: list[int] = []
+    quoted = False
+    for index, char in enumerate(command):
+        if char == '"':
+            quoted = not quoted
+        elif char.isspace() and not quoted and index > 0 and not command[index - 1].isspace():
+            ends.append(index)
+    if quoted:
+        return []
+    ends.append(len(command))
+    parts: list[str] = []
+    for end in reversed(ends):
+        candidate = command[:end].strip()
+        if '"' in candidate:
+            if not (candidate.count('"') == 2 and candidate[0] == candidate[-1] == '"'):
+                continue
+            candidate = candidate[1:-1]
+        if candidate:
+            parts.append(candidate)
+    return parts
+
+
+def _token_command_runs(command: str, base: Path, env: object) -> bool:
+    """True if the server could start ``PERSONA_SATI_MCP_TOKEN_COMMAND``.
+
+    This follows ``entrabot.mcp_server._persona_token_words``, which decides what the
+    server actually starts: the whole value as one program first (so a path with spaces
+    needs no quoting), otherwise a program followed by arguments, split by the platform's
+    rules. On POSIX that is shell quoting. On Windows the program is the longest leading
+    part that names a file, and a script (``.ps1``, ``.py``) counts, because the server
+    hands those to their interpreter.
+
+    The rule is restated here rather than imported: importing ``entrabot.mcp_server``
+    builds the server, which runs this very command and contacts persona-sati, and a
+    health check must do neither. Nothing here runs the command.
+    """
+    windows = _is_windows()
+    if _find_program(command, base, env, any_file=windows) is not None:
+        return True
+    if windows:
+        return any(
+            _find_program(part, base, env, any_file=True) is not None
+            for part in _windows_leading_parts(command)
+        )
+    try:
+        words = shlex.split(command)
+    except ValueError:  # an unbalanced quote
+        return False
+    return bool(words) and _find_program(words[0], base, env) is not None
 
 
 def check_persona_sati_mcp(claude_path: Path) -> Check:
@@ -629,7 +890,7 @@ def check_persona_sati_mcp(claude_path: Path) -> Check:
     """
     name = "persona-sati MCP (optional)"
     try:
-        servers = json.loads(claude_path.read_text(encoding="utf-8")).get("mcpServers") or {}
+        servers = json.loads(claude_path.read_text(encoding="utf-8-sig")).get("mcpServers") or {}
         entry, entrabot = servers.get("persona-sati"), servers.get("entrabot")
     except (OSError, ValueError, AttributeError):  # missing, unparsable, or wrong shape
         entry = entrabot = None
@@ -686,7 +947,8 @@ def check_persona_sati_mcp(claude_path: Path) -> Check:
     for var in ("PERSONA_SATI_MCP_URL", _TOKEN_ENV):
         if _is_placeholder(env.get(var)):
             problems.append(f"{var} in the entrabot env is an unfilled placeholder")
-    if token and not _is_placeholder(token) and not _is_executable(token, claude_path.parent, env):
+    runnable = _token_command_runs(token, claude_path.parent, env) if token else False
+    if token and not _is_placeholder(token) and not runnable:
         problems.append(f"{_TOKEN_ENV} in the entrabot env was not found or is not executable")
 
     if not problems:
@@ -712,11 +974,19 @@ def run_diagnostics(
     claude_mcp_path: Path,
     copilot_mcp_path: Path,
     transport: httpx.BaseTransport | None = None,
+    work_iq_manifest: Path | None = None,
 ) -> list[Check]:
-    """Full health check for ``./scripts/setup.sh --diagnose``."""
+    """Full health check for ``./scripts/setup.sh --diagnose`` and the Windows wizard.
+
+    ``expected_binary`` is the MCP server setup installed; see
+    :func:`default_expected_binary`.
+    """
     checks: list[Check] = []
     checks.append(check_state_file(state_path))
-    checks.append(_check_cert_in_keystore())
+    old_setup_keys = check_old_setup_keys(state_path)
+    if old_setup_keys is not None:
+        checks.append(old_setup_keys)
+    checks.append(_check_cert_in_keystore(config))
     checks.extend(run_smoke_checks(config, transport=transport))
     checks.extend(
         check_mcp_configs(
@@ -726,6 +996,10 @@ def run_diagnostics(
         )
     )
     checks.append(check_persona_sati_mcp(claude_mcp_path))
+    if work_iq_manifest is not None:
+        work_iq = check_work_iq_tokens(config, work_iq_manifest)
+        if work_iq is not None:
+            checks.append(work_iq)
     return checks
 
 
@@ -767,9 +1041,11 @@ __all__ = [
     "TEAMS_CAPABLE_SKUS",
     "check_copilot_license_availability",
     "check_mcp_configs",
+    "check_old_setup_keys",
     "check_persona_sati_mcp",
     "check_state_file",
     "check_teams_license_availability",
+    "default_expected_binary",
     "format_report",
     "overall_exit_code",
     "run_diagnostics",

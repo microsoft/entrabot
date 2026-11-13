@@ -19,7 +19,7 @@ Configuration is not a value frozen once at boot. `get_config()` calls `EntraBot
 | `ENTRABOT_BLUEPRINT_OBJECT_ID` | Directory object ID of the Blueprint **application object** (not the BlueprintPrincipal/service-principal object). This is the object ID you get back when creating the application registration itself. |
 | `ENTRABOT_BLUEPRINT_CERT_THUMBPRINT` | Base64url-encoded SHA-256 DER thumbprint of the Blueprint's signing certificate. Used as the `x5t#S256` header on every JWT client-assertion, on every platform (macOS, Linux, Windows). |
 | `ENTRABOT_BLUEPRINT_CERT_SHA1` | 40-character hex SHA-1 thumbprint of the same certificate. Used only on Windows to locate the certificate (and its non-exportable CNG private key) in the Windows Certificate Store — the store indexes by SHA-1, not SHA-256. |
-| `ENTRABOT_BLUEPRINT_KSP` | Windows key-storage provider name/label recorded by setup, kept for certificate diagnostics on that platform. |
+| `ENTRABOT_BLUEPRINT_KSP` | Where setup created the Windows key: `tpm` or `software`. Recorded for reference; the runtime does not read it. |
 | `ENTRABOT_AGENT_ID` | Agent Identity's application (client) ID — the `client_id` used in the Hop 1 → Hop 2 token exchange. |
 | `ENTRABOT_AGENT_OBJECT_ID` | Agent Identity's service-principal object ID. |
 | `ENTRABOT_AGENT_USER_ID` | Agent User's directory object ID (the real Entra user account the agent authenticates as). |

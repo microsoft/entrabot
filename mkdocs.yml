@@ -168,6 +168,7 @@ nav:
               - setup.sh: reference/scripts/setup/setup-sh.md
               - setup-windows.ps1: reference/scripts/setup/setup-windows-ps1.md
               - setup-windows.cmd: reference/scripts/setup/setup-windows-cmd.md
+              - start-entrabot.cmd: reference/scripts/setup/start-entrabot-cmd.md
               - prereqs-macos.sh: reference/scripts/setup/prereqs-macos-sh.md
               - prereqs-windows.ps1: reference/scripts/setup/prereqs-windows-ps1.md
               - setup_delegated.sh: reference/scripts/setup/setup-delegated-sh.md

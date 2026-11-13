@@ -96,8 +96,10 @@ def load_manifest(path: Path | None = None) -> WorkIqManifest:
         if not candidate.exists():
             continue
         try:
-            manifest_text = candidate.read_text()
-        except OSError as exc:
+            # UTF-8, with or without the byte-order mark Windows tools add: json.loads
+            # rejects a BOM, and the platform default on Windows is the ANSI code page.
+            manifest_text = candidate.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeDecodeError) as exc:
             raise A365ManifestInvalidError(
                 f"{candidate}: could not read manifest: {exc}"
             ) from exc

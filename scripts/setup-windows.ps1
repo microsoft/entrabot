@@ -1,100 +1,156 @@
-﻿<#
+<#
 .SYNOPSIS
-  EntraBot — Windows setup. Mirror of scripts/setup.sh for Windows.
+  Entrabot - Windows setup. Start here (or double-click scripts\setup-windows.cmd).
 
 .DESCRIPTION
-  Provisions the agent identity on a Windows host:
-    1. Refuse-on-WSL (Phase 2 finding — WSL users should run setup.sh).
-    2. Probe prereqs (pwsh 7, python 3.12+, az CLI, git).
-    3. Bootstrap venv + pip install.
-    4. Run config.py migration helper (one-shot move of legacy ~/.entrabot).
-    5. Call entra_provisioning.py + create_entra_agent_ids.py via az login.
-    6. Make sure this machine's Blueprint cert is registered: reuse it if it is,
-       register it if it isn't, otherwise generate one (TPM-first, software-
-       fallback) via generate_windows_cert.py and add it to the Blueprint with
-       register_windows_blueprint_cert.py, which keeps every other machine's.
-    7. Write .env with the Blueprint, agent and Agent User IDs, both thumbprints
-       (SHA-1 hex + SHA-256 b64url), and a default sponsor if none is set,
-       replacing any earlier lines.
-       icacls -M (D10) — modify, NOT readonly. Setup re-runs need to
-       update .env or rotation halts.
-    8. Register the entrabot MCP server via mcp_config.py.
+  This script is the BOOTSTRAP. It gets a brand-new Windows PC to the point where the
+  real setup wizard can run, then hands over to it:
 
-  See docs/architecture/windows-and-platforms.md for the full design and the
-  failure-modes table.
+    1. Checks this PC (Windows, not WSL, not somebody else's administrator account).
+    2. Finds Python 3.12 or newer. If there is none it downloads a private copy of
+       Python just for Entrabot (the official nuget.org package, checked against a
+       pinned SHA-512 checksum and the Python Software Foundation's signature; nothing
+       else on the PC is changed) - no administrator rights, no installer, nothing to
+       restart.
+    3. Creates the project's private Python environment (.venv) and installs Entrabot.
+       Later runs skip this when nothing has changed.
+    4. Starts the setup wizard:  python -m entrabot.winsetup
+
+  The wizard does everything else: signing in to Azure, creating or joining the agent,
+  the certificate, memory (local or cloud), registering the MCP server, and a final
+  check that the agent can sign in.
+
+  Runs on the Windows PowerShell 5.1 that ships with Windows, and on PowerShell 7.
+  Nothing here needs PowerShell 7, winget, git, or administrator rights.
+
+  With no parameters the wizard asks its questions interactively. Every question can
+  also be answered up front with a parameter, and -Yes makes the run unattended.
 
 .PARAMETER NewChain
-  Create a completely new Agent Identity chain.
+  Create a brand-new agent (Blueprint, Agent Identity and Agent User).
 
 .PARAMETER UseBlueprint
-  Attach to an existing Blueprint by App ID.
+  Join an existing agent Blueprint by its App ID.
 
 .PARAMETER UpnSuffix
-  Agent User UPN suffix (required with -NewChain). Also supported with
-  -UseBlueprint to select an existing suffixed Agent User.
+  Suffix for the Agent User's sign-in name, for example "bob".
 
 .PARAMETER AgentUserUpn
-  Explicit existing Agent User UPN to reuse with -UseBlueprint, e.g.
-  entrabot-agent-sati-agent@yourtenant.onmicrosoft.com.
+  Use this exact Agent User sign-in name, for example
+  entrabot-agent-bob@yourtenant.onmicrosoft.com.
+
+.PARAMETER Sponsor
+  Who the agent takes instructions from in Teams (sign-in name). Repeat or separate
+  with commas for more than one. Default: the account that signs in during setup.
 
 .PARAMETER UseCloudMemory
-  Provision Azure Blob Storage for operational data (default: local).
+  Keep the agent's memory in Azure Blob Storage.
+
+.PARAMETER KeepMemoryLocal
+  Keep the agent's memory on this PC.
 
 .PARAMETER WithStorageAccount
-  Use the named Azure Storage Account instead of the deterministic
-  per-tenant default. Created if missing. Mutually exclusive with
-  -CreateNewStorage. Only meaningful with -UseCloudMemory.
+  Cloud memory: use this Storage Account (created if missing).
 
 .PARAMETER WithContainer
-  Use the named blob container instead of the agent-<oid> default.
-  Only meaningful with -UseCloudMemory.
+  Cloud memory: use this blob container.
 
 .PARAMETER CreateNewStorage
-  Force creation of a fresh randomly-suffixed Storage Account even when
-  the deterministic-name one already exists. Mutually exclusive with
-  -WithStorageAccount. Only meaningful with -UseCloudMemory.
+  Cloud memory: always create a fresh Storage Account.
+
+.PARAMETER Location
+  Cloud memory: Azure region for a new Storage Account, for example westus2.
+
+.PARAMETER Subscription
+  Cloud memory: Azure subscription name or ID to use.
 
 .PARAMETER ConfigureA365WorkIq
-  Run the interactive Microsoft Agent 365 Work IQ Word developer setup:
-  a365 develop add-mcp-servers mcp_WordServer, a365 setup permissions mcp
-  against the existing Entrabot Blueprint, then validate ToolingManifest.json.
+  Also set up Microsoft Agent 365 Work IQ (needs the a365 CLI; see
+  scripts\prereqs-windows.ps1 -WithWorkIq).
 
-.PARAMETER A365AgentName
-  Deprecated compatibility parameter. Work IQ setup now uses the existing
-  Entrabot Blueprint ID from .entrabot-state.json.
+.PARAMETER Tenant
+  Sign in to this tenant (domain or tenant ID).
+
+.PARAMETER DeviceCode
+  Sign in with a device code instead of a browser window.
+
+.PARAMETER Hosts
+  Which AI hosts to register the MCP server for: claude, copilot, or claude,copilot.
+
+.PARAMETER SkipSmoke
+  Skip the final sign-in check.
+
+.PARAMETER Yes
+  Unattended: never ask a question. Anything that still needs an answer is an error.
+
+.PARAMETER Diagnose
+  Do not change anything; check an existing setup and explain what is wrong. Never
+  installs, repairs or moves anything: if this folder is not set up yet it says so.
+
+.PARAMETER Verbose
+  Show everything: the full package-install output here, and the wizard's full helper
+  output instead of its summaries.
+
+.PARAMETER BootstrapOnly
+  Stop once Python and .venv are ready, without starting the wizard (used by CI).
 
 .PARAMETER Status
-    Skip setup and run the consolidated status command via status-windows.ps1.
+  Show the agent's status (delegates to status-windows.ps1).
 
 .PARAMETER Json
-    With -Status, output machine-readable JSON.
+  With -Status, output machine-readable JSON.
 
 .PARAMETER HealthOnly
-    With -Status, only print health checks.
+  With -Status, only print health checks.
 
 .PARAMETER Strict
-    With -Status, return non-zero when health checks fail.
+  With -Status, return non-zero when health checks fail.
+
+.PARAMETER A365AgentName
+  Deprecated and ignored. Work IQ setup uses the existing Entrabot Blueprint.
+
+.PARAMETER Migrate
+  Deprecated and ignored. Old data is moved automatically.
 
 .EXAMPLE
-  .\scripts\setup-windows.ps1 -NewChain -UpnSuffix winagent
+  scripts\setup-windows.cmd
+
+  The interactive wizard. This is all most people need.
 
 .EXAMPLE
-  .\scripts\setup-windows.ps1 -NewChain -UpnSuffix winagent -UseCloudMemory `
-      -WithStorageAccount mycorpstg -WithContainer winagent-mem
+  scripts\setup-windows.cmd -NewChain -UpnSuffix bob -KeepMemoryLocal -Yes
+
+.EXAMPLE
+  scripts\setup-windows.cmd -UseBlueprint 11111111-2222-3333-4444-555555555555 `
+      -UseCloudMemory -WithStorageAccount mycorpstg -WithContainer bob-mem
+
+.EXAMPLE
+  scripts\setup-windows.cmd -Diagnose
 #>
 
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [switch]$NewChain,
     [string]$UseBlueprint = "",
     [string]$UpnSuffix = "",
     [string]$AgentUserUpn = "",
+    [string[]]$Sponsor = @(),
     [switch]$UseCloudMemory,
+    [switch]$KeepMemoryLocal,
     [string]$WithStorageAccount = "",
     [string]$WithContainer = "",
     [switch]$CreateNewStorage,
+    [string]$Location = "",
+    [string]$Subscription = "",
     [switch]$ConfigureA365WorkIq,
-    [string]$A365AgentName = "EntraBot Code Agent",
+    [string]$A365AgentName = "",
+    [string]$Tenant = "",
+    [switch]$DeviceCode,
+    [string]$Hosts = "",
+    [switch]$SkipSmoke,
+    [switch]$Yes,
+    [switch]$Diagnose,
+    [switch]$BootstrapOnly,
     [switch]$Migrate,
     [switch]$Status,
     [switch]$Json,
@@ -103,554 +159,1263 @@ param(
     [switch]$Help
 )
 
-# Detect the "blue Windows PowerShell 5.1 vs black PowerShell 7" trap before
-# strict mode trips on PS-7-only automatic variables ($IsWindows, $IsLinux).
-# Done inline (not via #Requires) so the message can be actionable.
-if ($PSVersionTable.PSVersion.Major -lt 7) {
-    Write-Host ""
-    Write-Host "ERROR: This script needs PowerShell 7+, but you launched it from" -ForegroundColor Red
-    Write-Host "       Windows PowerShell $($PSVersionTable.PSVersion)." -ForegroundColor Red
-    Write-Host ""
-    Write-Host "Two different products on Windows — easy to confuse:" -ForegroundColor Yellow
-    Write-Host "  - 'Windows PowerShell' (blue icon, pre-installed) is 5.1, NOT this." -ForegroundColor Yellow
-    Write-Host "  - 'PowerShell' / pwsh (black icon, separate install) is 7+, USE THIS." -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "How to fix:" -ForegroundColor Cyan
-    Write-Host "  Close this window. Open Start, type 'pwsh' (NOT 'PowerShell'),"
-    Write-Host "  pick the result with the BLACK icon, and re-run the same command."
-    Write-Host ""
-    Write-Host "  If pwsh is missing, run scripts\prereqs-windows.ps1 first to install it."
-    Write-Host ""
-    exit 1
+# Windows PowerShell 5.1 writes progress records as CLIXML to stderr when its output is
+# not a console (SSH, CI, a captured run), and its progress bar makes downloads many
+# times slower. Nothing here needs a progress bar.
+$ProgressPreference = 'SilentlyContinue'
+
+# Windows PowerShell started from a PowerShell 7 terminal through anything other than
+# PowerShell 7 itself (cmd.exe, Python, ...) keeps PowerShell 7's module paths, resolves
+# its in-box modules (Microsoft.PowerShell.Utility, ...) to versions it cannot load, and
+# then cannot find Write-Host or Get-FileHash (about_PSModulePath, "Starting Windows
+# PowerShell from PowerShell 7"). So under Windows PowerShell, put back its own default
+# locations for this process, before the first cmdlet that needs a module. No cmdlet is
+# used here: even Join-Path lives in a module. PowerShell 7 builds its own; nothing to do.
+if ($PSVersionTable.PSVersion.Major -lt 6) {
+    $windowsPowerShellModulePaths = @()
+    $documentsFolder = [Environment]::GetFolderPath('MyDocuments')
+    if ($documentsFolder) {
+        $windowsPowerShellModulePaths += [System.IO.Path]::Combine($documentsFolder, 'WindowsPowerShell\Modules')
+    }
+    $programFilesFolder = [Environment]::GetFolderPath('ProgramFiles')
+    if ($programFilesFolder) {
+        $windowsPowerShellModulePaths += [System.IO.Path]::Combine($programFilesFolder, 'WindowsPowerShell\Modules')
+    }
+    $windowsPowerShellModulePaths += [System.IO.Path]::Combine($PSHOME, 'Modules')
+    $env:PSModulePath = $windowsPowerShellModulePaths -join ';'
 }
 
-# Mutex: -CreateNewStorage and -WithStorageAccount both pin the storage
-# account name; only one can win.
-if ($CreateNewStorage -and $WithStorageAccount) {
-    Write-Host "ERROR: -CreateNewStorage and -WithStorageAccount are mutually exclusive." -ForegroundColor Red
-    exit 2
+# =============================================================================
+# Pure helpers. Everything above the dot-source guard is side-effect free so the
+# tests can load this file and call these functions under PowerShell 5.1 and 7.
+# This file must stay ASCII-only: Windows PowerShell 5.1 reads a file without a
+# byte-order mark in the ANSI code page, where one non-ASCII character is a
+# parse error.
+# =============================================================================
+
+$PythonInstallerVersion = '3.12.10'   # last 3.12 release with a Windows installer
+
+function ConvertTo-PythonVersion {
+    # '3.12.10', 'Python 3.12.10' -> [version]; anything else -> $null.
+    param([string]$Text)
+    if (-not $Text) { return $null }
+    $found = [regex]::Match($Text, '(?<![\d.])(\d+)\.(\d+)\.(\d+)(?![\d])')
+    if (-not $found.Success) { return $null }
+    return [version]$found.Value
 }
 
-$ErrorActionPreference = 'Stop'
-Set-StrictMode -Version Latest
+function Test-PythonVersionOk {
+    param([string]$Text)
+    $version = ConvertTo-PythonVersion -Text $Text
+    if ($null -eq $version) { return $false }
+    return ($version -ge [version]'3.12')
+}
+
+function Test-StoreAliasPath {
+    # Anything under a WindowsApps folder is the Microsoft Store alias: either a stub
+    # that only opens the Store, or the Store build of Python, which redirects writes
+    # under %LOCALAPPDATA% into its own package folder. Entrabot keeps its data in
+    # %LOCALAPPDATA%\entrabot, so neither is usable.
+    param([string]$Path)
+    if (-not $Path) { return $false }
+    return ($Path -match '(?i)[\\/]WindowsApps[\\/]')
+}
+
+function Get-PyLauncherPaths {
+    # Interpreter paths from the output of `py -0p`.
+    param([string[]]$Lines)
+    $paths = @()
+    foreach ($line in @($Lines)) {
+        if (-not $line) { continue }
+        $found = [regex]::Match($line, '([A-Za-z]:\\.*\.exe)\s*$')
+        if ($found.Success) { $paths += $found.Groups[1].Value }
+    }
+    return $paths
+}
+
+function Select-PreferredPython {
+    # Candidates: objects with Path and Version. Picks 3.12 (what CI tests), then 3.13,
+    # then the newest remaining release. Too-old and Store interpreters are never used.
+    param([object[]]$Candidates)
+    $usable = @()
+    foreach ($candidate in @($Candidates)) {
+        if ($null -eq $candidate) { continue }
+        $path = [string]$candidate.Path
+        if (-not $path) { continue }
+        if (Test-StoreAliasPath -Path $path) { continue }
+        $version = ConvertTo-PythonVersion -Text ([string]$candidate.Version)
+        if ($null -eq $version) { continue }
+        if ($version -lt [version]'3.12') { continue }
+        $usable += @{ Path = $path; Version = $version }
+    }
+    foreach ($minor in @(12, 13)) {
+        $hits = @($usable | Where-Object { $_.Version.Major -eq 3 -and $_.Version.Minor -eq $minor } |
+            Sort-Object -Property { $_.Version } -Descending)
+        if ($hits.Count -gt 0) { return $hits[0].Path }
+    }
+    $rest = @($usable | Sort-Object -Property { $_.Version } -Descending)
+    if ($rest.Count -gt 0) { return $rest[0].Path }
+    return $null
+}
+
+function Get-MachineArchitecture {
+    # PROCESSOR_ARCHITEW6432 is set when a 32-bit shell runs on a 64-bit Windows.
+    param([string]$ProcessorArchitecture, [string]$ProcessorArchiteW6432)
+    $raw = $ProcessorArchiteW6432
+    if (-not $raw) { $raw = $ProcessorArchitecture }
+    if (-not $raw) { return 'x86' }
+    switch ($raw.ToUpperInvariant()) {
+        'AMD64' { return 'amd64' }
+        'ARM64' { return 'arm64' }
+        default { return 'x86' }
+    }
+}
+
+function Get-PythonInstallerUrl {
+    param([string]$Architecture)
+    if ($Architecture -ne 'amd64' -and $Architecture -ne 'arm64') { return $null }
+    return ('https://www.python.org/ftp/python/{0}/python-{0}-{1}.exe' -f $PythonInstallerVersion, $Architecture)
+}
+
+# SHA-512 of each official Python package on nuget.org, base64: the form nuget.org
+# publishes (PackageHash, with PackageHashAlgorithm SHA512). Pinned on 2026-11-11 after
+# two sources agreed exactly: the hash of the package downloaded from
+#   https://www.nuget.org/api/v2/package/<id>/3.12.10
+# and the PackageHash nuget.org publishes for that exact version at
+#   https://www.nuget.org/api/v2/Packages(Id='<id>',Version='3.12.10')
+# Keyed by id AND version, so changing $PythonInstallerVersion without re-pinning (both
+# sources again) turns the private-copy route off instead of trusting an unpinned file.
+$PythonNuGetSha512 = @{
+    'python/3.12.10'      = 'u9pNz2iKlCEbYtUJaKkbOPMF0LjR7NkCafdKhvigpPzrt8oWKgdTpHaR6z3wyWQAm9PYGUxv0Zr66NX9AeHMDw=='
+    'pythonarm64/3.12.10' = 's3YP8TRRHOfg/JPmc96KP1bLPIlOjgt+MsJLyocX+BJ0qy9RmwHwogDZLnp9LsArUCmpJPd1LP+aUIXbX2kW2w=='
+}
+
+function Get-PythonNuGetPackageId {
+    param([string]$Architecture)
+    if ($Architecture -eq 'amd64') { return 'python' }
+    if ($Architecture -eq 'arm64') { return 'pythonarm64' }
+    return $null
+}
+
+function Get-PythonNuGetUrl {
+    # The official Python packages on nuget.org (published by the Python Software
+    # Foundation): a plain zip of a complete interpreter. No installer, no registry.
+    param([string]$Architecture)
+    $packageId = Get-PythonNuGetPackageId -Architecture $Architecture
+    if (-not $packageId) { return $null }
+    return ('https://www.nuget.org/api/v2/package/{0}/{1}' -f $packageId, $PythonInstallerVersion)
+}
+
+function Get-PythonNuGetSha512 {
+    # The pinned SHA-512 (base64) of the package for this processor, or $null when there
+    # is none, in which case the private copy is not offered at all.
+    param([string]$Architecture)
+    $packageId = Get-PythonNuGetPackageId -Architecture $Architecture
+    if (-not $packageId) { return $null }
+    $key = '{0}/{1}' -f $packageId, $PythonInstallerVersion
+    if (-not $PythonNuGetSha512.ContainsKey($key)) { return $null }
+    return [string]$PythonNuGetSha512[$key]
+}
+
+function Test-PackageHashMatch {
+    # Get-FileHash reports hex; nuget.org publishes base64. Compares the bytes exactly.
+    param([string]$Sha512Hex, [string]$ExpectedBase64)
+    if (-not $ExpectedBase64) { return $false }
+    if ($Sha512Hex -notmatch '^[0-9A-Fa-f]{128}$') { return $false }
+    $bytes = New-Object byte[] 64
+    for ($index = 0; $index -lt 64; $index++) {
+        $bytes[$index] = [System.Convert]::ToByte($Sha512Hex.Substring($index * 2, 2), 16)
+    }
+    return ([System.Convert]::ToBase64String($bytes) -ceq $ExpectedBase64)
+}
+
+function Test-InstallerUnavailable {
+    # 1601: the Windows Installer service cannot be reached (seen for a standard user in
+    # a remote session). 1603: fatal error during installation. Either way the MSI-based
+    # installer is not an option in this session; it says nothing about the PC being broken.
+    param([int]$ExitCode)
+    return (@(1601, 1603) -contains $ExitCode)
+}
+
+function Get-PythonRouteMessage {
+    # One line telling the user where the Python that setup uses came from.
+    param([string]$Route, [string]$Version)
+    switch ($Route) {
+        'venv' { return "Using this folder's existing Python environment (Python $Version)" }
+        'existing' { return "Using Python $Version already on this PC" }
+        'private' { return "Using Entrabot's private copy of Python $Version - nothing else on this PC is changed" }
+        'private-new' { return "Downloaded a private copy of Python $Version for Entrabot - nothing else on this PC is changed" }
+        'winget' { return "Installed Python $Version for your account with the Windows Package Manager" }
+        'pythonorg' { return "Installed Python $Version for your account with the python.org installer" }
+        default { return "Using Python $Version" }
+    }
+}
+
+function Get-LegacyDataAction {
+    # What to do about data in the old location (%USERPROFILE%\.entrabot):
+    #   none     - there is none
+    #   move     - move it to the current location (%LOCALAPPDATA%\entrabot)
+    #   conflict - both locations hold data; never merge or delete automatically
+    param([bool]$LegacyHasContent, [bool]$CurrentHasContent)
+    if (-not $LegacyHasContent) { return 'none' }
+    if ($CurrentHasContent) { return 'conflict' }
+    return 'move'
+}
+
+function ConvertFrom-DistinguishedName {
+    # Splits a certificate subject such as  CN=Name, O="Org, Inc.", C=US  into its
+    # attribute=value parts the way .NET writes it: parts are separated by , ; or + outside
+    # quotes, a value may be "quoted" ("" is a quote inside one), and \ escapes the next
+    # character. Returns an array of @{ Key; Value }, or $null when the text is not a
+    # well-formed name (a subject that cannot be read is never trusted).
+    param([string]$Subject)
+    if (-not $Subject) { return $null }
+    $text = $Subject
+    $n = $text.Length
+    $i = 0
+    $parts = New-Object 'System.Collections.Generic.List[object]'
+    while ($i -lt $n) {
+        $equals = $text.IndexOf('=', $i)
+        if ($equals -lt 0) { return $null }
+        $key = $text.Substring($i, $equals - $i).Trim()
+        if ($key -notmatch '^[A-Za-z0-9][A-Za-z0-9.-]*$') { return $null }
+        $i = $equals + 1
+        while ($i -lt $n -and $text[$i] -eq ' ') { $i++ }
+        $value = New-Object System.Text.StringBuilder
+        if ($i -lt $n -and $text[$i] -eq '"') {
+            $i++
+            $closed = $false
+            while ($i -lt $n) {
+                $character = $text[$i]
+                if ($character -eq '"') {
+                    if ($i + 1 -lt $n -and $text[$i + 1] -eq '"') {
+                        [void]$value.Append('"')
+                        $i += 2
+                        continue
+                    }
+                    $closed = $true
+                    $i++
+                    break
+                }
+                if ($character -eq '\') {
+                    if ($i + 1 -ge $n) { return $null }
+                    [void]$value.Append($text[$i + 1])
+                    $i += 2
+                    continue
+                }
+                [void]$value.Append($character)
+                $i++
+            }
+            if (-not $closed) { return $null }
+            while ($i -lt $n -and $text[$i] -eq ' ') { $i++ }
+            $valueText = $value.ToString()
+        } else {
+            while ($i -lt $n) {
+                $character = $text[$i]
+                if ($character -eq ',' -or $character -eq ';' -or $character -eq '+') { break }
+                if ($character -eq '"') { return $null }
+                if ($character -eq '\') {
+                    if ($i + 1 -ge $n) { return $null }
+                    [void]$value.Append($text[$i + 1])
+                    $i += 2
+                    continue
+                }
+                [void]$value.Append($character)
+                $i++
+            }
+            $valueText = $value.ToString().Trim()
+        }
+        $parts.Add([pscustomobject]@{ Key = $key; Value = $valueText })
+        if ($i -ge $n) { break }
+        $separator = $text[$i]
+        if ($separator -ne ',' -and $separator -ne ';' -and $separator -ne '+') { return $null }
+        $i++
+        if ($i -ge $n) { return $null }   # a trailing separator
+    }
+    return ,$parts.ToArray()
+}
+
+function Test-SubjectHasExactly {
+    # True only when the subject parses, has exactly ONE $Attribute part, and its value is
+    # exactly $Expected (case-sensitive). The organization can also be written as its
+    # object identifier, so those spellings count as O as well.
+    param([string]$Subject, [string]$Attribute, [string]$Expected)
+    if (-not $Expected) { return $false }
+    $parts = ConvertFrom-DistinguishedName -Subject $Subject
+    if ($null -eq $parts) { return $false }
+    $names = @($Attribute)
+    if ($Attribute -eq 'O') { $names = @('O', 'OID.2.5.4.10', '2.5.4.10') }
+    if ($Attribute -eq 'CN') { $names = @('CN', 'OID.2.5.4.3', '2.5.4.3') }
+    $values = @()
+    foreach ($part in $parts) {
+        if ($names -contains $part.Key) { $values += [string]$part.Value }
+    }
+    if ($values.Count -ne 1) { return $false }
+    return ($values[0] -ceq $Expected)
+}
+
+function Test-TrustedPythonSignature {
+    # The downloaded installer is only run when Windows says its signature is valid AND
+    # the signer's organization (O=) is exactly the Python Software Foundation. The
+    # subject is parsed, not searched: a quoted CN can contain the text ", O=...,".
+    param([string]$Status, [string]$Subject)
+    if ($Status -ne 'Valid') { return $false }
+    return (Test-SubjectHasExactly -Subject $Subject -Attribute 'O' -Expected 'Python Software Foundation')
+}
+
+function Test-DifferentAccount {
+    # True only for "elevated with another account's credentials on someone's desktop".
+    # Everything Entrabot creates (certificate, credentials, .env permissions) belongs to
+    # the account that runs setup, so that person's agent would be unusable by the person
+    # actually logged on. A plain remote session has no desktop owner and never matches.
+    param([string]$CurrentSid, [string]$SessionOwnerSid, [bool]$Elevated)
+    if (-not $Elevated) { return $false }
+    if (-not $CurrentSid -or -not $SessionOwnerSid) { return $false }
+    return ($CurrentSid -ne $SessionOwnerSid)
+}
+
+function Test-LongPathRisk {
+    # Windows limits paths to 260 characters unless LongPathsEnabled is 1 (changing it
+    # needs an administrator, so setup never does). Installed packages nest about 170
+    # characters below the project folder.
+    param([string]$ProjectRoot, [int]$LongPathsEnabled)
+    if ($LongPathsEnabled -eq 1) { return $false }
+    if (-not $ProjectRoot) { return $false }
+    return ($ProjectRoot.Length -gt 90)
+}
+
+function Test-CompilerNeeded {
+    # Does pip's output say a C compiler was required?
+    param([string[]]$Lines)
+    foreach ($line in @($Lines)) {
+        if (-not $line) { continue }
+        if ($line -match 'Microsoft Visual C\+\+ \d+(\.\d+)? or greater is required') { return $true }
+        if ($line -match "cl\.exe'? failed") { return $true }
+        if ($line -match 'Unable to find vcvarsall') { return $true }
+    }
+    return $false
+}
+
+function ConvertTo-NativeArgument {
+    # One argument, quoted the way Windows programs split their command line (the
+    # CommandLineToArgvW rules): quote when there is whitespace, escape embedded quotes,
+    # and double any backslashes that end up in front of a quote. Start-Process on
+    # Windows PowerShell 5.1 joins its arguments with spaces and quotes nothing.
+    param([string]$Value)
+    if ($Value -and $Value -notmatch '[\s"]') { return $Value }
+    $builder = New-Object System.Text.StringBuilder
+    [void]$builder.Append('"')
+    $backslashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq [char]92) {
+            $backslashes++
+            continue
+        }
+        if ($character -eq [char]34) {
+            [void]$builder.Append([char]92, ($backslashes * 2 + 1))
+        } else {
+            [void]$builder.Append([char]92, $backslashes)
+        }
+        [void]$builder.Append($character)
+        $backslashes = 0
+    }
+    [void]$builder.Append([char]92, ($backslashes * 2))
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function Join-NativeArguments {
+    param([string[]]$Arguments)
+    $quoted = @()
+    foreach ($argument in @($Arguments)) { $quoted += (ConvertTo-NativeArgument -Value $argument) }
+    return ($quoted -join ' ')
+}
+
+function Get-InstallStamp {
+    # Identifies "what was installed into .venv": the project definition (a hash of
+    # pyproject.toml) and the extras. Stored in .venv after a successful install.
+    param([string]$PyprojectHash, [string]$Extras)
+    return ('{0}|{1}' -f $PyprojectHash.ToLowerInvariant(), $Extras)
+}
+
+function Test-InstallCurrent {
+    param([string]$Expected, [string]$Recorded)
+    if (-not $Expected -or -not $Recorded) { return $false }
+    return ($Expected -eq $Recorded.Trim())
+}
+
+function Test-BoundSwitch {
+    param([hashtable]$Bound, [string]$Name)
+    if (-not $Bound.ContainsKey($Name)) { return $false }
+    return [bool]$Bound[$Name]
+}
+
+function Get-BoundText {
+    param([hashtable]$Bound, [string]$Name)
+    if (-not $Bound.ContainsKey($Name)) { return '' }
+    if ($null -eq $Bound[$Name]) { return '' }
+    return ([string]$Bound[$Name]).Trim()
+}
+
+function Get-ParameterProblems {
+    # Contradictions that can be reported before anything is downloaded or installed.
+    param([hashtable]$Bound)
+    $problems = @()
+    if ((Test-BoundSwitch $Bound 'NewChain') -and (Get-BoundText $Bound 'UseBlueprint')) {
+        $problems += '-NewChain and -UseBlueprint are mutually exclusive: create a new agent, or join an existing one.'
+    }
+    if ((Test-BoundSwitch $Bound 'UseCloudMemory') -and (Test-BoundSwitch $Bound 'KeepMemoryLocal')) {
+        $problems += '-UseCloudMemory and -KeepMemoryLocal are mutually exclusive.'
+    }
+    if ((Test-BoundSwitch $Bound 'CreateNewStorage') -and (Get-BoundText $Bound 'WithStorageAccount')) {
+        $problems += '-CreateNewStorage and -WithStorageAccount are mutually exclusive.'
+    }
+    return $problems
+}
+
+function Get-WizardArguments {
+    # The argument list handed to `python -m entrabot.winsetup`, built from the
+    # parameters the caller actually passed. Values are separate array elements, so
+    # nothing is ever quoted by hand.
+    param([hashtable]$Bound, [string]$ProjectRoot)
+
+    if (Test-BoundSwitch $Bound 'Diagnose') {
+        return @('diagnose', '--project-root', $ProjectRoot)
+    }
+
+    $list = New-Object 'System.Collections.Generic.List[string]'
+    $list.Add('setup')
+    $list.Add('--project-root')
+    $list.Add($ProjectRoot)
+
+    if (Test-BoundSwitch $Bound 'NewChain') { $list.Add('--new-chain') }
+    $valueFlags = @(
+        @('UseBlueprint', '--use-blueprint'),
+        @('UpnSuffix', '--upn-suffix'),
+        @('AgentUserUpn', '--agent-user-upn')
+    )
+    foreach ($pair in $valueFlags) {
+        $value = Get-BoundText $Bound $pair[0]
+        if ($value) { $list.Add($pair[1]); $list.Add($value) }
+    }
+
+    if ($Bound.ContainsKey('Sponsor') -and $null -ne $Bound['Sponsor']) {
+        foreach ($entry in @($Bound['Sponsor'])) {
+            foreach ($piece in ([string]$entry).Split(',')) {
+                $sponsorName = $piece.Trim()
+                if ($sponsorName) { $list.Add('--sponsor'); $list.Add($sponsorName) }
+            }
+        }
+    }
+
+    if (Test-BoundSwitch $Bound 'UseCloudMemory') { $list.Add('--memory'); $list.Add('cloud') }
+    if (Test-BoundSwitch $Bound 'KeepMemoryLocal') { $list.Add('--memory'); $list.Add('local') }
+
+    $storageFlags = @(
+        @('WithStorageAccount', '--storage-account'),
+        @('WithContainer', '--container')
+    )
+    foreach ($pair in $storageFlags) {
+        $value = Get-BoundText $Bound $pair[0]
+        if ($value) { $list.Add($pair[1]); $list.Add($value) }
+    }
+    if (Test-BoundSwitch $Bound 'CreateNewStorage') { $list.Add('--create-new-storage') }
+
+    $placementFlags = @(
+        @('Location', '--location'),
+        @('Subscription', '--subscription')
+    )
+    foreach ($pair in $placementFlags) {
+        $value = Get-BoundText $Bound $pair[0]
+        if ($value) { $list.Add($pair[1]); $list.Add($value) }
+    }
+
+    if (Test-BoundSwitch $Bound 'ConfigureA365WorkIq') { $list.Add('--configure-a365-work-iq') }
+    $tenantValue = Get-BoundText $Bound 'Tenant'
+    if ($tenantValue) { $list.Add('--tenant'); $list.Add($tenantValue) }
+    if (Test-BoundSwitch $Bound 'DeviceCode') { $list.Add('--device-code') }
+    $hostsValue = Get-BoundText $Bound 'Hosts'
+    if ($hostsValue) { $list.Add('--hosts'); $list.Add($hostsValue) }
+    if (Test-BoundSwitch $Bound 'SkipSmoke') { $list.Add('--skip-smoke') }
+    if (Test-BoundSwitch $Bound 'Yes') { $list.Add('--yes') }
+    if (Test-BoundSwitch $Bound 'Verbose') { $list.Add('--verbose') }
+
+    return $list.ToArray()
+}
+
+# -----------------------------------------------------------------------------
+# Dot-source guard: `. scripts\setup-windows.ps1` loads the functions above and
+# stops here. Nothing below runs unless the script is actually executed.
+# -----------------------------------------------------------------------------
+if ($MyInvocation.InvocationName -eq '.' -or $env:ENTRABOT_SETUP_FUNCTIONS_ONLY -eq '1') { return }
+
+# =============================================================================
+# Output helpers (plain ASCII; the Python wizard owns the real user interface)
+# =============================================================================
+
+function Write-Step { param([string]$Message) Write-Host ""; Write-Host $Message -ForegroundColor Cyan }
+function Write-Ok { param([string]$Message) Write-Host "  [ok] $Message" -ForegroundColor Green }
+function Write-Info { param([string]$Message) Write-Host "  $Message" }
+function Write-Note { param([string]$Message) Write-Host "  [!!] $Message" -ForegroundColor Yellow }
+function Stop-Setup {
+    # Print what went wrong and how to fix it, then exit.
+    param([string]$Message, [string[]]$Fix = @(), [int]$Code = 1)
+    Write-Host ""
+    Write-Host "  [xx] $Message" -ForegroundColor Red
+    foreach ($line in $Fix) { Write-Host "       $line" }
+    Write-Host ""
+    exit $Code
+}
+
+# =============================================================================
+# Machine helpers (touch the system; only called from the main body)
+# =============================================================================
+
+function Get-CurrentSid {
+    return [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+}
+
+function Test-Elevated {
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object System.Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Get-SessionOwnerSid {
+    # The account whose desktop this window is on: the owner of explorer.exe in this
+    # logon session. Empty when there is no desktop (SSH, scheduled task, service).
+    # WMI can refuse the query ("Access denied" for a standard user in a remote
+    # session). Not being able to tell must never block setup or print an error.
+    try {
+        $sessionId = (Get-Process -Id $PID -ErrorAction Stop).SessionId
+        $shells = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop `
+                -Filter "Name = 'explorer.exe' AND SessionId = $sessionId")
+        foreach ($shell in $shells) {
+            $owner = Invoke-CimMethod -InputObject $shell -MethodName GetOwnerSid -ErrorAction Stop
+            if ($null -ne $owner -and $owner.Sid) { return [string]$owner.Sid }
+        }
+    } catch {
+        return ''
+    }
+    return ''
+}
+
+function Get-LongPathsEnabled {
+    try {
+        $key = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem'
+        if ($key.PSObject.Properties['LongPathsEnabled']) { return [int]$key.LongPathsEnabled }
+    } catch {
+        return 0
+    }
+    return 0
+}
+
+function Get-PythonVersionText {
+    # Runs the interpreter and returns '3.12.10', or '' when it does not start.
+    param([string]$Exe)
+    if (-not $Exe) { return '' }
+    try {
+        # Test-Path throws for a drive that is not there (a stale registry or PATH entry
+        # pointing at an unplugged disk); inside the try on purpose.
+        if (-not (Test-Path -LiteralPath $Exe -PathType Leaf)) { return '' }
+        $out = & $Exe '-c' 'import sys; print(''%d.%d.%d'' % sys.version_info[:3])'
+        if ($LASTEXITCODE -ne 0) { return '' }
+        return [string](@($out) | Select-Object -Last 1)
+    } catch {
+        return ''
+    }
+}
+
+function Get-PythonCandidatePaths {
+    $paths = New-Object 'System.Collections.Generic.List[string]'
+
+    # 1. The py launcher knows every registered interpreter.
+    $launcher = Get-Command py -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($launcher) {
+        try {
+            $listing = & $launcher.Path '-0p'
+            foreach ($path in @(Get-PyLauncherPaths -Lines @($listing))) { $paths.Add($path) }
+        } catch {
+            Write-Info "(The py launcher could not list interpreters: $($_.Exception.Message))"
+        }
+    }
+
+    # 2. PEP 514 registry entries: per-user installs first, then all-users installs.
+    foreach ($hive in @('HKCU:\Software\Python\PythonCore', 'HKLM:\Software\Python\PythonCore')) {
+        if (-not (Test-Path -LiteralPath $hive)) { continue }
+        foreach ($tag in @(Get-ChildItem -LiteralPath $hive -ErrorAction SilentlyContinue)) {
+            $installKey = Join-Path $tag.PSPath 'InstallPath'
+            if (-not (Test-Path -LiteralPath $installKey)) { continue }
+            $props = Get-ItemProperty -LiteralPath $installKey
+            $exe = ''
+            if ($props.PSObject.Properties['ExecutablePath']) { $exe = [string]$props.ExecutablePath }
+            if (-not $exe -and $props.PSObject.Properties['(default)']) {
+                # String join on purpose: Join-Path throws "Cannot find drive" when a
+                # stale registry entry points at a drive that is no longer there.
+                $exe = ([string]$props.'(default)').TrimEnd('\') + '\python.exe'
+            }
+            if ($exe) { $paths.Add($exe) }
+        }
+    }
+
+    # 3. The default per-user install folder, in case the registry entry is missing.
+    if ($env:LOCALAPPDATA) {
+        $programs = Join-Path $env:LOCALAPPDATA 'Programs\Python'
+        if (Test-Path -LiteralPath $programs) {
+            foreach ($dir in @(Get-ChildItem -LiteralPath $programs -Directory -ErrorAction SilentlyContinue)) {
+                $paths.Add((Join-Path $dir.FullName 'python.exe'))
+            }
+        }
+    }
+
+    # 4. Whatever `python` is on PATH.
+    foreach ($command in @(Get-Command python -All -CommandType Application -ErrorAction SilentlyContinue)) {
+        if ($command.Path) { $paths.Add($command.Path) }
+    }
+
+    $seen = @{}
+    $unique = @()
+    foreach ($path in $paths) {
+        $key = $path.ToLowerInvariant()
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+        $unique += $path
+    }
+    return $unique
+}
+
+function Find-Python {
+    # The best real interpreter on this PC, or $null.
+    $candidates = @()
+    foreach ($path in @(Get-PythonCandidatePaths)) {
+        if (Test-StoreAliasPath -Path $path) { continue }
+        $version = Get-PythonVersionText -Exe $path
+        if (-not $version) { continue }
+        $candidates += @{ Path = $path; Version = $version }
+    }
+    return (Select-PreferredPython -Candidates $candidates)
+}
+
+function Test-WingetWorks {
+    # winget can be present but unusable (never registered for this account, blocked by
+    # policy), so it is judged by running it, not by finding it.
+    $winget = Get-Command winget -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $winget) { return $false }
+    try {
+        $null = & $winget.Path '--version'
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+
+function Install-PythonWithWinget {
+    $winget = Get-Command winget -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $winget) { return $false }
+    $wingetArgs = @(
+        'install', '--id', 'Python.Python.3.12', '--exact', '--source', 'winget',
+        '--scope', 'user', '--silent',
+        '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity'
+    )
+    try {
+        # Out-Host keeps winget's output on screen and off this function's return value.
+        & $winget.Path @wingetArgs | Out-Host
+        $code = $LASTEXITCODE
+    } catch {
+        Write-Note "winget could not be started: $($_.Exception.Message)"
+        return $false
+    }
+    # 0 = installed; the others mean "already there / nothing newer".
+    if (@(0, -1978335189, -1978335135, -1978335153, -1978334963) -contains $code) { return $true }
+    Write-Note "winget could not install Python (exit code $code)."
+    return $false
+}
+
+function Enable-Tls12 {
+    # Windows PowerShell 5.1 on older builds still offers TLS 1.0/1.1 first.
+    [System.Net.ServicePointManager]::SecurityProtocol = `
+        [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
+}
+
+function Test-PrivatePythonTrusted {
+    # python.exe and the python3*.dll files beside it must each carry a valid signature
+    # from the Python Software Foundation. Checked before the copy is ever run.
+    param([string]$ToolsDir)
+    $files = @((Join-Path $ToolsDir 'python.exe'))
+    foreach ($dll in @(Get-ChildItem -LiteralPath $ToolsDir -Filter 'python3*.dll' -File -ErrorAction SilentlyContinue)) {
+        $files += $dll.FullName
+    }
+    foreach ($file in $files) {
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+            Write-Note "Expected file is missing from the Python package: $file"
+            return $false
+        }
+        $signature = Get-AuthenticodeSignature -LiteralPath $file
+        $subject = ''
+        if ($signature.SignerCertificate) { $subject = [string]$signature.SignerCertificate.Subject }
+        if (-not (Test-TrustedPythonSignature -Status ([string]$signature.Status) -Subject $subject)) {
+            Write-Note "$(Split-Path -Leaf $file) is not validly signed by the Python Software Foundation (status: $($signature.Status))."
+            return $false
+        }
+    }
+    return $true
+}
+
+function Get-PrivatePython {
+    # Entrabot's own copy of Python under <data folder>\python\<version>, unpacked from
+    # the official NuGet package. Returns @{ Path; Downloaded } or $null. A new download
+    # must match the package's pinned SHA-512 before it is unpacked, and its signed files
+    # must pass Authenticode in a staging folder before it is moved into place. An
+    # existing copy is reused after its signed files pass Authenticode again (the package
+    # checksum cannot be re-checked once unpacked). This function never runs the interpreter.
+    param([string]$DataRoot)
+    $pythonRoot = Join-Path $DataRoot 'python'
+    $copyDir = Join-Path $pythonRoot $PythonInstallerVersion
+    $toolsDir = Join-Path $copyDir 'tools'
+    $exe = Join-Path $toolsDir 'python.exe'
+
+    if (Test-Path -LiteralPath $exe -PathType Leaf) {
+        if (Test-PrivatePythonTrusted -ToolsDir $toolsDir) {
+            return @{ Path = $exe; Downloaded = $false }
+        }
+        Write-Note "The private copy of Python at $copyDir failed its signature check; replacing it."
+        Remove-Item -LiteralPath $copyDir -Recurse -Force
+    }
+
+    $architecture = Get-MachineArchitecture -ProcessorArchitecture $env:PROCESSOR_ARCHITECTURE `
+        -ProcessorArchiteW6432 $env:PROCESSOR_ARCHITEW6432
+    $url = Get-PythonNuGetUrl -Architecture $architecture
+    $expectedHash = Get-PythonNuGetSha512 -Architecture $architecture
+    if (-not $url -or -not $expectedHash) {
+        Write-Note "There is no pinned 64-bit Python package for this kind of processor ($architecture)."
+        return $null
+    }
+    $packageId = Get-PythonNuGetPackageId -Architecture $architecture
+
+    $token = [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $staging = Join-Path $pythonRoot ('.new-' + $token)
+    $stagedTools = Join-Path $staging 'tools'
+    $package = Join-Path $env:TEMP ('entrabot-python-' + $token + '.zip')
+    try {
+        Write-Info "Python 3.12 or newer was not found on this PC."
+        Write-Info "Downloading a private copy of Python $PythonInstallerVersion for Entrabot (about 14 MB)..."
+        Enable-Tls12
+        Invoke-WebRequest -Uri $url -OutFile $package -UseBasicParsing
+        # The whole package is pinned before anything in it is unpacked. Authenticode
+        # (below) covers python.exe and python3*.dll only; vcruntime140*.dll, DLLs\*.pyd
+        # and Lib\ carry no signature, so only this checksum vouches for them.
+        $actualHash = (Get-FileHash -LiteralPath $package -Algorithm SHA512).Hash
+        if (-not (Test-PackageHashMatch -Sha512Hex $actualHash -ExpectedBase64 $expectedHash)) {
+            Remove-Item -LiteralPath $package -Force
+            Write-Note "The downloaded Python package does not match the SHA-512 checksum pinned for $packageId $PythonInstallerVersion. It was deleted and NOT used."
+            return $null
+        }
+        Write-Ok "Package checksum verified (SHA-512 pinned for nuget.org $packageId $PythonInstallerVersion)"
+        New-Item -ItemType Directory -Path $staging -Force | Out-Null
+        Expand-Archive -LiteralPath $package -DestinationPath $staging -Force
+        if (-not (Test-PrivatePythonTrusted -ToolsDir $stagedTools)) {
+            Write-Note "python.exe or python3*.dll in the downloaded package is not signed by the Python Software Foundation. It was NOT used."
+            return $null
+        }
+        Write-Ok "python.exe and python3*.dll are signed by the Python Software Foundation"
+        if (Test-Path -LiteralPath $copyDir) { Remove-Item -LiteralPath $copyDir -Recurse -Force }
+        Rename-Item -LiteralPath $staging -NewName $PythonInstallerVersion
+        return @{ Path = $exe; Downloaded = $true }
+    } catch {
+        Write-Note "Could not download a private copy of Python: $($_.Exception.Message)"
+        return $null
+    } finally {
+        if (Test-Path -LiteralPath $package) { Remove-Item -LiteralPath $package -Force -ErrorAction SilentlyContinue }
+        if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Move-LegacyData {
+    # PowerShell twin of entrabot.config.migrate_legacy_data_dir, for the one case where
+    # setup has to write under the data folder before any Python exists to run the real
+    # helper. Only called when the current folder has no content.
+    param([string]$Legacy, [string]$Current)
+    if (Test-Path -LiteralPath $Current) { Remove-Item -LiteralPath $Current -Force }
+    $parent = Split-Path -Parent $Current
+    if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+    Move-Item -LiteralPath $Legacy -Destination $Current
+}
+
+function Install-PythonFromPythonOrg {
+    # Download the official installer, check its signature, install for this account only.
+    $architecture = Get-MachineArchitecture -ProcessorArchitecture $env:PROCESSOR_ARCHITECTURE `
+        -ProcessorArchiteW6432 $env:PROCESSOR_ARCHITEW6432
+    $url = Get-PythonInstallerUrl -Architecture $architecture
+    if (-not $url) {
+        Write-Note "There is no 64-bit Python installer for this kind of processor ($architecture)."
+        return $false
+    }
+
+    $workDir = Join-Path $env:TEMP ('entrabot-python-' + [guid]::NewGuid().ToString('N'))
+    $installer = Join-Path $workDir (Split-Path -Leaf $url)
+    try {
+        New-Item -ItemType Directory -Path $workDir -Force | Out-Null
+        Write-Info "Downloading the Python $PythonInstallerVersion installer from python.org (about 27 MB)..."
+        Enable-Tls12
+        Invoke-WebRequest -Uri $url -OutFile $installer -UseBasicParsing
+
+        $signature = Get-AuthenticodeSignature -LiteralPath $installer
+        $subject = ''
+        if ($signature.SignerCertificate) { $subject = [string]$signature.SignerCertificate.Subject }
+        if (-not (Test-TrustedPythonSignature -Status ([string]$signature.Status) -Subject $subject)) {
+            Write-Note "The downloaded installer is not validly signed by the Python Software Foundation (status: $($signature.Status)). It was NOT run."
+            return $false
+        }
+        Write-Ok "Installer signature verified (Python Software Foundation)"
+
+        Write-Info "Installing Python for your account only (no administrator rights needed)..."
+        $installArgs = @('/quiet', 'InstallAllUsers=0', 'PrependPath=0', 'Include_launcher=0', 'Include_test=0', 'Shortcuts=0')
+        $process = Start-Process -FilePath $installer -ArgumentList $installArgs -Wait -PassThru
+        if ($process.ExitCode -ne 0) {
+            if (Test-InstallerUnavailable -ExitCode $process.ExitCode) {
+                Write-Note "The Python installer cannot run in this kind of session (Windows Installer error $($process.ExitCode)). Skipping it."
+            } else {
+                Write-Note "The Python installer finished with exit code $($process.ExitCode)."
+            }
+            return $false
+        }
+        return $true
+    } catch {
+        Write-Note "Could not download or install Python: $($_.Exception.Message)"
+        return $false
+    } finally {
+        if (Test-Path -LiteralPath $workDir) {
+            Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Invoke-QuietNative {
+    # Runs a program with its output captured in files, printing a dot every two seconds
+    # so a long step is visibly alive (this also works when output is not a console).
+    # Returns the exit code. The operating system does the redirection, so nothing the
+    # program writes can surface as a PowerShell error.
+    param([string]$Exe, [string[]]$Arguments, [string]$StdoutPath, [string]$StderrPath, [switch]$NoDots)
+    $argumentLine = Join-NativeArguments -Arguments $Arguments
+    $process = Start-Process -FilePath $Exe -ArgumentList $argumentLine -NoNewWindow -PassThru `
+        -RedirectStandardOutput $StdoutPath -RedirectStandardError $StderrPath
+    $null = $process.Handle   # Windows PowerShell 5.1 loses ExitCode unless the handle is held
+    $ticks = 0
+    while (-not $process.HasExited) {
+        Start-Sleep -Milliseconds 500
+        $ticks++
+        if (-not $NoDots) {
+            if ($ticks % 4 -eq 0) { Write-Host '.' -NoNewline }
+        }
+    }
+    $process.WaitForExit()
+    return [int]$process.ExitCode
+}
+
+function Test-WizardImportable {
+    # Can this environment load the setup wizard? Output is captured, so a broken
+    # install shows up as "needs installing", not as a Python traceback on screen.
+    param([string]$VenvPython)
+    $token = [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $probeOut = Join-Path $env:TEMP "entrabot-import-$token.out.txt"
+    $probeErr = Join-Path $env:TEMP "entrabot-import-$token.err.txt"
+    try {
+        $code = Invoke-QuietNative -Exe $VenvPython -Arguments @('-c', 'import entrabot.winsetup') `
+            -StdoutPath $probeOut -StderrPath $probeErr -NoDots
+        return ($code -eq 0)
+    } finally {
+        foreach ($file in @($probeOut, $probeErr)) {
+            if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue }
+        }
+    }
+}
+
+function Test-DirectoryHasContent {
+    param([string]$Path)
+    if (-not $Path) { return $false }
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return $false }
+    $first = Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue | Select-Object -First 1
+    return ($null -ne $first)
+}
+
+function Stop-ProjectMcpServer {
+    # A running entrabot-mcp.exe from THIS project's .venv locks files pip must replace.
+    param([string]$VenvDir)
+    $prefix = $VenvDir.TrimEnd('\') + '\'
+    foreach ($process in @(Get-Process -Name 'entrabot-mcp' -ErrorAction SilentlyContinue)) {
+        $path = ''
+        try { $path = [string]$process.Path } catch { $path = '' }
+        if (-not $path) { continue }
+        if (-not $path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+        Write-Note "The Entrabot server from this folder is running (process $($process.Id)). Stopping it so its files can be updated; your AI host starts it again when needed."
+        $taskkillArgs = @('/PID', [string]$process.Id, '/T', '/F')
+        $null = & taskkill.exe @taskkillArgs
+        if ($LASTEXITCODE -ne 0) {
+            Stop-Setup "Could not stop the running Entrabot server (process $($process.Id))." @(
+                'Close Claude Code / Copilot CLI windows that use this folder, then run setup again.')
+        }
+    }
+}
+
+# =============================================================================
+# Main
+# =============================================================================
+
+$bound = @{}
+foreach ($name in $PSBoundParameters.Keys) { $bound[$name] = $PSBoundParameters[$name] }
 
 if ($Help) {
     Get-Help $PSCommandPath -Detailed
     exit 0
 }
 
+# Managed PCs can run PowerShell in Constrained Language Mode, where the .NET calls a
+# setup like this needs are blocked. Say so plainly instead of failing half-way.
+if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {
+    Write-Host ""
+    Write-Host "  [xx] This PC restricts PowerShell (language mode: $($ExecutionContext.SessionState.LanguageMode))." -ForegroundColor Red
+    Write-Host "       That is an application-control policy set by your organization. It also"
+    Write-Host "       blocks the programs Entrabot installs, so setup cannot continue here."
+    Write-Host "       What to tell IT: 'I need to run Python and local PowerShell scripts from"
+    Write-Host "       my user profile for a development tool (Entrabot).'"
+    Write-Host ""
+    exit 1
+}
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+# Strict mode makes reading $LASTEXITCODE an error until some native command has set it.
+$global:LASTEXITCODE = 0
+
+$problems = @(Get-ParameterProblems -Bound $bound)
+if ($problems.Count -gt 0) {
+    foreach ($problem in $problems) { Write-Host "ERROR: $problem" -ForegroundColor Red }
+    exit 2
+}
+
+$ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
+
 if ($Status) {
-    $ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
     & (Join-Path $ProjectRoot 'status-windows.ps1') -Json:$Json -HealthOnly:$HealthOnly -Strict:$Strict
     exit $LASTEXITCODE
 }
 
-# ═══════════════════════════════════════════════════════════════════════════
-# 1. Refuse to run inside WSL (Phase 2 finding)
-# ═══════════════════════════════════════════════════════════════════════════
-if ($IsLinux -or $env:WSL_DISTRO_NAME) {
+# ---- 1. This PC ---------------------------------------------------------------
+if ($env:WSL_DISTRO_NAME) {
     Write-Host "ERROR: setup-windows.ps1 invoked from inside WSL." -ForegroundColor Red
     Write-Host "  WSL is a Linux environment; run scripts/setup.sh instead." -ForegroundColor Red
-    Write-Host "  To set up native Windows, run setup-windows.cmd from a" -ForegroundColor Red
-    Write-Host "  Windows PowerShell terminal (not a WSL shell)." -ForegroundColor Red
+    Write-Host "  To set up native Windows, run scripts\setup-windows.cmd from a" -ForegroundColor Red
+    Write-Host "  Windows terminal (not a WSL shell)." -ForegroundColor Red
     exit 1
 }
-
-if (-not $IsWindows) {
-    Write-Host "ERROR: setup-windows.ps1 must run on Windows." -ForegroundColor Red
+if ($env:OS -ne 'Windows_NT') {
+    Write-Host "ERROR: setup-windows.ps1 must run on Windows. On macOS or Linux run scripts/setup.sh." -ForegroundColor Red
     exit 1
 }
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 2. Resolve project root
-# ═══════════════════════════════════════════════════════════════════════════
-$ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
-$ScriptDir   = Join-Path $ProjectRoot 'scripts'
-$VenvPython  = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
-
-function Step($n, $msg) {
-    Write-Host ""
-    Write-Host "═══ Step $n / 9 — $msg" -ForegroundColor Cyan
-}
-function Success($msg) { Write-Host "  ✓ $msg" -ForegroundColor Green }
-function Fail($msg)    { Write-Host "  ✗ $msg" -ForegroundColor Red; exit 1 }
-function Ensure-A365ToolingManifest {
-    $manifestPath = Join-Path $ProjectRoot 'ToolingManifest.json'
-    if (-not (Test-Path $manifestPath)) {
-        Set-Content -Path $manifestPath -Value '{"mcpServers":[]}' -Encoding utf8
-        Success "Created minimal ToolingManifest.json for A365 Work IQ"
-    }
-}
-
-function Write-A365Config {
-    param(
-        [string]$TenantId,
-        [string]$BlueprintAppId,
-        [string]$BlueprintObjectId,
-        [string]$AgentId
-    )
-
-    $clientAppId = az ad app list --display-name "Agent 365 CLI" --query "[0].appId" -o tsv 2>$null
-    if (-not $clientAppId) {
-        Fail "Agent 365 CLI app was not found. Re-run and choose C during 'a365 setup requirements', or create the app before configuring Work IQ."
-    }
-    if (-not $BlueprintAppId) {
-        Fail "Blueprint ID not found. Entrabot provisioning must complete before configuring A365 Work IQ."
-    }
-    $AgentIdentityDisplayName = az ad sp show --id $AgentId --query displayName -o tsv 2>$null
-    if (-not $AgentIdentityDisplayName) {
-        Fail "Agent Identity display name not found for $AgentId. Entrabot provisioning must complete before configuring A365 Work IQ."
-    }
-
-    $configPath = Join-Path $ProjectRoot 'a365.config.json'
-    $config = @{}
-    if (Test-Path $configPath) {
-        $existing = Get-Content $configPath -Raw | ConvertFrom-Json
-        foreach ($property in $existing.PSObject.Properties) {
-            $config[$property.Name] = $property.Value
-        }
-    }
-
-    $config["tenantId"] = $TenantId
-    $config["clientAppId"] = $clientAppId
-    $config["agentBlueprintId"] = $BlueprintAppId
-    $config["agentBlueprintDisplayName"] = "EntraBot Code Agent"
-    $config["agentIdentityDisplayName"] = $AgentIdentityDisplayName
-    $config["deploymentProjectPath"] = $ProjectRoot
-    if ($BlueprintObjectId) { $config["agentBlueprintObjectId"] = $BlueprintObjectId }
-    if ($AgentId) { $config["agentIdentityId"] = $AgentId }
-
-    $config | ConvertTo-Json -Depth 8 | Set-Content -Path $configPath -Encoding utf8
-    Success "A365 config points to existing Entrabot Blueprint"
-}
-
-function Configure-A365WorkIq {
-    param(
-        [string]$TenantId,
-        [string]$BlueprintAppId,
-        [string]$BlueprintObjectId,
-        [string]$AgentId
-    )
-    $A365WorkIqMcpServers = @("mcp_WordServer", "mcp_ODSPRemoteServer", "mcp_ExcelServer")
-
-    Write-Host ""
-    Write-Host "Configuring Microsoft Agent 365 Work IQ Word + OneDrive/SharePoint + Excel..." -ForegroundColor Cyan
-    Write-Host "This may open an interactive Microsoft sign-in/device-code flow." -ForegroundColor Yellow
-    Write-Host "If the Agent 365 CLI app is missing, choose C when prompted to create it." -ForegroundColor Yellow
-
-    Ensure-A365ToolingManifest
-
-    Write-A365Config -TenantId $TenantId -BlueprintAppId $BlueprintAppId -BlueprintObjectId $BlueprintObjectId -AgentId $AgentId
-
-    a365 setup requirements
-    if ($LASTEXITCODE -ne 0) { Fail "a365 setup requirements failed" }
-
-    a365 develop add-mcp-servers $A365WorkIqMcpServers --project-path $ProjectRoot
-    if ($LASTEXITCODE -ne 0) { Fail "a365 develop add-mcp-servers failed" }
-
-    & $VenvPython (Join-Path $ScriptDir 'ensure_a365_work_iq_permissions.py') '--blueprint-app-id', $BlueprintAppId
-    if ($LASTEXITCODE -ne 0) { Fail "ensure_a365_work_iq_permissions.py failed" }
-
-    $permissionsOutput = a365 setup permissions mcp 2>&1
-    $permissionsExit = $LASTEXITCODE
-    $permissionsOutput | ForEach-Object { Write-Host $_ }
-    if ($permissionsExit -ne 0) { Fail "a365 setup permissions mcp failed" }
-    if (($permissionsOutput -join "`n") -match "OAuth2 grants failed") {
-        Fail "a365 setup permissions mcp reported OAuth2 grants failed; Work IQ permissions are incomplete. Resolve the Agent 365 Tools service principal/admin-consent issue, then rerun setup-windows.ps1."
-    }
-
-    & python (Join-Path $ScriptDir 'spike_a365_work_iq.py')
-    if ($LASTEXITCODE -ne 0) { Fail "A365 Work IQ manifest validation failed" }
-    Success "A365 Work IQ Word and Excel manifest configured"
-}
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 3. Probe prereqs
-# ═══════════════════════════════════════════════════════════════════════════
-Step 1 "Probing prerequisites"
-
-$missing = @()
-foreach ($tool in 'python', 'az', 'git', 'pwsh', 'a365') {
-    if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
-        $missing += $tool
-    }
-}
-if ($missing) {
-    Fail "Missing tools: $($missing -join ', '). Run scripts\prereqs-windows.ps1 and retry."
-}
-Success "Found: python, az, git, pwsh, a365"
-
-$pyVer = & python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
-if ([version]$pyVer -lt [version]'3.12') {
-    Fail "Python 3.12+ required, found $pyVer."
-}
-Success "Python $pyVer"
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 4. One-shot data dir migration (D11)
-# ═══════════════════════════════════════════════════════════════════════════
-Step 2 "Migrating legacy data dir (idempotent)"
-
-$migrateScript = @'
-from entrabot.config import migrate_legacy_data_dir
-moved = migrate_legacy_data_dir()
-print(f"migrated={moved}")
-'@
-
-if (Test-Path $VenvPython) {
-    $out = & $VenvPython -c $migrateScript
-    Success $out
-} else {
-    Success "venv not yet created — migration will run after pip install"
-}
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 5. Bootstrap venv
-# ═══════════════════════════════════════════════════════════════════════════
-Step 3 "Creating venv + installing dependencies"
-
-if (-not (Test-Path $VenvPython)) {
-    & python -m venv (Join-Path $ProjectRoot '.venv')
-    if ($LASTEXITCODE -ne 0) { Fail "venv creation failed" }
-}
-& $VenvPython -m pip install --upgrade pip --quiet
-& $VenvPython -m pip install -e "$ProjectRoot[dev]" --quiet
-if ($LASTEXITCODE -ne 0) { Fail "pip install failed" }
-Success "venv ready at $VenvPython"
-
-# Re-run migration now that venv exists.
-$out = & $VenvPython -c $migrateScript
-Success $out
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 6. az login + identity provisioning
-# ═══════════════════════════════════════════════════════════════════════════
-Step 4 "Verifying az login"
-
-$account = az account show --output json 2>$null | ConvertFrom-Json
-if (-not $account) {
-    Fail "Not logged in to az. Run 'az login' and retry."
-}
-Success "Logged in as $($account.user.name) (tenant $($account.tenantId))"
-
-Step 5 "Provisioning Entra Agent Identity"
-
-$args = @()
-if ($NewChain)             { $args += '--new' }
-if ($UseBlueprint)         { $args += "--use-blueprint=$UseBlueprint" }
-if ($UpnSuffix)            { $args += "--with-upn-suffix=$UpnSuffix" }
-# Run directly, setup leaves these in the PowerShell session, so clear the last run's choice first.
-Remove-Item Env:ENTRABOT_AGENT_USER_UPN, Env:_ENTRABOT_UPN_SUFFIX -ErrorAction SilentlyContinue
-if ($AgentUserUpn) {
-    $env:ENTRABOT_AGENT_USER_UPN = $AgentUserUpn
-} elseif ($UseBlueprint -and $UpnSuffix) {
-    $env:_ENTRABOT_UPN_SUFFIX = $UpnSuffix
-}
-if ($ConfigureA365WorkIq) {
-    $env:ENTRABOT_ASSIGN_WORK_IQ_LICENSE = '1'
-}
-
-# entra_provisioning.py + create_entra_agent_ids.py both read az CLI
-# session state directly, identical to setup.sh.
-& $VenvPython (Join-Path $ScriptDir 'entra_provisioning.py')
-if ($LASTEXITCODE -ne 0) { Fail "entra_provisioning.py failed" }
-
-& $VenvPython (Join-Path $ScriptDir 'create_entra_agent_ids.py') @args
-if ($LASTEXITCODE -ne 0) { Fail "create_entra_agent_ids.py failed" }
-
-# Read back IDs from .entrabot-state.json — needed for .env and the cloud-memory step
-$statePath = Join-Path $ProjectRoot '.entrabot-state.json'
-$BlueprintAppId = ""
-$BlueprintObjectId = ""
-$AgentId = ""
-$AgentObjectId = ""
-$AgentUserId = ""
-$StateAgentUserUpn = ""
-$ProvisionerClientId = ""
-if (Test-Path $statePath) {
-    $state = Get-Content $statePath -Raw | ConvertFrom-Json
-    $BlueprintAppId = if ($state.PSObject.Properties['BLUEPRINT_APP_ID']) { $state.BLUEPRINT_APP_ID } else { "" }
-    $BlueprintObjectId = if ($state.PSObject.Properties['BLUEPRINT_OBJECT_ID']) { $state.BLUEPRINT_OBJECT_ID } else { "" }
-    $AgentId = if ($state.PSObject.Properties['AGENT_ID']) { $state.AGENT_ID } else { "" }
-    $AgentObjectId = if ($state.PSObject.Properties['AGENT_OBJECT_ID']) { $state.AGENT_OBJECT_ID } else { "" }
-    $AgentUserId = if ($state.PSObject.Properties['AGENT_USER_ID']) { $state.AGENT_USER_ID } else { "" }
-    $StateAgentUserUpn = if ($state.PSObject.Properties['AGENT_USER_UPN']) { $state.AGENT_USER_UPN } else { "" }
-    $ProvisionerClientId = if ($state.PSObject.Properties['PROVISIONER_CLIENT_ID']) { $state.PROVISIONER_CLIENT_ID } else { "" }
-}
-
-if ($ConfigureA365WorkIq) {
-    Configure-A365WorkIq -TenantId $account.tenantId -BlueprintAppId $BlueprintAppId -BlueprintObjectId $BlueprintObjectId -AgentId $AgentId
-}
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 7. Blueprint cert: reuse, repair, or generate (TPM-first / software-fallback), and register it
-# ═══════════════════════════════════════════════════════════════════════════
-Step 6 "Blueprint cert (reuse, register, or generate; TPM-first / software-fallback)"
-
-if (-not $BlueprintObjectId) {
-    Fail "BLUEPRINT_OBJECT_ID is missing from .entrabot-state.json, so a certificate can't be registered on the Blueprint. Re-run setup once provisioning completes."
-}
-
-# Each Python helper below answers through its exit code, so a non-zero exit must not throw.
-$PSNativeCommandUseErrorActionPreference = $false
-
-# .env is read the way config.py reads it, since that decides what the agent uses: keys and
-# values are trimmed, comments are skipped, and the first value of a repeated key wins.
-$envPath = Join-Path $ProjectRoot '.env'
-function Get-EnvKey {
-    param([string]$Line)
-    $text = $Line.Trim()
-    if ($text.StartsWith('#') -or -not $text.Contains('=')) { return '' }
-    return ($text -split '=', 2)[0].Trim()
-}
-function Get-EnvValue {
-    param([string]$Key)
-    if (-not (Test-Path $envPath)) { return '' }
-    foreach ($line in Get-Content $envPath) {
-        if ((Get-EnvKey $line) -eq $Key) { return ($line -split '=', 2)[1].Trim() }
-    }
-    return ''
-}
-
-# Is there a cert in .env that is also in the local store?
-$thumbprint = Get-EnvValue 'ENTRABOT_BLUEPRINT_CERT_SHA1'
-$x5tS256    = Get-EnvValue 'ENTRABOT_BLUEPRINT_CERT_THUMBPRINT'
-$ksp        = Get-EnvValue 'ENTRABOT_BLUEPRINT_KSP'
-$haveLocalCert = ($thumbprint -match '^[0-9A-F]{40}$') -and ($x5tS256 -match '^[A-Za-z0-9_-]{43}$') -and
-                 (Test-Path "Cert:\CurrentUser\My\$thumbprint")
-if ($haveLocalCert) {
-    # One that has expired or has no private key here can't sign, so reusing or registering it
-    # would report success while Hop 1 stays broken.
-    $localCert = Get-Item "Cert:\CurrentUser\My\$thumbprint"
-    $now = Get-Date
-    $haveLocalCert = $localCert.HasPrivateKey -and ($localCert.NotBefore -le $now) -and ($now -le $localCert.NotAfter)
-    if (-not $haveLocalCert) {
-        Write-Host "  The certificate in .env can't sign (not in date, or no private key here). Generating a new one." -ForegroundColor Yellow
-    }
-}
-
-$derPath     = Join-Path $env:TEMP "entrabot-blueprint-$(Get-Random).cer"
-$register    = $true    # false once the local cert is known to be on the Blueprint
-$generated   = $false   # true when this run made a new cert, so .env needs its thumbprints
-$unconfirmed = $false   # true when the write may have landed but could not be confirmed
-try {
-    if ($haveLocalCert) {
-        & $VenvPython (Join-Path $ScriptDir 'verify_blueprint_cert.py') $BlueprintObjectId $x5tS256
-        $verifyExit = $LASTEXITCODE
-        if ($verifyExit -eq 0) {
-            $register = $false
-            Success "Using the registered certificate (thumbprint=$thumbprint)"
-        } elseif ($verifyExit -eq 1) {
-            # Not on the Blueprint, as on every machine set up before this step registered certificates.
-            Write-Host "  This machine's certificate is not on the Blueprint. Registering it." -ForegroundColor Yellow
-            [IO.File]::WriteAllBytes($derPath, (Get-Item "Cert:\CurrentUser\My\$thumbprint").GetRawCertData())
-        } else {
-            # A failed check says nothing about the Blueprint, so nothing is generated.
-            Fail "Could not check whether the certificate is registered (exit $verifyExit, see above). Nothing was generated or changed. Fix the error and re-run setup."
-        }
-    } else {
-        $certOutput = & $VenvPython (Join-Path $ScriptDir 'generate_windows_cert.py') `
-            --subject "CN=entrabot-blueprint" `
-            --days 365 `
-            --export-der $derPath
-        if ($LASTEXITCODE -ne 0) { Fail "generate_windows_cert.py failed" }
-        $certText   = $certOutput -join "`n"
-        $thumbprint = [regex]::Match($certText, '(?m)^thumbprint=([0-9A-F]{40})\s*$').Groups[1].Value
-        $ksp        = [regex]::Match($certText, '(?m)^ksp=(tpm|software)\s*$').Groups[1].Value
-        $x5tS256    = [regex]::Match($certText, '(?m)^x5t_s256=([A-Za-z0-9_-]{43})\s*$').Groups[1].Value
-        if (-not ($thumbprint -and $ksp -and $x5tS256)) { Fail "generate_windows_cert.py printed output setup can't read: $certText" }
-        $generated = $true
-        Success "Cert generated — thumbprint=$thumbprint ksp=$ksp"
-    }
-
-    if ($register) {
-        & $VenvPython (Join-Path $ScriptDir 'register_windows_blueprint_cert.py') --blueprint-object-id $BlueprintObjectId --der $derPath
-        $registerExit = $LASTEXITCODE
-        if ($registerExit -eq 0) {
-            Success "Certificate registered on the Blueprint"
-        } elseif ($registerExit -eq 3) {
-            $unconfirmed = $true   # the write may have landed: keep the cert and record it in .env
-        } else {
-            # Nothing was written to the Blueprint, so a cert generated for it is useless.
-            if ($generated) { Remove-Item "Cert:\CurrentUser\My\$thumbprint" -Force }
-            Fail "The certificate was not registered on the Blueprint (exit $registerExit, see above). Nothing was changed. Fix the error and re-run setup."
-        }
-    }
-} finally {
-    if (Test-Path $derPath) { Remove-Item $derPath -Force }
-}
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 8. Write .env with strict ACLs (icacls -M, D10)
-# ═══════════════════════════════════════════════════════════════════════════
-Step 7 "Writing .env"
-
-# config.py reads identity only from the environment and .env, never from the state file, so
-# everything the runtime needs is written here on every run. A machine set up before this
-# step wrote it has a registered certificate to reuse and no identity in .env.
-$envValues = [ordered]@{
-    ENTRABOT_TENANT_ID                 = $account.tenantId
-    ENTRABOT_BLUEPRINT_APP_ID          = $BlueprintAppId
-    ENTRABOT_BLUEPRINT_OBJECT_ID       = $BlueprintObjectId
-    ENTRABOT_BLUEPRINT_CERT_THUMBPRINT = $x5tS256
-    ENTRABOT_BLUEPRINT_CERT_SHA1       = $thumbprint
-    ENTRABOT_BLUEPRINT_KSP             = $ksp
-    ENTRABOT_AGENT_ID                  = $AgentId
-    ENTRABOT_AGENT_OBJECT_ID           = $AgentObjectId
-    ENTRABOT_AGENT_USER_ID             = $AgentUserId
-    ENTRABOT_AGENT_UPN                 = $StateAgentUserUpn
-    ENTRABOT_AGENT_USER_UPN            = $StateAgentUserUpn
-    ENTRABOT_PROVISIONER_APP_ID        = $ProvisionerClientId
-}
-
-# The sponsor and the blob store in .env belong to the agent they were set up for, so a run for a
-# different agent (-NewChain, or another -UseBlueprint) inherits neither. With no ID on one side
-# there's no telling, which counts as the same agent: a machine set up before this step wrote IDs
-# has none in .env.
-$previousAgentUserId = Get-EnvValue 'ENTRABOT_AGENT_USER_ID'
-$sameAgent = (-not $previousAgentUserId) -or (-not $AgentUserId) -or ($previousAgentUserId -eq $AgentUserId)
-
-# The sponsor defaults to the signed-in account, as in setup.sh, but only when .env names none:
-# the account running setup isn't always the sponsor, and a re-run must not silently change it.
-$namesSponsor = @('ENTRABOT_HUMAN_USER_ID', 'ENTRABOT_HUMAN_USER_IDS', 'ENTRABOT_HUMAN_UPN', 'ENTRABOT_HUMAN_UPNS') |
-    Where-Object { Get-EnvValue $_ }
-if (-not ($sameAgent -and $namesSponsor)) {
-    $me = az ad signed-in-user show --output json | ConvertFrom-Json
-    if ($LASTEXITCODE -eq 0 -and $me) {
-        $envValues['ENTRABOT_HUMAN_USER_ID']         = $me.id
-        $envValues['ENTRABOT_HUMAN_UPN']             = $account.user.name
-        $envValues['ENTRABOT_HUMAN_USER_IDS']        = $me.id
-        $envValues['ENTRABOT_HUMAN_UPNS']            = $account.user.name
-        $envValues['ENTRABOT_HUMAN_USER_TENANT_IDS'] = ''
-        $envValues['ENTRABOT_HUMAN_USER_MAILS']      = $account.user.name
-        $envValues['ENTRABOT_HUMAN_USER_TYPES']      = 'Member'
-    } else {
-        Write-Host "  Could not look up the signed-in user, so no sponsor was written to .env." -ForegroundColor Yellow
-    }
-}
-
-# Replace earlier lines instead of appending: config.py keeps the FIRST value of a repeated
-# key, so a stale line above a new one would win. A key with no value keeps what's there, except
-# a new sponsor's tenant IDs, which must not inherit the old sponsor's.
-$written = @($envValues.Keys | Where-Object { $envValues[$_] -or $_ -eq 'ENTRABOT_HUMAN_USER_TENANT_IDS' })
-
-# A different agent's sponsor and blob settings go now, whatever happens next: a failed lookup or
-# an unconfirmed certificate must not leave them looking like this agent's on the next run.
-$blobKeys  = @('ENTRABOT_BLOB_ENDPOINT', 'ENTRABOT_BLOB_CONTAINER')
-$inherited = @(
-    if (-not $sameAgent) {
-        'ENTRABOT_HUMAN_USER_ID', 'ENTRABOT_HUMAN_UPN', 'ENTRABOT_HUMAN_USER_IDS', 'ENTRABOT_HUMAN_UPNS',
-        'ENTRABOT_HUMAN_USER_TENANT_IDS', 'ENTRABOT_HUMAN_USER_MAILS', 'ENTRABOT_HUMAN_USER_TYPES',
-        'ENTRABOT_KEEP_MEMORY_LOCAL'
-        $blobKeys
-    }
-)
-$kept = @(
-    if (Test-Path $envPath) {
-        Get-Content $envPath | Where-Object { ($written + $inherited) -notcontains (Get-EnvKey $_) }
-    }
-)
-@($kept) + @($written | ForEach-Object { "$_=$($envValues[$_])" }) | Set-Content -Path $envPath -Encoding utf8
-
-# icacls :M (modify) — NOT :R (read-only). :R would self-brick: setup
-# re-runs and rotation both need to update .env.
-$user = "$env:USERDOMAIN\$env:USERNAME"
-icacls $envPath /inheritance:r /grant:r "${user}:M" | Out-Null
-Success ".env locked to $user (modify, per D10)"
-
-if ($unconfirmed) {
-    Fail "Could not confirm the certificate is on the Blueprint (see above); it may be. Its thumbprints are in .env, so re-run setup: it checks again and registers the certificate if it is missing."
-}
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 8. Cloud memory — Azure Blob Storage provisioning (ADR-005, Phase 5)
-# ═══════════════════════════════════════════════════════════════════════════
-Step 8 "Cloud memory (Azure Blob Storage)"
-
-# Re-running setup is how a machine repairs its certificate, so a machine on cloud memory must
-# stay there: ENTRABOT_KEEP_MEMORY_LOCAL=true outranks the blob settings at runtime and would
-# leave the agent on an empty local store. config.py keeps the first value of a repeated key, so
-# these lines are replaced, never appended.
-$onCloudMemory = $sameAgent -and (Get-EnvValue 'ENTRABOT_BLOB_ENDPOINT') -and (Get-EnvValue 'ENTRABOT_BLOB_CONTAINER') -and
-                 ((Get-EnvValue 'ENTRABOT_KEEP_MEMORY_LOCAL') -notin 'true', '1', 'yes')
-
-function Set-MemoryLines {
-    param([string[]]$Replacing, [string[]]$Lines)
-    $kept = @(Get-Content $envPath | Where-Object { $Replacing -notcontains (Get-EnvKey $_) -and $_ -notmatch '^\s*# ADR-005:' })
-    @($kept) + $Lines | Set-Content -Path $envPath -Encoding utf8
-}
-function Use-LocalMemory {
-    Set-MemoryLines @('ENTRABOT_KEEP_MEMORY_LOCAL') @(
-        '# ADR-005: keep agent memory local (skip cloud sync)',
-        'ENTRABOT_KEEP_MEMORY_LOCAL=true'
-    )
-}
-function Skip-BlobStorage {
-    param([string]$Problem)
-    if ($onCloudMemory) {
-        Write-Host "  ⚠ $Problem — keeping the cloud memory already in .env" -ForegroundColor Yellow
-    } else {
-        Write-Host "  ⚠ $Problem — using local-only memory" -ForegroundColor Yellow
-        Use-LocalMemory
-    }
-}
-
-if (-not $UseCloudMemory) {
-    if ($onCloudMemory) {
-        Success "Memory mode: CLOUD (already set in .env)"
-    } else {
-        Use-LocalMemory
-        Success "Memory mode: LOCAL (pass -UseCloudMemory to opt in)"
-    }
-} elseif (-not $AgentUserId) {
-    Skip-BlobStorage "Skipping blob storage, no Agent User ID found in state"
-} else {
-    $provArgs = @(
-        '--tenant-id', $account.tenantId,
-        '--agent-user-object-id', $AgentUserId
-    )
-    if ($WithStorageAccount) { $provArgs += @('--with-storage-account', $WithStorageAccount) }
-    if ($WithContainer)      { $provArgs += @('--with-container', $WithContainer) }
-    if ($CreateNewStorage)   { $provArgs += '--create-new-storage' }
-
-    # Provisioner prints progress on stderr and KEY=VALUE lines on stdout.
-    # PS 5.1/7 native-stderr handling: capture stdout into a variable, let
-    # stderr stream to the console so the user sees az progress.
-    $provStdout = & $VenvPython (Join-Path $ScriptDir 'provision_blob_storage.py') @provArgs
-    $provRc = $LASTEXITCODE
-
-    if ($provRc -ne 0) {
-        Skip-BlobStorage "Blob storage provisioning failed"
-    } else {
-        $provText      = $provStdout -join "`n"
-        $blobEndpoint  = [regex]::Match($provText, '(?m)^BLOB_ENDPOINT=(.+?)\s*$').Groups[1].Value
-        $blobContainer = [regex]::Match($provText, '(?m)^BLOB_CONTAINER=(.+?)\s*$').Groups[1].Value
-        if (-not $blobEndpoint -or -not $blobContainer) {
-            Skip-BlobStorage "Provisioner returned no endpoint/container"
-        } else {
-            Set-MemoryLines (@('ENTRABOT_KEEP_MEMORY_LOCAL') + $blobKeys) @(
-                '# ADR-005: cloud-hosted agent memory (Azure Blob Storage)',
-                "ENTRABOT_BLOB_ENDPOINT=$blobEndpoint",
-                "ENTRABOT_BLOB_CONTAINER=$blobContainer"
-            )
-            Success "Blob storage ready: $blobEndpoint/$blobContainer"
-        }
-    }
-}
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 9. Register MCP server via mcp_config.py
-# ═══════════════════════════════════════════════════════════════════════════
-Step 9 "Registering MCP server"
-
-$mcpBinary = Join-Path $ProjectRoot '.venv\Scripts\entrabot-mcp.exe'
-if (-not (Test-Path $mcpBinary)) { Fail "MCP binary not found at $mcpBinary" }
-& $VenvPython (Join-Path $ScriptDir 'mcp_config.py') --binary $mcpBinary --project-root $ProjectRoot
-if ($LASTEXITCODE -ne 0) { Fail "mcp_config.py failed" }
-Success "MCP server registered for Claude Code + Copilot CLI"
 
 Write-Host ""
-Write-Host "═══ Setup complete ═══" -ForegroundColor Green
-Write-Host "  KSP:        $ksp"
-Write-Host "  Thumbprint: $thumbprint"
-Write-Host "  Run: pwsh -File scripts\deploy-windows.ps1 to rotate cert."
+Write-Host "Entrabot setup" -ForegroundColor Cyan
+Write-Host "Getting this PC ready, then the setup wizard takes over."
+
+if ($bound.ContainsKey('A365AgentName')) {
+    Write-Note "-A365AgentName is deprecated and ignored (Work IQ setup uses the existing Blueprint)."
+}
+if ($Migrate) {
+    Write-Note "-Migrate is deprecated and ignored (old data is moved automatically)."
+}
+
+Write-Step "[1/4] Checking this PC"
+
+if ([System.Environment]::OSVersion.Version.Major -lt 10) {
+    Stop-Setup "Entrabot needs Windows 10 or Windows 11." @()
+}
+
+$elevated = Test-Elevated
+if ($elevated) {
+    $currentSid = Get-CurrentSid
+    $ownerSid = Get-SessionOwnerSid
+    if (Test-DifferentAccount -CurrentSid $currentSid -SessionOwnerSid $ownerSid -Elevated $elevated) {
+        $who = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        Stop-Setup "This window is running as a different account ($who) than the person logged on to this PC." @(
+            'Entrabot stores its certificate, credentials and settings for the account that runs',
+            'setup. Set up this way, the agent would belong to that administrator account and the',
+            'person actually using this PC could not start it.',
+            '',
+            'Fix: close this window and run scripts\setup-windows.cmd normally (double-click it).',
+            'Setup does not need administrator rights.')
+    }
+    Write-Note "This window is running as Administrator. Setup does not need that; continuing."
+}
+
+$diagnoseOnly = [bool]$Diagnose          # -Diagnose inspects; it never installs or changes anything
+$verboseRun = Test-BoundSwitch $bound 'Verbose'
+
+# A ZIP downloaded from the internet marks every file as blocked. Clear that for the
+# project's own scripts so later steps (and later runs) are not refused.
+if (-not $diagnoseOnly) {
+    try {
+        $marked = Get-Item -LiteralPath $PSCommandPath -Stream 'Zone.Identifier' -ErrorAction SilentlyContinue
+        if ($marked) { Write-Info "This copy of Entrabot was downloaded from the internet; unblocking its scripts." }
+        $toUnblock = @(Get-ChildItem -LiteralPath $ProjectRoot -File -ErrorAction SilentlyContinue)
+        $toUnblock += @(Get-ChildItem -LiteralPath (Join-Path $ProjectRoot 'scripts') -File -Recurse -ErrorAction SilentlyContinue)
+        foreach ($file in $toUnblock) {
+            if (@('.ps1', '.cmd', '.py', '.sh', '.psm1') -contains $file.Extension.ToLowerInvariant()) {
+                Unblock-File -LiteralPath $file.FullName
+            }
+        }
+    } catch {
+        Write-Note "Could not unblock the downloaded scripts: $($_.Exception.Message)"
+    }
+}
+
+Write-Ok "Windows $([System.Environment]::OSVersion.Version), project folder: $ProjectRoot"
+
+# ---- 2. Python ------------------------------------------------------------------
+Write-Step "[2/4] Python"
+
+$venvDir = Join-Path $ProjectRoot '.venv'
+$venvPython = Join-Path $venvDir 'Scripts\python.exe'
+$legacyData = Join-Path $env:USERPROFILE '.entrabot'
+$currentData = Join-Path $env:LOCALAPPDATA 'entrabot'
+$notSetUpFix = @(
+    '-Diagnose only inspects an existing setup; it never installs or changes anything.',
+    'Run scripts\setup-windows.cmd (without -Diagnose) to set Entrabot up here.')
+
+$python = $null
+$venvVersion = ''
+if (Test-Path -LiteralPath $venvPython) { $venvVersion = Get-PythonVersionText -Exe $venvPython }
+$venvOk = Test-PythonVersionOk -Text $venvVersion
+
+if ($venvOk) {
+    # A working environment proves its interpreter is still there; nothing to find.
+    Write-Ok (Get-PythonRouteMessage -Route 'venv' -Version $venvVersion)
+}
+if ($diagnoseOnly) {
+    if (-not $venvOk) {
+        Stop-Setup "Entrabot is not set up in this folder yet (there is no working Python environment here)." $notSetUpFix
+    }
+}
+if (-not $venvOk) {
+    # Route 1: a real Python that is already on this PC.
+    $route = 'existing'
+    $python = Find-Python
+
+    # Route 2: Entrabot's own private copy (official signed package; no installer).
+    if (-not $python) {
+        # The private copy lives under the data folder. Settle data from the old
+        # location first, or writing here would make it look like two data folders.
+        $earlyAction = Get-LegacyDataAction -LegacyHasContent (Test-DirectoryHasContent -Path $legacyData) `
+            -CurrentHasContent (Test-DirectoryHasContent -Path $currentData)
+        if ($earlyAction -eq 'move') {
+            try {
+                Move-LegacyData -Legacy $legacyData -Current $currentData
+                Write-Ok "Moved your existing Entrabot data to $currentData"
+            } catch {
+                Stop-Setup "Could not move older Entrabot data to its current location: $($_.Exception.Message)" @(
+                    "Old location: $legacyData", "Current location: $currentData",
+                    'Move the old folder there yourself (or delete it if you do not need it), then run setup again.')
+            }
+        }
+        $private = Get-PrivatePython -DataRoot $currentData
+        if ($private) {
+            if (Test-PythonVersionOk -Text (Get-PythonVersionText -Exe $private.Path)) {
+                $python = $private.Path
+                if ($private.Downloaded) { $route = 'private-new' } else { $route = 'private' }
+            } else {
+                Write-Note "The private copy of Python does not start on this PC; trying another way."
+            }
+        }
+    }
+
+    # Route 3: a per-user install with the Windows Package Manager.
+    if (-not $python) {
+        if (Test-WingetWorks) {
+            Write-Info "Installing Python 3.12 for your account with the Windows Package Manager (winget)..."
+            if (Install-PythonWithWinget) { $python = Find-Python; $route = 'winget' }
+        }
+    }
+
+    # Route 4: the python.org installer, for this account only.
+    if (-not $python) {
+        if (Install-PythonFromPythonOrg) { $python = Find-Python; $route = 'pythonorg' }
+    }
+
+    # Route 5: plain instructions.
+    if (-not $python) {
+        Stop-Setup "Python could not be set up automatically." @(
+            'Install it yourself, then run scripts\setup-windows.cmd again:',
+            '  1. Open https://www.python.org/downloads/release/python-31210/',
+            '  2. Download "Windows installer (64-bit)" (or "ARM64" on an ARM PC).',
+            '  3. Run it and choose "Install Now". Administrator rights are not needed.',
+            'Do not use the Python from the Microsoft Store; Entrabot cannot use that one.')
+    }
+    $pythonVersion = Get-PythonVersionText -Exe $python
+    Write-Ok "$(Get-PythonRouteMessage -Route $route -Version $pythonVersion) ($python)"
+}
+
+# ---- 3. Entrabot in this folder ----------------------------------------------------
+Write-Step "[3/4] Entrabot"
+
+# "Installed" means: the environment can load the setup tools AND it was installed from
+# the project definition as it is now. The stamp records the second half.
+$installExtras = 'provisioning'   # the setup scripts import azure-identity and requests
+$stampPath = Join-Path $venvDir 'entrabot-install.stamp'
+$pyproject = Join-Path $ProjectRoot 'pyproject.toml'
+$expectedStamp = ''
+if (Test-Path -LiteralPath $pyproject -PathType Leaf) {
+    $expectedStamp = Get-InstallStamp -PyprojectHash (Get-FileHash -LiteralPath $pyproject -Algorithm SHA256).Hash `
+        -Extras $installExtras
+}
+$recordedStamp = ''
+$importable = $false
+if ($venvOk) {
+    if (Test-Path -LiteralPath $stampPath -PathType Leaf) {
+        $recordedStamp = [string](Get-Content -LiteralPath $stampPath -TotalCount 1)
+    }
+    $importable = Test-WizardImportable -VenvPython $venvPython
+}
+$installCurrent = ($importable -and (Test-InstallCurrent -Expected $expectedStamp -Recorded $recordedStamp))
+$pipLog = ''
+
+if ($diagnoseOnly) {
+    if (-not $importable) {
+        Stop-Setup "Entrabot is not fully installed in this folder (its Python environment cannot load the setup tools)." $notSetUpFix
+    }
+    Write-Ok "Entrabot is installed here"
+} elseif ($installCurrent) {
+    Write-Ok "Entrabot is already installed here"
+} else {
+    Stop-ProjectMcpServer -VenvDir $venvDir
+
+    if (-not $venvOk) {
+        if (Test-Path -LiteralPath $venvDir) {
+            # Not ours to delete: it may be another machine's environment on a shared folder.
+            $aside = '.venv.unusable-' + (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
+            Write-Note "The existing .venv cannot be used on this PC (missing, broken, or older than Python 3.12). Moving it aside to $aside; delete that folder whenever you like."
+            Rename-Item -LiteralPath $venvDir -NewName $aside
+        }
+        Write-Info "Creating the Python environment (.venv)..."
+        $venvArgs = @('-m', 'venv', $venvDir)
+        & $python @venvArgs
+        if ($LASTEXITCODE -ne 0) {
+            Stop-Setup "Could not create the Python environment (python -m venv exited with $LASTEXITCODE)." @(
+                "Interpreter used: $python")
+        }
+        if (-not (Test-PythonVersionOk -Text (Get-PythonVersionText -Exe $venvPython))) {
+            Stop-Setup "The new Python environment does not start." @("Expected: $venvPython")
+        }
+        Write-Ok "Python environment ready"
+    }
+
+    if (Test-LongPathRisk -ProjectRoot $ProjectRoot -LongPathsEnabled (Get-LongPathsEnabled)) {
+        Write-Note "This folder's path is long ($($ProjectRoot.Length) characters) and Windows long-path support is off, so installing packages may fail with 'path too long' errors. If it does, move the Entrabot folder somewhere shorter (for example C:\src\entrabot) and run setup again."
+    }
+
+    # pip's screen output (about 90 lines of "Collecting / Downloading") goes to capture
+    # files; the screen gets one line and a dot every two seconds. -Verbose shows it all
+    # instead. pip also writes its own complete log (--log). Everything starts in %TEMP%:
+    # creating %LOCALAPPDATA%\entrabot before the data migration below would make an old
+    # installation look like "two data folders".
+    $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
+    $pipLog = Join-Path $env:TEMP "entrabot-bootstrap-pip-$stamp.log"
+    $pipOut = Join-Path $env:TEMP "entrabot-bootstrap-pip-$stamp.out.txt"
+    $pipErr = Join-Path $env:TEMP "entrabot-bootstrap-pip-$stamp.err.txt"
+    $pipArgs = @(
+        '-m', 'pip', 'install', '--disable-pip-version-check', '--prefer-binary',
+        '--log', $pipLog,
+        '-e', ($ProjectRoot + '[' + $installExtras + ']')
+    )
+    if (Test-Path -LiteralPath $stampPath) { Remove-Item -LiteralPath $stampPath -Force }
+    $pipShown = @()
+    $pipStarted = Get-Date
+    if ($verboseRun) {
+        Write-Info "Installing Entrabot and its packages (full output, because of -Verbose):"
+        & $venvPython @pipArgs
+        $pipExit = $LASTEXITCODE
+    } else {
+        Write-Host "  Installing Entrabot and its packages (a minute or two) " -NoNewline
+        $pipExit = Invoke-QuietNative -Exe $venvPython -Arguments $pipArgs -StdoutPath $pipOut -StderrPath $pipErr
+        Write-Host ""
+        foreach ($capture in @($pipOut, $pipErr)) {
+            if (Test-Path -LiteralPath $capture) {
+                $pipShown += @(Get-Content -LiteralPath $capture)
+                Remove-Item -LiteralPath $capture -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    $pipSeconds = [int]((Get-Date) - $pipStarted).TotalSeconds
+
+    if ($pipExit -ne 0) {
+        if ($pipShown.Count -gt 0) {
+            Write-Host ""
+            Write-Host "  ---- last lines of the install output ----" -ForegroundColor DarkGray
+            foreach ($line in @($pipShown | Select-Object -Last 25)) { Write-Host "  $line" -ForegroundColor DarkGray }
+        }
+        $fix = @("Full log: $pipLog")
+        $allLines = @($pipShown)
+        if (Test-Path -LiteralPath $pipLog) { $allLines += @(Get-Content -LiteralPath $pipLog) }
+        if (Test-CompilerNeeded -Lines $allLines) {
+            $fix += ''
+            $fix += 'A package had to be compiled and this PC has no C++ compiler. Install one with:'
+            $fix += '  powershell -ExecutionPolicy Bypass -File scripts\prereqs-windows.ps1 -WithBuildTools'
+            $fix += 'then run scripts\setup-windows.cmd again.'
+        } else {
+            $fix += 'If this looks like a network problem (proxy, VPN, offline), fix that and run setup again.'
+        }
+        Stop-Setup "Installing Entrabot's packages failed (pip exited with $pipExit)." $fix
+    }
+    if ($expectedStamp) { Set-Content -LiteralPath $stampPath -Value $expectedStamp -Encoding ascii }
+    Write-Ok "Entrabot installed ($pipSeconds s)"
+}
+
+if (-not $diagnoseOnly) {
+    # One-time move of data from the old location (%USERPROFILE%\.entrabot) to the current
+    # one (%LOCALAPPDATA%\entrabot). No double quotes in the Python: Windows PowerShell 5.1
+    # strips them from native arguments.
+    $MigrationCode = 'from entrabot.config import migrate_legacy_data_dir as m; print(''migrated=%s'' % m())'
+    $legacyAction = Get-LegacyDataAction -LegacyHasContent (Test-DirectoryHasContent -Path $legacyData) `
+        -CurrentHasContent (Test-DirectoryHasContent -Path $currentData)
+    if ($legacyAction -eq 'conflict') {
+        Write-Note "Two Entrabot data folders exist. Entrabot uses $currentData. The older one, $legacyData, was left untouched; nothing was merged or deleted. If the older one holds data you still want, compare the two before deleting it."
+    } elseif ($legacyAction -eq 'move') {
+        $migrationArgs = @('-c', $MigrationCode)
+        $migrationOut = & $venvPython @migrationArgs
+        if ($LASTEXITCODE -ne 0) {
+            Stop-Setup "Moving older Entrabot data to its current location failed (see the error above)." @(
+                "Old location: $legacyData", "Current location: $currentData")
+        }
+        if ((@($migrationOut) -join ' ') -match 'migrated=True') {
+            Write-Ok "Moved your existing Entrabot data to $currentData"
+        }
+    }
+
+    # Now that the data folder is settled, keep the install log with the other logs.
+    if ($pipLog -and (Test-Path -LiteralPath $pipLog)) {
+        try {
+            $logDir = Join-Path $currentData 'logs'
+            New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+            $keptLog = Join-Path $logDir (Split-Path -Leaf $pipLog)
+            Move-Item -LiteralPath $pipLog -Destination $keptLog -Force
+            $pipLog = $keptLog
+        } catch {
+            Write-Info "(The install log stays at $pipLog)"
+        }
+    }
+}
+
+if ($BootstrapOnly) {
+    Write-Host ""
+    Write-Ok "Bootstrap complete. Python environment: $venvPython"
+    if ($pipLog -and (Test-Path -LiteralPath $pipLog)) { Write-Info "Install log: $pipLog" }
+    exit 0
+}
+
+# ---- 4. Hand over to the wizard ---------------------------------------------------
+Write-Step "[4/4] Starting the setup wizard"
+
+$wizardArgs = @(Get-WizardArguments -Bound $bound -ProjectRoot $ProjectRoot)
+$env:PYTHONUTF8 = '1'
+$env:PYTHONIOENCODING = 'utf-8'
+$handoff = @('-m', 'entrabot.winsetup') + $wizardArgs
+& $venvPython @handoff
+exit $LASTEXITCODE

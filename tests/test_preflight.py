@@ -30,6 +30,7 @@ from entrabot.preflight import (
     Check,
     check_copilot_license_availability,
     check_mcp_configs,
+    check_old_setup_keys,
     check_persona_sati_mcp,
     check_state_file,
     check_teams_license_availability,
@@ -38,6 +39,14 @@ from entrabot.preflight import (
     run_diagnostics,
     run_smoke_checks,
 )
+
+
+@pytest.fixture(autouse=True)
+def _not_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remediation text names the platform's own setup script. These tests assert the
+    macOS/Linux wording, so pin it; ``TestWindows`` turns Windows on explicitly."""
+    monkeypatch.setattr("entrabot.preflight._is_windows", lambda: False)
+
 
 # ─── Phase 1: license preflight ──────────────────────────────────────────────
 
@@ -147,6 +156,47 @@ class TestCheckTeamsLicenseAvailability:
 
         assert result.status == "skip"
 
+    @staticmethod
+    def _with_plans(part: str, plans: list[str], *, free: int = 2) -> dict:
+        return {
+            "skuId": f"id-{part}",
+            "skuPartNumber": part,
+            "appliesTo": "User",
+            "prepaidUnits": {"enabled": free},
+            "consumedUnits": 0,
+            "servicePlans": [
+                {"servicePlanName": name, "appliesTo": "User", "provisioningStatus": "Success"}
+                for name in plans
+            ],
+        }
+
+    def _check(self, *skus: dict) -> Check:
+        with respx.mock:
+            respx.get(self.SUBSCRIBED_SKUS_URL).mock(
+                return_value=httpx.Response(200, json={"value": list(skus)})
+            )
+            return check_teams_license_availability("fake-token")
+
+    def test_a_product_with_the_teams_plan_counts_whatever_its_part_number(self) -> None:
+        # Microsoft 365 Business Basic: not on the old name list under this part number.
+        result = self._check(
+            self._with_plans("SMB_BUSINESS_ESSENTIALS", ["TEAMS1", "EXCHANGE_S_STANDARD"])
+        )
+        assert result.status == "pass" and "SMB_BUSINESS_ESSENTIALS (2 free)" in result.detail
+
+    def test_a_no_teams_suite_does_not_count_though_plans_are_named_after_teams(self) -> None:
+        plans = ["MESH_AVATARS_FOR_TEAMS", "CDS_O365_P2", "EXCHANGE_S_ENTERPRISE"]
+        assert self._check(self._with_plans("Microsoft_365_E3_(no_Teams)", plans)).status == "warn"
+
+    def test_the_e5_extra_features_licence_does_not_count(self) -> None:
+        # It was on the old name list, and includes no Teams.
+        result = self._check(self._with_plans("M365_E5_SUITE_COMPONENTS", ["CLIPCHAMP"]))
+        assert result.status == "warn"
+
+    def test_a_shared_device_licence_does_not_count(self) -> None:
+        result = self._check(self._with_plans("MCOCAP", ["TEAMS1", "MCOEV"]))
+        assert result.status == "warn"
+
 
 class TestCheckCopilotLicenseAvailability:
     SUBSCRIBED_SKUS_URL = "https://graph.microsoft.com/v1.0/subscribedSkus"
@@ -234,6 +284,23 @@ class TestCheckCopilotLicenseAvailability:
         result = check_copilot_license_availability("fake-token", transport=transport)
 
         assert result.status == "skip"
+
+    def test_copilot_under_another_part_number_counts_by_its_plans(self) -> None:
+        # "Microsoft Copilot for Microsoft 365" (M365_Copilot) is not on the name list.
+        sku = {
+            "skuId": "copilot-sku",
+            "skuPartNumber": "M365_Copilot",
+            "prepaidUnits": {"enabled": 2},
+            "consumedUnits": 1,
+            "servicePlans": [{"servicePlanName": "M365_COPILOT_APPS", "appliesTo": "User"}],
+        }
+        with respx.mock:
+            respx.get(self.SUBSCRIBED_SKUS_URL).mock(
+                return_value=httpx.Response(200, json={"value": [sku]})
+            )
+            result = check_copilot_license_availability("fake-token")
+
+        assert result.status == "pass" and "M365_Copilot (1 free)" in result.detail
 
 
 # ─── Phase 2: smoke checks ───────────────────────────────────────────────────
@@ -486,11 +553,7 @@ class TestCheckMcpConfigs:
         copilot_cfg = tmp_path / "copilot.json"
         copilot_cfg.write_text(
             json.dumps(
-                {
-                    "mcpServers": {
-                        "entrabot": {"command": "/other/worktree/.venv/bin/entrabot-mcp"}
-                    }
-                }
+                {"mcpServers": {"entrabot": {"command": "/other/worktree/.venv/bin/entrabot-mcp"}}}
             )
         )
 
@@ -807,6 +870,148 @@ class TestCheckPersonaSatiMcp:
         assert result.status == "pass"
 
 
+class TestPersonaTokenCommandForms:
+    """The check accepts every form of PERSONA_SATI_MCP_TOKEN_COMMAND the running server
+    accepts (``mcp_server._persona_token_words``): a program with arguments, and on Windows
+    a script or an unquoted path with spaces. It used to treat the whole value as one
+    executable, so a working setup was reported as "not found"."""
+
+    ENTRY = {"type": "sse", "url": "https://persona.example/sse"}
+
+    def _check(self, tmp_path: Path, command: str, extra: dict[str, str] | None = None) -> Check:
+        env = {"PERSONA_SATI_MCP_TOKEN_COMMAND": command, **(extra or {})}
+        return check_persona_sati_mcp(_write_mcp(tmp_path, self.ENTRY, env))
+
+    @POSIX_ONLY
+    def test_a_program_with_arguments_passes(self, tmp_path: Path) -> None:
+        launcher = _launcher(tmp_path / "bin")
+
+        result = self._check(tmp_path, f"{launcher} --audience api://persona --tenant t1")
+
+        assert result.status == "pass", result.detail
+
+    @POSIX_ONLY
+    def test_a_quoted_program_with_spaces_in_its_path_passes(self, tmp_path: Path) -> None:
+        launcher = _launcher(tmp_path / "my tools")
+
+        result = self._check(tmp_path, f'"{launcher}" --audience "api://persona sati"')
+
+        assert result.status == "pass", result.detail
+
+    @POSIX_ONLY
+    def test_an_unquoted_path_with_spaces_and_no_arguments_still_passes(
+        self, tmp_path: Path
+    ) -> None:
+        # The whole value is tried as one program first, as the server does.
+        launcher = _launcher(tmp_path / "my tools")
+
+        assert self._check(tmp_path, str(launcher)).status == "pass"
+
+    @POSIX_ONLY
+    def test_a_bare_name_with_arguments_is_found_on_the_entrys_own_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        launcher = _launcher(tmp_path / "bin")
+        monkeypatch.setenv("PATH", str(tmp_path / "elsewhere"))
+
+        result = self._check(tmp_path, f"{launcher.name} --flag", {"PATH": str(launcher.parent)})
+
+        assert result.status == "pass", result.detail
+
+    def test_a_missing_program_with_arguments_warns_without_echoing_them(
+        self, tmp_path: Path
+    ) -> None:
+        result = self._check(tmp_path, "/no/such/token-cli --client-secret hunter2")
+
+        assert result.status == "warn"
+        assert "PERSONA_SATI_MCP_TOKEN_COMMAND" in result.detail
+        assert "not found" in result.detail
+        assert "hunter2" not in _text(result)
+        assert "/no/such/token-cli" not in _text(result)
+
+    @POSIX_ONLY
+    def test_an_unbalanced_quote_warns(self, tmp_path: Path) -> None:
+        launcher = _launcher(tmp_path / "bin")
+
+        assert self._check(tmp_path, f'{launcher} --scope "api://persona').status == "warn"
+
+    @POSIX_ONLY
+    def test_posix_does_not_guess_at_an_unquoted_path_with_spaces_and_arguments(
+        self, tmp_path: Path
+    ) -> None:
+        # The server splits by shell rules here, so the program would be ".../my".
+        launcher = _launcher(tmp_path / "my tools")
+
+        assert self._check(tmp_path, f"{launcher} --flag").status == "warn"
+
+    @POSIX_ONLY  # Windows rules, simulated on a POSIX host with real files
+    @pytest.mark.parametrize("name", ["get-token.ps1", "get-token.py", "get-token.cmd"])
+    def test_on_windows_a_script_is_a_program_even_without_an_executable_bit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+    ) -> None:
+        script = tmp_path / "bin" / name
+        script.parent.mkdir()
+        script.write_text("", encoding="utf-8")
+        script.chmod(0o644)
+        monkeypatch.setattr("entrabot.preflight._is_windows", lambda: True)
+
+        result = self._check(tmp_path, f"{script} -Audience api://persona")
+
+        assert result.status == "pass", result.detail
+
+    @POSIX_ONLY
+    def test_on_windows_an_unquoted_path_with_spaces_and_arguments_passes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        script = tmp_path / "Program Files" / "persona" / "token.cmd"
+        script.parent.mkdir(parents=True)
+        script.write_text("", encoding="utf-8")
+        monkeypatch.setattr("entrabot.preflight._is_windows", lambda: True)
+
+        result = self._check(tmp_path, f'{script} --flag "a b"')
+
+        assert result.status == "pass", result.detail
+
+    @POSIX_ONLY
+    def test_on_windows_a_program_that_does_not_exist_still_warns(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("entrabot.preflight._is_windows", lambda: True)
+
+        result = self._check(tmp_path, f"{tmp_path}/nowhere/token.ps1 --flag")
+
+        assert result.status == "warn"
+        assert "not found" in result.detail
+
+    def test_checking_never_runs_the_command(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import subprocess
+
+        def _boom(*args: object, **kwargs: object) -> None:
+            raise AssertionError("the token command must not be run by a health check")
+
+        for name in ("run", "check_output", "Popen", "call"):
+            monkeypatch.setattr(subprocess, name, _boom)
+        launcher = _launcher(tmp_path / "bin")
+
+        self._check(tmp_path, f"{launcher} --flag")
+
+    def test_checking_never_imports_the_server(self) -> None:
+        # Importing entrabot.mcp_server builds the server, which runs the token command and
+        # contacts persona-sati. A health check must do neither.
+        import subprocess
+
+        code = (
+            "import sys, entrabot.preflight; "
+            "sys.exit(1 if 'entrabot.mcp_server' in sys.modules else 0)"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, timeout=60, check=False
+        )
+        assert result.returncode == 0, result.stderr
+
+
 class TestRunDiagnostics:
     def test_aggregates_all_checks(self, tmp_path: Path) -> None:
         # Just smoke-test that run_diagnostics returns a superset of smoke checks
@@ -865,6 +1070,138 @@ class TestRunDiagnostics:
         assert PERSONA_CHECK in names
 
 
+# ─── older setup keys ────────────────────────────────────────────────────────
+#
+# An older install kept the Provisioner's private key in a plain file. When setup could not take
+# that key's certificate off the Provisioner app (tenant-wide Graph permissions), it recorded it
+# in the state file: PROVISIONER_CERT_REVOKE_PENDING (lowercase SHA-1 thumbprints) and
+# PROVISIONER_CERT_REVOKE_PENDING_EXPIRES (their expiry dates, in the same order). Setup retries
+# on every run; until then the health check says so.
+
+PENDING = "PROVISIONER_CERT_REVOKE_PENDING"
+PENDING_EXPIRES = "PROVISIONER_CERT_REVOKE_PENDING_EXPIRES"
+OLD_KEY_SHA1 = "c3f1a2b4d5e6f708192a3b4c5d6e7f8091a2b3c4"
+THIS_COMPUTERS_KEY_SHA1 = "77aa88bb99cc00dd11ee22ff33aa44bb55cc66dd"
+OLD_KEYS_CHECK = "Older setup keys"
+
+
+def _set_up_state(tmp_path: Path, **values: str) -> Path:
+    state = tmp_path / ".entrabot-state.json"
+    state.write_text(
+        json.dumps(
+            {
+                "BLUEPRINT_APP_ID": "x",
+                "AGENT_ID": "y",
+                "AGENT_USER_ID": "z",
+                "PROVISIONER_CLIENT_ID": "prov-app",
+                "PROVISIONER_CERT_THUMBPRINT": THIS_COMPUTERS_KEY_SHA1,
+                **values,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return state
+
+
+def _pending(tmp_path: Path) -> Path:
+    return _set_up_state(tmp_path, **{PENDING: OLD_KEY_SHA1, PENDING_EXPIRES: "2027-02-01"})
+
+
+class TestCheckOldSetupKeys:
+    def test_nothing_recorded_adds_nothing(self, tmp_path: Path) -> None:
+        assert check_old_setup_keys(_set_up_state(tmp_path)) is None
+        assert check_old_setup_keys(tmp_path / "missing.json") is None
+
+    def test_a_pending_key_is_a_warning_that_names_it_and_where_to_remove_it(
+        self, tmp_path: Path
+    ) -> None:
+        check = check_old_setup_keys(_pending(tmp_path))
+
+        assert check is not None
+        assert check.name == OLD_KEYS_CHECK and check.status == "warn"
+        assert (
+            "An older setup key for this computer could not be switched off in Microsoft Entra: "
+            "the certificate whose thumbprint ends in B3C4 (expires 2027-02-01)." in check.detail
+        )
+        remediation = check.remediation or ""
+        assert (
+            "Microsoft Entra admin center (https://entra.microsoft.com): App registrations > "
+            "'EntraBot Agent ID Provisioner' (application ID prov-app) > Certificates & secrets "
+            "> Certificates." in remediation
+        )
+        assert remediation.endswith("Setup will try again the next time it runs.")
+
+    @pytest.mark.parametrize("broken", ["an entry", "the file"])
+    def test_a_record_that_cannot_be_read_is_a_warning_that_says_so(
+        self, tmp_path: Path, broken: str
+    ) -> None:
+        if broken == "an entry":
+            state = _set_up_state(tmp_path, **{PENDING: "not-a-thumbprint"})
+        else:
+            state = tmp_path / ".entrabot-state.json"
+            state.write_text("{half written", encoding="utf-8")
+
+        check = check_old_setup_keys(state)
+
+        assert check is not None and check.status == "warn"
+        assert check.detail.startswith(
+            "Setup could not read its record of older setup keys for this computer."
+        )
+        assert "can't account for" in (check.remediation or "")
+
+    def test_it_is_a_warning_not_a_failed_health_check(self, tmp_path: Path) -> None:
+        check = check_old_setup_keys(_pending(tmp_path))
+        assert check is not None
+        assert overall_exit_code([check]) == 0
+        rendered = format_report([check], color=False)
+        assert rendered.startswith("[ WARN ] Older setup keys: An older setup key")
+        assert "→ Remove it by hand in the Microsoft Entra admin center" in rendered
+
+    def test_no_full_thumbprint_is_reported(self, tmp_path: Path) -> None:
+        check = check_old_setup_keys(_pending(tmp_path))
+        assert check is not None
+        text = (format_report([check], color=False) + repr(check)).lower()
+        for full in (OLD_KEY_SHA1, THIS_COMPUTERS_KEY_SHA1):
+            assert full not in text and full[:36] not in text
+
+    @pytest.mark.parametrize("windows", [False, True])
+    def test_it_is_checked_on_every_platform(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, windows: bool
+    ) -> None:
+        # The keys are only written on Windows, but a state file can travel; the check reads
+        # what is there wherever it runs.
+        monkeypatch.setattr("entrabot.preflight._is_windows", lambda: windows)
+        assert check_old_setup_keys(_pending(tmp_path)) is not None
+
+    def _diagnose(self, state: Path) -> list[Check]:
+        with (
+            patch(
+                "entrabot.preflight.acquire_agent_user_token",
+                side_effect=AgentIDNotAvailable("no cert"),
+            ),
+            patch(
+                "entrabot.preflight._check_cert_in_keystore",
+                return_value=Check(name="Blueprint cert in OS keystore", status="pass", detail="x"),
+            ),
+        ):
+            return run_diagnostics(
+                _config_complete(),
+                state_path=state,
+                expected_binary=state.parent / "bin" / "entrabot-mcp",
+                claude_mcp_path=state.parent / "absent.json",
+                copilot_mcp_path=state.parent / "absent2.json",
+            )
+
+    def test_diagnostics_report_it_right_after_the_state_file(self, tmp_path: Path) -> None:
+        names = [check.name for check in self._diagnose(_pending(tmp_path))]
+        assert names[:3] == ["State file", OLD_KEYS_CHECK, "Blueprint cert in OS keystore"]
+
+    def test_diagnostics_with_nothing_pending_print_nothing_new(self, tmp_path: Path) -> None:
+        names = [check.name for check in self._diagnose(_set_up_state(tmp_path))]
+        assert OLD_KEYS_CHECK not in names
+        assert names[:2] == ["State file", "Blueprint cert in OS keystore"]
+
+
 # ─── format_report rendering ─────────────────────────────────────────────────
 
 
@@ -899,3 +1236,362 @@ class TestFormatReport:
             "MICROSOFT_365_COPILOT",
             "Microsoft_365_Copilot",
         )
+
+
+# ─── Windows ─────────────────────────────────────────────────────────────────
+
+
+class TestWindows:
+    """On Windows the key is a CNG key found by the SHA-1 in .env, the setup script is
+    ``scripts\\setup-windows.cmd``, and the MCP binary is under ``.venv\\Scripts``."""
+
+    SHA1 = "0123456789ABCDEF0123456789ABCDEF01234567"
+
+    @pytest.fixture(autouse=True)
+    def _windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from entrabot import preflight
+
+        monkeypatch.setattr(preflight, "_is_windows", lambda: True)
+
+        def no_keyring() -> None:
+            raise AssertionError("Credential Manager must not be used on Windows")
+
+        monkeypatch.setattr("entrabot.platform.get_credential_store", no_keyring)
+
+    def _config(self, **overrides: object) -> EntraBotConfig:
+        values: dict[str, object] = {
+            "tenant_id": "t",
+            "blueprint_app_id": "b",
+            "blueprint_cert_thumbprint": "x" * 43,
+            "blueprint_cert_sha1": self.SHA1,
+        }
+        values.update(overrides)
+        return EntraBotConfig(**values)  # type: ignore[arg-type]
+
+    def _health(self, status: str, message: str = "") -> object:
+        from entrabot.platform import wincert
+
+        return wincert.CertHealth(
+            status=status, days_left=9, not_after=None, message=message or f"cert is {status}"
+        )
+
+    def _cert_check(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        status: str,
+        *,
+        sign_error: Exception | None = None,
+        config: EntraBotConfig | None = None,
+    ) -> Check:
+        from entrabot import preflight
+        from entrabot.platform import wincert
+
+        signed: list[str] = []
+
+        def test_sign(sha1: str) -> None:
+            signed.append(sha1)
+            if sign_error:
+                raise sign_error
+
+        monkeypatch.setattr(wincert, "cert_health", lambda sha1: self._health(status))
+        monkeypatch.setattr(wincert, "test_sign", test_sign)
+        result = preflight._check_cert_in_keystore(config or self._config())
+        self.signed = signed
+        return result
+
+    def test_present_in_date_and_signing_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        result = self._cert_check(monkeypatch, "ok")
+        assert result.status == "pass"
+        assert self.signed == [self.SHA1]
+        assert self.SHA1 not in result.detail
+
+    def test_expiring_is_a_warning_with_what_to_do(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        result = self._cert_check(monkeypatch, "expiring")
+        assert result.status == "warn"
+        assert "setup-windows.cmd" in (result.remediation or "")
+
+    @pytest.mark.parametrize("status", ["missing", "expired", "no_private_key", "not_yet_valid"])
+    def test_unusable_certificate_fails_without_trying_to_sign(
+        self, monkeypatch: pytest.MonkeyPatch, status: str
+    ) -> None:
+        result = self._cert_check(monkeypatch, status)
+        assert result.status == "fail"
+        assert result.detail == f"cert is {status}"
+        assert "setup-windows.cmd" in (result.remediation or "")
+        assert "setup.sh" not in (result.remediation or "")
+        assert self.signed == []
+
+    def test_a_key_that_cannot_sign_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from entrabot.platform import wincert
+
+        result = self._cert_check(
+            monkeypatch, "ok", sign_error=wincert.WinCertError("the key is not usable here")
+        )
+        assert result.status == "fail"
+        assert "the key is not usable here" in result.detail
+
+    def test_store_error_is_a_failure_not_a_crash(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from entrabot import preflight
+        from entrabot.platform import wincert
+
+        def broken(sha1: str) -> None:
+            raise wincert.WinCertError("could not open the certificate store")
+
+        monkeypatch.setattr(wincert, "cert_health", broken)
+        result = preflight._check_cert_in_keystore(self._config())
+        assert result.status == "fail" and "certificate store" in result.detail
+
+    def test_no_config_is_a_skip(self) -> None:
+        from entrabot import preflight
+
+        assert preflight._check_cert_in_keystore().status == "skip"
+
+    def test_run_diagnostics_hands_the_config_to_the_certificate_check(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from entrabot import preflight
+
+        seen: list[object] = []
+
+        def record(config: EntraBotConfig | None = None) -> Check:
+            seen.append(config)
+            return Check(name="Blueprint cert in OS keystore", status="pass", detail="ok")
+
+        monkeypatch.setattr(preflight, "_check_cert_in_keystore", record)
+        monkeypatch.setattr(
+            preflight,
+            "acquire_agent_user_token",
+            lambda config: (_ for _ in ()).throw(AgentIDNotAvailable("no cert")),
+        )
+        config = self._config()
+        run_diagnostics(
+            config,
+            state_path=tmp_path / "missing.json",
+            expected_binary=tmp_path / "x",
+            claude_mcp_path=tmp_path / "a.json",
+            copilot_mcp_path=tmp_path / "b.json",
+        )
+        assert seen == [config]
+
+    def test_remediation_names_the_windows_setup_script(self, tmp_path: Path) -> None:
+        missing = check_state_file(tmp_path / "nope.json")
+        assert "scripts\\setup-windows.cmd" in (missing.remediation or "")
+        assert "setup.sh" not in (missing.remediation or "")
+
+        with patch(
+            "entrabot.preflight.acquire_agent_user_token",
+            side_effect=TokenExchangeError(hop="Hop 1", error="invalid_client", description="x"),
+        ):
+            token_check = run_smoke_checks(self._config())[0]
+        assert "setup-windows.cmd -Diagnose" in (token_check.remediation or "")
+        assert "setup.sh" not in (token_check.remediation or "")
+
+        mcp = check_mcp_configs(
+            expected_binary=tmp_path / "x.exe",
+            claude_path=tmp_path / "absent.json",
+            copilot_path=tmp_path / "absent2.json",
+        )
+        for check in mcp:
+            assert "setup.sh" not in (check.remediation or "")
+
+    def test_default_expected_binary(self, tmp_path: Path) -> None:
+        from entrabot import preflight
+
+        assert preflight.default_expected_binary(tmp_path) == (
+            tmp_path / ".venv" / "Scripts" / "entrabot-mcp.exe"
+        )
+
+    def test_mcp_command_matches_whatever_its_case_or_exe_suffix(self, tmp_path: Path) -> None:
+        expected = tmp_path / ".venv" / "Scripts" / "entrabot-mcp.exe"
+        expected.parent.mkdir(parents=True)
+        expected.write_bytes(b"")
+        claude = tmp_path / ".mcp.json"
+        for command in (
+            str(expected),
+            str(expected).upper(),
+            str(expected)[: -len(".exe")],
+            ".venv/Scripts/entrabot-mcp.exe",
+        ):
+            claude.write_text(
+                json.dumps({"mcpServers": {"entrabot": {"command": command}}}), encoding="utf-8"
+            )
+            checks = check_mcp_configs(
+                expected_binary=expected, claude_path=claude, copilot_path=tmp_path / "none.json"
+            )
+            assert checks[0].status == "pass", (command, checks[0])
+
+
+class TestPosixExpectedBinary:
+    def test_default_expected_binary(self, tmp_path: Path) -> None:
+        from entrabot import preflight
+
+        assert preflight.default_expected_binary(tmp_path) == (
+            tmp_path / ".venv" / "bin" / "entrabot-mcp"
+        )
+
+    def test_case_still_matters_off_windows(self, tmp_path: Path) -> None:
+        from entrabot import preflight
+
+        assert preflight._comparable("/Repo/.venv/bin/entrabot-mcp") != preflight._comparable(
+            "/repo/.venv/bin/entrabot-mcp"
+        )
+
+
+class TestFileEncodings:
+    """These files are UTF-8 whatever the machine's ANSI code page is, and a Windows
+    editor may have put a byte-order mark in front."""
+
+    def test_state_file_with_a_bom_is_read(self, tmp_path: Path) -> None:
+        state = tmp_path / ".entrabot-state.json"
+        body = json.dumps({"BLUEPRINT_APP_ID": "x", "AGENT_ID": "y", "AGENT_USER_ID": "z"})
+        state.write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
+        assert check_state_file(state).status == "pass"
+
+    def test_mcp_config_with_a_non_ascii_path_under_a_windows_code_page(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tests.locale_codec import force_locale_codec
+
+        home = tmp_path / "José Łukasz"
+        expected = home / ".venv" / "bin" / "entrabot-mcp"
+        expected.parent.mkdir(parents=True)
+        expected.write_bytes(b"")
+        claude = home / ".mcp.json"
+        claude.write_bytes(
+            json.dumps(
+                {"mcpServers": {"entrabot": {"command": str(expected)}}}, ensure_ascii=False
+            ).encode("utf-8")
+        )
+        force_locale_codec(monkeypatch)
+
+        checks = check_mcp_configs(
+            expected_binary=expected, claude_path=claude, copilot_path=tmp_path / "none.json"
+        )
+        assert checks[0].status == "pass", checks[0]
+
+
+# ─── Work IQ: does Microsoft honour the agent's permissions for Word, Excel and OneDrive? ───
+
+
+def _jwt(claims: dict[str, object]) -> str:
+    import base64
+
+    def part(data: dict[str, object]) -> str:
+        return base64.urlsafe_b64encode(json.dumps(data).encode()).decode().rstrip("=")
+
+    return f"{part({'alg': 'none'})}.{part(claims)}.signature"
+
+
+WORD_AUDIENCE = "c2d0c2b6-8013-4346-9f8b-b81d3b754a29"
+TOOLS_AUDIENCE = "ea9ffc3e-8a23-4a7d-836d-234d7c7565c1"
+
+
+def _work_iq_manifest(tmp_path: Path) -> Path:
+    from entrabot.a365.catalog import manifest_entry, setup_servers
+
+    path = tmp_path / "ToolingManifest.json"
+    entries = [manifest_entry(server) for server in setup_servers()]
+    path.write_text(json.dumps({"mcpServers": entries}), encoding="utf-8")
+    return path
+
+
+class TestWorkIqTokenScopes:
+    """The check that replaced the manifest 'spike': a token as the agent for each audience in
+    the manifest, the way the runtime asks, and the scopes it carries."""
+
+    def test_each_audience_is_asked_for_the_way_the_runtime_asks(self, tmp_path: Path) -> None:
+        from entrabot.preflight import work_iq_token_scopes
+
+        asked: list[str] = []
+
+        def acquire(config: EntraBotConfig, *, resource_scope: str) -> str:
+            asked.append(resource_scope)
+            scopes = {
+                f"{WORD_AUDIENCE}/.default": "Tools.ListInvoke.All",
+                f"{TOOLS_AUDIENCE}/.default": (
+                    "McpServers.Excel.All McpServers.OneDriveSharepoint.All "
+                    "McpServersMetadata.Read.All"
+                ),
+            }[resource_scope]
+            return _jwt({"scp": scopes})
+
+        results = work_iq_token_scopes(
+            _config_complete(), _work_iq_manifest(tmp_path), acquire=acquire
+        )
+        assert sorted(asked) == sorted(
+            [f"{WORD_AUDIENCE}/.default", f"{TOOLS_AUDIENCE}/.default"]
+        )
+        assert results == [
+            {"audience": WORD_AUDIENCE, "ok": True, "missing": [], "error": ""},
+            {"audience": TOOLS_AUDIENCE, "ok": True, "missing": [], "error": ""},
+        ]
+
+    def test_a_missing_scope_is_named_and_no_token_is_returned(self, tmp_path: Path) -> None:
+        from entrabot.preflight import work_iq_token_scopes
+
+        token = _jwt({"scp": "McpServers.Excel.All"})
+        results = work_iq_token_scopes(
+            _config_complete(),
+            _work_iq_manifest(tmp_path),
+            acquire=lambda config, *, resource_scope: token,
+        )
+        tools = next(item for item in results if item["audience"] == TOOLS_AUDIENCE)
+        assert tools["ok"] is False and tools["missing"] == ["McpServers.OneDriveSharepoint.All"]
+        assert token not in json.dumps(results)
+
+    def test_not_consented_yet_is_a_result_not_a_crash(self, tmp_path: Path) -> None:
+        from entrabot.preflight import work_iq_token_scopes
+
+        def refuse(config: EntraBotConfig, *, resource_scope: str) -> str:
+            raise TokenExchangeError(
+                "hop3:agent_user", "invalid_grant", "AADSTS65001: The user or administrator "
+                "has not consented to use the application."
+            )
+
+        results = work_iq_token_scopes(
+            _config_complete(), _work_iq_manifest(tmp_path), acquire=refuse
+        )
+        assert all(item["ok"] is False for item in results)
+        assert "AADSTS65001" in str(results[0]["error"])
+
+
+class TestWorkIqDiagnosis:
+    def test_without_a_manifest_there_is_nothing_to_check(self, tmp_path: Path) -> None:
+        from entrabot.preflight import check_work_iq_tokens
+
+        assert check_work_iq_tokens(_config_complete(), tmp_path / "ToolingManifest.json") is None
+
+    def test_honoured_is_a_pass(self, tmp_path: Path) -> None:
+        from entrabot.preflight import check_work_iq_tokens
+
+        def acquire(config: EntraBotConfig, *, resource_scope: str) -> str:
+            return _jwt(
+                {
+                    "scp": "Tools.ListInvoke.All McpServers.Excel.All "
+                    "McpServers.OneDriveSharepoint.All"
+                }
+            )
+
+        check = check_work_iq_tokens(
+            _config_complete(), _work_iq_manifest(tmp_path), acquire=acquire
+        )
+        assert check is not None and check.status == "pass"
+
+    def test_not_honoured_yet_is_a_warning_with_what_to_do(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from entrabot import preflight
+        from entrabot.preflight import check_work_iq_tokens
+
+        monkeypatch.setattr(preflight, "_is_windows", lambda: True)
+
+        def refuse(config: EntraBotConfig, *, resource_scope: str) -> str:
+            raise TokenExchangeError("hop3:agent_user", "invalid_grant", "AADSTS65001: not yet")
+
+        check = check_work_iq_tokens(
+            _config_complete(), _work_iq_manifest(tmp_path), acquire=refuse
+        )
+        assert check is not None and check.status == "warn"  # optional: never fails -Diagnose
+        assert "AADSTS65001" in check.detail
+        assert check.remediation is not None
+        assert "scripts\\setup-windows.cmd -Diagnose" in check.remediation

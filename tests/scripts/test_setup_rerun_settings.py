@@ -14,6 +14,7 @@ The helper reads a real ``.env`` with the real interpreter. Nothing else runs fo
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import stat
@@ -874,3 +875,387 @@ class TestHelp:
         assert "keeps the recipient already in .env" in output
         # --keep-memory-local is no longer a no-op alias for the default.
         assert "this is now the default behavior" not in output
+
+
+# ---------------------------------------------------------------------------
+# --use-blueprint: which agent the run is for (identity mode, then Step 5)
+# ---------------------------------------------------------------------------
+
+OLD_BP = "00000000-0000-0000-0000-00000000aaaa"
+NEW_BP = "00000000-0000-0000-0000-00000000bbbb"
+OLD_UPN = "entrabot-agent-old@contoso.com"
+MINE_UPN = "entrabot-agent-mine@contoso.com"
+OLD_STATE = {
+    "PROVISIONER_CLIENT_ID": "00000000-0000-0000-0000-0000000000a3",
+    "TENANT_ID": "00000000-0000-0000-0000-0000000000f1",
+    "BLUEPRINT_APP_ID": OLD_BP,
+    "BLUEPRINT_OBJECT_ID": "00000000-0000-0000-0000-00000000abab",
+    "AGENT_ID": "00000000-0000-0000-0000-00000000acac",
+    "AGENT_USER_UPN": OLD_UPN,
+}
+
+
+def _identity_slice() -> str:
+    """From the identity-mode checks up to Step 4."""
+    text = _script()
+    return text[
+        text.index("# ── Validate identity mode") : text.index(
+            'step 4 "Bootstrapping Entra provisioner app"'
+        )
+    ]
+
+
+def _agent_step_slice() -> str:
+    """Step 5: create_entra_agent_ids.py and the checks on what it recorded, up to Step 6."""
+    text = _script()
+    return text[
+        text.index('echo "  Running create_entra_agent_ids.py..."') : text.index(
+            "# Step 6: Generate Blueprint certificate"
+        )
+    ]
+
+
+def _function(name: str) -> str:
+    match = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n", _script(), flags=re.DOTALL | re.MULTILINE)
+    return match.group(0) if match else ""
+
+
+# Runs the state-file programs and the .env reader for real, in the fake root, and stands in for
+# create_entra_agent_ids.py: it notes what the helper would see (the identity variables, and the
+# state file as it was) and records the agent the way the helper does, with the Blueprint App ID
+# FAKE_RECORDED_BLUEPRINT when that is set.
+_FAKE_AGENT_PYTHON = r"""#!/bin/bash
+case "$1" in
+    *create_entra_agent_ids.py)
+        {
+            if [ -n "${ENTRABOT_AGENT_USER_UPN+x}" ]; then
+                echo "UPN=set:$ENTRABOT_AGENT_USER_UPN"
+            else
+                echo "UPN=unset"
+            fi
+            if [ -n "${_ENTRABOT_UPN_SUFFIX+x}" ]; then
+                echo "SUFFIX=set:$_ENTRABOT_UPN_SUFFIX"
+            else
+                echo "SUFFIX=unset"
+            fi
+            if [ -n "${ENTRABOT_NEW_CHAIN+x}" ]; then
+                echo "NEW_CHAIN=set:$ENTRABOT_NEW_CHAIN"
+            else
+                echo "NEW_CHAIN=unset"
+            fi
+        } > "$FAKE_ROOT/helper-saw.txt"
+        if [ -f "$FAKE_ROOT/.entrabot-state.json" ]; then
+            cp "$FAKE_ROOT/.entrabot-state.json" "$FAKE_ROOT/state-seen-by-helper.json"
+        fi
+        if [ "$FAKE_CREATE_RC" = 0 ]; then
+            "$REAL_PYTHON" -c '
+import json, pathlib, sys
+path, blueprint = pathlib.Path(sys.argv[1]), sys.argv[2]
+data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+if blueprint:
+    data["BLUEPRINT_APP_ID"] = blueprint
+data.update(BLUEPRINT_OBJECT_ID="bp-object", AGENT_ID="agent-app", AGENT_OBJECT_ID="agent-object",
+            AGENT_USER_ID="agent-user", AGENT_USER_UPN="agent@contoso.com")
+path.write_text(json.dumps(data), encoding="utf-8")
+' "$FAKE_ROOT/.entrabot-state.json" "$FAKE_RECORDED_BLUEPRINT"
+        fi
+        exit "$FAKE_CREATE_RC" ;;
+    -c) exec "$REAL_PYTHON" "$@" ;;
+    *) echo "unexpected interpreter call: $*" >&2; exit 99 ;;
+esac
+"""
+
+_AGENT_HARNESS = r"""
+set -euo pipefail
+GREEN=""; YELLOW=""; RED=""; BLUE=""; NC=""
+success() { echo "SUCCESS: $1"; }
+warn()    { echo "WARN: $1"; }
+err()     { echo "ERR: $1"; }
+fail()    { echo "FAIL: $1"; exit 1; }
+configure_a365_work_iq() { echo "WORK IQ CONFIGURED"; }
+PROJECT_ROOT="$FAKE_ROOT"
+SCRIPT_DIR="$FAKE_ROOT/scripts"
+PYTHON="$FAKE_ROOT/fake-python"
+SCRIPT_PYTHON="$FAKE_ROOT/fake-python"
+cd "$PROJECT_ROOT"
+@@DEFAULTS@@
+@@PARSE@@
+@@READ_STATE@@
+@@READ_ENV_VALUE@@
+@@SAME_ID@@
+@@IDENTITY@@
+@@AGENT_STEP@@
+if [ -n "${ENTRABOT_AGENT_USER_UPN+x}" ]; then
+    echo "LATER STEPS SEE ENTRABOT_AGENT_USER_UPN=$ENTRABOT_AGENT_USER_UPN"
+fi
+echo "REACHED THE CERTIFICATE STEP"
+"""
+
+
+def _agent_harness() -> str:
+    return (
+        _AGENT_HARNESS.replace("@@DEFAULTS@@", _defaults_slice())
+        .replace("@@PARSE@@", _parse_slice())
+        .replace("@@READ_STATE@@", _function("read_state"))
+        .replace("@@READ_ENV_VALUE@@", _function("read_env_value"))
+        .replace("@@SAME_ID@@", _function("same_id"))
+        .replace("@@IDENTITY@@", _identity_slice())
+        .replace("@@AGENT_STEP@@", _agent_step_slice())
+    )
+
+
+@dataclass
+class AgentStepRun:
+    returncode: int
+    stdout: str
+    stderr: str
+    root: Path
+
+    @property
+    def helper_saw(self) -> dict[str, str]:
+        """What create_entra_agent_ids.py would have found in its environment."""
+        path = self.root / "helper-saw.txt"
+        if not path.exists():
+            return {}
+        return dict(line.split("=", 1) for line in path.read_text(encoding="utf-8").splitlines())
+
+    @property
+    def state_seen_by_helper(self) -> dict[str, str] | None:
+        path = self.root / "state-seen-by-helper.json"
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+    def reached_the_certificate_step(self) -> bool:
+        return self.returncode == 0 and "REACHED THE CERTIFICATE STEP" in self.stdout
+
+    def output(self) -> str:
+        return f"exit {self.returncode}\n--- stdout\n{self.stdout}\n--- stderr\n{self.stderr}"
+
+
+def _run_agent_step(
+    tmp_path: Path,
+    *args: str,
+    state: dict[str, str] | None = None,
+    env_lines: list[str] | None = None,
+    recorded_blueprint: str = "",
+    create_rc: int = 0,
+) -> AgentStepRun:
+    root = tmp_path / "fake root with a space"
+    (root / "scripts").mkdir(parents=True)
+    fake_python = root / "fake-python"
+    fake_python.write_text(_FAKE_AGENT_PYTHON, encoding="utf-8")
+    fake_python.chmod(fake_python.stat().st_mode | stat.S_IEXEC)
+    if state is not None:
+        (root / ".entrabot-state.json").write_text(json.dumps(state), encoding="utf-8")
+    if env_lines is not None:
+        (root / ".env").write_text("\n".join(env_lines) + "\n", encoding="utf-8")
+    script = root / "harness.sh"
+    script.write_text(_agent_harness(), encoding="utf-8")
+    home = tmp_path / "home"
+    home.mkdir()
+    result = subprocess.run(
+        ["bash", str(script), *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+        check=False,
+        env={
+            "PATH": os.defpath,
+            "HOME": str(home),
+            "FAKE_ROOT": str(root),
+            "REAL_PYTHON": sys.executable,
+            "FAKE_RECORDED_BLUEPRINT": recorded_blueprint,
+            "FAKE_CREATE_RC": str(create_rc),
+        },
+        cwd=root,
+        stdin=subprocess.DEVNULL,
+    )
+    return AgentStepRun(result.returncode, result.stdout, result.stderr, root)
+
+
+def _old_env(blueprint: str = OLD_BP, upn: str = OLD_UPN) -> list[str]:
+    """The .env an earlier setup wrote for its agent."""
+    return [
+        "ENTRABOT_TENANT_ID=00000000-0000-0000-0000-0000000000f1",
+        f"ENTRABOT_BLUEPRINT_APP_ID={blueprint}",
+        f"ENTRABOT_AGENT_USER_UPN={upn}",
+    ]
+
+
+@posix_shell_only
+class TestUseBlueprintDoesNotCarryAnotherAgentsUser:
+    """The defect: .env keeps the previous agent's ENTRABOT_AGENT_USER_UPN, the helper loads
+    .env for any variable that is not set, and --use-blueprint did not set it. Joining another
+    Blueprint therefore looked for the previous agent's Agent User, and reused it."""
+
+    def test_a_switch_hands_the_helper_an_empty_upn(self, tmp_path: Path) -> None:
+        run = _run_agent_step(
+            tmp_path, f"--use-blueprint={NEW_BP}", state=OLD_STATE, env_lines=_old_env()
+        )
+
+        assert run.reached_the_certificate_step(), run.output()
+        # Set, and empty: an empty value counts as set, so the helper's .env load can't
+        # bring back the old agent's.
+        assert run.helper_saw["UPN"] == "set:"
+        assert run.helper_saw["SUFFIX"] == "unset"
+        assert run.helper_saw["NEW_CHAIN"] == "unset"
+        assert run.state_seen_by_helper == {
+            "PROVISIONER_CLIENT_ID": OLD_STATE["PROVISIONER_CLIENT_ID"],
+            "TENANT_ID": OLD_STATE["TENANT_ID"],
+            "BLUEPRINT_APP_ID": NEW_BP,
+        }
+        assert OLD_UPN in run.stdout and "--agent-user-upn=UPN" in run.stdout
+        # For the helper alone: the smoke test after Step 7 must read the new .env, and an
+        # empty value left set would also switch off its check of whose token it got.
+        assert "LATER STEPS SEE" not in run.stdout
+
+    @pytest.mark.parametrize(
+        "state",
+        [None, {"BLUEPRINT_APP_ID": NEW_BP}],
+        ids=["state-file-lost", "switch-interrupted-before-env-was-rewritten"],
+    )
+    def test_an_env_written_for_another_blueprint_is_not_carried(
+        self, tmp_path: Path, state: dict[str, str] | None
+    ) -> None:
+        # The state file no longer says this is a switch, but .env still names the old agent.
+        run = _run_agent_step(
+            tmp_path, f"--use-blueprint={NEW_BP}", state=state, env_lines=_old_env()
+        )
+
+        assert run.reached_the_certificate_step(), run.output()
+        assert run.helper_saw["UPN"] == "set:"
+
+    @pytest.mark.parametrize("asked", [NEW_BP, NEW_BP.upper()], ids=["same", "other-letter-case"])
+    def test_the_same_blueprint_keeps_the_agent_user_in_env(
+        self, tmp_path: Path, asked: str
+    ) -> None:
+        # The documented repair: ./scripts/setup.sh --use-blueprint=ID, for this agent.
+        run = _run_agent_step(
+            tmp_path,
+            f"--use-blueprint={asked}",
+            state={"BLUEPRINT_APP_ID": NEW_BP, "AGENT_ID": "kept"},
+            env_lines=_old_env(blueprint=NEW_BP, upn=MINE_UPN),
+        )
+
+        assert run.reached_the_certificate_step(), run.output()
+        assert run.helper_saw["UPN"] == "unset"  # so the helper reads this agent's from .env
+        assert (run.root / ".env").read_text(encoding="utf-8").count(MINE_UPN) == 1
+        # Another letter case is the same Blueprint, not a switch that wipes the state.
+        assert (run.state_seen_by_helper or {}).get("AGENT_ID") == "kept"
+        assert "Switching Blueprint" not in run.stdout
+
+    def test_agent_user_upn_still_names_the_agent_user_on_a_switch(self, tmp_path: Path) -> None:
+        run = _run_agent_step(
+            tmp_path,
+            f"--use-blueprint={NEW_BP}",
+            f"--agent-user-upn={MINE_UPN}",
+            state=OLD_STATE,
+            env_lines=_old_env(),
+        )
+
+        assert run.reached_the_certificate_step(), run.output()
+        assert run.helper_saw["UPN"] == f"set:{MINE_UPN}"
+
+    def test_a_upn_suffix_still_selects_the_agent_user_on_a_switch(self, tmp_path: Path) -> None:
+        run = _run_agent_step(
+            tmp_path,
+            f"--use-blueprint={NEW_BP}",
+            "--with-upn-suffix=sati",
+            state=OLD_STATE,
+            env_lines=_old_env(),
+        )
+
+        assert run.reached_the_certificate_step(), run.output()
+        assert run.helper_saw["SUFFIX"] == "set:sati"  # the helper ranks a suffix above a UPN
+
+    def test_a_new_chain_is_unaffected(self, tmp_path: Path) -> None:
+        run = _run_agent_step(
+            tmp_path,
+            "--new",
+            "--with-upn-suffix=bob",
+            state=OLD_STATE,
+            env_lines=_old_env(),
+            recorded_blueprint=NEW_BP,
+        )
+
+        assert run.reached_the_certificate_step(), run.output()
+        assert run.helper_saw == {
+            "UPN": "unset",
+            "SUFFIX": "set:bob",
+            "NEW_CHAIN": "set:1",
+        }
+        assert run.state_seen_by_helper == {
+            "PROVISIONER_CLIENT_ID": OLD_STATE["PROVISIONER_CLIENT_ID"]
+        }
+
+    def test_the_comment_no_longer_describes_the_old_object_id_first_lookup(self) -> None:
+        assert "over the APP_ID filter" not in _identity_slice()
+
+
+@posix_shell_only
+class TestStepFiveChecksTheBlueprintItGotBack:
+    """The defence the Windows wizard has: the certificate step registers this machine's key on
+    the Blueprint recorded in the state file (and Work IQ configures it), so that must be the one
+    --use-blueprint asked for."""
+
+    def test_another_blueprint_stops_setup_before_the_certificate_step(
+        self, tmp_path: Path
+    ) -> None:
+        run = _run_agent_step(
+            tmp_path,
+            f"--use-blueprint={NEW_BP}",
+            "--configure-a365-work-iq",
+            state={"BLUEPRINT_APP_ID": NEW_BP},
+            recorded_blueprint=OLD_BP,
+        )
+
+        assert run.returncode != 0, run.output()
+        assert "REACHED THE CERTIFICATE STEP" not in run.stdout
+        assert "WORK IQ CONFIGURED" not in run.stdout
+        fail_lines = [line for line in run.stdout.splitlines() if line.startswith("FAIL: ")]
+        assert len(fail_lines) == 1, run.output()
+        report = run.stdout[run.stdout.index("ERR: ") :]
+        assert NEW_BP in report and OLD_BP in report
+        assert f"--use-blueprint={NEW_BP}" in report
+
+    @pytest.mark.parametrize(
+        ("asked", "recorded"),
+        [(NEW_BP, NEW_BP), (NEW_BP.upper(), NEW_BP), (NEW_BP, NEW_BP.upper())],
+        ids=["same", "asked-in-capitals", "recorded-in-capitals"],
+    )
+    def test_the_blueprint_asked_for_goes_on_in_any_letter_case(
+        self, tmp_path: Path, asked: str, recorded: str
+    ) -> None:
+        run = _run_agent_step(
+            tmp_path,
+            f"--use-blueprint={asked}",
+            "--configure-a365-work-iq",
+            state={"BLUEPRINT_APP_ID": NEW_BP},
+            recorded_blueprint=recorded,
+        )
+
+        assert run.reached_the_certificate_step(), run.output()
+        assert "WORK IQ CONFIGURED" in run.stdout
+
+    def test_a_new_chain_has_nothing_to_compare_with(self, tmp_path: Path) -> None:
+        run = _run_agent_step(
+            tmp_path, "--new", "--with-upn-suffix=bob", state=None, recorded_blueprint=NEW_BP
+        )
+
+        assert run.reached_the_certificate_step(), run.output()
+
+    def test_a_failed_helper_still_stops_setup(self, tmp_path: Path) -> None:
+        run = _run_agent_step(
+            tmp_path, f"--use-blueprint={NEW_BP}", state={"BLUEPRINT_APP_ID": NEW_BP}, create_rc=1
+        )
+
+        assert run.returncode != 0
+        assert "FAIL: Agent Identity provisioning failed" in run.stdout
+
+    def test_the_blocks_under_test_are_hermetic(self) -> None:
+        executed = (
+            _identity_slice() + _agent_step_slice() + _function("read_state") + _function("same_id")
+        )
+        code = [line.strip() for line in executed.splitlines() if not line.lstrip().startswith("#")]
+        assert [line for line in code if SIDE_EFFECT.search(line)] == []
+        assert "/dev/null" not in _function("same_id")

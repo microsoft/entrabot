@@ -1,41 +1,58 @@
-﻿<#
+<#
 .SYNOPSIS
-  EntraBot — Windows cert rotation deploy.
+  Entrabot - rotate this computer's Blueprint certificate (Windows).
 
 .DESCRIPTION
-  Wraps scripts/rotate_cert_windows.py. Captures the current cert's
-  public DER (must happen BEFORE generating the new cert — for non-
-  exportable TPM keys this is the only chance to grab it), generates
-  a new cert, hands both DERs to rotate_cert_windows.rotate(), and
-  deletes the old cert from Cert:\CurrentUser\My only after smoke
-  passes. Other machines' certs on the Blueprint are kept, forward and
-  on rollback.
+  Replaces the certificate this computer uses to sign the agent in. The certificate in
+  use stays in use until the new one is proven to work:
+
+    1. A new certificate is created on this computer (in the TPM where there is one).
+    2. It is added to the agent's Blueprint, beside the current one.
+    3. The agent signs in with it, waiting for Microsoft Entra to take it up.
+    4. This computer's settings (.env) switch to the new certificate.
+    5. The old certificate is removed from the Blueprint and deleted from this computer,
+       together with its private key.
+
+  If steps 1-3 fail, the new certificate is undone and nothing else changes. If step 5
+  fails, the agent is already working on the new certificate; run this again to finish.
+
+  This script is a thin wrapper. The work is done by:
+      python -m entrabot.winsetup rotate-cert
+  It runs on the Windows PowerShell 5.1 that ships with Windows, and on PowerShell 7.
+  Afterwards, restart your assistant (Claude Code or GitHub Copilot CLI): the agent reads
+  its certificate when it starts.
+
+  Exit codes: 0 rotated, 1 failed (the current certificate is still in use), 3 rotated but
+  cleanup is pending (run it again), 130 cancelled.
+
+.PARAMETER Yes
+  Do not ask before rotating.
 
 .PARAMETER Status
-    Skip cert rotation and run the consolidated status command via
-    status-windows.ps1.
+  Skip rotation and show the agent's status instead (status-windows.ps1).
 
 .PARAMETER Json
-    With -Status, output machine-readable JSON.
+  With -Status, output machine-readable JSON.
 
 .PARAMETER HealthOnly
-    With -Status, only print health checks.
+  With -Status, only print health checks.
 
 .PARAMETER Strict
-    With -Status, return non-zero when health checks fail.
+  With -Status, return non-zero when health checks fail.
 
-  Failure modes:
-    - Reading the Blueprint's certs or the initial PATCH fails → rotate
-      raises RotationFailed; old cert still in store; .env still points
-      at old cert.
-    - Smoke fails → rotate triggers a rollback PATCH + .env restore +
-      MSAL cache invalidation, raises RotationRolledBack.
-    - Rollback PATCH fails → rotate raises ManualInterventionRequired;
-      operator must triage by hand.
+.PARAMETER Help
+  Show this help.
+
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\deploy-windows.ps1
+
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\deploy-windows.ps1 -Yes -Verbose
 #>
 
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
+    [switch]$Yes,
     [switch]$Status,
     [switch]$Json,
     [switch]$HealthOnly,
@@ -43,133 +60,80 @@ param(
     [switch]$Help
 )
 
-# Detect the "blue Windows PowerShell 5.1 vs black PowerShell 7" trap before
-# strict mode trips on PS-7-only automatic variables ($IsWindows, $IsLinux).
-if ($PSVersionTable.PSVersion.Major -lt 7) {
-    Write-Host ""
-    Write-Host "ERROR: This script needs PowerShell 7+, but you launched it from" -ForegroundColor Red
-    Write-Host "       Windows PowerShell $($PSVersionTable.PSVersion)." -ForegroundColor Red
-    Write-Host ""
-    Write-Host "Two different products on Windows — easy to confuse:" -ForegroundColor Yellow
-    Write-Host "  - 'Windows PowerShell' (blue icon, pre-installed) is 5.1, NOT this." -ForegroundColor Yellow
-    Write-Host "  - 'PowerShell' / pwsh (black icon, separate install) is 7+, USE THIS." -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "How to fix:" -ForegroundColor Cyan
-    Write-Host "  Close this window. Open Start, type 'pwsh' (NOT 'PowerShell'),"
-    Write-Host "  pick the result with the BLACK icon, and re-run the same command."
-    Write-Host ""
-    Write-Host "  If pwsh is missing, run scripts\prereqs-windows.ps1 first to install it."
-    Write-Host ""
-    exit 1
+# Windows PowerShell 5.1 writes progress records as CLIXML to stderr when its output is
+# not a console. Nothing here needs a progress bar.
+$ProgressPreference = 'SilentlyContinue'
+
+# Windows PowerShell started from a PowerShell 7 terminal through anything other than
+# PowerShell 7 itself (cmd.exe, Python, ...) keeps PowerShell 7's module paths, resolves
+# its in-box modules (Microsoft.PowerShell.Utility, ...) to versions it cannot load, and
+# then cannot find Write-Host or Get-FileHash (about_PSModulePath, "Starting Windows
+# PowerShell from PowerShell 7"). So under Windows PowerShell, put back its own default
+# locations for this process, before the first cmdlet that needs a module. No cmdlet is
+# used here: even Join-Path lives in a module. PowerShell 7 builds its own; nothing to do.
+if ($PSVersionTable.PSVersion.Major -lt 6) {
+    $windowsPowerShellModulePaths = @()
+    $documentsFolder = [Environment]::GetFolderPath('MyDocuments')
+    if ($documentsFolder) {
+        $windowsPowerShellModulePaths += [System.IO.Path]::Combine($documentsFolder, 'WindowsPowerShell\Modules')
+    }
+    $programFilesFolder = [Environment]::GetFolderPath('ProgramFiles')
+    if ($programFilesFolder) {
+        $windowsPowerShellModulePaths += [System.IO.Path]::Combine($programFilesFolder, 'WindowsPowerShell\Modules')
+    }
+    $windowsPowerShellModulePaths += [System.IO.Path]::Combine($PSHOME, 'Modules')
+    $env:PSModulePath = $windowsPowerShellModulePaths -join ';'
 }
 
-$ErrorActionPreference = 'Stop'
-Set-StrictMode -Version Latest
+# =============================================================================
+# Pure helpers, loadable by the tests (dot-source this file). This file must stay
+# ASCII-only: Windows PowerShell 5.1 reads a file without a byte-order mark in the
+# ANSI code page, where one non-ASCII character is a parse error.
+# =============================================================================
+
+function Get-RotateArguments {
+    # The argument list handed to `python -m entrabot.winsetup`. Values are separate
+    # array elements, so nothing is ever quoted by hand.
+    param([string]$ProjectRoot, [bool]$AssumeYes, [bool]$ShowEverything)
+    $list = @('rotate-cert', '--project-root', $ProjectRoot)
+    if ($AssumeYes) { $list += '--yes' }
+    if ($ShowEverything) { $list += '--verbose' }
+    return $list
+}
+
+if ($MyInvocation.InvocationName -eq '.' -or $env:ENTRABOT_SETUP_FUNCTIONS_ONLY -eq '1') { return }
 
 if ($Help) {
     Get-Help $PSCommandPath -Detailed
     exit 0
 }
 
+$showEverything = ($VerbosePreference -ne 'SilentlyContinue')
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+# Strict mode makes reading $LASTEXITCODE an error until some native command has set it.
+$global:LASTEXITCODE = 0
+
+$ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
+
 if ($Status) {
-    $ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
     & (Join-Path $ProjectRoot 'status-windows.ps1') -Json:$Json -HealthOnly:$HealthOnly -Strict:$Strict
     exit $LASTEXITCODE
 }
 
-if (-not $IsWindows) { throw "deploy-windows.ps1 must run on Windows." }
-
-$ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
-$VenvPython  = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
-$ScriptDir   = Join-Path $ProjectRoot 'scripts'
-
-if (-not (Test-Path $VenvPython)) {
-    throw "venv not found at $VenvPython. Run setup-windows.ps1 first."
-}
-
-# Read current SHA-1 from .env so we know which cert to dump and rotate.
-$envText = Get-Content (Join-Path $ProjectRoot '.env') -Raw
-$oldSha1 = ($envText | Select-String '(?m)^ENTRABOT_BLUEPRINT_CERT_SHA1=(.+)$').Matches[0].Groups[1].Value
-if (-not $oldSha1) { throw "ENTRABOT_BLUEPRINT_CERT_SHA1 missing from .env" }
-
-Write-Host "Capturing public DER of cert $oldSha1 BEFORE generating new cert..."
-$oldDerPath = Join-Path $env:TEMP "entrabot-old-$(Get-Random).cer"
-$cert = Get-Item "Cert:\CurrentUser\My\$oldSha1" -ErrorAction Stop
-[IO.File]::WriteAllBytes($oldDerPath, $cert.GetRawCertData())
-Write-Host "  Saved old DER to $oldDerPath"
-
-Write-Host "Generating new cert..."
-$newDerPath = Join-Path $env:TEMP "entrabot-new-$(Get-Random).cer"
-$genOut = & $VenvPython (Join-Path $ScriptDir 'generate_windows_cert.py') `
-    --subject "CN=entrabot-blueprint" `
-    --days 365 `
-    --export-der $newDerPath
-if ($LASTEXITCODE -ne 0) { throw "generate_windows_cert.py failed" }
-
-$newThumb   = ($genOut | Select-String '^thumbprint=(.+)$').Matches[0].Groups[1].Value
-$newX5tS256 = ($genOut | Select-String '^x5t_s256=(.+)$').Matches[0].Groups[1].Value
-
-# Hand off to rotate_cert_windows.py via a Python driver that wires the
-# graph_patch + smoke_test + delete_old callables to real Graph + a
-# fresh acquire_agent_user_token call.
-$driver = @"
-import sys
-from pathlib import Path
-sys.path.insert(0, r'$ScriptDir')
-import blueprint_certs
-import rotate_cert_windows as rcw
-from entrabot.config import get_config
-from entrabot.tools.teams import acquire_agent_identity_token, acquire_agent_user_token
-
-cfg   = get_config()
-state = rcw.RotationState(
-    env_path=Path(r'$ProjectRoot') / '.env',
-    msal_cache_path=Path(r'$env:LOCALAPPDATA') / 'entrabot' / '.msal-cache.bin',
-    blueprint_object_id=cfg.blueprint_object_id,
-)
-old_der = Path(r'$oldDerPath').read_bytes()
-new_der = Path(r'$newDerPath').read_bytes()
-
-# Swaps this machine's old and new certs and keeps every other machine's. A failed
-# read returns a status >= 400 and sends nothing, which rotate() treats as a failure.
-def graph_patch(*, token, der_bytes):
-    return blueprint_certs.swap_key_credential(
-        object_id=cfg.blueprint_object_id,
-        token=token,
-        der_bytes=der_bytes,
-        old_der=old_der,
-        new_der=new_der,
-        display_name=blueprint_certs.device_certificate_display_name(),
-    )
-
-def smoke_test():
-    try:
-        acquire_agent_user_token(cfg)
-        return True
-    except Exception:
-        return False
-
-def delete_old(sha1):
-    import subprocess
-    subprocess.run(['pwsh','-NoProfile','-Command',f'Remove-Item Cert:\\\\CurrentUser\\\\My\\\\{sha1}'], check=False)
-
-rcw.rotate(
-    state=state,
-    old_der=old_der,
-    new_thumbprint='$newThumb',
-    new_x5t_s256='$newX5tS256',
-    new_der=new_der,
-    graph_patch=graph_patch,
-    smoke_test=smoke_test,
-    delete_old_cert=delete_old,
-    graph_token_provider=lambda: acquire_agent_identity_token(cfg),
-)
-print('rotation succeeded')
-"@
-
-& $VenvPython -c $driver
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Rotation failed — see exception above. Triage required if ManualInterventionRequired raised." -ForegroundColor Red
+if ($env:OS -ne 'Windows_NT') {
+    Write-Host "ERROR: deploy-windows.ps1 must run on Windows." -ForegroundColor Red
     exit 1
 }
-Write-Host "Rotation complete." -ForegroundColor Green
+
+$venvPython = Join-Path (Join-Path $ProjectRoot '.venv') 'Scripts\python.exe'
+if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
+    Write-Host "ERROR: Entrabot is not installed in this folder yet. Run scripts\setup-windows.cmd first." -ForegroundColor Red
+    exit 1
+}
+
+$env:PYTHONUTF8 = '1'
+$env:PYTHONIOENCODING = 'utf-8'
+$handoff = @('-m', 'entrabot.winsetup') + @(Get-RotateArguments -ProjectRoot $ProjectRoot -AssumeYes ([bool]$Yes) -ShowEverything $showEverything)
+& $venvPython @handoff
+exit $LASTEXITCODE

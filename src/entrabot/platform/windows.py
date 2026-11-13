@@ -1,19 +1,20 @@
-"""Windows credential store backed by Credential Locker + Cert: store lookup.
+"""Windows credential store backed by Credential Manager, plus a cert-store lookup.
 
 Two responsibilities:
 
 1. Generic key-value secrets via ``keyring`` (maps to Windows Credential
-   Manager). This covers refresh tokens, MSAL cache markers, and any
-   other small string secret. Identical contract to the Mac/Linux
-   implementations.
-2. ``find_cert_by_thumbprint`` — query ``Cert:\\CurrentUser\\My`` for a
-   cert by SHA-1 hex thumbprint. Used by preflight checks and rotation
-   helpers to confirm the Blueprint cert is still present without
-   exporting the private key (which is non-exportable on the CNG path).
+   Manager). Identical contract to the Mac/Linux implementations. Nothing on
+   the Windows token path depends on it: Credential Manager holds at most
+   2,560 bytes per entry and is not reachable at all from an SSH or
+   scheduled-task logon session.
+2. ``find_cert_by_thumbprint`` — is a cert with this SHA-1 thumbprint in
+   ``Cert:\\CurrentUser\\My``? A presence check only.
 
-Unlike the Mac path, there is no ``blueprint-private-key`` PEM entry —
-the Blueprint private key lives in CNG and never leaves it. ``cncrypt_signer``
-performs the actual signing operation.
+There is no ``blueprint-private-key`` PEM entry on Windows — the Blueprint
+private key is a non-exportable CNG key and never leaves the key store.
+``entrabot.platform.wincert`` owns that key's lifecycle (create, find with
+dates and key store, test-sign, delete) and ``cncrypt_signer`` performs the
+signing.
 """
 
 from __future__ import annotations
@@ -121,7 +122,8 @@ def find_cert_by_thumbprint(thumbprint: str) -> bool:
     don't need to instantiate the store. Windows-only.
     """
     if not _THUMBPRINT_RE.match(thumbprint or ""):
-        raise ValueError(f"thumbprint must be 40 hex chars, got: {thumbprint!r}")
+        # Not echoed: a near-miss is still most of a real thumbprint.
+        raise ValueError("thumbprint must be 40 hex chars")
 
     crypt32 = _load_crypt32()
     store = crypt32.CertOpenStore(

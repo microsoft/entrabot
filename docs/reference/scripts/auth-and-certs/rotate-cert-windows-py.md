@@ -1,105 +1,81 @@
-# rotate_cert_windows.py
+# `scripts/rotate_cert_windows.py`
 
-Transactional Windows Blueprint certificate rotation with full rollback,
-extracted from `deploy-windows.ps1` so the rollback contract is testable. Windows
-only.
+Platforms: Windows.
 
 Part of the [auth-and-certs command reference](../index.md#auth-and-certs).
 
 ## Purpose
 
-Performs an all-or-nothing rotation of the Blueprint certificate: it registers
-the new certificate on the Blueprint app, smoke-tests token acquisition, and
-either commits (removing the old certificate) or rolls everything back. Other
-machines' certificates on the Blueprint are kept in both directions. It is a
-module invoked by [`deploy-windows.ps1`](../setup/deploy-windows-ps1.md), not a
-standalone CLI entry point. See
-[Windows Platform APIs → Two thumbprints, two purposes](../../../platform-docs/platform-windows.md#two-thumbprints-two-purposes)
-and [Token flows](../../token-flows.md).
+`rotate_cert_windows.py` rotates this PC's Blueprint certificate. Running it
+does the same rotation as
+[`deploy-windows.ps1`](../setup/deploy-windows-ps1.md): it is
+`python -m entrabot.winsetup rotate-cert` for this repository. Most operators
+use `deploy-windows.ps1`.
+
+The module also still contains the earlier `rotate()` function and its
+exceptions, kept as a library for existing callers and tests. That function is
+**not** what the command runs. It swaps the old certificate out in the same
+write that adds the new one, which leaves the agent without a working
+certificate while Microsoft Entra takes up the new one.
 
 ## Requirements
 
-- Windows, driven by [`deploy-windows.ps1`](../setup/deploy-windows-ps1.md).
-- The wrapper must, **before** generating the new certificate, capture the old
-  certificate's public DER — for a non-exportable TPM key this is the only chance
-  to grab the old public material for rollback.
-- The wrapper supplies: the old DER, the new certificate's SHA-1 thumbprint,
-  `x5t#S256`, and public DER (from
-  [`generate_windows_cert.py`](generate-windows-cert-py.md)), plus callables for
-  the Graph `PATCH`, the smoke test, deletion of the old certificate, and a Graph
-  token provider, together with the `.env` path, MSAL cache path, and Blueprint
-  object ID.
+- Native Windows, and the project's Python environment (`.venv`).
+- A completed [`setup-windows.ps1`](../setup/setup-windows-ps1.md) run on this
+  PC.
+- A signed-in Azure CLI session (setup's is reused).
 
 ## Usage
 
-Invoked through the deploy wrapper rather than run directly:
-
 ```powershell
-pwsh scripts/deploy-windows.ps1
+.\.venv\Scripts\python.exe scripts\rotate_cert_windows.py
+.\.venv\Scripts\python.exe scripts\rotate_cert_windows.py --yes --verbose
 ```
 
 ## Options
 
-Not a CLI. The rotation is driven by the parameters the wrapper passes to the
-`rotate` function.
+- `--yes` — do not ask before rotating.
+- `--verbose` — show everything the helper scripts print.
 
 ## Effects
 
-The rotation runs as an ordered transaction:
+The same five steps as `deploy-windows.ps1`, with the current certificate kept
+in use until the new one is proven:
 
-1. Read the original `x5t#S256` and SHA-1 thumbprints from `.env`.
-2. Acquire a Graph token.
-3. Swap the new certificate DER into the Blueprint's `keyCredentials`, through the
-   wrapper's callable: read the list, drop only the entries whose key material matches
-   the old or new certificate, add the new one, and `PATCH`. If the read fails, nothing
-   is sent.
-4. Rewrite the `BLUEPRINT_CERT_*` lines in `.env` to the new thumbprints (the
-   single source of truth for the next run).
-5. Run the smoke test (acquire a fresh Agent User token end to end).
-6. On the outcome:
-   - **Smoke passes** → delete the old certificate from `Cert:\CurrentUser\My`
-     by its SHA-1 thumbprint. The old certificate is removed **only** after the
-     new one is proven to work.
-   - **Smoke fails** → roll back in order: swap the old DER back onto the
-     Blueprint, restore the original thumbprints in `.env`, and delete the MSAL
-     cache so the next call does not present a token signed by the now-invalid
-     new key.
+1. Create a new certificate on this PC (TPM where the TPM accepts a key).
+2. Add it to the Blueprint beside the current one.
+3. Sign the agent in with it, retrying while Microsoft Entra takes it up.
+4. Switch `.env` to it.
+5. Remove the old certificate from the Blueprint, and delete it from this PC
+   with its private key.
+
+A failure in steps 1-3 undoes the new certificate. A failure in step 5 leaves
+the agent on the new certificate, and running the command again finishes the
+cleanup. See the
+[`deploy-windows.ps1` reference](../setup/deploy-windows-ps1.md#effects).
 
 ## Exit behavior
 
-Outcomes surface as typed errors that the wrapper maps to process exit codes:
-
-- **Success** — returns without error; the new certificate is live and the old
-  one removed.
-- `RotationFailed` — the initial read or `PATCH` failed; no rollback was attempted
-  and the old certificate is still in the local store.
-- `RotationRolledBack` — the `PATCH` succeeded but the smoke test failed; the
-  original certificate and `.env` thumbprints were restored, and the MSAL cache
-  was deleted (not restored) so a fresh cache is built on the next token
-  acquisition.
-- `ManualInterventionRequired` — the smoke test failed and then the rollback (its
-  read or its `PATCH`) failed too; `.env` and the MSAL cache are deliberately left untouched for
-  manual triage, since the old DER is the only public material matching a working
-  private key.
+- `0` — rotated.
+- `1` — failed. The current certificate is still in use.
+- `3` — rotated, but cleanup is pending. Run it again.
+- `130` — cancelled.
 
 ## Security
 
-Private keys never leave the certificate store; only public DER is exchanged.
-Invalidating the MSAL cache on rollback prevents a stale-signed token from
-looping on `401` after the new key is removed.
-
-## Common failures
-
-- **Rollback after smoke failure** — expected and safe; the previous certificate
-  is restored automatically.
-- **`ManualInterventionRequired`** — re-`PATCH` the old DER manually; do not
-  touch `.env`/MSAL until the Blueprint is consistent again.
+Only public certificates go to Graph. Graph calls use the Provisioner token,
+never an `az` CLI token. Private keys are created non-exportable and are never
+read; the old key is deleted with its certificate. Full thumbprints are not
+printed.
 
 ## Related commands
 
-- [`generate_windows_cert.py`](generate-windows-cert-py.md) — produces the new
-  certificate material this rotation consumes.
-- [`deploy-windows.ps1`](../setup/deploy-windows-ps1.md) — the wrapper that
-  drives this module.
-- [`setup-windows.ps1`](../setup/setup-windows-ps1.md) — first-time Windows
-  provisioning.
+- [`deploy-windows.ps1`](../setup/deploy-windows-ps1.md) — the usual way to
+  rotate.
+- [`register_windows_blueprint_cert.py`](register-windows-blueprint-cert-py.md)
+  and [`blueprint_certs.py`](blueprint-certs-py.md) — add and remove
+  certificates on the Blueprint.
+- [`generate_windows_cert.py`](generate-windows-cert-py.md) — creates a
+  certificate the same way.
+- [`setup-windows.ps1`](../setup/setup-windows-ps1.md) — repairs a PC whose
+  certificate is missing.

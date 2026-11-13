@@ -7,7 +7,9 @@ DLL lookup. We assert:
   with a NULL output buffer to size the signature, second with the real
   buffer.
 - ``NTE_BUFFER_TOO_SMALL`` (0x80090028) on a probe call still proceeds
-  cleanly — that's the expected size-discovery NTSTATUS, not an error.
+  cleanly — that's the expected size-discovery status, not an error. ctypes
+  returns it as a NEGATIVE number (``restype`` is a signed ``c_long``), so the
+  mocks do too.
 - A non-zero, non-NTE_BUFFER_TOO_SMALL NTSTATUS is raised with the value
   in the message.
 - The cert is looked up by thumbprint against
@@ -28,6 +30,11 @@ from entrabot.auth import cncrypt_signer
 NTE_BUFFER_TOO_SMALL = 0x80090028
 
 
+def _signed(status: int) -> int:
+    """A SECURITY_STATUS as ctypes hands it back: ``restype`` is a signed ``c_long``."""
+    return status - (1 << 32) if status & 0x80000000 else status
+
+
 def _padding_alg_address(info: cncrypt_signer._BcryptPkcs1PaddingInfo) -> int:
     return ctypes.c_void_p.from_address(ctypes.addressof(info)).value or 0
 
@@ -38,8 +45,9 @@ def _make_mock_dlls(
     key_handle: int = 0xABCD,
     sig_size_first: int = 256,
     final_signature: bytes = b"\xab" * 256,
-    sign_first_status: int = NTE_BUFFER_TOO_SMALL,
+    sign_first_status: int = _signed(NTE_BUFFER_TOO_SMALL),
     sign_second_status: int = 0,
+    caller_frees_key: bool = True,
 ) -> tuple[MagicMock, MagicMock]:
     """Build mock crypt32 + ncrypt DLLs configured for a normal flow."""
     crypt32 = MagicMock(name="crypt32")
@@ -48,8 +56,10 @@ def _make_mock_dlls(
     crypt32.CertOpenStore.return_value = 0xDEADBEEF
     crypt32.CertFindCertificateInStore.return_value = cert_handle
 
-    def acquire_key(_cert, _flags, _reserved, key_out, _spec_out, _free_out):
+    def acquire_key(_cert, _flags, _reserved, key_out, _spec_out, free_out):
         key_out._obj.value = key_handle
+        # pfCallerFreeProvOrNCryptKey: whether this handle is the caller's to free.
+        free_out._obj.value = 1 if caller_frees_key else 0
         return 1
 
     crypt32.CryptAcquireCertificatePrivateKey.side_effect = acquire_key
@@ -125,12 +135,64 @@ class TestSignPkcs1Sha256:
         assert results == [(expected_address, "SHA256"), (expected_address, "SHA256")]
 
     def test_nonzero_ntstatus_other_than_buffer_too_small_raises(self) -> None:
-        crypt32, ncrypt = _make_mock_dlls(sign_first_status=0xC000_0001)
+        crypt32, ncrypt = _make_mock_dlls(sign_first_status=_signed(0xC000_0001))
         with (
             patch.object(cncrypt_signer, "_load_dlls", return_value=(crypt32, ncrypt)),
-            pytest.raises(cncrypt_signer.SigningError, match="0xc0000001"),
+            pytest.raises(cncrypt_signer.SigningError, match="0xC0000001"),
         ):
             cncrypt_signer.sign_pkcs1_sha256(thumbprint="A" * 40, hash_bytes=b"\x00" * 32)
+
+    def test_buffer_too_small_is_accepted_whether_signed_or_unsigned(self) -> None:
+        for status in (NTE_BUFFER_TOO_SMALL, _signed(NTE_BUFFER_TOO_SMALL)):
+            crypt32, ncrypt = _make_mock_dlls(sign_first_status=status)
+            with patch.object(cncrypt_signer, "_load_dlls", return_value=(crypt32, ncrypt)):
+                result = cncrypt_signer.sign_pkcs1_sha256(
+                    thumbprint="A" * 40, hash_bytes=b"\x00" * 32
+                )
+            assert result == b"\xab" * 256
+
+    def test_sign_failure_is_reported_unsigned_with_what_to_do(self) -> None:
+        # NTE_BAD_KEYSET: the key container is gone (deleted, or it lives elsewhere).
+        crypt32, ncrypt = _make_mock_dlls(sign_second_status=_signed(0x80090016))
+        with (
+            patch.object(cncrypt_signer, "_load_dlls", return_value=(crypt32, ncrypt)),
+            pytest.raises(cncrypt_signer.SigningError) as excinfo,
+        ):
+            cncrypt_signer.sign_pkcs1_sha256(thumbprint="A" * 40, hash_bytes=b"\x00" * 32)
+        message = str(excinfo.value)
+        assert "0x80090016" in message and "-0x" not in message
+        assert "setup-windows.cmd" in message
+        assert excinfo.value.code == 0x80090016
+
+    def test_acquire_failure_reports_last_error(self) -> None:
+        crypt32, ncrypt = _make_mock_dlls()
+        crypt32.CryptAcquireCertificatePrivateKey.side_effect = lambda *a, **k: 0
+        with (
+            patch.object(cncrypt_signer, "_load_dlls", return_value=(crypt32, ncrypt)),
+            patch.object(cncrypt_signer, "_last_error", return_value=0x8009200B),
+            pytest.raises(cncrypt_signer.SigningError) as excinfo,
+        ):
+            cncrypt_signer.sign_pkcs1_sha256(thumbprint="C" * 40, hash_bytes=b"\x00" * 32)
+        message = str(excinfo.value)
+        assert "0x8009200B" in message
+        assert "setup-windows.cmd" in message
+        assert excinfo.value.code == 0x8009200B
+
+    def test_messages_never_contain_the_thumbprint(self) -> None:
+        thumbprint = "0123456789ABCDEF0123456789ABCDEF01234567"
+        crypt32, ncrypt = _make_mock_dlls()
+        crypt32.CertFindCertificateInStore.return_value = 0
+        with (
+            patch.object(cncrypt_signer, "_load_dlls", return_value=(crypt32, ncrypt)),
+            pytest.raises(cncrypt_signer.CertNotFoundError) as excinfo,
+        ):
+            cncrypt_signer.sign_pkcs1_sha256(thumbprint=thumbprint, hash_bytes=b"\x00" * 32)
+        assert thumbprint not in str(excinfo.value)
+        assert "setup-windows.cmd" in str(excinfo.value)
+
+        with pytest.raises(ValueError) as bad:
+            cncrypt_signer.sign_pkcs1_sha256(thumbprint=thumbprint + "0", hash_bytes=b"\x00" * 32)
+        assert thumbprint not in str(bad.value)
 
     def test_thumbprint_must_be_40_hex(self) -> None:
         with pytest.raises(ValueError, match="thumbprint"):
@@ -162,8 +224,19 @@ class TestSignPkcs1Sha256:
         crypt32.CertFreeCertificateContext.assert_called()
         crypt32.CertCloseStore.assert_called()
 
+    def test_key_handle_is_not_freed_when_the_api_keeps_ownership(self) -> None:
+        # A handle the API says it still owns (a cached one, say) must not be freed
+        # here: that would be a double free when its real owner releases it.
+        crypt32, ncrypt = _make_mock_dlls(caller_frees_key=False)
+        with patch.object(cncrypt_signer, "_load_dlls", return_value=(crypt32, ncrypt)):
+            result = cncrypt_signer.sign_pkcs1_sha256(thumbprint="D" * 40, hash_bytes=b"\x00" * 32)
+        assert result == b"\xab" * 256
+        ncrypt.NCryptFreeObject.assert_not_called()
+        crypt32.CertFreeCertificateContext.assert_called()
+        crypt32.CertCloseStore.assert_called()
+
     def test_releases_handles_on_failure(self) -> None:
-        crypt32, ncrypt = _make_mock_dlls(sign_first_status=0xC000_0001)
+        crypt32, ncrypt = _make_mock_dlls(sign_first_status=_signed(0xC000_0001))
         with (
             patch.object(cncrypt_signer, "_load_dlls", return_value=(crypt32, ncrypt)),
             pytest.raises(cncrypt_signer.SigningError),
@@ -180,3 +253,29 @@ class TestLoadDllsGuard:
             pytest.raises(RuntimeError, match="Windows"),
         ):
             cncrypt_signer._load_dlls()
+
+
+class TestDescribeStatus:
+    @pytest.mark.parametrize(
+        ("code", "needle"),
+        [
+            (0x80090016, "key"),  # NTE_BAD_KEYSET
+            (0x8009200B, "private key"),  # CRYPT_E_NO_KEY_PROPERTY
+            (0x80090030, "TPM"),  # NTE_DEVICE_NOT_READY
+            (0x80280921, "TPM"),  # TPM 2.0 lockout
+            (0x8010006E, "smart card"),  # SCARD_W_CANCELLED_BY_USER
+            (1312, "logon session"),  # ERROR_NO_SUCH_LOGON_SESSION
+        ],
+    )
+    def test_known_codes_get_actionable_text(self, code: int, needle: str) -> None:
+        text = cncrypt_signer.describe_status(code)
+        assert needle.lower() in text.lower()
+
+    def test_unknown_code_still_says_what_to_do(self) -> None:
+        text = cncrypt_signer.describe_status(0x80091234)
+        assert "setup-windows.cmd" in text
+
+    def test_accepts_signed_values(self) -> None:
+        assert cncrypt_signer.describe_status(
+            _signed(0x80090016)
+        ) == cncrypt_signer.describe_status(0x80090016)

@@ -59,17 +59,71 @@ def _token_url(tenant_id: str) -> str:
     return TOKEN_ENDPOINT.format(tenant=tenant_id)
 
 
+# Certificates whose approaching expiry has already been logged by this process.
+_expiry_warned: set[str] = set()
+
+
+def _build_windows_cng_assertion(config: EntraBotConfig, token_endpoint: str) -> str:
+    """Hop-1 assertion signed by the non-exportable CNG key behind ``blueprint_cert_sha1``.
+
+    Credential Manager is never consulted: the key isn't there, and it can't even be
+    reached from an SSH or scheduled-task logon session.
+
+    A certificate that is missing, expired, or has no key here is reported as what it
+    is, with what to do, instead of as Entra's ``invalid_client``. The check is one
+    local certificate-store read; a failure to perform it never blocks signing.
+    """
+    from entrabot.auth.cncrypt_signer import SigningError
+    from entrabot.platform import wincert
+
+    sha1 = config.blueprint_cert_sha1 or ""
+    try:
+        health = wincert.cert_health(sha1)
+    except Exception as exc:  # noqa: BLE001 — advisory; signing reports the real failure
+        logger.debug("Blueprint certificate health check skipped: %s", exc)
+        health = None
+
+    if health is not None:
+        if not health.usable:
+            raise AgentIDNotAvailable(health.message)
+        if health.status == "expiring" and sha1 not in _expiry_warned:
+            _expiry_warned.add(sha1)
+            logger.warning("%s", health.message)
+
+    try:
+        return build_client_assertion(
+            cert_thumbprint=config.blueprint_cert_thumbprint,
+            cert_sha1=sha1,
+            client_id=config.blueprint_app_id,
+            token_endpoint=token_endpoint,
+        )
+    except SigningError as exc:
+        raise AgentIDNotAvailable(
+            f"The Blueprint certificate could not sign the Hop 1 assertion: {exc}"
+        ) from exc
+
+
 def _build_blueprint_assertion(config: EntraBotConfig, token_endpoint: str) -> str:
     """Build the Hop-1 client assertion.
 
-    Try the keystore PEM first (Mac/Linux runtime, and any platform whose
-    setup wrote a PEM into keyring — including most test fixtures). If
-    no PEM is in the keystore, fall back to the Windows CNG path keyed
-    by ``blueprint_cert_sha1``. A Windows-only setup writes the SHA-1
-    but never a PEM, so real Windows deployments take the CNG branch.
+    Windows with ``blueprint_cert_sha1`` configured (every real Windows setup) signs
+    through CNG and never reads the credential store.
+
+    Everywhere else, the keystore PEM is used (Mac/Linux runtime, and any platform
+    whose setup wrote a PEM into keyring — including most test fixtures).
     """
-    store = get_credential_store()
-    private_key_pem = store.retrieve("entrabot", "blueprint-private-key")
+    if sys.platform == "win32" and config.blueprint_cert_sha1:
+        return _build_windows_cng_assertion(config, token_endpoint)
+
+    try:
+        store = get_credential_store()
+        private_key_pem = store.retrieve("entrabot", "blueprint-private-key")
+    except Exception:
+        if sys.platform != "win32":
+            raise
+        # Credential Manager is unreachable (SSH and scheduled-task sessions have no
+        # credential set). Windows doesn't keep the key there anyway.
+        private_key_pem = None
     if private_key_pem:
         return build_client_assertion(
             private_key_pem=private_key_pem,
@@ -79,16 +133,9 @@ def _build_blueprint_assertion(config: EntraBotConfig, token_endpoint: str) -> s
         )
 
     if sys.platform == "win32":
-        if not config.blueprint_cert_sha1:
-            raise AgentIDNotAvailable(
-                "ENTRABOT_BLUEPRINT_CERT_SHA1 missing. "
-                "Run setup-windows.cmd to generate the Blueprint cert."
-            )
-        return build_client_assertion(
-            cert_thumbprint=config.blueprint_cert_thumbprint,
-            cert_sha1=config.blueprint_cert_sha1,
-            client_id=config.blueprint_app_id,
-            token_endpoint=token_endpoint,
+        raise AgentIDNotAvailable(
+            "ENTRABOT_BLUEPRINT_CERT_SHA1 missing. "
+            "Run scripts\\setup-windows.cmd to generate the Blueprint cert."
         )
 
     raise AgentIDNotAvailable(

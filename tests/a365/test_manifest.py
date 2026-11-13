@@ -220,3 +220,48 @@ def test_manifest_require_server_raises_for_unconfigured_server(tmp_path: Path) 
 
     with pytest.raises(A365ServerNotConfiguredError):
         manifest.require_server("mcp_WordServer")
+
+
+_WORD_SERVER = {
+    "mcpServerName": "mcp_WordServer",
+    "mcpServerUniqueName": "mcp_WordServer",
+    "scope": "McpServers.Word.All",
+    "audience": "api://word-audience",
+}
+
+
+def test_load_manifest_tolerates_a_byte_order_mark(tmp_path: Path) -> None:
+    """Windows tools often write UTF-8 with a BOM, which ``json.loads`` rejects outright."""
+    path = tmp_path / "ToolingManifest.json"
+    path.write_bytes(b"\xef\xbb\xbf" + json.dumps({"mcpServers": [_WORD_SERVER]}).encode())
+
+    manifest = load_manifest(path)
+
+    assert manifest.require_server(WORD_SERVER_NAME).audience == "api://word-audience"
+
+
+def test_load_manifest_reads_utf8_on_a_windows_locale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Read as cp1252, the closing quote's last byte (0x9D) doesn't decode at all."""
+    from tests.locale_codec import force_locale_codec
+
+    body = {"mcpServers": [{**_WORD_SERVER, "description": "Word “comments” — für José"}]}
+    path = tmp_path / "ToolingManifest.json"
+    path.write_bytes(json.dumps(body, ensure_ascii=False).encode("utf-8"))
+    force_locale_codec(monkeypatch)
+
+    manifest = load_manifest(path)
+
+    assert manifest.require_server(WORD_SERVER_NAME).scope == "McpServers.Word.All"
+
+
+def test_load_manifest_reports_a_file_that_is_not_utf8(tmp_path: Path) -> None:
+    """A UTF-16 file (Windows PowerShell's ``>``) is a bad manifest, not a crash."""
+    path = tmp_path / "ToolingManifest.json"
+    path.write_bytes(json.dumps({"mcpServers": [_WORD_SERVER]}).encode("utf-16"))
+
+    with pytest.raises(A365ManifestInvalidError) as exc_info:
+        load_manifest(path)
+
+    assert str(path) in str(exc_info.value)

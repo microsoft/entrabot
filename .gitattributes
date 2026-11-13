@@ -1,0 +1,16 @@
+# Line endings for scripts, pinned so a checkout or a ZIP download gets the ones the
+# interpreter needs, whatever the user's core.autocrlf says. Everything is stored with LF
+# in the repository; only the working-tree copy differs.
+
+# Windows scripts: CRLF. cmd.exe mis-parses labels and multi-line blocks in an LF-only
+# batch file, and Windows editors expect CRLF in PowerShell files. A UTF-8 byte-order mark
+# is content, not a line ending, so the BOM some .ps1 files carry is left alone.
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+*.ps1   text eol=crlf
+*.psm1  text eol=crlf
+*.psd1  text eol=crlf
+
+# POSIX shell scripts: LF, including on Windows, where core.autocrlf=true would otherwise
+# check them out with CRLF and Git Bash or WSL would fail on the stray carriage returns.
+*.sh    text eol=lf

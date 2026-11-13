@@ -294,3 +294,95 @@ class TestPersonaBackendPullAll:
         assert report.pulled == 2
         assert report.skipped == 1
         assert report.skipped_keys == ["claude_memory/../../etc/x"]
+
+
+class TestPersonaBackendIsUtf8OnAnyLocale:
+    """Memory files are UTF-8 whatever the platform's default text encoding is (issue #60).
+
+    Claude Code writes them as UTF-8. Read with the Windows ANSI code page, an accent
+    becomes mojibake in the cloud copy and some bytes don't decode at all; written with
+    it, an emoji raises ``UnicodeEncodeError``.
+    """
+
+    CONTENT = "---\nname: José\n---\nprefers “terse” replies ✅ 東京\n"
+
+    @pytest.fixture(autouse=True)
+    def _windows_locale(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tests.locale_codec import force_locale_codec
+
+        force_locale_codec(monkeypatch)
+
+    def test_push_one_uploads_utf8_content_intact(self, tmp_path: Path) -> None:
+        root = tmp_path / "memory"
+        root.mkdir()
+        (root / "user_jose.md").write_bytes(self.CONTENT.encode())
+        data: dict[str, str] = {}
+        PersonaBackend(FakeBackend(data), local_root=root).push_one(root / "user_jose.md")
+        assert data == {"claude_memory/user_jose.md": self.CONTENT}
+
+    def test_push_all_uploads_utf8_content_intact(self, tmp_path: Path) -> None:
+        root = tmp_path / "memory"
+        root.mkdir()
+        (root / "user_jose.md").write_bytes(self.CONTENT.encode())
+        data: dict[str, str] = {}
+        report = PersonaBackend(FakeBackend(data), local_root=root).push_all()
+        assert report.errors == []
+        assert data == {"claude_memory/user_jose.md": self.CONTENT}
+
+    def test_pull_all_writes_utf8_files(self, tmp_path: Path) -> None:
+        root = tmp_path / "memory"
+        data = {"claude_memory/user_jose.md": self.CONTENT}
+        report = PersonaBackend(FakeBackend(data), local_root=root).pull_all()
+        assert report.pulled == 1
+        assert (root / "user_jose.md").read_bytes() == self.CONTENT.encode()
+
+
+class TestPersonaBackendPullIsByteExact:
+    """A memory file pulled from the cloud is byte-for-byte the cloud's copy.
+
+    Windows text mode wrote ``"\\n"`` as ``"\\r\\n"``, so every pulled file differed from
+    the blob it came from and looked changed to whatever compared the two next.
+    """
+
+    CONTENT = "---\nname: Alice\ntype: user\n---\n\nProduct Architect\n"
+
+    def test_pull_all_writes_the_text_unchanged(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tests.locale_codec import force_windows_newlines
+
+        force_windows_newlines(monkeypatch)
+        root = tmp_path / "memory"
+        data = {"claude_memory/user_alice.md": self.CONTENT}
+
+        PersonaBackend(FakeBackend(data), local_root=root).pull_all()
+
+        assert (root / "user_alice.md").read_bytes() == self.CONTENT.encode()
+
+    def test_pull_then_push_round_trips_through_a_local_store(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cloud to disk and back leaves the stored bytes as they were."""
+        from tests.locale_codec import force_windows_newlines
+
+        force_windows_newlines(monkeypatch)
+        store = tmp_path / "store"
+        backend = LocalBackend(store)
+        backend.write_text("claude_memory/user_alice.md", self.CONTENT)
+        before = (store / "claude_memory" / "user_alice.md").read_bytes()
+        persona = PersonaBackend(backend, local_root=tmp_path / "memory")
+
+        persona.pull_all()
+        persona.push_one(tmp_path / "memory" / "user_alice.md")
+
+        assert before == self.CONTENT.encode()
+        assert (store / "claude_memory" / "user_alice.md").read_bytes() == before
+
+    @pytest.mark.skipif(os.name != "nt", reason="exercises real Windows text-mode defaults")
+    def test_pull_all_is_byte_exact_on_real_windows(self, tmp_path: Path) -> None:
+        root = tmp_path / "memory"
+        data = {"claude_memory/user_alice.md": self.CONTENT}
+
+        PersonaBackend(FakeBackend(data), local_root=root).pull_all()
+
+        assert (root / "user_alice.md").read_bytes() == self.CONTENT.encode()

@@ -8,8 +8,8 @@ optionally, deprovisions individual Agent User chains by UPN.
 `teardown.sh` removes the full Agent Identity chain and local state that setup
 creates: the Agent User, the Agent Identity service principal, the Blueprint app
 registration (and its cascaded `BlueprintPrincipal`), the Provisioner app
-registration, and the local `.env`, `.entrabot-state.json`, and OS keystore
-entries.
+registration recorded for this machine, and the local `.env`,
+`.entrabot-state.json`, and OS keystore entries.
 
 It operates in one of two modes:
 
@@ -26,9 +26,8 @@ Cloud (Azure Blob) storage is never deleted by this script. See
 ## Requirements
 
 - macOS or Linux with `bash`.
-- Azure CLI (`az`) signed in (`az login`). It is used to discover and delete the
-  Provisioner app and to delete the Agent User, which are ordinary directory
-  objects.
+- Azure CLI (`az`) signed in (`az login`). It is used to delete the Agent User
+  and the recorded Provisioner app, which are ordinary directory objects.
 - The project virtual environment at `.venv` with provisioning dependencies
   installed (`pip install -e ".[dev]"`). The script uses `.venv/bin/python3` to
   mint a Provisioner certificate token and to call the Microsoft Graph beta
@@ -45,7 +44,7 @@ but cannot delete the Agent Identity or Blueprint (see
 # Full teardown of the chain described by local state
 ./scripts/teardown.sh
 
-# Preview only — resolve and print, delete nothing
+# Preview only — print what would be deleted, delete nothing
 ./scripts/teardown.sh --dry-run
 
 # Skip the interactive confirmation prompt
@@ -65,7 +64,7 @@ but cannot delete the Agent Identity or Blueprint (see
 | Option | Default | Effect |
 | --- | --- | --- |
 | `--agent-user-upn=UPN` | none | Target a specific Agent User UPN for deprovisioning instead of the state-based chain. May be repeated or comma-separated. Switches the run to targeted mode. |
-| `--dry-run` | off | Resolve and print what would be deleted without deleting anything in the tenant or on disk. In targeted mode the flag is passed through to the deprovision helper. |
+| `--dry-run` | off | Print what would be deleted, then exit without deleting anything in the tenant or on disk. In targeted mode it lists the UPNs given and does not resolve their chains; for that, run [`deprovision_entra_agent_identity.py`](deprovision-entra-agent-identity-py.md) with `--dry-run`. |
 | `--yes`, `-y` | off | Skip the interactive `Are you sure?` confirmation prompt. |
 | `--delete-cloud-storage` | off | **Reserved and intentionally not implemented.** Supplying it exits with an error (see [Safety](#safety)). |
 | `--preserve-provisioner` | off | Do not delete the shared Provisioner app. Intended for targeted, smoke-test teardowns that reuse the Provisioner. |
@@ -76,12 +75,17 @@ An unrecognized argument prints an error to stderr followed by the usage text.
 
 ## Effects
 
-When there is nothing to remove — no Entra resources referenced by local state,
-no Provisioner app discoverable by name, and no local state files — the script
-prints `Nothing to clean up.` and exits without prompting.
+When there is nothing to remove — no Entra resources referenced by local state
+and no local state files — the script prints `Nothing to clean up.` and exits
+without prompting. Unless `--preserve-provisioner` is set, it also says that no
+Provisioner app is recorded for this machine, so none is deleted, and how to
+delete one by hand.
 
-Otherwise it prints the resources it is about to delete and, unless `--dry-run`
-or `--yes` is set, prompts for confirmation before proceeding.
+Otherwise it prints the resources it is about to delete, including
+`Provisioner: <application ID> (recorded in .entrabot-state.json)`, or a line
+saying that no application ID is recorded and none will be deleted. Unless
+`--dry-run` or `--yes` is set, it then prompts for confirmation before
+proceeding.
 
 **Deletion order (state-based full teardown).** Children are removed before
 parents:
@@ -93,8 +97,18 @@ parents:
 3. **Blueprint application** — deleted via `DELETE /beta/applications/{id}`
    using the Provisioner certificate token. This cascade also removes the
    `BlueprintPrincipal`.
-4. **Provisioner app** — deleted last (it is needed for steps 2–3), by display
-   name, with `az ad app delete`, unless `--preserve-provisioner` is set.
+4. **Provisioner app** — deleted last (it is needed for steps 2–3) with
+   `az ad app delete --id`, unless `--preserve-provisioner` is set. Only the app
+   recorded for this machine in `.entrabot-state.json` (`PROVISIONER_CLIENT_ID`)
+   is deleted, by its application ID. Teardown never deletes an app found by its
+   name: another app can have the same name, and a Provisioner app holds
+   tenant-wide Microsoft Graph permissions. With no application ID recorded, or
+   a recorded value that is not one, no app is deleted, and teardown prints how
+   to find this machine's Provisioner app in the Entra admin center and delete
+   it by hand. If the delete fails, teardown shows the `az` error and the
+   command to run once it is fixed, and carries on; step 5 still removes the
+   state file (unless `--preserve-local-state` is set), so keep the
+   application ID it printed.
 5. **Local state** — unless `--preserve-local-state` is set: clears the
    Blueprint private key and legacy secrets from the OS keystore (service
    `entrabot`), then removes `.env` and `.entrabot-state.json`.
@@ -142,8 +156,21 @@ used for cloud-hosted memory is left untouched. Remove it separately with
   scope) with a hard `403`. The Agent Identity and Blueprint then survive as
   orphans. Delete them afterward with
   [`cleanup-orphans.sh`](cleanup-orphans-sh.md) or in the Entra admin portal.
-- **`Not logged in`.** Provisioner discovery and Agent User deletion need
+- **`Not logged in`.** Deleting the Agent User and the Provisioner app needs
   `az login`.
+- **"No Provisioner app is recorded for this machine in .entrabot-state.json,
+  so none is deleted."** (or "PROVISIONER_CLIENT_ID in .entrabot-state.json is
+  not an application ID") — `.entrabot-state.json` is missing or names no
+  Provisioner app by its application ID, and teardown does not look for one by
+  name. The rest of teardown still runs. To delete this machine's Provisioner
+  app yourself, find its application ID in the Entra admin center (App
+  registrations > All applications: `EntraBot Agent ID Provisioner`, or
+  `EntraBot Provisioner` from older setups), check that it is the one setup
+  created for this machine, then run `az ad app delete --id <PROVISIONER_APP_ID>`.
+- **"Could not delete Provisioner app (<application ID>): see the az error
+  above"** — for example, the `az` session lacks the rights. Fix what the error
+  says, then run the command teardown printed:
+  `az ad app delete --id <application ID>`.
 - **Resource already deleted.** A `404` from a delete is treated as
   already-gone and reported as a warning, not a failure.
 
@@ -151,6 +178,8 @@ used for cloud-hosted memory is left untouched. Remove it separately with
 
 - `0` — success; also returned for `--help`, `--dry-run`, a `Nothing to clean
   up` no-op, an aborted confirmation, and a `--preserve-local-state` early exit.
+  A Provisioner app that is not recorded, or that could not be deleted, is
+  reported as a warning and does not change it.
 - `1` — a targeted `--agent-user-upn` teardown failed.
 - `2` — `--delete-cloud-storage` was supplied (refused).
 

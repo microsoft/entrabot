@@ -13,15 +13,21 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import errno
 import json
 import logging
+import ntpath
 import os
 import re
+import shlex
+import shutil
+import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
@@ -111,6 +117,292 @@ def _load_body_prompt() -> str:
     return expanded
 
 
+_IS_WINDOWS = sys.platform == "win32"
+
+# How long the persona-sati token command may take before it is given up on.
+_PERSONA_TOKEN_TIMEOUT_SECONDS = 30
+
+
+class PersonaTokenCommandError(subprocess.SubprocessError):
+    """The persona-sati token command ran and did not produce a token.
+
+    The message carries the exit status or the time limit and nothing else: never the
+    command's arguments or its output, either of which may hold a credential.
+    """
+
+
+def _split_windows_command(command: str) -> list[str]:
+    r"""Split a Windows command line into words.
+
+    Whitespace separates words, double quotes group them and are dropped, and ``\"`` is a
+    literal quote. Every other backslash is kept as written, which is why this isn't
+    ``shlex.split``: POSIX rules would eat the separators in ``C:\Users\jo``.
+    """
+    words: list[str] = []
+    word = ""
+    started = quoted = False
+    i = 0
+    while i < len(command):
+        char = command[i]
+        if char == "\\" and command[i + 1 : i + 2] == '"':
+            word, started, i = word + '"', True, i + 1
+        elif char == '"':
+            quoted, started = not quoted, True
+        elif char.isspace() and not quoted:
+            if started:
+                words.append(word)
+            word, started = "", False
+        else:
+            word, started = word + char, True
+        i += 1
+    if quoted:
+        raise ValueError("unbalanced quote in command")
+    if started:
+        words.append(word)
+    return words
+
+
+# What Windows will start by name when PATHEXT isn't set, in the order it tries them.
+_DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD"
+
+# Scripts Windows can't start itself, which are handed to an interpreter instead.
+_SCRIPT_SUFFIXES = frozenset({".ps1", ".py", ".pyw"})
+
+
+def _is_file(path: str) -> bool:
+    """True if *path* is an existing file."""
+    return os.path.isfile(path)
+
+
+def _is_absolute_windows_path(path: str) -> bool:
+    r"""True if *path* names one place whatever the current directory or drive is.
+
+    That is a drive or share and a root: ``C:\tools\x`` or ``\\server\share\x``, but not
+    ``C:x``, ``\x`` or ``x\y``.
+    """
+    if ntpath.splitdrive(path)[0] and ntpath.isabs(path):
+        return True
+    # A host that isn't Windows standing in for one (the tests): its own absolute paths.
+    return os.name != "nt" and os.path.isabs(path)
+
+
+def _windows_spellings(path: str) -> list[str]:
+    """Return the files *path* can mean on Windows, in the order ``cmd.exe`` tries them.
+
+    A name with a runnable extension means itself. Any other name means that name plus
+    each PATHEXT extension first, so ``get-token`` finds ``get-token.cmd`` rather than the
+    shell script of the same name that npm-style installers put beside it.
+    """
+    extensions = [ext for ext in os.environ.get("PATHEXT", _DEFAULT_PATHEXT).split(";") if ext]
+    with_extension = [path + ext for ext in extensions]
+    suffix = ntpath.splitext(path)[1].casefold()
+    if suffix in _SCRIPT_SUFFIXES or suffix in {ext.casefold() for ext in extensions}:
+        return [path, *with_extension]
+    return [*with_extension, path]
+
+
+def _same_directory(left: str, right: str) -> bool:
+    """True if two directory paths are one directory."""
+    return os.path.normcase(os.path.realpath(left)) == os.path.normcase(os.path.realpath(right))
+
+
+def _find_windows_program(name: str) -> str | None:
+    """Return the absolute path of the program *name* on Windows, else ``None``.
+
+    Never the current directory. The server runs wherever its host was started, which can
+    be a checkout nobody has vetted, and Windows looks there before ``PATH``: both when it
+    starts a program by name and in ``shutil.which``. So *name* must be an absolute path,
+    or a bare name found in a ``PATH`` directory that is itself absolute and isn't the
+    current directory. A relative path is refused: it means a different file in every
+    directory the host is started in.
+    """
+    if _is_absolute_windows_path(name):
+        return next((path for path in _windows_spellings(name) if _is_file(path)), None)
+    if ntpath.splitdrive(name)[0] or "\\" in name or "/" in name:
+        return None
+    here = os.getcwd()
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        # A relative entry ("", ".", "bin") is the current directory by another name.
+        if not _is_absolute_windows_path(directory):
+            continue
+        for path in _windows_spellings(os.path.join(directory, name)):
+            if _is_file(path):
+                # Resolved, so a PATH entry that is a link to this directory counts as it.
+                # Only checked for a hit: resolving every PATH entry can be slow.
+                if _same_directory(os.path.dirname(path), here):
+                    break
+                return path
+    return None
+
+
+def _find_persona_token_program(name: str) -> str | None:
+    """Return the file *name* refers to, as a path or looked up on ``PATH``, else ``None``."""
+    if _IS_WINDOWS:
+        return _find_windows_program(name)
+    return shutil.which(name)
+
+
+def _windows_powershell_exe() -> str:
+    r"""Absolute path of the Windows PowerShell 5.1 that ships with Windows.
+
+    Never a ``pwsh`` or ``powershell`` looked up by name, which the current directory
+    could supply. Same root as ``entrabot.platform.wincert``: ``%SystemRoot%``, then
+    ``%WINDIR%``, then ``C:\Windows``.
+    """
+    root = os.environ.get("SYSTEMROOT") or os.environ.get("WINDIR") or r"C:\Windows"
+    return ntpath.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+
+
+def _windows_program_and_arguments(command: str) -> list[str] | None:
+    r"""Split a Windows command line at the end of its program, or return ``None``.
+
+    The program is the longest leading part of *command* that names a file, so the usual
+    unquoted ``C:\Program Files\persona\token.cmd --flag`` works. Windows applies the same
+    idea the other way round, shortest part first, and would run a ``C:\Program.exe``
+    someone planted; the longest match can't be hijacked like that. Only what follows the
+    program is split into words. Raises ``ValueError`` for an unbalanced quote.
+    """
+    ends: list[int] = []  # where each word of the command ends, outside quotes
+    quoted = False
+    i = 0
+    while i < len(command):
+        char = command[i]
+        if char == "\\" and command[i + 1 : i + 2] == '"':
+            i += 1
+        elif char == '"':
+            quoted = not quoted
+        elif char.isspace() and not quoted and i > 0 and not command[i - 1].isspace():
+            ends.append(i)
+        i += 1
+    if quoted:
+        raise ValueError("unbalanced quote in command")
+    ends.append(len(command))
+
+    for end in reversed(ends):
+        candidate = command[:end].strip()
+        if '"' in candidate:
+            # A quoted program is one word once its quotes are dropped, or it isn't one.
+            words = _split_windows_command(candidate)
+            if len(words) != 1:
+                continue
+            candidate = words[0]
+        program = _find_persona_token_program(candidate)
+        if program is not None:
+            return [program, *_split_windows_command(command[end:])]
+    return None
+
+
+def _persona_token_words(token_cmd: str) -> list[str]:
+    """Return ``PERSONA_SATI_MCP_TOKEN_COMMAND`` as ``[program, *arguments]``.
+
+    The whole value is tried as one program first, so a path with spaces needs no quoting
+    and a value that has always worked means what it always meant. Only a value that names
+    no program is split into a program and its arguments, by the platform's own rules:
+    shell quoting on POSIX, and on Windows the rules of a Windows command line, where a
+    backslash is a path separator and is never dropped.
+
+    On POSIX the program is returned as written, for the OS to look up as it always has.
+    On Windows it is returned as an absolute path (see :func:`_find_windows_program`). A
+    program that can't be found is returned as written, which is right for a message and
+    for POSIX, where starting it fails with the same ``OSError`` as before. On Windows it
+    must not be started: :func:`_persona_token_argv` refuses it.
+    """
+    whole = _find_persona_token_program(token_cmd)
+    if whole is not None:
+        return [whole if _IS_WINDOWS else token_cmd]
+    try:
+        if _IS_WINDOWS:
+            words = _windows_program_and_arguments(token_cmd) or _split_windows_command(token_cmd)
+        else:
+            words = shlex.split(token_cmd)
+    except ValueError:  # an unbalanced quote: not something to guess at
+        return [token_cmd]
+    return words or [token_cmd]
+
+
+def _persona_token_program(token_cmd: str) -> str:
+    """Return the program part of the token command, which is safe to log.
+
+    Its arguments are not: a command with arguments can carry a secret on its command line.
+    """
+    return _persona_token_words(token_cmd)[0]
+
+
+def _persona_token_argv(token_cmd: str) -> list[str]:
+    """Return the argument list that starts the token command, without a shell.
+
+    On Windows the program is always an absolute path. A command that wasn't found raises
+    ``FileNotFoundError`` here instead of being handed over by name: Windows would go
+    looking for it, starting with the current directory.
+
+    Windows can start an ``.exe`` directly, and a ``.cmd`` or ``.bat`` through the command
+    interpreter it picks for them. It can't start a script, so a Python script is handed to
+    this interpreter and a PowerShell script to the Windows PowerShell that ships with
+    Windows: one interpreter, the same on every machine (a script that needs PowerShell 7
+    says so, ``pwsh -File ...``). It runs under ``RemoteSigned``: the stock policy on
+    Windows clients refuses every script, while this one still refuses an unsigned script
+    that was downloaded and never unblocked. A policy set by the organisation outranks it
+    either way.
+    """
+    words = _persona_token_words(token_cmd)
+    if not _IS_WINDOWS:
+        return words
+    if _find_windows_program(words[0]) is None:
+        raise FileNotFoundError(
+            errno.ENOENT,
+            "token command not found. On Windows it must be an absolute path or a program "
+            "on PATH; the current directory is never searched",
+            words[0],
+        )
+    suffix = ntpath.splitext(words[0])[1].casefold()
+    if suffix == ".ps1":
+        options = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "RemoteSigned", "-File"]
+        return [_windows_powershell_exe(), *options, *words]
+    if suffix in (".py", ".pyw"):
+        return [sys.executable, *words]
+    return words
+
+
+def _mint_persona_sati_token(token_cmd: str) -> str:
+    """Run ``PERSONA_SATI_MCP_TOKEN_COMMAND`` and return the token it prints, trimmed.
+
+    Raises ``OSError`` if the command can't be found or started, and
+    :class:`PersonaTokenCommandError` if it fails or takes too long. Returns ``""`` if it
+    prints nothing. Its output is returned to the caller and never logged.
+    """
+    argv = _persona_token_argv(token_cmd)
+    options: dict[str, Any] = {}
+    if _IS_WINDOWS:
+        # Without this a server started by a host that has no console gets one opened, and
+        # closed, for every heartbeat.
+        options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        if ntpath.basename(argv[0]).casefold() == "powershell.exe":
+            # A host started from PowerShell 7 passes down its PSModulePath, and Windows
+            # PowerShell 5.1 then loads 7's modules in place of its own and fails.
+            options["env"] = {
+                name: value
+                for name, value in os.environ.items()
+                if name.casefold() != "psmodulepath"
+            }
+    try:
+        output = subprocess.check_output(
+            argv,
+            text=True,
+            timeout=_PERSONA_TOKEN_TIMEOUT_SECONDS,
+            # This process's stdin is the MCP stream. A child that inherited it could read
+            # requests meant for the server, or wait on it forever.
+            stdin=subprocess.DEVNULL,
+            **options,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise PersonaTokenCommandError(f"exited with status {exc.returncode}") from None
+    except subprocess.TimeoutExpired:
+        raise PersonaTokenCommandError(
+            f"did not finish within {_PERSONA_TOKEN_TIMEOUT_SECONDS} seconds"
+        ) from None
+    return output.strip()
+
+
 def _load_agent_instructions() -> str:
     """Return the agent's composed system prompt.
 
@@ -150,29 +442,31 @@ def _load_agent_instructions() -> str:
 
     body_or_fallback = body or _HARDCODED_FALLBACK
 
+    # Messages name the program only: its arguments may carry a secret.
+    token_program = _persona_token_program(token_cmd)
     try:
-        token = subprocess.check_output([token_cmd], text=True, timeout=30).strip()
+        token = _mint_persona_sati_token(token_cmd)
     except (subprocess.SubprocessError, OSError) as exc:
         print(
             f"[entrabot] could not mint persona-sati token "
-            f"({token_cmd}): {exc}; using local fallback prompt",
+            f"({token_program}): {exc}; using local fallback prompt",
             file=sys.stderr,
         )
         log.warning(
             "persona-sati token mint failed (%s): %s: %s",
-            token_cmd,
+            token_program,
             type(exc).__name__,
             exc,
         )
         return body_or_fallback
     if not token:
         print(
-            f"[entrabot] token command {token_cmd} returned empty; using local fallback prompt",
+            f"[entrabot] token command {token_program} returned empty; using local fallback prompt",
             file=sys.stderr,
         )
         log.warning(
             "persona-sati token command %s returned empty output",
-            token_cmd,
+            token_program,
         )
         return body_or_fallback
 
@@ -1213,12 +1507,14 @@ async def _persona_sati_heartbeat_once() -> str:
     if not remote_url or not token_cmd:
         return "skipped"
 
+    # Messages name the program only: its arguments may carry a secret.
+    token_program = _persona_token_program(token_cmd)
     try:
-        token = subprocess.check_output([token_cmd], text=True, timeout=30).strip()
+        token = _mint_persona_sati_token(token_cmd)
     except (subprocess.SubprocessError, OSError) as exc:
         log.warning(
             "persona-sati heartbeat FAILED: token_mint_failed (%s): %s: %s",
-            token_cmd,
+            token_program,
             type(exc).__name__,
             exc,
         )
@@ -1226,7 +1522,7 @@ async def _persona_sati_heartbeat_once() -> str:
     if not token:
         log.warning(
             "persona-sati heartbeat FAILED: token_mint_failed (%s returned empty output)",
-            token_cmd,
+            token_program,
         )
         return "token_mint_failed"
 
@@ -6034,12 +6330,14 @@ def main() -> None:
 
     from entrabot.singleton import run_or_exit_if_held
 
-    # Acquire the process-singleton flock BEFORE any side-effecting work
+    # Acquire the process-singleton lock BEFORE any side-effecting work
     # (logging, keychain reads, blob clients). When two MCP hosts attach to
     # the same workstation simultaneously, every spawn after the first will
     # exit(2) here with a clear stderr message naming the holder PID instead
-    # of dying silently between module import and main() — see GitHub
-    # issue #62.
+    # of dying silently between module import and main(). The lock is real on
+    # every platform: flock on macOS and Linux, msvcrt.locking on Windows
+    # (see entrabot.singleton and Learning #56). The Windows half was a no-op
+    # until recently, and that gap was never tracked in an issue.
     #
     # The handle is bound to ``_singleton_handle`` so the GC can't release
     # it; the lock lives for the process lifetime and the kernel cleans up

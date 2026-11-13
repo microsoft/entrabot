@@ -8,8 +8,9 @@ five or more provisioning scripts.
 from __future__ import annotations
 
 import logging
+import re
 import time
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 
@@ -139,17 +140,48 @@ def graph_collection_values(
     return values
 
 
-def resolve_user_by_email(token: str, email: str) -> tuple[str, str]:
-    """Resolve an email address to ``(object_id, display_name)`` in the tenant.
+_OBJECT_ID = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+# Left as written in a ``$filter`` value so it stays readable in logs and traces. Everything
+# else is percent-encoded, in particular ``#`` (a guest's sign-in name contains ``#EXT#``,
+# and a raw ``#`` starts the URL fragment, which is never sent), ``&``, ``+``, ``%`` and ``?``.
+_FILTER_SAFE = "'()/:,@$="
 
-    Tries, in order: ``userPrincipalName eq``, ``mail eq``,
+
+def _filter_url(filter_expression: str, select: str) -> str:
+    encoded = quote(filter_expression, safe=_FILTER_SAFE)
+    return f"{GRAPH_BETA}/users?$filter={encoded}&$select={select}"
+
+
+def resolve_user_by_email(token: str, email: str) -> tuple[str, str]:
+    """Resolve a person to ``(object_id, display_name)`` in the tenant.
+
+    *email* is an email address or sign-in name (a guest's ``...#EXT#@tenant`` name
+    included), or the user's object ID, which is looked up directly.
+
+    For an address it tries, in order: ``userPrincipalName eq``, ``mail eq``,
     ``otherMails/any``, ``proxyAddresses/any (smtp:)``,
     ``proxyAddresses/any (SMTP:)``.
 
     Raises :class:`LookupError` if the user cannot be found.
     """
+    email = email.strip()
     headers = {"Authorization": f"Bearer {token}"}
     select = "id,displayName,userPrincipalName,mail,proxyAddresses"
+
+    if _OBJECT_ID.match(email):
+        resp = requests.get(
+            f"{GRAPH_BETA}/users/{email}?$select={select}", headers=headers, timeout=15
+        )
+        if resp.status_code == 200:
+            user = resp.json()
+            return user["id"], user.get("displayName") or email
+        raise LookupError(
+            f"Could not find a user with object ID {email} in the tenant "
+            f"(Graph answered {resp.status_code})."
+        )
+
     quoted = odata_escape(email)
 
     filters = (
@@ -161,7 +193,7 @@ def resolve_user_by_email(token: str, email: str) -> tuple[str, str]:
     )
 
     for filt in filters:
-        url = f"{GRAPH_BETA}/users?$filter={filt}&$select={select}"
+        url = _filter_url(filt, select)
         resp = requests.get(url, headers=headers, params={"$count": "true"}, timeout=15)
         # Some advanced queries require ConsistencyLevel: eventual
         if resp.status_code == 400:

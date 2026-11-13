@@ -676,13 +676,13 @@ Regression tests in `tests/test_mcp_server_integration.py` cover both raw Teams 
 ### Learning #56: Two Simultaneous MCP Hosts Silently Double-Spawn `entrabot-mcp` — flock-Singleton Is Mandatory
 
 **Date:** 2026-04-30
-**Status:** **CONFIRMED — issue #62, fixed in `fix/singleton-lock`.**
+**Status:** **CONFIRMED — fixed in `fix/singleton-lock`.** (Earlier text here cited issue #62; that number belongs to an unrelated issue, and the Windows gap was never tracked.)
 **Context:** A user opened two Copilot CLI sessions on the same repo in different terminal tabs. Both sessions independently spawned `entrabot-mcp` (correct per MCP stdio spec — one server per client; there is no shared-server mechanism for stdio transport). The two processes then raced on every shared resource: macOS Keychain item for the cert key, `~/.entrabot/data/interaction_log.jsonl`, `watched_chats`, the Azure Blob container (ETag races), and Teams Graph polls (2× rate, extra 429 risk).
 **Problem:** The second spawn imported the module, logged `persona-sati env unset; serving body-only`, and **died before reaching `main()` / `Starting EntraBot MCP server`**. Most likely cause: the older process was holding the Keychain during a token refresh; the new spawn's first cert-key read blocked long enough for Copilot CLI's MCP `initialize` handshake (~25–30s) to time out and SIGKILL the spawn. Copilot CLI 1.0.39 then sat at "Connecting" forever without surfacing the failure or auto-respawning. From the user's perspective: silent death.
 **Fix:** `src/entrabot/singleton.py` acquires an exclusive `fcntl.flock(LOCK_EX | LOCK_NB)` on `<data_dir>/.singleton.lock` as the first action in `main()`. On contention it writes a one-line `[entrabot]` stderr message naming the holder PID (read from `.holder.pid` sidecar) and exits with code 2 so the host surfaces the failure instead of timing out. The kernel releases the flock automatically on process death — even SIGKILL — so a dead lock-holder never strands the next spawn. The `.holder.pid` sidecar is a diagnostic; the flock itself is load-bearing.
 **Prevention:** Run only one MCP host per workstation per project. If two clients must share state, use the SSE (HTTP) transport instead of stdio — that's the only MCP transport designed for multi-client. The singleton lock is a *belt* against accidental double-spawn; don't treat it as authorization to run two on purpose.
-**Windows note:** The implementation degrades to a no-op on Windows (returns a handle that doesn't actually exclude). Cross-platform locking via `msvcrt.locking` is a follow-up tracked in issue #62. The original symptom was macOS-specific.
-**Evidence/references:** GitHub issue #62; `src/entrabot/singleton.py`; `src/entrabot/mcp_server.py:main()` calls `run_or_exit_if_held()` before `setup_logging()`; `tests/test_singleton.py` (12 tests including cross-process contention via `multiprocessing.Process`).
+**Windows note (updated 2026-11-11):** The lock is now real on Windows: `msvcrt.locking(fd, LK_NBLCK, 1)` on the same lock file, with the descriptor closed on every path that returns no handle. Before that the implementation was a no-op on Windows (it returned a handle that excluded nothing), so two hosts on one PC ran two servers. The holder-PID sidecar is written only after the lock is held; the no-op used to write it first and overwrite the real holder's PID. The original symptom was macOS-specific.
+**Evidence/references:** `src/entrabot/singleton.py`; `src/entrabot/mcp_server.py:main()` calls `run_or_exit_if_held()` before `setup_logging()`; `tests/test_singleton.py` (12 tests including cross-process contention via `multiprocessing.Process`).
 
 ---
 
@@ -979,6 +979,138 @@ The wrap always adds an authoritative outer envelope; a body that already resemb
 - **A failing test runs the old code.** This work's first red run executed a script that hardcoded `~/.entrabot/data`, and three tests without a home guard read a developer's real chat list before the fix existed. Point `HOME` at a decoy before a test touches anything that might read from it, and do it for every test in the file rather than the ones you expect to need it.
 
 **Evidence/references:** `src/entrabot/tools/poll_state.py`, `_email_poll_cycle` and `_discover_chats_once` in `src/entrabot/mcp_server.py`, `write_text(if_absent=)` in `src/entrabot/storage/backend.py`. Tests: `tests/tools/test_poll_state.py`, `tests/test_mcp_server_email_poll.py`, `tests/test_mcp_server_watched_chats.py`. Design: `engineering-history/architecture/DESIGN-multi-instance-cursor-consistency.md`. Companion: Learning #52 (stale sponsor gate after `create_chat`). Closes GitHub #64.
+
+---
+
+### Learning #72: `Get-Tpm` Returns Blank Properties, Not an Error, for a Standard User — Probe the TPM by Creating a Key
+
+**Date:** 2026-11-11
+**Status:** **CONFIRMED on Windows 11 25H2 (virtual TPM 2.0), non-administrator account.**
+**Context:** Windows setup chose the key store by running `(Get-Tpm).TpmReady` and using the TPM provider only when it was true.
+**Problem:** Without elevation `Get-Tpm` does not fail. It returns an object whose `TpmPresent` and `TpmReady` are empty, which reads as false. Every standard user silently got a software key, on machines with a working TPM. The same account could create a non-exportable key on the Microsoft Platform Crypto Provider and sign with it.
+**Fix:** `entrabot.platform.wincert.create_signing_cert` does not ask. It creates the key on the TPM provider and signs once; on any failure it deletes what it made, key included, and creates the key on the software provider, recording the reason.
+**Prevention:** Don't infer a capability from a status cmdlet that needs more privilege than the capability itself. Try the operation, and clean up after a failed try.
+**Evidence/references:** `src/entrabot/platform/wincert.py`; `tests/test_platform_wincert.py`.
+
+---
+
+### Learning #73: `icacls /inheritance:r` Does Not Remove Explicit Entries — Set the Access List Exactly
+
+**Date:** 2026-11-11
+**Status:** **CONFIRMED on Windows 11 25H2.**
+**Context:** `.env` was "locked to the user" with `icacls <file> /inheritance:r /grant:r <user>:M`.
+**Problem:** A new file in the project folder carried SYSTEM, Administrators and the user as explicit entries, not inherited ones (no `(I)` flag). `/inheritance:r` had no inheritance to remove, `/grant:r` rewrote only the user's entry, and the command exited 0 with SYSTEM and Administrators still holding full control. Setup then printed that only the user could read the file. Separately, a later rewrite through a temp file and `os.replace` replaced the locked file with an unlocked one.
+**Fix:** `winsetup/_winacl.py` replaces the access list with exactly one entry (protected DACL, current user, modify) in one call through `advapi32`. `envfile.update_env` applies it to the temp file before the replace, on every write. Setup reads the access list back after its last write and reports the file as private only if that is true.
+**Prevention:** A lock is a property of every write, not a step. State the access list you want instead of editing the one that is there. Never report a permission you have not read back.
+**Evidence/references:** `src/entrabot/winsetup/_winacl.py`, `src/entrabot/winsetup/envfile.py`; `tests/winsetup/test_envfile.py`.
+
+---
+
+### Learning #74: In a Windows SSH Session, MSI Installers Fail With 1601 and Credential Manager Is Unavailable
+
+**Date:** 2026-11-11
+**Status:** **CONFIRMED on Windows 11 25H2, OpenSSH server, password sign-in.**
+**Context:** Testing Windows setup as a non-administrator over SSH.
+**Problem:** The python.org installer run quietly for the current user exited 1601 ("the Windows Installer service could not be accessed") and installed nothing. `cmdkey` reported "Credentials cannot be saved from this logon session", so anything that uses `keyring` fails there, even with password sign-in. `winget` is not registered for a user who has never logged on at the desktop.
+**Fix:** Setup depends on none of them. Python comes from an installer-free package (Learning #79), the Azure CLI from `pip` into a private folder, and the Windows sign-in path does not open Credential Manager when a certificate SHA-1 is configured. The wizard reports a Credential Manager failure in its end-to-end test as a limit of the session, not of the setup.
+**Prevention:** Treat "works at the desktop" and "works in a remote or service session" as different environments. Give every installer route a fallback that needs no service, and keep OS credential stores off the critical path.
+**Evidence/references:** `scripts/setup-windows.ps1` (Python routes), `src/entrabot/winsetup/azcli.py`, `src/entrabot/tools/teams.py` (`_build_blueprint_assertion`).
+
+---
+
+### Learning #75: Windows PowerShell 5.1 Writes CLIXML Progress Records to stderr When It Has No Console
+
+**Date:** 2026-11-11
+**Status:** **CONFIRMED on Windows PowerShell 5.1.26100.**
+**Context:** Running `powershell.exe` with its output captured (SSH, CI, a Python subprocess).
+**Problem:** stderr began with `#< CLIXML` and a block of `<Obj S="progress">` records ("Preparing modules for first use") on a run that succeeded. Code that treats non-empty stderr as failure breaks, and a user sees XML. The progress bar also slows `Invoke-WebRequest` downloads badly.
+**Fix:** `$ProgressPreference = 'SilentlyContinue'` is the first statement of every script and of every script text passed to `powershell.exe`. The exit code decides success; stderr is only read to explain a non-zero exit, with progress records dropped.
+**Prevention:** Never use "stderr is empty" as a success test. Silence progress before the first cmdlet runs.
+**Evidence/references:** `src/entrabot/platform/wincert.py` (`_error_text`), `scripts/setup-windows.ps1`, `scripts/prereqs-windows.ps1`.
+
+---
+
+### Learning #76: Text-Mode Writes Turn `\n` Into `\r\n` on Windows — Write Storage Byte-Exact
+
+**Date:** 2026-11-11
+**Status:** **CONFIRMED by tests on Windows 11; fix in place.**
+**Context:** Local storage wrote text with `open(..., "w")`.
+**Problem:** Two defects from one default. The encoding was the system code page, so the daily summary (which contains emoji) raised `UnicodeEncodeError` when archived, before the email was sent: it could never send on Windows with local memory. And newline translation turned every `\n` into `\r\n`, so a memory file pulled from the cloud differed from its source and the next sync saw a change that was not there. Simulated-Windows tests on macOS caught the first and missed the second until the suite ran on Windows.
+**Fix:** Every text write in `src/entrabot/storage/` passes `encoding="utf-8"` and `newline="\n"`. Reads stay tolerant of older files with `\r\n`. `tests/locale_codec.py` fakes both the code page and the newline translation so the regression runs on every platform.
+**Prevention:** A file another machine will read has an explicit encoding and an explicit newline. Run the suite on the real platform; a simulation only covers the differences you thought of.
+**Evidence/references:** `src/entrabot/storage/backend.py`, `src/entrabot/storage/persona.py`, `tests/locale_codec.py`; issue #60.
+
+---
+
+### Learning #77: `a & echo %ERRORLEVEL%` Prints the Exit Code From Before `a` Ran
+
+**Date:** 2026-11-11
+**Status:** **CONFIRMED.**
+**Context:** Capturing a command's exit code over SSH with `scripts\setup-windows.cmd ... & echo EXITCODE=%ERRORLEVEL%`.
+**Problem:** `cmd.exe` expands `%ERRORLEVEL%` when it parses the line, before the first command runs. Every run printed `EXITCODE=0`, including ones that failed.
+**Fix:** `cmd /v:on /c "<command> & echo EXITCODE=!ERRORLEVEL!"`, or read the code on a separate line.
+**Prevention:** In `cmd`, a variable read on the same line as the command that sets it needs delayed expansion. Check a harness against a command that is known to fail before trusting its "0".
+**Evidence/references:** `scripts/setup-windows.cmd` and `start-entrabot.cmd` read `%ERRORLEVEL%` on the line after the command.
+
+---
+
+### Learning #78: Don't Pass Arguments With `cmd` Metacharacters Through `az.cmd` — Run the CLI's Python
+
+**Date:** 2026-11-11
+**Status:** **Fix in place and exercised end to end on Windows; the original failure was inferred from `az.cmd`'s structure, not reproduced.**
+**Context:** On Windows `az` is `az.cmd`, a batch file that ends with `python -m azure.cli %*` inside an `IF ( ... )` block.
+**Problem:** Arguments are re-parsed by `cmd.exe` on the way through. A `)` in a Graph URL such as `servicePrincipals(appId='...')` closes the block, and `&`, `|`, `^`, `<`, `>` and `%` are interpreted.
+**Fix:** `entra_provisioning._az_command` and `winsetup/azcli.py` find the CLI's own interpreter (the MSI layout and the `pip` layout) and run `python -m azure.cli` directly, which takes `cmd.exe` out of the path. The role lookup also resolves the service principal's object ID first and uses `/servicePrincipals/{id}/...`.
+**Prevention:** Treat a `.cmd` shim as a shell. Either avoid it or keep its arguments free of metacharacters; prefer URLs without parentheses.
+**Evidence/references:** `scripts/entra_provisioning.py` (`_az_command`, `run_az`), `src/entrabot/winsetup/azcli.py`.
+
+---
+
+### Learning #79: The Official NuGet `python` Package Is an Installer-Free, Signed Interpreter
+
+**Date:** 2026-11-11
+**Status:** **CONFIRMED on Windows 11 25H2 x64, non-administrator, over SSH.**
+**Context:** A PC with no Python, no `winget`, and no way to run an MSI (Learning #74).
+**Problem:** Every usual route needs something the session lacks: `winget` needs registration, the python.org installer needs the Windows Installer service, the Microsoft Store needs a desktop.
+**Fix:** `https://www.nuget.org/api/v2/package/python/<version>` is a 14 MB zip published by the Python Software Foundation. Unpacked, `tools\python.exe` runs, `python -m venv` works, and `pip` works in the venv. `python.exe` and its DLLs carry a valid Authenticode signature from the Python Software Foundation, which setup checks before the first execution. Nothing is written to the registry or `PATH`. The ARM64 package is `pythonarm64` (not tested).
+**Prevention:** Prefer an unpack-and-run distribution over an installer for a private dependency, and verify the publisher's signature before running anything downloaded.
+**Evidence/references:** `scripts/setup-windows.ps1` (private Python route).
+
+---
+
+### Learning #80: Claude Code Hooks Need a Pinned Shell and a Fail-Closed Setting to Be Safe on Windows
+
+**Date:** 2026-11-11
+**Status:** **CONFIRMED under Git Bash on Windows 11; the fail-open behaviour of the old configuration follows from the documented exit-code rules and was not reproduced in a live Claude Code session.**
+**Context:** The hooks were `python3 scripts/hooks/<name>.py`.
+**Problem:** A standard Windows Python install provides `python.exe` and `py.exe`, not `python3`. A hook that cannot start exits with a code that is neither 0 nor 2, which Claude Code treats as a non-blocking error, so both gates (local memory writes, body prompt before Teams sends) stopped gating. There is no per-platform hook setting.
+**Fix:** One launcher, `scripts/hooks/run-hook.sh`, finds an interpreter (`.venv/bin/python3`, `.venv/Scripts/python.exe`, then `PATH`) and exits 2 when it finds none. Each hook sets `"shell": "bash"`, the two gates set `"onFailure": "block"`, and timeouts are 20 seconds because a cold Git Bash plus Python start can exceed 5. On Windows this makes Git for Windows a requirement for Claude Code with this repo.
+**Prevention:** A security hook must block when it cannot run, on every platform it can be invoked from. Test the hook command itself on each platform, not just the script behind it.
+**Evidence/references:** `.claude/settings.json`, `scripts/hooks/run-hook.sh`, `tests/hooks/test_run_hook_launcher.py`.
+
+---
+
+### Learning #81: The Sponsors the Agent Obeys Come From the Directory, Not From `.env`
+
+**Date:** 2026-11-11
+**Status:** **CONFIRMED.**
+**Context:** Setup recorded the chosen sponsor in `.env` (`ENTRABOT_HUMAN_*`) and reported "Works for: <that person>".
+**Problem:** At runtime the sponsor list comes from the Agent Identity's `sponsors` in Microsoft Entra (`whoami` reports `human_sponsor_source: entra_agent_identity_sponsors`). A new agent's only directory sponsor is the account that created it. Naming someone else in setup changed `.env` and nothing the agent consults, so the agent would ignore the person setup said it worked for. `scripts/add_agent_sponsor.py` existed as the manual fix.
+**Fix:** The Windows wizard adds each explicitly chosen sponsor on the Agent Identity (additive, never removing anyone), shows that on the review screen, and reports "Works for" from the directory. When joining or continuing an agent with no sponsor named, it adds nobody. `setup.sh` still has the gap.
+**Prevention:** When a setting has two homes, find out which one the runtime reads, and make setup write that one. Report state from the source of truth, not from what setup intended.
+**Evidence/references:** `src/entrabot/tools/identity.py` (`SPONSOR_SOURCE`), `src/entrabot/winsetup/agentsponsors.py`, `scripts/add_agent_sponsor.py`.
+
+---
+
+### Learning #82: Never Adopt a Directory Object by Display Name Before Granting It Privileges
+
+**Date:** 2026-11-12
+**Status:** **Fix in place and covered by unit tests; not yet run against a real tenant.**
+**Context:** A machine with no Provisioner app recorded ran `az ad app list --display-name "EntraBot Agent ID Provisioner" --query "[0].appId"`, took the first result, uploaded its certificate to it, and granted it admin consent for tenant-wide Microsoft Graph application permissions.
+**Problem:** Display names are not unique, and `--display-name` matches the start of the name in any case. Anyone allowed to register applications can create an app with that name, own it, or leave a secret, certificate or federated credential on it and then hand it over, and setup would grant that app tenant-wide permissions. The consent check had the same flaw one level down: it counted an app role assignment as Microsoft Graph's when its `resourceDisplayName` was "Microsoft Graph".
+**Fix:** `entra_provisioning._provisioner_app_for_this_machine` takes over an exact-name match only when that grants nobody anything: an administrator has already consented to every permission setup needs and to anything else the app declares, or nobody else can use it (the signed-in user is the only owner of the app and its service principal, or there are none; no client secret, federated credential or service-principal credential; every certificate's private key is on this machine; no other permission declared). Several matches, or anything that could not be read, refuse with nothing changed; `ENTRABOT_PROVISIONER_APP_ID_VERIFIED` names a checked app for one run. Graph's service principal is found by its well-known appId (`00000003-0000-0000-c000-000000000000`) and assignments are matched to it by object ID.
+**Prevention:** Never adopt a directory object by display name before granting it privileges: names are not unique, and anyone who can register an app can squat one. Decide from who can control the object (its owners and credentials) and from what an administrator has already approved, and treat "could not check" as "no". Identify Microsoft Graph, and any other first-party resource, by its well-known appId, never by its display name.
+**Evidence/references:** `scripts/entra_provisioning.py` (`_provisioner_app_for_this_machine`, `_assess_candidate`, `_approval`, `_graph_service_principal_id`), `tests/scripts/test_entra_provisioning.py`. The same rule was then applied to the Blueprint: `scripts/create_entra_agent_ids.py` (`find_existing_blueprint`) uses only the Blueprint that is recorded or named, and stops instead of searching by display name when it is missing or cannot be checked. An Agent User found by its sign-in name is adopted only when its parent Agent Identity belongs to that Blueprint (`agent_identity_to_reuse`): the name is unique, but it can be another agent's. The Agent Identity and Agent User lookups stop on "could not check" instead of reading it as "none" (`find_existing_agent_identity`, `find_existing_agent_user`, `find_existing_agent_user_by_upn`); `tests/scripts/test_create_entra_agent_ids.py`. `scripts/teardown.sh` deletes only the Provisioner app recorded in `.entrabot-state.json`, by its application ID, and with none recorded deletes no app and prints the command to delete one by hand; `tests/scripts/test_provisioner_token_contract.py`.
 
 ---
 

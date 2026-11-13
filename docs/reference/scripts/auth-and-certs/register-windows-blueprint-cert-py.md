@@ -7,11 +7,11 @@ Part of the [auth-and-certs command reference](../index.md#auth-and-certs).
 
 ## Purpose
 
-[`setup-windows.ps1`](../setup/setup-windows-ps1.md) Step 6 calls this once it has a
-certificate in `Cert:\CurrentUser\My` that the Blueprint doesn't list.
-[`generate_windows_cert.py`](generate-windows-cert-py.md) only creates the certificate on
-the machine, so until it is registered Entra has never seen its public key and Hop 1
-fails with `invalid_client`.
+The Windows setup wizard ([`setup-windows.ps1`](../setup/setup-windows-ps1.md)) and
+certificate rotation ([`deploy-windows.ps1`](../setup/deploy-windows-ps1.md)) call this
+once they have a certificate in `Cert:\CurrentUser\My` that the Blueprint doesn't list.
+Creating a certificate only puts it on the machine, so until it is registered Entra has
+never seen its public key and Hop 1 fails with `invalid_client`.
 
 Several machines can share one Blueprint, each with its own certificate, and Microsoft
 Graph treats a `keyCredentials` update as a replacement of the whole list. This command
@@ -23,8 +23,10 @@ registering this machine leaves the others working.
 - A provisioned Blueprint, and its object ID.
 - The Provisioner app. This command uses the bootstrap token helper, which creates or
   repairs the app if needed.
-- The certificate's public DER file, such as the one
-  `generate_windows_cert.py --export-der` writes. A PEM file is refused.
+- Either the certificate's SHA-1 thumbprint (`--sha1`), in which case the public
+  certificate is read from this user's certificate store and no file is written, or its
+  public DER file (`--der`), such as the one `generate_windows_cert.py --export-der`
+  writes. A PEM file is refused.
 - Windows. macOS and Linux use
   [`register_blueprint_cert.py`](register-blueprint-cert-py.md), which also generates
   the key.
@@ -32,21 +34,29 @@ registering this machine leaves the others working.
 ## Usage
 
 ```powershell
-python scripts/register_windows_blueprint_cert.py `
+.\.venv\Scripts\python.exe scripts\register_windows_blueprint_cert.py `
+    --blueprint-object-id <BLUEPRINT_OBJECT_ID> `
+    --sha1 <SHA1_THUMBPRINT>
+
+.\.venv\Scripts\python.exe scripts\register_windows_blueprint_cert.py `
     --blueprint-object-id <BLUEPRINT_OBJECT_ID> `
     --der <PATH_TO_CERTIFICATE>
 ```
 
-Most operators reach this through `setup-windows.ps1` rather than running it directly.
+Most operators reach this through `scripts\setup-windows.cmd` rather than running it directly.
 
 ## Options
 
 - `--blueprint-object-id` — the object ID of the Blueprint application. Required.
-- `--der` — the certificate's public DER file. Required.
+- `--sha1` — the SHA-1 thumbprint of a certificate in this user's certificate store.
+- `--der` — the certificate's public DER file.
+
+Exactly one of `--sha1` and `--der` is required.
 
 ## Effects
 
-1. Reads the DER file and builds a `keyCredentials` entry from it, named
+1. Reads the public certificate (from the certificate store for `--sha1`, or from the DER
+   file) and builds a `keyCredentials` entry from it, named
    `EntraBot Device Certificate — <short hostname>`. The name is for people reading the
    list in Entra; it is never used to decide which entry is which.
 2. Mints a Provisioner Graph token and reads the Blueprint's `keyCredentials`. If either
@@ -65,18 +75,19 @@ prints goes to stderr, and stdout stays empty.
 - `1` — not registered, and nothing was changed: a token failure, the list couldn't be
   read, or Graph refused the update.
 - `2` — usage error, including a DER file that is missing, unreadable, or not a DER
-  certificate.
+  certificate, and a thumbprint that isn't in this user's certificate store.
 - `3` — the outcome isn't confirmed. The Blueprint may have changed. Re-run setup.
 
-`setup-windows.ps1` removes a certificate it just generated after exit `1` or `2`, since
-nothing was written. After exit `3` it keeps the certificate and records its thumbprints
-in `.env`, so the next run checks the Blueprint for that same certificate instead of
-generating another.
+The setup wizard removes a certificate it just created, together with its private key,
+after exit `1` or `2`, since nothing was written. After exit `3` it keeps the certificate
+and records its thumbprints in `.env`, so the next run checks the Blueprint for that same
+certificate instead of creating another.
 
 ## Security
 
 Only the public certificate goes to Graph. Graph calls use the Provisioner token, never an
-`az` CLI token, and have bounded timeouts. The token and key material are never printed.
+`az` CLI token, and have bounded timeouts. The token, key material and the thumbprint
+are never printed.
 
 ## Common failures
 

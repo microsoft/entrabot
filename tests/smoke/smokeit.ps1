@@ -5,14 +5,23 @@
 .DESCRIPTION
   Delegates to tests/smoke/smokeit.py so Windows and Unix use the same
   orchestration, logs, failure summaries, and cleanup behavior.
+
+  On Windows the runner drives the real entry point unattended:
+    powershell -ExecutionPolicy Bypass -File scripts\setup-windows.ps1 -NewChain
+        -AgentUserUpn <upn> -UseCloudMemory -WithStorageAccount <name>
+        -WithContainer <name> -Yes [-Sponsor <upn>]
+  Works from Windows PowerShell 5.1 and PowerShell 7.
 #>
 
 [CmdletBinding()]
 param(
     [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$Args
+    [string[]]$SmokeArguments
 )
 
+# Windows PowerShell 5.1 writes progress records as CLIXML to stderr when its output is
+# captured, which the smoke runner does.
+$ProgressPreference = 'SilentlyContinue'
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
@@ -35,5 +44,5 @@ if (-not $Python) {
     }
 }
 
-& $Python (Join-Path $ScriptDir 'smokeit.py') @Args
+& $Python (Join-Path $ScriptDir 'smokeit.py') @SmokeArguments
 exit $LASTEXITCODE

@@ -69,11 +69,19 @@ in `.mcp.json` reaches it:
   otherwise, and a refused local connection says nothing about whether a hosted
   service is up.
 
-On macOS or Linux, run the health check:
+Run the health check. On macOS or Linux:
 
 ```bash
 ./scripts/setup.sh --diagnose
 ```
+
+On Windows:
+
+```bat
+scripts\setup-windows.cmd -Diagnose
+```
+
+On Windows, `PERSONA_SATI_MCP_TOKEN_COMMAND` may be a `.exe`, `.cmd`, `.bat`, `.ps1` or `.py` file, with arguments after it. The program must be an absolute path or a bare name found on `PATH`; a relative path, or a program found only in the current folder, is refused. A `.ps1` runs under the Windows PowerShell that ships with Windows (5.1), with the `RemoteSigned` execution policy, so a script downloaded from the internet must be unblocked first (`Unblock-File`). See [Windows troubleshooting](windows.md#could-not-mint-persona-sati-token-token-command-not-found).
 
 The `persona-sati MCP (optional)` line never fails the run:
 
