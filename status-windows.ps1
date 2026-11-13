@@ -24,6 +24,10 @@
 .PARAMETER Strict
   Return non-zero when health checks fail.
 
+.PARAMETER FullThumbprints
+  Show certificate thumbprints in full, to compare them with the Microsoft Entra
+  admin center. By default only their last four characters are shown.
+
 .PARAMETER Help
   Show this help.
 
@@ -42,6 +46,7 @@ param(
     [switch]$Json,
     [switch]$HealthOnly,
     [switch]$Strict,
+    [switch]$FullThumbprints,
     [switch]$Help
 )
 
@@ -79,11 +84,12 @@ if ($PSVersionTable.PSVersion.Major -lt 6) {
 function Get-StatusArguments {
     # The argument list handed to `python -m entrabot.winsetup`. Values are separate
     # array elements, so nothing is ever quoted by hand.
-    param([string]$ProjectRoot, [bool]$Json, [bool]$HealthOnly, [bool]$Strict)
+    param([string]$ProjectRoot, [bool]$Json, [bool]$HealthOnly, [bool]$Strict, [bool]$FullThumbprints)
     $list = @('status', '--project-root', $ProjectRoot)
     if ($Json) { $list += '--json' }
     if ($HealthOnly) { $list += '--health-only' }
     if ($Strict) { $list += '--strict' }
+    if ($FullThumbprints) { $list += '--full-thumbprints' }
     return $list
 }
 
@@ -114,6 +120,6 @@ if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
 
 $env:PYTHONUTF8 = '1'
 $env:PYTHONIOENCODING = 'utf-8'
-$handoff = @('-m', 'entrabot.winsetup') + @(Get-StatusArguments -ProjectRoot $ProjectRoot -Json ([bool]$Json) -HealthOnly ([bool]$HealthOnly) -Strict ([bool]$Strict))
+$handoff = @('-m', 'entrabot.winsetup') + @(Get-StatusArguments -ProjectRoot $ProjectRoot -Json ([bool]$Json) -HealthOnly ([bool]$HealthOnly) -Strict ([bool]$Strict) -FullThumbprints ([bool]$FullThumbprints))
 & $venvPython @handoff
 exit $LASTEXITCODE

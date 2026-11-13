@@ -239,16 +239,86 @@ def undo_join(path: Path, *, before: Mapping[str, str], applied: Mapping[str, st
     return True
 
 
-def identity_environment(choice: IdentityChoice, *, base: Mapping[str, str]) -> dict[str, str]:
+def _same_blueprint(recorded: str, wanted: str) -> bool:
+    """Microsoft Entra App IDs are GUIDs, the same in either letter case. Empty matches nothing."""
+    recorded = recorded.strip()
+    return bool(recorded) and recorded.lower() == wanted.strip().lower()
+
+
+def _env_names_another_blueprint(
+    choice: IdentityChoice, *, blueprint_app_id: str, env_values: Mapping[str, str]
+) -> bool:
+    """Is the Agent User sign-in name in ``.env`` another agent's, by what ``.env`` records?
+
+    ``scripts/setup.sh``'s rule ("Not reusing the Agent User named in .env"). Setup writes
+    ``ENTRABOT_AGENT_USER_UPN`` together with ``ENTRABOT_BLUEPRINT_APP_ID``, the Blueprint it
+    belongs to, so the name is this run's only when that is the Blueprint this run is for
+    (*blueprint_app_id*), in any letter case. Joining, a ``.env`` that names another Blueprint, or
+    none, is another agent's, as in setup.sh. Continuing with the agent recorded here, ``.env``
+    has to name another Blueprint: one that names none was written for this computer's agent by
+    an earlier setup. Never when the operator named the Agent User or a suffix, and never for a
+    new agent, whose helper is handed an empty name anyway.
+    """
+    if choice.mode == "new" or choice.agent_user_upn or choice.upn_suffix:
+        return False
+    recorded = env_values.get("ENTRABOT_BLUEPRINT_APP_ID", "")
+    if choice.mode == "join":
+        return not _same_blueprint(recorded, blueprint_app_id)
+    return bool(recorded.strip() and blueprint_app_id.strip()) and not _same_blueprint(
+        recorded, blueprint_app_id
+    )
+
+
+def not_reusing_env_agent_user(
+    choice: IdentityChoice, *, blueprint_app_id: str, env_values: Mapping[str, str]
+) -> list[str]:
+    """What to say when the Agent User ``.env`` names is not carried into this run, in
+    ``scripts/setup.sh``'s words: empty when ``.env`` names none, or it is this run's.
+
+    *blueprint_app_id* is the Blueprint this run is for (the one recorded here, when continuing).
+    """
+    wanted = choice.blueprint_app_id or blueprint_app_id
+    upn = env_values.get("ENTRABOT_AGENT_USER_UPN", "").strip()
+    if not upn or not _env_names_another_blueprint(
+        choice, blueprint_app_id=wanted, env_values=env_values
+    ):
+        return []
+    recorded = env_values.get("ENTRABOT_BLUEPRINT_APP_ID", "").strip() or "(none recorded)"
+    return [
+        f"Not reusing the Agent User named in .env ({upn}):",
+        f".env was written for Blueprint {recorded}, not {wanted}.",
+        f"To use one of {wanted}'s Agent Users, run setup with -UseBlueprint {wanted} "
+        "and -AgentUserUpn UPN or -UpnSuffix NAME.",
+    ]
+
+
+def identity_environment(
+    choice: IdentityChoice,
+    *,
+    base: Mapping[str, str],
+    env_values: Mapping[str, str] | None = None,
+    blueprint_app_id: str = "",
+) -> dict[str, str]:
     """The environment for ``create_entra_agent_ids.py``: *base* plus this run's identity choice.
 
     Identity variables already in *base* are dropped first. A different agent gets an explicit
     empty ``ENTRABOT_AGENT_USER_UPN`` when none was asked for: the helper loads ``.env`` for
-    any variable that is not set, and ``.env`` still names the previous agent.
+    any variable that is not set, and ``.env`` may still name the previous agent. A different
+    agent is one the state file shows a switch to, or, given *env_values* (what ``.env``
+    records), one whose Blueprint is not the one ``.env`` was written for
+    (:func:`not_reusing_env_agent_user` says so). *blueprint_app_id* is the Blueprint this run is
+    for; a join names its own.
     """
     env = {key: value for key, value in base.items() if key not in _IDENTITY_ENV_KEYS}
+    stale = env_values is not None and _env_names_another_blueprint(
+        choice,
+        blueprint_app_id=choice.blueprint_app_id or blueprint_app_id,
+        env_values=env_values,
+    )
 
     if choice.mode == "continue":
+        if stale:
+            env["ENTRABOT_AGENT_USER_UPN"] = ""
         return env
 
     if choice.mode == "new":
@@ -264,6 +334,6 @@ def identity_environment(choice: IdentityChoice, *, base: Mapping[str, str]) -> 
         env["ENTRABOT_AGENT_USER_UPN"] = choice.agent_user_upn
     elif choice.upn_suffix:
         env["_ENTRABOT_UPN_SUFFIX"] = choice.upn_suffix
-    elif choice.switching:
+    elif choice.switching or stale:
         env["ENTRABOT_AGENT_USER_UPN"] = ""
     return env

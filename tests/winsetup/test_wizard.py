@@ -681,6 +681,75 @@ class TestOtherIdentityModes:
         assert "_ENTRABOT_UPN_SUFFIX" not in request.env
 
 
+class TestAnInterruptedSwitchDoesNotCarryThePreviousAgentsUser:
+    """A switch to BP_APP recorded it in the state file and stopped before .env was rewritten, so
+    .env still names the previous agent's Blueprint and Agent User. The helper loads .env for any
+    variable it is not handed, so it looked for the previous agent's Agent User under BP_APP, and
+    its "belongs to a different Blueprint" check stopped setup. Now the wizard hands it an empty
+    name up front, as scripts/setup.sh does, and says why in setup.sh's words."""
+
+    OLD_UPN = "entrabot-agent-old@werner.ac"
+    SWITCHED_STATE = {
+        "TENANT_ID": TENANT,
+        "PROVISIONER_CLIENT_ID": "prov-app",
+        "BLUEPRINT_APP_ID": BP_APP,
+    }
+    STALE_ENV = [
+        *OTHER_AGENT_ENV,
+        f"ENTRABOT_BLUEPRINT_APP_ID={OTHER_BP}",
+        f"ENTRABOT_AGENT_USER_UPN={OLD_UPN}",
+    ]
+
+    def _helpers_were_handed(self, world: Scenario) -> list[str | None]:
+        return [
+            (request.env or {}).get("ENTRABOT_AGENT_USER_UPN")
+            for helper in ("entra_provisioning.py", "create_entra_agent_ids.py")
+            for request in world.ran(helper)
+        ]
+
+    def _said_why(self, world: Scenario) -> None:
+        assert f"Not reusing the Agent User named in .env ({self.OLD_UPN}):" in world.out
+        assert f".env was written for Blueprint {OTHER_BP}, not {BP_APP}." in world.out
+        assert (
+            f"To use one of {BP_APP}'s Agent Users, run setup with -UseBlueprint {BP_APP} "
+            "and -AgentUserUpn UPN or -UpnSuffix NAME."
+        ) in world.out
+
+    def test_joining_again(self, world: Scenario) -> None:
+        world.existing(state=self.SWITCHED_STATE, env=self.STALE_ENV)
+
+        assert world.run(use_blueprint=BP_APP) == 0, world.out
+
+        assert self._helpers_were_handed(world) == ["", ""]
+        self._said_why(world)
+
+    def test_running_again_with_no_flags(self, world: Scenario) -> None:
+        # What "Run setup again" leads to: setup continues with the agent the state file names.
+        world.existing(state=self.SWITCHED_STATE, env=self.STALE_ENV)
+
+        assert world.run() == 0, world.out
+
+        assert self._helpers_were_handed(world) == ["", ""]
+        self._said_why(world)
+
+    def test_the_agent_env_was_written_for_keeps_its_agent_user(self, world: Scenario) -> None:
+        env = [*self.STALE_ENV[:-2], f"ENTRABOT_BLUEPRINT_APP_ID={BP_APP.upper()}"]
+        world.existing(env=[*env, "ENTRABOT_AGENT_USER_UPN=entrabot-agent-sati@werner.ac"])
+
+        assert world.run(use_blueprint=BP_APP) == 0, world.out
+
+        assert self._helpers_were_handed(world) == [None, None]  # the helper reads .env's
+        assert "Not reusing" not in world.out
+
+    def test_an_agent_user_named_on_the_command_line_wins(self, world: Scenario) -> None:
+        world.existing(state=self.SWITCHED_STATE, env=self.STALE_ENV)
+
+        assert world.run(use_blueprint=BP_APP, agent_user_upn="bot@werner.ac") == 0, world.out
+
+        assert self._helpers_were_handed(world) == ["bot@werner.ac", "bot@werner.ac"]
+        assert "Not reusing" not in world.out
+
+
 class TestTheAgentStepKeepsTheBlueprint:
     """Defence in depth. A run that joins a Blueprint by App ID, or continues the one recorded
     on this computer, must come back from the agent step with that same Blueprint. The helper

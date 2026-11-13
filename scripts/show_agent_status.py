@@ -10,6 +10,10 @@ Usage::
     python scripts/show_agent_status.py
     python scripts/show_agent_status.py --json
     python scripts/show_agent_status.py --health-only
+    python scripts/show_agent_status.py --full-thumbprints
+
+A certificate thumbprint is shown by its last four characters (``…B3C4``), the form the rest
+of the tooling uses, in text and in JSON. ``--full-thumbprints`` shows it in full.
 """
 
 from __future__ import annotations
@@ -73,6 +77,23 @@ _REQUIRED_STATE_KEYS = [
 
 # ANSI colour of each health label, used only where the terminal can draw it.
 _STATUS_COLOR = {"pass": "32", "fail": "31", "warn": "33", "skip": "90"}
+
+# The certificate thumbprints in _STATE_KEYS. Like every other thumbprint here, they are shown by
+# their last four characters unless --full-thumbprints is given.
+_THUMBPRINT_STATE_KEYS = frozenset({"PROVISIONER_CERT_THUMBPRINT", "BLUEPRINT_CERT_THUMBPRINT"})
+
+
+def _shown_thumbprint(thumbprint: str | None, *, full: bool) -> str | None:
+    """A certificate thumbprint as the report shows it.
+
+    Its last four characters (``…B3C4``), the form the rest of the tooling uses: enough to
+    tell two certificates apart. In full only when the operator asks for it
+    (``--full-thumbprints``), to compare with the Microsoft Entra admin center. Nothing
+    recorded stays as it is (``None``, shown as N/A).
+    """
+    if not thumbprint or full:
+        return thumbprint
+    return "…" + thumbprint[-4:].upper()
 
 
 def _is_windows() -> bool:
@@ -164,8 +185,8 @@ def _local_certificate_checks(state: dict[str, str | None]) -> list[Check]:
 
 
 # What the older-setup-key check reads, the way setup and its health check read it
-# (entrabot.winsetup.oldkeys). Not in _STATE_KEYS: those are shown in full, and of an older
-# key's thumbprint only the last four characters are ever shown.
+# (entrabot.winsetup.oldkeys). Not in _STATE_KEYS, which make up the report's state object: of an
+# older key's thumbprint only the last four characters are ever shown, --full-thumbprints or not.
 _OLD_SETUP_KEY_STATE = (
     oldkeys.REVOKE_PENDING,
     oldkeys.REVOKE_PENDING_EXPIRES,
@@ -322,6 +343,8 @@ def _build_checks(
     permissions_error: str | None,
     key_credentials: list[dict] | None,
     key_credentials_error: str | None,
+    *,
+    full_thumbprints: bool = False,
 ) -> list[Check]:
     missing = [key for key in _REQUIRED_STATE_KEYS if not state.get(key)]
     checks = [
@@ -379,11 +402,12 @@ def _build_checks(
                 for cred in key_credentials
             )
             if not matches:
+                shown = _shown_thumbprint(local_thumb, full=full_thumbprints)
                 checks.append(
                     Check(
                         "Certificate",
                         "warn",
-                        f"Local thumbprint {local_thumb[:16]}... not found in Entra "
+                        f"Local thumbprint {shown} not found in Entra "
                         f"({len(key_credentials)} cert(s) on Blueprint)",
                     )
                 )
@@ -432,8 +456,11 @@ def _permission_rows(
 
 
 def _key_rows(
-    key_credentials: list[dict] | None, local_thumb: str | None
+    key_credentials: list[dict] | None, local_thumb: str | None, *, full_thumbprints: bool = False
 ) -> list[dict[str, object]]:
+    """One row per Blueprint certificate. Its thumbprints (the computed SHA-256 one, and
+    ``customKeyIdentifier``, which Graph sets to the SHA-1 one) are shown by their last four
+    characters unless *full_thumbprints*; the match is made on the full values."""
     rows = []
     for credential in key_credentials or []:
         thumbprint = _compute_cert_thumbprint(credential.get("key", ""))
@@ -444,15 +471,17 @@ def _key_rows(
                 "type": credential.get("type"),
                 "usage": credential.get("usage"),
                 "endDateTime": credential.get("endDateTime"),
-                "customKeyIdentifier": credential.get("customKeyIdentifier"),
-                "computedThumbprint": thumbprint or None,
+                "customKeyIdentifier": _shown_thumbprint(
+                    credential.get("customKeyIdentifier"), full=full_thumbprints
+                ),
+                "computedThumbprint": _shown_thumbprint(thumbprint, full=full_thumbprints) or None,
                 "matchesLocalBlueprintCert": bool(local_thumb and thumbprint == local_thumb),
             }
         )
     return rows
 
 
-def _snapshot(token: str) -> dict[str, object]:
+def _snapshot(token: str, *, full_thumbprints: bool = False) -> dict[str, object]:
     state = _read_all_state()
     agent_oid = state.get("AGENT_OBJECT_ID") or state.get("AGENT_ID")
     blueprint_oid = state.get("BLUEPRINT_OBJECT_ID") or state.get("BLUEPRINT_APP_ID")
@@ -486,6 +515,7 @@ def _snapshot(token: str) -> dict[str, object]:
         permissions_error,
         key_credentials,
         key_credentials_error,
+        full_thumbprints=full_thumbprints,
     )
     checks.extend(_local_certificate_checks(state))
     checks.extend(_old_setup_key_checks())
@@ -493,16 +523,23 @@ def _snapshot(token: str) -> dict[str, object]:
     warned = sum(1 for check in checks if check.status == "warn")
     passed = sum(1 for check in checks if check.status == "pass")
 
+    # What is shown. The checks above were made on the full values.
+    shown_state = {
+        key: _shown_thumbprint(value, full=full_thumbprints)
+        if key in _THUMBPRINT_STATE_KEYS
+        else value
+        for key, value in state.items()
+    }
     return {
         "tenant": {"id": state.get("TENANT_ID")},
         "provisioner": {
             "client_id": state.get("PROVISIONER_CLIENT_ID"),
-            "cert_thumbprint": state.get("PROVISIONER_CERT_THUMBPRINT"),
+            "cert_thumbprint": shown_state.get("PROVISIONER_CERT_THUMBPRINT"),
         },
         "blueprint": {
             "app_object_id": state.get("BLUEPRINT_APP_ID"),
             "object_id": state.get("BLUEPRINT_OBJECT_ID"),
-            "cert_thumbprint": state.get("BLUEPRINT_CERT_THUMBPRINT"),
+            "cert_thumbprint": shown_state.get("BLUEPRINT_CERT_THUMBPRINT"),
         },
         "agent_identity": {
             "app_object_id": state.get("AGENT_ID"),
@@ -513,7 +550,7 @@ def _snapshot(token: str) -> dict[str, object]:
             "upn": state.get("AGENT_USER_UPN"),
             "work_iq_license_sku": state.get("AGENT_USER_WORK_IQ_LICENSE_SKU"),
         },
-        "state": state,
+        "state": shown_state,
         "platform": _platform_info(),
         "storage": _storage_info(),
         "sponsors": sponsors,
@@ -522,7 +559,11 @@ def _snapshot(token: str) -> dict[str, object]:
         "licenses_error": licenses_error,
         "permissions": _permission_rows(permissions, resource_names),
         "permissions_error": permissions_error,
-        "key_credentials": _key_rows(key_credentials, state.get("BLUEPRINT_CERT_THUMBPRINT")),
+        "key_credentials": _key_rows(
+            key_credentials,
+            state.get("BLUEPRINT_CERT_THUMBPRINT"),
+            full_thumbprints=full_thumbprints,
+        ),
         "key_credentials_error": key_credentials_error,
         "health": {
             "checks": [check.__dict__ for check in checks],
@@ -686,6 +727,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Return non-zero when health checks fail. Implied by --health-only.",
     )
+    parser.add_argument(
+        "--full-thumbprints",
+        action="store_true",
+        help="Show certificate thumbprints in full, to compare them with the Microsoft Entra "
+        "admin center. By default only their last four characters are shown.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -694,7 +741,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: Cannot acquire token: {exc}")
         return 1
 
-    snapshot = _snapshot(token)
+    snapshot = _snapshot(token, full_thumbprints=args.full_thumbprints)
 
     if args.json:
         _print_json(snapshot)

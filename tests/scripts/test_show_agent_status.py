@@ -556,3 +556,139 @@ class TestColourOnlyWhereItCanBeDrawn:
         monkeypatch.delenv("NO_COLOR", raising=False)
 
         assert status_mod._use_color(object()) is False
+
+
+class TestThumbprintsShowOnlyTheirLastFourCharacters:
+    """Full certificate thumbprints are not shown. The status report showed the current
+    Provisioner and Blueprint certificates' in full, in text and in --json, and every Blueprint
+    certificate's too. It now shows the last four characters ("…B3C4"), as the rest of the
+    tooling does. --full-thumbprints is the explicit opt-in, for comparing with the Microsoft
+    Entra admin center. The JSON field names stay as they were."""
+
+    PROV_SHA1 = "c3f1a2b4d5e6f708192a3b4c5d6e7f8091a2b3c4"  # lowercase hex, as setup records it
+    CUSTOM_KEY_ID = "w/GitNXm9wgZKjtMXW5/gJGis8Q="  # base64 of a SHA-1, as Graph returns it
+    STATE = {**STATE, "PROVISIONER_CERT_THUMBPRINT": PROV_SHA1}
+    FULL = (PROV_SHA1, _FAKE_CERT_THUMB, CUSTOM_KEY_ID)
+
+    @classmethod
+    def _graph(cls, method, path, token, **kw):
+        response = _fake_graph(method, path, token, **kw)
+        if "keyCredentials" in path:
+            body = response.json.return_value
+            body["keyCredentials"][0]["customKeyIdentifier"] = cls.CUSTOM_KEY_ID
+        return response
+
+    def _main(self, monkeypatch, argv, state=None):
+        _load_module()
+        values = dict(self.STATE if state is None else state)
+        monkeypatch.setattr(status_mod, "get_existing_graph_token", lambda: "tok")
+        monkeypatch.setattr(status_mod, "get_state", lambda key: values.get(key))
+        monkeypatch.setattr(status_mod, "graph_request", self._graph)
+        return status_mod.main(argv)
+
+    @staticmethod
+    def _ending(value: str) -> str:
+        return "…" + value[-4:].upper()
+
+    @pytest.mark.parametrize("argv", [[], ["--json"], ["--health-only"]])
+    def test_no_full_thumbprint_is_printed(self, monkeypatch, capsys, argv):
+        self._main(monkeypatch, argv)
+
+        out = capsys.readouterr().out
+        for full in self.FULL:
+            assert full not in out and full[:12] not in out, full
+
+    def test_the_text_report_shows_the_last_four_characters(self, monkeypatch, capsys):
+        assert self._main(monkeypatch, []) == 0
+
+        out = capsys.readouterr().out
+        assert f"Cert Thumbprint:      {self._ending(self.PROV_SHA1)}" in out
+        assert f"Cert Thumbprint:      {self._ending(_FAKE_CERT_THUMB)}" in out
+        assert f"SHA-256 Thumbprint:   {self._ending(_FAKE_CERT_THUMB)}" in out
+        assert f"Custom Key ID:        {self._ending(self.CUSTOM_KEY_ID)}" in out
+        assert "Matches Local Cert:   yes" in out  # matched on the full values
+
+    def test_json_keeps_its_field_names_and_shows_the_last_four_characters(
+        self, monkeypatch, capsys
+    ):
+        self._main(monkeypatch, ["--json"])
+
+        data = json.loads(capsys.readouterr().out)
+        assert data["provisioner"] == {
+            "client_id": "prov-777",
+            "cert_thumbprint": self._ending(self.PROV_SHA1),
+        }
+        assert data["blueprint"]["cert_thumbprint"] == self._ending(_FAKE_CERT_THUMB)
+        assert data["state"]["PROVISIONER_CERT_THUMBPRINT"] == self._ending(self.PROV_SHA1)
+        assert data["state"]["BLUEPRINT_CERT_THUMBPRINT"] == self._ending(_FAKE_CERT_THUMB)
+        (key,) = data["key_credentials"]
+        assert set(key) == {
+            "keyId",
+            "displayName",
+            "type",
+            "usage",
+            "endDateTime",
+            "customKeyIdentifier",
+            "computedThumbprint",
+            "matchesLocalBlueprintCert",
+        }
+        assert key["computedThumbprint"] == self._ending(_FAKE_CERT_THUMB)
+        assert key["customKeyIdentifier"] == self._ending(self.CUSTOM_KEY_ID)
+        assert key["matchesLocalBlueprintCert"] is True
+        assert data["health"]["failed"] == 0
+
+    def test_full_thumbprints_shows_them_in_full(self, monkeypatch, capsys):
+        self._main(monkeypatch, ["--full-thumbprints"])
+        out = capsys.readouterr().out
+        for full in self.FULL:
+            assert full in out, full
+
+        self._main(monkeypatch, ["--json", "--full-thumbprints"])
+        data = json.loads(capsys.readouterr().out)
+        assert data["provisioner"]["cert_thumbprint"] == self.PROV_SHA1
+        assert data["blueprint"]["cert_thumbprint"] == _FAKE_CERT_THUMB
+        assert data["state"]["PROVISIONER_CERT_THUMBPRINT"] == self.PROV_SHA1
+        assert data["state"]["BLUEPRINT_CERT_THUMBPRINT"] == _FAKE_CERT_THUMB
+        assert data["key_credentials"][0]["computedThumbprint"] == _FAKE_CERT_THUMB
+        assert data["key_credentials"][0]["customKeyIdentifier"] == self.CUSTOM_KEY_ID
+
+    def test_a_thumbprint_that_is_not_recorded_is_still_null_and_na(self, monkeypatch, capsys):
+        state = {
+            k: v
+            for k, v in self.STATE.items()
+            if k not in ("PROVISIONER_CERT_THUMBPRINT", "BLUEPRINT_CERT_THUMBPRINT")
+        }
+        monkeypatch.delenv("ENTRABOT_BLUEPRINT_CERT_THUMBPRINT", raising=False)
+        self._main(monkeypatch, ["--json"], state=state)
+        data = json.loads(capsys.readouterr().out)
+        assert data["provisioner"]["cert_thumbprint"] is None
+        assert data["blueprint"]["cert_thumbprint"] is None
+        assert data["state"]["PROVISIONER_CERT_THUMBPRINT"] is None
+
+        self._main(monkeypatch, [], state=state)
+        assert "Cert Thumbprint:      N/A" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("full", [False, True])
+    def test_the_certificate_warning_names_the_local_certificate_the_same_way(
+        self, monkeypatch, capsys, full
+    ):
+        other = "Zz" + _FAKE_CERT_THUMB[2:-4] + "q9X1"  # not on the Blueprint
+        argv = ["--json", "--full-thumbprints"] if full else ["--json"]
+        self._main(monkeypatch, argv, state={**self.STATE, "BLUEPRINT_CERT_THUMBPRINT": other})
+
+        data = json.loads(capsys.readouterr().out)
+        (check,) = [c for c in data["health"]["checks"] if c["name"] == "Certificate"]
+        shown = other if full else "…Q9X1"
+        assert check == {
+            "name": "Certificate",
+            "status": "warn",
+            "detail": f"Local thumbprint {shown} not found in Entra (1 cert(s) on Blueprint)",
+        }
+
+    def test_the_help_names_the_flag(self, capsys):
+        _load_module()
+        with pytest.raises(SystemExit):
+            status_mod.main(["--help"])
+        help_text = " ".join(capsys.readouterr().out.split())
+        assert "--full-thumbprints" in help_text
+        assert "Entra admin center" in help_text

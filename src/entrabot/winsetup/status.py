@@ -1,6 +1,7 @@
 """Show the agent's status: a thin runner for ``scripts/show_agent_status.py``.
 
     python -m entrabot.winsetup status --project-root PATH [--json] [--health-only] [--strict]
+        [--full-thumbprints]
 
 The status script does the work. This starts it with the virtual-environment interpreter,
 from the project folder, with the Azure CLI setup used first on PATH (the script needs it to
@@ -120,9 +121,14 @@ def run_status(
     json_output: bool = False,
     health_only: bool = False,
     strict: bool = False,
+    full_thumbprints: bool = False,
     run: Runner = _run,
 ) -> int:
-    """Run the consolidated status script and return its exit code."""
+    """Run the consolidated status script and return its exit code.
+
+    The script shows a certificate thumbprint by its last four characters; *full_thumbprints*
+    (``--full-thumbprints``) has it show them in full.
+    """
     if not paths.env_file.is_file() and not paths.state_file.is_file():
         # Nothing is set up here. Under --json the answer is still JSON, on stdout, so a
         # machine reader gets something it can parse.
@@ -148,4 +154,6 @@ def run_status(
         argv.append("--health-only")
     if strict:
         argv.append("--strict")
+    if full_thumbprints:
+        argv.append("--full-thumbprints")
     return run(argv, cwd=paths.project_root, env=_child_env(paths, world))

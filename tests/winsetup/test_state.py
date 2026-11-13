@@ -20,6 +20,7 @@ from entrabot.winsetup.state import (
     certificate_recorded_on,
     default_suffix,
     identity_environment,
+    not_reusing_env_agent_user,
     read_state,
     undo_join,
     validate_app_id,
@@ -363,6 +364,175 @@ def test_choices_left_in_the_calling_shell_never_leak_into_this_run() -> None:
         "ENTRABOT_AGENT_USER_UPN": "new@contoso.com",
     }
     assert identity_environment(IdentityChoice(mode="continue"), base=stale) == {"PATH": "/bin"}
+
+
+OLD_UPN = "entrabot-agent-old@contoso.com"
+
+
+def _env_for(blueprint: str, upn: str = OLD_UPN) -> dict[str, str]:
+    """The .env setup writes for one agent: its Blueprint and its Agent User, together."""
+    return {"ENTRABOT_BLUEPRINT_APP_ID": blueprint, "ENTRABOT_AGENT_USER_UPN": upn}
+
+
+class TestAnAgentUserNameEnvHoldsForAnotherBlueprintIsNotCarried:
+    """The helper loads .env for any variable that is not set, so whatever ENTRABOT_AGENT_USER_UPN
+    .env holds is used unless the helper is handed one. The wizard handed it an empty one only
+    when the state file showed a switch. A switch that was interrupted (the state file already
+    names the new Blueprint, .env still the previous agent's) carried the previous agent's name
+    in, and the helper's "belongs to a different Blueprint" check stopped setup. scripts/setup.sh
+    avoids it up front ("Not reusing the Agent User named in .env"); so does the wizard now."""
+
+    def test_joining_again_after_an_interrupted_switch(self) -> None:
+        choice = IdentityChoice(mode="join", blueprint_app_id=NEW_BP)  # the state file agrees
+        env = identity_environment(choice, base={}, env_values=_env_for(OLD_BP))
+        assert env["ENTRABOT_AGENT_USER_UPN"] == ""
+
+    @pytest.mark.parametrize(
+        "env_values",
+        [{}, {"ENTRABOT_AGENT_USER_UPN": OLD_UPN}, _env_for("")],
+        ids=["no-env", "names-no-blueprint", "blank-blueprint"],
+    )
+    def test_joining_with_an_env_that_names_no_blueprint(self, env_values: dict[str, str]) -> None:
+        # As setup.sh does: nothing shows that .env's Agent User is this Blueprint's.
+        choice = IdentityChoice(mode="join", blueprint_app_id=NEW_BP)
+        assert identity_environment(choice, base={}, env_values=env_values) == {
+            "ENTRABOT_AGENT_USER_UPN": ""
+        }
+
+    @pytest.mark.parametrize("recorded", [NEW_BP, NEW_BP.upper()], ids=["same", "capitals"])
+    def test_the_blueprint_env_was_written_for_keeps_its_agent_user(self, recorded: str) -> None:
+        # The repair: join the agent this computer is set up for. The helper reads .env's name.
+        choice = IdentityChoice(mode="join", blueprint_app_id=NEW_BP)
+        assert identity_environment(choice, base={}, env_values=_env_for(recorded)) == {}
+
+    def test_a_switch_the_state_file_shows_still_counts(self) -> None:
+        choice = IdentityChoice(mode="join", blueprint_app_id=NEW_BP, switching=True)
+        env = identity_environment(choice, base={}, env_values=_env_for(NEW_BP))
+        assert env["ENTRABOT_AGENT_USER_UPN"] == ""
+
+    def test_an_agent_user_or_suffix_the_operator_named_wins(self) -> None:
+        upn = IdentityChoice(mode="join", blueprint_app_id=NEW_BP, agent_user_upn="mine@c.com")
+        suffix = IdentityChoice(mode="join", blueprint_app_id=NEW_BP, upn_suffix="sati")
+        stale = _env_for(OLD_BP)
+        assert identity_environment(upn, base={}, env_values=stale) == {
+            "ENTRABOT_AGENT_USER_UPN": "mine@c.com"
+        }
+        assert identity_environment(suffix, base={}, env_values=stale) == {
+            "_ENTRABOT_UPN_SUFFIX": "sati"
+        }
+
+    def test_continuing_after_an_interrupted_switch(self) -> None:
+        # Run again with no flags: setup continues with the agent the state file names.
+        env = identity_environment(
+            IdentityChoice(mode="continue"),
+            base={"PATH": "/bin"},
+            env_values=_env_for(OLD_BP),
+            blueprint_app_id=NEW_BP,
+        )
+        assert env == {"PATH": "/bin", "ENTRABOT_AGENT_USER_UPN": ""}
+
+    @pytest.mark.parametrize(
+        "env_values",
+        [_env_for(NEW_BP), _env_for(NEW_BP.upper()), {"ENTRABOT_AGENT_USER_UPN": OLD_UPN}, {}],
+        ids=["same", "capitals", "names-no-blueprint", "no-env"],
+    )
+    def test_continuing_with_this_computers_agent_changes_nothing(
+        self, env_values: dict[str, str]
+    ) -> None:
+        # Continuing needs .env to name another Blueprint: one that names none was written for
+        # this computer's agent by an earlier setup, and its name is what the repair needs.
+        env = identity_environment(
+            IdentityChoice(mode="continue"),
+            base={"PATH": "/bin"},
+            env_values=env_values,
+            blueprint_app_id=NEW_BP,
+        )
+        assert env == {"PATH": "/bin"}
+
+    def test_a_new_agent_is_unaffected(self) -> None:
+        choice = IdentityChoice(mode="new", upn_suffix="bob")
+        assert identity_environment(choice, base={}, env_values=_env_for(OLD_BP)) == {
+            "ENTRABOT_NEW_CHAIN": "1",
+            "ENTRABOT_AGENT_USER_UPN": "",
+            "_ENTRABOT_UPN_SUFFIX": "bob",
+        }
+
+    def test_a_caller_that_does_not_say_what_env_holds_gets_the_old_rule(self) -> None:
+        choice = IdentityChoice(mode="join", blueprint_app_id=NEW_BP)
+        assert identity_environment(choice, base={}) == {}
+        assert identity_environment(IdentityChoice(mode="continue"), base={}) == {}
+
+
+class TestWhatIsSaidWhenEnvsAgentUserIsNotCarried:
+    """The words of setup.sh, with the wizard's parameters."""
+
+    WANTED = (
+        f"To use one of {NEW_BP}'s Agent Users, run setup with -UseBlueprint {NEW_BP} "
+        "and -AgentUserUpn UPN or -UpnSuffix NAME."
+    )
+
+    def test_joining(self) -> None:
+        choice = IdentityChoice(mode="join", blueprint_app_id=NEW_BP)
+        assert not_reusing_env_agent_user(
+            choice, blueprint_app_id=NEW_BP, env_values=_env_for(OLD_BP)
+        ) == [
+            f"Not reusing the Agent User named in .env ({OLD_UPN}):",
+            f".env was written for Blueprint {OLD_BP}, not {NEW_BP}.",
+            self.WANTED,
+        ]
+
+    def test_continuing(self) -> None:
+        lines = not_reusing_env_agent_user(
+            IdentityChoice(mode="continue"), blueprint_app_id=NEW_BP, env_values=_env_for(OLD_BP)
+        )
+        assert lines[1:] == [f".env was written for Blueprint {OLD_BP}, not {NEW_BP}.", self.WANTED]
+
+    def test_an_env_that_names_no_blueprint(self) -> None:
+        choice = IdentityChoice(mode="join", blueprint_app_id=NEW_BP)
+        lines = not_reusing_env_agent_user(
+            choice, blueprint_app_id=NEW_BP, env_values={"ENTRABOT_AGENT_USER_UPN": OLD_UPN}
+        )
+        assert lines[1] == f".env was written for Blueprint (none recorded), not {NEW_BP}."
+
+    @pytest.mark.parametrize(
+        ("choice", "env_values"),
+        [
+            (IdentityChoice(mode="join", blueprint_app_id=NEW_BP), _env_for(OLD_BP, upn="")),
+            (IdentityChoice(mode="join", blueprint_app_id=NEW_BP), {}),
+            (IdentityChoice(mode="join", blueprint_app_id=NEW_BP), _env_for(NEW_BP.upper())),
+            (
+                IdentityChoice(mode="join", blueprint_app_id=NEW_BP, agent_user_upn="m@c.com"),
+                _env_for(OLD_BP),
+            ),
+            (
+                IdentityChoice(mode="join", blueprint_app_id=NEW_BP, upn_suffix="sati"),
+                _env_for(OLD_BP),
+            ),
+            # The state file shows a switch, but .env is this Blueprint's: nothing to explain.
+            (
+                IdentityChoice(mode="join", blueprint_app_id=NEW_BP, switching=True),
+                _env_for(NEW_BP),
+            ),
+            (IdentityChoice(mode="continue"), _env_for(NEW_BP)),
+            (IdentityChoice(mode="new", upn_suffix="bob"), _env_for(OLD_BP)),
+        ],
+        ids=[
+            "env-names-no-agent-user",
+            "no-env",
+            "same-blueprint",
+            "agent-user-named",
+            "suffix-named",
+            "switch-to-the-blueprint-env-names",
+            "continue-same",
+            "new",
+        ],
+    )
+    def test_nothing_is_said_otherwise(
+        self, choice: IdentityChoice, env_values: dict[str, str]
+    ) -> None:
+        assert (
+            not_reusing_env_agent_user(choice, blueprint_app_id=NEW_BP, env_values=env_values) == []
+        )
 
 
 class TestValidation:

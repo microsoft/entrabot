@@ -15,6 +15,14 @@ It operates in one of two modes:
 
 - **State-based full teardown** (default) — reads the resource IDs from `.env`
   and `.entrabot-state.json` and deletes the whole chain those IDs describe.
+  `.env` is read as data, never run as shell code, the way `entrabot.config`
+  reads it: a UTF-8 byte-order mark and CRLF line ends are tolerated, blank
+  lines, comments and lines without `=` are skipped, each line is split at the
+  first `=`, key and value are trimmed (a value is not unquoted), and the first
+  value of a repeated key wins. Only `ENTRABOT_AGENT_USER_ID`,
+  `ENTRABOT_AGENT_OBJECT_ID`, `ENTRABOT_BLUEPRINT_APP_ID` and
+  `ENTRABOT_BLUEPRINT_OBJECT_ID` are read. A value `.env` holds wins over the
+  state file.
 - **Targeted teardown** — when one or more `--agent-user-upn` values are given,
   it delegates each UPN to
   [`deprovision_entra_agent_identity.py`](deprovision-entra-agent-identity-py.md)
@@ -34,9 +42,13 @@ Cloud (Azure Blob) storage is never deleted by this script. See
   endpoints that delete the Agent Identity and Blueprint.
 - `python3` and `keyring` for reading state and clearing keystore entries.
 
-If the Provisioner certificate token cannot be acquired, the script continues
-but cannot delete the Agent Identity or Blueprint (see
+If the Provisioner certificate token cannot be acquired, the script shows why
+and continues, but cannot delete the Agent Identity or Blueprint (see
 [Common failures](#common-failures)).
+
+The token never goes on a command line, where any local user can read it from
+the process list, or into program text. Each Graph delete gets it in the
+environment of that one command, and it is not exported to anything else.
 
 ## Usage
 
@@ -46,6 +58,9 @@ but cannot delete the Agent Identity or Blueprint (see
 
 # Preview only — print what would be deleted, delete nothing
 ./scripts/teardown.sh --dry-run
+
+# Preview a targeted teardown: each chain is looked up in Entra (read-only) and printed
+./scripts/teardown.sh --dry-run --agent-user-upn=agent-sample@contoso.onmicrosoft.com
 
 # Skip the interactive confirmation prompt
 ./scripts/teardown.sh --yes
@@ -63,8 +78,8 @@ but cannot delete the Agent Identity or Blueprint (see
 
 | Option | Default | Effect |
 | --- | --- | --- |
-| `--agent-user-upn=UPN` | none | Target a specific Agent User UPN for deprovisioning instead of the state-based chain. May be repeated or comma-separated. Switches the run to targeted mode. |
-| `--dry-run` | off | Print what would be deleted, then exit without deleting anything in the tenant or on disk. In targeted mode it lists the UPNs given and does not resolve their chains; for that, run [`deprovision_entra_agent_identity.py`](deprovision-entra-agent-identity-py.md) with `--dry-run`. |
+| `--agent-user-upn=UPN` | none | Target a specific Agent User UPN for deprovisioning instead of the state-based chain. May be repeated or comma-separated; each UPN is trimmed and otherwise passed on exactly as given. Switches the run to targeted mode. |
+| `--dry-run` | off | Print what would be deleted, then exit without deleting anything in the tenant or on disk. In state-based mode it runs nothing else: no token, no `az`. In targeted mode it also runs [`deprovision_entra_agent_identity.py`](deprovision-entra-agent-identity-py.md) with `--dry-run`, which looks each Agent User's chain up in Entra (read-only, with its own Provisioner certificate token) and prints it, along with its shared-Blueprint check; a lookup that fails exits `1`. The chain local state names is not listed in targeted mode, because a targeted teardown leaves it alone. |
 | `--yes`, `-y` | off | Skip the interactive `Are you sure?` confirmation prompt. |
 | `--delete-cloud-storage` | off | **Reserved and intentionally not implemented.** Supplying it exits with an error (see [Safety](#safety)). |
 | `--preserve-provisioner` | off | Do not delete the shared Provisioner app. Intended for targeted, smoke-test teardowns that reuse the Provisioner. |
@@ -90,13 +105,23 @@ proceeding.
 **Deletion order (state-based full teardown).** Children are removed before
 parents:
 
-1. **Agent User** — deleted with `az ad user delete` (an Agent User is an
-   ordinary directory user, so the Azure CLI token is accepted here).
+1. **Agent User** — deleted with `az ad user delete --id` (an Agent User is an
+   ordinary directory user, so the Azure CLI token is accepted here), and only
+   by its object ID: `--id` also takes a sign-in name, so a recorded value that
+   is not a GUID is shown and not used. Whatever `az` prints is shown. When `az`
+   says the user does not exist it is reported as already deleted; any other
+   failure shows `az`'s error and the command to run once it is fixed.
 2. **Agent Identity service principal** — deleted via `DELETE
    /beta/servicePrincipals/{id}` using the Provisioner certificate token.
 3. **Blueprint application** — deleted via `DELETE /beta/applications/{id}`
    using the Provisioner certificate token. This cascade also removes the
    `BlueprintPrincipal`.
+
+   For steps 2 and 3 the object ID is an argument of the program and one URL
+   path segment, never part of the program text. A `404` is reported as already
+   deleted. Any other answer shows Graph's error on stderr and the status, and
+   a Graph that can't be reached shows why. Each request gives up after 60
+   seconds.
 4. **Provisioner app** — deleted last (it is needed for steps 2–3) with
    `az ad app delete --id`, unless `--preserve-provisioner` is set. Only the app
    recorded for this machine in `.entrabot-state.json` (`PROVISIONER_CLIENT_ID`)
@@ -149,9 +174,18 @@ used for cloud-hosted memory is left untouched. Remove it separately with
 
 ## Common failures
 
+- **`ERROR: .env exists but cannot be read`** — teardown stops (exit `1`)
+  before deleting anything, because it can't tell which objects `.env` names.
+  Fix the file's permissions and run it again.
+- **"The Agent User ID recorded for this machine is not an object ID"** —
+  `ENTRABOT_AGENT_USER_ID` (or `AGENT_USER_ID` in the state file) is not a GUID,
+  so no Agent User is deleted. The value is printed; find the Agent User's
+  object ID in the Entra admin center and delete it with
+  `az ad user delete --id <object ID>`.
 - **No Provisioner token — Agent Identity / Blueprint not deleted.** If the
   `.venv` is missing or the Provisioner certificate is unavailable, the script
-  warns and cannot delete the Agent Identity or Blueprint: the Agent Identity beta
+  shows why (`Could not get provisioner token: ...`), warns, and cannot delete
+  the Agent Identity or Blueprint: the Agent Identity beta
   APIs reject Azure CLI tokens (which carry the `Directory.AccessAsUser.All`
   scope) with a hard `403`. The Agent Identity and Blueprint then survive as
   orphans. Delete them afterward with
@@ -171,8 +205,14 @@ used for cloud-hosted memory is left untouched. Remove it separately with
   above"** — for example, the `az` session lacks the rights. Fix what the error
   says, then run the command teardown printed:
   `az ad app delete --id <application ID>`.
-- **Resource already deleted.** A `404` from a delete is treated as
-  already-gone and reported as a warning, not a failure.
+- **Resource already deleted.** A `404` from a Graph delete, or `az` saying the
+  Agent User does not exist, is treated as already-gone and reported as a
+  warning, not a failure.
+- **`Could not delete Agent User (...)`, `Could not delete Agent Identity SP
+  (..., status: ...)` or `Could not delete Blueprint (..., status: ...)`** —
+  the reason is printed just above it (`az`'s error, or `Microsoft Graph
+  answered <status>: ...`). Teardown carries on and still removes local state
+  (unless `--preserve-local-state` is set), so keep the IDs it printed.
 
 ## Exit behavior
 
@@ -180,7 +220,8 @@ used for cloud-hosted memory is left untouched. Remove it separately with
   up` no-op, an aborted confirmation, and a `--preserve-local-state` early exit.
   A Provisioner app that is not recorded, or that could not be deleted, is
   reported as a warning and does not change it.
-- `1` — a targeted `--agent-user-upn` teardown failed.
+- `1` — a targeted `--agent-user-upn` teardown or dry run failed, or `.env`
+  exists but cannot be read.
 - `2` — `--delete-cloud-storage` was supplied (refused).
 
 Because the script runs under `set -euo pipefail`, an unexpected error in a

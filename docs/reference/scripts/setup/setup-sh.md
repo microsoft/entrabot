@@ -72,7 +72,10 @@ Identity mode (choose one):
   identity keys are cleared (the Provisioner app is preserved). Requires a UPN
   suffix (`--with-upn-suffix`) or an explicit `--agent-user-upn`; if neither is
   given, the script prompts for a suffix.
-- `--use-blueprint=ID` — attach to an existing Blueprint by App ID. A new cert is
+- `--use-blueprint=ID` — attach to an existing Blueprint by App ID. `ID` must be
+  the App ID, a GUID such as `1a2b3c4d-1234-5678-9abc-def012345678` (either
+  letter case, nothing around it); anything else, an empty value included, is a
+  usage error (exit `2`) before anything runs. A new cert is
   generated for this machine and added to the Blueprint; existing certificates are
   kept, so other machines keep working, and the existing Agent Identity and Agent
   User are reused. If local state points at a *different* Blueprint, the stale
@@ -167,7 +170,14 @@ Diagnostics and control:
 
 ## Effects
 
-- Verifies `az`, Python ≥ 3.12, and required CLI tools; verifies the Azure login.
+- Verifies `az`, Python ≥ 3.12 (each candidate interpreter checks its own
+  version), and required CLI tools; verifies the Azure login.
+- Hands values to its Python programs as arguments or in the environment, never
+  as program text: the `--use-blueprint` App ID, paths, keys, and values read
+  from `.env` or the state file. The license preflight's Graph token (the
+  signed-in administrator's) goes to each check in that one command's
+  environment, never on a command line, where any local user could read it from
+  the process list, and is not exported to later commands.
 - Bootstraps the Provisioner app via `entra_provisioning.py` (see
   [Which app registration is the Provisioner](#which-app-registration-is-the-provisioner))
   and creates or reuses the Blueprint, Agent Identity, and Agent User via
@@ -285,7 +295,8 @@ read from `.env`, and `ENTRABOT_PROVISIONER_APP_ID`, which setup writes to
   `--remove-all-existing-certs` prompt, `--new` / `--use-blueprint` conflict, or a
   missing required identity mode).
 - `2` — mutually exclusive storage flags, `--new` with
-  `--remove-all-existing-certs`, or setup completed provisioning but the
+  `--remove-all-existing-certs`, a `--use-blueprint` value that is not an App
+  ID, or setup completed provisioning but the
   cloud-memory **migration failed** (cloud memory is not in sync with local
   disk; re-run after fixing the underlying consent error).
 - `3` — provisioning finished but the post-setup **smoke test failed** (the agent
@@ -301,6 +312,10 @@ read from `.env`, and `ENTRABOT_PROVISIONER_APP_ID`, which setup writes to
   --switch-user`) and retry.
 - **`No identity mode specified`** — pass `--new --with-upn-suffix=NAME` or
   `--use-blueprint=APP_ID`.
+- **`ERROR: --use-blueprint takes the Blueprint's App ID, which looks like
+  1a2b3c4d-1234-5678-9abc-def012345678.`** — followed by `Given: <value>`.
+  Nothing ran. Pass the Blueprint's Application (client) ID from the Entra admin
+  center, with nothing around it.
 - **`Setup did not take over an existing 'EntraBot Agent ID Provisioner' app
   registration`** — see
   [Which app registration is the Provisioner](#which-app-registration-is-the-provisioner)

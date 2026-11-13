@@ -67,6 +67,11 @@ def test_runs_the_status_script_with_the_venv_interpreter_from_the_project_folde
             {"json_output": True, "health_only": True, "strict": True},
             ["--json", "--health-only", "--strict"],
         ),
+        ({"full_thumbprints": True}, ["--full-thumbprints"]),
+        (
+            {"json_output": True, "strict": True, "full_thumbprints": True},
+            ["--json", "--strict", "--full-thumbprints"],
+        ),
     ],
 )
 def test_flags_are_passed_through(

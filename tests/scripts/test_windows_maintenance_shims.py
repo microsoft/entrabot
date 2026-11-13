@@ -207,6 +207,12 @@ class TestThinWrapper:
         code = _code(STATUS)
         assert "$ProjectRoot = Split-Path -Parent $PSCommandPath" in code
 
+    def test_status_help_explains_full_thumbprints(self) -> None:
+        text = STATUS.read_text(encoding="ascii")
+        assert ".PARAMETER FullThumbprints" in text
+        assert "last four characters" in text
+        assert "[switch]$FullThumbprints" in text
+
     @pytest.mark.parametrize("path", [DEPLOY, TEARDOWN], ids=lambda p: p.name)
     def test_scripts_folder_wrappers_find_the_project_one_level_up(self, path: Path) -> None:
         one_level_up = "$ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)"
@@ -314,6 +320,19 @@ class TestArguments:
             "--strict",
         ]
 
+    def test_status_full_thumbprints(self, shell: str) -> None:
+        call = (
+            "Get-StatusArguments -ProjectRoot $env:EB_ROOT -Json $true "
+            "-HealthOnly $false -Strict $false -FullThumbprints $true"
+        )
+        assert _args(shell, STATUS, call) == [
+            "status",
+            "--project-root",
+            ROOT,
+            "--json",
+            "--full-thumbprints",
+        ]
+
     @by_name
     def test_dot_sourcing_runs_nothing(self, shell: str, path: Path) -> None:
         # The helpers above loaded the file; this proves it stopped at the guard: with no
@@ -399,6 +418,12 @@ class TestSimulatedRun:
                 ["-Json", "-HealthOnly", "-Strict"],
                 ["status", "--json", "--health-only", "--strict"],
             ),
+            (STATUS, ["-FullThumbprints"], ["status", "--full-thumbprints"]),
+            (
+                STATUS,
+                ["-Json", "-HealthOnly", "-Strict", "-FullThumbprints"],
+                ["status", "--json", "--health-only", "--strict", "--full-thumbprints"],
+            ),
         ],
         ids=[
             "deploy",
@@ -409,6 +434,8 @@ class TestSimulatedRun:
             "teardown-everything",
             "status",
             "status-all-flags",
+            "status-full-thumbprints",
+            "status-every-flag-and-full-thumbprints",
         ],
     )
     def test_the_python_command_gets_exactly_these_arguments(

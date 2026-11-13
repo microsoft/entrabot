@@ -6,6 +6,7 @@
     python -m entrabot.winsetup teardown --project-root PATH
         [--delete-agent] [--purge-data] [--keep-setup-credential] [--yes]
     python -m entrabot.winsetup status --project-root PATH [--json] [--health-only] [--strict]
+        [--full-thumbprints]
 
 ``setup`` is the default subcommand. ``scripts/setup-windows.ps1`` passes its parameters
 through one to one (``-NewChain`` -> ``--new-chain`` and so on); ``deploy-windows.ps1``,
@@ -188,6 +189,12 @@ def build_parser() -> argparse.ArgumentParser:
     state.add_argument(
         "--strict", action="store_true", help="Exit non-zero when a health check fails."
     )
+    state.add_argument(
+        "--full-thumbprints",
+        action="store_true",
+        help="Show certificate thumbprints in full. By default only their last four "
+        "characters are shown.",
+    )
     return parser
 
 
@@ -250,6 +257,7 @@ def main(argv: Sequence[str] | None = None, *, world: World | None = None) -> in
                 json_output=args.json,
                 health_only=args.health_only,
                 strict=args.strict,
+                full_thumbprints=args.full_thumbprints,
             )
         except KeyboardInterrupt:
             return EXIT_CANCELLED
