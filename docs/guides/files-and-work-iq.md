@@ -105,10 +105,18 @@ Windows:
 scripts\setup-windows.cmd -ConfigureA365WorkIq
 ```
 
-On Windows this needs the `a365` CLI, which `scripts\prereqs-windows.ps1 -WithWorkIq`
-installs, and PowerShell 7, which one of the `a365` steps requires and which you install
-yourself. The rest of Windows setup needs neither. Work IQ setup through the Windows
-wizard has not yet been tested end to end.
+On Windows, answering yes to setup's Word, Excel and OneDrive question does the same.
+Setup needs nothing installed for it: no Agent 365 CLI, no .NET and no PowerShell 7, and
+no sign-in window, so it works over SSH and unattended. After the end-to-end test it lists
+the three Work IQ servers in `ToolingManifest.json`, gives the agent's Blueprint the
+permissions they need, including the inheritable permissions that let the agent use them
+(through
+[`ensure_a365_work_iq_permissions.py`](../reference/scripts/provisioning/ensure-a365-work-iq-permissions-py.md)),
+and checks that the agent's tokens carry them. This has been run on Windows over SSH, for
+a new agent and an unattended repair.
+
+On macOS and Linux, `--configure-a365-work-iq` uses Microsoft's Agent 365 CLI (`a365`) and
+PowerShell 7, and runs the same permissions script before the CLI's own permission step.
 
 See [`setup.sh` reference](../reference/scripts/setup/setup-sh.md) and
 [`setup-windows.ps1` reference](../reference/scripts/setup/setup-windows-ps1.md).

@@ -100,7 +100,7 @@ powershell -ExecutionPolicy Bypass -File scripts\prereqs-windows.ps1 -WithGit -W
 |--------|----------|
 | `-WithGit` | Git for Windows, for your account. Claude Code needs it for this repo's hooks |
 | `-WithClaudeCode` | Claude Code |
-| `-WithWorkIq` | .NET SDK and the Microsoft Agent 365 CLI, for `-ConfigureA365WorkIq` |
+| `-WithWorkIq` | Microsoft's Agent 365 CLI (with the .NET SDK it runs on, and PowerShell 7), for using it yourself. Setup does not need it: it switches on Word, Excel and OneDrive files by itself |
 | `-WithBuildTools` | VS Build Tools (C++ workload, ~6 GB). Only if setup reports a package had to be compiled |
 
 ### Certificate rotation

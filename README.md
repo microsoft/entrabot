@@ -205,7 +205,7 @@ This is a research repo, not a production service. It runs reliably on a develop
 |---|---|
 | macOS | Shipped — Keychain-backed cert storage, full three-hop flow |
 | Linux | Works — Secret Service (libsecret) backend |
-| Windows | Shipped — one-step setup wizard, non-exportable CNG keys (TPM first, software key store otherwise), certificate rotation, teardown. Setup, repair, rotation, status and teardown were run end to end on Windows 11 25H2 x64 with a virtual TPM, as a non-administrator. Not yet tested: ARM64, physical TPMs, Windows 10, Entra-joined or Intune-managed PCs, a desktop session. See [Windows installation](docs/getting-started/windows.md#what-has-been-tested). |
+| Windows | Shipped — one-step setup wizard, non-exportable CNG keys (TPM first, software key store otherwise), certificate rotation, teardown. Setup, repair, rotation, status and teardown were run end to end on Windows 11 25H2 x64 with a virtual TPM, as a non-administrator. Not yet tested: ARM64, physical TPMs, Windows 10, Entra-joined or Intune-managed PCs. See [Windows installation](docs/getting-started/windows.md#what-has-been-tested). |
 
 **Open:**
 

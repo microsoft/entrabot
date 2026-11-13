@@ -151,56 +151,44 @@ Run unattended (`-Yes`), setup asks nothing; it reads what the organization has,
 
 A licence that was just assigned takes 10-15 minutes to reach Teams. If setup says a licence was assigned and Teams still returns 403, wait and run `-Diagnose` again. A bought licence can be assigned at once.
 
-## "Word, Excel and OneDrive files were asked for, but they are not switched on: ... the tools they need"
-
-Setup ends with exit code 3.
-
-**Cause.** Word, Excel and OneDrive files (Microsoft Agent 365 Work IQ) need two tools on this PC: the Microsoft Agent 365 CLI (`a365`), which runs on the .NET SDK, and PowerShell 7, which one `a365` step uses. They were missing, and the install was declined or did not finish.
-
-**Fix.** Install them for your account, with no administrator rights:
-
-```bat
-powershell -ExecutionPolicy Bypass -File scripts\prereqs-windows.ps1 -WithWorkIq
-```
-
-then run `scripts\setup-windows.cmd` again and answer yes to the Word, Excel and OneDrive question. When you answer yes and the tools are missing, setup offers to run that command for you. The Agent 365 CLI, and the .NET SDK when the PC has none, go in `%LOCALAPPDATA%\entrabot\tools` (about 1 GB; a few minutes); PowerShell 7 comes from `winget`. If the helper reports a failure, its messages say which tool and where to get it. See [`prereqs-windows.ps1`](../reference/scripts/setup/prereqs-windows-ps1.md).
-
-Run unattended with `-ConfigureA365WorkIq`, setup stops with exit code 1 before changing anything when the tools are missing, and prints the same command.
-
-To run Entrabot's own copy of `a365` by hand, first set `DOTNET_ROOT=%LOCALAPPDATA%\entrabot\tools\dotnet`; without it, `a365.exe` cannot find its .NET.
-
-## "... they can only be switched on from this PC's own desktop"
-
-Setup ends with exit code 3. The rest of setup is done.
-
-**Cause.** One of the steps that switch on Word, Excel and OneDrive files (`a365 setup requirements`) signs in to Microsoft through a sign-in window (on Windows, the Web Account Manager). A session without a desktop, such as SSH, cannot show that window, so setup does not try. On a real run over SSH, `a365` failed with `MsalAuthenticationFailedException` there. Setup says so when you answer yes to the Word, Excel and OneDrive question, before it offers to install their tools; it still installs them if you agree, and it gives the agent no Microsoft 365 Copilot licence in that run.
-
-**Fix.** Sign in at the PC's own desktop, or with Remote Desktop, and run `scripts\setup-windows.cmd` again there, answering yes to the Word, Excel and OneDrive question. With the tools already installed, that run is quick. Word, Excel and OneDrive files cannot be switched on over SSH or in any other session without a desktop.
-
 ## "Word, Excel and OneDrive files were asked for, but they are not switched on."
 
 Setup ends with exit code 3. The rest of setup is done.
 
-**Cause.** A step that switches them on failed. These steps run after the end-to-end test, and a failure there never stops setup. The reason under the message says what happened:
+**Cause.** A step that switches them on failed. Setup does these steps itself, after the end-to-end test, and a failure there never stops setup:
 
-- *The Agent 365 tool could not sign in to Microsoft.* `a365` reported a failed sign-in.
-- *The Agent 365 tool's first step, which signs in and checks the tenant, did not finish.* `a365 setup requirements` runs in your terminal, so its own messages are on the screen above, where it ran, rather than in the log.
-- *The 'Agent 365 CLI' app registration was not found in this tenant.* Setup points the Agent 365 tooling at your tenant's own app registration named **Agent 365 CLI**, and there is none.
-- *One of the steps that switch them on did not finish*, or *... could not grant all of their permissions*: see the setup log, whose path the message gives.
+1. It writes the agent's list of Word, Excel and OneDrive tools into `ToolingManifest.json` in the Entrabot folder.
+2. It gives the agent's Blueprint the permissions they need, with the setup (Provisioner) credential: [`ensure_a365_work_iq_permissions.py`](../reference/scripts/provisioning/ensure-a365-work-iq-permissions-py.md) grants the permissions and lets the Blueprint's agents inherit them.
 
-Setup puts `ToolingManifest.json` and `a365.config.json` back the way they were, so neither setup's next run nor the agent takes Word, Excel and OneDrive files to be on.
+The reason under the message says which. *Setup could not give the agent's Blueprint the permissions they need* is the second step; *Setup could not write this folder's ToolingManifest.json* is the first (a manifest it cannot read is left as it is). The screen at that step shows the last lines of what went wrong, and the setup log, whose path the message gives, has all of it, such as the answer Microsoft Graph gave. Setup puts `ToolingManifest.json` back the way it was, so neither setup's next run nor the agent takes Word, Excel and OneDrive files to be on.
 
-**Fix.** Run `scripts\setup-windows.cmd` again at the PC's own desktop and answer yes to the Word, Excel and OneDrive question; sign in when the Microsoft window opens, and answer `a365`'s own questions. For the missing app registration, run `a365 setup requirements` once, choose **C** to create it, then run setup again (for Entrabot's own copy of `a365`, set `DOTNET_ROOT` first, as above). Switching them on needs a Global Administrator, because `a365 setup permissions mcp` grants permissions.
+**Fix.** Run `scripts\setup-windows.cmd` again and answer yes to the Word, Excel and OneDrive question; it works over SSH and unattended (`-Yes -ConfigureA365WorkIq`) too. If the screen or the log shows `403` from Microsoft Graph (for example `Authorization_RequestDenied`), Microsoft refused setup's own app (the Provisioner). Every run of setup checks that app's permissions and repairs them, which needs an administrator of the tenant, as the first run did.
 
 A Microsoft 365 Copilot licence that setup gave the agent earlier in the same run (at the step that creates the agent) stays assigned when a later step fails; the next run uses it.
+
+## "Word, Excel and OneDrive files are set up, but Microsoft has not started honouring them for the agent yet."
+
+Setup ends with exit code 3. The rest of setup is done, and so is everything Word, Excel and OneDrive files need.
+
+**Cause.** Setup's last check, as the agent, found that the agent's tokens for Word, Excel and OneDrive do not carry the permissions yet. Microsoft takes a little while to start honouring new permissions: 20 to 45 seconds on a real tenant. Setup waits about two minutes, then stops waiting.
+
+**Fix.** Wait a few minutes, then check with `scripts\setup-windows.cmd -Diagnose`, whose "Word, Excel and OneDrive files" line runs the same check. If it still says *Microsoft does not honour them for the agent yet* later, run `scripts\setup-windows.cmd` again and answer yes to the Word, Excel and OneDrive question.
+
+## The agent cannot use Word, Excel or OneDrive: `AADSTS65001`
+
+The agent's Word, Excel or OneDrive tools fail, and the error (or the setup log, or `-Diagnose`) shows `AADSTS65001` ("The user or administrator has not consented to use the application").
+
+**Cause.** The agent asked for a token for one of the Work IQ servers, and Microsoft Entra refused it: the agent cannot use the Blueprint's permissions for it. With the permission grants in place but without the Blueprint's inheritable permissions, this is the answer, as measured on a real tenant. It is also the answer for the minute or so after setup writes them, before Microsoft honours them.
+
+**Fix.** If setup set them up in the last few minutes, wait and run `scripts\setup-windows.cmd -Diagnose`. Otherwise run `scripts\setup-windows.cmd` again and answer yes to the Word, Excel and OneDrive question: it writes whatever is missing and checks the result. On macOS and Linux, run `.venv/bin/python scripts/ensure_a365_work_iq_permissions.py`, wait a minute, and try again.
 
 ## "Word, Excel and OneDrive files are switched on, but the agent has no Microsoft 365 Copilot licence"
 
 Setup ends with exit code 3.
 
-**Cause.** The agent's Work IQ tools need a Microsoft 365 Copilot licence of its own. Setup gives it a free one by itself, at the step that creates the agent, in every run that switches Word, Excel and OneDrive files on; none was free.
+**Cause.** The agent's Work IQ tools need a Microsoft 365 Copilot licence of its own. Setup gives it a free one by itself, at the step that creates the agent, in every run where you answer yes to the Word, Excel and OneDrive question (or give `-ConfigureA365WorkIq`); none was free.
 
-**Fix.** As for a missing Teams licence above: setup's licence walkthrough shows your Microsoft 365 Copilot licences and gives the agent a free one, or says how to add or free one. It comes after the Teams licence, and only when Word, Excel and OneDrive files are switched on in that run. Then run setup again and answer yes to the Word, Excel and OneDrive question; it gives the agent the licence by itself. A new Copilot licence can take 10-15 minutes before the files tools work.
+**Fix.** As for a missing Teams licence above: setup's licence walkthrough shows your Microsoft 365 Copilot licences and gives the agent a free one, or says how to add or free one. It comes after the Teams licence, and only when that run switched Word, Excel and OneDrive files on, or set them up for Microsoft to honour; after a failed step it is left out. Then run setup again and answer yes to the Word, Excel and OneDrive question; it gives the agent the licence by itself. A new Copilot licence can take 10-15 minutes before the files tools work.
 
 ## The agent ignores a person in Teams
 

@@ -71,7 +71,7 @@ commands:
     category: setup
     page: reference/scripts/setup/setup-windows-ps1.md
     platforms: [windows]
-    summary: Windows setup. A bootstrap that needs nothing installed first (Windows PowerShell 5.1, no admin rights) — finds or downloads Python, builds the venv, then starts the setup wizard (python -m entrabot.winsetup), which signs in, creates or joins the agent, creates and registers a non-exportable certificate (TPM first), writes .env, registers the MCP server, tests sign-in, then walks the person through getting the agent a licence when it has none and, at the PC's own desktop, switches on Word, Excel and OneDrive files if asked. Interactive by default; -Yes plus parameters for unattended runs; -Diagnose is read-only.
+    summary: Windows setup. A bootstrap that needs nothing installed first (Windows PowerShell 5.1, no admin rights) — finds or downloads Python, builds the venv, then starts the setup wizard (python -m entrabot.winsetup), which signs in, creates or joins the agent, creates and registers a non-exportable certificate (TPM first), writes .env, registers the MCP server, tests sign-in, then walks the person through getting the agent a licence when it has none and switches on Word, Excel and OneDrive files if asked (with no Agent 365 CLI, over SSH and unattended too). Interactive by default; -Yes plus parameters for unattended runs; -Diagnose is read-only.
   - id: setup-windows-cmd
     path: scripts/setup-windows.cmd
     category: setup
@@ -95,7 +95,7 @@ commands:
     category: setup
     page: reference/scripts/setup/prereqs-windows-ps1.md
     platforms: [windows]
-    summary: Optional Windows extras, installed only on request — -WithGit and -WithClaudeCode (per-user, no admin rights or winget), -WithWorkIq (the a365 CLI, and the .NET SDK it runs on when the PC has none, per-user under %LOCALAPPDATA%\entrabot\tools with no admin rights; PowerShell 7 with winget), -WithBuildTools (VS Build Tools). Not a required step before setup. Runs from Windows PowerShell 5.1 and is safe to re-run.
+    summary: Optional Windows extras, installed only on request — -WithGit and -WithClaudeCode (per-user, no admin rights or winget), -WithWorkIq (Microsoft's a365 CLI for using it yourself, which setup does not need, with the .NET SDK it runs on when the PC has none, per-user under %LOCALAPPDATA%\entrabot\tools with no admin rights and not on PATH; PowerShell 7 with winget), -WithBuildTools (VS Build Tools). Not a required step before setup. Runs from Windows PowerShell 5.1 and is safe to re-run.
   - id: setup-delegated-sh
     path: scripts/setup_delegated.sh
     category: setup
@@ -177,7 +177,7 @@ commands:
     category: provisioning
     page: reference/scripts/provisioning/ensure-a365-work-iq-permissions-py.md
     platforms: [macos, linux, windows]
-    summary: Materializes the Microsoft Agent 365 Work IQ MCP first-party resource service principals and Blueprint-wide OAuth grants using the Provisioner token, working around the A365 CLI's silent OAuth2-grants-failed exit.
+    summary: Gives the agent's Blueprint what Microsoft Agent 365 Work IQ (Word, Excel and OneDrive files) needs, using the Provisioner token — the first-party resource service principals, the Blueprint-wide OAuth grants, and least-privilege inheritable permissions, each confirmed by reading it back. Windows setup runs it instead of the Agent 365 CLI; setup.sh runs it before the CLI's own permission step, working around the CLI's silent OAuth2-grants-failed exit.
 
   # --- Auth and Certificates (12) ---
   - id: grant-consent-py

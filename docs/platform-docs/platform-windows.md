@@ -225,8 +225,9 @@ signing and deletion against the virtual TPM; the single-entry `.env`
 permission, read back; certificate rotation; teardown in its default mode
 (only that PC's certificate left a Blueprint that held several) and with
 `-DeleteAgent`; and the full test suite (4208 passed, 226 skipped, 0 failed).
-Physical TPM chips, ARM64, Windows 10, Entra-joined or Intune-managed PCs, a
-desktop session, and `-PurgeData` have not been tested. The fixes made after a
+Later runs on the same machine covered a desktop session (through Remote
+Desktop) and teardown with `-PurgeData`. Physical TPM chips, ARM64, Windows 10,
+and Entra-joined or Intune-managed PCs have not been tested. The fixes made after a
 security review (described on this page and in the changelog) are covered by
 unit tests but have not been run on a real Windows PC. See
 [Windows installation](../getting-started/windows.md#what-has-been-tested) and

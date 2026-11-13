@@ -41,20 +41,19 @@ Running `scripts\setup-windows.cmd` again is how you repair or change a setup. I
 | Short name for your agent | Your Windows user name | The agent's address becomes `entrabot-agent-<name>@<your domain>`. |
 | The agent's sponsor | You | The people the agent takes instructions from in Teams. When joining an existing agent, the suggested answer keeps its current sponsors. |
 | Memory | On this computer | Cloud memory (Azure Blob Storage) is offered when your account has an Azure subscription in the tenant. |
-| Switch on Word, Excel and OneDrive files? | No | Work IQ: the agent reads and edits Word, Excel and OneDrive files. Setup says first that the agent then needs a Microsoft 365 Copilot licence of its own. Most people skip this. They can only be switched on at the PC's own desktop or over Remote Desktop, because one step opens a Microsoft sign-in window; over SSH setup can install their tools but not switch them on. |
-| Install them now? | Yes | Only asked when Word, Excel and OneDrive files are switched on and their tools are missing: the Microsoft Agent 365 CLI (and the .NET SDK it runs on, when the PC has none) and PowerShell 7. Installed for your account only, with no administrator rights, in a few minutes; about 1 GB. See [`prereqs-windows.ps1`](../reference/scripts/setup/prereqs-windows-ps1.md). Say no and they stay off; the last screen says what to do. |
-| Start setting up? | Yes | The review screen. Nothing has been changed before this point, apart from tools you agreed to install. |
+| Switch on Word, Excel and OneDrive files? | No | Work IQ: the agent reads and edits Word, Excel and OneDrive files. Setup says first that the agent then needs a Microsoft 365 Copilot licence of its own. Most people skip this. There is nothing to install for them, and setup switches them on itself, over SSH and unattended too. |
+| Start setting up? | Yes | The review screen. Nothing has been changed before this point, apart from an Azure CLI you agreed to install. |
 | Install Git for Windows and Claude Code now? | Yes | Only asked if one is missing. |
 | Set up the agent's licence now? | Yes | Only asked when the agent has no licence that includes Teams, or no Microsoft 365 Copilot licence while Word, Excel and OneDrive files are on. See [Licences for the agent](#licences-for-the-agent). |
 | Give the agent one ... licence? | Yes | When a licence is free. With several, a numbered choice; the suggested one also brings mail and files. |
 | Press Enter when that is done ..., or type s to skip | Enter | When no licence is free: after someone adds or frees one, Enter checks again; `s` leaves it for later. |
 | Start your agent now? | Yes | Only asked at the PC's own desktop, when everything needed to start is in place. |
 
-Setup signs in through your browser, not through the Windows account sign-in window (the Web Account Manager): on a PC your organization does not manage, that window asks at every sign-in whether Windows should remember the account and manage the device. To use it anyway, set the environment variable `AZURE_CORE_ENABLE_BROKER_ON_WINDOWS` to `true` before running setup. Microsoft's Agent 365 tool, which runs only when you switch on Word, Excel and OneDrive files, still signs in through the Windows window and can ask more than once; setup cannot change that.
+Setup signs in through your browser, not through the Windows account sign-in window (the Web Account Manager): on a PC your organization does not manage, that window asks at every sign-in whether Windows should remember the account and manage the device. To use it anyway, set the environment variable `AZURE_CORE_ENABLE_BROKER_ON_WINDOWS` to `true` before running setup.
 
-In a remote session (SSH, for example) setup signs in with a device code instead of the browser: it prints a web address and a short code to enter there. Word, Excel and OneDrive files are the exception: on Windows their tool signs in through a sign-in window, which failed over SSH in testing, so in a session without a desktop setup leaves them off and says to run it again at the desktop.
+In a remote session (SSH, for example) setup signs in with a device code instead of the browser: it prints a web address and a short code to enter there.
 
-Setup then creates or connects the agent, creates this PC's certificate, saves settings, registers the agent with Claude Code and GitHub Copilot CLI, and tests that the agent can sign in and reach Teams. After that test, and only if you switched them on, it sets up Word, Excel and OneDrive files; a failure there never stops setup, and the last screen says why and what to do.
+Setup then creates or connects the agent, creates this PC's certificate, saves settings, registers the agent with Claude Code and GitHub Copilot CLI, and tests that the agent can sign in and reach Teams. After that test, and only if you switched them on, it sets up Word, Excel and OneDrive files. It lists their tools for the agent, gives the agent's Blueprint the permissions they need, and then checks, as the agent, that Microsoft honours them; that can take a minute, and setup waits up to about two minutes. A failure there never stops setup, and the last screen says why and what to do. When Microsoft has not started honouring them by then, the last screen says so and how to check later (`scripts\setup-windows.cmd -Diagnose`).
 
 ## Licences for the agent
 
@@ -64,7 +63,7 @@ The agent's user account is a user in Microsoft 365, and like a person it needs 
 2. With a free licence, it asks whether to give it to the agent.
 3. With none free, it says who can add a licence or free one, and where in the [Microsoft 365 admin center](https://admin.microsoft.com); or, when nothing includes Teams, which licences do. Then it waits: press Enter once that is done and it checks again, or type `s` to leave it for later. Its last screen then points back to these steps rather than repeating them.
 
-The Microsoft 365 Copilot part comes after the Teams part, and only when Word, Excel and OneDrive files are switched on in that run. If the Teams part is left for later, so is Copilot.
+The Microsoft 365 Copilot part comes after the Teams part, and only when that run switched Word, Excel and OneDrive files on (or set them up for Microsoft to honour); after a failed step it is left out. If the Teams part is left for later, so is Copilot.
 
 The admin center paths it gives (**Billing > Your products**, **Billing > Licenses**, **Marketplace**) are those of the admin center's **Dashboard view**, which most people see. In the **simplified view**, products are under **Subscriptions** and new ones under **Billing > Add more products**; a button at the top of the admin center switches views. Run unattended, setup asks nothing: it only reads the organization's licences, so the last screen can say what to do. Details are in [Windows troubleshooting](../troubleshooting/windows.md#no-teams-licence-or-graph-returned-403-for-mechats).
 
@@ -107,7 +106,7 @@ See the [`setup-windows.ps1` reference](../reference/scripts/setup/setup-windows
 
 ## What it installs and where
 
-Everything is installed for your account only, with one exception: on an account that is a local administrator and has `winget`, a missing Azure CLI is installed with `winget`, for the whole PC, and Windows may ask for permission. Nothing else is installed machine-wide or asks for administrator approval. PowerShell 7, for Word, Excel and OneDrive files, also comes from `winget`; on the test PC, as a standard user, `winget` installed it for that account.
+Everything is installed for your account only, with one exception: on an account that is a local administrator and has `winget`, a missing Azure CLI is installed with `winget`, for the whole PC, and Windows may ask for permission. Nothing else is installed machine-wide or asks for administrator approval. Word, Excel and OneDrive files need nothing installed.
 
 | What | Where | When |
 |---|---|---|
@@ -116,11 +115,9 @@ Everything is installed for your account only, with one exception: on an account
 | Azure CLI (private copy, version 2.92.0 or later and below 3) | `%LOCALAPPDATA%\entrabot\tools\azure-cli` | Only if the Azure CLI is missing and was not installed with `winget` (see above). |
 | Git for Windows | `%LOCALAPPDATA%\Programs\Git` | Only if you say yes. Claude Code needs it for this project. |
 | Claude Code | `%USERPROFILE%\.local\bin` | Only if you say yes. |
-| Microsoft Agent 365 CLI | `%LOCALAPPDATA%\entrabot\tools\a365` | Only for Word, Excel and OneDrive files, if you say yes and it is missing. |
-| .NET SDK (Microsoft's install script, checked to be signed by Microsoft; .NET 10) | `%LOCALAPPDATA%\entrabot\tools\dotnet` | Only with the Agent 365 CLI, and only if the PC has no .NET SDK 8 or later. With the CLI about 1 GB. |
-| PowerShell 7 | Where `winget` puts it (for a standard user, `%LOCALAPPDATA%\Microsoft\WindowsApps`) | Only for Word, Excel and OneDrive files, if you say yes and it is missing. |
 | Two certificates with non-exportable keys | Your Windows certificate store (`Cert:\CurrentUser\My`) | Always. The keys are held by the PC's TPM when it accepts them. |
 | Settings | `.env`, `.entrabot-state.json`, `.mcp.json` in the Entrabot folder | Always. |
+| The agent's list of Word, Excel and OneDrive tools | `ToolingManifest.json` in the Entrabot folder | Only when you switch on Word, Excel and OneDrive files. |
 | Logs, and local memory | `%LOCALAPPDATA%\entrabot` | Always. |
 
 To undo a setup, see [`teardown-windows.ps1`](../reference/scripts/teardown/teardown-windows-ps1.md).
@@ -151,16 +148,16 @@ Setup was run end to end on one configuration: Windows 11 Enterprise 25H2 (x64) 
 
 Licences and Word, Excel and OneDrive files, on the same machine against a real tenant, over SSH:
 
-- The Word, Excel and OneDrive question and the offer to install their tools.
-- The install itself with no administrator rights: the .NET SDK 10 and the Microsoft Agent 365 CLI in `%LOCALAPPDATA%\entrabot\tools`, with `a365 --version` running on .NET 10, and PowerShell 7 found.
+- The Word, Excel and OneDrive question, with its explanation of the Microsoft 365 Copilot licence.
+- Installing the .NET SDK 10 and the Microsoft Agent 365 CLI with no administrator rights in `%LOCALAPPDATA%\entrabot\tools`, with `a365 --version` running on .NET 10, and PowerShell 7 found. Setup did that through `prereqs-windows.ps1 -WithWorkIq` then; it no longer needs them.
 - The read-only licence report (`create_entra_agent_ids.py --licence-report`, with the setup credential), the walkthrough's screens with every licence that includes Teams in use, and the reminders on the last screen.
 - On a repair run, the step that creates the agent saying it has no Teams licence and no Microsoft 365 Copilot licence because none is free.
-- `a365 setup requirements` failing to sign in over SSH, which is why setup no longer runs the Word, Excel and OneDrive steps without a desktop.
+- `a365 setup requirements` failing to sign in over SSH. That, and the Windows sign-in prompts the Agent 365 CLI showed at the desktop (below), are why setup no longer uses the CLI.
 
 At the PC's own desktop, through Remote Desktop, on the same machine and tenant, starting from an account with nothing of Entrabot's on it:
 
 - Double-clicking `scripts\setup-windows.cmd`, signing in (through the Windows account sign-in window, which setup used then), and a full run to the last screen.
-- The Word, Excel and OneDrive tools installing with no administrator prompt, PowerShell 7 through `winget` included.
+- The Agent 365 CLI, the .NET SDK and PowerShell 7 installing with no administrator prompt, PowerShell 7 through `winget` included.
 - `a365 setup requirements` and `a365 develop add-mcp-servers`, which signed in through the Windows account sign-in window and succeeded. Together with setup's own sign-in that was four sign-in prompts on a PC its organization does not manage.
 - The step after them, which grants the Work IQ permissions, failing on a new agent: Microsoft Graph answered 404 when a second permission was added to a grant created moments before. Setup carried on and said so on the last screen, as intended. That step now writes each resource's permissions once and tries again on a 404.
 - The licence walkthrough with "check again" and "skip", and "Start your agent now?" opening the agent in its own window.
@@ -169,12 +166,21 @@ At the PC's own desktop, through Remote Desktop, on the same machine and tenant,
 - Setup's sign-in through the browser was run at the desktop and worked. The run still failed at the next step, because the Azure CLI went on sending a day-old Microsoft Graph token that the organization had since revoked; with that token removed from the CLI's cache by hand, the same sign-in carried a full repair run over SSH. Setup now removes the old sign-in itself before asking for a new one; that removal has unit tests only.
 - The step that grants the Work IQ permissions, after its fix, against the half-made grant the failed run left: it added the two missing permissions in one write and created the Word grant, and a second run changed nothing.
 
+By hand, from the same machine against the same tenant, without the wizard, the three things setup now does to switch Word, Excel and OneDrive files on were proven first: the content of `ToolingManifest.json` (its three servers, with their scopes and audiences), the inheritable-permission writes on the agent's Blueprint, and the scopes in the agent's tokens that result. That is also where these were measured: a read straight after a write could come back empty, two writes in quick succession could both succeed and one of them be lost, and Microsoft took 20 to 45 seconds to start honouring a new entry.
+
+Then setup doing them itself, on the same machine and tenant, over SSH:
+
+- A brand-new agent with Word, Excel and OneDrive files, switched on at the first attempt.
+- An unattended repair run through `scripts\setup-windows.cmd`.
+- `-Diagnose`, which said the agent's tokens carry every scope they need. They carried `Tools.ListInvoke.All` for Word, and `McpServers.OneDriveSharepoint.All`, `McpServers.Excel.All` and `McpServersMetadata.Read.All` for Excel and OneDrive.
+- A real request to create a Word document, which reached the Word server and was refused only because the agent had no licence that includes OneDrive.
+
 Not yet tested:
 
-- The rest of the Word, Excel and OneDrive configuration (`a365 setup permissions mcp` and the final check of the tooling manifest): no run on a real machine has reached them yet. So Word, Excel and OneDrive files have not been switched on end to end on Windows.
-- `winget` drawing its progress bar in place: on the desktop run it printed a new line for every redraw, and the change that runs it attached to the window has not been seen on Windows.
+- The "set up, but not honoured yet" ending, and a failed permissions step putting `ToolingManifest.json` back: unit tests only.
+- `winget` drawing its progress bar in place in `prereqs-windows.ps1`: on the desktop run it printed a new line for every redraw, and the change that runs it attached to the window has not been seen on Windows.
 - Giving the agent a licence through the walkthrough, and the Microsoft 365 Copilot path; unit tests only.
-- Changes made after those runs, covered by unit tests: the last screen pointing back to the walkthrough instead of repeating its advice; Microsoft 365 Copilot mentioned only when Word, Excel and OneDrive files are switched on; product names for products Microsoft's reference does not list; the Word, Excel and OneDrive steps running after the end-to-end test, a failure there never stopping setup, and their being skipped in a session without a desktop; and the review screen naming what was installed before it.
+- Changes made after those runs, covered by unit tests: the last screen pointing back to the walkthrough instead of repeating its advice; Microsoft 365 Copilot mentioned only when Word, Excel and OneDrive files are switched on; product names for products Microsoft's reference does not list; a failure in the Word, Excel and OneDrive steps never stopping setup; and the review screen naming an Azure CLI installed before it.
 
 - Windows on ARM64, and Windows 10.
 - Physical TPM chips (only a virtual TPM was used).

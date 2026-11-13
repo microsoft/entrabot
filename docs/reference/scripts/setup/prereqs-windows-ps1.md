@@ -13,8 +13,9 @@ sits around Entrabot:
 - Git for Windows and Claude Code, which you need to run the agent in Claude
   Code. The setup wizard calls this script for you when you say yes to
   installing them.
-- What Word, Excel and OneDrive files (Work IQ) need. The setup wizard calls
-  this script for you when you switch them on and the tools are missing.
+- Microsoft's Agent 365 CLI, for using it yourself. **Setup does not need it**:
+  it switches Word, Excel and OneDrive files (Work IQ) on by itself, with no
+  CLI, no .NET and no PowerShell 7.
 - The C++ build tools, which few people need.
 
 ## Requirements
@@ -38,7 +39,7 @@ powershell -ExecutionPolicy Bypass -File scripts\prereqs-windows.ps1
 # What Claude Code needs
 powershell -ExecutionPolicy Bypass -File scripts\prereqs-windows.ps1 -WithGit -WithClaudeCode
 
-# For scripts\setup-windows.cmd -ConfigureA365WorkIq
+# Microsoft's Agent 365 CLI, to use yourself (setup does not need it)
 powershell -ExecutionPolicy Bypass -File scripts\prereqs-windows.ps1 -WithWorkIq
 ```
 
@@ -47,9 +48,9 @@ powershell -ExecutionPolicy Bypass -File scripts\prereqs-windows.ps1 -WithWorkIq
 - `-WithGit` — Git for Windows, for the current user. Claude Code runs this
   project's hooks through Git Bash.
 - `-WithClaudeCode` — Claude Code, using its official installer.
-- `-WithWorkIq` — what Word, Excel and OneDrive files (Work IQ) need, for the
-  current user only: the Microsoft Agent 365 CLI (`a365`), the .NET SDK it runs
-  on when the PC has no .NET SDK 8 or later, and PowerShell 7, which the
+- `-WithWorkIq` — optional, and not used by setup: Microsoft's Agent 365 CLI
+  (`a365`), for the current user only, with the .NET SDK it runs on when the PC
+  has no .NET SDK 8 or later, and PowerShell 7, which its
   `a365 setup permissions` step needs.
 - `-WithBuildTools` — Visual Studio Build Tools with the C++ workload, about
   6 GB. Only needed if setup reports that a package had to be compiled.
@@ -98,9 +99,10 @@ re-run.
     PC, a standard user over SSH, `winget` installed it for that account
     (`%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe`).
 
-  The setup wizard finds Entrabot's own copies by itself and gives every `a365`
-  step `DOTNET_ROOT` and `PATH`. To run that `a365` by hand, set
-  `DOTNET_ROOT=%LOCALAPPDATA%\entrabot\tools\dotnet` first.
+  To run that `a365`, start `%LOCALAPPDATA%\entrabot\tools\a365\a365.exe`,
+  after setting `DOTNET_ROOT=%LOCALAPPDATA%\entrabot\tools\dotnet` when it runs
+  on Entrabot's own .NET; neither folder is on `PATH`. On Windows each `a365` command signs in through its own Windows
+  sign-in window, so it needs the PC's desktop.
   `teardown-windows.ps1 -PurgeData` deletes both folders. .NET's own per-user
   caches (`%USERPROFILE%\.dotnet`, `%USERPROFILE%\.nuget`) stay.
 - **`-WithBuildTools`.** Installs Visual Studio 2022 Build Tools with the C++

@@ -142,8 +142,11 @@ Agent 365 Work IQ:
 - `--with-a365-work-iq` — install or update the Microsoft Agent 365 DevTools CLI
   (`a365`) via `dotnet` global tools (requires a .NET SDK on `PATH`).
 - `--configure-a365-work-iq` — run the interactive Work IQ Word developer setup
-  against the existing Entrabot Blueprint, materialize the Work IQ OAuth grants,
-  and validate the tooling manifest. Requires `pwsh`.
+  against the existing Entrabot Blueprint, materialize the Work IQ OAuth grants
+  and the Blueprint's inheritable permissions
+  ([`ensure_a365_work_iq_permissions.py`](../provisioning/ensure-a365-work-iq-permissions-py.md),
+  before `a365 setup permissions mcp`), and validate the tooling manifest.
+  Requires `pwsh`.
 - `--a365-agent-name=NAME` — deprecated compatibility flag; Work IQ setup now
   reuses the existing Entrabot Blueprint from state.
 
