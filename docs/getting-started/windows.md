@@ -36,7 +36,7 @@ Running `scripts\setup-windows.cmd` again is how you repair or change a setup. I
 | Question | Suggested answer | Notes |
 |---|---|---|
 | Install the Azure CLI? | Yes | Only asked if it is missing. If your account is a local administrator and `winget` is present, setup installs it with `winget` (the standard install, for the whole PC; Windows may ask for permission). Otherwise, or if that does not work, a private copy goes into Entrabot's data folder. |
-| Use this account? | Yes | Shown when you are already signed in and that sign-in still works. Otherwise your browser opens for you to sign in to Microsoft. |
+| Use this account? | Yes | Shown when you are already signed in and Microsoft still accepts that sign-in (setup checks). Otherwise your browser opens for you to sign in to Microsoft. |
 | How do you want to set up your agent? | Create a new agent | Or join an agent that already exists, using its Blueprint App ID. On a PC that is already set up, the suggested answer is to continue with that agent. |
 | Short name for your agent | Your Windows user name | The agent's address becomes `entrabot-agent-<name>@<your domain>`. |
 | The agent's sponsor | You | The people the agent takes instructions from in Teams. When joining an existing agent, the suggested answer keeps its current sponsors. |

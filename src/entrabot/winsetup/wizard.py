@@ -275,6 +275,12 @@ class Options:
     log_file: Path | None = None
 
 
+# What Microsoft Entra says when a sign-in has to be made again: the session was revoked
+# (continuous access evaluation), or its refresh token expired or was invalidated.
+_SESSION_ENDED = re.compile(
+    r"InteractionRequired|TokenIssuedBeforeRevocationTimestamp|AADSTS(?:50173|700082|70043)"
+    r"|interaction_required",
+)
 START_SCRIPT = "start-entrabot.cmd"
 # End-to-end test results after which the agent is not offered a start, or things to try.
 _CANNOT_START = ("sign-in", "keyring", "crashed", "certificate-pending")
@@ -749,16 +755,18 @@ class Wizard:
             except AzError as exc:
                 raise SetupFailed(str(exc)) from exc
             self.done_before_review.append("installed the Azure CLI")
-        az = self.az = AzCli(location, console)
+        az = self.az = AzCli(location, console, env=world.env, platform=world.platform)
         self.helpers = Helpers(console, self.paths, az.child_env(world.env))
 
         account = az.account()
         if account is not None and opts.tenant and not self._in_tenant(account, opts.tenant):
             account = None  # signed in somewhere else than the tenant that was asked for
-        if account is not None and az.graph_token() is None:
-            # az still lists the account, but it cannot get a token for it any more: the
-            # session ended or was revoked, or it was made through the Windows account
-            # broker, which setup no longer uses. Offering it would fail a step later.
+        # Is the earlier sign-in still accepted? Only a real request to the directory tells:
+        # az goes on listing an account, and handing out its cached token, after the
+        # organization has ended the session (or when it was made through the Windows account
+        # broker, which setup no longer uses). Offering that account fails steps later.
+        me = az.me() if account is not None else None
+        if account is not None and me is None:
             console.info(
                 f"The earlier sign-in as {account.user} can no longer be used, so setup asks "
                 "you to sign in again."
@@ -772,10 +780,11 @@ class Wizard:
                 account = None
         if account is None:
             account = self._login()
+            me = None  # whoever just signed in, read below
         self.account = account
         console.ok(f"Signed in as {account.user} ({account.tenant_name or account.tenant_id})")
 
-        self.me = az.me()
+        self.me = me or az.me()
         self.subscriptions = az.subscriptions(account.tenant_id)
         self._check_tenant(account)
         self._check_privileges()
@@ -1406,6 +1415,13 @@ class Wizard:
                 raise SetupFailed(
                     f"{_COULD_NOT_READ_ENTRA} Nothing was changed in Microsoft Entra.",
                     fix=_PROVISIONER_COULD_NOT_CHECK_FIX,
+                )
+            if _SESSION_ENDED.search(bootstrap.stdout + bootstrap.stderr):
+                raise SetupFailed(
+                    "Your Microsoft sign-in is no longer accepted: your organization ended "
+                    "the session while setup was running.",
+                    fix="Run setup again. It will ask you to sign in again, then continue from "
+                    "here and keep what already works.",
                 )
             raise SetupFailed(
                 "Setup could not get the access it needs in your tenant.",

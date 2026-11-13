@@ -995,21 +995,56 @@ class TestSignIn:
         assert world.run(new_chain=True, upn_suffix="sati") == 0
         assert "Your browser is opening" in world.out
         assert "sign-in window is opening" not in world.out
+        # ...and az is really told so: the setting is in the environment it is started with.
+        for call in world.az("login") + world.az("account", "show"):
+            assert call.env is not None
+            assert call.env["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"] == "false"
 
-    def test_a_sign_in_that_can_no_longer_get_a_token_is_done_again(self, world: Scenario) -> None:
-        # Seen on the test machine: az still listed the account, but every token request
-        # failed (the session had been revoked). A sign-in made through the Windows account
-        # broker looks the same once setup uses the browser.
-        def token(_request: RunRequest) -> Reply:
+    _REVOKED = (
+        "ERROR: Continuous access evaluation resulted in challenge with result: "
+        "InteractionRequired and code: TokenIssuedBeforeRevocationTimestamp"
+    )
+
+    def _session_ended(self, world: Scenario) -> None:
+        """As on the test machine after the organization ended the session: az still lists
+        the account and still hands out its cached token, but Microsoft Graph refuses it."""
+        me = json.dumps(
+            {"id": "admin-object", "userPrincipalName": "admin@werner.ac", "userType": "Member"}
+        )
+
+        def signed_in_user(_request: RunRequest) -> Reply:
             if not world.az("login"):
-                return Reply(returncode=1, stderr="ERROR: InteractionRequired: sign in again")
-            return Reply(stdout=json.dumps({"accessToken": "tok"}))
+                return Reply(returncode=1, stderr=self._REVOKED)
+            return Reply(stdout=me)
 
-        world.spawn.on(words("account", "get-access-token"), token)
+        world.spawn.on(words("ad", "signed-in-user", "show"), signed_in_user)
+
+    def test_a_sign_in_microsoft_no_longer_accepts_is_done_again(self, world: Scenario) -> None:
+        # From a desktop run: "Already signed in as ... Use this account?" was offered, the
+        # person said yes, and setup failed three steps later with the raw token error.
+        self._session_ended(world)
         assert world.run(typed="\n" * 40) == 0, world.out
         assert len(world.az("login")) == 1
         assert "can no longer be used" in world.out
         assert "Use this account?" not in world.out  # there is nothing to choose
+        assert "Your browser is opening" in world.out
+
+    def test_a_cached_token_is_not_taken_as_proof_of_a_working_sign_in(
+        self, world: Scenario
+    ) -> None:
+        self._session_ended(world)
+        assert world.run(typed="\n" * 40) == 0, world.out
+        before_login = world.spawn.calls[: world.spawn.calls.index(world.az("login")[0])]
+        assert any(call.argv[-5:-2] == ["ad", "signed-in-user", "show"] for call in before_login)
+
+    def test_a_session_that_ends_during_setup_is_said_in_plain_words(self, world: Scenario) -> None:
+        world.spawn.on(
+            script("entra_provisioning.py"), Reply(returncode=1, stderr=f"ERROR: {self._REVOKED}")
+        )
+        assert world.run(new_chain=True, upn_suffix="sati") == 1
+        assert "Your Microsoft sign-in is no longer accepted" in world.out
+        assert "needs an administrator" not in world.out
+        assert "sign in again" in world.out
 
     def test_a_sign_in_that_still_works_is_offered_as_before(self, world: Scenario) -> None:
         assert world.run(typed="\n" * 40) == 0, world.out

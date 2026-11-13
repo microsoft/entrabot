@@ -386,13 +386,25 @@ def is_local_admin(console: Console, env: Mapping[str, str]) -> bool:
 class AzCli:
     """A located Azure CLI. Every call goes through the wizard's console."""
 
-    def __init__(self, location: AzLocation, console: Console) -> None:
+    def __init__(
+        self,
+        location: AzLocation,
+        console: Console,
+        *,
+        env: Mapping[str, str] | None = None,
+        platform: str | None = None,
+    ) -> None:
         self.location = location
         self._console = console
+        self._platform = platform
+        # The environment every ``az`` here is started with. It is always passed, never left
+        # to be inherited: that is what carries the browser sign-in setting to the CLI.
+        self._env = sign_in_env(os.environ if env is None else env, platform=platform)
 
     def child_env(self, base: Mapping[str, str]) -> dict[str, str]:
-        """*base* with the CLI's folder first on PATH, so helper scripts find the same ``az``."""
-        env = dict(base)
+        """*base* with the CLI's folder first on PATH, so helper scripts find the same ``az``,
+        and with the same sign-in setting, so they look for the same sign-in."""
+        env = sign_in_env(base, platform=self._platform)
         key = next((name for name in env if name.upper() == "PATH"), "PATH")
         current = env.get(key, "")
         env[key] = (
@@ -424,9 +436,14 @@ class AzCli:
     ) -> Any:
         """Run ``az <args>`` and return the CompletedProcess."""
         if interactive:
-            return self._console.run(self._argv(args), interactive=True)
+            return self._console.run(self._argv(args), interactive=True, env=self._env)
         return self._console.run(
-            self._argv(args), capture=True, quiet=quiet, sensitive=sensitive, heartbeat=heartbeat
+            self._argv(args),
+            capture=True,
+            quiet=quiet,
+            sensitive=sensitive,
+            heartbeat=heartbeat,
+            env=self._env,
         )
 
     def json(self, args: Sequence[str], *, sensitive: bool = False) -> Any:
@@ -477,7 +494,7 @@ class AzCli:
             args += ["--tenant", tenant]
         if not device_code:
             return "signed-in" if self.run(args, interactive=True).returncode == 0 else "failed"
-        result = self._console.run(self._argv([*args, "--use-device-code"]))
+        result = self._console.run(self._argv([*args, "--use-device-code"]), env=self._env)
         if result.returncode == 0:
             return "signed-in"
         codes = set(_AADSTS.findall(f"{result.stdout}\n{result.stderr}"))

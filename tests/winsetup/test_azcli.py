@@ -507,6 +507,29 @@ class TestBrowserSignIn:
     def test_other_systems_are_left_alone(self) -> None:
         assert azcli.sign_in_env({"PATH": "x"}, platform="darwin") == {"PATH": "x"}
 
+    def test_every_az_the_wrapper_starts_is_given_the_setting(self) -> None:
+        # From the first desktop run of browser sign-in: the setting was put in the wizard's
+        # own environment mapping, but az was started with no environment of its own, so it
+        # inherited the real one and opened the Windows account sign-in window again.
+        spawn = FakeSpawn()
+        console, _ = make_console(spawn=spawn)
+        location = AzLocation(command=("az",), bin_dir=Path("/x"), source="path")
+        az = AzCli(location, console, env={"PATH": "/usr/bin"}, platform="win32")
+        az.account()
+        az.login(tenant=None, device_code=False)
+        az.login(tenant=None, device_code=True)
+        assert len(spawn.calls) == 3
+        for call in spawn.calls:
+            assert call.env is not None, call.argv
+            assert call.env["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"] == "false", call.argv
+            assert call.env["PATH"] == "/usr/bin"
+
+    def test_helpers_started_through_the_wrapper_get_it_too(self) -> None:
+        console, _ = make_console(spawn=FakeSpawn())
+        location = AzLocation(command=("az",), bin_dir=Path("/x"), source="path")
+        az = AzCli(location, console, platform="win32")
+        assert az.child_env({"PATH": "p"})["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"] == "false"
+
     def test_the_given_mapping_is_not_changed(self) -> None:
         given = {"PATH": "x"}
         azcli.sign_in_env(given, platform="win32")

@@ -343,7 +343,7 @@ def connect(
     location = azcli.find_az(env=env, data_dir=paths.data_root, platform=platform, which=which)
     if location is None:
         return Access(helpers=Helpers(console, paths, env), az=None, account=None)
-    az = AzCli(location, console)
+    az = AzCli(location, console, env=env, platform=platform)
     return Access(helpers=Helpers(console, paths, az.child_env(env)), az=az, account=az.account())
 
 
