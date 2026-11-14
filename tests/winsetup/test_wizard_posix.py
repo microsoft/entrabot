@@ -91,6 +91,14 @@ class FakeKeyStore(FakeWinCert):
         return cert
 
 
+def _program(request: RunRequest) -> str:
+    """The program a request starts, by its file name. These tests also run on Windows, where
+    the folders they make have backslash paths: matching on "/bash" found nothing there, the
+    hooks and the Claude Code version came back empty, and setup did not offer to start the
+    agent."""
+    return re.split(r"[\\/]", request.argv[0])[-1]
+
+
 @dataclass
 class PosixScenario(Scenario):
     platform: str = "darwin"
@@ -139,9 +147,9 @@ class PosixScenario(Scenario):
             self.env["DISPLAY"] = ":0"
         self._rules()
         on = self.spawn.on
-        on(lambda r: r.argv[0].endswith("/bash"), Reply(stdout=HOOK_OUTPUT))
+        on(lambda r: _program(r) == "bash", Reply(stdout=HOOK_OUTPUT))
         on(
-            lambda r: r.argv[0].endswith("/claude") and r.argv[1:] == ["--version"],
+            lambda r: _program(r) == "claude" and r.argv[1:] == ["--version"],
             lambda _r: Reply(stdout=self.claude_version + "\n"),
         )
         on(snippet("find_credential_for_public_key"), self._older_key_check)
