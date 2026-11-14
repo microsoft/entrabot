@@ -34,7 +34,7 @@ exit "${STUB_EXIT:-0}"
 
 class Folder:
     def __init__(self, tmp_path: Path, *, venv: bool = True) -> None:
-        self.root = tmp_path / "Development HD" / "entrabot"
+        self.root = tmp_path / "My Projects" / "entrabot"
         (self.root / "scripts").mkdir(parents=True)
         shutil.copy(TEARDOWN_SH, self.root / "scripts" / "teardown.sh")
         self.log = tmp_path / "calls.log"

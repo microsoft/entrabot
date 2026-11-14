@@ -127,14 +127,14 @@ class TestEntraBotConfig:
     def test_tenant_ids_parsed_from_env(self) -> None:
         """ENTRABOT_HUMAN_USER_TENANT_IDS CSV is parsed into a list."""
         env = {
-            "ENTRABOT_HUMAN_USER_TENANT_IDS": "72f988bf-86f1-41af-91ab-2d7cd011db47,,other-tenant",
+            "ENTRABOT_HUMAN_USER_TENANT_IDS": "11112222-3333-4444-8555-666677778888,,other-tenant",
             "ENTRABOT_HUMAN_USER_MAILS": "user1@example.com,user2@example.com,guest@other.com",
             "ENTRABOT_HUMAN_USER_IDS": "guest-id,member-id,guest2-id",
         }
         with patch.dict(os.environ, env, clear=False):
             cfg = EntraBotConfig.from_env()
         assert cfg.human_user_tenant_ids == [
-            "72f988bf-86f1-41af-91ab-2d7cd011db47",
+            "11112222-3333-4444-8555-666677778888",
             "",
             "other-tenant",
         ]

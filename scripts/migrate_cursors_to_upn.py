@@ -26,7 +26,7 @@ Contract:
 * Only touches the operational cursor prefix (``chat_cursors/``) — persona-sati
   memory and interaction logs are never read or written.
 
-Live invocation (Brandon runs this after reviewing the diff):
+Live invocation (the operator runs this after reviewing the diff):
 
     python scripts/migrate_cursors_to_upn.py --dry-run    # inspect plan
     python scripts/migrate_cursors_to_upn.py              # execute

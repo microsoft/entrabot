@@ -176,7 +176,7 @@ The provisioning has multiple async states: `not_started â†’ auth_in_progress â†
 
 ### 6. Open Questions
 
-List everything you couldn't answer from research. These become questions for Brandon / the team before implementation starts.
+List everything you couldn't answer from research. These become questions for the user / the team before implementation starts.
 
 ### 7. Risks
 
@@ -210,10 +210,10 @@ Start each section with the WHY before the WHAT. Future-you will thank you.
 
 1. Commit the plan to `docs/architecture/PLAN-multi-tenant-lightweight-chat.md` on the `feature/multi-tenant-lightweight-chat` branch.
 2. Run `pytest -v && ruff check .` to confirm no regressions (you shouldn't have changed code, but double-check).
-3. Summarize the plan's key decisions in 5 bullet points for Brandon's review.
+3. Summarize the plan's key decisions in 5 bullet points for the user's review.
 4. List the top 3 risks you identified and the top 3 open questions.
 
-Brandon will review the plan, ask follow-up questions, and when he's satisfied, greenlight the implementation phase. Then a different agent (or you) will execute the plan step-by-step with TDD.
+The user will review the plan, ask follow-up questions, and when he's satisfied, greenlight the implementation phase. Then a different agent (or you) will execute the plan step-by-step with TDD.
 
 ---
 

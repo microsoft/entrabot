@@ -1,7 +1,7 @@
 # PLAN: SKILL.md Skills Layer
 
 Status: **Draft** — 2026-07-09
-Owner: Brandon (sponsor) + entrabot agent
+Owner: the sponsor + entrabot agent
 Parent: `docs/architecture/PLAN-entrabot-new-features.md` — Feature 2 (Best Short Term).
 
 ## Problem

@@ -910,7 +910,7 @@ def find_existing_agent_user_by_upn(token: str, upn: str) -> dict | None:
     creation so a re-run on a different machine (with a different
     hostname-suffixed Agent Identity display name) doesn't try to mint
     a second Agent Identity + Agent User and collide with the existing
-    UPN — the failure mode that produced the orphan 966d16f3-... on
+    UPN — the failure mode that produced an orphaned Agent Identity on
     2026-04-16.
 
     Returns the user dict (including ``identityParentId``) so the caller

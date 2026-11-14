@@ -185,7 +185,7 @@ class TestTopChatsToday:
         il.log_interaction(
             channel="teams_group",
             direction="inbound",
-            sender="brandon@x.com",
+            sender="alex@example.com",
             summary="hi",
             metadata={"chat_id": "19:X@thread.v2"},
         )
@@ -209,7 +209,7 @@ class TestTopChatsToday:
             latest_ts,
             channel="teams_group",
             direction="inbound",
-            sender="brandon@x.com",
+            sender="alex@example.com",
             summary="latest",
             metadata={"chat_id": "19:A@thread.v2"},
         )
@@ -221,7 +221,7 @@ class TestTopChatsToday:
         assert len(result["top_chats_today"]) == 1
         top = result["top_chats_today"][0]
         assert top["interaction_count"] == 2
-        assert top["last_sender"] == "brandon@x.com"
+        assert top["last_sender"] == "alex@example.com"
         # last_activity must reflect the NEWER of the two entries, not
         # the earlier one — regression for the recency selection in
         # _top_chats.

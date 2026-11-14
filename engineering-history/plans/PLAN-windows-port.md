@@ -242,7 +242,7 @@ Old cert is NOT deleted from `Cert:\CurrentUser\My` until smoke succeeds. On rol
 | `platform/windows.py` lookup | Thumbprint missing from Cert: store | ✅ unit | ✅ raise | Clear "cert not found: <thumbprint>" |
 | MSAL cache invalidation post-rollback | Cache file locked by another process | ⚠️ manual | ✅ retry+log | Warning, next call re-mints clean |
 
-**Critical gaps:** None. The "rollback PATCH itself fails" case halts loud — manual triage is the right response when both Graph PATCHes fail in a row (network outage; Brandon would want to know, not auto-recover).
+**Critical gaps:** None. The "rollback PATCH itself fails" case halts loud — manual triage is the right response when both Graph PATCHes fail in a row (network outage; the user would want to know, not auto-recover).
 
 ## Worktree parallelization strategy
 

@@ -62,7 +62,7 @@ class TestPushOneSubcommand:
         backend = _FakeBackend()
         mem_dir = tmp_path / "memory"
         mem_dir.mkdir()
-        target = mem_dir / "user_brandon_role.md"
+        target = mem_dir / "user_alex_role.md"
         target.write_text("Product Architect")
 
         monkeypatch.setattr(sync_module, "_resolve_backend", lambda: backend)
@@ -71,7 +71,7 @@ class TestPushOneSubcommand:
         rc = sync_module.main(["push-one", str(target)])
 
         assert rc == 0
-        assert backend.read_text("claude_memory/user_brandon_role.md") == "Product Architect"
+        assert backend.read_text("claude_memory/user_alex_role.md") == "Product Architect"
 
     def test_push_one_ignores_path_outside_memory_dir(
         self,
@@ -106,7 +106,7 @@ class TestPushSubcommand:
         mem_dir = tmp_path / "memory"
         mem_dir.mkdir()
         (mem_dir / "MEMORY.md").write_text("index")
-        (mem_dir / "user_brandon_role.md").write_text("Brandon")
+        (mem_dir / "user_alex_role.md").write_text("Alex")
 
         monkeypatch.setattr(sync_module, "_resolve_backend", lambda: backend)
         monkeypatch.setattr(sync_module, "_resolve_memory_dir", lambda: mem_dir)
@@ -115,7 +115,7 @@ class TestPushSubcommand:
 
         assert rc == 0
         assert backend.read_text("claude_memory/MEMORY.md") == "index"
-        assert backend.read_text("claude_memory/user_brandon_role.md") == "Brandon"
+        assert backend.read_text("claude_memory/user_alex_role.md") == "Alex"
 
 
 class TestPullSubcommand:
@@ -125,7 +125,7 @@ class TestPullSubcommand:
         monkeypatch.setenv("ENTRABOT_PERSONA_SYNC", "on")
         backend = _FakeBackend()
         backend.store["claude_memory/MEMORY.md"] = "index"
-        backend.store["claude_memory/user_brandon_role.md"] = "Brandon"
+        backend.store["claude_memory/user_alex_role.md"] = "Alex"
         # Non-persona key must stay in cloud and NOT land locally
         backend.store["interactions/2026-04-17.jsonl"] = "agent ops"
 
@@ -137,7 +137,7 @@ class TestPullSubcommand:
 
         assert rc == 0
         assert (mem_dir / "MEMORY.md").read_text() == "index"
-        assert (mem_dir / "user_brandon_role.md").read_text() == "Brandon"
+        assert (mem_dir / "user_alex_role.md").read_text() == "Alex"
         assert not (mem_dir / "interactions").exists()
 
 

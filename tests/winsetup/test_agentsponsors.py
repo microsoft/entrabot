@@ -28,8 +28,8 @@ AGENT = "agent-object"
 ADMIN = {
     "id": "admin-id",
     "displayName": "Admin",
-    "userPrincipalName": "admin@werner.ac",
-    "mail": "admin@werner.ac",
+    "userPrincipalName": "admin@contoso.com",
+    "mail": "admin@contoso.com",
 }
 
 
@@ -74,7 +74,7 @@ class TestSync:
         result = sync_sponsors(_helpers(tmp_path, spawn), AGENT, [], env={})
         assert result.read and result.added == () and not result.problems
         assert [item.object_id for item in result.after] == ["admin-id"]
-        assert result.after[0].label == "admin@werner.ac"
+        assert result.after[0].label == "admin@contoso.com"
 
     def test_an_added_sponsor_is_confirmed_by_the_read_back(self, tmp_path: Path) -> None:
         spawn = FakeSpawn()
@@ -145,8 +145,8 @@ class TestLabels:
         assert sponsor.label == "pat@contoso.com"
 
     def test_an_external_sign_in_name_is_shown_as_the_address_it_was_made_from(self) -> None:
-        sponsor = DirectorySponsor("id", "B", "brandwe_outlook.com#EXT#@t.onmicrosoft.com", "")
-        assert sponsor.label == "brandwe@outlook.com"
+        sponsor = DirectorySponsor("id", "B", "alex_example.com#EXT#@t.onmicrosoft.com", "")
+        assert sponsor.label == "alex@example.com"
 
     def test_an_entry_with_only_an_id_falls_back_to_the_id(self) -> None:
         # Graph often returns nothing but the id for a sponsor.
@@ -161,8 +161,8 @@ class TestManualCommands:
         assert add_command(paths, "pat@contoso.com") == (
             ".venv\\Scripts\\python.exe scripts\\add_agent_sponsor.py pat@contoso.com"
         )
-        assert remove_command(paths, "admin@werner.ac") == (
-            ".venv\\Scripts\\python.exe scripts\\remove_agent_sponsor.py admin@werner.ac"
+        assert remove_command(paths, "admin@contoso.com") == (
+            ".venv\\Scripts\\python.exe scripts\\remove_agent_sponsor.py admin@contoso.com"
         )
 
     def test_an_address_a_shell_would_split_is_quoted(self, tmp_path: Path) -> None:

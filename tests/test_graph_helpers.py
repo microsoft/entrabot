@@ -391,7 +391,7 @@ class TestResolveUserByEmail:
         # so the filter was "userPrincipalName eq 'alice_contoso.com" and matched nobody.
         from entrabot.graph_helpers import resolve_user_by_email
 
-        guest = "alice_contoso.com#EXT#@werner.onmicrosoft.com"
+        guest = "alice_contoso.com#EXT#@fabrikam.onmicrosoft.com"
         resp = _resp(200, {"value": [{"id": "uid-6", "displayName": "Alice (guest)"}]})
         with patch("entrabot.graph_helpers.requests") as mock_requests:
             mock_requests.get.return_value = resp
@@ -400,7 +400,7 @@ class TestResolveUserByEmail:
         assert (oid, name) == ("uid-6", "Alice (guest)")
         first_call_url = mock_requests.get.call_args_list[0][0][0]
         assert "#" not in first_call_url
-        assert "alice_contoso.com%23EXT%23@werner.onmicrosoft.com" in first_call_url
+        assert "alice_contoso.com%23EXT%23@fabrikam.onmicrosoft.com" in first_call_url
 
     @pytest.mark.parametrize(
         ("address", "encoded"),
@@ -428,7 +428,7 @@ class TestResolveUserByEmail:
     def test_the_retry_with_consistency_level_uses_the_same_encoded_url(self):
         from entrabot.graph_helpers import resolve_user_by_email
 
-        guest = "bob_contoso.com#EXT#@werner.onmicrosoft.com"
+        guest = "bob_contoso.com#EXT#@fabrikam.onmicrosoft.com"
         bad_request = _resp(400, text="ConsistencyLevel required")
         found = _resp(200, {"value": [{"id": "uid-8", "displayName": "Bob"}]})
         with patch("entrabot.graph_helpers.requests") as mock_requests:
@@ -440,17 +440,17 @@ class TestResolveUserByEmail:
 
     @pytest.mark.parametrize(
         "object_id",
-        ["7684aece-56ae-464e-a085-893d6a58fdf9", "7684AECE-56AE-464E-A085-893D6A58FDF9"],
+        ["a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D"],
     )
     def test_an_object_id_is_looked_up_directly(self, object_id):
         from entrabot.graph_helpers import resolve_user_by_email
 
-        user = {"id": "7684aece-56ae-464e-a085-893d6a58fdf9", "displayName": "Brandon"}
+        user = {"id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", "displayName": "Alex"}
         with patch("entrabot.graph_helpers.requests") as mock_requests:
             mock_requests.get.return_value = _resp(200, user)
             oid, name = resolve_user_by_email("tok", f"  {object_id} ")
 
-        assert (oid, name) == ("7684aece-56ae-464e-a085-893d6a58fdf9", "Brandon")
+        assert (oid, name) == ("a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", "Alex")
         (call,) = mock_requests.get.call_args_list
         assert call[0][0].split("?")[0].endswith(f"/users/{object_id}")
         assert "$filter" not in call[0][0]
@@ -458,7 +458,7 @@ class TestResolveUserByEmail:
     def test_an_object_id_that_is_not_a_user_raises_and_says_so(self):
         from entrabot.graph_helpers import resolve_user_by_email
 
-        object_id = "7684aece-56ae-464e-a085-893d6a58fdf9"
+        object_id = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
         with (
             patch("entrabot.graph_helpers.requests") as mock_requests,
             pytest.raises(LookupError, match="object ID"),
@@ -471,7 +471,7 @@ class TestResolveUserByEmail:
     def test_an_object_id_without_a_display_name_falls_back_to_the_id(self):
         from entrabot.graph_helpers import resolve_user_by_email
 
-        object_id = "7684aece-56ae-464e-a085-893d6a58fdf9"
+        object_id = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
         with patch("entrabot.graph_helpers.requests") as mock_requests:
             mock_requests.get.return_value = _resp(200, {"id": object_id, "displayName": None})
             assert resolve_user_by_email("tok", object_id) == (object_id, object_id)

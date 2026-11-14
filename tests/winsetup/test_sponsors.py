@@ -41,11 +41,11 @@ OWNER_ID = "0f3c1c7e-1111-2222-3333-444455556666"
 # The tenant's owner, who signs in with a personal Microsoft account.
 OWNER = {
     "id": "owner-id",
-    "displayName": "Brandon Werner",
+    "displayName": "Alex Wilber",
     "userType": "Member",
     "mail": None,
-    "userPrincipalName": "brandwe_outlook.com#EXT#@werner.onmicrosoft.com",
-    "otherMails": ["brandwe@outlook.com"],
+    "userPrincipalName": "alex_example.com#EXT#@contoso.onmicrosoft.com",
+    "otherMails": ["alex@example.com"],
 }
 
 
@@ -168,7 +168,7 @@ class TestResolve:
 class TestPersonalAndExternalAccounts:
     """Measured on a real tenant: its owner signs in with a personal Microsoft account.
 
-    In the directory that person is ``brandwe_outlook.com#EXT#@<tenant>.onmicrosoft.com``, a
+    In the directory that person is ``alex_example.com#EXT#@<tenant>.onmicrosoft.com``, a
     Member, with no ``mail``; the address they are known by lives in ``otherMails``, the email
     aliases, or only in that sign-in name. Looking up the address as a sign-in name and as
     ``mail`` found nobody, and setup refused a sponsor who was working on another machine.
@@ -176,69 +176,69 @@ class TestPersonalAndExternalAccounts:
 
     def test_the_address_is_found_among_other_mails(self) -> None:
         az, directory, _ = _az_with([OWNER])
-        sponsors = resolve_sponsors(["brandwe@outlook.com"], az, http_get=_no_http)
+        sponsors = resolve_sponsors(["alex@example.com"], az, http_get=_no_http)
         assert sponsors == [
             Sponsor(
                 object_id="owner-id",
-                upn="brandwe@outlook.com",  # what was typed, as the other machine recorded it
-                mail="brandwe@outlook.com",
+                upn="alex@example.com",  # what was typed, as the other machine recorded it
+                mail="alex@example.com",
                 user_type="Member",  # what the directory says, although the name has #EXT#
                 home_tenant_id="",
             )
         ]
         assert directory.asked == [
-            "id brandwe@outlook.com",
-            "userPrincipalName eq 'brandwe@outlook.com'",
-            "mail eq 'brandwe@outlook.com'",
-            "otherMails/any(x:x eq 'brandwe@outlook.com')",
+            "id alex@example.com",
+            "userPrincipalName eq 'alex@example.com'",
+            "mail eq 'alex@example.com'",
+            "otherMails/any(x:x eq 'alex@example.com')",
         ]
 
-    @pytest.mark.parametrize("stored", ["SMTP:brandwe@outlook.com", "smtp:brandwe@outlook.com"])
+    @pytest.mark.parametrize("stored", ["SMTP:alex@example.com", "smtp:alex@example.com"])
     def test_the_address_is_found_among_email_aliases_in_either_spelling(self, stored: str) -> None:
         owner = {**OWNER, "otherMails": [], "proxyAddresses": [stored]}
         az, directory, _ = _az_with([owner])
-        sponsors = resolve_sponsors(["brandwe@outlook.com"], az, http_get=_no_http)
+        sponsors = resolve_sponsors(["alex@example.com"], az, http_get=_no_http)
         assert sponsors[0].object_id == "owner-id"
-        assert "proxyAddresses/any(x:x eq 'SMTP:brandwe@outlook.com')" in directory.asked
+        assert "proxyAddresses/any(x:x eq 'SMTP:alex@example.com')" in directory.asked
 
     def test_the_address_is_found_from_the_external_sign_in_name_alone(self) -> None:
         owner = {**OWNER, "otherMails": []}
         az, directory, _ = _az_with([owner])
-        sponsors = resolve_sponsors(["brandwe@outlook.com"], az, http_get=_no_http)
+        sponsors = resolve_sponsors(["alex@example.com"], az, http_get=_no_http)
         assert sponsors[0].object_id == "owner-id" and sponsors[0].user_type == "Member"
         # "@" becomes "_" in an external sign-in name.
-        assert directory.asked[-1] == "startswith(userPrincipalName,'brandwe_outlook.com')"
+        assert directory.asked[-1] == "startswith(userPrincipalName,'alex_example.com')"
 
     def test_a_longer_name_that_merely_starts_the_same_is_not_a_match(self) -> None:
-        # brandwe_outlook.com.au#EXT#... is somebody else.
+        # alex_example.com.example#EXT#... is somebody else.
         lookalike = {
             **OWNER,
             "id": "other-id",
             "otherMails": [],
-            "userPrincipalName": "brandwe_outlook.com.au#EXT#@werner.onmicrosoft.com",
+            "userPrincipalName": "alex_example.com.example#EXT#@contoso.onmicrosoft.com",
         }
         az, _, _ = _az_with([lookalike])
         with pytest.raises(SponsorError, match="Could not find"):
-            resolve_sponsors(["brandwe@outlook.com"], az, http_get=_no_http)
+            resolve_sponsors(["alex@example.com"], az, http_get=_no_http)
 
     def test_no_hash_ever_reaches_the_url_unencoded(self) -> None:
         # A raw "#" starts a URL fragment: everything after it would silently not be sent.
         az, directory, _ = _az_with([OWNER])
         resolve_sponsors([OWNER["userPrincipalName"]], az, http_get=_no_http)  # type: ignore[list-item]
-        resolve_sponsors(["brandwe@outlook.com"], az, http_get=_no_http)
+        resolve_sponsors(["alex@example.com"], az, http_get=_no_http)
         assert directory.urls and not any("#" in url for url in directory.urls)
-        assert directory.asked[0] == "id brandwe_outlook.com#ext#@werner.onmicrosoft.com"
+        assert directory.asked[0] == "id alex_example.com#ext#@contoso.onmicrosoft.com"
 
     def test_the_external_sign_in_name_itself_can_be_given(self) -> None:
         az, _, _ = _az_with([OWNER])
-        typed = "brandwe_outlook.com#EXT#@werner.onmicrosoft.com"
+        typed = "alex_example.com#EXT#@contoso.onmicrosoft.com"
         assert resolve_sponsors([typed], az, http_get=_no_http)[0].object_id == "owner-id"
 
     def test_an_object_id_is_accepted_and_recorded_under_the_persons_address(self) -> None:
         az, directory, _ = _az_with([{**OWNER, "id": OWNER_ID}])
         sponsors = resolve_sponsors([OWNER_ID], az, http_get=_no_http)
         assert sponsors[0].object_id == OWNER_ID
-        assert sponsors[0].upn == "brandwe@outlook.com"  # an address, not a GUID, in .env
+        assert sponsors[0].upn == "alex@example.com"  # an address, not a GUID, in .env
         assert directory.asked == [f"id {OWNER_ID}"]
 
     def test_an_unknown_object_id_is_not_searched_for_as_an_email(self) -> None:
@@ -252,36 +252,36 @@ class TestPersonalAndExternalAccounts:
         twin = {
             **OWNER,
             "id": "twin-id",
-            "displayName": "Brandon (old account)",
-            "userPrincipalName": "brandon.old@werner.ac",
+            "displayName": "Alex (old account)",
+            "userPrincipalName": "alex.old@contoso.com",
         }
         az, _, _ = _az_with([OWNER, twin])
         with pytest.raises(SponsorError) as error:
-            resolve_sponsors(["brandwe@outlook.com"], az, http_get=_no_http)
+            resolve_sponsors(["alex@example.com"], az, http_get=_no_http)
         message = str(error.value)
-        assert "Brandon Werner" in message and "Brandon (old account)" in message
-        assert "brandwe_outlook.com#EXT#@werner.onmicrosoft.com" in message
-        assert "brandon.old@werner.ac" in message
+        assert "Alex Wilber" in message and "Alex (old account)" in message
+        assert "alex_example.com#EXT#@contoso.onmicrosoft.com" in message
+        assert "alex.old@contoso.com" in message
         assert "object ID" in message
 
     def test_a_lookup_graph_rejects_is_skipped_not_fatal(self) -> None:
         owner = {**OWNER, "otherMails": []}
         az, directory, _ = _az_with([owner])
         directory.fail_filters = ("proxyAddresses",)
-        assert resolve_sponsors(["brandwe@outlook.com"], az, http_get=_no_http)[0].object_id == (
+        assert resolve_sponsors(["alex@example.com"], az, http_get=_no_http)[0].object_id == (
             "owner-id"
         )
 
     def test_only_the_fields_setup_uses_are_requested(self) -> None:
         # Less of the directory in the setup log.
         az, directory, _ = _az_with([OWNER])
-        resolve_sponsors(["brandwe@outlook.com"], az, http_get=_no_http)
+        resolve_sponsors(["alex@example.com"], az, http_get=_no_http)
         assert all("%24select=" in url or "$select=" in url for url in directory.urls)
         assert all("proxyAddresses" not in url.split("select=")[1] for url in directory.urls)
 
     def test_every_lookup_asks_for_json(self) -> None:
         az, _, spawn = _az_with([OWNER])
-        resolve_sponsors(["brandwe@outlook.com"], az, http_get=_no_http)
+        resolve_sponsors(["alex@example.com"], az, http_get=_no_http)
         assert spawn.calls and all(call.argv[-2:] == ["--output", "json"] for call in spawn.calls)
 
     def test_a_batch_file_azure_cli_still_finds_members_and_mail(self) -> None:

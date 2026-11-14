@@ -114,7 +114,7 @@ class Project:
 
 @pytest.fixture
 def project(tmp_path: Path) -> Project:
-    root = tmp_path / "Development HD" / "entrabot"  # a space in the path, as on a real Mac
+    root = tmp_path / "My Projects" / "entrabot"  # a space in the path, as on a real Mac
     (root / "scripts").mkdir(parents=True)
     shutil.copy(SETUP_SH, root / "scripts" / "setup.sh")
     (root / "pyproject.toml").write_text('[project]\nname = "entrabot"\n', encoding="utf-8")

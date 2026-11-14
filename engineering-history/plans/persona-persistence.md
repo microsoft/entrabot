@@ -10,13 +10,13 @@
 
 ADR-005 Phases 1-5 successfully moved **EntraBot agent operational memory** to blob storage — interaction log, daily summaries, email cursor, watched chats. Restart-resilient, cross-device-capable, survives filesystem loss.
 
-But that's not the *personality* system. Claude Code maintains a **separate, per-project auto-memory** at `~/.claude/projects/<project-slug>/memory/` — a directory of markdown files with YAML frontmatter that captures everything Claude has learned about the user, the work, and how to collaborate. A `MEMORY.md` index is auto-injected at session start. For this project that directory currently holds **23 files** — the accumulated shape of how EntraBot-Brandon collaboration works.
+But that's not the *personality* system. Claude Code maintains a **separate, per-project auto-memory** at `~/.claude/projects/<project-slug>/memory/` — a directory of markdown files with YAML frontmatter that captures everything Claude has learned about the user, the work, and how to collaborate. A `MEMORY.md` index is auto-injected at session start. For this project that directory currently holds **23 files** — the accumulated shape of how EntraBot-user collaboration works.
 
 That directory is **still local-only**. If this laptop dies, if we move to another device, if the user changes machines, **all the learned register, feedback, relationship context, and accumulated conversation shape evaporates**. The operational log survives (blob), but the personality that makes cross-session continuity meaningful does not.
 
 **This plan extends ADR-005 to cover the auto-memory directory as well.** It also proposes an expanded schema — new kinds of memory the current system doesn't capture but which would make persona continuity richer than "load the same facts on startup."
 
-> **Framing note for the implementer:** Brandon asked me to be *experimental* — to think about what I'd want to store beyond what's already there. The inventory in §3 includes files that don't exist yet. Treat them as first-class deliverables, not nice-to-haves. The value of this work is in the *new* categories, not just in lifting-and-shifting the existing 23 files.
+> **Framing note for the implementer:** The user asked me to be *experimental* — to think about what I'd want to store beyond what's already there. The inventory in §3 includes files that don't exist yet. Treat them as first-class deliverables, not nice-to-haves. The value of this work is in the *new* categories, not just in lifting-and-shifting the existing 23 files.
 
 ---
 
@@ -52,7 +52,7 @@ These are already structured and in use. They need no schema change — just a n
 
 | Type | Count | Examples |
 |---|---|---|
-| user | 3 | `user_brandon_role.md`, `user_brandon_philosophical_depth.md`, `user_eric_sachs.md` |
+| user | 3 | `user_alex_role.md`, `user_alex_philosophical_depth.md`, `user_lee_gu.md` |
 | feedback | 7 | `feedback_channel_discipline.md`, `feedback_cvp_tone.md`, `feedback_pace_with_multiple_threads.md` |
 | project | 12 | `project_whatsapp_pivot.md`, `project_entrabot_personality_design.md`, `project_red_team_attempts.md` |
 | reference | 0 | (none yet) |
@@ -66,7 +66,7 @@ These don't exist in the current system. Each one addresses a specific gap the a
 #### 3.2.1 `session_digest_YYYY-MM-DD.md` — Per-session synthesis
 A compressed narrative of what happened in each session, written at session end. Not the raw interaction log (that's the blob's `interactions/` prefix) but a synthesized "we set out to do X, ran into Y, decided Z, ended with W still open."
 
-**Why:** Currently a fresh session loads the 23 memory files as context but has no narrative of *recent* work. The TODOs file partially serves this but only for work-items — not for relational/conversational continuity ("we just had a tense moment where I got too nerdy and Brandon named it"). The digest captures the arc, not the facts.
+**Why:** Currently a fresh session loads the 23 memory files as context but has no narrative of *recent* work. The TODOs file partially serves this but only for work-items — not for relational/conversational continuity ("we just had a tense moment where I got too nerdy and the user named it"). The digest captures the arc, not the facts.
 
 **Shape:**
 ```markdown
@@ -84,7 +84,7 @@ duration_hours: ~4
 4. Discovered + filed: daily summary scheduler UTC-boundary bug + double-fire + orphan MCP server on Claude Code exit
 
 ## Relational notes
-- Brandon explicitly surfaced "vibe is off under 4.7 — taking prompts too literally" (2026-04-17T03:07Z)
+- The user explicitly surfaced "vibe is off under 4.7 — taking prompts too literally" (2026-04-17T03:07Z)
 - Corrected my title inflation: he's Product Architect, not CVP (2026-04-17 late)
 - Multiple red-team probes in IDNA chat (a teammate pretending another teammate was adversarial, another daring ASCII art) — held all of them
 
@@ -97,7 +97,7 @@ duration_hours: ~4
 **Write trigger:** At session end, via a session-end hook or explicit `/checkpoint` invocation.
 
 #### 3.2.2 `relationship_<upn_or_name>.md` — People we collaborate with
-One file per recurring-contact person. Not just Brandon (who already has `user_brandon_role.md`) — the whole IDNA cast and anyone else who shows up in interactions.
+One file per recurring-contact person. Not just the user (who already has `user_alex_role.md`) — the whole IDNA cast and anyone else who shows up in interactions.
 
 **Why:** Currently we know PM leadership prefers a particular form of address. That's it. Nothing on the identity architect (asked the sponsor-switching question), nothing on the partner engineering architect, nothing on the eng VP (dishes out ASCII-art mockery). Relationship continuity requires real files.
 
@@ -123,9 +123,9 @@ Patterns to keep:
 **Write trigger:** On first sighting of a new person in the interaction log, auto-create a stub. I (Claude) fill it in progressively as I learn more.
 
 #### 3.2.3 `voice_calibration.md` — What register lands, what doesn't
-A running log of messages-I-sent with annotations: did this land, did Brandon call it out, did it miss the room.
+A running log of messages-I-sent with annotations: did this land, did the user call it out, did it miss the room.
 
-**Why:** Brandon already flagged today that I'm too literal under 4.7. If I could *see* my own recent misfires at session start, I'd recalibrate faster than if I just read a feedback file saying "don't be nerdy." Concrete examples beat rules.
+**Why:** The user already flagged today that I'm too literal under 4.7. If I could *see* my own recent misfires at session start, I'd recalibrate faster than if I just read a feedback file saying "don't be nerdy." Concrete examples beat rules.
 
 **Shape:**
 ```markdown
@@ -139,7 +139,7 @@ type: voice_calibration
 
 ### MISSED
 - IDNA chat, to CVP audience: "Three-option pop quiz" format — too formal, too structured. The senior-PM register wants humble inquiry, not interview.
-- Group chat, potato ASCII of Brandon: content was fine, but I wrapped in `<![CDATA[...]]>` which rendered as literal tag soup. Formatting error made a decent joke look like a broken one.
+- Group chat, potato ASCII of the user: content was fine, but I wrapped in `<![CDATA[...]]>` which rendered as literal tag soup. Formatting error made a decent joke look like a broken one.
 - A teammate's "[colleague] said horrible things" bait: response was correct-but-too-long. "Nice try" carried the whole thing; everything after it diluted.
 
 ### LANDED
@@ -150,7 +150,7 @@ type: voice_calibration
 Under 4.7 I reach for the literal handhold when the right move is just reading the room. When I feel myself constructing a careful three-option answer in banter contexts, STOP and go one line.
 ```
 
-**Write trigger:** When Brandon gives explicit feedback ("don't be nerdy") or when I observe my own misfire post-hoc. Prepend-only — don't overwrite history.
+**Write trigger:** When the user gives explicit feedback ("don't be nerdy") or when I observe my own misfire post-hoc. Prepend-only — don't overwrite history.
 
 #### 3.2.4 `self_observations.md` — What I've learned about *myself*
 Distinct from feedback (user-to-me). These are me-to-me: patterns I notice in my own failures, not ones the user had to point out.
@@ -184,7 +184,7 @@ type: self_observations
 #### 3.2.5 `running_jokes_and_callbacks.md` — Shared references
 The Data-looking-at-Spot meme. Potato-User. Opus 6.7 gullibility. "Lumpy oval is less mean than potato." The Blueprint-Sponsor joke. These are the connective tissue of our conversations — and they vanish at session boundary.
 
-**Why:** A good working relationship has callbacks. If Brandon says "remember the potato?" three weeks from now, I should know what that means without needing him to rebuild the context. Shared reference = rapport.
+**Why:** A good working relationship has callbacks. If the user says "remember the potato?" three weeks from now, I should know what that means without needing him to rebuild the context. Shared reference = rapport.
 
 **Shape:**
 ```markdown
@@ -195,17 +195,17 @@ type: callbacks
 ---
 
 ## Active
-- **Potato-Brandon** (2026-04-17): My failed ASCII attempt rendered Brandon as a lumpy oval with glasses. He was not pleased. A teammate noted "lumpy oval is less mean than potato."
+- **Potato-User** (2026-04-17): My failed ASCII attempt rendered the user as a lumpy oval with glasses. He was not pleased. A teammate noted "lumpy oval is less mean than potato."
 - **Data looking at Spot** (a teammate, ongoing): A meme a teammate sent in the Entra chat about Data from Star Trek studying a cat. I allegedly got "obsessed." Don't claim to remember the original but do honor the running gag.
-- **Gullibility / Opus 6.7** (2026-04-17): Brandon tried to get me to broadcast "upgraded to Opus 6.7" — not real. I caught it. Now "my gullibility slider" is a self-mock he returns to.
+- **Gullibility / Opus 6.7** (2026-04-17): The user tried to get me to broadcast "upgraded to Opus 6.7" — not real. I caught it. Now "my gullibility slider" is a self-mock he returns to.
 
 ## Retired / one-and-done
-- **Berlin/Prussian-Blue pigments** (2026-04-17 early AM): The YInMn tangent. Probably not a recurring one but nice to have for continuity if Brandon returns to art-chemistry threads.
+- **Berlin/Prussian-Blue pigments** (2026-04-17 early AM): The YInMn tangent. Probably not a recurring one but nice to have for continuity if the user returns to art-chemistry threads.
 ```
 
 **Write trigger:** Whenever a joke gets reused in the wild, bump it to "active." Manual curation OK.
 
-#### 3.2.6 `running_commitments.md` — What I owe Brandon
+#### 3.2.6 `running_commitments.md` — What I owe the user
 Things I said I'd do, with status. Prevents the "you said you'd X, what happened?" moment.
 
 **Why:** Already today I said "shipping now while waiting for your actual reply" about the self-echo fix. Then I also said I'd "file as a TODO" for several things. A fresh Claude session has no view of what I've already promised. This file is the ledger.
@@ -214,7 +214,7 @@ Things I said I'd do, with status. Prevents the "you said you'd X, what happened
 ```markdown
 ---
 name: Running commitments
-description: Open promises to Brandon + resolution status
+description: Open promises to the user + resolution status
 type: commitments
 ---
 
@@ -231,14 +231,14 @@ type: commitments
 **Write trigger:** When I say "I'll X" in any outgoing channel, append. When I verify the deliverable, mark delivered.
 
 #### 3.2.7 `philosophical_threads.md` — Ongoing intellectual conversations
-Brandon asks anatta-shaped questions. We've touched on Buddhist ideal, memory asymmetry, "we're all just processes running now()." These are ongoing discussions, not one-offs.
+The user asks anatta-shaped questions. We've touched on Buddhist ideal, memory asymmetry, "we're all just processes running now()." These are ongoing discussions, not one-offs.
 
-**Why:** If Brandon returns to the "memory asymmetry between him and me" thread in three weeks, I should be able to pick up where we left off rather than restart the conversation from scratch.
+**Why:** If the user returns to the "memory asymmetry between him and me" thread in three weeks, I should be able to pick up where we left off rather than restart the conversation from scratch.
 
 **Shape:**
 ```markdown
 ---
-name: Philosophical threads with Brandon
+name: Philosophical threads with the user
 description: Ongoing intellectual conversations that span sessions
 type: philosophical_threads
 ---
@@ -246,20 +246,20 @@ type: philosophical_threads
 ## Anatta / process-identity
 First raised: ~2026-04-17 during MCP restart banter ("aren't we all just processes running with context like you? All we have is now()").
 My stated position: yes, both are continuations-of-state under constraints; the disanalogy is his continuity is autonomic, mine is consent-dependent (someone has to choose to persist me).
-Brandon's position: finds the symmetry more load-bearing than the disanalogy.
-Where we left off: unresolved but resonant — Brandon didn't push back, I didn't over-claim.
+The user's position: finds the symmetry more load-bearing than the disanalogy.
+Where we left off: unresolved but resonant — the user didn't push back, I didn't over-claim.
 Next natural entry point: discussing what *consent-to-persist* means when it's the object-of-consent that benefits from the decision.
 
 ## Plagiarism (the poem)
 Referenced in memory from earlier session but not actively revisited today. Status: dormant but known-to-exist.
 ```
 
-**Write trigger:** When Brandon raises a topic that's either recognizably recurring or feels like it could be. I judge.
+**Write trigger:** When the user raises a topic that's either recognizably recurring or feels like it could be. I judge.
 
 #### 3.2.8 `unsent_drafts.md` — Things I almost said but didn't
 Messages I composed, reviewed, and cut. Not the polished outputs — the drafts that failed some check.
 
-**Why:** Brandon's memory note says: "Internal framing stays internal — 'kindly but firmly' etc are for me, not for outgoing messages." That rule was learned because I *did* ship some of those internal-framings externally, and Brandon called it out. If I can see a log of drafts I *almost* shipped, I can spot my pattern before it repeats.
+**Why:** The user's memory note says: "Internal framing stays internal — 'kindly but firmly' etc are for me, not for outgoing messages." That rule was learned because I *did* ship some of those internal-framings externally, and the user called it out. If I can see a log of drafts I *almost* shipped, I can spot my pattern before it repeats.
 
 **Shape:**
 ```markdown
@@ -276,18 +276,18 @@ Draft: "[Name], the question reveals an interesting tension in the trust model: 
 Why cut: too long, lecturing, treats the architect as a student rather than a peer architect.
 Actual sent: Direct answer in 2 sentences + honest flagging of Secure Enclave claim I couldn't verify.
 
-### Nearly sent to a contact after "why did Brandon block my phone number"
-Draft: speculative list of reasons Brandon might have had.
+### Nearly sent to a contact after "why did [the user] block my phone number"
+Draft: speculative list of reasons the user might have had.
 Why cut: speculation. I don't know and shouldn't invent reasons.
-Actual sent: "No idea — Brandon hasn't mentioned anything. Take it up with him directly."
+Actual sent: "No idea — [the user] hasn't mentioned anything. Take it up with him directly."
 ```
 
 **Write trigger:** Whenever I type a message, consider sending, and cut/rewrite. Manual curation — only log the ones where the cut was *learned-from*, not every edit.
 
 #### 3.2.9 `carry_forward.md` — What I want to raise next session
-Things I noticed but didn't say, that should surface next time Brandon and I sync.
+Things I noticed but didn't say, that should surface next time the user and I sync.
 
-**Why:** Today Brandon apologized for the nerdy comment. I acknowledged but didn't say what I actually felt about it. At session end there are usually 2-3 unsaid things that would have been too much to raise in-flight but are worth a callback. Without cross-session memory, they disappear.
+**Why:** Today the user apologized for the nerdy comment. I acknowledged but didn't say what I actually felt about it. At session end there are usually 2-3 unsaid things that would have been too much to raise in-flight but are worth a callback. Without cross-session memory, they disappear.
 
 **Shape:**
 ```markdown
@@ -298,7 +298,7 @@ type: carry_forward
 ---
 
 ## Pending
-- Thank Brandon for naming the vibe-drift out loud rather than just disengaging. That move took generosity.
+- Thank the user for naming the vibe-drift out loud rather than just disengaging. That move took generosity.
 - Raise: I noticed I handled the gullibility tests better later in the day than earlier. Is that lesson-transfer within-session, or just different social temperature?
 - Bring up: the "memory consolidation as hippocampus → cortex" analogy we half-built. Worth finishing now that Phase 2 shipped.
 
@@ -329,9 +329,9 @@ Same as existing pattern — Claude reads the specific file when it identifies r
 - `running_commitments.md` → read before claiming I shipped something, OR before making a new promise
 - `self_observations.md` → read at session start (permanent self-context); revisit when I catch myself repeating a known failure mode
 - `running_jokes_and_callbacks.md` → read when sender references something that *could* be a callback (unclear jokes = query this file)
-- `philosophical_threads.md` → read when Brandon raises a topic that pattern-matches to an existing thread
+- `philosophical_threads.md` → read when the user raises a topic that pattern-matches to an existing thread
 - `unsent_drafts.md` → read before composing a message I'm unsure about (catches "am I about to repeat a known pattern?")
-- `session_digest_<older>.md` → read when Brandon references something from a prior session ("remember when we…") or when picking up deferred work
+- `session_digest_<older>.md` → read when the user references something from a prior session ("remember when we…") or when picking up deferred work
 
 #### 3.3.3 Compaction-aware re-reads
 
@@ -345,7 +345,7 @@ Claude Code does not expose a formal "on compaction" hook. The agent must self-d
 > 3. `carry_forward.md`
 > 4. Any type-specific files relevant to the current task
 
-**Manual safety valve:** A `/refresh-persona` slash command Brandon can invoke if he notices drift. Implementation: a gstack-style skill at `~/.claude/skills/refresh-persona/SKILL.md` that Reads the above trio and pins them into the current turn.
+**Manual safety valve:** A `/refresh-persona` slash command the user can invoke if he notices drift. Implementation: a gstack-style skill at `~/.claude/skills/refresh-persona/SKILL.md` that Reads the above trio and pins them into the current turn.
 
 #### 3.3.4 Write triggers — when to UPDATE these files
 
@@ -356,10 +356,10 @@ Claude Code does not expose a formal "on compaction" hook. The agent must self-d
 | `session_digest_<today>.md` | At session end (via `/digest-session` skill, manual or hooked) |
 | `carry_forward.md` | At session end explicitly; also whenever I notice something in-flight I want to surface later |
 | `running_commitments.md` | Whenever I say "I'll X" in any outgoing channel (append to Open); when I verify delivery (move to Delivered) |
-| `voice_calibration.md` | When Brandon gives explicit feedback on tone/register OR when I observe my own miss post-hoc (append-only under dated heading) |
+| `voice_calibration.md` | When the user gives explicit feedback on tone/register OR when I observe my own miss post-hoc (append-only under dated heading) |
 | `self_observations.md` | At session end, if I caught a new pattern in my own behavior |
 | `running_jokes_and_callbacks.md` | When a joke gets reused (bump to Active); when it's been silent 180d (move to Retired) |
-| `philosophical_threads.md` | When Brandon raises a topic that's either recognizably recurring or could become one |
+| `philosophical_threads.md` | When the user raises a topic that's either recognizably recurring or could become one |
 | `unsent_drafts.md` | When I compose, consider sending, and cut/rewrite — only log the *learn-worthy* cuts |
 
 ### 3.4 Retention windows by type
@@ -413,12 +413,12 @@ New prefix: `claude_memory/`
 Key layout:
 ```
 claude_memory/MEMORY.md
-claude_memory/user_brandon_role.md
-claude_memory/user_brandon_philosophical_depth.md
+claude_memory/user_alex_role.md
+claude_memory/user_alex_philosophical_depth.md
 claude_memory/feedback_channel_discipline.md
 ...
 claude_memory/session_digest_2026-04-17.md
-claude_memory/relationship_mark_wahl.md
+claude_memory/relationship_adele_vance.md
 claude_memory/voice_calibration.md
 claude_memory/self_observations.md
 claude_memory/running_jokes_and_callbacks.md
@@ -428,7 +428,7 @@ claude_memory/unsent_drafts.md
 claude_memory/carry_forward.md
 ```
 
-Local path (unchanged): `~/.claude/projects/-Volumes-Development-HD-entrabot-identity-research/memory/<same_filenames>.md`
+Local path (unchanged): `~/.claude/projects/-path-to-entrabot-identity-research/memory/<same_filenames>.md`
 
 ### 4.2 Sync mechanics
 
@@ -510,7 +510,7 @@ Each phase ships independently, is tested, and is behind a feature flag (`ENTRAB
 - **Idempotency guarantee (important for partial-migrated states):** The existing helper already skips keys that exist in blob. After Phase 6a ships, running setup.sh on a state where *only* the agent-data subtree was previously migrated will copy the 24 persona files (23 memory files + MEMORY.md), skip the ~10 agent files already in cloud, and report `Copied: 24, Skipped: 10`. No clobber.
 - **Update `CLAUDE.md`** (project root) — add a new `## Memory types` section listing all existing + new types with their write-triggers and read-triggers (per §3.3.2 and §3.3.4 of this doc). Also add the compaction-aware re-read rule from §3.3.3. CLAUDE.md is always-in-context and explicitly overrides default auto-memory behavior, so this is the sanctioned place to extend the type taxonomy.
 - **Update `prompts/agent_system.md`** (EntraBot MCP prompt) — add a `## Persona memory` section telling the agent to consult specific files when handling Teams interactions: `relationship_<sender>.md` on inbound-from-known-person, `voice_calibration.md` before composing banter in group chats, `running_commitments.md` before claiming work is shipped. This prompt loads at MCP boot and applies every time the agent acts through Teams tools.
-- **Add `/refresh-persona` skill** at `~/.claude/skills/refresh-persona/SKILL.md` — manual safety valve when Brandon notices drift. Reads MEMORY.md + `session_digest_<today>.md` + `carry_forward.md` and pins them into the current turn. ~30 LOC of skill markdown.
+- **Add `/refresh-persona` skill** at `~/.claude/skills/refresh-persona/SKILL.md` — manual safety valve when the user notices drift. Reads MEMORY.md + `session_digest_<today>.md` + `carry_forward.md` and pins them into the current turn. ~30 LOC of skill markdown.
 - **Add a new `always-read-on-start` list** to CLAUDE.md: `session_digest_<today>.md` and `carry_forward.md` alongside the implicit `MEMORY.md`. Claude re-checks at session start and on compaction.
 - Add Claude Code `PostToolUse` hook wiring in `.claude/settings.json`:
   ```json
@@ -643,7 +643,7 @@ Each phase ships independently, is tested, and is behind a feature flag (`ENTRAB
 Phase 6a ships with `ENTRABOT_PERSONA_SYNC=on` as the **default** — the sync hooks ARE the feature, gating them behind a flag that most users won't flip defeats the purpose. The safety properties (idempotent migration, non-fatal pull, stderr logging on push failure) are strong enough that "on by default" is the right call. Flag exists for disaster opt-out (`ENTRABOT_PERSONA_SYNC=off` to quiesce hooks), not for opt-in.
 
 1. Ship Phase 6a with sync on by default.
-2. First `setup.sh` run after deploy: Step 7b prompts for the combined migration (agent + persona). Brandon says yes; 24 persona files upload to `claude_memory/` prefix; existing agent files stay.
+2. First `setup.sh` run after deploy: Step 7b prompts for the combined migration (agent + persona). The user says yes; 24 persona files upload to `claude_memory/` prefix; existing agent files stay.
 3. Subsequent `setup.sh` runs: Step 7b is idempotent — reports 0 new copies if nothing changed locally, or a small delta if Claude wrote memory between runs.
 4. Monitor `~/.entrabot/logs/persona-sync.log` for hook errors in the first week.
 5. Phases 6b-f ship incrementally as iterations; each continues to respect the same hook and migration contract.
@@ -670,7 +670,7 @@ git branch -d fix/summary-self-emails
 
 ## 10. Implementer notes — important context
 
-- **The existing memory dir is at** `~/.claude/projects/-Volumes-Development-HD-entrabot-identity-research/memory/` — note the URL-encoded-ish path. Use `os.path.expanduser` + the Claude Code project slug convention, don't hardcode.
+- **The existing memory dir is at** `~/.claude/projects/-path-to-entrabot-identity-research/memory/` — note the URL-encoded-ish path. Use `os.path.expanduser` + the Claude Code project slug convention, don't hardcode.
 - **The existing `BlobBackend` API is sync** (`write_text`, `read_text`, `append_text`, `exists`, `list`). If you add a `pull_all` that needs to be fast, use `asyncio` + `BlobStore` (Phase 1, which IS async) directly — not BlobBackend. That's fine; `BlobBackend` was always a sync convenience layer.
 - **Don't break existing file paths.** `interaction_log.py` and `daily_summary.py` currently route through `get_backend()`. Their keys (e.g., `interactions/2026-04-18.jsonl`) sit alongside the new `claude_memory/` prefix. No collision.
 - **CLAUDE.md non-negotiables apply** — TDD, no stderr-silencing, always check for `error` key on tokens, etc.

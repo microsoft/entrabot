@@ -127,7 +127,7 @@ Retention is governed by *what still has value in raw form*, not by calendar alo
 
 1. Read day `N-7`'s raw `interactions/YYYY-MM-DD.jsonl`.
 2. Extract **three kinds of durable content**, promoting each to the appropriate layer:
-   - **Behavioral learnings** ("Brandon prefers Teams over email when initiating") → `behavioral/feedback_*.md` or `project_*.md`. Curated; agent writes a draft, confirms with sponsor before promoting.
+   - **Behavioral learnings** ("the sponsor prefers Teams over email when initiating") → `behavioral/feedback_*.md` or `project_*.md`. Curated; agent writes a draft, confirms with sponsor before promoting.
    - **Patterns, recurring decisions, facts about people/projects** → `compacted/YYYY-WW.md` (this week's digest, append-mode).
    - **Routine status pings, noise, banter** → discarded.
 3. Delete the raw `interactions/YYYY-MM-DD.jsonl` once compaction succeeds.
@@ -169,7 +169,7 @@ Rollback: set `ENTRABOT_KEEP_MEMORY_LOCAL=true` in `.env`. Code reverts to pure-
 
 2. **Git repo for everything** — versioning and audit come free. Rejected for the interactions log (high write rate, commit noise, merge conflicts). Split architectures were considered but add ops complexity for minimal benefit.
 
-3. **Leave state local, sync via `rsync`** — one-shot manual migration per switch. Rejected: Brandon's exact complaint that triggered this ADR.
+3. **Leave state local, sync via `rsync`** — one-shot manual migration per switch. Rejected: the user's exact complaint that triggered this ADR.
 
 4. **Cosmos DB or Azure Tables** — queryability we don't need, costs we do. Rejected.
 
@@ -212,7 +212,7 @@ Default: cloud mode when `az login` exists + Azure subscription is reachable. Lo
 ## TODO (future work, explicitly out of scope for this ADR)
 
 - **Document user-visible recovery behavior** when two of the user's own machines run simultaneously. ETag handles it correctly (last-writer-wins after retry), but the semantics should be documented so users aren't surprised when their laptop clobbers an unflushed Mac Studio write.
-- **Multi-agent coordination on shared memory.** Explicitly *not* supported by this design. If we ever want two distinct Agent Users to share a memory store (e.g. Brandon's EntraBot and another teammate's agent both writing to a team-wide behavioral layer), that's a future ADR. Would require real locking or CRDT-style merge semantics. Categorized as science-project for now.
+- **Multi-agent coordination on shared memory.** Explicitly *not* supported by this design. If we ever want two distinct Agent Users to share a memory store (e.g. the user's EntraBot and another teammate's agent both writing to a team-wide behavioral layer), that's a future ADR. Would require real locking or CRDT-style merge semantics. Categorized as science-project for now.
 - **Compaction quality control.** The daily compaction step is the most judgment-heavy part of this design. The first few weeks should log compaction decisions so we can eyeball what got promoted vs discarded and tune the heuristic. Treat the first 30 days of compaction output as reviewable.
 - **Manifest consistency under concurrent writes.** The manifest is a single file updated on every blob write; ETag protects it, but heavy write bursts could cause retry loops. Monitor; switch to per-prefix manifests if that becomes a real problem.
 

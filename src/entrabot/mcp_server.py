@@ -2355,7 +2355,7 @@ async def _background_poll_email() -> None:
     # /me/messages returns the entire mailbox including the Sent Items
     # folder; emails the agent sends would otherwise loop into the
     # channel-notification stream. (Discovered 2026-04-17 when the
-    # "EntraBot email pipeline test" email I sent to Brandon got
+    # "EntraBot email pipeline test" email I sent to the sponsor got
     # echoed back as an inbound notification ~10s later.)
     agent_self_upn = ((_state.get("config") or get_config()).agent_user_upn or "").lower()
 
@@ -4358,7 +4358,7 @@ async def wait_for_sponsor_dm(
 
     **When to call this tool.** Only when the operator explicitly asks
     you to block until a sponsor replies mid-task (e.g. "wait for
-    Brandon's response before doing X", "block until they reply"). This
+    Alex's response before doing X", "block until they reply"). This
     is NOT the default follow-up to a proactive DM: ``send_teams_message``
     already handles that reply on its own — it auto-waits server-side on
     hosts without a channel push (Copilot CLI, Codex) and returns the

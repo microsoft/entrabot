@@ -601,7 +601,7 @@ class TestResolveTenantId:
         from entrabot.mcp_server import _resolve_tenant_id
 
         fake_oidc = {
-            "issuer": "https://sts.windows.net/72f988bf-86f1-41af-91ab-2d7cd011db47/",
+            "issuer": "https://sts.windows.net/11112222-3333-4444-8555-666677778888/",
         }
         fake_resp = MagicMock()
         fake_resp.status_code = 200
@@ -613,7 +613,7 @@ class TestResolveTenantId:
 
         with patch("entrabot.mcp_server.httpx.AsyncClient", return_value=mock_client):
             result = await _resolve_tenant_id("alice@example.com", "contoso.com")
-            assert result == "72f988bf-86f1-41af-91ab-2d7cd011db47"
+            assert result == "11112222-3333-4444-8555-666677778888"
 
     async def test_discovery_failure_returns_none(self) -> None:
         from entrabot.mcp_server import _resolve_tenant_id
@@ -1381,7 +1381,7 @@ class TestPushChannelNotificationObservability:
             await mcp_server._push_channel_notification(
                 {
                     "message_id": "m-html-1",
-                    "from": "Brandon",
+                    "from": "Alex",
                     "content": '<attachment id="SRC-1"></attachment><p>As</p>',
                     "sent_at": "2026-04-24T20:00:00Z",
                 },
@@ -1418,7 +1418,7 @@ class TestPushChannelNotificationObservability:
             await mcp_server._push_channel_notification(
                 {
                     "message_id": "m-img-1",
-                    "from": "Joe Brockhaus",
+                    "from": "Megan Bowen",
                     "content": f'<div><img src="{giphy_src}" alt="" /></div>',
                     "sent_at": "2026-04-27T21:46:41Z",
                 },
@@ -1495,7 +1495,7 @@ class TestPushChannelNotificationObservability:
             await mcp_server._push_channel_notification(
                 {
                     "message_id": "m-reply-1",
-                    "from": "Brandon",
+                    "from": "Alex",
                     "content": '<attachment id="SRC-1"></attachment><p>yes</p>',
                     "sent_at": "2026-04-17T01:10:00Z",
                     "reply_to_ids": ["SRC-1"],
@@ -1523,7 +1523,7 @@ class TestPushChannelNotificationObservability:
             await mcp_server._push_channel_notification(
                 {
                     "message_id": "m-plain-1",
-                    "from": "Brandon",
+                    "from": "Alex",
                     "content": "plain message",
                     "sent_at": "2026-04-17T01:11:00Z",
                     "reply_to_ids": [],
@@ -1558,7 +1558,7 @@ class TestPushChannelNotificationObservability:
             await mcp_server._push_channel_notification(
                 {
                     "message_id": "m-reply-2",
-                    "from": "Brandon",
+                    "from": "Alex",
                     "content": (
                         '<attachment id="SRC-A"></attachment>'
                         '<attachment id="SRC-B"></attachment><p>hi</p>'
@@ -1582,7 +1582,7 @@ class TestPushChannelNotificationObservability:
     ) -> None:
         """No angle brackets anywhere in params — not just in content.
 
-        Display names like ``Alice Smith <brandon@contoso.com>`` and any
+        Display names like ``Alice Smith <alex@contoso.com>`` and any
         future Graph fields that creep into ``meta`` must be sanitized.
         The walk-every-string assertion is stronger than per-field checks
         — it catches new fields that future code might add.
@@ -1600,7 +1600,7 @@ class TestPushChannelNotificationObservability:
             await mcp_server._push_channel_notification(
                 {
                     "message_id": "m-1",
-                    "from": "Alice Smith <brandon@contoso.com>",
+                    "from": "Alice Smith <alex@contoso.com>",
                     "content": "<p>plain reply</p>",
                     "sent_at": "2026-04-28T00:01:00Z",
                     "reply_to_ids": ["SRC-1"],
@@ -1645,7 +1645,7 @@ class TestPushChannelNotificationObservability:
         await mcp_server._push_channel_notification(
             {
                 "message_id": "m-log-first",
-                "from": "Brandon",
+                "from": "Alex",
                 "content": "something",
                 "sent_at": "2026-04-17T01:15:00Z",
                 "reply_to_ids": ["SRC"],

@@ -384,7 +384,7 @@ entrabot watch --teams  # only teams channel
 
 - Reads the **same** inbox JSONL the MCP server writes. Zero new
   network, zero new auth.
-- Prints a single colored line per message: `[teams 18:21] Brandon:
+- Prints a single colored line per message: `[teams 18:21] Alex:
   "Hi there"` plus a hint: `→ tell Copilot: /env or "check inbox"`.
 - Optional OS toast via `osascript` (mac), `notify-send` (linux),
   PowerShell `BurntToast` (win). All best-effort.

@@ -556,7 +556,7 @@ class TestValidation:
 
     @pytest.mark.parametrize(
         ("username", "expected"),
-        [("Brandon", "brandon"), ("josé.garcía", "jos-garc-a"), ("  ", "agent"), ("A_B", "a-b")],
+        [("Alex", "alex"), ("josé.garcía", "jos-garc-a"), ("  ", "agent"), ("A_B", "a-b")],
     )
     def test_a_default_suffix_is_derived_from_the_username(
         self, username: str, expected: str

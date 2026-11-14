@@ -137,7 +137,7 @@ class PosixScenario(Scenario):
             (tools / name).write_bytes(b"")
         self.env.update(
             {
-                "USER": "brandon",
+                "USER": "alex",
                 "HOME": str(self.tmp_path / "home"),
                 "COPILOT_HOME": str(self.tmp_path / "copilot"),
                 "PATH": "/usr/bin:/bin",
@@ -188,9 +188,9 @@ class PosixScenario(Scenario):
                     "ENTRABOT_AGENT_ID=agent-app",
                     "ENTRABOT_AGENT_OBJECT_ID=agent-object",
                     "ENTRABOT_AGENT_USER_ID=agent-user",
-                    "ENTRABOT_AGENT_USER_UPN=entrabot-agent-sati@werner.ac",
+                    "ENTRABOT_AGENT_USER_UPN=entrabot-agent-sati@contoso.com",
                     "ENTRABOT_HUMAN_USER_ID=admin-object",
-                    "ENTRABOT_HUMAN_UPN=admin@werner.ac",
+                    "ENTRABOT_HUMAN_UPN=admin@contoso.com",
                 ]
             )
             + "\n",
@@ -488,7 +488,7 @@ class TestStartingTheAgent:
         assert "Start your agent now" not in world.out and world.launched == []
 
     def test_a_folder_with_a_space_in_its_name_is_quoted(self, tmp_path: Path) -> None:
-        spaced = tmp_path / "Development HD"
+        spaced = tmp_path / "My Projects"
         spaced.mkdir()
         world = PosixScenario(spaced)
         assert world.run(new_chain=True, upn_suffix="sati") == 0, world.out
@@ -586,7 +586,7 @@ class TestTheTenantIsNamed:
                 {
                     "id": TENANT,
                     "displayName": "Contoso Showcase",
-                    "technicalNotificationMails": ["it-contact@werner.ac"],
+                    "technicalNotificationMails": ["it-contact@contoso.com"],
                 }
             ]
         }
@@ -597,10 +597,12 @@ class TestTheTenantIsNamed:
 
         assert world.run(new_chain=True, upn_suffix="sati") == 0, world.out
 
-        assert "Signed in as admin@werner.ac (Contoso Showcase)" in world.out
+        assert "Signed in as admin@contoso.com (Contoso Showcase)" in world.out
         assert f"({TENANT})" not in world.out
         # The answer holds the organization's contact details: none of it goes to the log.
-        assert "it-contact@werner.ac" not in world.log and "it-contact@werner.ac" not in world.out
+        assert (
+            "it-contact@contoso.com" not in world.log and "it-contact@contoso.com" not in world.out
+        )
 
     def test_when_the_directory_cannot_say_either_the_id_is_shown(self, tmp_path: Path) -> None:
         world = PosixScenario(tmp_path)
@@ -613,7 +615,7 @@ class TestTheTenantIsNamed:
 
         assert world.run(new_chain=True, upn_suffix="sati") == 0, world.out
 
-        assert f"Signed in as admin@werner.ac ({TENANT})" in world.out
+        assert f"Signed in as admin@contoso.com ({TENANT})" in world.out
 
     def test_a_named_sign_in_asks_the_directory_nothing_more(self, world: PosixScenario) -> None:
         assert world.run(new_chain=True, upn_suffix="sati") == 0, world.out

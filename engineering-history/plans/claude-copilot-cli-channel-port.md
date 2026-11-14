@@ -2,13 +2,13 @@
 
 ## Status
 
-Proposed — 2026-04-24, author: Claude (PM: Brandon)
+Proposed — 2026-04-24, author: Claude (PM: the user)
 
 ## Problem statement
 
 Entrabot's push channel is a non-standard JSON-RPC notification — `notifications/claude/channel` — emitted from the stdio write stream by background pollers in `_push_channel_notification` ([`mcp_server.py:1432`](https://github.com/microsoft/entrabot/blob/main/src/entrabot/mcp_server.py)) and `_push_email_notification` ([`mcp_server.py:1237`](https://github.com/microsoft/entrabot/blob/main/src/entrabot/mcp_server.py)). Claude Code routes the notification into the agent's system-reminder stream because the entrabot process is launched with `--dangerously-load-development-channels`, and we declare the matching `experimental_capabilities={"claude/channel": {}}` in `_run_stdio_with_write_stream` ([`mcp_server.py:2780`](https://github.com/microsoft/entrabot/blob/main/src/entrabot/mcp_server.py)). This is the entire push mechanism — no Microsoft webhooks, no Graph subscription, no client-pull.
 
-Brandon increasingly works in GitHub Copilot CLI. Copilot CLI is a different MCP host. It supports MCP **tools only** — not resources, not prompts, not sampling, not elicitation, not roots, and not arbitrary `notifications/*` channels ([copilot-cli#1518](https://github.com/github/copilot-cli/issues/1518), [copilot-cli#1748](https://github.com/github/copilot-cli/issues/1748), [copilot-cli#1803](https://github.com/github/copilot-cli/issues/1803)). It has no `--dangerously-load-development-channels` analogue. The model receives nothing the server doesn't send back as a tool-call result. So under Copilot CLI, every inbound Teams DM today is invisible to the agent until it happens to call a tool whose return value happens to mention it — which it never does, because no tool currently advertises inbound state.
+The user increasingly works in GitHub Copilot CLI. Copilot CLI is a different MCP host. It supports MCP **tools only** — not resources, not prompts, not sampling, not elicitation, not roots, and not arbitrary `notifications/*` channels ([copilot-cli#1518](https://github.com/github/copilot-cli/issues/1518), [copilot-cli#1748](https://github.com/github/copilot-cli/issues/1748), [copilot-cli#1803](https://github.com/github/copilot-cli/issues/1803)). It has no `--dangerously-load-development-channels` analogue. The model receives nothing the server doesn't send back as a tool-call result. So under Copilot CLI, every inbound Teams DM today is invisible to the agent until it happens to call a tool whose return value happens to mention it — which it never does, because no tool currently advertises inbound state.
 
 We must keep one MCP server boot working across both hosts, with push semantics that match today's experience on Claude Code (≤10s end-to-end latency for an inbound Teams message reaching the model) and zero regression for the Claude Code path.
 
@@ -31,7 +31,7 @@ We must keep one MCP server boot working across both hosts, with push semantics 
 | SSE transport | Yes (legacy) | Yes (legacy, deprecated) |
 | `--experimental` / preview flag | `--dangerously-load-development-channels` | `--experimental` exists but exposes preview features only — no documented arbitrary-notification opt-in |
 
-The MCP spec itself ([modelcontextprotocol.io](https://modelcontextprotocol.io/)) does not bless server-initiated push to the model out-of-band. The pattern Brandon and Anthropic invented — `notifications/claude/channel` — is currently host-specific. The MCP community has an open issue requesting a blessed push primitive ([anthropics/claude-code#36665](https://github.com/anthropics/claude-code/issues/36665)) which is still in `enhancement` / `stale` status.
+The MCP spec itself ([modelcontextprotocol.io](https://modelcontextprotocol.io/)) does not bless server-initiated push to the model out-of-band. The pattern the user and Anthropic invented — `notifications/claude/channel` — is currently host-specific. The MCP community has an open issue requesting a blessed push primitive ([anthropics/claude-code#36665](https://github.com/anthropics/claude-code/issues/36665)) which is still in `enhancement` / `stale` status.
 
 This means the cross-host bridge must be expressed in **tool semantics**, because tools are the only primitive Copilot CLI exposes to the model. There is no notification, resource, sampling, or elicitation back-channel available.
 
@@ -63,11 +63,11 @@ Dies on Copilot CLI: [community#160291](https://github.com/orgs/community/discus
 
 ### D. Sidecar process + IPC tool
 
-Polling moves to a separate daemon that writes to a queue file or socket; the MCP tool drains it. Violates the one-server bar Brandon set, doubles the operational surface (two systemd units, two sets of logs, two failure modes), and gains us nothing — the tool that drains the queue is functionally identical to (A) but with worse failure modes (the queue file can corrupt, fill the disk, or get stale across restarts). Skip.
+Polling moves to a separate daemon that writes to a queue file or socket; the MCP tool drains it. Violates the one-server bar the user set, doubles the operational surface (two systemd units, two sets of logs, two failure modes), and gains us nothing — the tool that drains the queue is functionally identical to (A) but with worse failure modes (the queue file can corrupt, fill the disk, or get stale across restarts). Skip.
 
 ### E. Standalone HTTP server with webhook into MCP tool space
 
-Brandon will hate this. Two surfaces, no security story for the webhook authentication, and the MCP tool side still has to drain — same pattern as (D) plus extra public attack surface. Skip.
+The user will hate this. Two surfaces, no security story for the webhook authentication, and the MCP tool side still has to drain — same pattern as (D) plus extra public attack surface. Skip.
 
 ### F. Hybrid — host detection at boot, channel push for Claude Code, long-poll for Copilot CLI
 
@@ -84,9 +84,9 @@ That collapses (F) into "ship (A); Claude Code body keeps using channel pushes; 
 | A. Long-poll tool | Yes | 5s | ~150 | Universal | Bounded buffer | **Recommended** |
 | B. Resource subscribe | Yes | n/a | ~80 | Cursor/Windsurf maybe; not Copilot | n/a | Blocked by Copilot CLI |
 | C. Sampling | Yes | <2s | ~50 | Claude Code only | n/a | Blocked by Copilot CLI |
-| D. Sidecar | **No** | 5s | ~400 | Universal | Disk-bound | Violates Brandon's bar |
-| E. HTTP webhook | **No** | <2s | ~600 | Universal | Network-bound | Violates Brandon's bar + security risk |
-| F. Hybrid (collapses to A) | Yes | 5s on Copilot, <1s on Claude | ~150 | Universal | Bounded buffer | Same as A — Brandon already gets it |
+| D. Sidecar | **No** | 5s | ~400 | Universal | Disk-bound | Violates the user's bar |
+| E. HTTP webhook | **No** | <2s | ~600 | Universal | Network-bound | Violates the user's bar + security risk |
+| F. Hybrid (collapses to A) | Yes | 5s on Copilot, <1s on Claude | ~150 | Universal | Bounded buffer | Same as A — the user already gets it |
 
 ## Recommendation
 
@@ -221,11 +221,11 @@ sequenceDiagram
 
 Total: ~410 lines, no dependencies added. Two days of work including the body-prompt review with the user.
 
-## Open questions for Brandon
+## Open questions for the user
 
 - **Q1. Do we want a `host_hint` config var for explicit override?** A user with a host clientInfo we haven't seen could be misclassified. **Recommended default: no.** The design doesn't depend on host detection — push fires unconditionally, queue exists unconditionally, tool exists unconditionally. The body prompt is the only host-aware artifact, and it's keyed on observed behavior ("channel notifications aren't arriving"), not host name. Skip the config knob.
 
-- **Q2. Should `wait_for_inbound_message` block on `timeout_s=50` even when there's nothing watched?** If `_state["watched_chats"]` is empty and email is configured, an idle hour means 72 tool calls returning `[]`. **Recommended default: yes, block normally.** The cost is 72 RPCs per hour per idle agent. The benefit is the agent is never deaf. If Brandon wants to tighten this we add a "no watched chats AND no email" fast-fail returning immediately, but I'd ship without it and watch whether it's a real problem.
+- **Q2. Should `wait_for_inbound_message` block on `timeout_s=50` even when there's nothing watched?** If `_state["watched_chats"]` is empty and email is configured, an idle hour means 72 tool calls returning `[]`. **Recommended default: yes, block normally.** The cost is 72 RPCs per hour per idle agent. The benefit is the agent is never deaf. If the user wants to tighten this we add a "no watched chats AND no email" fast-fail returning immediately, but I'd ship without it and watch whether it's a real problem.
 
 - **Q3. Do we expose queue stats as a tool?** A `inbound_queue_stats()` tool would help debug ("how many messages did I miss while compacting?"). **Recommended default: yes, add it cheaply.** One @mcp.tool that returns `{depth, dropped_total, oldest_ts}`. ~10 LOC.
 

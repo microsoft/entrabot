@@ -132,7 +132,7 @@ def _resp(status: int, body: dict) -> SimpleNamespace:
     return SimpleNamespace(status_code=status, json=lambda: body, text=str(body))
 
 
-BLUEPRINT_OURS = "9bfb75b3-e65f-4e56-bdbe-3ed213135c3b"
+BLUEPRINT_OURS = "b1b1b1b1-0000-4000-8000-0000000000b1"
 BLUEPRINT_OTHER = "11111111-1111-1111-1111-111111111111"
 DISPLAY_NAME = "EntraBot Agent - test-host"
 
@@ -158,7 +158,7 @@ class TestFindExistingAgentIdentity:
                 200,
                 {
                     "value": [
-                        _sp("eba51655-0aed-4a79-a5f2-7167ec9b8fa0", BLUEPRINT_OURS),
+                        _sp("a1a1a1a1-0000-4000-8000-0000000000a1", BLUEPRINT_OURS),
                         _sp("22222222-2222-2222-2222-222222222222", BLUEPRINT_OTHER),
                     ]
                 },
@@ -172,7 +172,7 @@ class TestFindExistingAgentIdentity:
             blueprint_app_id=BLUEPRINT_OURS,
         )
         assert result is not None
-        assert result["appId"] == "eba51655-0aed-4a79-a5f2-7167ec9b8fa0"
+        assert result["appId"] == "a1a1a1a1-0000-4000-8000-0000000000a1"
         assert result["agentIdentityBlueprintId"] == BLUEPRINT_OURS
 
     def test_rejects_stored_app_id_from_other_blueprint(
@@ -238,7 +238,7 @@ class TestFindExistingAgentIdentity:
 
 
 class TestFindExistingAgentUser:
-    _OUR_AI = "eba51655-0aed-4a79-a5f2-7167ec9b8fa0"
+    _OUR_AI = "a1a1a1a1-0000-4000-8000-0000000000a1"
     _OTHER_AI = "22222222-2222-2222-2222-222222222222"
 
     def test_stored_user_under_our_agent_identity_is_trusted(
@@ -946,11 +946,11 @@ class TestTheBlueprintThisRunIsFor:
     def test_a_recorded_value_that_is_not_an_id_stops_before_asking_graph(
         self, lookup: Lookup
     ) -> None:
-        lookup.state["BLUEPRINT_APP_ID"] = "9bfb75b3-e65f-4e56-bdbe"  # cut short when pasted
+        lookup.state["BLUEPRINT_APP_ID"] = "b1b1b1b1-0000-4000-8000"  # cut short when pasted
 
         message = _stopped(lookup)
 
-        assert "'9bfb75b3-e65f-4e56-bdbe'" in message and "is not an ID" in message
+        assert "'b1b1b1b1-0000-4000-8000'" in message and "is not an ID" in message
         assert lookup.graph.calls == []
 
     def test_with_nothing_recorded_the_one_blueprint_with_the_name_is_used(

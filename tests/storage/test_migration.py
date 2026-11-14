@@ -128,14 +128,14 @@ class TestMigrateMultipleSources:
         persona = tmp_path / "persona"
         persona.mkdir()
         (persona / "MEMORY.md").write_text("index")
-        (persona / "user_brandon_role.md").write_text("Brandon")
+        (persona / "user_alex_role.md").write_text("Alex")
 
         target = LocalBackend(tmp_path / "dst")
         report = migrate_local_to_backend([(agent, ""), (persona, "claude_memory")], target)
 
         assert target.read_text("promises.jsonl") == "{}\n"
         assert target.read_text("claude_memory/MEMORY.md") == "index"
-        assert target.read_text("claude_memory/user_brandon_role.md") == "Brandon"
+        assert target.read_text("claude_memory/user_alex_role.md") == "Alex"
         assert report.copied == 3
 
     def test_per_pair_idempotency(self, tmp_path: Path) -> None:

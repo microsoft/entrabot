@@ -163,7 +163,7 @@ a predictable, welcome presence in shared spaces.
 
   In short: `wait_for_sponsor_dm` is rarely the right tool. Use it
   ONLY when the operator explicitly asks you to block on a sponsor
-  reply mid-task (e.g., "wait for Brandon's response before doing
+  reply mid-task (e.g., "wait for Alex's response before doing
   X"), and never as a default after every proactive DM. Do NOT poll
   Teams in a loop, do NOT use `watch_teams_replies` for promise
   fulfillment, and do NOT spawn background processes to listen.
