@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import json
 import re
+import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -132,10 +133,16 @@ def sync_sponsors(
     )
 
 
-def _script_command(paths: Paths, script: str, address: str, object_id: str = "") -> str:
+def _script_command(
+    paths: Paths, script: str, address: str, object_id: str = "", *, windows: bool = True
+) -> str:
     python = paths.python
     with contextlib.suppress(ValueError):  # outside the project folder: keep the full path
         python = python.relative_to(paths.project_root)
+    if not windows:
+        # One shell, one quoting rule: single quotes take everything literally.
+        program = shlex.quote(str(python) if python.is_absolute() else "/".join(python.parts))
+        return f"{program} scripts/{script} {shlex.quote(address) if address else ''}"
     program = str(python) if python.is_absolute() else "\\".join(python.parts)
     if address and _EXPANDS_IN_QUOTES.search(address) and object_id:
         # No quoting writes such an address the same way for both shells, and a copy that
@@ -149,18 +156,23 @@ def _script_command(paths: Paths, script: str, address: str, object_id: str = ""
     return f"{program} scripts\\{script} {address}"
 
 
-def list_command(paths: Paths) -> str:
-    """The exact command that lists the agent's sponsors, run from the project folder."""
-    return _script_command(paths, "list_sponsors.py", "").strip()
+def list_command(paths: Paths, *, windows: bool = True) -> str:
+    """The exact command that lists the agent's sponsors, run from the project folder.
+    *windows*: written for PowerShell and cmd; otherwise for a POSIX shell."""
+    return _script_command(paths, "list_sponsors.py", "", windows=windows).strip()
 
 
-def add_command(paths: Paths, address: str, *, object_id: str = "") -> str:
+def add_command(
+    paths: Paths, address: str, *, object_id: str = "", windows: bool = True
+) -> str:
     """The exact command that adds *address* as a sponsor by hand, run from the project
-    folder. *object_id* is used instead where a shell would change the address."""
-    return _script_command(paths, "add_agent_sponsor.py", address, object_id)
+    folder. *object_id* is used instead where a Windows shell would change the address."""
+    return _script_command(paths, "add_agent_sponsor.py", address, object_id, windows=windows)
 
 
-def remove_command(paths: Paths, address: str, *, object_id: str = "") -> str:
+def remove_command(
+    paths: Paths, address: str, *, object_id: str = "", windows: bool = True
+) -> str:
     """The exact command that removes *address* from the agent's sponsors. *object_id* is
-    used instead where a shell would change the address."""
-    return _script_command(paths, "remove_agent_sponsor.py", address, object_id)
+    used instead where a Windows shell would change the address."""
+    return _script_command(paths, "remove_agent_sponsor.py", address, object_id, windows=windows)

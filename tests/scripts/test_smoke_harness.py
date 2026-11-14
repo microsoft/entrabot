@@ -174,3 +174,48 @@ def test_top_level_dry_run_exits_before_provisioner_token_and_deletions() -> Non
         "top-level dry-run branch prints its message but never exits, "
         "so control falls through to Provisioner token acquisition and deletions"
     )
+
+
+def test_the_smoke_agents_key_store_item_is_removed_and_the_resident_agents_is_not(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # macOS and Linux: setup keeps one key store item per certificate, named in .env.
+    from entrabot.platform import keycert
+
+    module = smokeit_module()
+    smoke_sha1, resident_sha1 = "A" * 40, "B" * 40
+    repo = tmp_path / "repo"
+    backup = tmp_path / "logs" / "local-state-backup"
+    repo.mkdir()
+    backup.mkdir(parents=True)
+    deleted: list[str] = []
+    monkeypatch.setattr(module, "REPO_ROOT", repo)
+    monkeypatch.setattr(module, "is_windows", lambda: False)
+    monkeypatch.setattr(keycert, "delete_cert", lambda sha1: deleted.append(sha1) or True)
+
+    class Context:
+        log_dir = tmp_path / "logs"
+
+    # The run wrote a .env for the smoke agent; the backup names the agent that lives here.
+    (repo / ".env").write_text(f"ENTRABOT_BLUEPRINT_CERT_SHA1={smoke_sha1}\n", encoding="utf-8")
+    (backup / ".env").write_text(
+        f"ENTRABOT_BLUEPRINT_CERT_SHA1={resident_sha1}\n", encoding="utf-8"
+    )
+    module.remove_smoke_certificate(Context())
+    assert deleted == [smoke_sha1]
+
+    # Setup never got as far as a new certificate: .env still names the resident agent's.
+    deleted.clear()
+    (repo / ".env").write_text(
+        f"ENTRABOT_BLUEPRINT_CERT_SHA1={resident_sha1}\n", encoding="utf-8"
+    )
+    module.remove_smoke_certificate(Context())
+    assert deleted == []
+
+    # No .env at all, or on Windows (where teardown of the certificate store is separate).
+    (repo / ".env").unlink()
+    module.remove_smoke_certificate(Context())
+    monkeypatch.setattr(module, "is_windows", lambda: True)
+    (repo / ".env").write_text(f"ENTRABOT_BLUEPRINT_CERT_SHA1={smoke_sha1}\n", encoding="utf-8")
+    module.remove_smoke_certificate(Context())
+    assert deleted == []

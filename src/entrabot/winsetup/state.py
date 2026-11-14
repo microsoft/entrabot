@@ -22,6 +22,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
+from entrabot.winsetup.words import Words, words_for
+
 IdentityMode = Literal["new", "join", "continue"]
 
 # Left behind in a shell by an earlier run; never inherited.
@@ -270,13 +272,19 @@ def _env_names_another_blueprint(
 
 
 def not_reusing_env_agent_user(
-    choice: IdentityChoice, *, blueprint_app_id: str, env_values: Mapping[str, str]
+    choice: IdentityChoice,
+    *,
+    blueprint_app_id: str,
+    env_values: Mapping[str, str],
+    words: Words | None = None,
 ) -> list[str]:
-    """What to say when the Agent User ``.env`` names is not carried into this run, in
-    ``scripts/setup.sh``'s words: empty when ``.env`` names none, or it is this run's.
+    """What to say when the Agent User ``.env`` names is not carried into this run: empty
+    when ``.env`` names none, or it is this run's.
 
     *blueprint_app_id* is the Blueprint this run is for (the one recorded here, when continuing).
+    *words* spells the flags for the system setup runs on (Windows when not given).
     """
+    flag = (words or words_for("win32")).flag
     wanted = choice.blueprint_app_id or blueprint_app_id
     upn = env_values.get("ENTRABOT_AGENT_USER_UPN", "").strip()
     if not upn or not _env_names_another_blueprint(
@@ -287,8 +295,8 @@ def not_reusing_env_agent_user(
     return [
         f"Not reusing the Agent User named in .env ({upn}):",
         f".env was written for Blueprint {recorded}, not {wanted}.",
-        f"To use one of {wanted}'s Agent Users, run setup with -UseBlueprint {wanted} "
-        "and -AgentUserUpn UPN or -UpnSuffix NAME.",
+        f"To use one of {wanted}'s Agent Users, run setup with {flag('use-blueprint', wanted)} "
+        f"and {flag('agent-user-upn', 'UPN')} or {flag('upn-suffix', 'NAME')}.",
     ]
 
 

@@ -1,6 +1,8 @@
-"""Entrabot setup wizard for Windows.
+"""Entrabot setup wizard, for Windows, macOS and Linux.
 
-``scripts/setup-windows.ps1`` only gets Python and a virtual environment onto the machine.
+It was written for Windows first, hence the package's name. ``scripts/setup-windows.ps1``
+(Windows) and ``scripts/setup.sh`` (macOS, Linux) only get Python and a virtual environment
+onto the machine.
 Everything after that (questions, sign-in, provisioning, the certificate, ``.env``, memory,
 registering the MCP server, the smoke test) lives here, where it can be unit-tested on any
 OS. Run it with ``python -m entrabot.winsetup setup --project-root <repo>``.

@@ -79,4 +79,5 @@ screen.
 - [`setup-windows.cmd`](setup-windows-cmd.md) — run this once first.
 - [`prereqs-windows.ps1`](prereqs-windows-ps1.md) — installs Claude Code and
   Git for Windows.
+- [`start-entrabot.sh`](start-entrabot-sh.md) — the macOS and Linux counterpart.
 - [Windows installation](../../../getting-started/windows.md).

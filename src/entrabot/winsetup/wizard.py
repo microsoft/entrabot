@@ -22,6 +22,7 @@ import json
 import os
 import platform as platform_module
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -77,6 +78,7 @@ from entrabot.winsetup.oldkeys import (
 )
 from entrabot.winsetup.sponsors import Sponsor, SponsorError
 from entrabot.winsetup.state import IdentityChoice, IdentityError
+from entrabot.winsetup.words import Words, words_for
 
 EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_SMOKE_FAILED, EXIT_CANCELLED = 0, 1, 2, 3, 130
 TOTAL_STEPS = 11
@@ -87,15 +89,22 @@ RERUN = "Run setup again. It continues from here and keeps what already works."
 # would not take over an existing app registration with the Provisioner's name. Tests on both
 # sides pin the whole line.
 PROVISIONER_TAKEOVER_REFUSED = "provisioner-takeover-refused"
-_TAKEOVER_REFUSED_FIX = (
-    "The app registrations it found, and why it did not use them, are listed above and in\n"
-    "the setup log. To go on, delete or rename the one you don't recognise (Entra admin\n"
-    "center > App registrations > All applications), or, once you have checked that it is\n"
-    "yours, set ENTRABOT_PROVISIONER_APP_ID_VERIFIED to its application ID in this window:\n"
-    '  cmd.exe:     set "ENTRABOT_PROVISIONER_APP_ID_VERIFIED=<application ID>"\n'
-    "  PowerShell:  $env:ENTRABOT_PROVISIONER_APP_ID_VERIFIED = '<application ID>'\n"
-    "Then run setup again from the same window (scripts\\setup-windows.cmd)."
-)
+_VERIFIED_APP = "ENTRABOT_PROVISIONER_APP_ID_VERIFIED"
+
+
+def _takeover_refused_fix(w: Words) -> str:
+    return "\n".join(
+        [
+            "The app registrations it found, and why it did not use them, are listed above and in",
+            "the setup log. To go on, delete or rename the one you don't recognise (Entra admin",
+            "center > App registrations > All applications), or, once you have checked that it is",
+            f"yours, set {_VERIFIED_APP} to its application ID in this {w.terminal}:",
+            *w.set_variable(_VERIFIED_APP, "<application ID>"),
+            f"Then run setup again from the same {w.terminal} ({w.setup}).",
+        ]
+    )
+
+
 # Printed the same way, just before the script's error: the app named in
 # ENTRABOT_PROVISIONER_APP_ID_VERIFIED was not accepted, or setup could not read from Microsoft
 # Entra what it needed to decide. Nothing in Entra changed in either case.
@@ -105,16 +114,22 @@ _APP_CHOICE_REJECTED = (
     "The value given in ENTRABOT_PROVISIONER_APP_ID_VERIFIED was not accepted. Nothing was "
     "changed in Microsoft Entra."
 )
-_APP_CHOICE_REJECTED_FIX = (
-    "The reason is in the lines above and in the setup log. Set it, in this window, to the\n"
-    "application ID of the Provisioner app you have checked is yours:\n"
-    '  cmd.exe:     set "ENTRABOT_PROVISIONER_APP_ID_VERIFIED=<application ID>"\n'
-    "  PowerShell:  $env:ENTRABOT_PROVISIONER_APP_ID_VERIFIED = '<application ID>'\n"
-    "or clear it:\n"
-    '  cmd.exe:     set "ENTRABOT_PROVISIONER_APP_ID_VERIFIED="\n'
-    "  PowerShell:  Remove-Item Env:ENTRABOT_PROVISIONER_APP_ID_VERIFIED\n"
-    "Then run setup again from the same window (scripts\\setup-windows.cmd)."
-)
+
+
+def _app_choice_rejected_fix(w: Words) -> str:
+    return "\n".join(
+        [
+            f"The reason is in the lines above and in the setup log. Set it, in this {w.terminal}, "
+            "to the",
+            "application ID of the Provisioner app you have checked is yours:",
+            *w.set_variable(_VERIFIED_APP, "<application ID>"),
+            "or clear it:",
+            *w.clear_variable(_VERIFIED_APP),
+            f"Then run setup again from the same {w.terminal} ({w.setup}).",
+        ]
+    )
+
+
 _COULD_NOT_READ_ENTRA = "Setup could not read what it needed from Microsoft Entra."
 _PROVISIONER_COULD_NOT_CHECK_FIX = (
     "This is usually temporary, or a problem with the sign-in or an admin role (if you activate\n"
@@ -130,11 +145,17 @@ BLUEPRINT_AMBIGUOUS = "blueprint-ambiguous"
 AGENT_USER_WRONG_BLUEPRINT = "agent-user-wrong-blueprint"
 AGENT_LOOKUP_COULD_NOT_CHECK = "agent-lookup-could-not-check"
 _DETAILS_ABOVE = "The details are in the lines above and in the setup log."
-_BLUEPRINT_NOT_FOUND_FIX = (
-    "Check the Blueprint App ID and that you signed in to the agent's tenant, then run setup\n"
-    "again with the right one (-UseBlueprint APP_ID), or create a new agent instead\n"
-    f"(-NewChain -UpnSuffix NAME).\n{_DETAILS_ABOVE}"
-)
+
+
+def _blueprint_not_found_fix(w: Words) -> str:
+    return (
+        "Check the Blueprint App ID and that you signed in to the agent's tenant, then run setup\n"
+        f"again with the right one ({w.flag('use-blueprint', 'APP_ID')}), or create a new agent "
+        "instead\n"
+        f"({w.flag('new')} {w.flag('upn-suffix', 'NAME')}).\n{_DETAILS_ABOVE}"
+    )
+
+
 # The helper asks about the Blueprint before it records or creates anything (in
 # blueprint_for_this_run), so "nothing was changed" holds for that stop.
 _BLUEPRINT_COULD_NOT_CHECK_FIX = (
@@ -148,16 +169,26 @@ _AGENT_LOOKUP_COULD_NOT_CHECK_FIX = (
     "This is usually temporary: run setup again in a few minutes.\n"
     f"It continues from where it stopped.\n{_DETAILS_ABOVE}"
 )
-_BLUEPRINT_AMBIGUOUS_FIX = (
-    "Run setup again with the App ID of the right one (the candidates are listed in the lines\n"
-    "above):\n"
-    "  scripts\\setup-windows.cmd -UseBlueprint <App ID>\n"
-    f"{_DETAILS_ABOVE}"
-)
-_AGENT_USER_WRONG_BLUEPRINT_FIX = (
-    "Join that agent instead (run setup with -UseBlueprint and its Blueprint App ID), or\n"
-    f"choose another name for this one (-UpnSuffix NAME).\n{_DETAILS_ABOVE}"
-)
+
+
+def _blueprint_ambiguous_fix(w: Words) -> str:
+    return (
+        "Run setup again with the App ID of the right one (the candidates are listed in the "
+        "lines\n"
+        "above):\n"
+        f"  {w.setup} {w.flag('use-blueprint', '<App ID>')}\n"
+        f"{_DETAILS_ABOVE}"
+    )
+
+
+def _agent_user_wrong_blueprint_fix(w: Words) -> str:
+    return (
+        f"Join that agent instead (run setup with {w.flag('use-blueprint')} and its Blueprint "
+        "App ID), or\n"
+        f"choose another name for this one ({w.flag('upn-suffix', 'NAME')}).\n{_DETAILS_ABOVE}"
+    )
+
+
 
 # What a failed sign-in test looks like when the only problem is the kind of session.
 _KEYRING_MARKERS = (
@@ -166,6 +197,9 @@ _KEYRING_MARKERS = (
     "credentials cannot be saved",
     "logon session",
     "1312",
+    "key store",  # entrabot.platform.keycert, on macOS and Linux
+    "keychain",
+    "secret service",
 )
 
 
@@ -269,6 +303,11 @@ class Options:
     configure_work_iq: bool = False
     tenant: str = ""
     device_code: bool = False
+    # Sign in again even when an earlier sign-in still works: someone else is to own the agent.
+    switch_user: bool = False
+    # Replace EVERY certificate on the agent's Blueprint, other computers' included, with a
+    # new one for this computer. Asked about before anything changes; never the default.
+    remove_all_existing_certs: bool = False
     hosts: str | None = None
     skip_smoke: bool = False
     yes: bool = False
@@ -287,12 +326,16 @@ START_SCRIPT = "start-entrabot.cmd"
 _CANNOT_START = ("sign-in", "keyring", "crashed", "certificate-pending")
 # What Claude Code asks the first time it opens this folder, in the order it asks. Worded
 # by what each question is about: Claude Code's own wording changes between versions.
-FIRST_START_QUESTIONS = (
-    "if this PC has not used it before, then whether to trust this folder, whether to use",
-    'the "entrabot" MCP server, and whether to load a development channel. Say yes to each:',
-    "the folder is the one you just set up, the server is your agent, and the channel is how",
-    "Teams messages reach it.",
-)
+def first_start_questions(w: Words) -> tuple[str, ...]:
+    return (
+        f"if this {w.computer} has not used it before, then whether to trust this folder, "
+        "whether to use",
+        'the "entrabot" MCP server, and whether to load a development channel. Say yes to each:',
+        "the folder is the one you just set up, the server is your agent, and the channel is how",
+        "Teams messages reach it.",
+    )
+
+
 # Characters cmd.exe gives a meaning to even inside quotes. A launcher under such a folder is
 # left for the person to double-click (Explorer starts it correctly).
 _CMD_SPECIAL = re.compile(r"[&^%!()]")
@@ -311,11 +354,39 @@ def launch_in_new_console(argv: Sequence[str], cwd: Path) -> None:
     )
 
 
+def launch_in_this_terminal(argv: Sequence[str], cwd: Path) -> None:
+    """Hand this terminal to *argv*: setup ends and the agent takes its place. macOS and
+    Linux, where the person is already in the terminal the agent should run in. Does not
+    return when it works."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.chdir(cwd)
+    os.execv(argv[0], list(argv))  # noqa: S606 - the project's own launcher, by full path
+
+
+def launch_agent(argv: Sequence[str], cwd: Path) -> None:
+    """Start the agent the way this system does it (see the two functions above)."""
+    if sys.platform == "win32":
+        launch_in_new_console(argv, cwd)
+    else:
+        launch_in_this_terminal(argv, cwd)
+
+
 def _os_description() -> str:
-    return (
-        f"{platform_module.system()} {platform_module.release()} "
-        f"({platform_module.version()}), {platform_module.machine()}"
-    )
+    """This computer's system, as its owner would name it: "Ubuntu 24.04.5 LTS", not the
+    kernel's build string."""
+    system, machine = platform_module.system(), platform_module.machine()
+    if system == "Darwin":
+        version = platform_module.mac_ver()[0]
+        return f"macOS {version}, {machine}" if version else f"macOS, {machine}"
+    if system == "Linux":
+        try:
+            name = platform_module.freedesktop_os_release().get("PRETTY_NAME", "")
+        except OSError:  # no os-release file: say what the kernel says
+            name = ""
+        kernel = f"Linux {platform_module.release()}"
+        return f"{name} ({kernel}), {machine}" if name else f"{kernel}, {machine}"
+    return f"{system} {platform_module.release()} ({platform_module.version()}), {machine}"
 
 
 @dataclass
@@ -326,10 +397,12 @@ class World:
     platform: str = sys.platform
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
     which: Callable[[str], str | None] = shutil.which
-    wincert: Any = None  # None: the real entrabot.platform.wincert, loaded when first needed
+    # The certificate store. None: this system's real one, loaded when first needed
+    # (entrabot.platform.wincert on Windows, entrabot.platform.keycert on macOS and Linux).
+    wincert: Any = None
     http_get: sponsors.HttpGet = sponsors.http_get_json
     os_description: Callable[[], str] = _os_description
-    launch: Callable[[Sequence[str], Path], None] = launch_in_new_console
+    launch: Callable[[Sequence[str], Path], None] = launch_agent
     sleep: Callable[[float], None] = time.sleep
 
 
@@ -393,6 +466,9 @@ class Wizard:
         self.console = console
         self.paths = paths
         self.world = world
+        # The world says which system this is, so its commands are the ones messages name.
+        console.words = words_for(world.platform)
+        self.words = console.words
         self.plan = Plan()
         self._step = 0
         self.az: AzCli | None = None
@@ -469,36 +545,41 @@ class Wizard:
             console.close()
 
     def _report_missing(self, missing: list[MissingAnswer]) -> int:
-        self.console.fail("Setup was asked not to prompt (-Yes), but needs these answers:")
+        self.console.fail(
+            f"Setup was asked not to prompt ({self.words.flag('yes')}), but needs these answers:"
+        )
         for item in missing:
             self.console.bullet(f"{item.prompt}  ->  {item.flag}" if item.flag else item.prompt)
         return EXIT_USAGE
 
     def _validate_options(self) -> None:
-        opts = self.options
+        opts, flag = self.options, self.words.flag
         if opts.new_chain and opts.use_blueprint:
             raise UsageError(
-                "Choose one: create a new agent (-NewChain) or join an existing one "
-                "(-UseBlueprint). They can't be combined."
+                f"Choose one: create a new agent ({flag('new')}) or join an existing one "
+                f"({flag('use-blueprint')}). They can't be combined."
             )
         checks = [
-            (opts.use_blueprint, state.validate_app_id, "-UseBlueprint"),
-            (opts.upn_suffix, state.validate_suffix, "-UpnSuffix"),
-            (opts.agent_user_upn, state.validate_upn, "-AgentUserUpn"),
-            (opts.tenant, azcli.validate_tenant, "-Tenant"),
+            (opts.use_blueprint, state.validate_app_id, flag("use-blueprint")),
+            (opts.upn_suffix, state.validate_suffix, flag("upn-suffix")),
+            (opts.agent_user_upn, state.validate_upn, flag("agent-user-upn")),
+            (opts.tenant, azcli.validate_tenant, flag("tenant")),
         ]
-        for value, validate, flag in checks:
+        for value, validate, spelled in checks:
             problem = validate(value) if value else None
             if problem:
-                raise UsageError(f"{flag} {value!r}: {problem}")
+                raise UsageError(f"{spelled} {value!r}: {problem}")
         for sponsor in opts.sponsors:
             problem = sponsors.validate_sponsor(sponsor)
             if problem:
-                raise UsageError(f"-Sponsor {sponsor!r}: {problem}")
+                raise UsageError(f"{flag('sponsor')} {sponsor!r}: {problem}")
         if opts.memory not in (None, "local", "cloud"):
             raise UsageError("Memory is either 'local' or 'cloud'.")
         if opts.create_new_storage and opts.storage_account:
-            raise UsageError("-CreateNewStorage and -WithStorageAccount are mutually exclusive.")
+            raise UsageError(
+                f"{flag('create-new-storage')} and {flag('storage-account')} are mutually "
+                "exclusive."
+            )
         storage_flags = (
             opts.storage_account
             or opts.container
@@ -507,7 +588,16 @@ class Wizard:
             or opts.subscription
         )
         if storage_flags and opts.memory != "cloud":
-            raise UsageError("The storage options only apply to cloud memory. Add -UseCloudMemory.")
+            raise UsageError(
+                f"The storage options only apply to cloud memory. Add {flag('cloud-memory')}."
+            )
+        if opts.remove_all_existing_certs and opts.new_chain:
+            # A new agent's Blueprint has no certificates: accepting both could only leave
+            # someone believing an older Blueprint was cleaned.
+            raise UsageError(
+                "Replacing every certificate (--remove-all-existing-certs) is for an agent that "
+                f"already exists. It can't be combined with {flag('new')}."
+            )
         try:
             self.plan.hosts = hosts.parse_hosts(opts.hosts)
         except hosts.HostError as exc:
@@ -533,11 +623,6 @@ class Wizard:
         """System check, and which agent this run is for. Returns "setup" or "diagnose"."""
         console, paths, world = self.console, self.paths, self.world
         self._next_step("Checking this computer")
-        if world.platform != "win32":
-            raise SetupFailed(
-                "This wizard sets up Entrabot on Windows.",
-                fix="On macOS or Linux, run ./scripts/setup.sh instead.",
-            )
         if not (paths.scripts / "entra_provisioning.py").is_file():
             raise SetupFailed(
                 f"The Entrabot project folder looks incomplete ({paths.scripts} has no "
@@ -546,11 +631,25 @@ class Wizard:
             )
         console.ok(world.os_description())
 
-        root = str(paths.project_root)
+        if self.words.windows:
+            self._check_windows_folder()
+            self._migrate_legacy_data()
+        else:
+            self._check_key_store()
+
+        try:
+            self.state = state.read_state(paths.state_file)
+        except IdentityError as exc:
+            raise SetupFailed(str(exc)) from exc
+        self.env_values = read_env(paths.env_file)
+        return self._decide_identity()
+
+    def _check_windows_folder(self) -> None:
+        console, root = self.console, str(self.paths.project_root)
         onedrive = [
-            world.env[name]
+            self.world.env[name]
             for name in ("OneDrive", "OneDriveCommercial", "OneDriveConsumer")
-            if world.env.get(name)
+            if self.world.env.get(name)
         ]
         if any(root.lower().startswith(base.lower()) for base in onedrive) or (
             "onedrive" in root.lower()
@@ -564,14 +663,28 @@ class Wizard:
             console.warn("This folder's path is very long, which some Windows tools can't handle.")
             console.detail("If setup fails with a path error, move the project somewhere shorter.")
 
-        self._migrate_legacy_data()
+    def _cert_store(self) -> Any:
+        """This system's certificate store (or the one a test passed in)."""
+        return self.world.wincert or certstep.load_cert_store(self.world.platform)
 
+    def _check_key_store(self) -> None:
+        """macOS and Linux: can setup keep the agent's sign-in key in this account's key
+        store? Asked now, before anything is created: a server with no keyring running, or a
+        locked keychain in a remote session, would otherwise fail five steps later, after the
+        agent exists. Setup never falls back to keeping a key in a file."""
+        console = self.console
         try:
-            self.state = state.read_state(paths.state_file)
-        except IdentityError as exc:
+            store = self._cert_store()
+            store.list_certs()
+        except CertStepError as exc:
             raise SetupFailed(str(exc)) from exc
-        self.env_values = read_env(paths.env_file)
-        return self._decide_identity()
+        except Exception as exc:  # noqa: BLE001 - the store's own error type, or a backend's
+            raise SetupFailed(
+                "Setup can't use this account's key store, where the agent's sign-in key is "
+                f"kept (the {self.words.key_store}). Nothing was changed.",
+                fix=str(exc),
+            ) from exc
+        console.ok(f"The agent's sign-in key will be kept in the {self.words.key_store}")
 
     def _migrate_legacy_data(self) -> None:
         """Older versions kept data in ``~\\.entrabot``; it now lives under LOCALAPPDATA."""
@@ -650,7 +763,8 @@ class Wizard:
                 MissingAnswer(
                     key="identity",
                     prompt="Which agent to set up",
-                    flag="-NewChain -UpnSuffix NAME   or   -UseBlueprint APP_ID",
+                    flag=f"{self.words.flag('new')} {self.words.flag('upn-suffix', 'NAME')}   or   "
+                    f"{self.words.flag('use-blueprint', 'APP_ID')}",
                 )
             )
             return "setup"
@@ -678,7 +792,7 @@ class Wizard:
                 "Blueprint App ID",
                 validate=state.validate_app_id,
                 key="blueprint",
-                flag="-UseBlueprint APP_ID",
+                flag=self.words.flag("use-blueprint", "APP_ID"),
             ).strip()
             self.plan.identity = self._join(app_id)
         return "setup"
@@ -697,7 +811,7 @@ class Wizard:
                 default=state.default_suffix(username) if console.interactive else None,
                 validate=state.validate_suffix,
                 key="upn_suffix",
-                flag="-UpnSuffix NAME",
+                flag=self.words.flag("upn-suffix", "NAME"),
             )
         return IdentityChoice(mode="new", upn_suffix=suffix)
 
@@ -734,8 +848,7 @@ class Wizard:
             if not console.confirm("Install it now?", default=True, key="install_az"):
                 raise SetupFailed(
                     "Setup needs the Azure CLI.",
-                    fix="Install it from https://aka.ms/installazurecliwindows, then run "
-                    "setup again.",
+                    fix=f"Install it from {self.words.az_install_url}, then run setup again.",
                 )
             try:
                 location = azcli.install_az(
@@ -745,7 +858,8 @@ class Wizard:
                     env=world.env,
                     platform=world.platform,
                     which=world.which,
-                    use_winget=azcli.is_local_admin(console, world.env),
+                    # winget is tried only for a local administrator, and only on Windows.
+                    use_winget=self.words.windows and azcli.is_local_admin(console, world.env),
                 )
             except AzError as exc:
                 raise SetupFailed(str(exc)) from exc
@@ -756,6 +870,12 @@ class Wizard:
         account = az.account()
         if account is not None and opts.tenant and not self._in_tenant(account, opts.tenant):
             account = None  # signed in somewhere else than the tenant that was asked for
+        if account is not None and opts.switch_user:
+            console.info(
+                f"Signed in as {account.user}. Setup was asked to sign in as someone else, so "
+                "it asks for a new sign-in."
+            )
+            account = None
         # Is the earlier sign-in still accepted? Only a real request to the directory tells:
         # az goes on listing an account, and handing out its cached token, after the
         # organization has ended the session (or when it was made through the Windows account
@@ -770,6 +890,7 @@ class Wizard:
             az.forget(account.user)
             account = None
         if account is not None:
+            account = self._with_tenant_name(account)
             console.info(
                 f"Already signed in as {account.user} ({account.tenant_name or account.tenant_id})."
             )
@@ -795,13 +916,21 @@ class Wizard:
                     "it keeps happening, your organization may be ending the session (a "
                     "sign-in risk or Conditional Access policy): ask your administrator.",
                 )
-        self.account = account
+        account = self.account = self._with_tenant_name(account)
         console.ok(f"Signed in as {account.user} ({account.tenant_name or account.tenant_id})")
 
         self.me = me
         self.subscriptions = az.subscriptions(account.tenant_id)
         self._check_tenant(account)
         self._check_privileges()
+
+    def _with_tenant_name(self, account: Account) -> Account:
+        """*account* with its tenant named. The Azure CLI does not always say the name (a
+        sign-in with a code and a tenant leaves it out), and an ID alone tells a person
+        nothing, so the directory is asked. Only once the sign-in is known to work."""
+        if account.tenant_name or self.az is None:
+            return account
+        return replace(account, tenant_name=self.az.tenant_name(account.tenant_id))
 
     def _in_tenant(self, account: Account, wanted: str) -> bool:
         """Is *account* signed in to the tenant named *wanted* (a tenant ID or any of its
@@ -877,7 +1006,8 @@ class Wizard:
                 "You are signed in to a different tenant "
                 f"({account.tenant_name or account.tenant_id}) "
                 f"than the one this computer's agent lives in ({recorded}). Nothing was changed.",
-                fix=f"Sign in to the agent's tenant (run setup with -Tenant {recorded}), or run "
+                fix="Sign in to the agent's tenant (run setup with "
+                f"{self.words.flag('tenant', recorded)}), or run "
                 "setup again and choose to set up a different agent.",
             )
 
@@ -1042,7 +1172,7 @@ class Wizard:
                     None,
                 ),
                 key="sponsor_emails",
-                flag="-Sponsor EMAIL",
+                flag=self.words.flag("sponsor", "EMAIL"),
             )
             plan.explicit_sponsors = self._resolve_sponsors(
                 [part.strip() for part in entered.split(",") if part.strip()]
@@ -1230,11 +1360,27 @@ class Wizard:
         console.info(f"Memory:      {plan.memory_label}")
         console.info(f"Work IQ:     {self._work_iq_label()}")
         console.info(f"Assistants:  {', '.join(names[host] for host in plan.hosts)}")
+        if self.options.remove_all_existing_certs:
+            console.blank()
+            console.warn(
+                "You asked to replace EVERY certificate on the agent's Blueprint with a new one "
+                f"for this {self.words.computer}."
+            )
+            console.detail(
+                "Every other computer that runs this agent stops signing in until setup is run "
+                "on it again. The agent itself is not deleted."
+            )
+            # Unattended, the flag is the consent, as it always was; at a keyboard, default No.
+            if console.interactive and not console.confirm(
+                "Replace them all?", default=False, key="remove_all_certs"
+            ):
+                raise Cancelled("declined to replace every certificate")
         console.blank()
         if self.done_before_review:
             # True to what happened: the tenant is untouched, this PC has new tools.
             for line in textwrap.wrap(
-                "Nothing has been changed in your tenant yet. On this PC setup has only "
+                f"Nothing has been changed in your tenant yet. On this {self.words.computer} "
+                "setup has only "
                 f"{listed(self.done_before_review)}.",
                 width=88,
             ):
@@ -1315,7 +1461,10 @@ class Wizard:
         for note in notes:
             console.info(note)
         not_reused = state.not_reusing_env_agent_user(
-            self.plan.identity, blueprint_app_id=expected_blueprint, env_values=env_values
+            self.plan.identity,
+            blueprint_app_id=expected_blueprint,
+            env_values=env_values,
+            words=self.words,
         )
         if not_reused:
             console.warn(not_reused[0])
@@ -1339,10 +1488,12 @@ class Wizard:
                 raise SetupFailed(
                     "An app registration with the Provisioner's name already exists in this "
                     "tenant, and setup would not take it over.",
-                    fix=_TAKEOVER_REFUSED_FIX,
+                    fix=_takeover_refused_fix(console.words),
                 )
             if outcome == PROVISIONER_APP_CHOICE_REJECTED:
-                raise SetupFailed(_APP_CHOICE_REJECTED, fix=_APP_CHOICE_REJECTED_FIX)
+                raise SetupFailed(
+                    _APP_CHOICE_REJECTED, fix=_app_choice_rejected_fix(console.words)
+                )
             if outcome == PROVISIONER_COULD_NOT_CHECK:
                 raise SetupFailed(
                     f"{_COULD_NOT_READ_ENTRA} Nothing was changed in Microsoft Entra.",
@@ -1408,7 +1559,8 @@ class Wizard:
                 f"{asked} with Blueprint {expected_blueprint}, but the agent step "
                 f"(create_entra_agent_ids.py) returned Blueprint {returned}. Setup stopped "
                 "before this computer's certificate step. Nothing further was changed.",
-                fix=f"Run setup again with -UseBlueprint {expected_blueprint}, or check that "
+                fix="Run setup again with "
+                f"{self.words.flag('use-blueprint', expected_blueprint)}, or check that "
                 f"{expected_blueprint} is the right Blueprint App ID.",
             )
         if not identity.blueprint_app_id or not identity.agent_id:
@@ -1506,7 +1658,7 @@ class Wizard:
                 message = f"The Blueprint App ID {whose} ({blueprint}) does not exist in {tenant}."
             else:
                 message = f"The agent's Blueprint does not exist in {tenant}."
-            return SetupFailed(message, fix=_BLUEPRINT_NOT_FOUND_FIX)
+            return SetupFailed(message, fix=_blueprint_not_found_fix(self.console.words))
         if outcome == BLUEPRINT_COULD_NOT_CHECK:
             return SetupFailed(
                 f"{_COULD_NOT_READ_ENTRA} Nothing was changed.", fix=_BLUEPRINT_COULD_NOT_CHECK_FIX
@@ -1517,12 +1669,12 @@ class Wizard:
             return SetupFailed(
                 "Several applications in this tenant have the agent's name, and none is recorded "
                 "on this computer, so setup can't tell which one is your agent.",
-                fix=_BLUEPRINT_AMBIGUOUS_FIX,
+                fix=_blueprint_ambiguous_fix(self.console.words),
             )
         if outcome == AGENT_USER_WRONG_BLUEPRINT:
             return SetupFailed(
                 "The name chosen for the agent already belongs to a different agent.",
-                fix=_AGENT_USER_WRONG_BLUEPRINT_FIX,
+                fix=_agent_user_wrong_blueprint_fix(self.console.words),
             )
         return SetupFailed("The agent could not be created.")
 
@@ -1567,7 +1719,9 @@ class Wizard:
             console.warn(f"Could not read who the agent takes instructions from: {sync.error}")
         for sponsor in chosen:
             key = sponsor.object_id.lower()
-            add = agentsponsors.add_command(paths, sponsor.upn, object_id=sponsor.object_id)
+            add = agentsponsors.add_command(
+                paths, sponsor.upn, object_id=sponsor.object_id, windows=self.words.windows
+            )
             if sync.read and key in {item.lower() for item in sync.added}:
                 console.ok(f"{sponsor.upn} can now give the agent instructions in Teams")
             elif sync.read and sync.was_sponsor(sponsor.object_id):
@@ -1579,7 +1733,7 @@ class Wizard:
                         f"{sponsor.upn} was added as a sponsor, but the directory does not "
                         "list them yet.",
                         "Check in a few minutes with:",
-                        f"  {agentsponsors.list_command(paths)}",
+                        f"  {agentsponsors.list_command(paths, windows=self.words.windows)}",
                     ]
                 )
             else:
@@ -1609,7 +1763,9 @@ class Wizard:
             and sync.is_sponsor(self.me.object_id)
         ):
             me = self.account.user
-            step_back = agentsponsors.remove_command(paths, me, object_id=self.me.object_id)
+            step_back = agentsponsors.remove_command(
+                paths, me, object_id=self.me.object_id, windows=self.words.windows
+            )
             console.info(f"You ({me}) are a sponsor too, because you created the agent.")
             console.detail(f"To step back later:  {step_back}")
 
@@ -1695,16 +1851,21 @@ class Wizard:
         only when it can actually start: the launcher is there, nothing is left to install,
         the agent can sign in, and there is a desktop to open a window on."""
         console, world = self.console, self.world
-        launcher = self.paths.project_root / START_SCRIPT
+        launcher = self.paths.project_root / self.words.start_script
         if (
             not console.interactive
             or "claude" not in self.plan.hosts
             or not launcher.is_file()
             or host_report.todo
             or smoke in _CANNOT_START
-            or not azcli.has_interactive_desktop(world.env, platform=world.platform)
-            or _CMD_SPECIAL.search(str(launcher))
         ):
+            return
+        if not self.words.windows:
+            self._offer_to_start_here(launcher)
+            return
+        if not azcli.has_interactive_desktop(
+            world.env, platform=world.platform
+        ) or _CMD_SPECIAL.search(str(launcher)):
             return
         console.blank()
         if not console.confirm("Start your agent now?", default=True, key="start_agent"):
@@ -1716,9 +1877,33 @@ class Wizard:
         try:
             world.launch([comspec, "/c", str(launcher)], self.paths.project_root)
         except (OSError, ValueError) as exc:
-            console.warn(f"Could not open it ({exc}). Double-click {START_SCRIPT} instead.")
+            console.warn(
+                f"Could not open it ({exc}). Double-click {self.words.start_script} instead."
+            )
             return
         console.ok("Your agent is starting in its own window")
+
+    def _offer_to_start_here(self, launcher: Path) -> None:
+        """macOS and Linux: the person is already in a terminal, so the agent starts in it.
+        Setup's own work is finished and its log closed before the terminal is handed over."""
+        console = self.console
+        if not os.access(launcher, os.X_OK):
+            return
+        console.blank()
+        if not console.confirm(
+            "Start your agent now, in this terminal?", default=True, key="start_agent"
+        ):
+            return
+        console.ok("Starting your agent here. Setup is finished.")
+        console.close()
+        try:
+            self.world.launch([str(launcher)], self.paths.project_root)
+        except (OSError, ValueError) as exc:
+            console.warn(f"Could not start it ({exc}). Run {self._launcher_command()} instead.")
+
+    def _launcher_command(self) -> str:
+        """The launcher as a command to type from anywhere (macOS and Linux)."""
+        return shlex.quote(str(self.paths.project_root / self.words.start_script))
 
     def _works_for(self, env_result: EnvResult) -> str:
         """Who the agent obeys, from the directory read-back; never from what was asked for."""
@@ -1751,15 +1936,15 @@ class Wizard:
     def _certificate(self, identity: Identity) -> CertOutcome:
         self._next_step("Securing the agent's sign-in on this computer")
         try:
-            wincert = self.world.wincert or certstep.load_wincert()
             return certstep.ensure_blueprint_cert(
                 env_values=read_env(self.paths.env_file),
                 blueprint_object_id=identity.blueprint_object_id,
                 blueprint_app_id=identity.blueprint_app_id,
                 helpers=self.helpers,
                 console=self.console,
-                wincert=wincert,
+                wincert=self._cert_store(),
                 now=self.world.now(),
+                replace_all=self.options.remove_all_existing_certs,
             )
         except CertStepError as exc:
             raise SetupFailed(str(exc)) from exc
@@ -1778,7 +1963,9 @@ class Wizard:
         console.ok("Settings saved to .env")
         if result.sponsor == "none":
             console.warn("Could not look up your account, so no sponsor was recorded.")
-            console.detail("Run setup again with -Sponsor you@yourcompany.com.")
+            console.detail(
+                f"Run setup again with {self.words.flag('sponsor', 'you@yourcompany.com')}."
+            )
         elif result.sponsor == "kept":
             console.detail(f"Contact in this computer's settings unchanged: {result.sponsor_label}")
         sync = self.sponsor_sync
@@ -1797,7 +1984,9 @@ class Wizard:
                 "agent will not take instructions from you in Teams: you are not one of its "
                 "sponsors."
             )
-            console.detail(f"To become one, run setup again with -Sponsor {me}.")
+            console.detail(
+                f"To become one, run setup again with {self.words.flag('sponsor', me)}."
+            )
         if cert.unconfirmed:
             raise SetupFailed(
                 "Microsoft Entra has not confirmed this computer's certificate yet. Your "
@@ -1890,7 +2079,7 @@ class Wizard:
         console = self.console
         self._next_step("Testing the agent end to end")
         if self.options.skip_smoke:
-            console.warn("Test skipped (-SkipSmoke).")
+            console.warn(f"Test skipped ({self.words.flag('skip-smoke')}).")
             return "skipped"
         console.info("Signing in as the agent and reaching Teams...")
         result = self.helpers.snippet(SMOKE_SNIPPET)
@@ -2012,7 +2201,7 @@ class Wizard:
                     "honouring them for the agent yet.",
                     _wrapped(
                         "That usually takes a minute or two after setup gives the permissions. "
-                        "Check with:  scripts\\setup-windows.cmd -Diagnose. If it still says so "
+                        f"Check with:  {self.words.diagnose}. If it still says so "
                         "later, run setup again and answer yes to the Word, Excel and OneDrive "
                         "question."
                     ),
@@ -2034,7 +2223,10 @@ class Wizard:
                 (
                     headline,
                     licences.last_screen_lines(
-                        self.licence_report, "copilot", shown="copilot" in self.licence_explained
+                        self.licence_report,
+                        "copilot",
+                        shown="copilot" in self.licence_explained,
+                        diagnose=self.words.diagnose,
                     ),
                 )
             )
@@ -2099,15 +2291,32 @@ class Wizard:
                 "step in this run removed them."
             )
 
-        if smoke == "keyring":
+        if smoke == "keyring" and not self.words.windows:
+            console.blank()
+            console.warn(
+                f"The test could not read the agent's key from the {self.words.key_store} in "
+                "this session. That is usually the session (a remote or SSH session whose key "
+                "store is locked), not the setup."
+            )
+            console.detail(
+                (
+                    "Unlock the login keychain in this session (security unlock-keychain), or "
+                    "sign in at the Mac's own desktop, and run:  "
+                    if self.words.platform == "darwin"
+                    else "Unlock the keyring in this session (see "
+                    "docs/platform-docs/platform-linux.md), or sign in at the desktop, and "
+                    "run:  "
+                )
+                + self.words.diagnose
+            )
+        elif smoke == "keyring":
             console.blank()
             console.warn(
                 "The test could not use Windows Credential Manager from this kind of session "
                 "(a remote or SSH session). That is a limit of the session, not of the setup."
             )
             console.detail(
-                "Sign in at the computer's own desktop and run:  "
-                "scripts\\setup-windows.cmd -Diagnose"
+                f"Sign in at the computer's own desktop and run:  {self.words.diagnose}"
             )
         elif smoke == "sign-in":
             console.blank()
@@ -2131,7 +2340,7 @@ class Wizard:
             console.warn("The agent signed in, but Teams is not ready for it yet.")
             console.detail(
                 "A newly assigned licence takes 10-15 minutes to reach Teams. Check later with:  "
-                "scripts\\setup-windows.cmd -Diagnose"
+                f"{self.words.diagnose}"
             )
         elif smoke == "teams-not-ready":
             console.blank()
@@ -2139,13 +2348,12 @@ class Wizard:
             console.detail(
                 "Check that the agent has a licence that includes Teams (Microsoft 365 admin "
                 "center, https://admin.microsoft.com), then run:  "
-                "scripts\\setup-windows.cmd -Diagnose"
+                f"{self.words.diagnose}"
             )
         elif smoke == "crashed":
             console.blank()
             console.warn(
-                "The end-to-end test could not run. Check with:  "
-                "scripts\\setup-windows.cmd -Diagnose"
+                f"The end-to-end test could not run. Check with:  {self.words.diagnose}"
             )
         if self.licence == "none" and smoke != "pass":
             console.blank()
@@ -2163,7 +2371,9 @@ class Wizard:
             # For what this organization has, when setup could read it (licences.py); in a
             # line or two when the walkthrough above already said it.
             shown = "teams" in self.licence_explained
-            for line in licences.last_screen_lines(self.licence_report, "teams", shown=shown):
+            for line in licences.last_screen_lines(
+                self.licence_report, "teams", shown=shown, diagnose=self.words.diagnose
+            ):
                 console.info(f"     {line}")
         for headline, body in work_iq_attention:
             console.blank()
@@ -2179,7 +2389,12 @@ class Wizard:
                 console.info(f"     {line}")
         if upload_failed:
             console.blank()
-            console.warn("Existing memory was NOT copied to the cloud. Run setup again to retry.")
+            # The copy is offered only by a run that sets cloud memory up, so the retry has to
+            # ask for cloud memory again; a plain re-run keeps the setting and offers nothing.
+            console.warn(
+                "Existing memory was NOT copied to the cloud. To retry, run setup again with "
+                f"{self.words.flag('cloud-memory')}."
+            )
 
         console.blank()
         console.info("To start your agent:")
@@ -2187,7 +2402,7 @@ class Wizard:
         for item in host_report.todo:
             number += 1
             console.info(f"  {number}. {item}")
-        launcher = paths.project_root / START_SCRIPT
+        launcher = paths.project_root / self.words.start_script
         if "claude" not in self.plan.hosts:
             console.info(
                 f"  {number + 1}. Open GitHub Copilot CLI in {paths.project_root}. "
@@ -2195,10 +2410,19 @@ class Wizard:
             )
             number += 1
         else:
-            if launcher.is_file():
-                console.info(f"  {number + 1}. Double-click {START_SCRIPT} in {paths.project_root}")
+            if launcher.is_file() and self.words.windows:
+                console.info(
+                    f"  {number + 1}. Double-click {self.words.start_script} in "
+                    f"{paths.project_root}"
+                )
                 # Under the step's words: detail indents five, the words start at seven.
                 console.detail(f"  (or, in a terminal there:  {self._claude_command(host_report)})")
+            elif launcher.is_file():
+                console.info(f"  {number + 1}. In a terminal, run:")
+                console.info(f"       {self._launcher_command()}")
+                console.detail(
+                    f"  (or, in a terminal in that folder:  {self._claude_command(host_report)})"
+                )
             else:
                 console.info(f"  {number + 1}. Open a terminal in {paths.project_root} and run:")
                 console.info(f"       {self._claude_command(host_report)}")
@@ -2206,7 +2430,7 @@ class Wizard:
                 f"  {number + 2}. Answer Claude Code's questions. The first time, it asks you to "
                 "sign in to Claude"
             )
-            for line in FIRST_START_QUESTIONS:
+            for line in first_start_questions(console.words):
                 console.info(f"     {line}")
             number += 2
         console.info(f"  {number + 1}. Then say:  Who are you?")
@@ -2214,9 +2438,9 @@ class Wizard:
             self._things_to_try()
         console.blank()
         console.info("Later:")
-        console.info("  Health check:       scripts\\setup-windows.cmd -Diagnose")
+        console.info(f"  Health check:       {self.words.diagnose}")
         console.info(
-            "  Change or repair:   run scripts\\setup-windows.cmd again. It keeps what works."
+            f"  Change or repair:   run {self.words.setup} again. It keeps what works."
         )
         console.detail(
             "Optional: to give the agent a persona and long-term memory (persona-sati), see "

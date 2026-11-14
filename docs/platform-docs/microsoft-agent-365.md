@@ -53,10 +53,10 @@ surface; Entrabot maintains its own fail-closed audit log.
 ## `ToolingManifest.json` is authoritative
 
 The Agent 365 CLI (`a365 develop add-mcp-servers`) generates
-`ToolingManifest.json`. Windows setup writes the same three entries (Word,
-Excel and OneDrive/SharePoint) itself, without the CLI, from the package's
-catalog (`src/entrabot/a365/catalog.py`), and keeps any other entries in the
-file. The manifest supplies each server's URL, audience, and scope. Runtime
+`ToolingManifest.json`. Setup, on Windows, macOS and Linux, writes the same three
+entries (Word, Excel and OneDrive/SharePoint) itself, without the CLI, from the
+package's catalog (`src/entrabot/a365/catalog.py`), and keeps any other entries
+in the file. The manifest supplies each server's URL, audience, and scope. Runtime
 code prefers that manifest over documented values because catalog metadata
 can change; if Microsoft changes a server's URL, audience, or scope, the
 package's catalog has to change with it.
@@ -176,9 +176,8 @@ Setup adds `mcp_ExcelServer` to `ToolingManifest.json`, and
 `scripts/ensure_a365_work_iq_permissions.py` adds `McpServers.Excel.All` to the
 Blueprint's grant on the Agent 365 Tools resource and to the Blueprint's
 inheritable permissions for it. Until that scope is granted, calls to the
-server return `403`. On macOS and Linux, the later `a365 setup permissions mcp`
-step requires PowerShell 7+ and stops at its requirements check without it;
-Windows setup does not run it.
+server return `403`. Setup does not run the Agent 365 CLI on any system, so it
+needs neither PowerShell 7 nor the .NET SDK.
 
 ## Authentication
 
@@ -214,18 +213,20 @@ privilege: only the scopes the manifest needs (`enumeratedScopes`) and no app
 roles (`noRoles`). An entry that already covers them, such as the CLI's
 `allAllowed` one, is left alone; one with fewer scopes is widened, never
 narrowed. On a real tenant, Microsoft's token service took 20 to 45 seconds to
-honour a new entry, so Windows setup checks the agent's tokens for each
-audience for about two minutes, and `scripts\setup-windows.cmd -Diagnose` runs
-the same check.
+honour a new entry, so setup checks the agent's tokens for each audience for
+about two minutes, and the health check (`scripts\setup-windows.cmd -Diagnose`,
+or `./scripts/setup.sh --diagnose` on macOS and Linux) runs the same check.
 
 ## Setup and validation
 
 1. Provision Entrabot's Agent Identity and Agent User.
 2. Add the Work IQ MCP servers to `ToolingManifest.json` and grant their
-   permissions, including the Blueprint's inheritable permissions. On
-   Windows, setup does this itself (answer yes to the Word, Excel and OneDrive
-   question, or pass `-ConfigureA365WorkIq`); on macOS and Linux,
-   `scripts/setup.sh --configure-a365-work-iq` does it with the Agent 365 CLI.
+   permissions, including the Blueprint's inheritable permissions. Setup does
+   this itself, with no Agent 365 CLI, .NET SDK, PowerShell 7 or
+   `a365.config.json`: answer yes to the Word, Excel and OneDrive question, or
+   pass `-ConfigureA365WorkIq` on Windows and `--configure-a365-work-iq` to
+   `./scripts/setup.sh` on macOS and Linux. On macOS and Linux this path has not
+   yet been run against a real tenant.
 3. Keep the generated `ToolingManifest.json` in a location Entrabot
    discovers, or set the configured manifest path.
 4. Run the relevant Word MCP tool and confirm the audit event identifies the

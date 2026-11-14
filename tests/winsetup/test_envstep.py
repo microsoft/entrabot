@@ -129,18 +129,29 @@ class TestIdentity:
         assert run.effective("ENTRABOT_TENANT_ID") == "tenant"
         assert "# ENTRABOT_AGENT_ID=a note" in run.lines
 
-    def test_every_key_setup_sh_writes_for_the_runtime_is_written(self, run: Run) -> None:
+    def test_every_key_the_runtime_reads_its_identity_from_is_written(self, run: Run) -> None:
         # config.py reads identity only from the environment and .env, never from the state
-        # file, so a key missing here is an identity the agent can't sign in with.
-        import re
-
-        script = (Path(__file__).resolve().parents[2] / "scripts" / "setup.sh").read_text(
-            encoding="utf-8"
-        )
-        heredoc = script[script.index("cat > .env << EOF") :]
-        heredoc = heredoc[: heredoc.index("\nEOF\n")]
-        keys = set(re.findall(r"^(ENTRABOT_[A-Z_]+)=", heredoc, re.M)) - {"ENTRABOT_LOG_LEVEL"}
-        assert len(keys) > 10
+        # file, so a key missing here is an identity the agent can't sign in with. These are
+        # the keys scripts/setup.sh wrote into .env before it started this wizard; a computer
+        # set up by either must end up with every one of them.
+        keys = {
+            "ENTRABOT_TENANT_ID",
+            "ENTRABOT_BLUEPRINT_APP_ID",
+            "ENTRABOT_BLUEPRINT_OBJECT_ID",
+            "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT",
+            "ENTRABOT_AGENT_ID",
+            "ENTRABOT_AGENT_OBJECT_ID",
+            "ENTRABOT_AGENT_USER_ID",
+            "ENTRABOT_AGENT_USER_UPN",
+            "ENTRABOT_HUMAN_USER_ID",
+            "ENTRABOT_HUMAN_UPN",
+            "ENTRABOT_HUMAN_USER_IDS",
+            "ENTRABOT_HUMAN_UPNS",
+            "ENTRABOT_HUMAN_USER_TENANT_IDS",
+            "ENTRABOT_HUMAN_USER_MAILS",
+            "ENTRABOT_HUMAN_USER_TYPES",
+            "ENTRABOT_PROVISIONER_APP_ID",
+        }
         run()
         written = set(read_env(run.path))
         assert sorted(keys - written) == []

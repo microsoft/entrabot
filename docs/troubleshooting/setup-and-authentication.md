@@ -3,23 +3,23 @@
 ## Setup stops before the final summary
 
 Setup is designed to be re-runnable. Fix the first reported failure, then run
-the same setup command again. Do not delete Entra resources simply to retry an
-idempotent step.
+setup again. Do not delete Entra resources simply to retry an idempotent step.
 
-For an existing Blueprint on macOS or Linux:
+Run it again with no options. It recognises the agent this computer is already
+set up for, keeps its sponsors and memory setting, and repairs what is broken.
+It replaces only its own lines in `.env`; lines you added by hand are kept.
+
+On macOS and Linux:
 
 ```bash
-./scripts/setup.sh --use-blueprint=<blueprint-app-id>
+./scripts/setup.sh
 ```
 
-On macOS and Linux, a re-run for the same Agent User keeps the sponsor
-(`ENTRABOT_HUMAN_*`) and any cloud-memory settings already in `.env`, so this
-command is safe on a configured machine. Pass `--teams-user` or `--switch-user` to
-change the sponsor, or `--keep-memory-local` to go back to local storage. Setup writes the
-rest of `.env` from scratch, so lines you added by hand are dropped.
+Pass `--sponsor=<email>` to add a sponsor, `--keep-memory-local` to go back to
+local storage, or `--use-blueprint=<blueprint-app-id>` to connect this computer
+to a different agent.
 
-On Windows, run setup again with no parameters. It recognises the agent this PC is
-already set up for, keeps its sponsors and memory setting, and repairs what is broken:
+On Windows:
 
 ```bat
 scripts\setup-windows.cmd
@@ -28,24 +28,23 @@ scripts\setup-windows.cmd
 Pass `-Sponsor <email>` to add a sponsor, `-KeepMemoryLocal` to go back to local
 storage, or `-UseBlueprint <blueprint-app-id>` to connect this PC to a different agent.
 
-If setup reports that provisioning succeeded but the smoke test failed, allow
-time for a newly assigned Teams or Exchange license to propagate, then run:
+If setup reports that the agent is set up but the end-to-end test failed (exit
+code 3), allow time for a newly assigned Teams or Exchange license to
+propagate, then run the health check (`./scripts/setup.sh --diagnose`, or
+`scripts\setup-windows.cmd -Diagnose` on Windows).
 
-```bash
-./scripts/setup.sh --diagnose
-```
-
-See [Identity Lifecycle](../guides/identity-lifecycle.md) and the
-[setup script references](../reference/scripts/index.md#setup).
+See [macOS and Linux troubleshooting](macos-linux.md), [Windows
+troubleshooting](windows.md), [Identity Lifecycle](../guides/identity-lifecycle.md)
+and the [setup script references](../reference/scripts/index.md#setup).
 
 ## Setup will not take over an existing Provisioner app registration
 
-Setup stops at the Provisioner step with "Setup did not take over an existing
-'EntraBot Agent ID Provisioner' app registration (see above), and nothing was
-changed in Microsoft Entra." On Windows the wizard says "An app registration
-with the Provisioner's name already exists in this tenant, and setup would not
-take it over." The lines above the message list each app it found (application
-ID, creation date, owners) and why setup did not use it.
+Setup stops at the step that connects it to your tenant with "An app
+registration with the Provisioner's name already exists in this tenant, and
+setup would not take it over." Above it, the provisioning script says "Setup did
+not take over an existing 'EntraBot Agent ID Provisioner' app registration (see
+above), and nothing was changed in Microsoft Entra." and lists each app it found
+(application ID, creation date, owners) and why setup did not use it.
 
 **Cause.** This machine has no Provisioner app recorded in
 `.entrabot-state.json`: it is a new machine, or its state file was removed
@@ -73,7 +72,8 @@ this machine can then take the app over. Naming the app, below, also works.
 **Fix.** Do one of these, then run the same setup command again:
 
 - **Something could not be read** (for example "its owners could not be read"):
-  sign in again with `az login`, or activate your administrator role.
+  sign in again (on macOS and Linux, `./scripts/setup.sh --switch-user`), or
+  activate your administrator role.
 - **You do not recognise the app:** delete or rename it in the Microsoft Entra
   admin center (App registrations > All applications). With no app left under
   that exact name, setup creates a new one.
@@ -81,10 +81,10 @@ this machine can then take the app over. Naming the app, below, also works.
   secrets, and its API permissions): set `ENTRABOT_PROVISIONER_APP_ID_VERIFIED`
   to its Application (client) ID for that run.
 
-On macOS or Linux, for one command (use the options of the run that stopped):
+On macOS or Linux, for one command:
 
 ```bash
-ENTRABOT_PROVISIONER_APP_ID_VERIFIED=<application-id> ./scripts/setup.sh --use-blueprint=<blueprint-app-id>
+ENTRABOT_PROVISIONER_APP_ID_VERIFIED=<application-id> ./scripts/setup.sh
 ```
 
 On Windows, in `cmd.exe`, then run setup from the same window:
@@ -121,12 +121,16 @@ account for.
 
 ## Setup stops while creating the agent
 
-Setup stops at Step 5 ("Creating Entra Agent Identities + Agent User") with
-"Agent Identity provisioning failed. Check errors above." and exits `1`. Above
-it is one of the messages below. The line just above that message, such as
-`ENTRABOT_RESULT=blueprint-not-found`, names the outcome for the Windows
-wizard, which explains it in its own words (see
-[Windows troubleshooting](windows.md#the-blueprint-app-id-does-not-exist-in-this-tenant)).
+Setup stops at its step "Creating your agent" and exits `1`, saying why in its
+own words: the Blueprint App ID does not exist in this tenant, Microsoft Entra
+could not be read, several applications have the agent's name, or the chosen name
+belongs to a different agent (see
+[Windows troubleshooting](windows.md#the-blueprint-app-id-does-not-exist-in-this-tenant);
+the messages are the same on every system). The lines above come from
+`create_entra_agent_ids.py` and are one of the messages below. It also prints an
+`ENTRABOT_RESULT=` line naming the outcome, such as
+`ENTRABOT_RESULT=blueprint-not-found`; the wizard keeps that line off the
+screen, and the setup log has it.
 
 **Cause.** `create_entra_agent_ids.py` stops rather than guess which Blueprint,
 Agent Identity or Agent User is this agent's, before it creates the object in
@@ -150,8 +154,9 @@ question:
 
 **Fix.** For a Blueprint that does not exist, or a value that is not an ID,
 check the App ID (it looks like `1a2b3c4d-1234-5678-9abc-def012345678`) and the
-tenant you are signed in to (`az account show`), then run setup again with the
-right App ID, or create a new agent with `--new --with-upn-suffix=<name>`. For
+tenant setup says you are signed in to, then run setup again with the right App
+ID, or create a new agent with `--new --with-upn-suffix=<name>` (`-NewChain
+-UpnSuffix <name>` on Windows). For
 "Could not check", run setup again in a few minutes; if it keeps failing with
 HTTP `401` or `403`, the Provisioner app is missing a permission or its admin
 consent, so run setup again as a tenant administrator. If the message says
@@ -162,12 +167,11 @@ name may be an ordinary account's: give this agent a different name with
 
 ## Setup stops because the Agent User belongs to a different Blueprint
 
-Setup stops at Step 5 with "ERROR: The Agent User <upn> belongs to a different
-Blueprint from the one this run is for", followed by that Agent User's
-Blueprint, this run's Blueprint, and its Agent Identity, and then "Agent
-Identity provisioning failed. Check errors above." On Windows the wizard says
-"The name chosen for the agent already belongs to a different agent." Setup
-exits `1`.
+Setup stops at its step "Creating your agent" with "The name chosen for the
+agent already belongs to a different agent." and exits `1`. Above it,
+`create_entra_agent_ids.py` says "ERROR: The Agent User <upn> belongs to a
+different Blueprint from the one this run is for", followed by that Agent User's
+Blueprint, this run's Blueprint, and its Agent Identity.
 
 **Cause.** Before it creates an Agent Identity, setup looks for an existing
 Agent User with the sign-in name this run wants, and reuses it only when its
@@ -194,45 +198,36 @@ or name one of its Agent Users exactly:
 ./scripts/setup.sh --use-blueprint=<blueprint-app-id> --agent-user-upn=<upn>
 ```
 
-On Windows, use `-UseBlueprint`, `-UpnSuffix` and `-AgentUserUpn`. A Windows
-PC whose switch to another agent was interrupted can still name the previous
+On Windows, use `-UseBlueprint`, `-UpnSuffix` and `-AgentUserUpn`. A computer
+whose switch to another agent was interrupted can still name the previous
 agent's Agent User in `.env`: name the new agent's Agent User with
-`-AgentUserUpn` or `-UpnSuffix`.
+`--agent-user-upn` or `--with-upn-suffix` (`-AgentUserUpn` or `-UpnSuffix` on
+Windows).
 
-## Setup says it is not reusing the Agent User named in `.env`
-
-With `--use-blueprint`, setup prints "Not reusing the Agent User named in .env
-(<upn>): .env was written for Blueprint <id>, not <id>." and carries on. This
-is a warning, not a stop.
-
-**Cause.** `.env` names the Agent User of the agent this machine was set up
-for before, and `create_entra_agent_ids.py` reads `.env` for any setting it is
-not given. `.env` was written for a different Blueprint ("(none recorded)" when
-it names none), so that Agent User would be looked for under the Blueprint you
-are joining. Setup runs that step with `ENTRABOT_AGENT_USER_UPN` set to empty
-instead, and the step looks for this Blueprint's Agent User as it does on a
-machine joining for the first time.
-
-**Fix.** None is needed. To use a particular Agent User of the Blueprint you
-are joining, name it with `--agent-user-upn=<upn>` or `--with-upn-suffix=<name>`;
-setup then uses that name and does not print the warning.
+When this computer switches to another agent, setup runs the agent step
+without the Agent User name that `.env` holds for the previous one, so that
+name is not looked for under the Blueprint you are joining. Earlier versions of
+`setup.sh` printed "Not reusing the Agent User named in .env" when they did
+this; the wizard does it without a message.
 
 ## Setup stops because a different Blueprint was recorded
 
-Setup stops at the end of Step 5 with "You asked to join Blueprint <id>, but
-create_entra_agent_ids.py recorded Blueprint <id> in .entrabot-state.json."
-and exits `1`.
+Setup stops at its step "Creating your agent" with "You asked to join the agent
+with Blueprint <id>, but the agent step (create_entra_agent_ids.py) returned
+Blueprint <id>. Setup stopped before this computer's certificate step. Nothing
+further was changed." (or "This computer is set up for the agent with Blueprint
+<id>, ...") and exits `1`.
 
-**Cause.** After the agent step, `setup.sh --use-blueprint` checks that the
-Blueprint recorded in `.entrabot-state.json` is the one you asked for, because
-the next steps configure Work IQ on it and register this machine's certificate
-on it. The agent step uses only the Blueprint recorded for the run, so this
-should not happen. Setup stopped before the certificate step: no certificate
-was registered on either Blueprint, and `.env` was not written. The Windows
-wizard makes the same check.
+**Cause.** After the agent step, setup checks that the Blueprint it came back
+with is the one this run is for, because the next steps register this
+computer's certificate on it and switch on Word, Excel and OneDrive files for
+it. The agent step uses only the Blueprint recorded for the run, so this should
+not happen. Setup stopped before the certificate step: no certificate was
+registered on either Blueprint.
 
-**Fix.** Check that the App ID you passed is your agent's Blueprint App ID, then
-run `./scripts/setup.sh --use-blueprint=<blueprint-app-id>` again.
+**Fix.** Check that the App ID is your agent's Blueprint App ID, then run setup
+again with it: `./scripts/setup.sh --use-blueprint=<blueprint-app-id>`, or
+`scripts\setup-windows.cmd -UseBlueprint <blueprint-app-id>` on Windows.
 
 ## The runtime selected an unexpected authentication type
 
@@ -264,8 +259,13 @@ Check:
 
 1. The MCP executable is using the expected repository and `.venv`.
 2. `.env` contains the Blueprint, Agent Identity, and Agent User identifiers.
-3. The Blueprint private key is present in the platform keystore.
-4. On Windows, both certificate thumbprint variables are present.
+3. The Blueprint private key is present in the platform keystore, and on macOS
+   and Linux the keychain or keyring is unlocked in the session the MCP host
+   runs in.
+4. Both certificate thumbprint variables are present
+   (`ENTRABOT_BLUEPRINT_CERT_THUMBPRINT` and `ENTRABOT_BLUEPRINT_CERT_SHA1`). A
+   macOS or Linux computer set up before the setup wizard has only the first,
+   and signs with the account's older single key until setup is run again.
 5. The MCP host was restarted after configuration changed.
 
 Use `./status.sh`, or on Windows `scripts\setup-windows.cmd -Diagnose`, for resource-chain health, then
@@ -297,7 +297,11 @@ Verify the local and registered certificate metadata:
 .venv/bin/python scripts/verify_blueprint_cert.py <BLUEPRINT_OBJECT_ID> <EXPECTED_THUMBPRINT>
 ```
 
-On macOS or Linux, if local state lost the registered thumbprint:
+The health check (`./scripts/setup.sh --diagnose` on macOS and Linux) checks
+that the certificate `.env` names is in the key store, in date, and that its key
+signs. On a macOS or Linux computer set up before the setup wizard, whose key is
+on its own in the account's single key store item, find the registered
+certificate that matches it with:
 
 ```bash
 .venv/bin/python scripts/find_local_blueprint_cert.py <BLUEPRINT_OBJECT_ID>
@@ -306,7 +310,8 @@ On macOS or Linux, if local state lost the registered thumbprint:
 If the private key is missing, re-run setup for the existing Blueprint. Do not
 copy private-key material into `.env` or logs.
 
-On Windows, use the checks in [Windows troubleshooting](windows.md).
+See also [macOS and Linux troubleshooting](macos-linux.md) and
+[Windows troubleshooting](windows.md).
 
 ## Hop 3 reports consent or scope errors
 

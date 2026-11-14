@@ -169,6 +169,7 @@ nav:
               - setup-windows.ps1: reference/scripts/setup/setup-windows-ps1.md
               - setup-windows.cmd: reference/scripts/setup/setup-windows-cmd.md
               - start-entrabot.cmd: reference/scripts/setup/start-entrabot-cmd.md
+              - start-entrabot.sh: reference/scripts/setup/start-entrabot-sh.md
               - prereqs-macos.sh: reference/scripts/setup/prereqs-macos-sh.md
               - prereqs-windows.ps1: reference/scripts/setup/prereqs-windows-ps1.md
               - setup_delegated.sh: reference/scripts/setup/setup-delegated-sh.md
@@ -221,6 +222,7 @@ nav:
       - Setup and Authentication: troubleshooting/setup-and-authentication.md
       - Teams and Email: troubleshooting/teams-and-email.md
       - Windows: troubleshooting/windows.md
+      - macOS and Linux: troubleshooting/macos-linux.md
       - Storage: troubleshooting/storage.md
       - MCP Connectivity: troubleshooting/mcp-connectivity.md
       - Migrations and Upgrades: troubleshooting/migrations-and-upgrades.md

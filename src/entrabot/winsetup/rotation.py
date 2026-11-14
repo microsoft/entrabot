@@ -6,7 +6,8 @@ The agent proves it is the Blueprint by signing with a private key held on this 
 Rotation replaces that key and its certificate. The order is what makes it safe: the
 certificate in use stays in use, untouched, until the new one is PROVEN to sign the agent in.
 
-    1. create a new certificate (TPM first, otherwise the Windows software key store)
+    1. create a new certificate (Windows: TPM first, otherwise the software key store;
+       macOS and Linux: in the account's Keychain or keyring)
     2. add it to the Blueprint, beside the current one and every other computer's
     3. prove it: sign in with the new certificate, waiting for Microsoft Entra to take it up
     4. switch ``.env`` to the new certificate            <- the only point of no return
@@ -37,7 +38,6 @@ from entrabot.winsetup import certstep
 from entrabot.winsetup.certstep import CertStepError
 from entrabot.winsetup.console import Cancelled, Console
 from entrabot.winsetup.directory import (
-    SETUP_COMMAND,
     Directory,
     Proof,
     connect,
@@ -49,6 +49,7 @@ from entrabot.winsetup.directory import (
 from entrabot.winsetup.envfile import EnvGuard, EnvLockError, read_env, update_env
 from entrabot.winsetup.helpers import Helpers, Paths
 from entrabot.winsetup.wizard import World
+from entrabot.winsetup.words import words_for
 
 EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_LEFTOVERS, EXIT_CANCELLED = 0, 1, 2, 3, 130
 
@@ -61,8 +62,6 @@ REGISTER_OK = 0
 # Microsoft Entra usually takes a new certificate up within a minute; this allows two.
 PROOF_ATTEMPTS = 12
 PROOF_DELAY_SECONDS = 10.0
-ROTATE_COMMAND = r"powershell -ExecutionPolicy Bypass -File scripts\deploy-windows.ps1"
-DIAGNOSE_COMMAND = SETUP_COMMAND + " -Diagnose"
 
 
 @dataclass(frozen=True)
@@ -71,14 +70,6 @@ class _Leftover:
 
     text: str
     retry: bool = True
-
-
-def _protection(ksp: str) -> str:
-    if ksp == "tpm":
-        return "hardware TPM (the key cannot leave this computer)"
-    if ksp == "software":
-        return "Windows software key store (not exportable)"
-    return "Windows key store"
 
 
 @dataclass
@@ -100,6 +91,9 @@ class _Rotation:
             env=self.world.env,
             tolerate_failure=True,
         )
+        # The world says which system this is, so its commands are the ones messages name.
+        self.console.words = words_for(self.world.platform)
+        self.words = self.console.words
 
     # ── Entry ────────────────────────────────────────────────────────────────
 
@@ -114,7 +108,7 @@ class _Rotation:
         )
         if not self.paths.env_file.is_file():
             console.fail(
-                "This computer has not been set up yet.", fix=f"Run {SETUP_COMMAND} first."
+                "This computer has not been set up yet.", fix=f"Run {self.words.setup} first."
             )
             return EXIT_FAILED
         values = read_env(self.paths.env_file)
@@ -124,12 +118,12 @@ class _Rotation:
         if not object_id or not app_id or not is_sha1(current):
             console.fail(
                 "This computer's settings don't name a certificate to rotate.",
-                fix=f"Run {SETUP_COMMAND}: it creates and registers one. Rotation replaces a "
+                fix=f"Run {self.words.setup}: it creates and registers one. Rotation replaces a "
                 "certificate that is already working.",
             )
             return EXIT_FAILED
         try:
-            wincert = self.world.wincert or certstep.load_wincert()
+            wincert = self.world.wincert or certstep.load_cert_store(self.world.platform)
         except CertStepError as exc:
             console.fail(str(exc))
             return EXIT_FAILED
@@ -147,7 +141,7 @@ class _Rotation:
             console.fail(
                 "The certificate named in this computer's settings is not in this computer's "
                 "certificate store (or its private key is gone).",
-                fix=f"Run {SETUP_COMMAND}: it creates and registers a new certificate. That "
+                fix=f"Run {self.words.setup}: it creates and registers a new certificate. That "
                 "is the repair for this; rotation needs a working certificate to start from.",
             )
             return EXIT_FAILED
@@ -155,7 +149,7 @@ class _Rotation:
         if not console.interactive and not console.assume_yes:
             console.fail(
                 "Rotation needs a yes before it changes anything.",
-                fix="Run it in a terminal and answer the question, or add -Yes (--yes).",
+                fix=f"Run it in a terminal and answer the question, or add {self.words.yes_hint}.",
             )
             return EXIT_USAGE
 
@@ -218,7 +212,9 @@ class _Rotation:
                 fix="Nothing was changed. The current certificate is still in use.",
             )
             return EXIT_FAILED
-        if tpm_reason:
+        if new.ksp not in ("tpm", "software", "unknown"):
+            console.ok(f"Created a certificate whose key is kept in the {self.words.key_store}")
+        elif tpm_reason:
             console.ok("Created a certificate in the Windows software key store")
             console.detail(f"The hardware TPM was not used: {tpm_reason}")
         else:
@@ -261,7 +257,7 @@ class _Rotation:
             console.fail(
                 f"Microsoft Entra did not accept the new certificate ({reason}).",
                 fix="The current certificate is still in use. Nothing else was changed.\n"
-                f"Try again in a few minutes. If it keeps failing, run {DIAGNOSE_COMMAND}.",
+                f"Try again in a few minutes. If it keeps failing, run {self.words.diagnose}.",
             )
             if proof.detail:
                 console.debug(proof.detail)
@@ -272,7 +268,7 @@ class _Rotation:
             console.ok("Microsoft Entra accepted the new certificate")
             console.warn(
                 f"A later sign-in step failed ({proof.hop}: {proof.code}). The certificate "
-                f"does not control that step. Check with {DIAGNOSE_COMMAND}."
+                f"does not control that step. Check with {self.words.diagnose}."
             )
 
         console.step(4, 5, "Switching this computer to the new certificate")
@@ -408,7 +404,7 @@ class _Rotation:
                 _Leftover(
                     f"The old certificate (ending {tail}) was removed from this computer, but "
                     f"its private key could not be deleted: {gone.detail} The key is still in "
-                    f"the Windows key store. {key_removal_advice(gone.ksp)}",
+                    f"the {self.words.key_store}. {key_removal_advice(gone.ksp)}",
                     retry=False,
                 )
             )
@@ -468,7 +464,7 @@ class _Rotation:
         if any(item.retry for item in leftovers):
             console.info(
                 "A certificate whose private key has been deleted cannot be used by anyone.\n"
-                f"Run rotation again to finish the cleanup:  {ROTATE_COMMAND}"
+                f"Run rotation again to finish the cleanup:  {self.words.rotate}"
             )
 
     def _finish(self, new: Any, leftovers: list[_Leftover]) -> int:
@@ -477,7 +473,7 @@ class _Rotation:
             "Certificate rotated" if not leftovers else "Certificate rotated, cleanup pending"
         )
         console.info(f"New certificate:  valid until {new.not_after:%d %b %Y}")
-        console.info(f"Sign-in key:      {_protection(new.ksp)}")
+        console.info(f"Sign-in key:      {certstep.protection_label(new.ksp)}")
         if self.console.log_file is not None:
             console.info(f"Log:              {self.console.log_file}")
         console.blank()

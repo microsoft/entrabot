@@ -1,35 +1,39 @@
 # find_local_blueprint_cert.py
 
-Find the registered Blueprint certificate whose public key matches this machine's
-local private key, and print its thumbprint, so setup can reuse that certificate
-instead of registering another. This is the only certificate check
-[`setup.sh`](../setup/setup-sh.md) makes. macOS and Linux only.
+Find the registered Blueprint certificate whose public key matches the account's older
+single Blueprint private key, and print its thumbprint. macOS and Linux only.
+
+Setup no longer runs this command. Before the setup wizard, `setup.sh` kept the
+Blueprint's private key on its own, in one key store item for the whole account
+(service `entrabot`, account `blueprint-private-key`), and this was the certificate check
+it made. The wizard keeps each certificate together with its key as its own item, and
+checks a certificate with [`verify_blueprint_cert.py`](verify-blueprint-cert-py.md)
+instead; on a computer set up before it, setup finds the older key's certificate itself
+(see [Computers set up before the wizard](../setup/setup-sh.md#computers-set-up-before-the-wizard)).
+This command is kept for looking at such a computer by hand.
 
 Part of the [auth-and-certs command reference](../index.md#auth-and-certs).
 
 ## Purpose
 
-[`setup.sh`](../setup/setup-sh.md) never trusts the thumbprint cached in the state
-file on its own. The cache can be stale, because the certificate was removed from the
-Blueprint, or it can belong to an earlier key: after an unconfirmed
-`--remove-all-existing-certs` or a failed state write, the active private key may no
-longer pair with it. This command checks the local private key against the certificates
-registered on the Blueprint and prints the SHA-256 base64url thumbprint of the one that
-matches. Setup reuses that certificate rather than adding another, and saves the
-thumbprint if it differs from the cached one.
+The thumbprint cached in the state file can be stale, because the certificate was
+removed from the Blueprint, or it can belong to an earlier key: after an unconfirmed
+`--remove-all-existing-certs` or a failed state write in an older `setup.sh`, the older
+private key may no longer pair with it. This command checks that private key against
+the certificates registered on the Blueprint and prints the SHA-256 base64url thumbprint
+of the one that matches.
 
 Only a certificate that can authenticate now is a match. One that has expired, or isn't
 valid yet, is ignored even though its public key is the local key's, so this command
-exits `1` and setup registers a new certificate. Without that, setup would keep selecting
-a credential that can't authenticate and never renew it. The expired entry stays on the
-Blueprint, because nothing here removes entries.
+exits `1`. The expired entry stays on the Blueprint, because nothing here removes
+entries.
 
-If a private key is waiting under the pending keystore account, an earlier run did not
-finish. This command says so and exits `1` without asking Graph anything, so setup runs
-[`register_blueprint_cert.py`](register-blueprint-cert-py.md), the one place that
-reconciles a pending key. That happens even when a thumbprint is cached.
+If a private key is waiting under the pending keystore account
+(`blueprint-private-key.pending`), a run of the older `setup.sh` did not finish. This
+command says so and exits `1` without asking Graph anything. The wizard does not use a
+pending key.
 
-The private key is stored on macOS Keychain and the Linux Secret Service; see
+The keys are stored in the macOS Keychain and the Linux Secret Service; see
 [macOS Platform APIs](../../../platform-docs/platform-macos.md) and
 [Linux Platform APIs](../../../platform-docs/platform-linux.md).
 
@@ -37,7 +41,8 @@ The private key is stored on macOS Keychain and the Linux Secret Service; see
 
 - The Blueprint private key must be present in the OS keystore under the
   `entrabot` service, account `blueprint-private-key`. The command also reads the
-  `blueprint-private-key.pending` account, and writes to neither.
+  `blueprint-private-key.pending` account, and writes to neither. It does not read the
+  wizard's per-certificate items.
 - The Provisioner app must already exist with its certificate in the OS keystore;
   this command uses the existing-only token helper and never bootstraps it.
 - macOS or Linux. Windows uses the SHA-1 certificate-store lookup in
@@ -47,7 +52,7 @@ The private key is stored on macOS Keychain and the Linux Secret Service; see
 ## Usage
 
 ```bash
-python scripts/find_local_blueprint_cert.py <BLUEPRINT_OBJECT_ID>
+.venv/bin/python scripts/find_local_blueprint_cert.py <BLUEPRINT_OBJECT_ID>
 ```
 
 ## Options
@@ -83,17 +88,14 @@ This command is read-only; it makes no changes to Entra or local state.
 - `0` — a matching certificate was found; its thumbprint is printed to stdout.
 - `1` — checked: a pending private key exists, there is no usable local private key
   in the keystore, or no valid registered certificate matches the local key (an expired
-  one doesn't count). Diagnostics go to stderr. Setup runs
-  [`register_blueprint_cert.py`](register-blueprint-cert-py.md) next.
+  one doesn't count). Diagnostics go to stderr.
 - `2` — usage error (missing or extra positional argument).
 - `3` — could not check: a keystore (the pending entry included), Graph, or token
   failure, a malformed response, or a certificate that could still be valid but whose key
   material couldn't be read. An expired certificate whose key material can't be read
-  doesn't count, since it couldn't be the local key's usable match anyway. Setup stops and
-  does not generate a certificate.
+  doesn't count, since it couldn't be the local key's usable match anyway.
 
-Anything other than `0` or `1`, including a crash, is treated by setup as "could not
-check".
+Treat anything other than `0` or `1`, including a crash, as "could not check".
 
 ## Security
 
@@ -103,14 +105,16 @@ is emitted.
 
 ## Common failures
 
-- **A private key is waiting under the pending account** — an earlier registration did
-  not finish, for example because Graph could not confirm it or the state file could
-  not be written. Re-run [`setup.sh`](../setup/setup-sh.md): it promotes that key if its
-  certificate is on the Blueprint, and otherwise registers a certificate for the same key.
-- **No local key** — this machine has never generated the Blueprint key; run
-  [`setup.sh`](../setup/setup-sh.md).
+- **A private key is waiting under the pending account** — a registration by an older
+  `setup.sh` did not finish. The wizard does not use that key: running
+  [`setup.sh`](../setup/setup-sh.md) now creates a new certificate when the older
+  `blueprint-private-key` has no certificate on the Blueprint.
+- **No local key** — this computer has no older single key. A computer set up by the
+  wizard keeps its key with its certificate instead; check it with
+  `./scripts/setup.sh --diagnose`.
 - **No match** — the certificate for the local key was removed from the Blueprint, or it
-  has expired; [`setup.sh`](../setup/setup-sh.md) adds a new one either way.
+  has expired; [`setup.sh`](../setup/setup-sh.md) then creates and registers a new one
+  for the agent.
 - **Exit `3`** — usually a transient Graph failure or a locked keystore; the message on
   stderr has the cause. Fix it and re-run.
 
@@ -118,9 +122,9 @@ is emitted.
 
 - [`list_blueprint_certs.py`](list-blueprint-certs-py.md) — enumerate the
   certificates registered on a Blueprint.
-- [`register_blueprint_cert.py`](register-blueprint-cert-py.md) — what setup runs when
-  this command exits `1`.
-- [`verify_blueprint_cert.py`](verify-blueprint-cert-py.md) — an operator tool that
-  checks whether a given thumbprint is registered. Setup does not call it.
-- [`setup.sh`](../setup/setup-sh.md) — the provisioning entry point that calls
-  this helper.
+- [`register_blueprint_cert.py`](register-blueprint-cert-py.md) — the older
+  registration, for the same single key item.
+- [`verify_blueprint_cert.py`](verify-blueprint-cert-py.md) — checks whether a given
+  thumbprint is registered; the wizard runs it on every system.
+- [`setup.sh`](../setup/setup-sh.md) — the setup entry point for macOS and Linux. It no
+  longer calls this helper.

@@ -62,7 +62,6 @@ from entrabot.winsetup import certstep, hosts
 from entrabot.winsetup.certstep import CertStepError
 from entrabot.winsetup.console import Cancelled, Console
 from entrabot.winsetup.directory import (
-    SETUP_COMMAND,
     Access,
     Directory,
     LocalDeletion,
@@ -78,11 +77,11 @@ from entrabot.winsetup.helpers import Paths
 from entrabot.winsetup.rotation import RETIRING_KEY
 from entrabot.winsetup.state import IdentityError, read_state
 from entrabot.winsetup.wizard import World
+from entrabot.winsetup.words import words_for
 
 EXIT_OK, EXIT_INCOMPLETE, EXIT_USAGE, EXIT_CANCELLED = 0, 1, 2, 130
 
 SERVER_NAME = "entrabot"
-TEARDOWN_COMMAND = r"powershell -ExecutionPolicy Bypass -File scripts\teardown-windows.ps1"
 _ENTRA_CERTS = (
     "Microsoft Entra admin center > App registrations > All applications > {name} > "
     "Certificates & secrets"
@@ -194,7 +193,8 @@ class _SetupCredential:
     """What will happen to this computer's setup (Provisioner) certificate, decided before
     the plan is shown so the plan, the action and the report all say the same thing."""
 
-    decision: str  # "none" | "retire" | "keep-asked" | "keep-other-agent" | "unknown"
+    # "none" | "retire" | "keep-asked" | "keep-other-agent" | "keep-other-folder" | "unknown"
+    decision: str
     certs: list[Any] = field(default_factory=list)
     problem: str = ""
 
@@ -244,6 +244,10 @@ def _storage_account(endpoint: str) -> str:
     return host.split(".")[0]
 
 
+def _capitalised(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
 def _inside(path: Path, parent: Path) -> bool:
     try:
         path.resolve().relative_to(parent.resolve())
@@ -267,6 +271,9 @@ class _Teardown:
         self.console = console
         self.paths = paths
         self.world = world
+        # The world says which system this is, so its commands are the ones messages name.
+        console.words = words_for(world.platform)
+        self.words = console.words
         self.delete_agent = delete_agent
         self.purge_data = purge_data
         self.keep_setup_credential = keep_setup_credential
@@ -291,6 +298,30 @@ class _Teardown:
         self.left_for_setup: list[_OldSetupCert] = []
         self.state_note: dict[str, str] = {}
 
+    # ── Words that differ by system ──────────────────────────────────────────
+
+    def _keep_flag(self) -> str:
+        return self.words.flag("keep-setup-credential")
+
+    def _script(self, name: str) -> str:
+        return f"scripts\\{name}" if self.words.windows else f"scripts/{name}"
+
+    def _store_place(self) -> str:
+        return "Windows certificate store" if self.words.windows else self.words.key_store
+
+    def _delete_by_hand(self, named: str) -> str:
+        """Where the person deletes a certificate (and its key) themselves. *named*: what it
+        is called there on Windows, ``Entrabot Provisioner ...`` or ``Entrabot Blueprint ...``."""
+        if self.words.windows:
+            return f"delete it in certmgr.msc > Personal > Certificates (named '{named}')"
+        item = "entrabot-provisioner-cert" if "Provisioner" in named else "entrabot-blueprint-cert"
+        app = (
+            "Keychain Access"
+            if self.words.platform == "darwin"
+            else "your keyring manager (Passwords and Keys, or KWallet Manager)"
+        )
+        return f"delete it in {app} (search for {item})"
+
     # ── What is here ─────────────────────────────────────────────────────────
 
     def _look_up(self, sha1: str, *, retiring: bool = False) -> _Cert:
@@ -312,7 +343,7 @@ class _Teardown:
         retiring = env.get(RETIRING_KEY, "").strip().upper()
         retiring = retiring if is_sha1(retiring) and retiring != sha1 else ""
         try:
-            self.wincert = self.world.wincert or certstep.load_wincert()
+            self.wincert = self.world.wincert or certstep.load_cert_store(self.world.platform)
         except CertStepError as exc:
             self.wincert_problem = str(exc)
         certs = [self._look_up(sha1)] if sha1 else []
@@ -350,15 +381,22 @@ class _Teardown:
         wincert = self.wincert
         if wincert is None or not facts.tenant_id:
             return _SetupCredential("none")
+        # macOS and Linux keep the setup certificate as its own key store item per tenant
+        # (scripts/entra_provisioning.py), outside the list of Blueprint certificates.
+        setup_certs = getattr(wincert, "setup_certs", None)
         try:
             every = wincert.list_certs()
+            certs = (
+                list(setup_certs(facts.tenant_id))
+                if setup_certs is not None
+                else [
+                    cert
+                    for cert in every
+                    if cert.friendly_name == f"Entrabot Provisioner {facts.tenant_id}"
+                ]
+            )
         except wincert.WinCertError as exc:
             return _SetupCredential("unknown", problem=str(exc))
-        certs = [
-            cert
-            for cert in every
-            if cert.friendly_name == f"Entrabot Provisioner {facts.tenant_id}"
-        ]
         if not certs:
             return _SetupCredential("none")
         if self.keep_setup_credential:
@@ -368,7 +406,35 @@ class _Teardown:
             cert.friendly_name.startswith("Entrabot Blueprint ") and cert.friendly_name != mine
             for cert in every
         )
-        return _SetupCredential("keep-other-agent" if another_agent else "retire", certs)
+        # macOS and Linux: an agent set up before the wizard has no certificate in the store,
+        # only its key in the account's older single slot. It needs the setup certificate too.
+        older_key = getattr(wincert, "older_key_is_someone_elses", None)
+        if not another_agent and older_key is not None:
+            try:
+                another_agent = bool(older_key([cert.sha1 for cert in facts.certs]))
+            except wincert.WinCertError as exc:
+                return _SetupCredential("unknown", problem=str(exc))
+        if another_agent:
+            return _SetupCredential("keep-other-agent", certs)
+        # The same agent set up in a second folder on this account has a certificate of its
+        # own under the same name. Found on a real run: disconnecting one folder retired the
+        # setup certificate, and the other folder's status and rotation stopped working.
+        own = {cert.sha1.upper() for cert in facts.certs}
+        elsewhere = any(
+            cert.friendly_name == mine and cert.sha1_hex.upper() not in own for cert in every
+        )
+        return _SetupCredential("keep-other-folder" if elsewhere else "retire", certs)
+
+    def _set_up_before_the_wizard(self, facts: _Facts) -> bool:
+        """macOS and Linux: do the settings name an agent but no certificate, while the
+        account's older single key store slot holds a key?"""
+        read_key = getattr(self.wincert, "legacy_private_key_pem", None)
+        if facts.cert_sha1 or not facts.blueprint_app_id or read_key is None:
+            return False
+        try:
+            return bool(read_key())
+        except self.wincert.WinCertError:
+            return False  # the store can't be read: the ordinary path says so
 
     def _has_data(self) -> bool:
         root = self.paths.data_root
@@ -385,11 +451,24 @@ class _Teardown:
         if not something_here and not (self.purge_data and self._has_data()):
             console.ok("Nothing to remove. This computer is not connected to an agent.")
             return EXIT_OK
+        if self._set_up_before_the_wizard(facts):
+            # macOS and Linux only. The settings name no certificate, and the account's one
+            # older key may be this agent's or another's: nothing here can tell which, and a
+            # disconnect that left the key and its Blueprint certificate behind would say
+            # "disconnected" about a computer that can still sign the agent in.
+            console.fail(
+                "This computer was set up by an earlier version of Entrabot's setup, which "
+                "kept the agent's sign-in key as the only one for this account. Teardown "
+                "can't tell from that whether the key is this agent's, so nothing was changed.",
+                fix=f"Run {self.words.setup} once: it keeps the agent, and stores its key as "
+                "this agent's own. Then run teardown again.",
+            )
+            return EXIT_INCOMPLETE
         if self.delete_agent and not facts.upn:
             console.fail(
                 "This computer's settings don't say which agent to delete.",
                 fix="Nothing was changed. To disconnect this computer only, run teardown "
-                "without -DeleteAgent.",
+                f"without {self.words.flag('delete-agent')}.",
             )
             return EXIT_USAGE
 
@@ -410,7 +489,7 @@ class _Teardown:
         if not console.interactive and not console.assume_yes:
             console.fail(
                 "Teardown needs a yes before it removes anything.",
-                fix="Run it in a terminal and answer the question, or add -Yes (--yes).",
+                fix=f"Run it in a terminal and answer the question, or add {self.words.yes_hint}.",
             )
             return EXIT_USAGE
         try:
@@ -514,17 +593,23 @@ class _Teardown:
                 "too. It is removed from the Provisioner app in Microsoft Entra and deleted "
                 "here with its private key. Setup signs in with it and it can manage "
                 "applications in your tenant, so it does not stay on a computer you are "
-                "done with. (About to set up again? Add -KeepSetupCredential.)"
+                f"done with. (About to set up again? Add {self._keep_flag()}.)"
             )
         elif self.setup.decision == "keep-asked":
             console.bullet(
                 "Setup credential: this computer's setup (Provisioner) certificate is kept, "
-                "as asked (-KeepSetupCredential). It can manage applications in your tenant."
+                f"as asked ({self._keep_flag()}). It can manage applications in your tenant."
             )
         elif self.setup.decision == "keep-other-agent":
             console.bullet(
                 "Setup credential: this computer's setup (Provisioner) certificate is kept: "
                 "another Entrabot agent on this computer still uses it."
+            )
+        elif self.setup.decision == "keep-other-folder":
+            console.bullet(
+                "Setup credential: this computer's setup (Provisioner) certificate is kept: "
+                "this agent has another certificate on this computer, as it does when it is "
+                "set up in a second folder here, and that folder still uses it."
             )
         self._plan_old_setup_certs()
         if access.problem and (facts.cert_sha1 or self.delete_agent or self.old_setup_certs):
@@ -653,7 +738,8 @@ class _Teardown:
             console.fail(f"The agent was NOT deleted. {access.problem[0]}")
             self.report.todo.append(
                 f"The agent {facts.agent} was NOT deleted: {access.problem[0]} "
-                f"{access.problem[1]} Then run teardown with -DeleteAgent again."
+                f"{access.problem[1]} Then run teardown with "
+                f"{self.words.flag('delete-agent')} again."
             )
             return False
         result = access.helpers.script(
@@ -667,7 +753,7 @@ class _Teardown:
             console.show_tail(result)
             self.report.todo.append(
                 f"The agent {facts.agent} was NOT deleted. Fix what the message above says, "
-                f"then run:  {TEARDOWN_COMMAND} -DeleteAgent"
+                f"then run:  {self.words.teardown} {self.words.flag('delete-agent')}"
             )
             return False
         console.ok(f"Deleted the agent {facts.agent} from your tenant")
@@ -922,19 +1008,19 @@ class _Teardown:
             self.report.todo.append(
                 f"This computer's setup (Provisioner) certificate could not be looked up: "
                 f"{setup.problem}. If one is still here it can manage applications in your "
-                "tenant: delete it in certmgr.msc > Personal > Certificates (named 'Entrabot "
-                "Provisioner ...') and remove it in the "
+                f"tenant: {self._delete_by_hand('Entrabot Provisioner ...')} and remove it in "
+                "the "
                 + _ENTRA_CERTS.format(name="EntraBot Agent ID Provisioner")
                 + "."
             )
             return
         if setup.decision == "keep-asked":
-            self.console.info("Kept the setup certificate, as asked (-KeepSetupCredential).")
+            self.console.info(f"Kept the setup certificate, as asked ({self._keep_flag()}).")
             self.report.kept.append(
                 "This computer's setup (Provisioner) certificate, as asked "
-                "(-KeepSetupCredential). It can manage applications in your tenant, so do "
-                "not leave it on a computer you are done with: delete it in certmgr.msc > "
-                "Personal > Certificates (named 'Entrabot Provisioner ...') and remove it in "
+                f"({self._keep_flag()}). It can manage applications in your tenant, so do "
+                "not leave it on a computer you are done with: "
+                f"{self._delete_by_hand('Entrabot Provisioner ...')} and remove it in "
                 "the " + _ENTRA_CERTS.format(name="EntraBot Agent ID Provisioner") + "."
             )
             return
@@ -945,6 +1031,23 @@ class _Teardown:
             self.report.kept.append(
                 "This computer's setup (Provisioner) certificate: another Entrabot agent on "
                 "this computer still uses it. It is retired when that agent is torn down."
+            )
+            return
+        if setup.decision == "keep-other-folder":
+            self.console.info(
+                "Kept the setup certificate: this agent is set up somewhere else on this "
+                "computer too."
+            )
+            self.report.kept.append(
+                "This computer's setup (Provisioner) certificate: this agent has another "
+                f"certificate in this account's {self._store_place()}, as it does when it is "
+                "set up in a second folder on this computer, and that folder's status, "
+                "certificate rotation and teardown need the setup certificate. It is retired "
+                "when the last of them is torn down. It can manage applications in your "
+                "tenant: if there is no such folder, "
+                f"{self._delete_by_hand('Entrabot Provisioner ...')} and remove it in the "
+                + _ENTRA_CERTS.format(name="EntraBot Agent ID Provisioner")
+                + "."
             )
             return
         if setup.decision != "retire" or wincert is None:
@@ -972,9 +1075,9 @@ class _Teardown:
                 self.report.todo.append(
                     f"This computer's setup (Provisioner) certificate (ending {tail}) could not "
                     f"be deleted from this computer: {detail}. It, and its private key, may "
-                    "still be in the Windows certificate store, and it can manage applications "
-                    "in your tenant. Delete it in certmgr.msc > Personal > Certificates (named "
-                    "'Entrabot Provisioner ...')."
+                    f"still be in the {self._store_place()}, and it can manage applications "
+                    "in your tenant. "
+                    + _capitalised(self._delete_by_hand("Entrabot Provisioner ...") + ".")
                     + (
                         f" It is also still listed on the Provisioner app: remove it in the "
                         f"{provisioner_certs}."
@@ -1048,7 +1151,7 @@ class _Teardown:
             return
         self.report.kept.append(
             f"The agent's cloud memory ({endpoint}/{container}) was not deleted. To delete "
-            "it:  python scripts\\deprovision_blob_storage.py "
+            f"it:  python {self._script('deprovision_blob_storage.py')} "
             f"--storage-account {_storage_account(endpoint)} --container {container}"
         )
 
@@ -1100,8 +1203,7 @@ class _Teardown:
             self.report.todo.append(
                 f"{cert.label} (thumbprint ending {tail}) could not be deleted from this "
                 f"computer: {detail}. It, and its private key, may still be in this account's "
-                "Windows certificate store: delete it in certmgr.msc > Personal > Certificates "
-                "(named 'Entrabot Blueprint ...')."
+                f"{self._store_place()}: {self._delete_by_hand('Entrabot Blueprint ...')}."
             )
         return gone
 
@@ -1211,12 +1313,16 @@ class _Teardown:
             self.report.kept.append(
                 f"Entrabot's private copy of Python in {root}: this command is running from "
                 "it. Delete that folder by hand to remove it too; the project's .venv then "
-                f"stops working until {SETUP_COMMAND} rebuilds it."
+                f"stops working until {self.words.setup} rebuilds it."
+            )
+        elif self.words.windows:
+            self.report.kept.append(
+                "The project's .venv folder. If it was built on Entrabot's private copy of "
+                f"Python it no longer works; {self.words.setup} rebuilds it."
             )
         else:
             self.report.kept.append(
-                "The project's .venv folder. If it was built on Entrabot's private copy of "
-                f"Python it no longer works; {SETUP_COMMAND} rebuilds it."
+                f"The project's .venv folder. {self.words.setup} rebuilds what it needs."
             )
         if kept_log:
             self.report.kept.append(f"This run's log: {log_file}")
@@ -1254,7 +1360,7 @@ class _Teardown:
         if not self.delete_agent:
             console.info(
                 f"The agent {facts.agent} still exists in your tenant. To use it from this "
-                f"computer again, run {SETUP_COMMAND}."
+                f"computer again, run {self.words.setup}."
             )
         if report.todo:
             console.blank()

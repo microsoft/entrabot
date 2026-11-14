@@ -36,7 +36,7 @@ import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -543,13 +543,20 @@ _CERT_CHECK_NAME = "Blueprint cert in OS keystore"
 def _check_cert_in_windows_store(config: EntraBotConfig | None) -> Check:
     """Windows: the certificate named in .env is in this user's store, in date, and
     its (non-exportable) key actually signs. Credential Manager is not involved."""
+    from entrabot.platform import wincert
+
+    return _check_cert_in_store(config, wincert, "certificate store")
+
+
+def _check_cert_in_store(config: EntraBotConfig | None, wincert: Any, place: str) -> Check:
+    """The certificate named in .env is in the store (``wincert`` on Windows, ``keycert`` on
+    macOS and Linux, passed as *wincert*), in date, and its private key signs for it."""
     if config is None:
         return Check(
             name=_CERT_CHECK_NAME,
             status="skip",
             detail="No configuration to check the certificate against.",
         )
-    from entrabot.platform import wincert
 
     remediation = f"Run {_setup_command()} as the user who runs Entrabot."
     sha1 = config.blueprint_cert_sha1
@@ -559,7 +566,7 @@ def _check_cert_in_windows_store(config: EntraBotConfig | None) -> Check:
         return Check(
             name=_CERT_CHECK_NAME,
             status="fail",
-            detail=f"Could not read the certificate store: {exc}",
+            detail=f"Could not read the {place}: {exc}",
             remediation=remediation,
         )
     if not health.usable:
@@ -575,7 +582,13 @@ def _check_cert_in_windows_store(config: EntraBotConfig | None) -> Check:
             name=_CERT_CHECK_NAME,
             status="warn",
             detail=health.message,
-            remediation=f"Re-run {_setup_command()} to renew the certificate before it expires.",
+            # Setup reuses a certificate that still works: replacing one early is rotation's job.
+            remediation=(
+                f"Re-run {_setup_command()} to renew the certificate before it expires."
+                if _is_windows()
+                else "Run ./scripts/setup.sh --rotate-cert to replace the certificate before it "
+                "expires."
+            ),
         )
     return Check(
         name=_CERT_CHECK_NAME,
@@ -588,6 +601,12 @@ def _check_cert_in_keystore(config: EntraBotConfig | None = None) -> Check:
     """Default cert presence check. Tests patch this for hermeticity."""
     if _is_windows():
         return _check_cert_in_windows_store(config)
+    if config is not None and config.blueprint_cert_sha1:
+        # macOS and Linux, set up by the wizard: this agent's own keystore item. The
+        # account's single key below is an older setup's, and may be another agent's.
+        from entrabot.platform import keycert
+
+        return _check_cert_in_store(config, keycert, "key store")
     try:
         from entrabot.platform import get_credential_store
     except Exception as exc:  # pragma: no cover — import failures are platform-level

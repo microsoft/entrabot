@@ -178,6 +178,15 @@ def find_claude(
         native = Path(env["USERPROFILE"]) / ".local" / "bin" / "claude.exe"
         if native.is_file():
             return native
+    if (platform or sys.platform) != "win32" and env.get("HOME"):
+        # Where Claude Code's own installer puts it on macOS and Linux. A new terminal has
+        # it on PATH; the one setup is running in may have been opened before the install.
+        for native in (
+            Path(env["HOME"]) / ".local" / "bin" / "claude",
+            Path(env["HOME"]) / ".claude" / "local" / "claude",
+        ):
+            if native.is_file():
+                return native
     return None
 
 
@@ -258,7 +267,9 @@ def hook_self_test(
         elif bash is None:
             return HookTest(
                 "fail",
-                "The project's hooks run under Git Bash, and Git for Windows was not found.",
+                "The project's hooks run under Git Bash, and Git for Windows was not found."
+                if console.words.windows
+                else "The project's hooks run under bash, and bash was not found on PATH.",
             )
         else:
             argv = [str(bash), "-c", hook.command]

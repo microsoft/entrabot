@@ -51,4 +51,11 @@ if [ -f "$PROJECT_ROOT/.env" ]; then
     set +a
 fi
 
+# Setup installs its own Azure CLI when the computer has none (~/.entrabot/tools/azure-cli).
+# It is not on PATH, so it is used here when no other az is.
+if ! command -v az >/dev/null && [ -x "${HOME:-}/.entrabot/tools/azure-cli/bin/az" ]; then
+    PATH="$HOME/.entrabot/tools/azure-cli/bin:$PATH"
+    export PATH
+fi
+
 exec "$VENV_PYTHON" "$PROJECT_ROOT/scripts/show_agent_status.py" "$@"

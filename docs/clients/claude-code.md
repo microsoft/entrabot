@@ -8,6 +8,8 @@ Setup writes a project-local `.mcp.json` that registers the `entrabot` stdio ser
 claude --dangerously-load-development-channels server:entrabot
 ```
 
+`./start-entrabot.sh` (macOS and Linux) and `start-entrabot.cmd` (Windows), in the Entrabot folder, run this command for you.
+
 The flag is required even when `.mcp.json` already lists `entrabot` as an MCP server — it's not a substitute for registration, and registration alone isn't a substitute for it. Without the flag, Claude Code loads the tools normally but does not route Entrabot's `notifications/claude/channel` push into next-turn context, so inbound Teams messages and emails never reach the model as channel pushes. `server:entrabot` is the MCP server name from `.mcp.json`, not a package or publication identifier — the double dash matters, since a single dash is silently treated as prompt text.
 
 ## Incoming messages

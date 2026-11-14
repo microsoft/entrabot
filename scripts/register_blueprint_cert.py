@@ -1,8 +1,12 @@
 """Generate this machine's Blueprint certificate and register it on the Blueprint.
 
-setup.sh Step 6 calls this when the machine has no certificate that is still
-registered. By default it ADDS to the Blueprint and never removes a certificate.
-``--remove-all-existing-certs`` is the only way to replace the list.
+An operator's tool for a macOS or Linux computer whose key is in the account's older single
+key store slot (``entrabot`` / ``blueprint-private-key``). ``scripts/setup.sh`` called it
+before it started the setup wizard; the wizard keeps each certificate with its key as its
+own key store item (``entrabot.platform.keycert``) and registers it with
+``register_windows_blueprint_cert.py`` instead. By default this script ADDS to the Blueprint
+and never removes a certificate. ``--remove-all-existing-certs`` is the only way to replace
+the list.
 
 The private key's route is what keeps a failure from locking anyone out:
 

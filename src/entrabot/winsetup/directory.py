@@ -30,6 +30,8 @@ from entrabot.winsetup.azcli import Account, AzCli
 from entrabot.winsetup.console import Console
 from entrabot.winsetup.helpers import RESULT_MARKER, Helpers, Paths, marked_line
 
+# The Windows spelling, kept for code written against it: messages take the command from
+# ``console.words.setup``, which is this system's.
 SETUP_COMMAND = r"scripts\setup-windows.cmd"
 
 RemovalStatus = Literal["gone", "unchanged", "unconfirmed", "no-access"]
@@ -246,7 +248,19 @@ def key_removal_advice(ksp: str) -> str:
     """How to delete a private key by hand once its certificate is gone.
 
     Needs confirmation on real Windows: the certutil invocation for each key store.
+    On macOS and Linux a certificate and its key are one key store item, named for the app.
     """
+    if ksp == "keychain":
+        return (
+            "To remove it by hand, open Keychain Access, search for entrabot, and delete the "
+            "item that belonged to this certificate."
+        )
+    if ksp == "keyring":
+        return (
+            "To remove it by hand, open your keyring manager (Passwords and Keys, or KWallet "
+            "Manager), search for entrabot, and delete the item that belonged to this "
+            "certificate."
+        )
     provider = _KEY_PROVIDERS.get(ksp)
     where = f'-csp "{provider}" ' if provider else ""
     return (
@@ -318,15 +332,16 @@ class Access:
     @property
     def problem(self) -> tuple[str, str] | None:
         """Why Microsoft Entra can't be reached from here, as (what, fix), else None."""
+        setup = self.helpers.console.words.setup
         if self.az is None:
             return (
                 "The Azure CLI (Microsoft's sign-in tool) was not found on this computer.",
-                f"Run {SETUP_COMMAND}: it installs it and signs you in.",
+                f"Run {setup}: it installs it and signs you in.",
             )
         if self.account is None:
             return (
                 "You are not signed in to Microsoft.",
-                f"Run {SETUP_COMMAND}: it signs you in. Then run this again.",
+                f"Run {setup}: it signs you in. Then run this again.",
             )
         return None
 

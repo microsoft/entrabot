@@ -55,26 +55,48 @@ def test_windows_setup_does_not_require_a365_cli_unless_work_iq_is_requested() -
     assert "scripts\\prereqs-windows.ps1 -WithWorkIq" in script
 
 
-def test_unix_setup_can_install_a365_cli_when_requested() -> None:
+def test_unix_setup_switches_work_iq_on_without_the_a365_cli() -> None:
+    # setup.sh used to install Microsoft's Agent 365 CLI (through a .NET SDK), need
+    # PowerShell 7, write a365.config.json and run three a365 commands. It now starts the
+    # setup wizard, which writes the manifest from the package's catalog, runs
+    # ensure_a365_work_iq_permissions.py and checks the agent's token scopes itself
+    # (entrabot.winsetup.workiq), exactly as on Windows. Both flags ask for that.
     script = read_script("scripts/setup.sh")
 
-    assert "--with-a365-work-iq" in script
-    assert "WITH_A365_WORK_IQ=false" in script
-    assert "dotnet tool install --global Microsoft.Agents.A365.DevTools.Cli" in script
-    assert "dotnet tool update --global Microsoft.Agents.A365.DevTools.Cli" in script
-    assert "--agent-user-upn=*" in script
-    assert 'export ENTRABOT_AGENT_USER_UPN="$AGENT_USER_UPN"' in script
-    assert 'export _ENTRABOT_UPN_SUFFIX="$UPN_SUFFIX"' in script
+    assert "--configure-a365-work-iq)    ARGS+=(--configure-a365-work-iq)" in script
+    assert "--with-a365-work-iq)" in script and "--a365-agent-name=*)" in script
+    for gone in (
+        "dotnet tool",
+        "Microsoft.Agents.A365.DevTools.Cli",
+        "pwsh",
+        "a365 setup",
+        "a365 develop",
+        "a365.config.json",
+        "ENTRABOT_ASSIGN_WORK_IQ_LICENSE",
+    ):
+        assert gone not in script, gone
+    wizard = read_script("src/entrabot/winsetup/workiq.py")
+    assert 'PERMISSIONS_SCRIPT = "ensure_a365_work_iq_permissions.py"' in wizard
 
 
-def test_unix_setup_can_create_new_chain_with_explicit_agent_user_upn() -> None:
+def test_unix_setup_passes_identity_flags_to_the_wizard() -> None:
+    # --new with an explicit Agent User UPN, or a suffix: the wizard hands them to
+    # create_entra_agent_ids.py (entrabot.winsetup.state.identity_environment).
     script = read_script("scripts/setup.sh")
+    state = read_script("src/entrabot/winsetup/state.py")
 
-    assert "--new --agent-user-upn=entrabot-agent@yourtenant.onmicrosoft.com" in script
-    new_branch = script[script.index('if [ "$NEW_CHAIN" = true ]') :]
-    assert 'if [ -n "$AGENT_USER_UPN" ]; then' in new_branch
-    assert 'export ENTRABOT_AGENT_USER_UPN="$AGENT_USER_UPN"' in new_branch
-    assert 'elif [ -z "$UPN_SUFFIX" ]; then' in new_branch
+    assert '--new)                       ARGS+=(--new-chain)' in script
+    assert '--agent-user-upn=*)          ARGS+=(--agent-user-upn "$(value_of "$arg")")' in script
+    assert '--with-upn-suffix=*)         ARGS+=(--upn-suffix "$(value_of "$arg")")' in script
+    assert "ENTRABOT_AGENT_USER_UPN" in state and "_ENTRABOT_UPN_SUFFIX" in state
+
+
+def test_macos_prereqs_no_longer_install_the_a365_cli_unless_asked() -> None:
+    script = read_script("scripts/prereqs-macos.sh")
+
+    assert "SKIP_A365=true\nSKIP_PWSH=true\n" in script  # the default
+    assert "--with-a365-cli) SKIP_A365=false; SKIP_PWSH=false ;;" in script
+    assert "--core-only) SKIP_A365=true; SKIP_PWSH=true ;;" in script  # still accepted
 
 
 def test_unix_teardown_supports_targeted_upn_and_preserves_cloud_storage() -> None:
@@ -89,57 +111,6 @@ def test_unix_teardown_supports_targeted_upn_and_preserves_cloud_storage() -> No
     assert "az storage container delete" not in script
 
 
-def test_unix_setup_can_run_interactive_a365_work_iq_configuration() -> None:
-    script = read_script("scripts/setup.sh")
-
-    assert "--configure-a365-work-iq" in script
-    assert "CONFIGURE_A365_WORK_IQ=false" in script
-    assert 'if [ "$CONFIGURE_A365_WORK_IQ" = true ] && ! command -v pwsh' in script
-    assert "PowerShell 7+ (pwsh)" in script
-    assert "brew install powershell" in script
-    assert "brew install --cask powershell" not in script
-    assert 'A365_AGENT_NAME="EntraBot Code Agent"' in script
-    assert "--a365-agent-name=*" in script
-    assert "ensure_a365_tooling_manifest" in script
-    assert 'printf \'{"mcpServers":[]}' in script
-    assert "write_a365_config" in script
-    assert 'az ad sp show --id "$AGENT_ID" --query displayName -o tsv' in script
-    assert '"agentBlueprintId": blueprint_app_id' in script
-    assert '"agentIdentityDisplayName": agent_identity_display_name' in script
-    assert '"deploymentProjectPath": str(project_root)' in script
-    assert "find_local_blueprint_cert.py" in script
-    assert (
-        "A365_WORK_IQ_MCP_SERVERS=(mcp_WordServer mcp_ODSPRemoteServer mcp_ExcelServer)"
-        in script
-    )
-    assert (
-        'a365 develop add-mcp-servers "${A365_WORK_IQ_MCP_SERVERS[@]}" '
-        '--project-path "$PROJECT_ROOT"'
-        in script
-    )
-    assert "a365 setup requirements" in script
-    assert 'a365 setup blueprint --agent-name "$A365_AGENT_NAME"' not in script
-    assert 'a365 setup permissions mcp --agent-name "$A365_AGENT_NAME"' not in script
-    assert "a365 setup permissions mcp" in script
-    assert "A365_PERMISSIONS_LOG=" in script
-    assert "OAuth2 grants failed" in script
-    assert "ensure_a365_work_iq_permissions.py" in script
-    assert '"$SCRIPT_PYTHON" "$PROJECT_ROOT/scripts/ensure_a365_work_iq_permissions.py"' in script
-    assert '"$SCRIPT_PYTHON" "$PROJECT_ROOT/scripts/spike_a365_work_iq.py"' in script
-    assert 'success "A365 Work IQ Word and Excel manifest configured"' in script
-    assert '--blueprint-app-id "$BLUEPRINT_APP_ID"' in script
-    config_call = script.index("write_a365_config")
-    requirements_call = script.index("a365 setup requirements", config_call)
-    preflight_call = script.index("ensure_a365_work_iq_permissions.py", config_call)
-    permissions_call = script.index("a365 setup permissions mcp", config_call)
-    assert config_call < requirements_call < preflight_call < permissions_call
-    assert script.index('success "Agent User:') < script.rindex(
-        'if [ "$CONFIGURE_A365_WORK_IQ" = true ]'
-    )
-    assert "scripts/spike_a365_work_iq.py" in script
-    assert 'fail "A365 Work IQ manifest validation failed"' in script
-
-
 def test_create_entra_agent_ids_allows_explicit_agent_user_upn() -> None:
     script = read_script("scripts/create_entra_agent_ids.py")
 
@@ -148,13 +119,14 @@ def test_create_entra_agent_ids_allows_explicit_agent_user_upn() -> None:
     assert "Using explicit Agent User UPN" in script
 
 
-def test_unix_setup_preflights_copilot_license_for_work_iq() -> None:
-    script = read_script("scripts/setup.sh")
+def test_the_wizard_asks_for_a_copilot_licence_only_when_work_iq_is_asked_for() -> None:
+    # What setup.sh did with ENTRABOT_ASSIGN_WORK_IQ_LICENSE and its Copilot preflight is the
+    # wizard's on every system now.
+    wizard = read_script("src/entrabot/winsetup/wizard.py")
 
-    assert "check_copilot_license_availability" in script
-    assert "Copilot license available" in script
-    assert 'if [ "$WITH_A365_WORK_IQ" = true ]; then' in script
-    assert "ENTRABOT_ASSIGN_WORK_IQ_LICENSE=1" in script
+    assert 'env.pop("ENTRABOT_ASSIGN_WORK_IQ_LICENSE", None)' in wizard
+    assert 'env["ENTRABOT_ASSIGN_WORK_IQ_LICENSE"] = "1"' in wizard
+    assert "check_copilot_license_availability" in read_script("src/entrabot/winsetup/helpers.py")
 
 
 def test_windows_setup_forwards_work_iq_configuration_to_the_wizard() -> None:

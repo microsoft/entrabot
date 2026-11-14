@@ -8,27 +8,25 @@ Entrabot gives an autonomous agent its own Microsoft Entra Agent Identity and Ag
 
 ## macOS or Linux
 
+Setup needs Python 3.12 or newer and nothing else first: no Azure CLI and no `az login`. Clone or download the repository, then run setup from a terminal in it:
+
 ```bash
-# 1. Clone the repository
 git clone https://github.com/microsoft/entrabot.git
 cd entrabot
-
-# 2. Install platform prerequisites
-./scripts/prereqs-macos.sh   # macOS
-# Linux: install Python 3.12+, Azure CLI, git, and your Secret Service/keyring
-
-# 3. Create a fresh identity chain
-# Replace "workstation" with a short unique label for this Agent User.
-./scripts/setup.sh --new --with-upn-suffix=workstation
+./scripts/setup.sh
 ```
 
-To attach this device to an existing Blueprint instead:
+Setup builds `.venv`, then asks a few questions (each has a suggested answer), signs you in to Microsoft, and creates the agent. To answer up front instead:
 
 ```bash
-./scripts/setup.sh --use-blueprint=<blueprint-app-id>
+# Replace "workstation" with a short unique label for this Agent User.
+./scripts/setup.sh --new --with-upn-suffix=workstation --yes
+./scripts/setup.sh --use-blueprint=<blueprint-app-id> --yes
 ```
 
-Use `--agent-user-upn=<existing-upn>` or `--with-upn-suffix=<label>` when the Blueprint has multiple Agent Users and auto-discovery would be ambiguous. Run `./scripts/setup.sh --help` for storage, Work IQ, migration, and status options.
+Use `--agent-user-upn=<existing-upn>` or `--with-upn-suffix=<label>` when the Blueprint has multiple Agent Users and auto-discovery would be ambiguous. Run `./scripts/setup.sh --help` for every option.
+
+The agent's signing key is kept in your login keychain on a Mac, or a Secret Service keyring on Linux; setup checks that it can use it before it changes anything. The wizard on macOS and Linux has not yet been run end to end against a real tenant. See [macOS and Linux installation](macos-linux.md) for what setup asks, what it installs, and its limits.
 
 ## Windows
 
@@ -65,19 +63,20 @@ A healthy Agent User token has `idtyp=user`, the Agent User's `oid`, and Microso
 
 ## Start the MCP host
 
-The setup script registers Entrabot with supported MCP hosts. For Claude Code channel notifications:
+The setup script registers Entrabot with supported MCP hosts. For Claude Code channel notifications, on macOS or Linux:
 
 ```bash
-claude --dangerously-load-development-channels server:entrabot
+./start-entrabot.sh
 ```
 
-On Windows, double-click `start-entrabot.cmd` in the Entrabot folder. It runs the same command.
+It runs `claude --dangerously-load-development-channels server:entrabot` in the Entrabot folder. On Windows, double-click `start-entrabot.cmd` in the Entrabot folder. It runs the same command.
 
 Then ask the host to call `whoami`. It should report the Agent User identity, not your human account.
 
 ## Next steps
 
 - [Prerequisites](prerequisites.md)
+- [macOS and Linux installation](macos-linux.md)
 - [Windows installation](windows.md)
 - [Setup script options](../reference/scripts/setup/setup-sh.md)
 - [Token flow](../reference/token-flows.md)

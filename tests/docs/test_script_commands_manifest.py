@@ -1,12 +1,12 @@
 """Validate docs/reference/scripts/commands.yml, the single source of
-truth for the 46 supported operator-facing commands documented on the
+truth for the 47 supported operator-facing commands documented on the
 public site. Each entry must:
   * declare all required manifest keys
   * reference a script that exists on disk (relative to repo root)
   * declare a category from the known set
   * declare a docs page under docs/reference/scripts/ that exists and
     contains all six required section headings
-  * be one of exactly 46 entries, with unique ids and unique paths
+  * be one of exactly 47 entries, with unique ids and unique paths
 """
 
 from tests.docs._helpers import DOCS_DIR, REPO_ROOT, load_commands_manifest
@@ -33,7 +33,7 @@ KNOWN_CATEGORIES = {
     "teardown",
 }
 
-EXPECTED_COMMAND_COUNT = 46
+EXPECTED_COMMAND_COUNT = 47
 
 
 def _entry_label(entry: dict, index: int) -> str:
@@ -63,7 +63,7 @@ def _level_2_headings(text: str) -> set[str]:
     return headings
 
 
-def test_manifest_has_exactly_46_commands():
+def test_manifest_has_exactly_47_commands():
     commands = load_commands_manifest()
     assert len(commands) == EXPECTED_COMMAND_COUNT, (
         f"Expected exactly {EXPECTED_COMMAND_COUNT} supported commands, "

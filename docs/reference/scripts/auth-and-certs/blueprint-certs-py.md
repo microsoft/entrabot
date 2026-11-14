@@ -99,9 +99,9 @@ code and message, never the token or key material.
 - **Two machines attaching in the same moment** — the read and the write aren't atomic,
   so one machine's new certificate can be lost. That machine's own verification doesn't
   see its certificate and reports it, and re-running setup there adds it again. The
-  per-user lock in [`register_blueprint_cert.py`](register-blueprint-cert-py.md) only
-  keeps two setups on the same machine from overlapping; this module takes no lock, and
-  nothing can lock across machines.
+  per-user lock in the older [`register_blueprint_cert.py`](register-blueprint-cert-py.md)
+  only keeps two of its runs on the same machine from overlapping; this module takes no
+  lock, and nothing can lock across machines.
 - **Graph rejects an existing entry** — sending back an entry as Graph returned it fails
   closed: Graph's error is reported and nothing changes.
 - **Removing several certificates one call at a time** — each `remove_key_credential` call
@@ -111,12 +111,17 @@ code and message, never the token or key material.
 
 ## Related commands
 
-- [`register_blueprint_cert.py`](register-blueprint-cert-py.md) — registers this
-  machine's certificate on macOS and Linux.
-- [`deploy-windows.ps1`](../setup/deploy-windows-ps1.md) — the Windows rotation, which
-  uses `register_key_credential` and then `remove_key_credential`.
-- [`teardown-windows.ps1`](../teardown/teardown-windows-ps1.md) — the Windows teardown,
-  which uses `remove_key_credentials` for the Blueprint.
+- [`register_windows_blueprint_cert.py`](register-windows-blueprint-cert-py.md) —
+  registers this machine's certificate for the setup wizard and rotation, on every
+  system.
+- [`register_blueprint_cert.py`](register-blueprint-cert-py.md) — the older macOS and
+  Linux registration, which setup no longer runs.
+- [`deploy-windows.ps1`](../setup/deploy-windows-ps1.md) and
+  `./scripts/setup.sh --rotate-cert` — rotation, which uses `register_key_credential`
+  and then `remove_key_credential`.
+- [`teardown-windows.ps1`](../teardown/teardown-windows-ps1.md) and
+  [`teardown.sh`](../teardown/teardown-sh.md) — teardown, which uses
+  `remove_key_credentials` for the Blueprint.
 - [`verify_blueprint_cert.py`](verify-blueprint-cert-py.md),
   [`find_local_blueprint_cert.py`](find-local-blueprint-cert-py.md), and
   [`list_blueprint_certs.py`](list-blueprint-certs-py.md) — the read-only checks built on

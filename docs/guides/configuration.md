@@ -18,8 +18,8 @@ Configuration is not a value frozen once at boot. `get_config()` calls `EntraBot
 | `ENTRABOT_BLUEPRINT_APP_ID` | Application (client) ID of the Agent Identity Blueprint app registration. |
 | `ENTRABOT_BLUEPRINT_OBJECT_ID` | Directory object ID of the Blueprint **application object** (not the BlueprintPrincipal/service-principal object). This is the object ID you get back when creating the application registration itself. |
 | `ENTRABOT_BLUEPRINT_CERT_THUMBPRINT` | Base64url-encoded SHA-256 DER thumbprint of the Blueprint's signing certificate. Used as the `x5t#S256` header on every JWT client-assertion, on every platform (macOS, Linux, Windows). |
-| `ENTRABOT_BLUEPRINT_CERT_SHA1` | 40-character hex SHA-1 thumbprint of the same certificate. Used only on Windows to locate the certificate (and its non-exportable CNG private key) in the Windows Certificate Store — the store indexes by SHA-1, not SHA-256. |
-| `ENTRABOT_BLUEPRINT_KSP` | Where setup created the Windows key: `tpm` or `software`. Recorded for reference; the runtime does not read it. |
+| `ENTRABOT_BLUEPRINT_CERT_SHA1` | 40-character hex SHA-1 thumbprint of the same certificate. Locates the certificate and its private key in this account's store: on Windows the certificate and its non-exportable CNG key in the Windows Certificate Store, which indexes by SHA-1, not SHA-256; on macOS and Linux the Keychain or keyring item that holds the certificate and its key together. Without it, macOS and Linux sign with the account's older single key (a setup from before the wizard). |
+| `ENTRABOT_BLUEPRINT_KSP` | Where setup created the key: `tpm` or `software` on Windows, `keychain` or `keyring` on macOS and Linux. Recorded for reference; the runtime does not use it. |
 | `ENTRABOT_AGENT_ID` | Agent Identity's application (client) ID — the `client_id` used in the Hop 1 → Hop 2 token exchange. |
 | `ENTRABOT_AGENT_OBJECT_ID` | Agent Identity's service-principal object ID. |
 | `ENTRABOT_AGENT_USER_ID` | Agent User's directory object ID (the real Entra user account the agent authenticates as). |

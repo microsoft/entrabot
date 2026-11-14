@@ -52,17 +52,27 @@ def _run_az(args: list[str], *, capture: bool = True) -> subprocess.CompletedPro
     )
 
 
-def delete_container(account: str, container: str) -> None:
+def delete_container(
+    account: str, container: str, resource_group: str = DEFAULT_RESOURCE_GROUP
+) -> None:
+    """Delete the container through the management plane, the way
+    ``provision_blob_storage.py`` creates it (``az storage container-rm``).
+
+    Found on a real run: the data-plane command used before (``az storage container
+    delete --auth-mode login --yes``) takes no ``--yes``, so it failed on every call, and
+    it needs a blob data role that the administrator who provisioned the storage does not
+    have by default.
+    """
     _eprint(f"  • Deleting container '{container}' on '{account}'...")
     res = _run_az([
-        "storage", "container", "delete",
-        "--account-name", account,
+        "storage", "container-rm", "delete",
+        "--storage-account", account,
+        "--resource-group", resource_group,
         "--name", container,
-        "--auth-mode", "login",
         "--yes",
     ])
     if res.returncode != 0:
-        raise RuntimeError(f"az storage container delete failed: {res.stderr.strip()}")
+        raise RuntimeError(f"az storage container-rm delete failed: {res.stderr.strip()}")
     _eprint("    ✓ deleted")
 
 
@@ -101,7 +111,7 @@ def deprovision(
     delete_resource_group: bool = False,
 ) -> None:
     """Delete blob storage resources in safe order: container → account → RG."""
-    delete_container(storage_account, container)
+    delete_container(storage_account, container, resource_group)
 
     if delete_account:
         delete_storage_account(storage_account, resource_group)

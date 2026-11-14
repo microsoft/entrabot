@@ -555,3 +555,37 @@ class TestCheckHosts:
             paths, ["copilot"], console, env={}, platform="win32", which=lambda name: None
         )
         assert report.ready and spawn.calls == []
+
+
+class TestFindClaudeOnMacAndLinux:
+    @pytest.mark.parametrize("platform", ["darwin", "linux"])
+    @pytest.mark.parametrize("place", [".local/bin/claude", ".claude/local/claude"])
+    def test_where_its_own_installer_puts_it(
+        self, tmp_path: Path, platform: str, place: str
+    ) -> None:
+        native = tmp_path / place
+        native.parent.mkdir(parents=True)
+        native.write_text("", encoding="utf-8")
+
+        found = find_claude({"HOME": str(tmp_path)}, platform=platform, which=lambda _n: None)
+
+        assert found == native
+
+    def test_path_wins(self, tmp_path: Path) -> None:
+        found = find_claude(
+            {"HOME": str(tmp_path)}, platform="darwin", which=lambda _n: "/opt/bin/claude"
+        )
+        assert found == Path("/opt/bin/claude")
+
+    def test_not_installed_is_none(self, tmp_path: Path) -> None:
+        assert (
+            find_claude({"HOME": str(tmp_path)}, platform="linux", which=lambda _n: None)
+            is None
+        )
+
+    def test_the_windows_place_is_not_looked_in(self, tmp_path: Path) -> None:
+        exe = tmp_path / ".local" / "bin" / "claude.exe"
+        exe.parent.mkdir(parents=True)
+        exe.write_text("", encoding="utf-8")
+        env = {"HOME": str(tmp_path), "USERPROFILE": str(tmp_path)}
+        assert find_claude(env, platform="darwin", which=lambda _n: None) is None

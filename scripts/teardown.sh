@@ -1,12 +1,22 @@
 #!/usr/bin/env bash
-# EntraBot Identity Research — teardown
-# Removes everything setup.sh creates:
+# Entrabot teardown for macOS and Linux.
+#
+# By default this DISCONNECTS THIS COMPUTER and nothing else: it starts the same teardown
+# Windows runs (python -m entrabot.winsetup teardown), which takes this computer's
+# certificate off the agent's Blueprint, deletes it here with its private key, removes the
+# entrabot entry from the assistants' configs, and backs up and removes .env and
+# .entrabot-state.json. The agent, its memory and every other computer are untouched.
+# --delete-agent also deletes the agent from the tenant.
+#
+# The older, tenant-wide teardown is still here for test tenants and wrappers. It runs when
+# --tenant-wide or one of its own flags is given (--agent-user-upn, --dry-run,
+# --preserve-provisioner, --preserve-local-state) and removes everything setup creates:
 #   1. Agent User (must go first — child of Agent Identity)
 #   2. Agent Identity (service principal)
 #   3. Blueprint (app registration — also deletes BlueprintPrincipal)
 #   4. Provisioner app registration: the one recorded for this machine in
 #      .entrabot-state.json, by its application ID, never one found by name
-#   5. Local state (.env, .entrabot-state.json, legacy keychain)
+#   5. Local state (.env, .entrabot-state.json, key store entries)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,7 +32,13 @@ DELETE_CLOUD_STORAGE=false
 PRESERVE_PROVISIONER=false
 PRESERVE_LOCAL_STATE=false
 SHOW_HELP=false
+UNKNOWN_ARGUMENT=false
 TARGETED_DEPROVISION_DONE=false
+# Which teardown runs. The tenant-wide one only when one of its own flags asks for it.
+TENANT_WIDE=false
+TENANT_WIDE_FLAG=""
+WIZARD_ARGS=()
+WIZARD_FLAG=""
 
 # A value without its leading and trailing whitespace.
 trim() {
@@ -31,9 +47,48 @@ trim() {
     printf '%s' "${value%"${value##*[![:space:]]}"}"
 }
 
+# An option's value may follow it after a space as well as after "=":
+#   --log-file /tmp/t.log   is   --log-file=/tmp/t.log
+GIVEN=()
+WAITING_FOR_VALUE=""
 for arg in "$@"; do
+    if [ -n "$WAITING_FOR_VALUE" ]; then
+        case "$arg" in
+            -*)
+                echo "ERROR: $WAITING_FOR_VALUE needs a value, for example $WAITING_FOR_VALUE=VALUE" >&2
+                exit 2
+                ;;
+        esac
+        GIVEN+=("$WAITING_FOR_VALUE=$arg")
+        WAITING_FOR_VALUE=""
+    elif [ "$arg" = "--log-file" ] || [ "$arg" = "--agent-user-upn" ]; then
+        WAITING_FOR_VALUE="$arg"
+    else
+        GIVEN+=("$arg")
+    fi
+done
+if [ -n "$WAITING_FOR_VALUE" ]; then
+    echo "ERROR: $WAITING_FOR_VALUE needs a value, for example $WAITING_FOR_VALUE=VALUE" >&2
+    exit 2
+fi
+
+for arg in ${GIVEN[@]+"${GIVEN[@]}"}; do
     case $arg in
+        --delete-agent|--purge-data|--keep-setup-credential|--verbose)
+            WIZARD_ARGS+=("$arg")
+            WIZARD_FLAG="$arg"
+            ;;
+        --log-file=*)
+            WIZARD_ARGS+=(--log-file "${arg#--log-file=}")
+            WIZARD_FLAG="--log-file"
+            ;;
+        --tenant-wide)
+            TENANT_WIDE=true
+            TENANT_WIDE_FLAG="$arg"
+            ;;
         --agent-user-upn=*)
+            TENANT_WIDE=true
+            TENANT_WIDE_FLAG="--agent-user-upn"
             # Comma-separated. Each UPN is trimmed and otherwise kept exactly as given: it is only
             # ever passed on as one argument.
             IFS=',' read -ra UPN_PARTS <<< "${arg#--agent-user-upn=}"
@@ -48,15 +103,23 @@ for arg in "$@"; do
             ASSUME_YES=true
             ;;
         --dry-run)
+            TENANT_WIDE=true
+            TENANT_WIDE_FLAG="$arg"
             DRY_RUN=true
             ;;
         --delete-cloud-storage)
+            TENANT_WIDE=true
+            TENANT_WIDE_FLAG="$arg"
             DELETE_CLOUD_STORAGE=true
             ;;
         --preserve-provisioner)
+            TENANT_WIDE=true
+            TENANT_WIDE_FLAG="$arg"
             PRESERVE_PROVISIONER=true
             ;;
         --preserve-local-state)
+            TENANT_WIDE=true
+            TENANT_WIDE_FLAG="$arg"
             PRESERVE_LOCAL_STATE=true
             ;;
         --help|-h)
@@ -65,6 +128,7 @@ for arg in "$@"; do
         *)
             echo "ERROR: Unknown argument: $arg" >&2
             SHOW_HELP=true
+            UNKNOWN_ARGUMENT=true
             ;;
     esac
 done
@@ -72,13 +136,36 @@ done
 if [ "$SHOW_HELP" = true ]; then
     echo "Usage: ./scripts/teardown.sh [OPTIONS]"
     echo ""
+    echo "Disconnects THIS computer from its agent. The agent itself, its memory and every"
+    echo "other computer that uses it are kept. It says what it will do and asks first."
+    echo ""
     echo "Options:"
+    echo "  --delete-agent         Also delete the agent from the tenant, for every computer."
+    echo "                         Cannot be undone."
+    echo "  --purge-data           Also delete Entrabot's data folder on this computer"
+    echo "                         (~/.entrabot: memory kept here, logs, its private Azure CLI)."
+    echo "  --keep-setup-credential"
+    echo "                         Keep this computer's setup (Provisioner) certificate, for"
+    echo "                         setting up again soon. By default it is retired once no"
+    echo "                         other Entrabot agent here needs it."
+    echo "  --yes, -y              Don't ask. Only what the other flags name is removed."
+    echo "  --verbose              Show everything the helper scripts print."
+    echo "  --log-file=PATH        Where to write the log (default: ~/.entrabot/logs)."
+    echo ""
+    echo "Exit codes: 0 done or nothing to do, 1 finished with something left to do,"
+    echo "2 usage, 130 cancelled."
+    echo ""
+    echo "Tenant-wide teardown, for test tenants and wrappers. Any of these flags selects it."
+    echo "It deletes the agent's whole chain and, unless told otherwise, this computer's"
+    echo "Provisioner app and local state. It cannot be combined with the options above"
+    echo "(--yes works with both)."
+    echo "  --tenant-wide          Run this teardown with none of the changes below: what"
+    echo "                         ./scripts/teardown.sh did before it had the default above."
     echo "  --agent-user-upn=UPN   Target a specific Agent User UPN to deprovision."
     echo "                         May be repeated or comma-separated."
     echo "  --dry-run              Print what would be deleted, and delete nothing."
     echo "                         With --agent-user-upn, each Agent User's chain is"
     echo "                         looked up in Entra (read-only) and printed."
-    echo "  --yes, -y              Skip confirmation prompt."
     echo "  --delete-cloud-storage Reserved explicit storage teardown switch."
     echo "                         Current script refuses this switch; cloud storage"
     echo "                         must be deleted manually after a backup."
@@ -91,7 +178,42 @@ if [ "$SHOW_HELP" = true ]; then
     echo "  --help, -h             Show this help."
     echo ""
     echo "Cloud storage is not deleted by teardown.sh."
+    # Help after a mistyped option is a usage error, as in setup.sh.
+    if [ "$UNKNOWN_ARGUMENT" = true ]; then
+        exit 2
+    fi
     exit 0
+fi
+
+# ── Which teardown ──────────────────────────────────────────────────────────
+
+if [ "$TENANT_WIDE" = true ] && [ -n "$WIZARD_FLAG" ]; then
+    echo "ERROR: $WIZARD_FLAG and $TENANT_WIDE_FLAG belong to two different teardowns and can't be combined." >&2
+    echo "  See ./scripts/teardown.sh --help." >&2
+    exit 2
+fi
+
+if [ "$TENANT_WIDE" = false ]; then
+    if [ ! -x "$VENV_PY" ]; then
+        if [ ! -f .env ] && [ ! -f .entrabot-state.json ]; then
+            echo "Nothing to remove. This computer is not connected to an agent."
+            exit 0
+        fi
+        echo "ERROR: Teardown needs the Python environment setup builds (.venv), and it is not here." >&2
+        echo "  Run ./scripts/setup.sh --help to see how to rebuild it, or remove .env and" >&2
+        echo "  .entrabot-state.json yourself if this folder is no longer used." >&2
+        exit 1
+    fi
+    [ "$ASSUME_YES" = true ] && WIZARD_ARGS+=(--yes)
+    exec "$VENV_PY" -m entrabot.winsetup teardown --project-root "$PROJECT_ROOT" \
+        ${WIZARD_ARGS[@]+"${WIZARD_ARGS[@]}"}
+fi
+
+# Setup installs its own Azure CLI when the computer has none (~/.entrabot/tools/azure-cli).
+# It is not on PATH, so it is used here when no other az is.
+if ! command -v az >/dev/null && [ -x "${HOME:-}/.entrabot/tools/azure-cli/bin/az" ]; then
+    PATH="$HOME/.entrabot/tools/azure-cli/bin:$PATH"
+    export PATH
 fi
 
 if [ "$DELETE_CLOUD_STORAGE" = true ]; then
@@ -530,6 +652,29 @@ if cleared:
 else:
     print('  (no keychain entries found)')
 " || true
+
+# This agent's own key store item (the setup wizard keeps one per certificate, named by the
+# thumbprint in .env). .env is read as data, never run. Another agent's item is not touched.
+"$CLEANUP_PY" - "$PROJECT_ROOT/.env" <<'PY' || true
+import sys
+from pathlib import Path
+
+try:
+    from entrabot.platform import keycert
+    from entrabot.winsetup.envfile import read_env
+except ImportError:
+    sys.exit(0)
+values = read_env(Path(sys.argv[1]))
+for key in ("ENTRABOT_BLUEPRINT_CERT_SHA1", "ENTRABOT_BLUEPRINT_CERT_RETIRING_SHA1"):
+    sha1 = values.get(key, "").strip()
+    if not sha1:
+        continue
+    try:
+        if keycert.delete_cert(sha1):
+            print("  ✅ Deleted this agent's certificate and its private key from the key store")
+    except keycert.CertStoreError as exc:
+        print(f"  ⚠️  Could not delete this agent's certificate from the key store: {exc}")
+PY
 
 if [ -f .env ]; then
     rm -f .env

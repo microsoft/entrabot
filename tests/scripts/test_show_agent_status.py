@@ -287,9 +287,51 @@ class TestWindowsCertificateSources:
         assert certificate["status"] == "pass", certificate
         assert snapshot["key_credentials"][0]["matchesLocalBlueprintCert"] is True
 
-    def test_no_local_key_check_off_windows(self, monkeypatch):
+    def test_no_local_certificate_check_for_a_setup_from_before_the_wizard(self, monkeypatch):
+        # macOS and Linux with no SHA-1 in .env: the key is on its own in the account's
+        # single slot, and there is no certificate here to check.
+        monkeypatch.delenv("ENTRABOT_BLUEPRINT_CERT_SHA1", raising=False)
         snapshot = self._snapshot(monkeypatch, windows=False)
         assert "Local certificate" not in {c["name"] for c in snapshot["health"]["checks"]}
+
+    @pytest.mark.parametrize(
+        ("status", "expected"),
+        [("ok", "pass"), ("expiring", "warn"), ("expired", "fail"), ("missing", "fail")],
+    )
+    def test_macos_and_linux_report_the_keystore_certificate_and_its_expiry(
+        self, monkeypatch, status, expected
+    ):
+        from entrabot.platform import keycert
+
+        sha1 = "0123456789ABCDEF0123456789ABCDEF01234567"
+        asked = []
+
+        def health(value):
+            asked.append(value)
+            return keycert.CertHealth(
+                status=status, days_left=12, not_after=None, message=f"certificate is {status}"
+            )
+
+        monkeypatch.setenv("ENTRABOT_BLUEPRINT_CERT_SHA1", sha1)
+        monkeypatch.setattr(keycert, "cert_health", health)
+        snapshot = self._snapshot(monkeypatch, windows=False)
+
+        local = self._check(snapshot, "Local certificate")
+        assert local["status"] == expected and asked == [sha1]
+        assert local["detail"] == f"certificate is {status}"
+
+    def test_a_keystore_that_cannot_be_read_is_a_warning_not_a_crash(self, monkeypatch):
+        from entrabot.platform import keycert
+
+        def broken(_sha1):
+            raise keycert.CertStoreError("Could not read this account's key store")
+
+        monkeypatch.setenv("ENTRABOT_BLUEPRINT_CERT_SHA1", "A" * 40)
+        monkeypatch.setattr(keycert, "cert_health", broken)
+        snapshot = self._snapshot(monkeypatch, windows=False)
+
+        local = self._check(snapshot, "Local certificate")
+        assert local["status"] == "warn" and "key store" in local["detail"]
 
     @pytest.mark.parametrize(
         ("status", "expected"),

@@ -1,9 +1,9 @@
 # verify_blueprint_cert.py
 
 Check whether a given certificate thumbprint is still registered on a Blueprint
-application. [`setup-windows.ps1`](../setup/setup-windows-ps1.md) uses it to decide whether
-to reuse a certificate; [`setup.sh`](../setup/setup-sh.md) does not call it. macOS, Linux,
-and Windows.
+application. The setup wizard uses it to decide whether to reuse a certificate, on every
+system: [`setup-windows.ps1`](../setup/setup-windows-ps1.md) on Windows and
+[`setup.sh`](../setup/setup-sh.md) on macOS and Linux. macOS, Linux, and Windows.
 
 Part of the [auth-and-certs command reference](../index.md#auth-and-certs).
 
@@ -16,15 +16,16 @@ question: is this thumbprint, for example the one in `.env` or in the state file
 on the Blueprint? See [Token flows](../../token-flows.md) for the certificate-to-token
 exchange.
 
-`setup.sh` used to call this command to vouch for the thumbprint cached in the state file.
-It no longer does. On macOS and Linux a thumbprint that is on the Blueprint does not show
-that this machine's private key matches it, and the cache can belong to an earlier key, so
-setup relies on [`find_local_blueprint_cert.py`](find-local-blueprint-cert-py.md) instead,
-which checks the local key against the registered certificates.
+The wizard calls it for the certificate named in `.env` (`ENTRABOT_BLUEPRINT_CERT_SHA1`)
+once that certificate is confirmed to be in this account's certificate store, in date, and
+able to sign: `Cert:\CurrentUser\My` on Windows, the Keychain or keyring item on macOS and
+Linux. In both, the certificate and its private key are held together, so a thumbprint on
+the Blueprint is this computer's key.
 
-`setup-windows.ps1` does call it, for the certificate named in `.env` once that certificate
-is confirmed to be in `Cert:\CurrentUser\My`, where the certificate and its private key are
-held together.
+Before the wizard, `setup.sh` kept the private key on its own, without its certificate, and
+a thumbprint on the Blueprint did not show that the local key matched it. It relied on
+[`find_local_blueprint_cert.py`](find-local-blueprint-cert-py.md) instead, which setup no
+longer runs.
 
 ## Requirements
 
@@ -63,8 +64,8 @@ the signal.
 - `0` — the expected thumbprint is present on the Blueprint's `keyCredentials`.
 - `1` — checked: the thumbprint is not present. Run setup to add a certificate for this
   machine ([`setup.sh`](../setup/setup-sh.md), or on Windows
-  [`setup-windows.ps1`](../setup/setup-windows-ps1.md), which registers the one already in
-  the certificate store).
+  [`setup-windows.ps1`](../setup/setup-windows-ps1.md)); it registers the one already in
+  the certificate store.
 - `2` — usage error (wrong number of positional arguments).
 - `3` — could not check: a Graph or token failure, a malformed response, or a
   certificate whose key material couldn't be read. This says nothing about whether the
@@ -90,11 +91,10 @@ public thumbprints are compared.
 ## Related commands
 
 - [`find_local_blueprint_cert.py`](find-local-blueprint-cert-py.md) — find the
-  registered certificate that matches this machine's private key. This is the check
-  setup makes.
+  registered certificate that matches the account's older single private key, on a
+  macOS or Linux computer set up before the wizard.
 - [`list_blueprint_certs.py`](list-blueprint-certs-py.md) — enumerate the
   certificates registered on a Blueprint.
-- [`setup.sh`](../setup/setup-sh.md) — the provisioning entry point for macOS and Linux. It
-  does not call this command.
-- [`setup-windows.ps1`](../setup/setup-windows-ps1.md) — the Windows provisioning entry
-  point, which calls it.
+- [`setup.sh`](../setup/setup-sh.md) and
+  [`setup-windows.ps1`](../setup/setup-windows-ps1.md) — the setup wizard, which calls
+  this command.

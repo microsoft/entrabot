@@ -103,17 +103,56 @@ def _build_windows_cng_assertion(config: EntraBotConfig, token_endpoint: str) ->
         ) from exc
 
 
+def _build_keystore_assertion(config: EntraBotConfig, token_endpoint: str) -> str:
+    """Hop-1 assertion on macOS and Linux, signed by the key stored with the certificate
+    ``blueprint_cert_sha1`` names (``entrabot.platform.keycert``).
+
+    That keystore item is this agent's own. The account's older single key
+    (``entrabot`` / ``blueprint-private-key``) is not read here, even when this agent's item
+    is missing: it may be another agent's, and Entra would answer ``invalid_client`` for a
+    reason nobody could see. A keystore that can't be read stops the sign-in (fail closed).
+    """
+    from entrabot.platform import keycert
+
+    sha1 = config.blueprint_cert_sha1 or ""
+    try:
+        health = keycert.cert_health(sha1)
+        private_key_pem = keycert.load_private_key_pem(sha1) if health.usable else None
+    except keycert.CertStoreError as exc:
+        raise AgentIDNotAvailable(str(exc)) from exc
+    if not health.usable:
+        raise AgentIDNotAvailable(health.message)
+    if health.status == "expiring" and sha1 not in _expiry_warned:
+        _expiry_warned.add(sha1)
+        logger.warning("%s", health.message)
+    if not private_key_pem:
+        raise AgentIDNotAvailable(
+            "The Blueprint certificate's private key is not stored with it. "
+            "Run ./scripts/setup.sh to create and register a new certificate."
+        )
+    return build_client_assertion(
+        private_key_pem=private_key_pem,
+        cert_thumbprint=config.blueprint_cert_thumbprint,
+        client_id=config.blueprint_app_id,
+        token_endpoint=token_endpoint,
+    )
+
+
 def _build_blueprint_assertion(config: EntraBotConfig, token_endpoint: str) -> str:
     """Build the Hop-1 client assertion.
 
-    Windows with ``blueprint_cert_sha1`` configured (every real Windows setup) signs
-    through CNG and never reads the credential store.
+    With ``blueprint_cert_sha1`` configured (every setup the wizard has made) the certificate
+    it names decides: on Windows the non-exportable CNG key behind it signs, and the
+    credential store is never read; on macOS and Linux the key stored with it in the OS
+    keystore signs.
 
-    Everywhere else, the keystore PEM is used (Mac/Linux runtime, and any platform
-    whose setup wrote a PEM into keyring — including most test fixtures).
+    Without it, the account's single keystore PEM is used: a macOS or Linux setup from before
+    the wizard, and any platform whose setup wrote a PEM into keyring (most test fixtures).
     """
     if sys.platform == "win32" and config.blueprint_cert_sha1:
         return _build_windows_cng_assertion(config, token_endpoint)
+    if sys.platform != "win32" and config.blueprint_cert_sha1:
+        return _build_keystore_assertion(config, token_endpoint)
 
     try:
         store = get_credential_store()

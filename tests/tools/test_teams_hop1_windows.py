@@ -2,8 +2,9 @@
 
 On Windows the Blueprint key lives in CNG and is found by the SHA-1 in ``.env``;
 Credential Manager is not involved, and is not even reachable from an SSH or
-scheduled-task logon session. On macOS and Linux nothing changes: the PEM comes
-from the OS keystore.
+scheduled-task logon session. On macOS and Linux the SHA-1 names the keystore item
+that holds this agent's certificate and key (``entrabot.platform.keycert``); a setup from
+before that, with no SHA-1 in ``.env``, still signs with the account's single key.
 """
 
 from __future__ import annotations
@@ -207,7 +208,9 @@ class _Store:
 
 
 @pytest.mark.parametrize("platform", ["darwin", "linux"])
-class TestMacAndLinuxUnchanged:
+class TestMacAndLinuxOlderSetup:
+    """No SHA-1 in ``.env``: the account's single key, as before."""
+
     def test_pem_from_the_keystore(
         self, platform: str, assertion: _Recorder, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -215,7 +218,7 @@ class TestMacAndLinuxUnchanged:
         monkeypatch.setattr(teams.sys, "platform", platform)
         monkeypatch.setattr(teams, "get_credential_store", lambda: store)
 
-        teams._build_blueprint_assertion(_config(), ENDPOINT)
+        teams._build_blueprint_assertion(_config(blueprint_cert_sha1=None), ENDPOINT)
 
         assert store.asked == [("entrabot", "blueprint-private-key")]
         assert assertion.calls == [
@@ -233,4 +236,108 @@ class TestMacAndLinuxUnchanged:
         monkeypatch.setattr(teams.sys, "platform", platform)
         monkeypatch.setattr(teams, "get_credential_store", lambda: _Store(None))
         with pytest.raises(AgentIDNotAvailable, match=r"\./scripts/setup\.sh"):
+            teams._build_blueprint_assertion(_config(blueprint_cert_sha1=None), ENDPOINT)
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+class TestMacAndLinuxCertificateStore:
+    """A SHA-1 in ``.env``: this agent's own keystore item, never the account's single key."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self, platform: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(teams.sys, "platform", platform)
+        monkeypatch.setattr(teams, "_expiry_warned", set(), raising=False)
+
+    def test_signs_with_the_key_stored_with_the_certificate(
+        self,
+        platform: str,
+        assertion: _Recorder,
+        no_keyring: list[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from entrabot.platform import keycert
+
+        asked: list[str] = []
+        monkeypatch.setattr(keycert, "cert_health", lambda sha1: _health("ok"))
+        monkeypatch.setattr(
+            keycert, "load_private_key_pem", lambda sha1: asked.append(sha1) or "AGENT PEM"
+        )
+
+        assert teams._build_blueprint_assertion(_config(), ENDPOINT) == "signed.jwt.value"
+
+        assert asked == [SHA1]
+        assert no_keyring == []  # the legacy single slot is not read
+        assert assertion.calls == [
+            {
+                "private_key_pem": "AGENT PEM",
+                "cert_thumbprint": "x5t-s256-value",
+                "client_id": "blueprint-app",
+                "token_endpoint": ENDPOINT,
+            }
+        ]
+
+    @pytest.mark.parametrize("status", ["missing", "expired", "no_private_key", "not_yet_valid"])
+    def test_unusable_certificate_is_an_actionable_error_before_signing(
+        self,
+        platform: str,
+        assertion: _Recorder,
+        no_keyring: list[str],
+        monkeypatch: pytest.MonkeyPatch,
+        status: str,
+    ) -> None:
+        from entrabot.platform import keycert
+
+        message = f"The Blueprint certificate is {status}. Run ./scripts/setup.sh."
+        monkeypatch.setattr(
+            keycert, "cert_health", lambda sha1: _health(status, days_left=-3, message=message)
+        )
+
+        with pytest.raises(AgentIDNotAvailable) as excinfo:
             teams._build_blueprint_assertion(_config(), ENDPOINT)
+
+        assert "./scripts/setup.sh" in str(excinfo.value)
+        assert SHA1 not in str(excinfo.value)
+        assert assertion.calls == [] and no_keyring == []
+
+    def test_a_keystore_that_cannot_be_read_fails_closed(
+        self,
+        platform: str,
+        assertion: _Recorder,
+        no_keyring: list[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from entrabot.platform import keycert
+
+        def broken(sha1: str) -> wincert.CertHealth:
+            raise keycert.CertStoreError("Could not read this account's key store")
+
+        monkeypatch.setattr(keycert, "cert_health", broken)
+
+        with pytest.raises(AgentIDNotAvailable, match="key store"):
+            teams._build_blueprint_assertion(_config(), ENDPOINT)
+        assert assertion.calls == [] and no_keyring == []
+
+    def test_expiring_certificate_warns_once_and_still_signs(
+        self,
+        platform: str,
+        assertion: _Recorder,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from entrabot.platform import keycert
+
+        monkeypatch.setattr(
+            keycert,
+            "cert_health",
+            lambda sha1: _health("expiring", days_left=9, message="expires in 9 day(s)"),
+        )
+        monkeypatch.setattr(keycert, "load_private_key_pem", lambda sha1: "AGENT PEM")
+        warned: list[str] = []
+        monkeypatch.setattr(
+            teams.logger, "warning", lambda fmt, *args: warned.append(fmt % args if args else fmt)
+        )
+
+        teams._build_blueprint_assertion(_config(), ENDPOINT)
+        teams._build_blueprint_assertion(_config(), ENDPOINT)
+
+        assert warned == ["expires in 9 day(s)"]
+        assert len(assertion.calls) == 2

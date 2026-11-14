@@ -6,7 +6,7 @@ Removes the Azure resources created by `provision_blob_storage.py` — the conta
 
 ## Requirements
 
-- The Azure CLI (`az`) installed and on `PATH`, with an active `az login` session that has delete permissions at the level you're escalating to: container deletion needs `Storage Blob Data Contributor` (or better) on the container, `--delete-account` needs `Contributor`/`Owner` on the storage account, and `--delete-resource-group` needs `Contributor`/`Owner` on the resource group.
+- The Azure CLI (`az`) installed and on `PATH`, with an active `az login` session that has delete permissions at the level you're escalating to: container deletion needs `Contributor` (or `Storage Account Contributor`) on the storage account, `--delete-account` needs `Contributor`/`Owner` on the storage account, and `--delete-resource-group` needs `Contributor`/`Owner` on the resource group.
 - The exact `--storage-account` and `--container` names used when the resources were provisioned. Recover them from `.env` (`ENTRABOT_BLOB_ENDPOINT`, `ENTRABOT_BLOB_CONTAINER`) or `show_agent_status.py --json` if you don't have them handy — the endpoint's hostname before `.blob.core.windows.net` is the account name.
 - No EntraBot Python environment or package install is required — the script only uses the standard library and shells out to `az`.
 
@@ -51,7 +51,7 @@ python3 scripts/deprovision_blob_storage.py \
 
 Deletion proceeds in safe order — container, then account, then resource group — matching increasing blast radius:
 
-- **Default (no escalation flags)**: deletes only the named container (`az storage container delete --auth-mode login --yes`). The storage account and any other containers on it are untouched.
+- **Default (no escalation flags)**: deletes only the named container (`az storage container-rm delete --yes`, the management-plane command, so it needs rights on the storage account and no blob data role). The storage account and any other containers on it are untouched.
 - **`--delete-account`**: also deletes the entire storage account. This destroys **every** container on that account, including any other Agent Users' data if they share the deterministic per-tenant account that `provision_blob_storage.py` creates by default.
 - **`--delete-resource-group`**: also deletes `entrabot-rg` (or `--resource-group`) itself, asynchronously (`--no-wait`). This removes anything else provisioned into that resource group, not only EntraBot's storage account. Passing this flag forces account deletion too, even if `--delete-account` was omitted.
 

@@ -70,13 +70,17 @@ def whole(text: str) -> str:
 
 
 _LABEL: dict[Kind, str] = {"teams": "Teams", "copilot": "Microsoft 365 Copilot"}
-_READY: dict[Kind, tuple[str, ...]] = {
-    "teams": (
-        "A new licence takes 10-15 minutes to reach Teams. To check later, run:",
-        f"  {DIAGNOSE}",
-    ),
-    "copilot": ("Word, Excel and OneDrive files can take 10-15 minutes to be ready with it.",),
-}
+
+
+def _ready(kind: Kind, diagnose: str) -> tuple[str, ...]:
+    if kind == "teams":
+        return (
+            "A new licence takes 10-15 minutes to reach Teams. To check later, run:",
+            f"  {diagnose}",
+        )
+    return ("Word, Excel and OneDrive files can take 10-15 minutes to be ready with it.",)
+
+
 _LAST_SCREEN = "What to do is on the last screen."
 _WAIT = "Press Enter when that is done and setup will check again, or type s to skip for now"
 _BUY = (
@@ -327,7 +331,9 @@ def _explain(console: Console, report: Report, kind: Kind) -> None:
     say(console, headline, body)
 
 
-def last_screen_lines(report: Report | None, kind: Kind, *, shown: bool = False) -> list[str]:
+def last_screen_lines(
+    report: Report | None, kind: Kind, *, shown: bool = False, diagnose: str = DIAGNOSE
+) -> list[str]:
     """What to do, for the last screen, when the agent still lacks a licence of *kind*:
     for what the organization has when *report* says, in general when it is None. *shown*:
     the walkthrough in this run showed the person what to do, so this points back to it
@@ -343,7 +349,7 @@ def last_screen_lines(report: Report | None, kind: Kind, *, shown: bool = False)
     if kind == "teams":
         closing = [
             "Run setup again. It gives the agent the licence by itself.",
-            f"Then check with:  {DIAGNOSE}",
+            f"Then check with:  {diagnose}",
         ]
     else:
         closing = [
@@ -449,7 +455,7 @@ def _give(
     outcome, result = _assign(helpers, env, product)
     if outcome in (ASSIGNED, ALREADY_ASSIGNED):
         console.ok(f"The agent has its {product.name} licence now.")
-        for line in _READY[kind]:
+        for line in _ready(kind, console.words.diagnose):
             console.detail(line)
         return "assigned"
     if outcome == NO_FREE_SEAT:

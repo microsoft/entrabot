@@ -698,6 +698,21 @@ class AzCli:
         token = data.get("accessToken") if isinstance(data, dict) else None
         return str(token) if token else None
 
+    def tenant_name(self, tenant_id: str) -> str:
+        """The organization's name as the directory gives it, or "" when it can't be read.
+
+        ``az account show`` names the tenant only for some kinds of sign-in (not for one made
+        with a code and ``--tenant``, measured on Ubuntu). The request carries no query, so it
+        passes through ``cmd.exe`` too, and the answer, which holds the organization's
+        contact details, is kept out of the log.
+        """
+        data = self._graph("/organization", sensitive=True)
+        entries = [item for item in (data or {}).get("value") or [] if isinstance(item, dict)]
+        for item in entries:
+            if str(item.get("id") or "").lower() == tenant_id.lower() and item.get("displayName"):
+                return str(item["displayName"])
+        return ""
+
     def directory_role_template_ids(self) -> set[str] | None:
         """Role template IDs of the signed-in user's ACTIVE directory roles, or None when they
         can't be read. Roles that are only eligible (PIM) are not included.

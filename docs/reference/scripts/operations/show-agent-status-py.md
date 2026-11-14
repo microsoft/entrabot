@@ -101,6 +101,17 @@ No positional arguments.
 - Recomputes the SHA-256 JWT thumbprint of every Blueprint key credential
   locally and compares it against `BLUEPRINT_CERT_THUMBPRINT` to detect
   certificate drift between Entra and local state.
+- The **Local certificate** health check looks at the certificate `.env` names
+  in `ENTRABOT_BLUEPRINT_CERT_SHA1`, on this computer only (no network): is it in
+  this account's certificate store with its private key, and in date? On Windows
+  that store is `Cert:\CurrentUser\My`; on macOS and Linux it is the Keychain or
+  keyring item that holds the certificate and its key together. It is `PASS`
+  with the expiry date, `WARN` when 30 days or fewer remain (or when the store
+  could not be read), and `FAIL` when the certificate is missing, has no private
+  key, has expired, or is not valid yet. With a Blueprint configured but no
+  SHA-1 thumbprint, it fails on Windows; on macOS and Linux that is a setup from
+  before the wizard, whose key has no certificate on this computer to read, and
+  the check is left out. It is `SKIP` when no Blueprint is configured here.
 - All output goes to stdout — the formatted text report, the health-only
   list, or the `--json` payload. The single error path (Provisioner token
   acquisition failure) also prints to stdout (`ERROR: Cannot acquire
@@ -128,6 +139,12 @@ No positional arguments.
   the local `BLUEPRINT_CERT_THUMBPRINT` doesn't match any key credential currently
   on the Blueprint app, typically after an out-of-band cert rotation; see
   [`verify_blueprint_cert.py`](../auth-and-certs/verify-blueprint-cert-py.md).
+- **"Local certificate" check fails or warns** — the certificate this computer
+  signs the agent in with is missing, expired, or close to expiry. Before it
+  expires, rotate it (`./scripts/setup.sh --rotate-cert`, or
+  `scripts\deploy-windows.ps1` on Windows); after, run setup again, which creates
+  and registers a new one. On macOS and Linux a key store that cannot be read in
+  this session (a locked keychain over SSH) shows here too.
 - **"Older setup keys" check warns** — Windows setup moved this machine off an
   older setup key file but could not take that key's certificate off the
   Provisioner app, and a copy of the file can still get tokens for it. Remove the

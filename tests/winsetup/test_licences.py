@@ -85,6 +85,7 @@ class World:
             color=False,
             unicode=False,
             log_file=self.tmp_path / "setup.log",
+            platform="win32",
         )
         return console
 
