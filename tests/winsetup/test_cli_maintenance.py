@@ -53,6 +53,11 @@ class TestParsing:
             ["status", "--project-root", ".", "--json", "--health-only", "--strict"]
         )
         assert (args.json, args.health_only, args.strict) == (True, True, True)
+        assert args.full_thumbprints is False
+
+    def test_status_shows_full_thumbprints_only_when_asked(self) -> None:
+        args = build_parser().parse_args(["status", "--project-root", ".", "--full-thumbprints"])
+        assert args.full_thumbprints is True
 
     def test_a_setup_flag_is_refused_by_teardown(self) -> None:
         with pytest.raises(SystemExit) as exit_info:
@@ -145,10 +150,33 @@ class TestDispatch:
         )
 
         assert code == 1
-        assert seen["options"] == {"json_output": True, "health_only": False, "strict": True}
+        assert seen["options"] == {
+            "json_output": True,
+            "health_only": False,
+            "strict": True,
+            "full_thumbprints": False,
+        }
         captured = capsys.readouterr()
         assert captured.out == "" and captured.err == ""
         assert not (tmp_path / "data").exists()  # no log folder was created for a status call
+
+    def test_status_passes_full_thumbprints_through(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, Any] = {}
+
+        def fake(paths: Any, world: Any, **options: Any) -> int:
+            seen.update(options=options)
+            return 0
+
+        monkeypatch.setattr(cli.status, "run_status", fake)
+
+        main(
+            ["status", "--project-root", str(tmp_path), "--full-thumbprints"],
+            world=_world(tmp_path),
+        )
+
+        assert seen["options"]["full_thumbprints"] is True
 
     def test_ctrl_c_is_a_cancellation_not_a_traceback(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

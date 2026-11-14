@@ -1260,10 +1260,20 @@ class Wizard:
             identity, cert, env_result, memory_result, upload_failed, host_report, smoke
         )
 
-    def _provisioning_env(self) -> dict[str, str]:
+    def _provisioning_env(
+        self, env_values: Mapping[str, str], blueprint_app_id: str
+    ) -> dict[str, str]:
+        """The helpers' environment. *env_values* is what ``.env`` records, and
+        *blueprint_app_id* the Blueprint this run is for: an Agent User ``.env`` names for
+        another Blueprint is not handed on (``state.identity_environment``)."""
         assert self.account is not None
         try:
-            env = state.identity_environment(self.plan.identity, base=self.helpers.base_env)
+            env = state.identity_environment(
+                self.plan.identity,
+                base=self.helpers.base_env,
+                env_values=env_values,
+                blueprint_app_id=blueprint_app_id,
+            )
         except IdentityError as exc:
             raise SetupFailed(str(exc)) from exc
         env["ENTRABOT_TENANT_ID"] = self.account.tenant_id
@@ -1291,19 +1301,27 @@ class Wizard:
         expected_blueprint = self._expected_blueprint()  # likewise
 
         self._next_step("Connecting setup to your tenant")
+        env_values = read_env(paths.env_file)
         try:
             previous = state.read_state(paths.state_file)
             notes = state.apply_identity_choice(
                 paths.state_file,
                 self.plan.identity,
                 now=self.world.now(),
-                env_values=read_env(paths.env_file),
+                env_values=env_values,
             )
         except IdentityError as exc:
             raise SetupFailed(str(exc)) from exc
         for note in notes:
             console.info(note)
-        env = self._provisioning_env()
+        not_reused = state.not_reusing_env_agent_user(
+            self.plan.identity, blueprint_app_id=expected_blueprint, env_values=env_values
+        )
+        if not_reused:
+            console.warn(not_reused[0])
+            for line in not_reused[1:]:
+                console.detail(line)
+        env = self._provisioning_env(env_values, expected_blueprint)
         try:
             before = state.read_state(paths.state_file)  # as the identity choice left it
         except IdentityError as exc:

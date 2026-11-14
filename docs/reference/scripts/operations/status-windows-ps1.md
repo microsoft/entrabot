@@ -25,6 +25,7 @@ environment and the same Azure CLI that setup used.
 powershell -ExecutionPolicy Bypass -File status-windows.ps1
 powershell -ExecutionPolicy Bypass -File status-windows.ps1 -HealthOnly -Strict
 powershell -ExecutionPolicy Bypass -File status-windows.ps1 -Json
+powershell -ExecutionPolicy Bypass -File status-windows.ps1 -FullThumbprints
 ```
 
 ## Options
@@ -33,6 +34,10 @@ powershell -ExecutionPolicy Bypass -File status-windows.ps1 -Json
   piped.
 - `-HealthOnly` — only the health checks.
 - `-Strict` — return non-zero when a health check fails.
+- `-FullThumbprints` — show certificate thumbprints in full, to compare them
+  with the Microsoft Entra admin center (passed on as
+  `python -m entrabot.winsetup status --full-thumbprints`). Without it only
+  their last four characters are shown.
 - `-Help` — show help and exit `0`.
 
 ## Effects
@@ -95,9 +100,13 @@ colour can be switched on). When the output is piped, captured, or sent over a
 session that cannot draw it, they are plain text. Setting the `NO_COLOR`
 environment variable turns colour off everywhere.
 
-The text and JSON output show the full thumbprints of this PC's current
-Provisioner and Blueprint certificates. An older setup key is only ever shown
-by the last four characters of its thumbprint.
+The text and JSON output show each certificate thumbprint by its last four
+characters (`…B3C4`): this PC's current Provisioner and Blueprint certificates,
+and the Blueprint's key credentials. `-FullThumbprints` shows them in full. The
+JSON field names are unchanged; see
+[`show_agent_status.py`](show-agent-status-py.md#effects) for the fields whose
+values are now in the shorter form. An older setup key is only ever shown by
+the last four characters of its thumbprint.
 
 For a check that also signs the agent in and tests Teams, use
 `scripts\setup-windows.cmd -Diagnose`.

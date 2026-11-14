@@ -35,6 +35,7 @@ USE_CLOUD_MEMORY=false
 MEMORY_FLAG_PASSED=false
 NEW_CHAIN=false
 USE_BLUEPRINT=""
+USE_BLUEPRINT_GIVEN=false
 REMOVE_ALL_EXISTING_CERTS=false
 UPN_SUFFIX=""
 AGENT_USER_UPN=""
@@ -86,6 +87,7 @@ for arg in "$@"; do
             ;;
         --use-blueprint=*)
             USE_BLUEPRINT="${arg#--use-blueprint=}"
+            USE_BLUEPRINT_GIVEN=true
             ;;
         --remove-all-existing-certs)
             REMOVE_ALL_EXISTING_CERTS=true
@@ -133,6 +135,15 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+# A Blueprint is named by its App ID, a GUID. Anything else is a usage error here, before anything
+# runs: the value is recorded in the state file and steers the provisioning helpers.
+if [ "$USE_BLUEPRINT_GIVEN" = true ] \
+    && ! [[ "$USE_BLUEPRINT" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]; then
+    echo "ERROR: --use-blueprint takes the Blueprint's App ID, which looks like 1a2b3c4d-1234-5678-9abc-def012345678." >&2
+    printf '  Given: %s\n' "$USE_BLUEPRINT" >&2
+    exit 2
+fi
 
 # Mutex: --create-new-storage and --with-storage-account both pin the
 # storage account name; only one can win.
@@ -308,7 +319,8 @@ if [ "$DIAGNOSE" = true ]; then
     fi
     set +e
     # entrabot.config reads .env as data. It is never sourced: a value could hold $(...).
-    "$PROJECT_ROOT/.venv/bin/python" - <<PY
+    # The project folder is an argument, never part of the program.
+    "$PROJECT_ROOT/.venv/bin/python" - "$PROJECT_ROOT" <<'PY'
 import sys
 from pathlib import Path
 
@@ -316,7 +328,7 @@ from entrabot.config import EntraBotConfig
 from entrabot.preflight import format_report, overall_exit_code, run_diagnostics
 
 config = EntraBotConfig.from_env()
-project_root = Path("$PROJECT_ROOT")
+project_root = Path(sys.argv[1])
 checks = run_diagnostics(
     config,
     state_path=project_root / ".entrabot-state.json",
@@ -339,19 +351,19 @@ PY
 fi
 
 # ── Helper: read value from .entrabot-state.json ───────────────────────────
+# The path and key go in as arguments, never into the program text.
 
 read_state() {
-    local key="$1"
-    "$PYTHON" -c "
+    "$PYTHON" -c '
 import json, pathlib, sys
-state_file = pathlib.Path('$PROJECT_ROOT/.entrabot-state.json')
+state_file, key = pathlib.Path(sys.argv[1]), sys.argv[2]
 if not state_file.is_file():
     sys.exit(0)
-data = json.loads(state_file.read_text())
-val = data.get('$key', '')
+data = json.loads(state_file.read_text(encoding="utf-8"))
+val = data.get(key, "")
 if val:
     print(val)
-" || echo ""
+' "$PROJECT_ROOT/.entrabot-state.json" "$1" || echo ""
 }
 
 # ── Helper: read one value from the existing .env ──────────────────────────
@@ -412,7 +424,9 @@ PYTHON=""
 for candidate in python3.12 python3.13 python3; do
     if command -v "$candidate" &>/dev/null; then
         PY_VER=$("$candidate" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        if [ "$(echo "$PY_VER >= 3.12" | bc || python3 -c "print(int($PY_VER >= 3.12))")" = "1" ]; then
+        # The interpreter compares its own version. Compared as decimal numbers, 3.9 counted as
+        # 3.12 or later.
+        if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)'; then
             PYTHON="$candidate"
             break
         fi
@@ -606,18 +620,25 @@ fi
 # Check whether this tenant has Teams and, for A365 runs, Copilot seats *before* we provision
 # anything. Warns are non-fatal — create_entra_agent_ids.py performs the actual
 # assignment later, after the Agent User exists.
+#
+# The token is the signed-in administrator's. It never goes on a command line, where any local
+# user can read it from the process list: each check gets it in the environment of that one
+# command and takes it out of there. GRAPH_TOKEN itself is never exported (unset first, in case
+# the calling shell exported one of this name) and is unset once the checks are done.
+unset GRAPH_TOKEN
 if command -v az >/dev/null 2>&1 && [ -d "$PROJECT_ROOT/.venv" ]; then
     GRAPH_TOKEN=$(az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv 2>/dev/null || echo "")
     if [ -n "$GRAPH_TOKEN" ]; then
         set +e
-        "$PROJECT_ROOT/.venv/bin/python" - "$GRAPH_TOKEN" <<'PY' 2>&1 || true
+        PREFLIGHT_GRAPH_TOKEN="$GRAPH_TOKEN" "$PROJECT_ROOT/.venv/bin/python" - <<'PY' 2>&1 || true
+import os
 import sys
 from entrabot.preflight import (
     check_teams_license_availability,
     format_report,
 )
 
-token = sys.argv[1]
+token = os.environ.pop("PREFLIGHT_GRAPH_TOKEN", "")
 teams_result = check_teams_license_availability(token)
 # Only print warn/skip — pass is silent so we don't add noise on green runs.
 if teams_result.status == "pass":
@@ -626,14 +647,15 @@ else:
     print(format_report([teams_result], color=sys.stdout.isatty()))
 PY
         if [ "$WITH_A365_WORK_IQ" = true ]; then
-            "$PROJECT_ROOT/.venv/bin/python" - "$GRAPH_TOKEN" <<'PY' 2>&1 || true
+            PREFLIGHT_GRAPH_TOKEN="$GRAPH_TOKEN" "$PROJECT_ROOT/.venv/bin/python" - <<'PY' 2>&1 || true
+import os
 import sys
 from entrabot.preflight import (
     check_copilot_license_availability,
     format_report,
 )
 
-token = sys.argv[1]
+token = os.environ.pop("PREFLIGHT_GRAPH_TOKEN", "")
 copilot_result = check_copilot_license_availability(token)
 if copilot_result.status == "pass":
     print(f"  \033[0;32m✅ Copilot license available: {copilot_result.detail}\033[0m")
@@ -644,6 +666,7 @@ PY
         set -e
     fi
 fi
+unset GRAPH_TOKEN
 
 # If --teams-user was specified, resolve user(s) for Teams (comma-separated for group chat)
 HUMAN_USER_IDS=""
@@ -749,19 +772,46 @@ success "Account:    $ACCOUNT_NAME"
 # ════════════════════════════════════════════════════════════════════════════
 # Step 3: Ensure Python dependencies for provisioning scripts
 # ════════════════════════════════════════════════════════════════════════════
-step 3 "Ensuring Python dependencies for provisioning scripts"
+step 3 "Setting up the Python environment for the provisioning scripts"
 
-if [ -d "$PROJECT_ROOT/.venv" ]; then
-    SCRIPT_PYTHON="$PROJECT_ROOT/.venv/bin/python3"
-    if [ ! -f "$SCRIPT_PYTHON" ]; then
-        SCRIPT_PYTHON="$PYTHON"
+# The provisioning scripts import this project (entrabot.*), so it has to be installed
+# before any of them runs. On a machine with no .venv yet they used to be started with the
+# system Python: that died on the import, and installing into the system Python is refused
+# on distributions that manage it (PEP 668). So the environment is made here, first, and
+# nothing is ever installed into the system Python.
+SCRIPT_PYTHON="$PROJECT_ROOT/.venv/bin/python3"
+if [ ! -x "$SCRIPT_PYTHON" ]; then
+    if ! "$PYTHON" -m venv "$PROJECT_ROOT/.venv"; then
+        err "Could not create the Python environment ($PROJECT_ROOT/.venv)."
+        echo "     On Debian or Ubuntu, install the venv module first:  sudo apt install python3-venv" >&2
+        exit 1
     fi
-else
-    SCRIPT_PYTHON="$PYTHON"
+    success "Created .venv"
 fi
 
-"$SCRIPT_PYTHON" -m pip install --quiet azure-identity requests 2>&1 | tail -1 || true
-success "azure-identity and requests available"
+# Install only when something is missing, so a repeat run stays quick. A failed install
+# stops setup with pip's own message; it is never hidden or reported as success.
+if ! "$SCRIPT_PYTHON" - <<'PY'
+import importlib.util
+import sys
+
+
+def have(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except ModuleNotFoundError:
+        return False
+
+
+needed = ("entrabot", "azure.identity", "requests", "keyring", "cryptography")
+sys.exit(0 if all(have(name) for name in needed) else 1)
+PY
+then
+    # Python 3.12+ venvs no longer seed setuptools/wheel; the editable install needs both.
+    "$SCRIPT_PYTHON" -m pip install --quiet --upgrade pip setuptools wheel
+    "$SCRIPT_PYTHON" -m pip install --quiet -e "$PROJECT_ROOT[provisioning]"
+fi
+success "Project and provisioning dependencies installed in .venv"
 
 # ── Validate identity mode ────────────────────────────────────────────────
 if [ "$NEW_CHAIN" = true ] && [ -n "$USE_BLUEPRINT" ]; then
@@ -809,29 +859,30 @@ if [ -n "$USE_BLUEPRINT" ] && [ "$NEW_CHAIN" = false ]; then
         echo -e "  ${YELLOW}Note: this machine's cert on the OLD Blueprint is NOT revoked."
         echo -e "        Remove it manually with ./scripts/cleanup-orphans.sh or via"
         echo -e "        'az ad app credential delete' if you want a clean break.${NC}"
-        "$SCRIPT_PYTHON" -c "
-import json, pathlib
-sf = pathlib.Path('$STATE_FILE')
-data = json.loads(sf.read_text()) if sf.is_file() else {}
+        # The state file and the Blueprint App ID are arguments, never part of the program.
+        "$SCRIPT_PYTHON" -c '
+import json, pathlib, sys
+sf, blueprint_app_id = pathlib.Path(sys.argv[1]), sys.argv[2]
+data = json.loads(sf.read_text(encoding="utf-8")) if sf.is_file() else {}
 # Keep provisioner app + tenant; drop everything tied to the old chain
 keep = {
     k: v for k, v in data.items()
-    if k.startswith('PROVISIONER') or k == 'TENANT_ID'
+    if k.startswith("PROVISIONER") or k == "TENANT_ID"
 }
-keep['BLUEPRINT_APP_ID'] = '$USE_BLUEPRINT'
-sf.write_text(json.dumps(keep, indent=2))
-print('  Cleared stale Blueprint/Agent/User state (kept Provisioner + tenant)')
-"
+keep["BLUEPRINT_APP_ID"] = blueprint_app_id
+sf.write_text(json.dumps(keep, indent=2), encoding="utf-8")
+print("  Cleared stale Blueprint/Agent/User state (kept Provisioner + tenant)")
+' "$STATE_FILE" "$USE_BLUEPRINT"
     else
         echo -e "  ${GREEN}Using existing Blueprint: ${USE_BLUEPRINT}${NC}"
         # Fresh machine or re-run with the same ID — just record it.
-        "$SCRIPT_PYTHON" -c "
-import json, pathlib
-sf = pathlib.Path('$STATE_FILE')
-data = json.loads(sf.read_text()) if sf.is_file() else {}
-data['BLUEPRINT_APP_ID'] = '$USE_BLUEPRINT'
-sf.write_text(json.dumps(data, indent=2))
-"
+        "$SCRIPT_PYTHON" -c '
+import json, pathlib, sys
+sf, blueprint_app_id = pathlib.Path(sys.argv[1]), sys.argv[2]
+data = json.loads(sf.read_text(encoding="utf-8")) if sf.is_file() else {}
+data["BLUEPRINT_APP_ID"] = blueprint_app_id
+sf.write_text(json.dumps(data, indent=2), encoding="utf-8")
+' "$STATE_FILE" "$USE_BLUEPRINT"
         echo "  State file updated with Blueprint ID"
     fi
     # Which Agent User. Step 7 writes .env's ENTRABOT_AGENT_USER_UPN together with the
@@ -869,15 +920,15 @@ if [ "$NEW_CHAIN" = true ]; then
         cp "$STATE_FILE" "$BACKUP"
         echo -e "  ${YELLOW}--new: backed up state to $(basename "$BACKUP")${NC}"
         # Clear identity keys but keep the provisioner app (it can be reused)
-        "$SCRIPT_PYTHON" -c "
-import json, pathlib
-sf = pathlib.Path('$STATE_FILE')
-data = json.loads(sf.read_text()) if sf.is_file() else {}
-# Keep provisioner app — it's a helper, not part of the agent identity
-keep = {k: v for k, v in data.items() if k.startswith('PROVISIONER')}
-sf.write_text(json.dumps(keep, indent=2))
-print('  Cleared identity state (kept provisioner app)')
-"
+        "$SCRIPT_PYTHON" -c '
+import json, pathlib, sys
+sf = pathlib.Path(sys.argv[1])
+data = json.loads(sf.read_text(encoding="utf-8")) if sf.is_file() else {}
+# Keep provisioner app — it is a helper, not part of the agent identity
+keep = {k: v for k, v in data.items() if k.startswith("PROVISIONER")}
+sf.write_text(json.dumps(keep, indent=2), encoding="utf-8")
+print("  Cleared identity state (kept provisioner app)")
+' "$STATE_FILE"
     fi
     # Resolve UPN — explicit UPN wins; otherwise suffix comes from flag or prompt.
     # Example: ./scripts/setup.sh --new --agent-user-upn=entrabot-agent@yourtenant.onmicrosoft.com
@@ -1285,12 +1336,14 @@ else
             # Migration prompt — upload existing local data + Claude Code
             # persona memory (ADR-005 Phase 6a), leave both trees in place.
             DATA_DIR="${ENTRABOT_DATA_DIR:-$HOME/.entrabot/data}"
-            # Resolve Claude Code per-project memory dir (may be absent).
-            PERSONA_DIR=$("$PYTHON" -c "
+            # Resolve Claude Code per-project memory dir (may be absent). The project folder is an
+            # argument, never part of the program.
+            PERSONA_DIR=$("$PYTHON" -c '
+import sys
 from pathlib import Path
 from entrabot.storage.persona import claude_code_memory_dir
-print(claude_code_memory_dir(Path('$PROJECT_ROOT')))
-" 2>/dev/null || echo "")
+print(claude_code_memory_dir(Path(sys.argv[1])))
+' "$PROJECT_ROOT" || echo "")
             HAS_DATA=false
             HAS_PERSONA=false
             [ -d "$DATA_DIR" ] && [ -n "$(ls -A "$DATA_DIR" 2>/dev/null)" ] && HAS_DATA=true
@@ -1318,28 +1371,30 @@ print(claude_code_memory_dir(Path('$PROJECT_ROOT')))
                 read -r MIGRATE_REPLY
                 if [ "$MIGRATE_REPLY" = "y" ] || [ "$MIGRATE_REPLY" = "Y" ]; then
                     MIGRATION_RC=0
-                    "$PYTHON" -c "
+                    # The folders are arguments, never part of the program.
+                    "$PYTHON" -c '
 import sys
 from pathlib import Path
 from entrabot.storage.backend import get_backend
 from entrabot.storage.migration import migrate_local_to_backend
-RED = '\033[0;31m'
-GREEN = '\033[0;32m'
-NC = '\033[0m'
+RED = "\033[0;31m"
+GREEN = "\033[0;32m"
+NC = "\033[0m"
+has_data, data_dir, has_persona, persona_dir = sys.argv[1:5]
 sources = []
-if '$HAS_DATA' == 'true':
-    sources.append((Path('$DATA_DIR'), ''))
-if '$HAS_PERSONA' == 'true':
-    sources.append((Path('$PERSONA_DIR'), 'claude_memory'))
+if has_data == "true":
+    sources.append((Path(data_dir), ""))
+if has_persona == "true":
+    sources.append((Path(persona_dir), "claude_memory"))
 report = migrate_local_to_backend(sources, get_backend())
-print(f'  {GREEN}Copied:{NC} {report.copied} files ({report.bytes_copied} bytes)')
-print(f'  Skipped (already in cloud): {report.skipped}')
+print(f"  {GREEN}Copied:{NC} {report.copied} files ({report.bytes_copied} bytes)")
+print(f"  Skipped (already in cloud): {report.skipped}")
 if report.errors:
-    print(f'  {RED}Errors: {len(report.errors)}{NC}')
+    print(f"  {RED}Errors: {len(report.errors)}{NC}")
     for k, e in report.errors[:5]:
-        print(f'    {RED}- {k}:{NC} {e}')
+        print(f"    {RED}- {k}:{NC} {e}")
     sys.exit(2)
-" || MIGRATION_RC=$?
+' "$HAS_DATA" "$DATA_DIR" "$HAS_PERSONA" "$PERSONA_DIR" || MIGRATION_RC=$?
                     if [ "$MIGRATION_RC" -ne 0 ]; then
                         MIGRATION_FAILED=true
                         err "Migration FAILED — cloud memory is not in sync with local"

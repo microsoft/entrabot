@@ -155,7 +155,8 @@ def _step_seven() -> str:
 # ---------------------------------------------------------------------------
 
 # Stands in for the interpreter setup.sh calls. It logs every call and runs only the .env reader
-# for real. The provisioner and the persona lookup get canned answers.
+# for real. The provisioner and the persona lookup get canned answers. (The persona lookup takes
+# the project folder from sys.argv too, so it is matched first.)
 _FAKE_PYTHON = r"""#!/bin/bash
 rest="${*:2}"
 printf '%s %s %s\n' "${1##*/}" "$#" "${rest%%$'\n'*}" >> "$FAKE_CALLS"
@@ -166,8 +167,8 @@ case "$1" in
         exit "$FAKE_PROVISION_RC" ;;
     -c)
         case "$2" in
-            *sys.argv*) exec "$REAL_PYTHON" "$@" ;;
             *claude_code_memory_dir*) exit 0 ;;
+            *sys.argv*) exec "$REAL_PYTHON" "$@" ;;
         esac
         echo "unexpected interpreter program: ${2%%$'\n'*}" >&2; exit 99 ;;
     *) echo "unexpected interpreter call: $*" >&2; exit 99 ;;
@@ -1259,3 +1260,384 @@ class TestStepFiveChecksTheBlueprintItGotBack:
         code = [line.strip() for line in executed.splitlines() if not line.lstrip().startswith("#")]
         assert [line for line in code if SIDE_EFFECT.search(line)] == []
         assert "/dev/null" not in _function("same_id")
+
+
+# ---------------------------------------------------------------------------
+# --use-blueprint is an App ID, checked before anything runs
+# ---------------------------------------------------------------------------
+#
+# The defect: the value was put into the text of a `python -c` program unchecked, so a value with a
+# quote in it became Python code. It is now checked as a GUID while the arguments are parsed, and
+# every value reaches Python as an argument or in the environment, never as program text.
+
+# Records every call and fails: a setup that got past the argument check would show up here.
+_RECORDING_STUB = '#!/bin/bash\nprintf "%s %s\\n" "${0##*/}" "$*" >> "$FAKE_CALLS"\nexit 1\n'
+_STUBBED = (
+    "az",
+    "python3",
+    "python3.12",
+    "python3.13",
+    "git",
+    "pip",
+    "pip3",
+    "curl",
+    "bc",
+    "uname",
+)
+
+
+def _run_setup_copy(tmp_path: Path, *args: str) -> tuple[subprocess.CompletedProcess[str], Path]:
+    root = tmp_path / "root"
+    (root / "scripts").mkdir(parents=True)
+    copy = root / "scripts" / "setup.sh"
+    copy.write_text(_script(), encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in _STUBBED:
+        stub = bin_dir / name
+        stub.write_text(_RECORDING_STUB, encoding="utf-8")
+        stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    calls = tmp_path / "calls.log"
+    calls.touch()
+    result = subprocess.run(
+        ["bash", str(copy), *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+        check=False,
+        env={
+            "PATH": f"{bin_dir}{os.pathsep}{os.defpath}",
+            "HOME": str(tmp_path),
+            "FAKE_CALLS": str(calls),
+        },
+        cwd=tmp_path,
+        stdin=subprocess.DEVNULL,
+    )
+    return result, calls
+
+
+GUID_SHAPE = "1a2b3c4d-1234-5678-9abc-def012345678"
+
+
+@posix_shell_only
+class TestUseBlueprintMustBeAnAppId:
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "not-a-guid",
+            "",
+            f"{NEW_BP}'); open('pwned', 'w').close(); ('",
+            f"{NEW_BP}&calc",
+            f" {NEW_BP}",
+            f"{NEW_BP}\n",
+            "{" + NEW_BP + "}",
+            NEW_BP[:-1],
+        ],
+        ids=[
+            "word",
+            "empty",
+            "python-code",
+            "ampersand",
+            "leading-space",
+            "newline",
+            "braces",
+            "short",
+        ],
+    )
+    def test_anything_else_is_a_usage_error_before_anything_runs(
+        self, tmp_path: Path, value: str
+    ) -> None:
+        result, calls = _run_setup_copy(tmp_path, f"--use-blueprint={value}")
+
+        assert result.returncode == 2, result.stdout + result.stderr
+        assert "ERROR: --use-blueprint takes the Blueprint's App ID" in result.stderr
+        assert GUID_SHAPE in result.stderr
+        assert f"Given: {value}" in result.stderr
+        assert calls.read_text(encoding="utf-8") == ""  # no command ran, not even the banner's
+        assert sorted(p.name for p in (tmp_path / "root").iterdir()) == ["scripts"]
+        assert not list(tmp_path.rglob("pwned"))
+
+    def test_it_is_checked_even_with_another_identity_flag(self, tmp_path: Path) -> None:
+        result, calls = _run_setup_copy(tmp_path, "--new", "--use-blueprint=x")
+
+        assert result.returncode == 2
+        assert "--use-blueprint takes the Blueprint's App ID" in result.stderr
+
+    @pytest.mark.parametrize("value", [NEW_BP, NEW_BP.upper(), GUID_SHAPE.upper()])
+    def test_an_app_id_in_either_letter_case_is_accepted(self, tmp_path: Path, value: str) -> None:
+        script = tmp_path / "parse.sh"
+        script.write_text(
+            "set -euo pipefail\n"
+            + _defaults_slice()
+            + _parse_slice()
+            + 'echo "OK $USE_BLUEPRINT"\n',
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            ["bash", str(script), f"--use-blueprint={value}"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+            check=False,
+            env={"PATH": os.defpath},
+            stdin=subprocess.DEVNULL,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == f"OK {value}"
+
+    def test_the_help_still_works(self, tmp_path: Path) -> None:
+        result, _ = _run_setup_copy(tmp_path, "--help")
+
+        assert result.returncode == 0
+        assert "--use-blueprint=ID" in result.stdout
+
+
+def _python_programs(text: str) -> list[str]:
+    """Every program setup.sh hands an interpreter in double quotes, which bash expands."""
+    return re.findall(r'-c "((?:[^"\\]|\\.)*)"', text, flags=re.DOTALL)
+
+
+class TestNoValueBecomesProgramText:
+    def test_no_double_quoted_program_holds_a_shell_value(self) -> None:
+        offenders = [program for program in _python_programs(_script()) if "$" in program]
+        assert offenders == []
+
+    def test_no_heredoc_program_is_expanded(self) -> None:
+        # `python - <<PY` expands $VALUES into the program; `<<'PY'` does not.
+        lines = [
+            line for line in _script().splitlines() if "python" in line.lower() and "<<" in line
+        ]
+        assert lines, "setup.sh hands no heredoc program to python"
+        assert [line for line in lines if not re.search(r"<<\s*'[A-Za-z_]+'", line)] == []
+
+
+# Runs the state-file programs for real, in a folder whose path has an apostrophe and a space.
+_IDENTITY_ONLY_HARNESS = r"""
+set -euo pipefail
+GREEN=""; YELLOW=""; RED=""; BLUE=""; NC=""
+success() { echo "SUCCESS: $1"; }
+warn()    { echo "WARN: $1"; }
+err()     { echo "ERR: $1"; }
+fail()    { echo "FAIL: $1"; exit 1; }
+PROJECT_ROOT="$FAKE_ROOT"
+SCRIPT_DIR="$FAKE_ROOT/scripts"
+PYTHON="$REAL_PYTHON"
+SCRIPT_PYTHON="$REAL_PYTHON"
+cd "$PROJECT_ROOT"
+@@DEFAULTS@@
+USE_BLUEPRINT="$FAKE_USE_BLUEPRINT"
+@@READ_STATE@@
+@@READ_ENV_VALUE@@
+@@SAME_ID@@
+@@IDENTITY@@
+echo "IDENTITY STEP DONE"
+"""
+
+
+@posix_shell_only
+class TestTheStateFileProgramsTakeValuesAsData:
+    """Defence in depth behind the argument check: even a value that got past it would be data."""
+
+    @staticmethod
+    def _run(tmp_path: Path, use_blueprint: str, state: dict[str, str] | None) -> Path:
+        root = tmp_path / "it's a root"
+        (root / "scripts").mkdir(parents=True)
+        if state is not None:
+            (root / ".entrabot-state.json").write_text(json.dumps(state), encoding="utf-8")
+        script = root / "harness.sh"
+        script.write_text(
+            _IDENTITY_ONLY_HARNESS.replace("@@DEFAULTS@@", _defaults_slice())
+            .replace("@@READ_STATE@@", _function("read_state"))
+            .replace("@@READ_ENV_VALUE@@", _function("read_env_value"))
+            .replace("@@SAME_ID@@", _function("same_id"))
+            .replace("@@IDENTITY@@", _identity_slice()),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            ["bash", str(script)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+            check=False,
+            env={
+                "PATH": os.defpath,
+                "HOME": str(tmp_path),
+                "FAKE_ROOT": str(root),
+                "REAL_PYTHON": sys.executable,
+                "FAKE_USE_BLUEPRINT": use_blueprint,
+            },
+            cwd=root,
+            stdin=subprocess.DEVNULL,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "IDENTITY STEP DONE" in result.stdout
+        return root
+
+    HOSTILE = "x'); open('pwned', 'w').close(); ('"
+
+    @pytest.mark.parametrize("state", [None, {"BLUEPRINT_APP_ID": HOSTILE}], ids=["fresh", "same"])
+    def test_recording_the_blueprint(self, tmp_path: Path, state: dict[str, str] | None) -> None:
+        root = self._run(tmp_path, self.HOSTILE, state)
+
+        assert json.loads((root / ".entrabot-state.json").read_text(encoding="utf-8")) == {
+            "BLUEPRINT_APP_ID": self.HOSTILE
+        }
+        assert not list(tmp_path.rglob("pwned"))
+
+    def test_switching_blueprint(self, tmp_path: Path) -> None:
+        root = self._run(tmp_path, self.HOSTILE, OLD_STATE)
+
+        recorded = json.loads((root / ".entrabot-state.json").read_text(encoding="utf-8"))
+        assert recorded == {
+            "PROVISIONER_CLIENT_ID": OLD_STATE["PROVISIONER_CLIENT_ID"],
+            "TENANT_ID": OLD_STATE["TENANT_ID"],
+            "BLUEPRINT_APP_ID": self.HOSTILE,
+        }
+        assert not list(tmp_path.rglob("pwned"))
+
+    def test_read_state_takes_its_key_as_an_argument(self, tmp_path: Path) -> None:
+        root = tmp_path / "it's a root"
+        root.mkdir()
+        (root / ".entrabot-state.json").write_text('{"A": "1"}', encoding="utf-8")
+        script = root / "read.sh"
+        script.write_text(
+            'set -euo pipefail\nPROJECT_ROOT="$1"\nPYTHON="$2"\n'
+            + _function("read_state")
+            + 'read_state "$3"\n',
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            ["bash", str(script), str(root), sys.executable, "A'); open('pwned', 'w').close(); ('"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+            check=False,
+            env={"PATH": os.defpath},
+            cwd=root,
+            stdin=subprocess.DEVNULL,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == ""
+        assert not list(tmp_path.rglob("pwned"))
+
+
+# ---------------------------------------------------------------------------
+# Secrets stay off command lines: the license preflight's Graph token
+# ---------------------------------------------------------------------------
+
+PREFLIGHT_TOKEN = "eyJ0eXAiOiJKV1QifQ." + "pr3fl1ght" * 30
+
+# The token is in this file only, not in the harness's environment, so it can be looked for in
+# what later commands inherit.
+_PREFLIGHT_AZ = (
+    r"""#!/bin/bash
+printf '%s\n' "$*" >> "$FAKE_CALLS"
+case "$1 $2" in
+    "account get-access-token") printf '%s\n' '"""
+    + PREFLIGHT_TOKEN
+    + r"""' ;;
+esac
+exit 0
+"""
+)
+
+# The venv interpreter: records its arguments, its environment and the program it was handed.
+_PREFLIGHT_PYTHON = r"""#!/bin/bash
+n=$(ls "$FAKE_LOG" | wc -l | tr -d ' ')
+printf '%s\0' "$@" > "$FAKE_LOG/$n.argv"
+env > "$FAKE_LOG/$n.env"
+cat > "$FAKE_LOG/$n.program"
+exit 0
+"""
+
+_PROBE = '#!/bin/bash\nenv > "$FAKE_PROBE"\n'
+
+_PREFLIGHT_HARNESS = r"""
+set -euo pipefail
+PROJECT_ROOT="$FAKE_ROOT"
+WITH_A365_WORK_IQ=true
+@@PREFLIGHT@@
+"$FAKE_ROOT/probe"
+"""
+
+
+def _preflight_slice() -> str:
+    text = _script()
+    return text[
+        text.index("# ── License preflight") : text.index("# If --teams-user was specified")
+    ]
+
+
+@posix_shell_only
+class TestThePreflightTokenStaysOffTheCommandLine:
+    @staticmethod
+    def _run(tmp_path: Path) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
+        root = tmp_path / "root"
+        venv_python = root / ".venv" / "bin" / "python"
+        venv_python.parent.mkdir(parents=True)
+        venv_python.write_text(_PREFLIGHT_PYTHON, encoding="utf-8")
+        venv_python.chmod(0o755)
+        probe = root / "probe"
+        probe.write_text(_PROBE, encoding="utf-8")
+        probe.chmod(0o755)
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "az").write_text(_PREFLIGHT_AZ, encoding="utf-8")
+        (bin_dir / "az").chmod(0o755)
+        log = tmp_path / "log"
+        log.mkdir()
+        script = tmp_path / "harness.sh"
+        script.write_text(
+            _PREFLIGHT_HARNESS.replace("@@PREFLIGHT@@", _preflight_slice()), encoding="utf-8"
+        )
+        result = subprocess.run(
+            ["bash", str(script)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+            check=False,
+            env={
+                "PATH": f"{bin_dir}{os.pathsep}{os.defpath}",
+                "FAKE_ROOT": str(root),
+                "FAKE_CALLS": str(tmp_path / "az-calls.log"),
+                "FAKE_LOG": str(log),
+                "FAKE_PROBE": str(tmp_path / "probe.env"),
+                # Exported by the calling shell: the token must not ride on it to later commands.
+                "GRAPH_TOKEN": "inherited",
+            },
+            cwd=root,
+            stdin=subprocess.DEVNULL,
+        )
+        return result, log, tmp_path / "probe.env"
+
+    def test_both_checks_get_the_token_in_their_environment_and_never_as_an_argument(
+        self, tmp_path: Path
+    ) -> None:
+        result, log, _ = self._run(tmp_path)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        runs = sorted(log.glob("*.argv"))
+        assert len(runs) == 2  # Teams, then Copilot (Work IQ was asked for)
+        for argv_file in runs:
+            argv = argv_file.read_bytes().decode("utf-8").split("\0")[:-1]
+            assert argv == ["-"]
+            env = argv_file.with_suffix(".env").read_text(encoding="utf-8")
+            assert f"PREFLIGHT_GRAPH_TOKEN={PREFLIGHT_TOKEN}" in env.splitlines()
+            program = argv_file.with_suffix(".program").read_text(encoding="utf-8")
+            assert "sys.argv" not in program and PREFLIGHT_TOKEN not in program
+            assert 'os.environ.pop("PREFLIGHT_GRAPH_TOKEN"' in program
+
+    def test_later_commands_do_not_inherit_it(self, tmp_path: Path) -> None:
+        result, _, probe = self._run(tmp_path)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        later = probe.read_text(encoding="utf-8")
+        assert PREFLIGHT_TOKEN not in later
+        assert "GRAPH_TOKEN=" not in later
