@@ -25,7 +25,7 @@ from entrabot.storage.backend import BlobBackend
 from entrabot.tools.poll_state import WATCHED_CHATS_KEY
 
 AGENT_USER_ID = "aaaabbbb-cccc-dddd-eeee-111122223333"
-SPONSOR_GUEST_OID = "963835fc-0b5c-4f3e-9f42-a1b906d9fbf8"
+SPONSOR_GUEST_OID = "ffeeddcc-bbaa-4998-8776-554433221100"
 SPONSOR_HOME_OID = "00112233-4455-6677-8899-aabbccddeeff"
 ATTACKER_HOME_OID = "deadbeef-0000-0000-0000-000000000001"
 

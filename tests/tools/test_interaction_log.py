@@ -58,7 +58,7 @@ class TestDetectChannel:
         )
 
     def test_group_chat_id(self) -> None:
-        assert detect_channel("19:4c8d47b5ea0b4177810fbdb1103ab013@thread.v2") == "teams_group"
+        assert detect_channel("19:00112233445566778899aabbccddeeff@thread.v2") == "teams_group"
 
     def test_none_is_terminal(self) -> None:
         assert detect_channel(None) == "terminal"
@@ -80,7 +80,7 @@ class TestLogInteraction:
             direction="outbound",
             sender="entrabot-agent@fabrikam.onmicrosoft.com",
             recipient="19:xyz@unq.gbl.spaces",
-            summary="Sent Brandon the phase plan",
+            summary="Sent Alex the phase plan",
             action="send_teams_message",
             content_ref="msg-123",
         )
@@ -93,7 +93,7 @@ class TestLogInteraction:
         assert entry["channel"] == "teams_dm"
         assert entry["direction"] == "outbound"
         assert entry["sender"] == "entrabot-agent@fabrikam.onmicrosoft.com"
-        assert entry["summary"] == "Sent Brandon the phase plan"
+        assert entry["summary"] == "Sent Alex the phase plan"
 
     def test_creates_directory(self, tmp_data_dir: Path) -> None:
         # interactions/ should not exist yet

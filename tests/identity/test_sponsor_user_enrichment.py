@@ -48,7 +48,7 @@ def _sponsors_response_with_id_only(sponsor_id: str) -> dict[str, Any]:
     """Real-world Graph response for the sponsors nav collection.
 
     Graph projects only ``id`` for nav-collection members regardless of
-    ``$select`` — this matches what Sara's tenant returned in production
+    ``$select`` — this matches what a real tenant returned in production
     on 2026-04-30 (sponsor allowlist empty bug).
     """
     return {"value": [{"id": sponsor_id}]}

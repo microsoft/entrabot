@@ -364,9 +364,9 @@ class TestLogin:
 
     def test_tenant_and_device_code_are_passed(self) -> None:
         spawn = FakeSpawn()
-        _az(spawn).login(tenant="werner.ac", device_code=True)
+        _az(spawn).login(tenant="contoso.com", device_code=True)
         argv = spawn.calls[0].argv
-        assert argv[argv.index("--tenant") + 1] == "werner.ac" and "--use-device-code" in argv
+        assert argv[argv.index("--tenant") + 1] == "contoso.com" and "--use-device-code" in argv
 
     def test_a_failed_login_is_false(self) -> None:
         spawn = FakeSpawn()
@@ -421,7 +421,7 @@ class TestLogin:
         assert _az(spawn).login(tenant=None, device_code=False) == "failed"
 
     @pytest.mark.parametrize(
-        "value", ["werner.ac", "contoso.onmicrosoft.com", "0f3c1c7e-1111-2222-3333-444455556666"]
+        "value", ["contoso.com", "contoso.onmicrosoft.com", "0f3c1c7e-1111-2222-3333-444455556666"]
     )
     def test_good_tenants(self, value: str) -> None:
         assert validate_tenant(value) is None

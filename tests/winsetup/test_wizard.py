@@ -61,7 +61,7 @@ CREATED_STATE = {
     "AGENT_ID": "agent-app",
     "AGENT_OBJECT_ID": "agent-object",
     "AGENT_USER_ID": "agent-user",
-    "AGENT_USER_UPN": "entrabot-agent-sati@werner.ac",
+    "AGENT_USER_UPN": "entrabot-agent-sati@contoso.com",
     "AGENT_USER_LICENSE_SKU": "TEAMS_ESSENTIALS",
 }
 PASSING_SMOKE = [
@@ -73,7 +73,7 @@ PASSING_SMOKE = [
 OTHER_AGENT_ENV = [
     f"ENTRABOT_TENANT_ID={TENANT}",
     "ENTRABOT_AGENT_USER_ID=the-previous-agent-user",
-    "ENTRABOT_AGENT_UPN=entrabot-agent-old@werner.ac",
+    "ENTRABOT_AGENT_UPN=entrabot-agent-old@contoso.com",
     "ENTRABOT_HUMAN_USER_ID=the-sponsor",
     "ENTRABOT_BLOB_ENDPOINT=https://old.blob.core.windows.net",
     "ENTRABOT_BLOB_CONTAINER=old",
@@ -81,33 +81,33 @@ OTHER_AGENT_ENV = [
 ADMIN_USER = {
     "id": "admin-object",
     "displayName": "Tenant Admin",
-    "userPrincipalName": "admin@werner.ac",
-    "mail": "admin@werner.ac",
+    "userPrincipalName": "admin@contoso.com",
+    "mail": "admin@contoso.com",
     "userType": "Member",
     "otherMails": [],
 }
 ADMIN_SPONSOR = {
     "id": "admin-object",
     "displayName": "Tenant Admin",
-    "userPrincipalName": "admin@werner.ac",
-    "mail": "admin@werner.ac",
+    "userPrincipalName": "admin@contoso.com",
+    "mail": "admin@contoso.com",
 }
 PAT = {
     "id": "pat-object",
     "displayName": "Pat Member",
-    "userPrincipalName": "pat@werner.ac",
-    "mail": "pat@werner.ac",
+    "userPrincipalName": "pat@contoso.com",
+    "mail": "pat@contoso.com",
     "userType": "Member",
     "otherMails": [],
 }
 # The tenant's owner signs in with a personal Microsoft account (measured on a real tenant).
 OWNER = {
     "id": "owner-object",
-    "displayName": "Brandon Werner",
-    "userPrincipalName": "brandwe_outlook.com#EXT#@werner.onmicrosoft.com",
+    "displayName": "Alex Wilber",
+    "userPrincipalName": "alex_example.com#EXT#@contoso.onmicrosoft.com",
     "mail": None,
     "userType": "Member",
-    "otherMails": ["brandwe@outlook.com"],
+    "otherMails": ["alex@example.com"],
 }
 # The kind of thing the provisioning helpers print: useful in a log, noise on screen.
 PROVISION_CHATTER = (
@@ -203,7 +203,7 @@ class Scenario:
             (tools / name).write_bytes(b"")
         self.env.update(
             {
-                "USERNAME": "Brandon",
+                "USERNAME": "Alex",
                 "USERPROFILE": str(self.tmp_path / "profile"),
                 "LOCALAPPDATA": str(self.tmp_path / "localappdata"),
                 "SESSIONNAME": "Console",
@@ -231,9 +231,9 @@ class Scenario:
             "id": TENANT,
             "name": "N/A(tenant level account)",
             "tenantId": self.account_tenant,
-            "tenantDisplayName": "Werner",
-            "tenantDefaultDomain": "werner.onmicrosoft.com",
-            "user": {"name": "admin@werner.ac", "type": "user"},
+            "tenantDisplayName": "Contoso",
+            "tenantDefaultDomain": "contoso.onmicrosoft.com",
+            "user": {"name": "admin@contoso.com", "type": "user"},
         }
 
     def _rules(self) -> None:
@@ -291,8 +291,8 @@ class Scenario:
                 stdout=json.dumps(
                     {
                         "id": "admin-object",
-                        "userPrincipalName": "admin@werner.ac",
-                        "mail": "admin@werner.ac",
+                        "userPrincipalName": "admin@contoso.com",
+                        "mail": "admin@contoso.com",
                         "userType": "Member",
                     }
                 )
@@ -343,7 +343,7 @@ class Scenario:
         )
         on(
             lambda r: r.argv[0].endswith("whoami.exe") and "/user" in r.argv,
-            Reply(stdout='"ebwintest\\\\brandon","S-1-5-21-1-2-3-1001"\n'),
+            Reply(stdout='"testpc\\\\alex","S-1-5-21-1-2-3-1001"\n'),
         )
         on(
             lambda r: r.argv[0].endswith("whoami.exe") and "/groups" in r.argv,
@@ -501,9 +501,9 @@ class Scenario:
             else [
                 f"ENTRABOT_TENANT_ID={TENANT}",
                 "ENTRABOT_AGENT_USER_ID=agent-user",
-                "ENTRABOT_AGENT_UPN=entrabot-agent-sati@werner.ac",
+                "ENTRABOT_AGENT_UPN=entrabot-agent-sati@contoso.com",
                 "ENTRABOT_HUMAN_USER_ID=the-sponsor",
-                "ENTRABOT_HUMAN_UPN=boss@werner.ac",
+                "ENTRABOT_HUMAN_UPN=boss@contoso.com",
             ]
         )
         self.env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -525,12 +525,12 @@ class TestScriptedNewAgent:
         env = world.dotenv
         assert env["ENTRABOT_TENANT_ID"] == TENANT
         assert env["ENTRABOT_BLUEPRINT_APP_ID"] == BP_APP
-        assert env["ENTRABOT_AGENT_UPN"] == "entrabot-agent-sati@werner.ac"
+        assert env["ENTRABOT_AGENT_UPN"] == "entrabot-agent-sati@contoso.com"
         assert env["ENTRABOT_BLUEPRINT_CERT_SHA1"] == NEW_SHA1
         assert env["ENTRABOT_BLUEPRINT_CERT_THUMBPRINT"] == NEW_X5T
         assert env["ENTRABOT_BLUEPRINT_KSP"] == "tpm"
         assert env["ENTRABOT_HUMAN_USER_ID"] == "admin-object"
-        assert env["ENTRABOT_HUMAN_UPN"] == "admin@werner.ac"
+        assert env["ENTRABOT_HUMAN_UPN"] == "admin@contoso.com"
         assert env["ENTRABOT_KEEP_MEMORY_LOCAL"] == "true"
         servers = json.loads((world.root / ".mcp.json").read_text("utf-8"))["mcpServers"]
         assert servers["entrabot"]["command"].endswith("entrabot-mcp.exe")
@@ -572,7 +572,7 @@ class TestScriptedNewAgent:
     ) -> None:
         world.run(new_chain=True, upn_suffix="sati")
         assert "claude --dangerously-load-development-channels server:entrabot" in world.out
-        assert "entrabot-agent-sati@werner.ac" in world.out
+        assert "entrabot-agent-sati@contoso.com" in world.out
         assert "hardware TPM" in world.out
         assert "valid until" in world.out
         assert "-Diagnose" in world.out
@@ -605,19 +605,19 @@ class TestScriptedNewAgent:
         assert not any(snippet("run_smoke_checks")(c) for c in world.spawn.calls)
 
     def test_a_sponsor_given_on_the_command_line_wins(self, world: Scenario) -> None:
-        assert world.run(new_chain=True, upn_suffix="sati", sponsors=["pat@werner.ac"]) == 0
+        assert world.run(new_chain=True, upn_suffix="sati", sponsors=["pat@contoso.com"]) == 0
         assert world.dotenv["ENTRABOT_HUMAN_USER_ID"] == "pat-object"
 
     def test_a_sponsor_who_signs_in_with_a_personal_account_is_found(self, world: Scenario) -> None:
         # The defect, on a real tenant: joining an agent with this sponsor stopped with
-        # "Could not find 'brandwe@outlook.com' in this tenant". The person is the tenant's
+        # "Could not find 'alex@example.com' in this tenant". The person is the tenant's
         # owner; their address is not their sign-in name and they have no "mail".
         world.directory.users.append(dict(OWNER))
-        code = world.run(use_blueprint=BP_APP, sponsors=["brandwe@outlook.com"])
+        code = world.run(use_blueprint=BP_APP, sponsors=["alex@example.com"])
         assert code == 0, world.out
         env = world.dotenv
         assert env["ENTRABOT_HUMAN_USER_ID"] == "owner-object"
-        assert env["ENTRABOT_HUMAN_UPN"] == "brandwe@outlook.com"  # as the other machine has it
+        assert env["ENTRABOT_HUMAN_UPN"] == "alex@example.com"  # as the other machine has it
         assert env["ENTRABOT_HUMAN_USER_TYPES"] == "Member"  # what the directory says
         assert env["ENTRABOT_HUMAN_USER_TENANT_IDS"] == ""
 
@@ -629,12 +629,12 @@ class TestScriptedNewAgent:
             {
                 **OWNER,
                 "id": "twin",
-                "displayName": "Brandon (old)",
-                "userPrincipalName": "brandon.old@werner.ac",
+                "displayName": "Alex (old)",
+                "userPrincipalName": "alex.old@contoso.com",
             },
         ]
-        assert world.run(new_chain=True, upn_suffix="sati", sponsors=["brandwe@outlook.com"]) == 1
-        assert "Brandon Werner" in world.out and "Brandon (old)" in world.out
+        assert world.run(new_chain=True, upn_suffix="sati", sponsors=["alex@example.com"]) == 1
+        assert "Alex Wilber" in world.out and "Alex (old)" in world.out
         assert "object ID" in world.out and not world.mutated()
 
     def test_only_the_chosen_assistant_is_registered(self, world: Scenario) -> None:
@@ -647,11 +647,11 @@ class TestOtherIdentityModes:
     def test_join_records_the_blueprint_and_tells_the_helper_nothing_about_a_new_chain(
         self, world: Scenario
     ) -> None:
-        assert world.run(use_blueprint=BP_APP, agent_user_upn="bot@werner.ac") == 0
+        assert world.run(use_blueprint=BP_APP, agent_user_upn="bot@contoso.com") == 0
         request = world.ran("create_entra_agent_ids.py")[0]
         assert request.env is not None
         assert "ENTRABOT_NEW_CHAIN" not in request.env
-        assert request.env["ENTRABOT_AGENT_USER_UPN"] == "bot@werner.ac"
+        assert request.env["ENTRABOT_AGENT_USER_UPN"] == "bot@contoso.com"
         assert "_ENTRABOT_UPN_SUFFIX" not in request.env
 
     def test_joining_a_different_blueprint_clears_the_old_agents_state_first(
@@ -696,7 +696,7 @@ class TestAnInterruptedSwitchDoesNotCarryThePreviousAgentsUser:
     its "belongs to a different Blueprint" check stopped setup. Now the wizard hands it an empty
     name up front, as scripts/setup.sh does, and says why in setup.sh's words."""
 
-    OLD_UPN = "entrabot-agent-old@werner.ac"
+    OLD_UPN = "entrabot-agent-old@contoso.com"
     SWITCHED_STATE = {
         "TENANT_ID": TENANT,
         "PROVISIONER_CLIENT_ID": "prov-app",
@@ -742,7 +742,7 @@ class TestAnInterruptedSwitchDoesNotCarryThePreviousAgentsUser:
 
     def test_the_agent_env_was_written_for_keeps_its_agent_user(self, world: Scenario) -> None:
         env = [*self.STALE_ENV[:-2], f"ENTRABOT_BLUEPRINT_APP_ID={BP_APP.upper()}"]
-        world.existing(env=[*env, "ENTRABOT_AGENT_USER_UPN=entrabot-agent-sati@werner.ac"])
+        world.existing(env=[*env, "ENTRABOT_AGENT_USER_UPN=entrabot-agent-sati@contoso.com"])
 
         assert world.run(use_blueprint=BP_APP) == 0, world.out
 
@@ -752,9 +752,9 @@ class TestAnInterruptedSwitchDoesNotCarryThePreviousAgentsUser:
     def test_an_agent_user_named_on_the_command_line_wins(self, world: Scenario) -> None:
         world.existing(state=self.SWITCHED_STATE, env=self.STALE_ENV)
 
-        assert world.run(use_blueprint=BP_APP, agent_user_upn="bot@werner.ac") == 0, world.out
+        assert world.run(use_blueprint=BP_APP, agent_user_upn="bot@contoso.com") == 0, world.out
 
-        assert self._helpers_were_handed(world) == ["bot@werner.ac", "bot@werner.ac"]
+        assert self._helpers_were_handed(world) == ["bot@contoso.com", "bot@contoso.com"]
         assert "Not reusing" not in world.out
 
 
@@ -842,7 +842,7 @@ class TestRepair:
     ) -> None:
         world.existing()
         assert world.run() == 0, world.out
-        assert "already set up for entrabot-agent-sati@werner.ac" in world.out
+        assert "already set up for entrabot-agent-sati@contoso.com" in world.out
         assert world.dotenv["ENTRABOT_HUMAN_USER_ID"] == "the-sponsor"  # sponsor unchanged
         assert world.directory.asked == []  # nobody is looked up when nothing will change
 
@@ -987,9 +987,9 @@ class TestInteractive:
         request = world.ran("create_entra_agent_ids.py")[0]
         assert request.env is not None
         assert request.env["ENTRABOT_NEW_CHAIN"] == "1"
-        assert request.env["_ENTRABOT_UPN_SUFFIX"] == "brandon"  # from the Windows username
+        assert request.env["_ENTRABOT_UPN_SUFFIX"] == "alex"  # from the Windows username
         assert world.dotenv["ENTRABOT_KEEP_MEMORY_LOCAL"] == "true"
-        assert world.dotenv["ENTRABOT_HUMAN_UPN"] == "admin@werner.ac"
+        assert world.dotenv["ENTRABOT_HUMAN_UPN"] == "admin@contoso.com"
 
     def test_nothing_changes_before_the_review_screen_is_confirmed(self, world: Scenario) -> None:
         assert world.run(answers={"identity": "new", "upn_suffix": "sati", "start": "no"}) == 130
@@ -999,9 +999,9 @@ class TestInteractive:
     def test_the_review_screen_shows_every_decision(self, world: Scenario) -> None:
         world.run(answers={"identity": "new", "upn_suffix": "sati", "start": "no"})
         for expected in (
-            "admin@werner.ac",
+            "admin@contoso.com",
             "entrabot-agent-sati",
-            "you (admin@werner.ac)",
+            "you (admin@contoso.com)",
             "on this computer",
             "Claude Code",
         ):
@@ -1036,10 +1036,10 @@ class TestInteractive:
             "identity": "new",
             "upn_suffix": "sati",
             "sponsor": "other",
-            "sponsor_emails": "pat@werner.ac",
+            "sponsor_emails": "pat@contoso.com",
         }
         assert world.run(answers=answers) == 0
-        assert world.dotenv["ENTRABOT_HUMAN_UPNS"] == "pat@werner.ac"
+        assert world.dotenv["ENTRABOT_HUMAN_UPNS"] == "pat@contoso.com"
 
     def test_cloud_memory_is_only_offered_with_a_subscription(self, world: Scenario) -> None:
         world.run(typed="\n" * 30)
@@ -1079,7 +1079,7 @@ class TestSignIn:
         az still sent the token issued the day before). Only removing it first does:
         ``az logout`` for the account, or ``az account clear``."""
         me = json.dumps(
-            {"id": "admin-object", "userPrincipalName": "admin@werner.ac", "userType": "Member"}
+            {"id": "admin-object", "userPrincipalName": "admin@contoso.com", "userType": "Member"}
         )
         state = {"stale": True, "removed": False}
 
@@ -1121,7 +1121,7 @@ class TestSignIn:
         self._session_ended(world)
         assert world.run(typed="\n" * 40) == 0, world.out
         (logout,) = world.az("logout")
-        assert logout.argv[-2:] == ["--username", "admin@werner.ac"]
+        assert logout.argv[-2:] == ["--username", "admin@contoso.com"]
         calls = world.spawn.calls
         assert calls.index(logout) < calls.index(world.az("login")[0])
         assert world.ran("entra_provisioning.py")  # and setup went on
@@ -1175,9 +1175,9 @@ class TestSignIn:
 
     def test_the_device_code_flag_forces_it(self, world: Scenario) -> None:
         world.signed_in = False
-        world.run(new_chain=True, upn_suffix="sati", device_code=True, tenant="werner.ac")
+        world.run(new_chain=True, upn_suffix="sati", device_code=True, tenant="contoso.com")
         argv = world.az("login")[0].argv
-        assert "--use-device-code" in argv and argv[argv.index("--tenant") + 1] == "werner.ac"
+        assert "--use-device-code" in argv and argv[argv.index("--tenant") + 1] == "contoso.com"
 
     def test_a_failed_browser_sign_in_is_retried_with_a_code(self, world: Scenario) -> None:
         world.signed_in = False
@@ -1292,7 +1292,7 @@ class TestSignIn:
         assert world.az("login")  # signed in again, to the tenant that was asked for
 
     def test_an_existing_session_in_the_right_tenant_is_reused(self, world: Scenario) -> None:
-        world.run(new_chain=True, upn_suffix="sati", tenant="werner.onmicrosoft.com")
+        world.run(new_chain=True, upn_suffix="sati", tenant="contoso.onmicrosoft.com")
         assert world.az("login") == []
 
     def test_a_missing_azure_cli_is_installed_without_admin_rights(self, world: Scenario) -> None:
@@ -1576,7 +1576,7 @@ class TestTheAgentStepSaysWhyItStopped:
 
         out = world.out
         assert (
-            f"The Blueprint App ID you gave ({BP_APP}) does not exist in this tenant (Werner)."
+            f"The Blueprint App ID you gave ({BP_APP}) does not exist in this tenant (Contoso)."
             in out
         )
         assert "Check the Blueprint App ID and that you signed in to the agent's tenant" in out
@@ -1591,7 +1591,7 @@ class TestTheAgentStepSaysWhyItStopped:
 
         assert (
             f"The Blueprint App ID recorded on this computer ({BP_APP}) does not exist in this "
-            "tenant (Werner)." in world.out
+            "tenant (Contoso)." in world.out
         )
         self._stopped_there(world)
 
@@ -2139,7 +2139,7 @@ class TestMoreChoices:
     CLOUD_ENV = [
         f"ENTRABOT_TENANT_ID={TENANT}",
         "ENTRABOT_AGENT_USER_ID=agent-user",
-        "ENTRABOT_HUMAN_UPN=boss@werner.ac",
+        "ENTRABOT_HUMAN_UPN=boss@contoso.com",
         "ENTRABOT_BLOB_ENDPOINT=https://old.blob.core.windows.net",
         "ENTRABOT_BLOB_CONTAINER=old",
     ]
@@ -2158,18 +2158,18 @@ class TestMoreChoices:
     def test_taking_over_as_sponsor_on_an_existing_agent(self, world: Scenario) -> None:
         world.existing(env=self.CLOUD_ENV)
         assert world.run(answers={"sponsor": "me"}) == 0
-        assert world.dotenv["ENTRABOT_HUMAN_UPN"] == "admin@werner.ac"
+        assert world.dotenv["ENTRABOT_HUMAN_UPN"] == "admin@contoso.com"
         assert world.dotenv["ENTRABOT_HUMAN_USER_ID"] == "admin-object"
 
     def test_keeping_the_sponsor_is_the_default_on_an_existing_agent(self, world: Scenario) -> None:
         world.existing(env=self.CLOUD_ENV)
         assert world.run(typed="\n" * 20) == 0
-        assert world.dotenv["ENTRABOT_HUMAN_UPN"] == "boss@werner.ac"
-        assert "Contact in this computer's settings unchanged: boss@werner.ac" in world.out
+        assert world.dotenv["ENTRABOT_HUMAN_UPN"] == "boss@contoso.com"
+        assert "Contact in this computer's settings unchanged: boss@contoso.com" in world.out
 
     def test_an_unknown_sponsor_stops_before_anything_changes(self, world: Scenario) -> None:
-        assert world.run(new_chain=True, upn_suffix="sati", sponsors=["nobody@werner.ac"]) == 1
-        assert "nobody@werner.ac" in world.out and not world.mutated()
+        assert world.run(new_chain=True, upn_suffix="sati", sponsors=["nobody@contoso.com"]) == 1
+        assert "nobody@contoso.com" in world.out and not world.mutated()
         assert "object ID" in world.out  # what to do about it
 
     def test_a_work_iq_licence_request_left_in_the_shell_is_not_inherited(
@@ -2546,19 +2546,19 @@ class TestQuietByDefault:
     def test_each_step_says_in_a_line_what_happened(self, world: Scenario) -> None:
         world.run(new_chain=True, upn_suffix="sati")
         assert "Setup has the access it needs" in world.out
-        assert "Created your agent: entrabot-agent-sati@werner.ac" in world.out
+        assert "Created your agent: entrabot-agent-sati@contoso.com" in world.out
         assert "Teams licence assigned (Teams Essentials)" in world.out
 
     def test_a_repair_says_the_agent_was_already_there(self, world: Scenario) -> None:
         world.existing()
         world.licence = "existing"
         world.run()
-        assert "Your agent: entrabot-agent-sati@werner.ac (already set up)" in world.out
+        assert "Your agent: entrabot-agent-sati@contoso.com (already set up)" in world.out
         assert "Created your agent" not in world.out
 
     def test_joining_says_this_computer_was_connected(self, world: Scenario) -> None:
         world.run(use_blueprint=BP_APP)
-        assert "Connected this computer to the agent: entrabot-agent-sati@werner.ac" in world.out
+        assert "Connected this computer to the agent: entrabot-agent-sati@contoso.com" in world.out
 
     def test_the_quiet_helpers_still_get_a_heartbeat(self, world: Scenario) -> None:
         world.run(new_chain=True, upn_suffix="sati")
@@ -2628,34 +2628,34 @@ class TestDirectorySponsors:
         sync = world.sponsor_calls()[-1]
         assert sync.argv[4] == "agent-object" and sync.argv[5:] == []  # a read, nothing to add
         assert [item["id"] for item in world.agent_sponsors] == ["admin-object"]
-        assert self._works_for(world) == "admin@werner.ac"
-        assert self._review_line(world).endswith("from: you (admin@werner.ac)")
+        assert self._works_for(world) == "admin@contoso.com"
+        assert self._review_line(world).endswith("from: you (admin@contoso.com)")
 
     def test_a_different_sponsor_chosen_for_a_new_agent_is_added_in_the_directory(
         self, world: Scenario
     ) -> None:
-        code = world.run(new_chain=True, upn_suffix="sati", sponsors=["pat@werner.ac"])
+        code = world.run(new_chain=True, upn_suffix="sati", sponsors=["pat@contoso.com"])
         assert code == 0, world.out
         assert world.sponsor_calls()[-1].argv[5:] == ["pat-object"]
         assert [item["id"] for item in world.agent_sponsors] == ["admin-object", "pat-object"]
-        assert "pat@werner.ac (added)" in self._review_line(world)
-        assert "admin@werner.ac (you, because you create the agent)" in self._review_line(world)
-        assert self._works_for(world) == "pat@werner.ac, admin@werner.ac"
-        assert world.dotenv["ENTRABOT_HUMAN_UPN"] == "pat@werner.ac"  # .env as before
+        assert "pat@contoso.com (added)" in self._review_line(world)
+        assert "admin@contoso.com (you, because you create the agent)" in self._review_line(world)
+        assert self._works_for(world) == "pat@contoso.com, admin@contoso.com"
+        assert world.dotenv["ENTRABOT_HUMAN_UPN"] == "pat@contoso.com"  # .env as before
 
     def test_the_creator_is_told_they_are_a_sponsor_too_and_how_to_step_back(
         self, world: Scenario
     ) -> None:
-        world.run(new_chain=True, upn_suffix="sati", sponsors=["pat@werner.ac"])
-        assert "You (admin@werner.ac) are a sponsor too" in world.out
-        assert "scripts\\remove_agent_sponsor.py admin@werner.ac" in world.out
+        world.run(new_chain=True, upn_suffix="sati", sponsors=["pat@contoso.com"])
+        assert "You (admin@contoso.com) are a sponsor too" in world.out
+        assert "scripts\\remove_agent_sponsor.py admin@contoso.com" in world.out
         # Said, never done: setup only ever adds.
         assert {"id": "admin-object"}.items() <= world.agent_sponsors[0].items()
 
     def test_the_sponsors_are_synced_after_the_agent_exists_and_before_the_certificate(
         self, world: Scenario
     ) -> None:
-        world.run(new_chain=True, upn_suffix="sati", sponsors=["pat@werner.ac"])
+        world.run(new_chain=True, upn_suffix="sati", sponsors=["pat@contoso.com"])
         calls = world.spawn.calls
         created = next(
             i for i, call in enumerate(calls) if script("create_entra_agent_ids.py")(call)
@@ -2673,11 +2673,11 @@ class TestDirectorySponsors:
             "identity": "new",
             "upn_suffix": "sati",
             "sponsor": "other",
-            "sponsor_emails": "pat@werner.ac",
+            "sponsor_emails": "pat@contoso.com",
             "start": "no",
         }
         assert world.run(answers=answers) == 130
-        assert "pat@werner.ac (added)" in self._review_line(world)
+        assert "pat@contoso.com (added)" in self._review_line(world)
         assert [item["id"] for item in world.agent_sponsors] == ["admin-object"]
 
     # ── Joining or continuing an existing agent ──────────────────────────────
@@ -2691,9 +2691,9 @@ class TestDirectorySponsors:
         assert all(call.argv[5:] == [] for call in world.sponsor_calls())
         assert len(world.agent_sponsors) == 2
         assert self._review_line(world).endswith(
-            "from: admin@werner.ac (already), pat@werner.ac (already)"
+            "from: admin@contoso.com (already), pat@contoso.com (already)"
         )
-        assert self._works_for(world) == "admin@werner.ac, pat@werner.ac"
+        assert self._works_for(world) == "admin@contoso.com, pat@contoso.com"
 
     def test_joining_on_a_new_computer_lists_the_sponsors_once_it_is_connected(
         self, world: Scenario
@@ -2703,9 +2703,9 @@ class TestDirectorySponsors:
         assert "its current sponsors (listed once this computer is connected)" in (
             self._review_line(world)
         )
-        assert "Takes instructions in Teams from: pat@werner.ac" in world.out
+        assert "Takes instructions in Teams from: pat@contoso.com" in world.out
         assert [item["id"] for item in world.agent_sponsors] == ["pat-object"]  # nobody added
-        assert self._works_for(world) == "pat@werner.ac"
+        assert self._works_for(world) == "pat@contoso.com"
 
     def test_someone_who_runs_setup_but_is_not_a_sponsor_is_told_so(self, world: Scenario) -> None:
         # .env still names whoever ran setup (other code writes to them), but the agent will
@@ -2713,22 +2713,22 @@ class TestDirectorySponsors:
         world.agent_sponsors = [{"id": "pat-object"}]
         world.run(use_blueprint=BP_APP)
         assert "will not take instructions from you" in world.out
-        assert "-Sponsor admin@werner.ac" in world.out
+        assert "-Sponsor admin@contoso.com" in world.out
 
     def test_a_named_sponsor_who_is_already_one_is_not_added_again(self, world: Scenario) -> None:
         world.existing()
         world.agent_sponsors = [dict(ADMIN_SPONSOR), {"id": "pat-object"}]
-        assert world.run(sponsors=["pat@werner.ac"]) == 0, world.out
-        assert "pat@werner.ac (already)" in self._review_line(world)
+        assert world.run(sponsors=["pat@contoso.com"]) == 0, world.out
+        assert "pat@contoso.com (already)" in self._review_line(world)
         assert len(world.agent_sponsors) == 2
-        assert "pat@werner.ac is already a sponsor" in world.out
+        assert "pat@contoso.com is already a sponsor" in world.out
 
     def test_a_named_sponsor_who_is_missing_is_added_when_continuing(self, world: Scenario) -> None:
         world.existing()
-        assert world.run(sponsors=["pat@werner.ac"]) == 0, world.out
-        assert "pat@werner.ac (added), admin@werner.ac (already)" in self._review_line(world)
+        assert world.run(sponsors=["pat@contoso.com"]) == 0, world.out
+        assert "pat@contoso.com (added), admin@contoso.com (already)" in self._review_line(world)
         assert [item["id"] for item in world.agent_sponsors] == ["admin-object", "pat-object"]
-        assert self._works_for(world) == "pat@werner.ac, admin@werner.ac"
+        assert self._works_for(world) == "pat@contoso.com, admin@contoso.com"
 
     def test_the_interactive_question_defaults_to_keeping_the_current_sponsors(
         self, world: Scenario
@@ -2736,8 +2736,8 @@ class TestDirectorySponsors:
         world.existing()
         world.agent_sponsors = [{"id": "pat-object"}]
         assert world.run(typed="\n" * 40) == 0, world.out
-        assert "Keep the current sponsors: pat@werner.ac" in world.out
-        assert "Add me (admin@werner.ac)" in world.out
+        assert "Keep the current sponsors: pat@contoso.com" in world.out
+        assert "Add me (admin@contoso.com)" in world.out
         assert [item["id"] for item in world.agent_sponsors] == ["pat-object"]
 
     def test_adding_yourself_interactively(self, world: Scenario) -> None:
@@ -2745,14 +2745,14 @@ class TestDirectorySponsors:
         world.agent_sponsors = [{"id": "pat-object"}]
         assert world.run(answers={"sponsor": "me"}) == 0, world.out
         assert [item["id"] for item in world.agent_sponsors] == ["pat-object", "admin-object"]
-        assert "admin@werner.ac (added), pat@werner.ac (already)" in self._review_line(world)
+        assert "admin@contoso.com (added), pat@contoso.com (already)" in self._review_line(world)
 
     def test_someone_already_a_sponsor_is_not_offered_to_add_themselves(
         self, world: Scenario
     ) -> None:
         world.existing()
         world.run(typed="\n" * 40)
-        assert "Add me (admin@werner.ac)" not in world.out
+        assert "Add me (admin@contoso.com)" not in world.out
 
     # ── When it does not work ────────────────────────────────────────────────
 
@@ -2760,13 +2760,15 @@ class TestDirectorySponsors:
         self, world: Scenario
     ) -> None:
         world.sponsor_add_fails = {"pat-object": "Failed to add sponsor: 403 Forbidden"}
-        code = world.run(new_chain=True, upn_suffix="sati", sponsors=["pat@werner.ac"])
+        code = world.run(new_chain=True, upn_suffix="sati", sponsors=["pat@contoso.com"])
         assert code == 3  # finished, with something to check: never a silent pass
         assert "Setup finished, with something to check" in world.out
         assert "403 Forbidden" in world.out
-        assert ".venv\\Scripts\\python.exe scripts\\add_agent_sponsor.py pat@werner.ac" in world.out
-        assert self._works_for(world) == "admin@werner.ac"  # the truth, not the wish
-        assert "will not take instructions from pat@werner.ac" in world.out
+        assert (
+            ".venv\\Scripts\\python.exe scripts\\add_agent_sponsor.py pat@contoso.com" in world.out
+        )
+        assert self._works_for(world) == "admin@contoso.com"  # the truth, not the wish
+        assert "will not take instructions from pat@contoso.com" in world.out
 
     def test_the_command_for_an_address_a_shell_would_expand_names_the_object_id(
         self, world: Scenario
@@ -2777,13 +2779,13 @@ class TestDirectorySponsors:
             "id": "dollar-object",
             "displayName": "Pat Dollar",
             "userType": "Member",
-            "mail": "pat$ops@werner.ac",
-            "userPrincipalName": "pat$ops@werner.ac",
+            "mail": "pat$ops@contoso.com",
+            "userPrincipalName": "pat$ops@contoso.com",
             "otherMails": [],
         }
         world.directory.users.append(dollar)
         world.sponsor_add_fails = {"dollar-object": "Failed to add sponsor: 403 Forbidden"}
-        code = world.run(new_chain=True, upn_suffix="sati", sponsors=["pat$ops@werner.ac"])
+        code = world.run(new_chain=True, upn_suffix="sati", sponsors=["pat$ops@contoso.com"])
         assert code == 3, world.out
         assert "scripts\\add_agent_sponsor.py dollar-object" in world.out
         assert "add_agent_sponsor.py pat$ops" not in world.out
@@ -2793,7 +2795,7 @@ class TestDirectorySponsors:
         self, world: Scenario
     ) -> None:
         world.sponsor_adds_stay_invisible = True
-        code = world.run(new_chain=True, upn_suffix="sati", sponsors=["pat@werner.ac"])
+        code = world.run(new_chain=True, upn_suffix="sati", sponsors=["pat@contoso.com"])
         assert code == 3
         assert "does not list" in world.out and "list_sponsors.py" in world.out
 
@@ -2801,10 +2803,10 @@ class TestDirectorySponsors:
         self, world: Scenario
     ) -> None:
         world.sponsors_unreadable = "Failed to read sponsors: 403"
-        code = world.run(new_chain=True, upn_suffix="sati", sponsors=["pat@werner.ac"])
+        code = world.run(new_chain=True, upn_suffix="sati", sponsors=["pat@contoso.com"])
         assert code == 3
         assert "Failed to read sponsors: 403" in world.out
-        assert "add_agent_sponsor.py pat@werner.ac" in world.out
+        assert "add_agent_sponsor.py pat@contoso.com" in world.out
         assert "could not be read from the directory" in self._works_for(world)
 
     def test_an_unreadable_directory_with_nothing_to_add_is_a_warning_only(
@@ -2818,7 +2820,7 @@ class TestDirectorySponsors:
         self, world: Scenario
     ) -> None:
         world.sponsor_add_fails = {"pat-object": "403"}
-        world.run(new_chain=True, upn_suffix="sati", sponsors=["pat@werner.ac"])
+        world.run(new_chain=True, upn_suffix="sati", sponsors=["pat@contoso.com"])
         assert world.dotenv["ENTRABOT_AGENT_ID"] == "agent-app"
         assert (world.root / ".mcp.json").is_file()
 
@@ -2853,8 +2855,8 @@ class TestStartingTheAgent:
 
     def test_a_path_with_a_space_is_quoted_in_the_raw_command(self, world: Scenario) -> None:
         (world.tmp_path / "tools" / "claude.exe").unlink()
-        world.env["USERPROFILE"] = str(world.tmp_path / "Brandon Werner")
-        installed = world.tmp_path / "Brandon Werner" / ".local" / "bin" / "claude.exe"
+        world.env["USERPROFILE"] = str(world.tmp_path / "Alex Wilber")
+        installed = world.tmp_path / "Alex Wilber" / ".local" / "bin" / "claude.exe"
         installed.parent.mkdir(parents=True)
         installed.write_bytes(b"")
         world.run(new_chain=True, upn_suffix="sati")

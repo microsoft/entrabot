@@ -17,7 +17,7 @@ CHOICES = [Choice("local", "On this computer"), Choice("cloud", "In Azure", hint
 class TestPrompts:
     def test_enter_takes_the_default(self) -> None:
         console, _ = make_console(typed="\n\n\n")
-        assert console.ask_text("Name", default="brandon") == "brandon"
+        assert console.ask_text("Name", default="alex") == "alex"
         assert console.ask_choice("Memory", CHOICES, default="local") == "local"
         assert console.confirm("Go?", default=True) is True
 
@@ -60,7 +60,7 @@ class TestPrompts:
 class TestNonInteractive:
     def test_defaults_are_taken_without_reading_anything(self) -> None:
         console, out = make_console(assume_yes=True)
-        assert console.ask_text("Name", default="brandon") == "brandon"
+        assert console.ask_text("Name", default="alex") == "alex"
         assert console.ask_choice("Memory", CHOICES, default="cloud") == "cloud"
         assert console.confirm("Go?", default=False) is False
         assert console.missing == []

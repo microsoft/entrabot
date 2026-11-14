@@ -55,7 +55,7 @@ class TestFlags:
             "sub-1",
             "--configure-a365-work-iq",
             "--tenant",
-            "werner.ac",
+            "contoso.com",
             "--device-code",
             "--hosts",
             "claude",
@@ -71,7 +71,7 @@ class TestFlags:
         assert (opts.location, opts.subscription) == ("westus2", "sub-1")
         assert opts.configure_work_iq and opts.device_code and opts.skip_smoke and opts.yes
         assert (opts.tenant, opts.hosts, opts.log_file) == (
-            "werner.ac",
+            "contoso.com",
             "claude",
             Path("setup.log"),
         )

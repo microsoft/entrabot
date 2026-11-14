@@ -164,7 +164,7 @@ class TestTriage:
                 channel="teams_dm",
                 direction="outbound",
                 sender="entrabot-agent",
-                recipient="19:brandon@unq.gbl.spaces",
+                recipient="19:alex@unq.gbl.spaces",
                 summary="Phase 2 shipped",
             ),
         ]

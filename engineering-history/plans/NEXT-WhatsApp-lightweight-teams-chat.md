@@ -253,17 +253,17 @@ Between 2026-04-08 evening and 2026-04-09 early morning, the group (the identity
 
 4. **Directory scale is real but solvable.** The identity PM's quota table: 300K default, 1M+ needs coordination. The identity PM had 7-8 concurrent agent sessions at once — this doesn't scale if every session creates an Agent User. Mitigations:
    - Don't pool (OID recycling is a security risk, soft-delete quota makes churn worse)
-   - Do push substrate for fast provisioning (Brandon confirmed doable)
+   - Do push substrate for fast provisioning (the project owner confirmed doable)
    - Long-term: Teams/IC3 federation for chat-only agent identities (the identity architect's idea — virtual agent tenant, session IDs as external OIDs)
 
-5. **Brandon's substrate commitment:** fast Agent User provisioning (sub-minute) is doable. That makes the Phase 1 → Phase 2 swap fast enough for BUILD.
+5. **The project owner's substrate commitment:** fast Agent User provisioning (sub-minute) is doable. That makes the Phase 1 → Phase 2 swap fast enough for BUILD.
 
 6. **Agent User is NOT replaced by OBO.** Agent User remains the security anchor. OBO with decorated tokens is a UX layer with weaker security (same OID = no real isolation). The progressive model uses delegated tokens as a bridge, not as an architectural endpoint.
 
 ### Minor Adjustments to This Spec
 
 - **Step 2 (Device Code Auth Flow):** Change default to **localhost redirect** for security (per the security architect's flag). Keep device code as a fallback for headless environments.
-- **Step 4 (Background Agent User Provisioning):** Coordinate with Brandon's substrate contacts for sub-minute provisioning target. If achievable, Phase 2 upgrade happens in seconds, not 10-15 minutes.
+- **Step 4 (Background Agent User Provisioning):** Coordinate with the project owner's substrate contacts for sub-minute provisioning target. If achievable, Phase 2 upgrade happens in seconds, not 10-15 minutes.
 - **Step 5 (Token Swap):** No change — the seamless swap logic is the same regardless of wait time.
 
 ### Not Changed
@@ -276,4 +276,4 @@ Between 2026-04-08 evening and 2026-04-09 early morning, the group (the identity
 
 ### New Future Direction (Tracked Separately)
 
-The IC3/Teams federation approach (agent identities as native federated users in Teams backend, no directory objects) is a promising long-term direction but is **not part of this build-time spec**. Brandon has a TODO to talk to the Teams team about it on 2026-04-09 morning. If that lands, it would be a follow-up spec, not a change to this one.
+The IC3/Teams federation approach (agent identities as native federated users in Teams backend, no directory objects) is a promising long-term direction but is **not part of this build-time spec**. The project owner has a TODO to talk to the Teams team about it on 2026-04-09 morning. If that lands, it would be a follow-up spec, not a change to this one.

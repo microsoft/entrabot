@@ -448,8 +448,8 @@ def _write_memory(path: Path, name: str, body: str) -> None:
 def test_build_bootstrap_session_returns_operating_packet(tmp_path: Path) -> None:
     mem = tmp_path / "memory"
     mem.mkdir()
-    _write_memory(mem, "MEMORY.md", "# Index\n- [Brandon](user_brandon.md) - sponsor context\n")
-    _write_memory(mem, "user_brandon.md", "---\nname: Brandon\ntype: user\n---\nUser profile")
+    _write_memory(mem, "MEMORY.md", "# Index\n- [Alex](user_alex.md) - sponsor context\n")
+    _write_memory(mem, "user_alex.md", "---\nname: Alex\ntype: user\n---\nUser profile")
     _write_memory(mem, "running_commitments.md", "---\nname: Commitments\ntype: project\n---\n- Ship bootstrap")
     _write_memory(mem, "carry_forward.md", "---\nname: Carry\ntype: session\n---\n- Continue context work")
 
@@ -507,7 +507,7 @@ def test_memory_catalog_omits_filenames_and_reports_category_counts(tmp_path: Pa
     mem.mkdir()
     for i in range(205):
         _write_memory(mem, f"memory_{i:03d}.md", "---\nname: M\ntype: note\n---\nbody")
-    _write_memory(mem, "user_brandon.md", "---\nname: Brandon\ntype: user\n---\nbody")
+    _write_memory(mem, "user_alex.md", "---\nname: Alex\ntype: user\n---\nbody")
 
     packet = build_bootstrap_session(
         mem,

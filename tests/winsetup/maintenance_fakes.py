@@ -22,7 +22,7 @@ NOW = datetime(2026, 11, 11, 9, 30, 15, tzinfo=UTC)
 TENANT = "aaaaaaaa-0000-0000-0000-000000000001"
 BP_APP = "11111111-2222-3333-4444-555555555555"
 BP_OBJECT = "bp-object"
-UPN = "entrabot-agent-sati@werner.ac"
+UPN = "entrabot-agent-sati@contoso.com"
 OLD_SHA1 = "B" * 36 + "01D1"
 NEW_SHA1 = "A" * 36 + "2E3F"
 PROV_SHA1 = "C" * 36 + "9A9A"
@@ -163,7 +163,7 @@ ENV_LINES = [
     "ENTRABOT_AGENT_ID=agent-app",
     "ENTRABOT_AGENT_USER_ID=agent-user",
     f"ENTRABOT_AGENT_UPN={UPN}",
-    "ENTRABOT_HUMAN_UPN=brandon@werner.ac",
+    "ENTRABOT_HUMAN_UPN=alex@contoso.com",
     "ENTRABOT_KEEP_MEMORY_LOCAL=true",
 ]
 STATE = {
@@ -185,9 +185,9 @@ REVOKE_PENDING = {
 }
 ACCOUNT = {
     "tenantId": TENANT,
-    "tenantDisplayName": "Werner",
-    "tenantDefaultDomain": "werner.ac",
-    "user": {"name": "admin@werner.ac", "type": "user"},
+    "tenantDisplayName": "Contoso",
+    "tenantDefaultDomain": "contoso.com",
+    "user": {"name": "admin@contoso.com", "type": "user"},
     "id": "",
     "name": "",
 }

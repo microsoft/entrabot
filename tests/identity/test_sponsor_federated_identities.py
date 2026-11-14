@@ -19,7 +19,7 @@ from entrabot.identity.sponsors import (
 )
 
 GUEST_WITH_FEDERATED_IDENTITY = {
-    "id": "963835fc-0b5c-4f3e-9f42-a1b906d9fbf8",
+    "id": "ffeeddcc-bbaa-4998-8776-554433221100",
     "userPrincipalName": "alice_example.com#EXT#@fabrikam.onmicrosoft.com",
     "mail": "alice@example.com",
     "otherMails": ["alice@example.com"],
@@ -123,7 +123,7 @@ class TestUnqGblSpacesChatIdEnrichment:
     AGENT_USER_ID = "aaaabbbb-cccc-dddd-eeee-111122223333"
     SPONSOR_HOME_USER_ID = "00112233-4455-6677-8899-aabbccddeeff"
     # The sponsor's *agent-tenant* guest OID (from GUEST_WITH_FEDERATED_IDENTITY).
-    SPONSOR_GUEST_OID = "963835fc-0b5c-4f3e-9f42-a1b906d9fbf8"
+    SPONSOR_GUEST_OID = "ffeeddcc-bbaa-4998-8776-554433221100"
 
     def _gate(self) -> SponsorGate:
         sponsor = AgentIdentitySponsor.from_graph_user(GUEST_WITH_FEDERATED_IDENTITY)
@@ -227,7 +227,7 @@ class TestWatchedChatSponsorVerification:
     """
 
     AGENT_USER_ID = "aaaabbbb-cccc-dddd-eeee-111122223333"
-    SPONSOR_GUEST_OID = "963835fc-0b5c-4f3e-9f42-a1b906d9fbf8"
+    SPONSOR_GUEST_OID = "ffeeddcc-bbaa-4998-8776-554433221100"
     ATTACKER_HOME_OID = "deadbeef-0000-0000-0000-000000000001"
 
     def _gate(self) -> SponsorGate:

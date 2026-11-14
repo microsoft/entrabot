@@ -1,7 +1,7 @@
 # PLAN: Entrabot New Features — Master Plan
 
 Status: **Draft** — 2026-07-09
-Owner: Brandon (sponsor) + entrabot agent
+Owner: the sponsor + entrabot agent
 Purpose: Consolidated planning doc for a batch of new capabilities that harden entrabot's security posture, extend user reach, and unify a growing set of ad-hoc wait/approval patterns behind a single mechanism.
 
 ## Why now

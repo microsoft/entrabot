@@ -3,7 +3,7 @@
 **Status:** Shipped on `main` (2026-07)
 
 Status: **In progress** — 2026-07-09
-Owner: Brandon (sponsor) + entrabot agent
+Owner: the sponsor + entrabot agent
 Trigger: 2026-07-09 cursor-replay incident — 6-week-old self-authored Teams messages replayed as fresh channel notifications after agent rename.
 
 ## Problem
@@ -120,6 +120,6 @@ Idempotent: running against already-migrated cursors is a no-op.
 
 ## References
 
-- Cursor-replay incident: 2026-07-09 conversation with Brandon, root cause traced by sub-agent in the same session.
+- Cursor-replay incident: 2026-07-09 conversation with the sponsor, root cause traced by sub-agent in the same session.
 - Adjacent fix: PR #97 (commit `77b6d49`) — fleet-safe channel poll + per-message cloud idempotency. That layer is working as designed; it just never saw these message IDs before, so it can't help.
 - Related learning: Learning #16 (Graph `$filter`/`$orderby` unreliable for chat messages — always filter client-side). Same shape: don't trust Graph-returned fields for identity/filtering unless they're stable primitives.

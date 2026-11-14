@@ -140,9 +140,9 @@ A "connection pool" model (pre-provision Agent Users, check out/return) was prop
 - **Soft-deleted objects count against quota** — 30 days at full weight, 30 more at partial. Pool churn makes scale worse, not better.
 - **Hard delete lifecycle** is ~2 months before quota is freed
 
-### The IC3/Teams Federation Direction (Identity Architect + Brandon convergence)
+### The IC3/Teams Federation Direction (Identity Architect + Project Owner convergence)
 
-Brandon and the identity architect — on opposite sides of the debate earlier — converged on a new direction:
+The project owner and the identity architect — on opposite sides of the debate earlier — converged on a new direction:
 
 > **"What is the point of having hard objects in directory if all we need is distinct chats in teams?"** — the identity architect
 
@@ -153,9 +153,9 @@ The proposal:
 - IC3 already scales to billions of messages — directory quota becomes irrelevant
 - Governance hooks on the session ID, not a directory object
 
-Brandon's pitch to substrate: **"A company-wide fast REPL maker for AI"** — use Teams/IC3 as the chat interface AND the identity scale layer. Agent IDs are already GA; Microsoft must back them up at scale. FMIs (Federated Machine Identities) are likely the scaling path.
+The project owner's pitch to substrate: **"A company-wide fast REPL maker for AI"** — use Teams/IC3 as the chat interface AND the identity scale layer. Agent IDs are already GA; Microsoft must back them up at scale. FMIs (Federated Machine Identities) are likely the scaling path.
 
-**Status:** Brandon has confirmed with substrate folks that sub-minute Agent User provisioning is doable. Talk to Teams team about the federation angle (TODO from Brandon — morning of 2026-04-09).
+**Status:** The project owner has confirmed with substrate folks that sub-minute Agent User provisioning is doable. Talk to Teams team about the federation angle (TODO from the project owner — morning of 2026-04-09).
 
 ### Implications for BUILD Timeline
 
@@ -176,27 +176,27 @@ This changes nothing about what we should build for BUILD. The bridge plan stand
 | 3 | Sandboxing infra as alternative choke point | Security architect | Exploring — knows more about this than Identity team |
 | 4 | Permission categorization for scope claims | Identity PM | Required for Maya to declare "no destructive writes" |
 | 5 | Out-of-network enforcement (AWS → Salesforce) | Partner PM | Parked for later — in-network first |
-| 6 | Agent User provisioning speed | Partner PM's team + Brandon's substrate contacts | Brandon confirmed "doable" with substrate (2026-04-09 night session) |
-| 7 | Directory quota at scale | Brandon → Teams team | Talk to Teams about IC3 federation approach (TODO 2026-04-09 morning) |
+| 6 | Agent User provisioning speed | Partner PM's team + the project owner's substrate contacts | The project owner confirmed "doable" with substrate (2026-04-09 night session) |
+| 7 | Directory quota at scale | Project owner → Teams team | Talk to Teams about IC3 federation approach (TODO 2026-04-09 morning) |
 | 8 | Device code flow replacement | Security architect | Flagged as security concern — use localhost redirect |
-| 9 | IC3/Teams federation for agent identities | Brandon + identity architect | New direction from 2026-04-09 session — agents as native fed users in Teams backend, no directory objects |
-| 10 | FMI (Federated Machine Identities) in IC3 | Brandon | Proposed as long-term scale path for Agent IDs |
+| 9 | IC3/Teams federation for agent identities | Project owner + identity architect | New direction from 2026-04-09 session — agents as native fed users in Teams backend, no directory objects |
+| 10 | FMI (Federated Machine Identities) in IC3 | Project owner | Proposed as long-term scale path for Agent IDs |
 
 ## Key Agreements
 
-1. **Everyone agrees both tracks are needed** — not either/or (partner PM, corrected by the agent runtime team + Brandon)
+1. **Everyone agrees both tracks are needed** — not either/or (partner PM, corrected by the agent runtime team + the project owner)
 2. **Same governance plumbing for both** — provisioning, tagging, risk assessment applies to OBO and Agent User (partner PM)
 3. **Proxy/gateway enforcement, not RP changes** — RPs don't need to understand decorated claims (identity architect, identity PM)
 4. **No prompt-level enforcement** — must be at identity/token/sandbox layer (identity PM, from her Copilot experience)
 5. **No admin setup for ad-hoc tasks** — leadership aligns (partner PM, confirmed 2026-04-08)
 6. **May timeline pressure** — identity PM wants an Identity-owned fallback plan for May
-7. **Agent IDs are GA, must scale** — Microsoft cannot ship a product that doesn't back up at scale (Brandon, 2026-04-09 night session)
+7. **Agent IDs are GA, must scale** — Microsoft cannot ship a product that doesn't back up at scale (the project owner, 2026-04-09 night session)
 8. **Progressive model is the BUILD-time bridge** — human delegated token → background Agent User provision → seamless swap. Not a parallel architecture.
 9. **OBO track is 1:1 only** — agent communicates exclusively with its owner/sponsor. Multi-user chat requires Agent User + Office license (Track 2). Security rationale: OBO agent chatting beyond owner introduces Circles of Trust risks (PM leadership, security architect, identity architect, 2026-04-10).
 
 ## Relationship to Existing Work
 
-- **EntraBot (Brandon + agent runtime team):** Currently implements Track 2 (Agent User) end-to-end. Working today with Teams identity, @mentions, cross-tenant federation, multi-chat. Proves Agent User viability.
+- **EntraBot (project owner + agent runtime team):** Currently implements Track 2 (Agent User) end-to-end. Working today with Teams identity, @mentions, cross-tenant federation, multi-chat. Proves Agent User viability.
 - **Coclaw (agent runtime team):** Agent in sandbox, does coding directly. Complementary to identity layer.
 - **Multi-tenant lightweight chat spec:** `docs/architecture/NEXT-WhatsApp-lightweight-teams-chat.md` — implements the progressive model (start with delegated token, background-provision Agent User).
 - **Actor-attribution working group:** Designing the OBO + actor attribution model — non-directory FMI/SPIFFE-like actor identity.

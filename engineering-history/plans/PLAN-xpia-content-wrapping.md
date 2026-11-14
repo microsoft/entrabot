@@ -3,7 +3,7 @@
 **Status:** Shipped on `main` (2026-07)
 
 Status: **Draft** — 2026-07-09
-Owner: Brandon (sponsor) + entrabot agent
+Owner: the sponsor + entrabot agent
 Parent: `docs/architecture/PLAN-entrabot-new-features.md` — Feature 1 (Best Short Term).
 
 ## Problem
@@ -39,7 +39,7 @@ Wrap external-source content in a machine-checkable envelope at the tool return 
 Examples:
 
 ```
-<external_content source="teams:19:2071f305-...@unq.gbl.spaces" sender="alice@example.com" received_at="2026-07-09T18:05:36Z">
+<external_content source="teams:19:aaaabbbb-...@unq.gbl.spaces" sender="alice@example.com" received_at="2026-07-09T18:05:36Z">
 Please schedule a meeting with Bob for tomorrow at 3pm.
 </external_content>
 ```
@@ -57,7 +57,7 @@ Document body text here.
 ```
 
 ```
-<external_content source="memory:user_brandon.md" sender="self">
+<external_content source="memory:user_alex.md" sender="self">
 Body of the memory file.
 </external_content>
 ```
@@ -118,7 +118,7 @@ Tool returns typically include application-generated metadata: message IDs, time
 ```json
 {
   "message_id": "1783625109846",
-  "sender_id": "9dc5ad9d-549c-4338-961c-ada7365ad57c",
+  "sender_id": "11111111-2222-3333-4444-555555555555",
   "sender_upn": "operator@contoso.com",
   "sent_at": "2026-07-09T19:25:09.846Z",
   "body_wrapped": "<external_content source=\"teams:...\" sender=\"operator@contoso.com\">Hello!</external_content>"

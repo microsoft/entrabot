@@ -159,14 +159,14 @@ class TestChatIdFilter:
         il.log_interaction(
             channel="teams_group",
             direction="inbound",
-            sender="brandon@x.com",
+            sender="alex@example.com",
             summary="from A",
             metadata={"chat_id": "19:A@thread.v2"},
         )
         il.log_interaction(
             channel="teams_group",
             direction="inbound",
-            sender="brandon@x.com",
+            sender="alex@example.com",
             summary="from B",
             metadata={"chat_id": "19:B@thread.v2"},
         )
@@ -185,7 +185,7 @@ class TestChatIdFilter:
         il.log_interaction(
             channel="teams_group",
             direction="inbound",
-            sender="brandon@x.com",
+            sender="alex@example.com",
             summary="received",
             metadata={"chat_id": "19:A@thread.v2"},
         )
@@ -477,7 +477,7 @@ class TestFilterComposition:
         il.log_interaction(
             channel="teams_group",
             direction="inbound",
-            sender="brandon@x.com",
+            sender="alex@example.com",
             summary="match",
             metadata={"chat_id": "19:A@thread.v2"},
         )
@@ -498,14 +498,14 @@ class TestFilterComposition:
         il.log_interaction(
             channel="teams_group",
             direction="inbound",
-            sender="brandon@x.com",
+            sender="alex@example.com",
             summary="wrong chat",
             metadata={"chat_id": "19:B@thread.v2"},
         )
         results = read_interactions(
             chat_id="19:A@thread.v2",
             direction="inbound",
-            sender="brandon@x.com",
+            sender="alex@example.com",
         )
         assert len(results) == 1
         assert results[0]["summary"] == "match"

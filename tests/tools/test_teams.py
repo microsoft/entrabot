@@ -550,7 +550,7 @@ class TestCreateOrFindChat:
         result = await create_or_find_chat(
             token="agent-token",
             human_user_ids=["guest-obj-id"],
-            human_user_tenant_ids=["72f988bf-86f1-41af-91ab-2d7cd011db47"],
+            human_user_tenant_ids=["11112222-3333-4444-8555-666677778888"],
             human_user_mails=["user1@example.com"],
         )
         assert result["chat_id"] == "19:fed-chat@thread.v2"
@@ -562,7 +562,7 @@ class TestCreateOrFindChat:
             m for m in body["members"] if "user1@example.com" in m.get("user@odata.bind", "")
         ]
         assert len(human_members) == 1
-        assert human_members[0]["tenantId"] == "72f988bf-86f1-41af-91ab-2d7cd011db47"
+        assert human_members[0]["tenantId"] == "11112222-3333-4444-8555-666677778888"
         # user@odata.bind should use email, not the guest object ID
         assert "user1@example.com" in human_members[0]["user@odata.bind"]
 
@@ -642,7 +642,7 @@ class TestCreateOrFindChat:
             human_user_ids=["guest-obj-id"],
             agent_user_id="agent-user-id",
             human_user_types=["Guest"],
-            human_user_tenant_ids=["72f988bf-86f1-41af-91ab-2d7cd011db47"],
+            human_user_tenant_ids=["11112222-3333-4444-8555-666677778888"],
             human_user_mails=["user@example.com"],
         )
         assert result["chat_id"] == "19:fed-guest@thread.v2"
@@ -657,7 +657,7 @@ class TestCreateOrFindChat:
         ]
         assert len(human_members) == 1
         assert human_members[0]["roles"] == ["owner"]
-        assert human_members[0]["tenantId"] == "72f988bf-86f1-41af-91ab-2d7cd011db47"
+        assert human_members[0]["tenantId"] == "11112222-3333-4444-8555-666677778888"
         # Agent user should still be owner
         agent_members = [
             m for m in body["members"] if "agent-user-id" in m.get("user@odata.bind", "")
@@ -798,7 +798,7 @@ class TestAddMember:
                 token="agent-token",
                 email="newuser@example.com",
                 requester_email="sponsor@contoso.com",
-                tenant_id="72f988bf-86f1-41af-91ab-2d7cd011db47",
+                tenant_id="11112222-3333-4444-8555-666677778888",
             )
         finally:
             for p in patches:
@@ -807,7 +807,7 @@ class TestAddMember:
         import json
 
         body = json.loads(route.calls.last.request.content)
-        assert body["tenantId"] == "72f988bf-86f1-41af-91ab-2d7cd011db47"
+        assert body["tenantId"] == "11112222-3333-4444-8555-666677778888"
         assert "newuser@example.com" in body["user@odata.bind"]
         assert body["roles"] == ["owner"]
 
@@ -869,7 +869,7 @@ class TestAddMember:
                     token="agent-token",
                     email="nobody@example.com",
                     requester_email="sponsor@contoso.com",
-                    tenant_id="72f988bf-86f1-41af-91ab-2d7cd011db47",
+                    tenant_id="11112222-3333-4444-8555-666677778888",
                 )
         finally:
             for p in patches:
@@ -1179,7 +1179,7 @@ class TestTeamsRead:
                     "value": [
                         {
                             "id": "img-1",
-                            "from": {"user": {"displayName": "Brandon"}},
+                            "from": {"user": {"displayName": "Alex"}},
                             "body": {"content": ('<p><attachment id="abc-uuid"></attachment></p>')},
                             "createdDateTime": "2026-04-20T12:00:00Z",
                             "attachments": [
@@ -1198,7 +1198,7 @@ class TestTeamsRead:
                         },
                         {
                             "id": "plain-1",
-                            "from": {"user": {"displayName": "Brandon"}},
+                            "from": {"user": {"displayName": "Alex"}},
                             "body": {"content": "<p>just text</p>"},
                             "createdDateTime": "2026-04-20T12:01:00Z",
                         },
@@ -1290,7 +1290,7 @@ class TestFetchMessage:
                 200,
                 json={
                     "id": "m1",
-                    "from": {"user": {"displayName": "Brandon"}},
+                    "from": {"user": {"displayName": "Alex"}},
                     "body": {"content": "<p>original msg</p>"},
                     "createdDateTime": "2026-04-17T01:00:00Z",
                 },
@@ -1299,7 +1299,7 @@ class TestFetchMessage:
         result = await fetch_message(chat_id="c1", message_id="m1", token="tok")
         assert result == {
             "message_id": "m1",
-            "from": "Brandon",
+            "from": "Alex",
             "content": "<p>original msg</p>",
             "sent_at": "2026-04-17T01:00:00Z",
         }
@@ -1402,7 +1402,7 @@ class TestCreateOneOnOneChat:
         result = await create_one_on_one_chat(
             token="agent-token",
             target_email="user@example.com",
-            target_tenant_id="72f988bf-86f1-41af-91ab-2d7cd011db47",
+            target_tenant_id="11112222-3333-4444-8555-666677778888",
             agent_user_id="agent-oid-123",
         )
         assert result["chat_id"] == "19:xt-dm@thread.v2"
@@ -1413,7 +1413,7 @@ class TestCreateOneOnOneChat:
             m for m in body["members"] if "user@example.com" in m.get("user@odata.bind", "")
         ]
         assert len(target_members) == 1
-        assert target_members[0]["tenantId"] == "72f988bf-86f1-41af-91ab-2d7cd011db47"
+        assert target_members[0]["tenantId"] == "11112222-3333-4444-8555-666677778888"
 
     @respx.mock
     @pytest.mark.asyncio
