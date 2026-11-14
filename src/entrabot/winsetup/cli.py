@@ -1,4 +1,4 @@
-"""Command line for the Windows setup wizard.
+"""Command line for the setup wizard, on Windows, macOS and Linux.
 
     python -m entrabot.winsetup setup --project-root PATH [flags]
     python -m entrabot.winsetup diagnose --project-root PATH
@@ -8,9 +8,13 @@
     python -m entrabot.winsetup status --project-root PATH [--json] [--health-only] [--strict]
         [--full-thumbprints]
 
-``setup`` is the default subcommand. ``scripts/setup-windows.ps1`` passes its parameters
-through one to one (``-NewChain`` -> ``--new-chain`` and so on); ``deploy-windows.ps1``,
-``teardown-windows.ps1`` and ``status-windows.ps1`` do the same for the other three.
+``setup`` is the default subcommand. On Windows ``scripts/setup-windows.ps1`` passes its
+parameters through one to one (``-NewChain`` -> ``--new-chain`` and so on), and
+``deploy-windows.ps1``, ``teardown-windows.ps1`` and ``status-windows.ps1`` do the same for
+the other three. On macOS and Linux ``scripts/setup.sh`` and ``scripts/teardown.sh`` do it,
+translating the flags they have always taken (``--new`` -> ``--new-chain``,
+``--with-upn-suffix=NAME`` -> ``--upn-suffix NAME``, ``--teams-user=EMAIL`` -> ``--sponsor``).
+The package is still called ``winsetup``: it was written for Windows first.
 """
 
 from __future__ import annotations
@@ -26,7 +30,15 @@ from pathlib import Path
 from entrabot.winsetup import azcli, rotation, status, teardown
 from entrabot.winsetup.console import Console
 from entrabot.winsetup.helpers import Paths, default_data_root
-from entrabot.winsetup.wizard import EXIT_CANCELLED, Options, Wizard, World, run_diagnose
+from entrabot.winsetup.wizard import (
+    EXIT_CANCELLED,
+    EXIT_USAGE,
+    Options,
+    Wizard,
+    World,
+    run_diagnose,
+)
+from entrabot.winsetup.words import words_for
 
 SUBCOMMANDS = ("setup", "diagnose", "rotate-cert", "teardown", "status")
 
@@ -34,7 +46,7 @@ SUBCOMMANDS = ("setup", "diagnose", "rotate-cert", "teardown", "status")
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m entrabot.winsetup",
-        description="Set up Entrabot on Windows: an interactive wizard, or scripted with --yes.",
+        description="Set up Entrabot: an interactive wizard, or scripted with --yes.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -43,7 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Set up or repair Entrabot on this computer (the default).",
         description="Set up or repair Entrabot on this computer. Without flags it asks; every "
         "question has a default. Exit codes: 0 done, 1 failed, 2 usage or a missing answer "
-        "under --yes, 3 set up but the end-to-end test failed, 130 cancelled.",
+        "under --yes, 3 set up but with something to check (said on the last screen), "
+        "130 cancelled.",
     )
     setup.add_argument("--project-root", required=True, type=Path, help="The Entrabot folder.")
 
@@ -94,12 +107,25 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Sign in with a code instead of a browser window.",
     )
+    sign_in.add_argument(
+        "--switch-user",
+        action="store_true",
+        help="Ask for a new Microsoft sign-in even when an earlier one still works.",
+    )
 
     extras = setup.add_argument_group("other")
     extras.add_argument(
         "--configure-a365-work-iq",
         action="store_true",
-        help="Also configure Microsoft Agent 365 Work IQ (needs the a365 CLI).",
+        help="Also switch on Word, Excel and OneDrive files (Microsoft Agent 365 Work IQ). "
+        "Nothing else to install; the agent needs a Microsoft 365 Copilot licence.",
+    )
+    extras.add_argument(
+        "--remove-all-existing-certs",
+        action="store_true",
+        help="Replace EVERY certificate on the agent's Blueprint, other computers' included, "
+        "with a new one for this computer. Asks first at a terminal; unattended the flag is "
+        "the consent. Not with --new-chain.",
     )
     extras.add_argument(
         "--hosts",
@@ -217,12 +243,33 @@ def options_from_args(args: argparse.Namespace) -> Options:
         configure_work_iq=args.configure_a365_work_iq,
         tenant=args.tenant.strip(),
         device_code=args.device_code,
+        switch_user=args.switch_user,
+        remove_all_existing_certs=args.remove_all_existing_certs,
         hosts=args.hosts,
         skip_smoke=args.skip_smoke,
         yes=args.yes,
         verbose=args.verbose,
         log_file=args.log_file,
     )
+
+
+def code_is_from_another_copy(project_root: Path, *, code_root: Path | None = None) -> Path | None:
+    """The folder this code is running from, when *project_root* is a copy of the project
+    of its own and this code is not that copy's; otherwise None.
+
+    The runtime reads ``.env`` from the folder its code is in (``entrabot.config``), never
+    from ``--project-root``. Code from one copy pointed at another would write that copy's
+    ``.env`` and then test the agent with its own, or with none: seen for real, as "Agent
+    User credentials not configured" from a health check of a folder that was set up. A
+    ``.venv`` whose editable install was re-pointed at a git worktree does the same without
+    anyone asking for it. A folder with no code of its own (a test's scratch folder) is not
+    such a copy, and is left to the checks that follow.
+    """
+    code_root = (code_root or Path(__file__).resolve().parents[3]).resolve()
+    own_code = project_root / "src" / "entrabot" / "__init__.py"
+    if not own_code.is_file() or project_root.resolve() == code_root:
+        return None
+    return code_root
 
 
 def _with_default_command(argv: Sequence[str]) -> list[str]:
@@ -243,6 +290,20 @@ def main(argv: Sequence[str] | None = None, *, world: World | None = None) -> in
             stream.reconfigure(errors="replace")  # type: ignore[union-attr]
 
     project_root = args.project_root.resolve()
+    elsewhere = code_is_from_another_copy(project_root)
+    if elsewhere is not None:
+        setup = words_for(world.platform).setup
+        print(
+            f"ERROR: this is Entrabot's code from {elsewhere}, asked to work on {project_root}, "
+            "which has its own copy of the code.\n"
+            "The agent's settings (.env) are read from the folder the code is in, so the two "
+            "have to be the same folder: nothing was changed.\n"
+            f"Run it from that folder instead:  cd {project_root}  and then  {setup}\n"
+            "If its .venv was built from another copy of the project (for example a git "
+            "worktree), rebuild it there:  .venv/bin/python -m pip install -e .",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
     paths = Paths(
         project_root=project_root,
         python=Path(sys.executable),
@@ -267,6 +328,7 @@ def main(argv: Sequence[str] | None = None, *, world: World | None = None) -> in
         log_file=log_file,
         env=world.env,
         verbose=getattr(args, "verbose", False),
+        platform=world.platform,
     )
     if args.command == "diagnose":
         try:

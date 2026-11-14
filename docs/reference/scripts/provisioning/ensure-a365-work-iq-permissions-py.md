@@ -7,12 +7,13 @@ is what the Agent 365 CLI's `a365 setup permissions mcp` does.
 
 ## Purpose
 
-The Windows setup wizard runs this script instead of the Agent 365 CLI: with
-it, setup switches Word, Excel and OneDrive files on with no CLI, no .NET and no
-PowerShell 7, over SSH and unattended too. `setup.sh` runs it before the CLI's
-own permission step, because the CLI can fail to create the first-party resource
-service principals and still exit successfully after printing
-`OAuth2 grants failed`.
+The setup wizard runs this script instead of the Agent 365 CLI, on Windows,
+macOS and Linux: with it, setup switches Word, Excel and OneDrive files on with
+no CLI, no .NET and no PowerShell 7, over SSH and unattended too. Earlier
+versions of `setup.sh` used the CLI on macOS and Linux, and ran this script
+before the CLI's own permission step, because the CLI can fail to create the
+first-party resource service principals and still exit successfully after
+printing `OAuth2 grants failed`.
 
 The grants alone are not enough. Without inheritable permissions on the
 Blueprint, the agent's token request for a Work IQ audience fails with
@@ -119,9 +120,10 @@ re-run reports the current materialized state without implying a stale history.
   Graph accepted a write but did not show it within about a minute. Run the
   script again.
 - **The agent's Word, Excel or OneDrive token fails with `AADSTS65001`** — the
-  inheritable permissions are missing or not honoured yet. Run the script (or
-  `scripts\setup-windows.cmd` and answer yes to Word, Excel and OneDrive), wait
-  a minute, and check with `scripts\setup-windows.cmd -Diagnose`.
+  inheritable permissions are missing or not honoured yet. Run the script, or run
+  setup and answer yes to Word, Excel and OneDrive (`scripts\setup-windows.cmd`
+  on Windows, `./scripts/setup.sh` on macOS and Linux), wait a minute, and check
+  with `scripts\setup-windows.cmd -Diagnose` or `./scripts/setup.sh --diagnose`.
 
 ## Related commands
 

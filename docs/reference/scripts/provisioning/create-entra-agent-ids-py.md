@@ -41,7 +41,7 @@ only to identify the human sponsor and to bootstrap the Provisioner app.
 ```bash
 python3 scripts/create_entra_agent_ids.py
 
-# Licence only (the Windows setup wizard's licence walkthrough uses these)
+# Licence only (the setup wizard's licence walkthrough uses these)
 python3 scripts/create_entra_agent_ids.py --licence-report
 python3 scripts/create_entra_agent_ids.py --assign-licence <sku-id>
 ```
@@ -52,9 +52,9 @@ and change nothing else; see [Licence only](#licence-only).
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `ENTRABOT_NEW_CHAIN` | unset | When `1`, skips every reuse lookup and forces a fresh chain. `setup.sh --new` sets this. |
+| `ENTRABOT_NEW_CHAIN` | unset | When `1`, skips every reuse lookup and forces a fresh chain. The setup wizard sets this for a new agent (`setup.sh --new`, `-NewChain`). |
 | `_ENTRABOT_UPN_SUFFIX` | empty | The Agent User's sign-in name becomes `entrabot-agent-<suffix>@<domain>` (and its display name `EntraBot Agent (<suffix>)`), so a forced-new chain does not collide on the unique-UPN constraint. Outranks `ENTRABOT_AGENT_USER_UPN`. |
-| `ENTRABOT_AGENT_USER_UPN` | unset | The Agent User's sign-in name, used when no suffix is set. Like every setting, it is read from `.env` when the environment does not set it, so an earlier setup's value counts. `setup.sh --use-blueprint` sets it empty for this script when `.env` was written for another Blueprint. With neither, the name is `entrabot-agent@<domain>`. |
+| `ENTRABOT_AGENT_USER_UPN` | unset | The Agent User's sign-in name, used when no suffix is set. Like every setting, it is read from `.env` when the environment does not set it, so an earlier setup's value counts. The setup wizard sets it empty for this script when this computer is switching to another agent's Blueprint. With neither, the name is `entrabot-agent@<domain>`. |
 | `ENTRABOT_ASSIGN_TEAMS_LICENSE` | `1` | Assign a licence that includes Teams to the Agent User. |
 | `ENTRABOT_ASSIGN_WORK_IQ_LICENSE` | unset | When `1`, also assign a Microsoft 365 Copilot (Work IQ) SKU. |
 
@@ -168,9 +168,9 @@ message, naming the outcome:
 | `ENTRABOT_RESULT=agent-user-wrong-blueprint` | The Agent User with the sign-in name this run wants belongs to a different Blueprint. |
 | `ENTRABOT_RESULT=agent-lookup-could-not-check` | A lookup of the agent's Agent Identity or Agent User could not be completed, including which Blueprint an existing Agent User belongs to. |
 
-The Windows setup wizard reads this line to explain the stop in its own words,
-and keeps it off the screen (the setup log has it). `setup.sh` shows the
-script's output as it is. Other failures, such as a create call or the consent
+The setup wizard (`setup.sh` on macOS and Linux, `setup-windows.cmd` on
+Windows) reads this line to explain the stop in its own words, and keeps it off
+the screen (the setup log has it). Other failures, such as a create call or the consent
 grant failing, print no result line, and neither does a run that completes.
 
 ## Idempotency and resume

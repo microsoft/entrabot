@@ -2,13 +2,13 @@
 
 ## Setup is being run again on an existing installation
 
-Setup is intended to be re-runnable. Use the existing Blueprint rather than
-creating a new chain:
+Setup is intended to be re-runnable. Run it again with no options; it continues
+with the agent this computer is set up for rather than creating a new chain:
 
 === "macOS or Linux"
 
     ```bash
-    ./scripts/setup.sh --use-blueprint=<blueprint-app-id>
+    ./scripts/setup.sh
     ```
 
 === "Windows"
@@ -23,16 +23,41 @@ Review any prompt before selecting a migration source.
 
 ## Cloud migration copied some files and then failed
 
-Local-to-Blob migration continues across per-file errors, but `setup.sh`
-treats a non-empty migration error report as incomplete setup and exits with
-code 2. Successfully copied files remain in Blob and all source files remain
-local.
+Local-to-Blob migration continues across per-file errors, but setup treats a
+non-empty migration error report as a failure: it says "Copying memory to the
+cloud failed." and exits with code 1 (earlier versions of `setup.sh` exited 2).
+Successfully copied files remain in Blob and all source files remain local.
 
 Fix the reported storage consent, RBAC, connectivity, or local-file problem,
-then re-run the same setup command. Existing target keys are skipped, so the
-retry is idempotent and cloud data remains authoritative.
+then run setup again with cloud memory (`./scripts/setup.sh --use-cloud-memory`
+on macOS and Linux) and answer yes to the copy. Existing target keys are
+skipped, so the retry is idempotent and cloud data remains authoritative.
 
 See [Storage troubleshooting](storage.md).
+
+## A macOS or Linux computer was set up before the setup wizard
+
+Earlier versions of `setup.sh` kept the agent's private key on its own, in one
+key store item for the whole account (service `entrabot`, account
+`blueprint-private-key`). Such a computer keeps working unchanged after the
+upgrade. The next `./scripts/setup.sh` run keeps that key and, when its
+certificate is on the agent's Blueprint, stores the two together as the agent's
+own item and records `ENTRABOT_BLUEPRINT_CERT_SHA1` in `.env`, creating and
+registering nothing new. Run setup once this way before rotating the
+certificate or running `./scripts/teardown.sh`; both say so until then. See
+[A computer set up before the wizard](macos-linux.md#a-computer-set-up-before-the-wizard).
+
+Scripts that called `setup.sh` or `teardown.sh` need a look too:
+
+- `./scripts/teardown.sh --yes` now disconnects this computer only. Add
+  `--delete-agent` to delete the agent, or pass `--tenant-wide` for the older
+  teardown.
+- An unknown option to `setup.sh` is now an error (exit 2), and its exit codes
+  are the wizard's: `0`, `1`, `2`, `3`, `130`.
+- `--teams-user` now also adds the person as a sponsor of the agent in the
+  directory, and `--with-a365-work-iq` no longer installs the Agent 365 CLI.
+
+See the [`setup.sh` reference](../reference/scripts/setup/setup-sh.md#changes-from-earlier-versions).
 
 ## Windows reports legacy and current data directories
 
@@ -89,19 +114,29 @@ the runtime three-hop flow.
 
 Do not preserve the old secret in `.env`, shell history, logs, or backup notes.
 
-## A Windows Blueprint certificate needs rotation
+## A Blueprint certificate needs rotation
 
 Run:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\deploy-windows.ps1
-```
+=== "macOS or Linux"
+
+    ```bash
+    ./scripts/setup.sh --rotate-cert
+    ```
+
+=== "Windows"
+
+    ```powershell
+    powershell -ExecutionPolicy Bypass -File scripts\deploy-windows.ps1
+    ```
 
 The old certificate stays in use until the new one is proven: rotation creates a new
 certificate, adds it to the Blueprint beside the old one, signs the agent in with it,
 switches `.env`, and only then removes the old certificate from the Blueprint and from
-this PC. If it fails before the switch, the new certificate is undone and nothing else
-changes. Restart the assistant afterwards. See [Windows troubleshooting](windows.md).
+this computer. If it fails before the switch, the new certificate is undone and nothing
+else changes. Restart the assistant afterwards. See
+[macOS and Linux troubleshooting](macos-linux.md#certificate-rotation-stopped-partway)
+and [Windows troubleshooting](windows.md#certificate-rotation-stopped-partway).
 
 ## Upgrading to shared poll state
 
@@ -157,19 +192,21 @@ See [Poll state](../architecture/storage-and-memory.md#poll-state).
 
 After pulling an upgrade:
 
-1. Reinstall the editable package in the repository's own environment.
-2. Re-run setup for the existing Blueprint.
-3. Run strict health checks.
-4. Restart the MCP host.
-5. Call `whoami` to verify the runtime session.
+1. Re-run setup for the existing agent. Setup reinstalls Entrabot's packages
+   into the repository's own environment when `pyproject.toml` has changed.
+2. Run strict health checks.
+3. Restart the MCP host.
+4. Call `whoami` to verify the runtime session.
 
 === "macOS or Linux"
 
     ```bash
-    .venv/bin/python -m pip install -e ".[dev]"
-    ./scripts/setup.sh --use-blueprint=<blueprint-app-id>
+    ./scripts/setup.sh
     ./status.sh --health-only --strict
     ```
+
+    Setup does not install the test tools. If you work on Entrabot's code, add
+    them with `.venv/bin/python -m pip install -e ".[dev]"`.
 
 === "Windows"
 
@@ -177,8 +214,6 @@ After pulling an upgrade:
     scripts\setup-windows.cmd
     scripts\setup-windows.cmd -Diagnose
     ```
-
-    Setup reinstalls Entrabot's packages when `pyproject.toml` has changed.
 
 Health status validates the Provisioner-visible resource chain. `whoami`
 validates the identity and token held by the newly restarted MCP runtime.

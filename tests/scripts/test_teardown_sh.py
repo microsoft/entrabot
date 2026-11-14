@@ -242,7 +242,9 @@ def _teardown(
         **(extra_env or {}),
     }
     result = subprocess.run(
-        ["bash", str(root / "scripts" / "teardown.sh"), *args],
+        # These tests are about the tenant-wide teardown, which has to be asked for: without
+        # one of its flags teardown.sh only disconnects this computer (the wizard's teardown).
+        ["bash", str(root / "scripts" / "teardown.sh"), "--tenant-wide", *args],
         capture_output=True,
         text=True,
         encoding="utf-8",

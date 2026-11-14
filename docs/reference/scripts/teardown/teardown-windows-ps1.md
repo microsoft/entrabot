@@ -75,7 +75,7 @@ Entra, then asks. The suggested answer is No.
 | `.env` and `.entrabot-state.json` | Backed up as `<name>.bak.<stamp>`, then removed. When the setup certificate is kept with `-KeepSetupCredential` and an old setup certificate could not be removed, `.entrabot-state.json` is put back holding only setup's note (see Notes) | Same, once the agent is gone | Same |
 | The agent (Agent User, Agent Identity, Blueprint) | Kept | Deleted | Kept |
 | An old setup (Provisioner) certificate that setup noted it could not remove (`PROVISIONER_CERT_REVOKE_PENDING` in `.entrabot-state.json`) | Removed from the Provisioner app. If that fails, listed under "Still to do" with where to remove it by hand | Same, once the agent is gone | Same |
-| This PC's setup (Provisioner) certificate | Retired: removed from the Provisioner app and deleted from this PC with its private key. Kept if another Entrabot agent on this PC still needs it, or with `-KeepSetupCredential` | Same | Same |
+| This PC's setup (Provisioner) certificate | Retired: removed from the Provisioner app and deleted from this PC with its private key. Kept if another Entrabot agent on this PC still needs it, if this same agent is set up in a second folder on this PC (it then has another certificate in the same store), or with `-KeepSetupCredential` | Same | Same |
 | `%LOCALAPPDATA%\entrabot` (local memory, logs, private Python and Azure CLI, and the .NET SDK and Agent 365 CLI if an earlier version of setup, or `prereqs-windows.ps1 -WithWorkIq`, installed them) | Kept | Kept | Deleted, except the Python this command is running from |
 | `start-entrabot.cmd`, your `PATH`, the agent's sponsors, cloud storage | Never touched | Never touched | Never touched |
 

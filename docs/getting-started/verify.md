@@ -29,7 +29,7 @@ On macOS or Linux, re-run the full diagnostics without provisioning anything:
 ./scripts/setup.sh --diagnose
 ```
 
-It covers the state file, certificate, three-hop token, Graph identity, Teams scope, and the MCP configuration files, and ends with an optional `persona-sati MCP` line. That line reports `SKIP` when `.mcp.json` has no `persona-sati` entry, and never fails the run: a `WARN` means the entry still has an unfilled `<...>` placeholder, points at a launcher or token command that is missing or not executable, or points at a `localhost` address where nothing is listening. A failed local connection does not mean a hosted persona-sati service is down; connect through the client launcher from your persona-sati install, per its own setup documentation. See [MCP connectivity](../troubleshooting/mcp-connectivity.md#persona-sati-does-not-connect).
+It changes nothing. It exits `0` when no check fails and `1` otherwise. It covers the state file, the certificate (in your keychain or keyring, in date, and its key signs; a warning when 30 days or fewer remain), the three-hop token, Graph identity, Teams scope, and the MCP configuration files, and ends with an optional `persona-sati MCP` line. That line reports `SKIP` when `.mcp.json` has no `persona-sati` entry, and never fails the run: a `WARN` means the entry still has an unfilled `<...>` placeholder, points at a launcher or token command that is missing or not executable, or points at a `localhost` address where nothing is listening. A failed local connection does not mean a hosted persona-sati service is down; connect through the client launcher from your persona-sati install, per its own setup documentation. See [MCP connectivity](../troubleshooting/mcp-connectivity.md#persona-sati-does-not-connect).
 
 On Windows, the same checks run with:
 
@@ -42,18 +42,20 @@ It changes nothing. It exits `0` when every check passes and `1` otherwise.
 ## Inspect status directly
 
 ```bash
-python3 scripts/show_agent_status.py
+./status.sh
 ```
 
-This prints the Agent Identity's object ID, the Agent User's UPN, license assignment status, and certificate expiry. See [scripts/show_agent_status.py reference](../reference/scripts/operations/show-agent-status-py.md) for the full output shape.
+This runs `scripts/show_agent_status.py` in the project's environment, and prints the Agent Identity's object ID, the Agent User's UPN, license assignment status, and certificate expiry. See [scripts/show_agent_status.py reference](../reference/scripts/operations/show-agent-status-py.md) for the full output shape.
 
 ## Start the MCP host and send your first message
 
+On macOS or Linux, from the Entrabot folder:
+
 ```bash
-claude --dangerously-load-development-channels server:entrabot
+./start-entrabot.sh
 ```
 
-On Windows, double-click `start-entrabot.cmd` in the Entrabot folder. It runs the same command.
+It runs `claude --dangerously-load-development-channels server:entrabot` there. On Windows, double-click `start-entrabot.cmd` in the Entrabot folder. It runs the same command.
 
 Then ask the host to call `whoami` and send a Teams message. Both should report and act as the Agent User identity, not your human account. See [Identity and Token Flow](../architecture/identity-and-token-flow.md) for how the three-hop token exchange makes this possible.
 

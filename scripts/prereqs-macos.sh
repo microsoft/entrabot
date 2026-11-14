@@ -7,26 +7,31 @@
 #   3. Python 3.12+
 #   4. Git (usually shipped with Xcode CLT; brew install as fallback)
 #   5. Azure CLI
-#   6. .NET SDK              [optional, --skip-a365 to opt out]
-#   7. Microsoft Agent 365 DevTools CLI (a365)    [needs .NET SDK]
-#   8. PowerShell 7+         [optional, --skip-pwsh to opt out]
+#
+# That is all setup needs: ./scripts/setup.sh needs only Python, and installs its own
+# Azure CLI when there is none. Setup switches Word, Excel and OneDrive files (Work IQ) on
+# by itself, so Microsoft's Agent 365 CLI is no longer installed here by default. To have
+# it anyway, for your own use:
+#   6. .NET SDK                                  [only with --with-a365-cli]
+#   7. Microsoft Agent 365 DevTools CLI (a365)   [only with --with-a365-cli]
+#   8. PowerShell 7+                             [only with --with-a365-cli]
 #
 # Safe to re-run — skips anything already installed. Run BEFORE setup.sh.
 #
 # Usage:
-#   ./scripts/prereqs-macos.sh                # install everything
-#   ./scripts/prereqs-macos.sh --skip-a365    # skip .NET SDK and a365 CLI
-#   ./scripts/prereqs-macos.sh --skip-pwsh    # skip PowerShell 7
-#   ./scripts/prereqs-macos.sh --core-only    # skip both a365 and pwsh
+#   ./scripts/prereqs-macos.sh                  # what setup needs
+#   ./scripts/prereqs-macos.sh --with-a365-cli  # also .NET, the a365 CLI and PowerShell 7
+#   (--core-only, --skip-a365 and --skip-pwsh are still accepted: they are the default now)
 #
 set -euo pipefail
 
-SKIP_A365=false
-SKIP_PWSH=false
+SKIP_A365=true
+SKIP_PWSH=true
 SHOW_HELP=false
 
 for arg in "$@"; do
     case $arg in
+        --with-a365-cli) SKIP_A365=false; SKIP_PWSH=false ;;
         --skip-a365) SKIP_A365=true ;;
         --skip-pwsh) SKIP_PWSH=true ;;
         --core-only) SKIP_A365=true; SKIP_PWSH=true ;;
@@ -36,7 +41,7 @@ for arg in "$@"; do
 done
 
 if [ "$SHOW_HELP" = true ]; then
-    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
 fi
 
@@ -201,7 +206,7 @@ fi
 # ───────────────────────────────────────────────────────────────────────────
 if [ "$SKIP_A365" = true ]; then
     step ".NET SDK"
-    skip "Skipped (--skip-a365 / --core-only). Pass --with-a365-work-iq to setup.sh and re-run prereqs to add it later."
+    skip "Not installed: setup does not need it. Add --with-a365-cli to install it anyway."
 else
     step ".NET SDK (for Microsoft Agent 365 DevTools CLI)"
 
@@ -264,9 +269,9 @@ fi
 # ───────────────────────────────────────────────────────────────────────────
 if [ "$SKIP_PWSH" = true ]; then
     step "PowerShell 7+"
-    skip "Skipped (--skip-pwsh / --core-only). Only needed for setup.sh --configure-a365-work-iq."
+    skip "Not installed: setup does not need it. Add --with-a365-cli to install it anyway."
 else
-    step "PowerShell 7+ (for setup.sh --configure-a365-work-iq)"
+    step "PowerShell 7+ (for Microsoft's Agent 365 CLI)"
 
     if command -v pwsh &>/dev/null; then
         PWSH_VER=$(pwsh -NoProfile -Command '$PSVersionTable.PSVersion.ToString()' 2>/dev/null || echo "?")
@@ -349,13 +354,13 @@ if [ ${#FAILED[@]} -gt 0 ]; then
 elif [ "$all_good" = false ]; then
     warn "Installs succeeded but some tools aren't on PATH yet."
     warn "Open a NEW terminal, then run:"
-    warn "  ./scripts/setup.sh --new --with-upn-suffix=<yourname>"
+    warn "  ./scripts/setup.sh"
     exit 0
 else
     ok "All prerequisites ready!"
     echo ""
     echo "  Next step:"
-    echo "    ./scripts/setup.sh --new --with-upn-suffix=<yourname>"
+    echo "    ./scripts/setup.sh"
     echo ""
     exit 0
 fi

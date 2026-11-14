@@ -23,6 +23,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO, TextIO
 
+from entrabot.winsetup.words import Words, words_for
+
 
 class Cancelled(Exception):
     """The person stopped the wizard: Ctrl+C, end of input, or "no" at the review screen."""
@@ -279,7 +281,10 @@ class Console:
         env: Mapping[str, str] | None = None,
         heartbeat_seconds: float = 20.0,
         verbose: bool = False,
+        platform: str | None = None,
     ) -> None:
+        # The commands and flags to name in messages: this system's (see ``words``).
+        self.words: Words = words_for(platform)
         self.stdin: TextIO = stdin if stdin is not None else sys.stdin
         self.stdout: TextIO = stdout if stdout is not None else sys.stdout
         self.assume_yes = assume_yes

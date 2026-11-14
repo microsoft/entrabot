@@ -50,13 +50,15 @@ def test_teardown_uses_existing_provisioner_token_only() -> None:
 
 
 def test_setup_certificate_registration_is_explicitly_bootstrap_capable() -> None:
-    """setup.sh Step 6 hands certificate registration to this script, so it's a setup path."""
-    setup = (REPO_ROOT / "scripts" / "setup.sh").read_text(encoding="utf-8")
-    script = (SCRIPTS_DIR / "register_blueprint_cert.py").read_text(encoding="utf-8")
-
-    assert "register_blueprint_cert.py" in setup
-    assert "from entra_provisioning import get_bootstrap_graph_token" in script
-    assert "get_bootstrap_graph_token(wait_for_propagation=False)" in script
+    """Setup's certificate step (the wizard's, on every system) hands registration to this
+    script, so it's a setup path. ``register_blueprint_cert.py`` stays one too: it is the
+    operator's tool for a computer still on the older single key."""
+    step = (REPO_ROOT / "src" / "entrabot" / "winsetup" / "certstep.py").read_text("utf-8")
+    assert '"register_windows_blueprint_cert.py"' in step
+    for name in ("register_windows_blueprint_cert.py", "register_blueprint_cert.py"):
+        script = (SCRIPTS_DIR / name).read_text(encoding="utf-8")
+        assert "from entra_provisioning import get_bootstrap_graph_token" in script, name
+        assert "get_bootstrap_graph_token(wait_for_propagation=False)" in script, name
 
 
 def test_teardown_no_token_warning_does_not_promise_az_cli_fallback() -> None:
@@ -151,7 +153,9 @@ def _teardown(
     home = tmp_path / "home"
     home.mkdir()
     result = subprocess.run(
-        ["bash", str(root / "scripts" / "teardown.sh"), *args],
+        # These tests are about the tenant-wide teardown, which now has to be asked for:
+        # without one of its flags teardown.sh only disconnects this computer.
+        ["bash", str(root / "scripts" / "teardown.sh"), "--tenant-wide", *args],
         input=answer,
         capture_output=True,
         text=True,

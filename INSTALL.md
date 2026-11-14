@@ -1,7 +1,8 @@
 # Installing EntraBot
 
-Platform-specific setup instructions. On macOS, run the prerequisites step
-first, then the one-command setup. On Windows there is only the setup command.
+Platform-specific setup instructions. On every platform setup is one command,
+and it starts the same setup wizard. On macOS and Linux it needs Python 3.12 or
+newer first; on Windows it needs nothing.
 
 ---
 
@@ -128,84 +129,137 @@ tenant-side Agent User, Agent Identity, and Blueprint unless you add
 
 ## macOS
 
+The wizard on macOS has not yet been run end to end against a real tenant;
+see [what has been tested](docs/getting-started/macos-linux.md#what-has-been-tested).
+
 ### Prerequisites
 
-Run the repository prerequisite helper:
+Python 3.12 or newer. Nothing else: setup offers to install a private Azure
+CLI, and signs you in itself, so no `az login` is needed first. With Homebrew:
+
+```bash
+brew install python@3.12
+```
+
+Or run the optional helper, which also installs the Xcode Command Line Tools,
+Git and the Azure CLI through Homebrew:
 
 ```bash
 ./scripts/prereqs-macos.sh
 ```
 
-It installs or verifies Python 3.12+, Azure CLI, GitHub CLI, Node.js, Claude Code,
-`jq`, and the Xcode Command Line Tools through Homebrew.
-
 ### Setup
 
-Choose exactly one identity mode:
+Run it from a terminal in the repo root. The wizard asks a few questions; each
+has a suggested answer, and Enter accepts it. Nothing is changed in your tenant
+until you confirm the review screen. Running it again repairs or changes an
+existing setup.
 
 ```bash
-# Create a fresh identity chain
-./scripts/setup.sh --new --with-upn-suffix=workstation
-
-# Or attach to an existing Blueprint
-./scripts/setup.sh --use-blueprint=<blueprint-app-id>
+./scripts/setup.sh
 ```
+
+To answer up front instead:
+
+```bash
+# A new agent, unattended
+./scripts/setup.sh --new --with-upn-suffix=workstation --yes
+
+# Join an existing agent from another machine
+./scripts/setup.sh --use-blueprint=<blueprint-app-id> --yes
+```
+
+#### Start the agent
+
+```bash
+./start-entrabot.sh
+```
+
+At a terminal, setup offers to do this for you as its last question.
 
 #### Certificate storage
 
-Private key is stored in **macOS Keychain** (login keychain), accessed via
-the `keyring` Python package. No PEM files on disk.
+The agent's certificate and its private key are one item in your **login
+keychain** (service `entrabot-blueprint-cert`, one item per certificate),
+accessed through the `keyring` Python package. No PEM files on disk. Over SSH
+the login keychain is usually locked: unlock it with `security unlock-keychain`
+before running setup or starting the agent.
 
 #### With Azure Blob Storage
 
 ```bash
-./scripts/setup.sh --new --with-upn-suffix=workstation --use-cloud-memory
-# Or add --use-cloud-memory to an existing --use-blueprint invocation.
+./scripts/setup.sh --use-cloud-memory
 ```
+
+#### Certificate rotation
+
+```bash
+./scripts/setup.sh --rotate-cert
+```
+
+The current certificate stays in use until the new one is proven to work.
 
 ### Teardown
 
 ```bash
 ./scripts/teardown.sh
 ```
+
+Disconnects this computer only: removes its certificate from the agent's
+Blueprint and from the keychain, removes the `entrabot` MCP entries, backs up
+then removes `.env` and `.entrabot-state.json`, and retires this computer's
+setup certificate (`--keep-setup-credential` keeps it). It keeps the agent
+unless you add `--delete-agent`, and keeps `~/.entrabot` unless you add
+`--purge-data`. `--yes` no longer deletes the agent: it used to. The older
+tenant-wide teardown runs with `--tenant-wide`.
 
 ---
 
 ## Linux
 
+Setup on Linux has not been run yet; see
+[what has been tested](docs/getting-started/macos-linux.md#what-has-been-tested).
+
 ### Prerequisites
+
+Python 3.12 or newer, and a keyring for the agent's key.
 
 **Ubuntu/Debian:**
 ```bash
 sudo apt update
-sudo apt install python3.12 python3.12-venv python3-pip git curl
-# Azure CLI
-curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+sudo apt install python3.12 python3.12-venv
 ```
 
 **Fedora/RHEL:**
 ```bash
-sudo dnf install python3.12 git curl
-# Azure CLI
-sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc
-sudo dnf install azure-cli
+sudo dnf install python3.12
 ```
+
+Git and the Azure CLI are optional: setup offers to install a private Azure
+CLI with `pip`, with no `sudo`.
 
 ### Setup
 
 ```bash
-./scripts/setup.sh --new --with-upn-suffix=workstation
+./scripts/setup.sh
 ```
+
+The same wizard, questions and flags as on macOS (above). Start the agent with
+`./start-entrabot.sh`, and rotate the certificate with
+`./scripts/setup.sh --rotate-cert`.
 
 #### Certificate storage
 
-Private key is stored via **Secret Service** (GNOME Keyring or KDE Wallet),
-accessed via the `keyring` Python package. Requires an active D-Bus session
-(interactive login, not a headless server).
+The agent's certificate and its private key are one item in a **Secret
+Service** keyring (GNOME Keyring or KDE Wallet), accessed through the `keyring`
+Python package. The keyring must be running and unlocked in a D-Bus session that
+setup and the agent can reach: a desktop session has one. Setup checks this
+first and stops, having changed nothing, if there is none.
 
-> **Headless Linux (no GUI / no D-Bus):** Set `PYTHON_KEYRING_BACKEND=keyrings.alt.file.PlaintextKeyring`
-> as a fallback — stores in `~/.local/share/python_keyring/`. Less secure but
-> functional for development.
+Entrabot never falls back to a file: a `keyring` backend that is not the
+operating system's own (for example one selected with `PYTHON_KEYRING_BACKEND`)
+is refused. For a server with no desktop, see
+[Preparing a Linux host](docs/platform-docs/platform-linux.md#preparing-a-linux-host).
 
 ### Teardown
 
@@ -213,17 +267,26 @@ accessed via the `keyring` Python package. Requires an active D-Bus session
 ./scripts/teardown.sh
 ```
 
+As on macOS: it disconnects this computer only, unless you add
+`--delete-agent`.
+
 ---
 
 ## Verify Installation
 
-Setup ends with this check on every platform. To run it again on Windows:
+Setup ends with this check on every platform. To run it again:
 
 ```bat
+rem Windows
 scripts\setup-windows.cmd -Diagnose
 ```
 
-On macOS or Linux, verify the three-hop flow works:
+```bash
+# macOS or Linux
+./scripts/setup.sh --diagnose
+```
+
+On macOS or Linux, to verify the three-hop flow by hand:
 
 ```bash
 # Activate the venv
@@ -239,15 +302,16 @@ PY
 ```
 
 You should see a 40-character token prefix. If you get an AADSTS error, check:
-- `az login` is current
 - The Agent User has a Teams-capable license
-- The certificate thumbprint in `.env` matches `Cert:\CurrentUser\My` (Windows)
-  or Keychain (Mac)
+- The certificate `.env` names (`ENTRABOT_BLUEPRINT_CERT_SHA1`) is in
+  `Cert:\CurrentUser\My` (Windows) or your keychain or keyring (macOS, Linux),
+  in date, and unlocked in this session; the health check above checks it
 
 ### Boot the MCP server
 
-**Claude Code:** Open the project — it auto-loads from `.mcp.json`. On Windows,
-double-click `start-entrabot.cmd`.
+**Claude Code:** Open the project — it auto-loads from `.mcp.json`. For Teams
+messages as they arrive, start it with `./start-entrabot.sh` (macOS, Linux) or
+double-click `start-entrabot.cmd` (Windows).
 
 **Copilot CLI:** Run `copilot` from the repo directory — it loads from
 `~/.copilot/mcp-config.json`.
@@ -275,19 +339,24 @@ Start with `scripts\setup-windows.cmd -Diagnose`. Running
 
 More, with causes: [docs/troubleshooting/windows.md](docs/troubleshooting/windows.md).
 
-### macOS
+### macOS and Linux
+
+Start with `./scripts/setup.sh --diagnose`. Running `./scripts/setup.sh` again
+repairs most problems.
 
 | Problem | Fix |
 |---------|-----|
-| `keyring` can't access Keychain | Ensure you're in an interactive session (not SSH without forwarding) |
-| `setup.sh` fails on cert generation | Check `security list-keychains` includes login keychain |
+| "Entrabot needs Python 3.12 or later" | Install it (`brew install python@3.12`, or `sudo apt install python3.12 python3.12-venv`), then run setup again |
+| "Setup can't use this account's key store" (macOS, over SSH) | Unlock the login keychain: `security unlock-keychain`. Or run setup at the Mac's own desktop |
+| "Setup can't use this account's key store" (Linux) | Start and unlock a Secret Service keyring in a D-Bus session: see [Preparing a Linux host](docs/platform-docs/platform-linux.md#preparing-a-linux-host). Unset `PYTHON_KEYRING_BACKEND` if it is set |
+| "ERROR: Unknown option" (exit 2) | Write values with `=`, for example `--use-blueprint=APP_ID` |
+| Setup ends with "no Teams licence", or `403` on `/me/chats` | Make a Teams-capable licence available in the tenant, then run setup again |
+| Claude Code is not installed | Setup does not install it on macOS or Linux: <https://code.claude.com/docs/en/setup> |
+| A script in `scripts/` run by hand cannot find `az` | Setup's private Azure CLI is not on your `PATH` (setup, teardown and `./status.sh` find it themselves): `PATH="$HOME/.entrabot/tools/azure-cli/bin:$PATH" .venv/bin/python scripts/list_sponsors.py` |
+| `./scripts/teardown.sh --yes` did not delete the agent | It now disconnects this computer only. Add `--delete-agent` |
+| Certificate expired or missing | Run setup again. To replace one before it expires: `./scripts/setup.sh --rotate-cert` |
 
-### Linux
-
-| Problem | Fix |
-|---------|-----|
-| `keyring` fails with "No recommended backend" | Install `gnome-keyring` or set `PYTHON_KEYRING_BACKEND` env var |
-| D-Bus errors | Start a session: `eval $(dbus-launch --sh-syntax)` |
+More, with causes: [docs/troubleshooting/macos-linux.md](docs/troubleshooting/macos-linux.md).
 
 ### All platforms
 

@@ -12,8 +12,8 @@ Compact lookup of every `ENTRABOT_*` environment variable read by `EntraBotConfi
 | `ENTRABOT_BLUEPRINT_APP_ID` | Unset by default; required for the Agent User three-hop flow. |
 | `ENTRABOT_BLUEPRINT_OBJECT_ID` | Unset by default; used by provisioning/diagnostics. |
 | `ENTRABOT_BLUEPRINT_CERT_THUMBPRINT` | Unset by default; required (SHA-256, base64url) for the certificate JWT assertion. |
-| `ENTRABOT_BLUEPRINT_CERT_SHA1` | Unset by default; Windows-only, used to locate the certificate in the Windows Certificate Store. |
-| `ENTRABOT_BLUEPRINT_KSP` | Unset by default; Windows-only diagnostics label. |
+| `ENTRABOT_BLUEPRINT_CERT_SHA1` | Unset by default; setup writes it on every platform. Locates the certificate and its private key in the Windows Certificate Store, or in the macOS Keychain or Linux keyring. |
+| `ENTRABOT_BLUEPRINT_KSP` | Unset by default; diagnostics label for where the key is (`tpm`, `software`, `keychain` or `keyring`). |
 | `ENTRABOT_AGENT_ID` | Unset by default; required for the Agent User three-hop flow. |
 | `ENTRABOT_AGENT_OBJECT_ID` | Unset by default; used by provisioning/diagnostics. |
 | `ENTRABOT_AGENT_USER_ID` | Unset by default; required for the Agent User three-hop flow. |

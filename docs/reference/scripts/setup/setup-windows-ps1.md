@@ -6,10 +6,10 @@ Platforms: Windows.
 
 `setup-windows.ps1` sets up Entrabot on a Windows PC. It is a bootstrap: it
 gets the PC to the point where the setup wizard can run, then hands over to it.
-The wizard (`python -m entrabot.winsetup`) is the Windows equivalent of
-[`setup.sh`](setup-sh.md): it signs in to Microsoft, creates or joins the agent,
-creates this PC's certificate, writes `.env`, registers the MCP server, and
-tests that the agent can sign in.
+The wizard (`python -m entrabot.winsetup`) is the same one
+[`setup.sh`](setup-sh.md) starts on macOS and Linux: it signs in to Microsoft,
+creates or joins the agent, creates this PC's certificate, writes `.env`,
+registers the MCP server, and tests that the agent can sign in.
 
 Start it through [`setup-windows.cmd`](setup-windows-cmd.md), which handles the
 execution policy. Running it again is how a setup is repaired or changed.

@@ -8,6 +8,8 @@ scripts\setup-windows.cmd -Diagnose
 
 Running `scripts\setup-windows.cmd` again is the repair path for most of what follows. It keeps what already works.
 
+macOS and Linux run the same setup wizard. Their own entries, and which of the entries below apply there, are on the [macOS and Linux](macos-linux.md) page.
+
 ## Where the logs are
 
 | Log | Location |
@@ -38,9 +40,9 @@ The setup log holds everything the helper scripts printed. The screen shows a on
 
 ## Windows asks to manage the device, or "Device management could not be enabled"
 
-**Cause.** A sign-in went through the Windows account sign-in window (the Web Account Manager). On a PC your organization does not manage, Windows then offers to remember the account for all apps and to let the organization manage the device, and that can fail. Setup's own sign-in no longer uses that window; Microsoft's Agent 365 tool, which runs when you switch on Word, Excel and OneDrive files, still does, and can ask more than once.
+**Cause.** A sign-in went through the Windows account sign-in window (the Web Account Manager). On a PC your organization does not manage, Windows then offers to remember the account for all apps and to let the organization manage the device, and that can fail. Setup's own sign-in no longer uses that window, and nothing setup runs does: it switches Word, Excel and OneDrive files on itself. A tool you run yourself that signs in through Windows, such as Microsoft's Agent 365 CLI, still can, and can ask more than once.
 
-**Fix.** The sign-in itself has worked. Choose "No, sign in to this app only" to go on without registering the PC; the Agent 365 tool may then ask you to sign in again for each of its steps.
+**Fix.** The sign-in itself has worked. Choose "No, sign in to this app only" to go on without registering the PC; such a tool may then ask you to sign in again for each of its steps.
 
 ## The sign-in page never appears
 
@@ -180,7 +182,7 @@ The agent's Word, Excel or OneDrive tools fail, and the error (or the setup log,
 
 **Cause.** The agent asked for a token for one of the Work IQ servers, and Microsoft Entra refused it: the agent cannot use the Blueprint's permissions for it. With the permission grants in place but without the Blueprint's inheritable permissions, this is the answer, as measured on a real tenant. It is also the answer for the minute or so after setup writes them, before Microsoft honours them.
 
-**Fix.** If setup set them up in the last few minutes, wait and run `scripts\setup-windows.cmd -Diagnose`. Otherwise run `scripts\setup-windows.cmd` again and answer yes to the Word, Excel and OneDrive question: it writes whatever is missing and checks the result. On macOS and Linux, run `.venv/bin/python scripts/ensure_a365_work_iq_permissions.py`, wait a minute, and try again.
+**Fix.** If setup set them up in the last few minutes, wait and run `scripts\setup-windows.cmd -Diagnose`. Otherwise run `scripts\setup-windows.cmd` again and answer yes to the Word, Excel and OneDrive question: it writes whatever is missing and checks the result. On macOS and Linux, do the same with `./scripts/setup.sh` and `./scripts/setup.sh --diagnose`.
 
 ## "Word, Excel and OneDrive files are switched on, but the agent has no Microsoft 365 Copilot licence"
 

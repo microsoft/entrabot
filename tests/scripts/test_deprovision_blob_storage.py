@@ -35,13 +35,30 @@ class TestDeleteContainer:
     @patch.object(deprov_mod, "_run_az")
     def test_delete_success(self, mock_az):
         mock_az.return_value = _ok()
+        deprov_mod.delete_container("myaccount", "mycontainer", "my-rg")
+        args = mock_az.call_args[0][0]
+        # The management-plane command, as provision_blob_storage.py creates the container.
+        # A real run showed the data-plane one (az storage container delete --auth-mode login
+        # --yes) fails every time: it takes no --yes, and needs a blob data role.
+        assert args == [
+            "storage",
+            "container-rm",
+            "delete",
+            "--storage-account",
+            "myaccount",
+            "--resource-group",
+            "my-rg",
+            "--name",
+            "mycontainer",
+            "--yes",
+        ]
+
+    @patch.object(deprov_mod, "_run_az")
+    def test_the_default_resource_group_is_used_when_none_is_given(self, mock_az):
+        mock_az.return_value = _ok()
         deprov_mod.delete_container("myaccount", "mycontainer")
         args = mock_az.call_args[0][0]
-        assert "storage" in args
-        assert "container" in args
-        assert "delete" in args
-        assert "myaccount" in args
-        assert "mycontainer" in args
+        assert args[args.index("--resource-group") + 1] == deprov_mod.DEFAULT_RESOURCE_GROUP
 
     @patch.object(deprov_mod, "_run_az")
     def test_delete_failure_raises(self, mock_az):
@@ -100,8 +117,8 @@ class TestDeprovision:
         # Should have called _run_az once (container delete)
         assert mock_az.call_count == 1
         args = mock_az.call_args[0][0]
-        assert "container" in args
-        assert "delete" in args
+        assert args[:3] == ["storage", "container-rm", "delete"]
+        assert args[args.index("--resource-group") + 1] == "rg1"
 
     @patch.object(deprov_mod, "_run_az")
     def test_delete_account_also(self, mock_az):

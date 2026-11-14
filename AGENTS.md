@@ -80,7 +80,7 @@ Read the listed documentation before drafting code or a plan that touches the to
   - `agent_user` — three-hop Agent User flow (Blueprint cert → Agent Identity FIC → Agent User `user_fic`)
   - `delegated` — MSAL interactive auth with human's token, messages prefixed `[EntraBot]`
   - `_init_auth` tries three-hop first when a Blueprint app ID + tenant ID are present and `ENTRABOT_SKIP_PROVISIONING` is false; on failure or bypass it falls back to MSAL delegated when `ENTRABOT_CLIENT_ID` is set. `ENTRABOT_MODE` is validated but not currently consumed as a selector.
-- Certificate auth: private key in the OS keystore, JWT assertion for Hop 1 (ADR-003). macOS Keychain and Linux keyring hold a PEM; on Windows the key is a non-exportable CNG key in the certificate store (TPM when the TPM accepts a key, software key store otherwise) and signs in place
+- Certificate auth: private key in the OS keystore, JWT assertion for Hop 1 (ADR-003). On macOS and Linux each certificate is one Keychain/keyring item holding the certificate and its private key together, named by the certificate's SHA-1 thumbprint (`platform/keycert.py`; `.env` names it in `ENTRABOT_BLUEPRINT_CERT_SHA1`), so two agents on one account never share a key. A computer set up before the wizard has the key alone in the account's single `entrabot` / `blueprint-private-key` item and keeps working until setup is run again, which keeps that key and stores it the new way. On Windows the key is a non-exportable CNG key in the certificate store (TPM when the TPM accepts a key, software key store otherwise) and signs in place
 - Background tasks: initialization is eagerly scheduled at stdio boot, but each task's own gate decides whether it actually starts.
   - Teams chat poll (5s) — starts whenever `watched_chats` is non-empty, in either authenticated session type; pushes inbound DMs / group-chat messages via `notifications/claude/channel`
   - Email poll (60s) — Agent-User-only; `/me/messages`, filters Teams/M365 noise, detects Purview-encrypted mail
@@ -93,9 +93,12 @@ Read the listed documentation before drafting code or a plan that touches the to
 ## Key implementation patterns
 
 - `CredentialStore` implementations under `platform/` keep certificate private keys in the OS
-  keystore through `keyring` on macOS and Linux. On Windows the Blueprint and Provisioner keys
-  never leave the certificate store (`platform/wincert.py`); Hop 1 signs through CNG and does
-  not touch `keyring` or Credential Manager.
+  keystore through `keyring` on macOS and Linux. `platform/keycert.py` builds the certificate
+  lifecycle on top of it (create, find, test-sign, delete, one item per certificate) with the
+  same functions as `platform/wincert.py`, so setup, rotation, teardown, preflight and the
+  runtime treat a certificate the same way on every system. On Windows the Blueprint and
+  Provisioner keys never leave the certificate store (`platform/wincert.py`); Hop 1 signs
+  through CNG and does not touch `keyring` or Credential Manager.
 - The three-hop Teams token flow lives in `acquire_agent_user_token`; Hop 1 uses the certificate
   JWT assertion, and Graph/Work IQ HTTP calls use `httpx` with bounded timeouts.
 - Token renewal combines eager `_ensure_valid_token()` checks with lazy 401 retry through
@@ -258,9 +261,17 @@ Two memory systems coexist in this project:
 
 ## Commands
 
+macOS and Linux:
+
 ```bash
-# Setup
-python -m venv .venv && source .venv/bin/activate
+# Setup, repair, or change: the wizard. Builds .venv itself. Add --yes plus flags to run unattended.
+./scripts/setup.sh
+
+# Health check of an existing setup. Changes nothing.
+./scripts/setup.sh --diagnose
+
+# Developer tools. Setup builds .venv; without setup, create it first: python3.12 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 
 # Test + lint (run before every commit)
@@ -276,7 +287,12 @@ pytest tests/tools/test_teams.py::TestAcquireAgentUserToken::test_success -v
 ruff format .
 
 # Run with Claude Code channel notifications
-claude --dangerously-load-development-channels server:entrabot
+./start-entrabot.sh        # or: claude --dangerously-load-development-channels server:entrabot
+
+# Status, certificate rotation, disconnect this computer
+./status.sh --health-only --strict
+./scripts/setup.sh --rotate-cert
+./scripts/teardown.sh
 
 # Docs preview
 pip install mkdocs-material && mkdocs serve
@@ -308,8 +324,8 @@ powershell -ExecutionPolicy Bypass -File scripts\teardown-windows.ps1
 
 ## High-Value Repo Areas
 
-- `src/entrabot/platform/`: OS-specific credential storage — `CredentialStore` protocol with Mac/Linux/Windows implementations, plus `wincert.py`, the Windows certificate and key lifecycle (create with a non-exportable key, TPM first; find; test-sign; delete with the key)
-- `src/entrabot/winsetup/`: the Windows setup wizard (`python -m entrabot.winsetup`: `setup`, `diagnose`, `rotate-cert`, `teardown`, `status`). `scripts/setup-windows.ps1` is only a bootstrap that builds `.venv` and starts it
+- `src/entrabot/platform/`: OS-specific credential storage — `CredentialStore` protocol with Mac/Linux/Windows implementations, plus the certificate and key lifecycle (create, find, test-sign, delete with the key) in `wincert.py` for Windows (non-exportable key, TPM first) and `keycert.py` for macOS and Linux (one Keychain/keyring item per certificate)
+- `src/entrabot/winsetup/`: the setup wizard for Windows, macOS and Linux (`python -m entrabot.winsetup`: `setup`, `diagnose`, `rotate-cert`, `teardown`, `status`); the name is from when it was Windows-only. `scripts/setup-windows.ps1` and `scripts/setup.sh` are only bootstraps that build `.venv` and start it. `words.py` holds the commands and flags each system's messages name
 - `src/entrabot/auth/`: Certificate-based JWT assertion builder + MSAL delegated auth (localhost redirect + device code fallback)
 - `src/entrabot/a365/`: Microsoft Agent 365 Work IQ provider boundary and Word adapter
 - `src/entrabot/identity/`: Progressive identity state machine (UNAUTHENTICATED → DELEGATED → PROVISIONING → AGENT_USER)

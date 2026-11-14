@@ -161,7 +161,7 @@ def run_command(
 
 def smoke_env(ctx: SmokeContext) -> dict[str, str]:
     env = os.environ.copy()
-    # Avoid setup.sh prompting to migrate unrelated local operational/persona data.
+    # Keep setup from offering to migrate unrelated local operational/persona data.
     env["ENTRABOT_DATA_DIR"] = str(ctx.log_dir / "isolated-data")
     env["ENTRABOT_LOG_DIR"] = str(ctx.log_dir / "entrabot-logs")
     env["ENTRABOT_AUDIT_DIR"] = str(ctx.log_dir / "entrabot-audit")
@@ -197,6 +197,8 @@ def setup_command(ctx: SmokeContext) -> list[str]:
         if ctx.sponsor_upn:
             cmd += ["-Sponsor", ctx.sponsor_upn]
     else:
+        # setup.sh starts the same wizard. --yes makes it unattended whether or not the
+        # harness was started from a terminal, so every answer it would ask for is a flag.
         cmd = [
             "./scripts/setup.sh",
             "--new",
@@ -204,11 +206,12 @@ def setup_command(ctx: SmokeContext) -> list[str]:
             "--use-cloud-memory",
             f"--with-storage-account={ctx.storage_account}",
             f"--with-container={ctx.container}",
+            "--yes",
         ]
         if ctx.sponsor_upn:
-            cmd.append(f"--teams-user={ctx.sponsor_upn}")
+            cmd.append(f"--sponsor={ctx.sponsor_upn}")
         if ctx.test_a365:
-            cmd.append("--with-a365-work-iq")
+            cmd.append("--configure-a365-work-iq")
     return cmd
 
 
@@ -261,7 +264,40 @@ def snapshot_local_state(ctx: SmokeContext) -> None:
         (backup_dir / "keyring-backup-error.txt").write_text(str(exc) + "\n", encoding="utf-8")
 
 
+def _cert_sha1_in(env_file: Path) -> str:
+    """The Blueprint certificate a ``.env`` names (its SHA-1), or "" when it names none."""
+    if not env_file.is_file():
+        return ""
+    for line in env_file.read_text(encoding="utf-8", errors="replace").splitlines():
+        key, _, value = line.strip().partition("=")
+        if key.strip() == "ENTRABOT_BLUEPRINT_CERT_SHA1":
+            return value.strip().upper()
+    return ""
+
+
+def remove_smoke_certificate(ctx: SmokeContext) -> None:
+    """macOS and Linux: setup keeps each agent's certificate and private key as their own key
+    store item, named in the ``.env`` it writes. The smoke agent's is removed here, before
+    that ``.env`` is put back. The certificate named by the ``.env`` this checkout had before
+    the run (the backup) belongs to the agent that lives here and is never touched."""
+    if is_windows():
+        return
+    smoke = _cert_sha1_in(REPO_ROOT / ".env")
+    before = _cert_sha1_in(ctx.log_dir / "local-state-backup" / ".env")
+    if not smoke or smoke == before:
+        return
+    try:
+        from entrabot.platform import keycert
+
+        keycert.delete_cert(smoke)
+    except Exception as exc:  # pragma: no cover - depends on host keyring
+        (ctx.log_dir / "remove-smoke-certificate-error.txt").write_text(
+            str(exc) + "\n", encoding="utf-8"
+        )
+
+
 def restore_local_state(ctx: SmokeContext) -> None:
+    remove_smoke_certificate(ctx)
     backup_dir = ctx.log_dir / "local-state-backup"
     for name in (".env", ".entrabot-state.json"):
         target = REPO_ROOT / name

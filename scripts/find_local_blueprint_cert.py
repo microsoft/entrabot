@@ -1,6 +1,12 @@
 """Find the registered Blueprint cert thumbprint for this local private key.
 
-This is how setup.sh decides whether to reuse a certificate. It never trusts the
+An operator's tool for a macOS or Linux computer whose key is in the account's older single
+key store slot (``entrabot`` / ``blueprint-private-key``). The setup wizard makes the same
+check itself when it meets such a computer (``entrabot.winsetup.certstep``), so
+``scripts/setup.sh`` no longer runs this; where the text below says setup.sh, read "the
+caller".
+
+This is how a caller decides whether to reuse a certificate. It never trusts the
 thumbprint cached in the state file: that can be stale, or can belong to an earlier key
 (after an unconfirmed ``--remove-all-existing-certs``, or a failed state write). Only a
 match between the local private key and a certificate registered on the Blueprint counts,

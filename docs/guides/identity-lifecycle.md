@@ -57,7 +57,25 @@ See the
 
 ## Certificate lifecycle
 
-**Windows** operators rotate the Blueprint certificate with:
+Each computer signs the agent in with its own certificate, whose private key stays on
+that computer: on Windows a non-exportable key in the certificate store (in the TPM
+where the TPM accepts one), on macOS and Linux one Keychain or keyring item that holds
+the certificate and its key together. `.env` names it by two thumbprints: the
+`x5t#S256` (SHA-256) thumbprint used in JWT assertion headers, and the 40-character
+SHA-1 thumbprint that finds the certificate and its key in the store. Setup reuses the
+certificate on every run when it is in the store, in date, can sign, and is on the
+Blueprint ([`verify_blueprint_cert.py`](../reference/scripts/auth-and-certs/verify-blueprint-cert-py.md)
+checks that); otherwise it creates and registers a new one.
+
+Rotate the Blueprint certificate with:
+
+macOS/Linux:
+
+```bash
+./scripts/setup.sh --rotate-cert
+```
+
+Windows (PowerShell):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\deploy-windows.ps1
@@ -65,66 +83,65 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy-windows.ps1
 
 The certificate in use stays in use until the new one is proven to work:
 
-1. A new certificate is created on this PC, with its key in the TPM where the TPM
-   accepts one.
+1. A new certificate is created on this computer: on Windows with its key in the TPM
+   where the TPM accepts one, on macOS and Linux in the account's Keychain or keyring.
 2. Its public half is added to the Blueprint beside the current certificate. Other
    machines' certificates are kept.
 3. The agent signs in with the new certificate, retrying while Microsoft Entra takes
    it up.
-4. `.env` switches to the new certificate: both the `x5t#S256` (SHA-256) thumbprint
-   used in JWT assertion headers and the 40-character SHA-1 thumbprint that locates
-   the key in the Windows certificate store.
-5. The old certificate is removed from the Blueprint and deleted from this PC together
-   with its private key.
+4. `.env` switches to the new certificate's two thumbprints.
+5. The old certificate is removed from the Blueprint and deleted from this computer
+   together with its private key.
 
 A failure in steps 1-3 undoes the new certificate and changes nothing else. A failure
 in step 5 leaves the agent working on the new certificate; running the command again
 finishes the cleanup. Restart the assistant afterwards, because the agent reads its
 certificate when it starts. A certificate is valid for one year, and the agent logs a
 warning when 30 days or fewer remain. See the
-[`deploy-windows.ps1` reference](../reference/scripts/setup/deploy-windows-ps1.md).
+[`deploy-windows.ps1` reference](../reference/scripts/setup/deploy-windows-ps1.md) and
+[`setup.sh --rotate-cert`](../reference/scripts/setup/setup-sh.md#certificate-rotation).
+On macOS and Linux, rotation has unit tests only so far.
 
-To disconnect a Windows PC from an agent, run `scripts\teardown-windows.ps1`. It
-removes that PC's certificate from the Blueprint, keeping other machines', and deletes
-it locally with its key; a certificate left by an interrupted rotation comes off in the
-same write. It also retires that PC's setup (Provisioner) certificate
-(removed from the Provisioner app and deleted locally with its key) unless another
-Entrabot agent on the PC still needs it or `-KeepSetupCredential` is given. Before
-that, it tries to remove any older setup certificate that setup noted it could not take
-off the Provisioner app, and reports where to remove it by hand if that fails. See the
+To disconnect a computer from an agent, run `./scripts/teardown.sh` (macOS and Linux)
+or `scripts\teardown-windows.ps1` (Windows). It removes that computer's certificate
+from the Blueprint, keeping other machines', and deletes it locally with its key; a
+certificate left by an interrupted rotation comes off in the same write. It also
+retires that computer's setup (Provisioner) certificate (removed from the Provisioner
+app and deleted locally with its key) unless another Entrabot agent there still needs
+it or `--keep-setup-credential` (`-KeepSetupCredential`) is given. Before that, it
+tries to remove any older setup certificate that setup noted it could not take off the
+Provisioner app, and reports where to remove it by hand if that fails. See the
+[`teardown.sh` reference](../reference/scripts/teardown/teardown-sh.md) and the
 [`teardown-windows.ps1` reference](../reference/scripts/teardown/teardown-windows-ps1.md).
 
-**macOS and Linux** have no automated rotation flow. Setup checks the certificate on
-every run instead. `find_local_blueprint_cert.py` tests whether this machine's private
-key matches a certificate registered on the Blueprint that hasn't expired, and setup
-reuses that certificate if so, correcting a stale thumbprint in local state. Otherwise
-(an expired certificate counts as no match, so the next run adds a new one), and whenever a new
-key from an unfinished run is still pending, setup runs `register_blueprint_cert.py` to
-add one. It never trusts the cached thumbprint on its own. If the check itself fails
-(exit `3`), setup stops rather than generating a certificate, so fix the cause first. To
-ask whether one particular thumbprint, such as the one in `.env`, is still on the
-Blueprint, use `verify_blueprint_cert.py`; setup does not call it. See the
-auth-and-certs reference pages for
-[`find_local_blueprint_cert.py`](../reference/scripts/auth-and-certs/find-local-blueprint-cert-py.md),
-[`register_blueprint_cert.py`](../reference/scripts/auth-and-certs/register-blueprint-cert-py.md),
+**A macOS or Linux computer set up before the setup wizard** kept the private key on
+its own, in one key store item for the whole account (`entrabot` /
+`blueprint-private-key`), with no SHA-1 thumbprint in `.env`. It keeps working; the
+next `./scripts/setup.sh` stores the key with its certificate as the agent's own item
+when that certificate is on the Blueprint. Run setup once before rotating or tearing
+down such a computer. The older scripts for that single item,
+[`find_local_blueprint_cert.py`](../reference/scripts/auth-and-certs/find-local-blueprint-cert-py.md)
 and
-[`verify_blueprint_cert.py`](../reference/scripts/auth-and-certs/verify-blueprint-cert-py.md).
+[`register_blueprint_cert.py`](../reference/scripts/auth-and-certs/register-blueprint-cert-py.md),
+are no longer run by setup.
 
 ### Several machines on one Blueprint
 
 A Blueprint holds one certificate per machine, and attaching a machine with
-`setup.sh --use-blueprint=<APP_ID>` adds to the list without removing any other
-machine's certificate. See which certificates are registered with
+`./scripts/setup.sh --use-blueprint=<APP_ID>` (`scripts\setup-windows.cmd -UseBlueprint
+<APP_ID>` on Windows) adds to the list without removing any other machine's
+certificate. See which certificates are registered with
 [`list_blueprint_certs.py`](../reference/scripts/auth-and-certs/list-blueprint-certs-py.md).
 
 To start over, for example after losing a laptop,
-`setup.sh --use-blueprint=<APP_ID> --remove-all-existing-certs` removes **every**
-certificate on the Blueprint and replaces them with a new one for the machine you run
-it on. Every other machine stops authenticating until it runs setup again. The flag
-only removes certificates: it does not delete the Blueprint, its Agent Identities, or
-its Agent Users. To delete those, see [Targeted deprovisioning](#targeted-deprovisioning).
+`./scripts/setup.sh --use-blueprint=<APP_ID> --remove-all-existing-certs` removes
+**every** certificate on the Blueprint and replaces them with a new one for the macOS
+or Linux computer you run it on. Every other machine stops authenticating until it
+runs setup again. At a terminal setup asks first, with No suggested. The flag only
+removes certificates: it does not delete the Blueprint, its Agent Identities, or its
+Agent Users. To delete those, see [Targeted deprovisioning](#targeted-deprovisioning).
 See the
-[`register_blueprint_cert.py` reference](../reference/scripts/auth-and-certs/register-blueprint-cert-py.md).
+[`register_windows_blueprint_cert.py` reference](../reference/scripts/auth-and-certs/register-windows-blueprint-cert-py.md).
 
 ## Targeted deprovisioning
 

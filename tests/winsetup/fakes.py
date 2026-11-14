@@ -120,6 +120,7 @@ def make_console(
     typed: str | None = None,
     assume_yes: bool = False,
     log_file: Path | None = None,
+    platform: str = "win32",
 ) -> tuple[Console, io.StringIO]:
     """A console that writes to a string and never colours or uses non-ASCII glyphs.
 
@@ -137,6 +138,7 @@ def make_console(
         spawn=spawn or FakeSpawn(),
         color=False,
         unicode=False,
+        platform=platform,
     )
     return console, out
 

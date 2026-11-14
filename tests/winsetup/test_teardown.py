@@ -1321,3 +1321,55 @@ class TestPurgeData:
             "the .NET SDK and the Microsoft Agent 365 CLI if an earlier version of setup "
             "installed them" in " ".join(plan.split())
         )
+
+
+class TestTheSameAgentInASecondFolderKeepsTheSetupCertificate:
+    """Found on a real run (Ubuntu): the agent set up in two folders on one account, one
+    folder disconnected, and the other's status stopped with "Provisioner certificate private
+    key is missing locally". The second folder's certificate has the agent's own name."""
+
+    SECOND_FOLDER = blueprint_cert(sha1="7" * 40, x5t="s" * 43)
+
+    def test_it_is_kept_and_the_report_says_why_and_how_to_remove_it(
+        self, project: Project
+    ) -> None:
+        project.store.certs.pop(OTHER_AGENT_CERT.sha1_hex)
+        project.store.certs[self.SECOND_FOLDER.sha1_hex] = self.SECOND_FOLDER
+
+        code, out = tear_down(project)
+
+        assert code == teardown.EXIT_OK, out
+        assert project.ran(REMOVE_PROVISIONER_CREDENTIAL) == []
+        assert project.store.find_cert(PROV_SHA1) is not None
+        assert project.store.find_cert(self.SECOND_FOLDER.sha1_hex) is not None
+        assert (OLD_SHA1, True) in project.store.deleted  # this folder's own still goes
+        assert "set up in a second folder" in out
+        assert "certmgr.msc" in out  # where to delete it by hand if there is no such folder
+
+    def test_with_no_other_certificate_of_this_agent_it_is_still_retired(
+        self, project: Project
+    ) -> None:
+        project.store.certs.pop(OTHER_AGENT_CERT.sha1_hex)
+
+        code, out = tear_down(project)
+
+        assert code == teardown.EXIT_OK, out
+        assert len(project.ran(REMOVE_PROVISIONER_CREDENTIAL)) == 1
+        assert (PROV_SHA1, True) in project.store.deleted
+
+    def test_a_rotation_leftover_named_in_env_is_this_folders_own(self, project: Project) -> None:
+        # ENTRABOT_BLUEPRINT_CERT_RETIRING_SHA1 names it: it goes with this folder and does
+        # not count as a second folder.
+        project.store.certs.pop(OTHER_AGENT_CERT.sha1_hex)
+        leftover = blueprint_cert(sha1=NEW_SHA1, x5t=NEW_X5T)
+        project.store.certs[leftover.sha1_hex] = leftover
+        with project.env_file.open("a", encoding="utf-8") as handle:
+            handle.write(f"ENTRABOT_BLUEPRINT_CERT_RETIRING_SHA1={NEW_SHA1}\n")
+        project.spawn.on(
+            REMOVE_BLUEPRINT_CREDENTIALS_IN_ONE_WRITE, result(0, removed=2, kept=1, not_listed=[])
+        )
+
+        code, out = tear_down(project)
+
+        assert code == teardown.EXIT_OK, out
+        assert len(project.ran(REMOVE_PROVISIONER_CREDENTIAL)) == 1

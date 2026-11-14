@@ -113,16 +113,17 @@ class TestMain:
         assert cli._with_default_command(["--help"]) == ["--help"]
         assert cli._with_default_command([]) == ["setup"]
 
-    def test_running_on_another_os_explains_and_exits_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    @pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])
+    def test_a_folder_that_is_not_the_project_stops_before_anything_and_is_logged(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], platform: str
     ) -> None:
-        world = World(env={"HOME": str(tmp_path)}, platform="darwin")
+        world = World(env={"HOME": str(tmp_path)}, platform=platform)
         code = main(
             ["--project-root", str(tmp_path), "--yes", "--log-file", str(tmp_path / "s.log")],
             world=world,
         )
         assert code == 1
-        assert "setup.sh" in capsys.readouterr().out
+        assert "looks incomplete" in capsys.readouterr().out
         assert (tmp_path / "s.log").is_file()  # the run is logged where it was told to
 
     def test_every_command_signs_in_through_the_browser(
@@ -223,3 +224,76 @@ class TestChildEnvironment:
             [sys.executable, "-c", code], capture_output=True, text=True, timeout=60, check=False
         )
         assert result.returncode == 0, result.stderr
+
+
+class TestFlagsAddedForMacAndLinux:
+    """``scripts/setup.sh`` had these before the wizard; they exist on every system now."""
+
+    def test_switch_user_and_replacing_every_certificate_default_to_off(self) -> None:
+        opts = _parse()
+        assert (opts.switch_user, opts.remove_all_existing_certs) == (False, False)
+
+    def test_they_map_to_options(self) -> None:
+        opts = _parse("--switch-user", "--remove-all-existing-certs", "--use-blueprint", BP)
+        assert opts.switch_user and opts.remove_all_existing_certs
+        assert opts.use_blueprint == BP
+
+    def test_the_work_iq_help_no_longer_asks_for_the_a365_cli(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit):
+            build_parser().parse_args(["setup", "--help"])
+        text = capsys.readouterr().out
+        assert "needs the a365 CLI" not in text
+        assert "--switch-user" in text and "--remove-all-existing-certs" in text
+
+
+class TestCodeFromAnotherCopyOfTheProject:
+    """The runtime reads ``.env`` from the folder its code is in, never from
+    ``--project-root``. Seen for real on a Mac: a health check run with one copy's code
+    against another copy's folder failed with "Agent User credentials not configured"."""
+
+    def _copy(self, root: Path) -> Path:
+        package = root / "src" / "entrabot"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        return root
+
+    def test_another_copy_is_named(self, tmp_path: Path) -> None:
+        here, there = self._copy(tmp_path / "here"), self._copy(tmp_path / "there")
+        assert cli.code_is_from_another_copy(there, code_root=here) == here.resolve()
+
+    def test_the_same_folder_is_fine(self, tmp_path: Path) -> None:
+        here = self._copy(tmp_path / "here")
+        assert cli.code_is_from_another_copy(here, code_root=here) is None
+
+    def test_a_folder_with_no_code_of_its_own_is_left_to_the_later_checks(
+        self, tmp_path: Path
+    ) -> None:
+        here = self._copy(tmp_path / "here")
+        (tmp_path / "scratch").mkdir()
+        assert cli.code_is_from_another_copy(tmp_path / "scratch", code_root=here) is None
+
+    def test_by_default_it_compares_with_the_copy_these_tests_run_from(self) -> None:
+        repo = Path(cli.__file__).resolve().parents[3]
+        assert cli.code_is_from_another_copy(repo) is None
+
+    @pytest.mark.parametrize(
+        "command", [[], ["diagnose"], ["rotate-cert", "--yes"], ["teardown", "--yes"], ["status"]]
+    )
+    def test_every_command_stops_before_anything_and_says_where_to_run_it(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], command: list[str]
+    ) -> None:
+        there = self._copy(tmp_path / "another copy")
+        (there / ".env").write_text("ENTRABOT_TENANT_ID=t\n", encoding="utf-8")
+        world = World(env={"HOME": str(tmp_path)}, platform="darwin")
+
+        code = main([*command, "--project-root", str(there)], world=world)
+
+        captured = capsys.readouterr()
+        assert code == 2
+        assert "has its own copy of the code" in captured.err
+        assert "nothing was changed" in captured.err
+        assert f"cd {there.resolve()}" in captured.err and "./scripts/setup.sh" in captured.err
+        assert captured.out == ""
+        assert (there / ".env").read_text(encoding="utf-8") == "ENTRABOT_TENANT_ID=t\n"

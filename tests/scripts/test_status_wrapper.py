@@ -30,7 +30,7 @@ def test_setup_status_delegates_to_root_status_wrapper() -> None:
 
     assert "--status" in script
     assert "STATUS_ARGS=()" in script
-    assert 'exec "$PROJECT_ROOT/status.sh" "${STATUS_ARGS[@]}"' in script
+    assert 'exec "$PROJECT_ROOT/status.sh" ${STATUS_ARGS[@]+"${STATUS_ARGS[@]}"}' in script
     assert "./scripts/setup.sh --status --json" in script
 
 

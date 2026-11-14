@@ -105,10 +105,11 @@ What you need: a Microsoft 365 tenant, an account that administers it, and a fre
 ```bash
 git clone https://github.com/microsoft/entrabot.git
 cd entrabot
-./scripts/prereqs-macos.sh   # macOS; see INSTALL.md for Linux
-./scripts/setup.sh --new --with-upn-suffix=workstation
-claude --dangerously-load-development-channels server:entrabot
+./scripts/setup.sh
+./start-entrabot.sh
 ```
+
+Setup needs Python 3.12 or newer and nothing else first: no Azure CLI and no `az login`. It runs the same setup wizard as Windows: it asks a few questions (each has a suggested answer), signs you in to Microsoft, creates the agent, keeps its sign-in key in your Keychain or keyring, and tests it. To skip the questions, pass the answers: `./scripts/setup.sh --new --with-upn-suffix=workstation --yes`. The wizard on macOS and Linux has not yet been run end to end against a real tenant. Guide, limits, and what has and has not been tested: [`docs/getting-started/macos-linux.md`](docs/getting-started/macos-linux.md).
 
 Setup is idempotent on every platform. It provisions the Blueprint, BlueprintPrincipal, Agent Identity, and Agent User; assigns a Teams-capable license; uploads a self-signed certificate to Entra; and writes `.env` plus `.mcp.json` with no secrets on disk. Full walkthrough — including cloud memory, cross-tenant group chats, and the Work IQ Word setup — is in [`docs/getting-started/quickstart.md`](docs/getting-started/quickstart.md) and [`INSTALL.md`](INSTALL.md).
 
@@ -122,7 +123,7 @@ The repo isn't published to npm/pypi — your host CLI loads the local stdio MCP
 claude --dangerously-load-development-channels server:entrabot
 ```
 
-On Windows, `start-entrabot.cmd` runs this command for you. Claude Code on Windows also needs Git for Windows for this repo's hooks; setup offers to install both.
+`./start-entrabot.sh` (macOS and Linux) and `start-entrabot.cmd` (Windows) run this command for you. Claude Code on Windows also needs Git for Windows for this repo's hooks; setup offers to install both there. On macOS and Linux, setup does not install Claude Code.
 
 The double-dash matters — single-dash silently treats `server:entrabot` as prompt text (Learning #44). `server:entrabot` is the MCP server name from `.mcp.json`, not a publication identifier.
 
@@ -151,6 +152,7 @@ After setup, use `./status.sh` as the canonical health and identity check:
 ./status.sh
 ./status.sh --health-only --strict
 ./scripts/setup.sh --status --json   # delegates to ./status.sh
+./scripts/setup.sh --diagnose        # setup's own health check; changes nothing
 ```
 
 On Windows:
@@ -203,8 +205,8 @@ This is a research repo, not a production service. It runs reliably on a develop
 
 | OS | Status |
 |---|---|
-| macOS | Shipped — Keychain-backed cert storage, full three-hop flow |
-| Linux | Works — Secret Service (libsecret) backend |
+| macOS | The same setup wizard as Windows, with one Keychain item per certificate (the certificate and its key), certificate rotation, and teardown that disconnects this computer. Covered by unit and script tests, and the Keychain items were round-tripped for real, but the wizard has not yet been run end to end against a real tenant. See [macOS and Linux installation](docs/getting-started/macos-linux.md#what-has-been-tested). |
+| Linux | The same wizard and runtime, with the key in a Secret Service, KWallet or libsecret keyring that is running and unlocked. Not yet run on Linux. |
 | Windows | Shipped — one-step setup wizard, non-exportable CNG keys (TPM first, software key store otherwise), certificate rotation, teardown. Setup, repair, rotation, status and teardown were run end to end on Windows 11 25H2 x64 with a virtual TPM, as a non-administrator. Not yet tested: ARM64, physical TPMs, Windows 10, Entra-joined or Intune-managed PCs. See [Windows installation](docs/getting-started/windows.md#what-has-been-tested). |
 
 **Open:**

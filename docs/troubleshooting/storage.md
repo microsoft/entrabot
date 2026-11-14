@@ -76,10 +76,13 @@ The migration is:
 - **Best effort per file**: individual failures are collected while other
   files continue.
 
-When selected migration errors occur during `setup.sh`, setup prints
-`Setup INCOMPLETE` and exits with code 2. Fix storage scope, RBAC, connectivity,
-or the unreadable local file, then re-run the same setup command. Do not delete
-successful Blob copies before retrying.
+When migration errors occur during setup, setup prints "Copying memory to the
+cloud failed. Cloud memory is not in sync with this computer." and the files
+that failed, and exits with code 1 (earlier versions of `setup.sh` printed
+`Setup INCOMPLETE` and exited with code 2). Fix storage scope, RBAC,
+connectivity, or the unreadable local file, then run setup again with cloud
+memory (`./scripts/setup.sh --use-cloud-memory` on macOS and Linux) and answer
+yes to the copy. Do not delete successful Blob copies before retrying.
 
 See [Migrations and upgrades](migrations-and-upgrades.md).
 

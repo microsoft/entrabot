@@ -170,6 +170,16 @@ class Scenario:
     slept: list[float] = field(default_factory=list)  # every wait, in seconds; none is real
     out: str = ""
     log: str = ""
+    # The system this scenario is: tests/winsetup/test_wizard_posix.py has macOS and Linux.
+    platform: str = "win32"
+    os_text: str = "Windows 11 (10.0.26200), AMD64"
+
+    def paths(self) -> Paths:
+        return Paths(
+            self.root,
+            self.root / ".venv" / "Scripts" / "python.exe",
+            self.tmp_path / "localappdata" / "entrabot",
+        )
 
     def __post_init__(self) -> None:
         root = self.root
@@ -421,9 +431,10 @@ class Scenario:
         *,
         typed: str | None = None,
         answers: dict[str, str] | None = None,
-        platform: str = "win32",
+        platform: str | None = None,
         **options: object,
     ) -> int:
+        platform = platform or self.platform
         yes = bool(options.pop("yes", typed is None and answers is None))
         out = io.StringIO()
         log_file = self.tmp_path / "setup.log"
@@ -438,6 +449,7 @@ class Scenario:
             spawn=self.spawn,
             color=False,
             unicode=False,
+            platform=platform,
         )
         world = World(
             env=self.env,
@@ -446,16 +458,12 @@ class Scenario:
             which=self.which,
             wincert=self.wincert,
             http_get=lambda url: None,
-            os_description=lambda: "Windows 11 (10.0.26200), AMD64",
+            os_description=lambda: self.os_text,
             launch=self.launch_override
             or (lambda argv, cwd: self.launched.append((list(argv), cwd))),
             sleep=self.slept.append,
         )
-        paths = Paths(
-            self.root,
-            self.root / ".venv" / "Scripts" / "python.exe",
-            self.tmp_path / "localappdata" / "entrabot",
-        )
+        paths = self.paths()
         opts = Options(project_root=self.root, yes=yes, **options)  # type: ignore[arg-type]
         try:
             return Wizard(opts, console, paths, world).run()
@@ -1517,10 +1525,6 @@ class TestFailures:
         assert world.run(new_chain=True, upn_suffix="sati") == 130
         assert "Nothing is left half-written" in world.out
         assert not world.env_file.exists()
-
-    def test_not_windows_is_refused(self, world: Scenario) -> None:
-        assert world.run(new_chain=True, upn_suffix="sati", platform="darwin") == 1
-        assert "setup.sh" in world.out and world.spawn.calls == []
 
     def test_work_iq_asked_for_unattended_needs_no_tools(self, world: Scenario) -> None:
         # It used to stop here for want of the Agent 365 CLI, .NET and PowerShell 7.

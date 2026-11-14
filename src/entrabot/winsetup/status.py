@@ -43,9 +43,17 @@ from entrabot.winsetup.oldkeys import (
 )
 from entrabot.winsetup.state import IdentityError, read_state
 from entrabot.winsetup.wizard import World
+from entrabot.winsetup.words import words_for
 
 STATUS_SCRIPT = "show_agent_status.py"
 NOT_SET_UP = f"This folder is not connected to an agent. Run {SETUP_COMMAND} to set one up."
+
+
+def not_set_up(platform: str) -> str:
+    """:data:`NOT_SET_UP`, naming the setup command of the system this runs on."""
+    setup = words_for(platform).setup
+    return f"This folder is not connected to an agent. Run {setup} to set one up."
+
 # All a state file holds when teardown left it only for setup's retry of an older setup key
 # (teardown.py, _settle_old_setup_certs). Anything else recorded means more than that note.
 _NOTE_ONLY = frozenset(
@@ -92,10 +100,11 @@ def _only_setups_note(paths: Paths) -> OldSetupKeys | None:
     return note if note.pending else None
 
 
-def _report_setups_note(note: OldSetupKeys, *, json_output: bool) -> None:
+def _report_setups_note(note: OldSetupKeys, *, json_output: bool, platform: str) -> None:
     waiting = old_setup_key_waiting(note)
+    message = not_set_up(platform)
     if not json_output:
-        print(NOT_SET_UP)
+        print(message)
         print(waiting)
         return
     keys = [{"thumbprint_ends_in": key.ending, "expires": key.expires or None} for key in note.keys]
@@ -103,7 +112,7 @@ def _report_setups_note(note: OldSetupKeys, *, json_output: bool) -> None:
         json.dumps(
             {
                 "configured": False,
-                "message": NOT_SET_UP,
+                "message": message,
                 "old_setup_keys": {
                     "waiting": keys,
                     "record_unreadable": note.unreadable,
@@ -132,18 +141,18 @@ def run_status(
     if not paths.env_file.is_file() and not paths.state_file.is_file():
         # Nothing is set up here. Under --json the answer is still JSON, on stdout, so a
         # machine reader gets something it can parse.
-        print(
-            json.dumps({"configured": False, "message": NOT_SET_UP}) if json_output else NOT_SET_UP
-        )
+        message = not_set_up(world.platform)
+        print(json.dumps({"configured": False, "message": message}) if json_output else message)
         return 1
     note = _only_setups_note(paths)
     if note is not None:
-        _report_setups_note(note, json_output=json_output)
+        _report_setups_note(note, json_output=json_output, platform=world.platform)
         return 1
     script = paths.scripts / STATUS_SCRIPT
     if not script.is_file():
         print(
-            f"ERROR: {script} is missing. Update the project folder, then run {SETUP_COMMAND}.",
+            f"ERROR: {script} is missing. Update the project folder, then run "
+            f"{words_for(world.platform).setup}.",
             file=sys.stderr,
         )
         return 1

@@ -93,17 +93,17 @@ ENTRABOT_BLOB_CONTAINER=agent-<agent-user-oid>
 
 ### Re-running setup
 
-Setup rewrites `.env` on every run, but it reads the old file first and keeps the memory settings when the run is for the same Agent User:
+Setup reads `.env` before it changes it, replaces only its own lines, and keeps the memory settings when the run is for the same Agent User:
 
-- With neither `--use-cloud-memory` nor `--keep-memory-local`, an agent on cloud memory stays on it. Setup writes the same blob endpoint and container back, provisions nothing, and says so. That is why `./scripts/setup.sh --use-blueprint=<blueprint-app-id>` is safe to run on a configured machine.
+- With neither `--use-cloud-memory` nor `--keep-memory-local`, an agent on cloud memory stays on it. Setup leaves the blob endpoint and container as they are and provisions nothing. That is why `./scripts/setup.sh` is safe to run on a configured machine.
 - `--keep-memory-local` switches to local. `--use-cloud-memory` provisions again and writes the new values.
-- If `--use-cloud-memory` fails to provision, setup shows the provisioner's output and keeps the cloud settings that were already there. On a machine that was not on cloud memory, it falls back to local.
+- If `--use-cloud-memory` fails to provision, setup shows the provisioner's output and keeps the cloud settings that were already there. On a machine that was not on cloud memory, it says so and asks whether to continue with local memory (yes is suggested, and is the answer unattended); it never falls back silently.
 
-Cloud memory counts as set only when both `ENTRABOT_BLOB_ENDPOINT` and `ENTRABOT_BLOB_CONTAINER` are present and `ENTRABOT_KEEP_MEMORY_LOCAL` is not `true`, `1`, or `yes`. A run for a different Agent User, such as `--new`, carries nothing over; pass `--use-cloud-memory` for it. Setup writes the rest of `.env` from scratch, so lines you added by hand are dropped.
+Cloud memory counts as set only when both `ENTRABOT_BLOB_ENDPOINT` and `ENTRABOT_BLOB_CONTAINER` are present and `ENTRABOT_KEEP_MEMORY_LOCAL` is not `true`, `1`, or `yes`. A run for a different Agent User, such as `--new`, carries nothing over; pass `--use-cloud-memory` for it. Lines you added to `.env` by hand are kept.
 
-### On Windows
+### The wizard's memory question
 
-The Windows setup wizard asks where the agent should keep its memory. Cloud memory is offered only when the signed-in account has an Azure subscription in the tenant. The same choices as parameters:
+The setup wizard (on macOS and Linux as on Windows) asks where the agent should keep its memory. Cloud memory is offered only when the signed-in account has an Azure subscription in the tenant. The same choices as options:
 
 | `setup.sh` | `scripts\setup-windows.cmd` |
 |---|---|
@@ -112,11 +112,11 @@ The Windows setup wizard asks where the agent should keep its memory. Cloud memo
 | `--with-storage-account=NAME` | `-WithStorageAccount NAME` |
 | `--with-container=NAME` | `-WithContainer NAME` |
 | `--create-new-storage` | `-CreateNewStorage` |
-| (none) | `-Location REGION`, `-Subscription ID_OR_NAME` |
+| `--location=REGION`, `--subscription=ID_OR_NAME` | `-Location REGION`, `-Subscription ID_OR_NAME` |
 
-The rules above apply unchanged: a re-run for the same agent keeps its memory setting, and a different agent inherits nothing. If cloud provisioning fails on a PC that was not on cloud memory, the wizard says so and asks whether to continue with local memory; it never falls back silently. When local memory already holds data, the wizard offers to copy it to the cloud.
+The rules above apply unchanged: a re-run for the same agent keeps its memory setting, and a different agent inherits nothing. When cloud memory is set up in a run and local memory already holds data, the wizard offers to copy it to the cloud (no is suggested; the local copy is kept). The storage options need `--use-cloud-memory` (`-UseCloudMemory`).
 
-Setting up cloud memory through the Windows wizard has not yet been tested against a real subscription.
+Setting up cloud memory through the wizard has not yet been tested against a real subscription, on any system.
 
 ### The storage-scope token
 
@@ -138,7 +138,7 @@ If you've been running local and want to move your history to the cloud:
 ./scripts/setup.sh --use-blueprint=<blueprint-app-id> --use-cloud-memory
 ```
 
-Near the end, the script will prompt you to migrate `~/.entrabot/data` into the blob container. The migration:
+Once the storage is set up, setup asks whether to copy what this computer already holds (`~/.entrabot/data`, and Claude Code's persona memory) into the blob container. It asks only at a terminal; unattended, nothing is copied. The migration:
 
 - Is **non-destructive** — nothing is deleted from local. You end up with two copies.
 - Is **idempotent** — running twice skips keys already present in the blob.
@@ -146,7 +146,7 @@ Near the end, the script will prompt you to migrate `~/.entrabot/data` into the 
 - Collects per-file errors while continuing other files.
 - Leaves local poll state behind: your `watched_chats` list, both email cursor files, the legacy `chat_id` key, and the per-chat cursors under `chat_cursors/`. A machine's copies could be stale or belong to another agent, and adopting them could replay old mail or messages as new. The cloud email cursor starts at "now", so mail that arrived before the first boot on the container isn't pushed, but stays readable through the `read_email` tool. Discovery rebuilds the chat list from Graph about two minutes after boot, and a chat with no cursor surfaces its newest message only if it is under 24 hours old.
 
-When selected migration errors occur inside `setup.sh`, setup reports `Setup INCOMPLETE` and exits with code 2. Fix the reported problem and re-run the same setup command; successful copies remain in Blob and local sources remain untouched.
+When migration errors occur inside setup, setup says "Copying memory to the cloud failed." and exits with code 1 (earlier versions of `setup.sh` reported `Setup INCOMPLETE` and exited with code 2). Fix the reported problem and run the same command again, answering yes to the copy; successful copies remain in Blob and local sources remain untouched.
 
 To migrate manually (outside of `setup.sh`):
 

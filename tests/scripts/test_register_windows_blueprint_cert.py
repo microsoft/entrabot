@@ -190,6 +190,7 @@ def run_sha1(monkeypatch: Patch) -> Callable[..., tuple[int, FakeGraph]]:
         reg, "get_bootstrap_graph_token", lambda *, wait_for_propagation=True: FAKE_TOKEN
     )
     monkeypatch.setattr(socket, "gethostname", lambda: "fake-host.local")
+    monkeypatch.setattr(reg, "_cert_store", lambda: wincert)  # as on Windows
 
     def go(*entries: dict[str, Any], found: Any = "default", **graph: Any) -> tuple[int, FakeGraph]:
         cert = _store_cert(THIS.der) if found == "default" else found
@@ -245,3 +246,77 @@ def test_exactly_one_of_der_and_sha1_is_required(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as both:
         reg.main(["--blueprint-object-id", FAKE_OBJECT_ID, "--der", str(der), "--sha1", SHA1])
     assert neither.value.code == 2 and both.value.code == 2
+
+
+# ── macOS and Linux: the same script, reading the Keychain or keyring ────────
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_sha1_reads_the_keystore_off_windows(monkeypatch: Patch, platform: str) -> None:
+    from entrabot.platform import keycert
+
+    asked: list[str] = []
+
+    def find(sha1: str) -> Any:
+        asked.append(sha1)
+        return _store_cert(THIS.der)
+
+    monkeypatch.setattr(reg.sys, "platform", platform)
+    monkeypatch.setattr(keycert, "find_cert", find)
+    monkeypatch.setattr(
+        reg, "get_bootstrap_graph_token", lambda *, wait_for_propagation=True: FAKE_TOKEN
+    )
+    monkeypatch.setattr(socket, "gethostname", lambda: "fake-host.local")
+    fake = use_fake_graph(monkeypatch, FakeGraph(EXISTING))
+
+    code = reg.main(
+        ["--blueprint-object-id", FAKE_OBJECT_ID, "--sha1", SHA1], sleep=lambda _seconds: None
+    )
+
+    assert code == OK and asked == [SHA1]
+    assert fake.patch_bodies[0][2]["key"] == THIS.b64
+
+
+def test_sha1_missing_from_the_keystore_names_the_keystore(
+    monkeypatch: Patch, capsys: Capture
+) -> None:
+    from entrabot.platform import keycert
+
+    monkeypatch.setattr(reg.sys, "platform", "darwin")
+    monkeypatch.setattr(keycert, "find_cert", lambda sha1: None)
+    fake = use_fake_graph(monkeypatch, FakeGraph(EXISTING))
+
+    code = reg.main(["--blueprint-object-id", FAKE_OBJECT_ID, "--sha1", SHA1])
+
+    assert code == USAGE and fake.requests == []
+    err = capsys.readouterr().err
+    assert "Keychain or keyring" in err and "CurrentUser" not in err and SHA1 not in err
+
+
+# ── --remove-all-existing-certs: every other certificate goes ───────────────
+
+
+def test_remove_all_replaces_every_certificate_and_lists_what_went(
+    run: Run, monkeypatch: Patch, tmp_path: Path, capsys: Capture
+) -> None:
+    der = tmp_path / "machine.cer"
+    fake = use_fake_graph(monkeypatch, FakeGraph(EXISTING))
+
+    code = reg.main(
+        ["--blueprint-object-id", FAKE_OBJECT_ID, "--der", str(der), "--remove-all-existing-certs"],
+        sleep=lambda _seconds: None,
+    )
+
+    assert code == OK
+    body = fake.patch_bodies[0]
+    assert len(body) == 1 and body[0]["key"] == THIS.b64
+    err = capsys.readouterr().err
+    assert "2 existing certificate(s) removed" in err
+    assert "host-a" in err and "host-b" in err  # by name and expiry, never by thumbprint
+
+
+def test_without_the_flag_nothing_is_ever_removed(run: Run, capsys: Capture) -> None:
+    code, graph = run(*EXISTING)
+
+    assert code == OK and len(graph.patch_bodies[0]) == 3
+    assert "kept" in capsys.readouterr().err

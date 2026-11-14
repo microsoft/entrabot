@@ -45,7 +45,7 @@ The storage token is cached in-process, keyed by tenant, Agent Identity, and Age
 
 `_build_blueprint_assertion()` in `tools/teams.py` decides which signing path to use:
 
-- **macOS and Linux** retrieve the Blueprint's PEM private key from the OS keystore (Keychain / Secret Service) into the process, then sign the JWT in-process via `cryptography`'s `load_pem_private_key` and PyJWT.
+- **macOS and Linux** keep each certificate and its private key together as one OS keystore item (Keychain / Secret Service), named by the certificate's 40-character SHA-1 thumbprint (`platform/keycert.py`). With `ENTRABOT_BLUEPRINT_CERT_SHA1` set, as setup writes it, the runtime reads the key stored with that certificate into the process, checks that the certificate is in date, and signs the JWT in-process via `cryptography`'s `load_pem_private_key` and PyJWT. A keystore that cannot be read stops the sign-in. Without `ENTRABOT_BLUEPRINT_CERT_SHA1` (a setup from before the wizard), it signs with the account's single PEM under `entrabot` / `blueprint-private-key`, as earlier versions did; with it, that older item is never read.
 - **Windows** has no PEM in the keystore. It locates the certificate by its 40-character SHA-1 thumbprint in `Cert:\CurrentUser\My` and signs through `ncrypt.dll` (CNG) against the non-exportable private key — the key material itself is never exported or read into the process; only the signature comes back.
 
 Both paths produce the same JWT shape: header carries `x5t#S256` (the base64url SHA-256 thumbprint of the DER certificate, RFC 7515 §4.1.8), and the assertion is valid for 10 minutes (`ASSERTION_LIFETIME_SECONDS`). See `src/entrabot/auth/certificate.py` for `build_client_assertion()` and `compute_cert_thumbprint()`.

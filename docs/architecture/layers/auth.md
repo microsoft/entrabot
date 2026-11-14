@@ -20,7 +20,7 @@ Implemented as `acquire_agent_user_token()` in `src/entrabot/tools/teams.py`, us
 
 ## Certificate assertion building
 
-`_build_blueprint_assertion()` in `teams.py` tries the keystore PEM first (macOS/Linux, and any Windows box a test fixture wrote a PEM into); if none is found and the process is on Windows, it falls back to the CNG path keyed by the Blueprint certificate's SHA-1 thumbprint. See [Platform](platform.md) for how the private key is actually stored per OS.
+`_build_blueprint_assertion()` in `teams.py` goes by the Blueprint certificate's SHA-1 thumbprint (`ENTRABOT_BLUEPRINT_CERT_SHA1`), which setup writes on every OS. With it, Windows signs through CNG with the non-exportable key behind that certificate, and macOS and Linux sign with the PEM key stored with that certificate in the OS keystore, after checking that the certificate is in date; a keystore that cannot be read stops the sign-in. Without it, the account's single keystore PEM (`entrabot` / `blueprint-private-key`) is used: a macOS or Linux setup from before the wizard, and any platform a test fixture wrote a PEM into. See [Platform](platform.md) for how the private key is actually stored per OS.
 
 ## Error handling
 

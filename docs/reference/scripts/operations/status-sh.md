@@ -16,8 +16,10 @@ Agent Identity status/health command.
 - Python 3.12 or 3.13 available as `python3.12`, `python3.13`, or `python3`
   on `PATH` — only needed the first time, to create `.venv`.
 - Everything `show_agent_status.py` itself needs at runtime (a bootstrapped
-  Provisioner app and its certificate in the OS keystore) — `status.sh`
-  does not check for these itself; it only prepares the Python environment.
+  Provisioner app and its certificate in the OS keystore, and the Azure CLI on
+  `PATH`) — `status.sh` does not check for these itself; it only prepares the
+  Python environment. When no `az` is on `PATH`, it uses the private Azure CLI
+  that `setup.sh` may have installed, in `~/.entrabot/tools/azure-cli`.
 
 ## Usage
 

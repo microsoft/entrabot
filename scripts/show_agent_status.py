@@ -165,7 +165,8 @@ def _read_all_state() -> dict[str, str | None]:
 
 
 def _local_certificate_checks(state: dict[str, str | None]) -> list[Check]:
-    """Windows: is the certificate named in .env in this user's store, keyed, in date?
+    """Is the certificate named in .env in this user's store, with its key, and in date?
+    (Windows: the certificate store. macOS and Linux: the Keychain or keyring.)
 
     A registered certificate is no use if its key isn't on this machine or it has
     expired, and neither shows up in what Graph returns.
@@ -174,11 +175,18 @@ def _local_certificate_checks(state: dict[str, str | None]) -> list[Check]:
     here at all. With a Blueprint but no certificate configured it fails: the agent
     exists and this machine can't sign for it.
     """
-    if not _is_windows():
-        return []
-    from entrabot.platform import wincert
-
     sha1 = _configured("blueprint_cert_sha1", "ENTRABOT_BLUEPRINT_CERT_SHA1")
+    if _is_windows():
+        from entrabot.platform import wincert
+    elif sha1:
+        # macOS and Linux, set up by the wizard: the certificate and its key are one item
+        # in this account's Keychain or keyring, with the same checks.
+        from entrabot.platform import keycert as wincert
+    else:
+        # Set up before the wizard: the key is on its own in the account's single slot
+        # and there is no certificate on this machine to read an expiry from.
+        return []
+
     has_blueprint = bool(state.get("BLUEPRINT_OBJECT_ID") or state.get("BLUEPRINT_APP_ID"))
     if not sha1 and not has_blueprint:
         return [Check("Local certificate", "skip", "No Blueprint is configured on this machine")]

@@ -1,17 +1,27 @@
 # register_blueprint_cert.py
 
 Generate this machine's Blueprint certificate and register it on the Blueprint
-application. By default this adds to the certificates already there and removes
-none of them. macOS and Linux only.
+application, keeping the private key in the account's single key store item
+(service `entrabot`, account `blueprint-private-key`). By default this adds to the
+certificates already there and removes none of them. macOS and Linux only.
+
+Setup no longer runs this command. Before the setup wizard, `setup.sh` called it when
+[`find_local_blueprint_cert.py`](find-local-blueprint-cert-py.md) found no registered
+certificate for the account's key. The wizard keeps each certificate together with its
+key as its own item and registers it with
+[`register_windows_blueprint_cert.py`](register-windows-blueprint-cert-py.md), on every
+system. On a computer set up by the wizard, do not use this command: the agent does not
+read the single item while `.env` names a certificate (`ENTRABOT_BLUEPRINT_CERT_SHA1`).
+Use `./scripts/setup.sh`, or `./scripts/setup.sh --rotate-cert` to replace the
+certificate.
 
 Part of the [auth-and-certs command reference](../index.md#auth-and-certs).
 
 ## Purpose
 
-[`setup.sh`](../setup/setup-sh.md) Step 6 calls this when
-[`find_local_blueprint_cert.py`](find-local-blueprint-cert-py.md) finds no registered
-certificate for this machine's key, or finds a private key still waiting under the
-pending account. That makes this command the one place that reconciles a pending key.
+On a computer set up before the wizard, this is the one place that registers a
+certificate for the account's single key and reconciles a key left under the pending
+account by a run that did not finish.
 
 Several machines can share one Blueprint, each with its own certificate, and Microsoft
 Graph treats a `keyCredentials` update as a replacement of the whole list. This command
@@ -38,7 +48,7 @@ python scripts/register_blueprint_cert.py \
     --state-file <PATH_TO_STATE_FILE>
 ```
 
-Most operators reach this through `setup.sh` rather than running it directly.
+Earlier versions of `setup.sh` ran this for you; the current one does not.
 
 ## Options
 
@@ -165,11 +175,14 @@ token, never an `az` CLI token, and have bounded timeouts.
 
 ## Related commands
 
-- [`setup.sh`](../setup/setup-sh.md) — the provisioning entry point that calls this.
+- [`setup.sh`](../setup/setup-sh.md) — the setup entry point for macOS and Linux. It
+  no longer calls this.
+- [`register_windows_blueprint_cert.py`](register-windows-blueprint-cert-py.md) — what
+  the setup wizard registers a certificate with, on every system.
 - [`blueprint_certs.py`](blueprint-certs-py.md) — the read, merge, and write logic.
 - [`list_blueprint_certs.py`](list-blueprint-certs-py.md) — see which certificates are
   registered.
-- [`find_local_blueprint_cert.py`](find-local-blueprint-cert-py.md) — the check that
-  runs before this. It sends setup here whenever a pending key exists.
-- [`verify_blueprint_cert.py`](verify-blueprint-cert-py.md) — an operator tool that
-  checks whether a given thumbprint is registered. Setup does not call it.
+- [`find_local_blueprint_cert.py`](find-local-blueprint-cert-py.md) — the older check
+  for the same single key item.
+- [`verify_blueprint_cert.py`](verify-blueprint-cert-py.md) — checks whether a given
+  thumbprint is registered; the setup wizard runs it.

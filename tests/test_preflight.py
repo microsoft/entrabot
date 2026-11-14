@@ -1595,3 +1595,117 @@ class TestWorkIqDiagnosis:
         assert "AADSTS65001" in check.detail
         assert check.remediation is not None
         assert "scripts\\setup-windows.cmd -Diagnose" in check.remediation
+
+
+class TestMacAndLinuxCertificateStore:
+    """With a SHA-1 in .env, macOS and Linux check this agent's own keystore item the way
+    Windows checks the certificate store: there, in date, and its key signs. Without one
+    (a setup from before the wizard) the account's single key is looked for, as before."""
+
+    SHA1 = "0123456789ABCDEF0123456789ABCDEF01234567"
+
+    @pytest.fixture(autouse=True)
+    def _posix(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from entrabot import preflight
+
+        monkeypatch.setattr(preflight, "_is_windows", lambda: False)
+
+    def _config(self, **overrides: object) -> EntraBotConfig:
+        values: dict[str, object] = {
+            "tenant_id": "t",
+            "blueprint_app_id": "b",
+            "blueprint_cert_thumbprint": "x" * 43,
+            "blueprint_cert_sha1": self.SHA1,
+        }
+        values.update(overrides)
+        return EntraBotConfig(**values)  # type: ignore[arg-type]
+
+    def _check(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        status: str,
+        *,
+        sign_error: Exception | None = None,
+    ) -> Check:
+        from entrabot import preflight
+        from entrabot.platform import keycert
+
+        self.signed: list[str] = []
+
+        def test_sign(sha1: str) -> None:
+            self.signed.append(sha1)
+            if sign_error:
+                raise sign_error
+
+        def no_legacy_slot() -> None:
+            raise AssertionError("the account's single key must not be read for this agent")
+
+        health = keycert.CertHealth(
+            status=status, days_left=9, not_after=None, message=f"cert is {status}"
+        )
+        monkeypatch.setattr(keycert, "cert_health", lambda sha1: health)
+        monkeypatch.setattr(keycert, "test_sign", test_sign)
+        monkeypatch.setattr("entrabot.platform.get_credential_store", no_legacy_slot)
+        return preflight._check_cert_in_keystore(self._config())
+
+    def test_present_in_date_and_signing_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        result = self._check(monkeypatch, "ok")
+        assert result.status == "pass"
+        assert self.signed == [self.SHA1]
+        assert self.SHA1 not in result.detail
+
+    def test_expiring_is_a_warning_with_what_to_do(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        result = self._check(monkeypatch, "expiring")
+        assert result.status == "warn"
+        assert "./scripts/setup.sh" in (result.remediation or "")
+
+    @pytest.mark.parametrize("status", ["missing", "expired", "no_private_key", "not_yet_valid"])
+    def test_unusable_certificate_fails_without_trying_to_sign(
+        self, monkeypatch: pytest.MonkeyPatch, status: str
+    ) -> None:
+        result = self._check(monkeypatch, status)
+        assert result.status == "fail"
+        assert "./scripts/setup.sh" in (result.remediation or "")
+        assert "setup-windows" not in (result.remediation or "")
+        assert self.signed == []
+
+    def test_a_key_that_is_not_the_certificates_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from entrabot.platform import keycert
+
+        result = self._check(
+            monkeypatch, "ok", sign_error=keycert.CertStoreError("the key does not match")
+        )
+        assert result.status == "fail" and "does not match" in result.detail
+
+    def test_a_keystore_that_cannot_be_read_is_a_failure_not_a_crash(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from entrabot import preflight
+        from entrabot.platform import keycert
+
+        def broken(sha1: str) -> None:
+            raise keycert.CertStoreError("Could not read this account's key store")
+
+        monkeypatch.setattr(keycert, "cert_health", broken)
+        result = preflight._check_cert_in_keystore(self._config())
+        assert result.status == "fail" and "key store" in result.detail
+
+    def test_an_older_setup_is_checked_in_the_single_slot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from entrabot import preflight
+
+        asked: list[tuple[str, str]] = []
+
+        class Store:
+            def retrieve(self, service: str, key: str) -> str:
+                asked.append((service, key))
+                return "PEM"
+
+        monkeypatch.setattr("entrabot.platform.get_credential_store", lambda: Store())
+        result = preflight._check_cert_in_keystore(self._config(blueprint_cert_sha1=None))
+
+        assert result.status == "pass"
+        assert asked == [("entrabot", "blueprint-private-key")]

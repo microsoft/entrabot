@@ -1,1540 +1,299 @@
 #!/usr/bin/env bash
-# EntraBot Identity Research — one-command setup
+# Entrabot setup for macOS and Linux.
 #
-# Thin orchestrator that calls Python scripts for Entra provisioning.
-# No device-code flow.  No OBO.  The Agent User authenticates autonomously
-# via the three-hop flow: Blueprint → Agent Identity → Agent User.
+# This file only gets Python and a virtual environment in place, then starts the setup
+# wizard (python -m entrabot.winsetup), the same wizard Windows runs from
+# scripts\setup-windows.cmd. The wizard asks a few questions (each has a default), shows
+# what it is about to do, and only then changes anything. Running it again is the repair.
 #
-# Architecture (borrowed from a related internal project):
-#   1. entra_provisioning.py  — creates/manages the dedicated provisioner app
-#   2. create_entra_agent_ids.py — Blueprint + Agent Identity + Agent User
-#   3. This script — venv + .env + tests
+# Every flag this script took before the wizard still works; see --help. Flags are passed
+# to the wizard as arguments and never evaluated: a value can hold any character.
 #
-# State is persisted in .entrabot-state.json so re-runs are idempotent.
-#
-# NOTE: The Agent User requires a Teams-capable M365 license (E3/E5/Teams
-# Enterprise) to be assigned AFTER this script runs. License assignment is
-# a manual step in the Entra admin center or via Graph API.
+# Works with the bash 3.2 that ships with macOS.
 set -euo pipefail
 
-TOTAL_STEPS=8
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+VENV_PY="$PROJECT_ROOT/.venv/bin/python"
 
-# ── Argument parsing ───────────────────────────────────────────────────────
+say()  { printf '%s\n' "$*"; }
+warn() { printf 'NOTE: %s\n' "$*" >&2; }
+die()  { printf 'ERROR: %s\n' "$*" >&2; exit "${2:-1}"; }
 
-SWITCH_USER=false
-TEAMS_USER_EMAIL=""
-SHOW_HELP=false
-DIAGNOSE=false
-SKIP_SMOKE=false
-# Local is the default for operational storage on a first run; users opt in to
-# cloud via --use-cloud-memory. MEMORY_FLAG_PASSED records whether either memory
-# flag was actually given. A re-run that gives neither keeps the memory settings
-# already in .env (Step 7); an explicit flag always wins.
-KEEP_MEMORY_LOCAL=true
-USE_CLOUD_MEMORY=false
-MEMORY_FLAG_PASSED=false
-NEW_CHAIN=false
-USE_BLUEPRINT=""
-USE_BLUEPRINT_GIVEN=false
-REMOVE_ALL_EXISTING_CERTS=false
-UPN_SUFFIX=""
-AGENT_USER_UPN=""
-WITH_STORAGE_ACCOUNT=""
-WITH_CONTAINER=""
-CREATE_NEW_STORAGE=false
-WITH_A365_WORK_IQ=false
-CONFIGURE_A365_WORK_IQ=false
-A365_AGENT_NAME="EntraBot Code Agent"
-A365_WORK_IQ_MCP_SERVERS=(mcp_WordServer mcp_ODSPRemoteServer mcp_ExcelServer)
+show_help() {
+    cat <<'HELP'
+Usage: ./scripts/setup.sh [OPTIONS]
 
-SETUP_STATUS=false
+Sets up an Entrabot agent on this Mac or Linux computer, or repairs the one that is here.
+With no options it asks; press Enter to accept each suggested answer. Nothing is changed
+until you confirm the review screen. Add --yes to run without questions.
+A value may follow its option after "=" or after a space: --tenant=NAME or --tenant NAME.
+
+Which agent:
+  --new                    Create a new agent. Give it a name with --with-upn-suffix.
+  --use-blueprint=APP_ID   Join an agent that already exists (a second computer), by its
+                           Blueprint App ID. This computer gets its own certificate; every
+                           other computer's is kept.
+  --with-upn-suffix=NAME   Short name: the agent becomes entrabot-agent-NAME@<your domain>.
+  --agent-user-upn=UPN     Use exactly this address for the agent.
+  --sponsor=EMAIL          Who the agent takes instructions from in Teams. Repeat it, or
+                           separate addresses with commas. They are added as sponsors in the
+                           directory. Default: you.
+  --teams-user=EMAIL       The older name for --sponsor.
+
+Signing in:
+  --tenant=NAME_OR_ID      Sign in to this tenant.
+  --device-code            Sign in with a code instead of a browser window.
+  --switch-user            Ask for a new sign-in even when an earlier one still works.
+
+Memory:
+  --keep-memory-local      Keep the agent's memory on this computer (the default on a first
+                           run; on a later run, moves it back from Azure).
+  --use-cloud-memory       Keep it in Azure Blob Storage, in your subscription.
+  --with-storage-account=NAME, --with-container=NAME, --create-new-storage,
+  --location=REGION, --subscription=ID_OR_NAME
+                           Where the cloud memory goes. Only with --use-cloud-memory.
+  A later run with neither memory flag keeps the setting it finds.
+
+Word, Excel and OneDrive files:
+  --configure-a365-work-iq Switch them on (Microsoft Agent 365 Work IQ). Nothing else to
+                           install. The agent needs a Microsoft 365 Copilot licence.
+  --with-a365-work-iq      The older name for the same thing.
+
+Certificates:
+  --remove-all-existing-certs
+                           Replace EVERY certificate on the agent's Blueprint, other
+                           computers' included, with a new one for this computer. Every
+                           other computer stops signing in until setup is run on it again.
+                           Asks first at a terminal; without one the flag is the consent.
+                           Not with --new. Without this flag setup never removes a
+                           certificate.
+  --rotate-cert            Replace this computer's certificate only. The current one stays
+                           in use until the new one is proven to work.
+
+Other:
+  --hosts=LIST             Assistants to register with: claude,copilot (default: both).
+  --skip-smoke             Skip the end-to-end test at the end.
+  --yes, -y                Never ask. A missing answer is an error (exit 2).
+  --verbose                Show everything the helper scripts print.
+  --log-file=PATH          Where to write the log (default: ~/.entrabot/logs).
+  --diagnose               Health check of the setup that is here. Changes nothing.
+  --status                 Show the agent's status (./status.sh). Other options after it
+                           are passed on, for example: ./scripts/setup.sh --status --json
+  --help, -h               Show this help.
+
+Exit codes: 0 done, 1 failed, 2 usage or a missing answer under --yes, 3 set up but with
+something to check (said on the last screen), 130 cancelled.
+
+Persona and long-term memory (persona-sati, optional):
+  If your assistant uses persona-sati, copy docs/clients/persona-sati-host-bootstrap.md
+  into the assistant's global instruction file (Claude Code: ~/.claude/CLAUDE.md).
+  FastMCP instructions are not enough: assistants do not put them into the model's
+  prompt. A new session then calls bootstrap_session() first, and observe, reflect and
+  recall as it works. When that answers mind_contract_available=false the agent works
+  without the persona and does not impersonate it.
+
+To disconnect this computer, or delete the agent: ./scripts/teardown.sh --help
+HELP
+}
+
+# ── --status: nothing here is needed for it ──────────────────────────────────
+
+STATUS=false
 STATUS_ARGS=()
 for arg in "$@"; do
     if [ "$arg" = "--status" ]; then
-        SETUP_STATUS=true
+        STATUS=true
     else
         STATUS_ARGS+=("$arg")
     fi
 done
-
-if [ "$SETUP_STATUS" = true ]; then
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-    exec "$PROJECT_ROOT/status.sh" "${STATUS_ARGS[@]}"
+if [ "$STATUS" = true ]; then
+    exec "$PROJECT_ROOT/status.sh" ${STATUS_ARGS[@]+"${STATUS_ARGS[@]}"}
 fi
 
+# ── Flags: translated for the wizard, one for one ────────────────────────────
+
+COMMAND="setup"
+ARGS=()
+value_of() { printf '%s' "${1#*=}"; }
+
+# An option's value may follow it after a space as well as after "=":
+#   --tenant contoso.com   is   --tenant=contoso.com
+VALUE_OPTIONS=" --use-blueprint --with-upn-suffix --agent-user-upn --sponsor --teams-user --tenant --with-storage-account --with-container --location --subscription --a365-agent-name --hosts --log-file "
+GIVEN=()
+waiting_for_value=""
 for arg in "$@"; do
-    case $arg in
-        --switch-user)
-            SWITCH_USER=true
-            ;;
-        --teams-user=*)
-            TEAMS_USER_EMAIL="${arg#--teams-user=}"
-            ;;
-        --use-cloud-memory)
-            USE_CLOUD_MEMORY=true
-            KEEP_MEMORY_LOCAL=false
-            MEMORY_FLAG_PASSED=true
-            ;;
-        --keep-memory-local)
-            # Local storage, even on a re-run whose .env already has cloud memory.
-            KEEP_MEMORY_LOCAL=true
-            USE_CLOUD_MEMORY=false
-            MEMORY_FLAG_PASSED=true
-            ;;
-        --new)
-            NEW_CHAIN=true
-            ;;
-        --use-blueprint=*)
-            USE_BLUEPRINT="${arg#--use-blueprint=}"
-            USE_BLUEPRINT_GIVEN=true
-            ;;
-        --remove-all-existing-certs)
-            REMOVE_ALL_EXISTING_CERTS=true
-            ;;
-        --with-upn-suffix=*)
-            UPN_SUFFIX="${arg#--with-upn-suffix=}"
-            ;;
-        --agent-user-upn=*)
-            AGENT_USER_UPN="${arg#--agent-user-upn=}"
-            ;;
-        --with-storage-account=*)
-            WITH_STORAGE_ACCOUNT="${arg#--with-storage-account=}"
-            ;;
-        --with-container=*)
-            WITH_CONTAINER="${arg#--with-container=}"
-            ;;
-        --create-new-storage)
-            CREATE_NEW_STORAGE=true
-            ;;
+    if [ -n "$waiting_for_value" ]; then
+        case "$arg" in
+            -*) die "$waiting_for_value needs a value, for example $waiting_for_value=VALUE" 2 ;;
+        esac
+        GIVEN+=("$waiting_for_value=$arg")
+        waiting_for_value=""
+    elif [ "${VALUE_OPTIONS#*" $arg "}" != "$VALUE_OPTIONS" ]; then
+        waiting_for_value="$arg"
+    else
+        GIVEN+=("$arg")
+    fi
+done
+if [ -n "$waiting_for_value" ]; then
+    die "$waiting_for_value needs a value, for example $waiting_for_value=VALUE" 2
+fi
+
+for arg in ${GIVEN[@]+"${GIVEN[@]}"}; do
+    case "$arg" in
+        --help|-h)                   show_help; exit 0 ;;
+        --diagnose)                  COMMAND="diagnose" ;;
+        --rotate-cert)               COMMAND="rotate-cert" ;;
+        --new)                       ARGS+=(--new-chain) ;;
+        --use-blueprint=*)           ARGS+=(--use-blueprint "$(value_of "$arg")") ;;
+        --with-upn-suffix=*)         ARGS+=(--upn-suffix "$(value_of "$arg")") ;;
+        --agent-user-upn=*)          ARGS+=(--agent-user-upn "$(value_of "$arg")") ;;
+        --sponsor=*|--teams-user=*)  ARGS+=(--sponsor "$(value_of "$arg")") ;;
+        --tenant=*)                  ARGS+=(--tenant "$(value_of "$arg")") ;;
+        --device-code)               ARGS+=(--device-code) ;;
+        --switch-user)               ARGS+=(--switch-user) ;;
+        --use-cloud-memory)          ARGS+=(--memory cloud) ;;
+        --keep-memory-local)         ARGS+=(--memory local) ;;
+        --with-storage-account=*)    ARGS+=(--storage-account "$(value_of "$arg")") ;;
+        --with-container=*)          ARGS+=(--container "$(value_of "$arg")") ;;
+        --create-new-storage)        ARGS+=(--create-new-storage) ;;
+        --location=*)                ARGS+=(--location "$(value_of "$arg")") ;;
+        --subscription=*)            ARGS+=(--subscription "$(value_of "$arg")") ;;
+        --configure-a365-work-iq)    ARGS+=(--configure-a365-work-iq) ;;
         --with-a365-work-iq)
-            WITH_A365_WORK_IQ=true
-            ;;
-        --configure-a365-work-iq)
-            WITH_A365_WORK_IQ=true
-            CONFIGURE_A365_WORK_IQ=true
+            warn "--with-a365-work-iq is now the same as --configure-a365-work-iq: setup switches Word, Excel and OneDrive files on itself, with no Agent 365 CLI to install."
+            ARGS+=(--configure-a365-work-iq)
             ;;
         --a365-agent-name=*)
-            A365_AGENT_NAME="${arg#--a365-agent-name=}"
+            warn "--a365-agent-name is no longer used and is ignored: Work IQ uses the agent's own Blueprint."
             ;;
-        --diagnose)
-            DIAGNOSE=true
-            ;;
-        --status)
-            # Handled before full setup argument parsing.
-            ;;
-        --skip-smoke)
-            SKIP_SMOKE=true
-            ;;
-        --help|-h)
-            SHOW_HELP=true
-            ;;
+        --remove-all-existing-certs) ARGS+=(--remove-all-existing-certs) ;;
+        --hosts=*)                   ARGS+=(--hosts "$(value_of "$arg")") ;;
+        --skip-smoke)                ARGS+=(--skip-smoke) ;;
+        --yes|-y)                    ARGS+=(--yes) ;;
+        --verbose)                   ARGS+=(--verbose) ;;
+        --log-file=*)                ARGS+=(--log-file "$(value_of "$arg")") ;;
         *)
-            echo "ERROR: Unknown argument: $arg" >&2
-            SHOW_HELP=true
+            printf 'ERROR: Unknown option: %s\n\n' "$arg" >&2
+            show_help >&2
+            exit 2
             ;;
     esac
 done
 
-# A Blueprint is named by its App ID, a GUID. Anything else is a usage error here, before anything
-# runs: the value is recorded in the state file and steers the provisioning helpers.
-if [ "$USE_BLUEPRINT_GIVEN" = true ] \
-    && ! [[ "$USE_BLUEPRINT" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]; then
-    echo "ERROR: --use-blueprint takes the Blueprint's App ID, which looks like 1a2b3c4d-1234-5678-9abc-def012345678." >&2
-    printf '  Given: %s\n' "$USE_BLUEPRINT" >&2
-    exit 2
+# The health check and certificate rotation are for a setup that is already here. They
+# install nothing, so without a virtual environment there is nothing for them to look at.
+if [ "$COMMAND" != "setup" ] && [ ! -x "$VENV_PY" ]; then
+    die "This computer has not been set up yet. Run ./scripts/setup.sh first."
 fi
-
-# Mutex: --create-new-storage and --with-storage-account both pin the
-# storage account name; only one can win.
-if [ "$CREATE_NEW_STORAGE" = true ] && [ -n "$WITH_STORAGE_ACCOUNT" ]; then
-    echo "ERROR: --create-new-storage and --with-storage-account are mutually exclusive." >&2
-    exit 2
-fi
-
-# --new creates a Blueprint with no certificates, so there would be nothing to remove.
-# Accepting both could only leave someone believing an older Blueprint was cleaned.
-if [ "$REMOVE_ALL_EXISTING_CERTS" = true ] && [ "$NEW_CHAIN" = true ]; then
-    echo "ERROR: --new and --remove-all-existing-certs are mutually exclusive." >&2
-    echo "  To replace the certificates on an existing Blueprint, use:" >&2
-    echo "    --use-blueprint=APP_ID --remove-all-existing-certs" >&2
-    exit 2
-fi
-
-if [ "$SHOW_HELP" = true ]; then
-    echo "Usage: ./scripts/setup.sh [OPTIONS]"
-    echo ""
-    echo "Prerequisites (az CLI, Python 3.12+, git):"
-    echo "  macOS:   ./scripts/prereqs-macos.sh"
-    echo "  Windows: .\\scripts\\prereqs-windows.ps1"
-    echo "  Linux:   install python3.12, git, and the Azure CLI via your package manager"
-    echo ""
-    echo "Options:"
-    echo ""
-    echo "Identity mode (one required):"
-    echo "  --new                  Create a completely new Agent Identity chain."
-    echo "                         Provisions fresh Blueprint, Agent Identity, Agent User."
-    echo "                         The existing chain is NOT affected."
-    echo "  --use-blueprint=ID     Attach to an existing Blueprint by App ID."
-    echo "                         Generates a new cert for this machine and adds it"
-    echo "                         to the Blueprint. Existing certificates are kept, so"
-    echo "                         other machines keep working. Reuses existing Agent"
-    echo "                         Identity and Agent User. Use when adding a machine, OR"
-    echo "                         when switching this machine to a different Blueprint"
-    echo "                         (the stale Agent Identity / User / cert thumbprint"
-    echo "                         are wiped from local state so create_entra_agent_ids.py"
-    echo "                         rediscovers everything under the new Blueprint)."
-    echo "  --remove-all-existing-certs"
-    echo "                         Used with --use-blueprint. Removes EVERY certificate"
-    echo "                         on the Blueprint, including those of other machines,"
-    echo "                         and replaces them with a new one for this machine,"
-    echo "                         even if this machine's current one is still valid."
-    echo "                         This does NOT delete the Blueprint itself. Every other"
-    echo "                         machine stops authenticating until it runs setup"
-    echo "                         again. Lists what will be removed and asks y/N on a"
-    echo "                         terminal; without a terminal the flag itself is the"
-    echo "                         consent. Without this flag, setup never removes a"
-    echo "                         certificate."
-    echo ""
-    echo "  --with-upn-suffix=NAME Agent User UPN suffix (required with --new)."
-    echo "                         e.g., --with-upn-suffix=sati-agent"
-    echo "                         produces: entrabot-agent-sati-agent@yourdomain.com"
-    echo "                         If omitted with --new, you will be prompted."
-    echo "                         Also supported with --use-blueprint to select"
-    echo "                         an existing suffixed Agent User under that Blueprint."
-    echo "  --agent-user-upn=UPN   Explicit Agent User UPN. With --use-blueprint,"
-    echo "                         selects an existing Agent User to reuse; with"
-    echo "                         --new, creates exactly that UPN, e.g."
-    echo "                         entrabot-agent-sati-agent@yourtenant.onmicrosoft.com."
-    echo "  --switch-user          Sign in as a different user before setup."
-    echo "                         The new user becomes the agent's owner and sponsor."
-    echo "  --teams-user=EMAIL     Set a different user as the Teams chat recipient."
-    echo "                         The az CLI user remains the admin/provisioner."
-    echo "                         e.g., --teams-user=user@yourtenant.onmicrosoft.com"
-    echo "                         Without it, a re-run for the same Agent User keeps"
-    echo "                         the recipient already in .env; with it, that"
-    echo "                         recipient is changed."
-    echo "  --use-cloud-memory     Opt in to Azure Blob Storage for operational data"
-    echo "                         (interactions log, watched chats, email cursor)."
-    echo "                         Provisions a resource group, storage account, and"
-    echo "                         container scoped to the Agent User. Recommended"
-    echo "                         for durable, cross-device operation. ADR-005."
-    echo "                         Also unsets ENTRABOT_KEEP_MEMORY_LOCAL so the"
-    echo "                         PreToolUse hook blocks local Claude Code auto-memory"
-    echo "                         writes — mind content routes through persona-sati."
-    echo "                         A re-run without this flag keeps cloud memory that"
-    echo "                         is already set in .env for the same Agent User."
-    echo "  --keep-memory-local    Operational data stays on the local filesystem"
-    echo "                         (~/.entrabot/data). A first run with neither memory"
-    echo "                         flag does this too. On a re-run for the same Agent"
-    echo "                         User whose .env already has cloud memory, pass this"
-    echo "                         flag to switch back to local; without it the cloud"
-    echo "                         settings are kept. Pass --use-cloud-memory to override."
-    echo "                         Also sets ENTRABOT_KEEP_MEMORY_LOCAL=true, which"
-    echo "                         opts the PreToolUse hook out so Claude Code's local"
-    echo "                         auto-memory directory is writable again."
-    echo ""
-    echo "  Cloud storage targeting (used with --use-cloud-memory):"
-    echo "  --with-storage-account=NAME"
-    echo "                         Use the named Azure Storage Account instead of the"
-    echo "                         deterministic per-tenant default (entclaw<hash>)."
-    echo "                         The account is created if it doesn't exist, in"
-    echo "                         resource group 'entrabot-rg'. Useful for attaching"
-    echo "                         to a pre-existing account in a different naming"
-    echo "                         convention. Mutually exclusive with"
-    echo "                         --create-new-storage."
-    echo "  --with-container=NAME  Use the named blob container instead of the"
-    echo "                         agent-<oid> default. The Agent User still gets"
-    echo "                         RBAC scoped to this container only."
-    echo "  --create-new-storage   Force creation of a fresh randomly-suffixed"
-    echo "                         storage account even when the deterministic-name"
-    echo "                         one already exists. Use this when you want a"
-    echo "                         second isolated cloud-memory store in the same"
-    echo "                         tenant. Mutually exclusive with"
-    echo "                         --with-storage-account."
-    echo ""
-    echo "  Agent 365 Work IQ:"
-    echo "  --with-a365-work-iq    Install or update the Microsoft Agent 365"
-    echo "                         DevTools CLI (a365) via dotnet global tools."
-    echo "                         Requires a .NET SDK on PATH."
-    echo "  --configure-a365-work-iq"
-    echo "                         Run the interactive developer setup for Work IQ"
-    echo "                         Word: a365 develop add-mcp-servers mcp_WordServer,"
-    echo "                         a365 setup permissions mcp against the existing"
-    echo "                         Entrabot Blueprint, then manifest validation."
-    echo "  --a365-agent-name=NAME Deprecated compatibility flag; Work IQ setup now"
-    echo "                         uses the existing Entrabot Blueprint from state."
-    echo "  --help, -h             Show this help"
-    echo ""
-    echo "Diagnostics:"
-    echo "  --status               Skip setup and run ./status.sh. Extra args are"
-    echo "                         forwarded to show_agent_status.py, e.g."
-    echo "                         ./scripts/setup.sh --status --json"
-    echo "  --diagnose             Skip provisioning. Run a full health check"
-    echo "                         (state file, certificate, three-hop token,"
-    echo "                         Graph identity, Teams scope, MCP wiring) and"
-    echo "                         print a pass/fail report. Use this to debug"
-    echo "                         a previously-completed install. Exits non-zero"
-    echo "                         if any check fails."
-    echo "  --skip-smoke           Skip the post-setup smoke test (token + Graph"
-    echo "                         identity + Teams scope). Useful in CI where"
-    echo "                         no live tenant is reachable."
-    exit 0
-fi
-
-# ── Colored output helpers ──────────────────────────────────────────────────
-
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-step()    { echo -e "\n${BLUE}[$1/$TOTAL_STEPS]${NC} $2"; }
-success() { echo -e "  ${GREEN}✅ $1${NC}"; }
-warn()    { echo -e "  ${YELLOW}⚠️  $1${NC}"; }
-err()     { echo -e "  ${RED}❌ $1${NC}"; }
-MIGRATION_FAILED=false
-fail()    { echo -e "  ${RED}❌ $1${NC}"; exit 1; }
-
-# ── Resolve project root ────────────────────────────────────────────────────
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-cd "$PROJECT_ROOT"
-
-echo -e "${GREEN}╔══════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║   EntraBot Identity Research — Setup         ║${NC}"
-echo -e "${GREEN}║   (Agent User — no OBO, no device-code flow) ║${NC}"
-echo -e "${GREEN}╚══════════════════════════════════════════════╝${NC}"
-
-# ── --diagnose short-circuit ────────────────────────────────────────────────
-# Read existing .env + state, run preflight.run_diagnostics, exit. No
-# provisioning happens. Use this to debug a previously-completed install.
-if [ "$DIAGNOSE" = true ]; then
-    echo ""
-    echo -e "${BLUE}Running diagnostics (provisioning skipped)...${NC}"
-    if [ ! -d "$PROJECT_ROOT/.venv" ]; then
-        fail "No .venv found. Run setup.sh once before --diagnose."
-    fi
-    set +e
-    # entrabot.config reads .env as data. It is never sourced: a value could hold $(...).
-    # The project folder is an argument, never part of the program.
-    "$PROJECT_ROOT/.venv/bin/python" - "$PROJECT_ROOT" <<'PY'
-import sys
-from pathlib import Path
-
-from entrabot.config import EntraBotConfig
-from entrabot.preflight import format_report, overall_exit_code, run_diagnostics
-
-config = EntraBotConfig.from_env()
-project_root = Path(sys.argv[1])
-checks = run_diagnostics(
-    config,
-    state_path=project_root / ".entrabot-state.json",
-    expected_binary=project_root / ".venv" / "bin" / "entrabot-mcp",
-    claude_mcp_path=project_root / ".mcp.json",
-    copilot_mcp_path=Path.home() / ".copilot" / "mcp-config.json",
-)
-print(format_report(checks, color=sys.stdout.isatty()))
-sys.exit(overall_exit_code(checks))
-PY
-    DIAG_EXIT=$?
-    set -e
-    echo ""
-    if [ "$DIAG_EXIT" -eq 0 ]; then
-        echo -e "${GREEN}Diagnostics: all checks passed.${NC}"
-    else
-        echo -e "${RED}Diagnostics: one or more checks failed (see above).${NC}"
-    fi
-    exit "$DIAG_EXIT"
-fi
-
-# ── Helper: read value from .entrabot-state.json ───────────────────────────
-# The path and key go in as arguments, never into the program text.
-
-read_state() {
-    "$PYTHON" -c '
-import json, pathlib, sys
-state_file, key = pathlib.Path(sys.argv[1]), sys.argv[2]
-if not state_file.is_file():
-    sys.exit(0)
-data = json.loads(state_file.read_text(encoding="utf-8"))
-val = data.get(key, "")
-if val:
-    print(val)
-' "$PROJECT_ROOT/.entrabot-state.json" "$1" || echo ""
-}
-
-# ── Helper: read one value from the existing .env ──────────────────────────
-#
-# Step 7 writes .env from scratch, so it asks this what the old file said first.
-# Reads the file the way entrabot.config does: each line is trimmed, blank lines,
-# comments and lines with no "=" are skipped, the line is split at the FIRST "=",
-# key and value are trimmed (a value is not unquoted), and the FIRST value of a
-# repeated key wins. Prints nothing when the file or key is absent. A file that
-# exists but can't be read stops setup (set -e) before anything is rewritten.
-# The path and key go in as arguments, never into the program text.
-
-read_env_value() {
-    "$PYTHON" -c '
-import pathlib
-import sys
-
-path, wanted = pathlib.Path(sys.argv[1]), sys.argv[2]
-if not path.is_file():
-    sys.exit(0)
-try:
-    text = path.read_text(encoding="utf-8", errors="replace")
-except OSError as exc:
-    sys.exit(f"Could not read {path}: {exc}")
-for line in text.splitlines():
-    line = line.strip()
-    if not line or line.startswith("#") or "=" not in line:
-        continue
-    key, _, value = line.partition("=")
-    if key.strip() == wanted:
-        print(value.strip())
-        break
-' "$PROJECT_ROOT/.env" "$1"
-}
-
-# ── Helper: do two IDs name the same directory object? ─────────────────────
-#
-# Microsoft Entra IDs are GUIDs, the same in either letter case. Empty matches nothing.
-# (bash 3.2, the macOS one, has no ${var,,}.)
-
-same_id() {
-    [ -n "$1" ] && [ "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" = \
-        "$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')" ]
-}
-
-# ════════════════════════════════════════════════════════════════════════════
-# Step 1: Verify prerequisites
-# ════════════════════════════════════════════════════════════════════════════
-step 1 "Verifying prerequisites"
-
-MISSING=()
-
-if ! command -v az &>/dev/null; then
-    MISSING+=("az (Azure CLI — https://aka.ms/install-az)")
-fi
-
-PYTHON=""
-for candidate in python3.12 python3.13 python3; do
-    if command -v "$candidate" &>/dev/null; then
-        PY_VER=$("$candidate" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        # The interpreter compares its own version. Compared as decimal numbers, 3.9 counted as
-        # 3.12 or later.
-        if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)'; then
-            PYTHON="$candidate"
-            break
+# The maintenance commands take only these of the flags above.
+if [ "$COMMAND" != "setup" ]; then
+    KEPT=()
+    skip_next=false
+    for item in ${ARGS[@]+"${ARGS[@]}"}; do
+        if [ "$skip_next" = true ]; then
+            KEPT+=("$item")
+            skip_next=false
+            continue
         fi
-    fi
-done
-if [ -z "$PYTHON" ]; then
-    MISSING+=("python3.12+ (https://www.python.org/downloads/)")
-fi
-
-if ! command -v git &>/dev/null; then
-    MISSING+=("git")
-fi
-
-if [ "$CONFIGURE_A365_WORK_IQ" = true ] && ! command -v pwsh &>/dev/null; then
-    MISSING+=("PowerShell 7+ (pwsh) - macOS: brew install powershell")
-fi
-
-if [ ${#MISSING[@]} -gt 0 ]; then
-    for m in "${MISSING[@]}"; do
-        echo -e "  ${RED}✗ $m${NC}"
+        case "$item" in
+            --log-file) KEPT+=("$item"); skip_next=true ;;
+            --yes|--verbose) [ "$COMMAND" = "rotate-cert" ] && KEPT+=("$item") ;;
+        esac
     done
-    echo ""
+    ARGS=(${KEPT[@]+"${KEPT[@]}"})
+fi
+
+# ── Python 3.12 or later ─────────────────────────────────────────────────────
+
+is_new_enough() {
+    "$1" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)'
+}
+
+find_python() {
+    local candidate
+    for candidate in python3.13 python3.12 python3.14 python3; do
+        if command -v "$candidate" >/dev/null && is_new_enough "$candidate"; then
+            command -v "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+python_missing() {
+    say "Entrabot needs Python 3.12 or later, and it was not found on this computer."
+    say ""
     if [ "$(uname -s)" = "Darwin" ]; then
-        echo -e "  ${YELLOW}One-shot installer for macOS:${NC}"
-        echo -e "      ${YELLOW}./scripts/prereqs-macos.sh${NC}"
-        echo -e "  ${YELLOW}(installs Xcode CLT, Python 3.12+, git, Azure CLI, and optionally${NC}"
-        echo -e "  ${YELLOW}.NET SDK + a365 CLI + PowerShell via Homebrew. Pass --core-only${NC}"
-        echo -e "  ${YELLOW}to skip the optional Microsoft Agent 365 tooling.)${NC}"
-        echo ""
-        echo -e "  ${YELLOW}Or install manually with Homebrew:${NC}"
-        echo -e "      ${YELLOW}brew install python@3.12 git azure-cli${NC}"
-    elif [ "$(uname -s)" = "Linux" ]; then
-        echo -e "  ${YELLOW}Install via your distro's package manager:${NC}"
-        echo -e "      ${YELLOW}# Debian/Ubuntu${NC}"
-        echo -e "      ${YELLOW}sudo apt install python3.12 git${NC}"
-        echo -e "      ${YELLOW}curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash${NC}"
+        say "On a Mac, this installs it (with git and the Azure CLI) through Homebrew:"
+        say "    ./scripts/prereqs-macos.sh"
+        say "or, by hand:  brew install python@3.12"
     else
-        echo -e "  ${YELLOW}For Windows, see scripts/prereqs-windows.ps1.${NC}"
+        say "Install it with your distribution's package manager, for example:"
+        say "    sudo apt install python3.12 python3.12-venv      (Debian, Ubuntu)"
+        say "    sudo dnf install python3.12                      (Fedora, RHEL)"
     fi
-    echo ""
-    fail "Install the missing prerequisites above and re-run."
-fi
-
-success "az CLI found ($(az version --query '"azure-cli"' -o tsv || echo '?'))"
-success "$PYTHON found ($PY_VER)"
-success "git found ($(git --version | awk '{print $3}'))"
-
-ensure_a365_cli() {
-    if ! command -v dotnet &>/dev/null; then
-        fail "--with-a365-work-iq requires a .NET SDK. Install it from https://dotnet.microsoft.com/download and re-run."
-    fi
-
-    export PATH="$PATH:$HOME/.dotnet/tools"
-    if command -v a365 &>/dev/null; then
-        echo "  Updating Microsoft Agent 365 DevTools CLI (a365)..."
-        if dotnet tool update --global Microsoft.Agents.A365.DevTools.Cli; then
-            success "a365 CLI updated"
-        else
-            warn "a365 is already on PATH, but dotnet global-tool update did not complete"
-        fi
-    else
-        echo "  Installing Microsoft Agent 365 DevTools CLI (a365)..."
-        dotnet tool install --global Microsoft.Agents.A365.DevTools.Cli
-        export PATH="$PATH:$HOME/.dotnet/tools"
-        if ! command -v a365 &>/dev/null; then
-            fail "a365 installed but is not on PATH. Add ~/.dotnet/tools to PATH and re-run."
-        fi
-        success "a365 CLI installed"
-    fi
+    say ""
+    say "Then run ./scripts/setup.sh again."
+    exit 1
 }
 
-if [ "$WITH_A365_WORK_IQ" = true ]; then
-    export ENTRABOT_ASSIGN_WORK_IQ_LICENSE=1
-    ensure_a365_cli
-fi
+# ── The virtual environment ──────────────────────────────────────────────────
 
-ensure_a365_tooling_manifest() {
-    local manifest="$PROJECT_ROOT/ToolingManifest.json"
-    if [ -f "$manifest" ]; then
-        return
-    fi
-    printf '{"mcpServers":[]}\n' > "$manifest"
-    success "Created minimal ToolingManifest.json for A365 Work IQ"
-}
+# What the installed packages were built from. A changed pyproject.toml means new
+# requirements, so the install runs again; otherwise a second run starts at once.
+stamp_of_project() { cksum < "$PROJECT_ROOT/pyproject.toml" | tr -d ' \t'; }
+STAMP_FILE="$PROJECT_ROOT/.venv/.entrabot-setup-stamp"
 
-write_a365_config() {
-    local client_app_id
-    local agent_identity_display_name
-    client_app_id=$(az ad app list --display-name "Agent 365 CLI" --query "[0].appId" -o tsv 2>/dev/null || echo "")
-    if [ -z "$client_app_id" ]; then
-        fail "Agent 365 CLI app was not found. Re-run and choose C during 'a365 setup requirements', or create the app before configuring Work IQ."
-    fi
-    if [ -z "${BLUEPRINT_APP_ID:-}" ]; then
-        fail "Blueprint ID not found. Entrabot provisioning must complete before configuring A365 Work IQ."
-    fi
-    agent_identity_display_name=$(az ad sp show --id "$AGENT_ID" --query displayName -o tsv 2>/dev/null || echo "")
-    if [ -z "$agent_identity_display_name" ]; then
-        fail "Agent Identity display name not found for $AGENT_ID. Entrabot provisioning must complete before configuring A365 Work IQ."
-    fi
-
-    "$PYTHON" - "$PROJECT_ROOT" "$TENANT_ID" "$client_app_id" "$BLUEPRINT_APP_ID" "${BLUEPRINT_OBJECT_ID:-}" "${AGENT_ID:-}" "$agent_identity_display_name" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-project_root = Path(sys.argv[1])
-tenant_id, client_app_id, blueprint_app_id, blueprint_object_id, agent_id = sys.argv[2:7]
-agent_identity_display_name = sys.argv[7]
-config_path = project_root / "a365.config.json"
-
-data = {}
-if config_path.is_file():
-    data = json.loads(config_path.read_text(encoding="utf-8"))
-
-data.update(
-    {
-        "tenantId": tenant_id,
-        "clientAppId": client_app_id,
-        "agentBlueprintId": blueprint_app_id,
-        "agentBlueprintDisplayName": "EntraBot Code Agent",
-        "agentIdentityDisplayName": agent_identity_display_name,
-        "deploymentProjectPath": str(project_root),
-    }
-)
-if blueprint_object_id:
-    data["agentBlueprintObjectId"] = blueprint_object_id
-if agent_id:
-    data["agentIdentityId"] = agent_id
-
-config_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-PY
-    success "A365 config points to existing Entrabot Blueprint"
-}
-
-configure_a365_work_iq() {
-    echo "  Configuring Microsoft Agent 365 Work IQ Word + OneDrive/SharePoint + Excel..."
-    echo "  This may open an interactive Microsoft sign-in/device-code flow."
-    echo "  If the Agent 365 CLI app is missing, choose C when prompted to create it."
-    ensure_a365_tooling_manifest
-    write_a365_config
-    if ! a365 setup requirements; then
-        fail "a365 setup requirements failed"
-    fi
-    a365 develop add-mcp-servers "${A365_WORK_IQ_MCP_SERVERS[@]}" --project-path "$PROJECT_ROOT"
-    "$SCRIPT_PYTHON" "$PROJECT_ROOT/scripts/ensure_a365_work_iq_permissions.py" \
-        --blueprint-app-id "$BLUEPRINT_APP_ID"
-    A365_PERMISSIONS_LOG=$(mktemp)
-    set +e
-    a365 setup permissions mcp 2>&1 | tee "$A365_PERMISSIONS_LOG"
-    A365_PERMISSIONS_RC=${PIPESTATUS[0]}
-    set -e
-    if [ "$A365_PERMISSIONS_RC" -ne 0 ]; then
-        rm -f "$A365_PERMISSIONS_LOG"
-        fail "a365 setup permissions mcp failed"
-    fi
-    if grep -q "OAuth2 grants failed" "$A365_PERMISSIONS_LOG"; then
-        rm -f "$A365_PERMISSIONS_LOG"
-        fail "a365 setup permissions mcp reported OAuth2 grants failed; Work IQ permissions are incomplete. Resolve the Agent 365 Tools service principal/admin-consent issue, then rerun setup.sh."
-    fi
-    rm -f "$A365_PERMISSIONS_LOG"
-    if ! "$SCRIPT_PYTHON" "$PROJECT_ROOT/scripts/spike_a365_work_iq.py"; then
-        fail "A365 Work IQ manifest validation failed"
-    fi
-    success "A365 Work IQ Word and Excel manifest configured"
-}
-
-# ════════════════════════════════════════════════════════════════════════════
-# Step 2: Verify Azure login
-# ════════════════════════════════════════════════════════════════════════════
-step 2 "Verifying Azure login"
-
-if [ "$SWITCH_USER" = true ]; then
-    echo "  Signing in as a new user (the new user will own/sponsor the agent)..."
-    az login
-fi
-
-if ! az account show &>/dev/null; then
-    fail "Not logged in to Azure CLI. Run 'az login' first."
-fi
-
-TENANT_ID=$(az account show --query "tenantId" -o tsv)
-ACCOUNT_NAME=$(az account show --query "name" -o tsv)
-HUMAN_UPN=$(az account show --query "user.name" -o tsv || echo "")
-HUMAN_USER_ID=$(az ad signed-in-user show --query "id" -o tsv || echo "")
-
-if [ -z "$HUMAN_USER_ID" ]; then
-    fail "Could not determine signed-in user ID. Ensure 'az login' is done with a user account."
-fi
-
-# ── License preflight (informational, never blocks) ────────────────────────
-# Check whether this tenant has Teams and, for A365 runs, Copilot seats *before* we provision
-# anything. Warns are non-fatal — create_entra_agent_ids.py performs the actual
-# assignment later, after the Agent User exists.
-#
-# The token is the signed-in administrator's. It never goes on a command line, where any local
-# user can read it from the process list: each check gets it in the environment of that one
-# command and takes it out of there. GRAPH_TOKEN itself is never exported (unset first, in case
-# the calling shell exported one of this name) and is unset once the checks are done.
-unset GRAPH_TOKEN
-if command -v az >/dev/null 2>&1 && [ -d "$PROJECT_ROOT/.venv" ]; then
-    GRAPH_TOKEN=$(az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv 2>/dev/null || echo "")
-    if [ -n "$GRAPH_TOKEN" ]; then
-        set +e
-        PREFLIGHT_GRAPH_TOKEN="$GRAPH_TOKEN" "$PROJECT_ROOT/.venv/bin/python" - <<'PY' 2>&1 || true
-import os
-import sys
-from entrabot.preflight import (
-    check_teams_license_availability,
-    format_report,
-)
-
-token = os.environ.pop("PREFLIGHT_GRAPH_TOKEN", "")
-teams_result = check_teams_license_availability(token)
-# Only print warn/skip — pass is silent so we don't add noise on green runs.
-if teams_result.status == "pass":
-    print(f"  \033[0;32m✅ Teams license available: {teams_result.detail}\033[0m")
-else:
-    print(format_report([teams_result], color=sys.stdout.isatty()))
-PY
-        if [ "$WITH_A365_WORK_IQ" = true ]; then
-            PREFLIGHT_GRAPH_TOKEN="$GRAPH_TOKEN" "$PROJECT_ROOT/.venv/bin/python" - <<'PY' 2>&1 || true
-import os
-import sys
-from entrabot.preflight import (
-    check_copilot_license_availability,
-    format_report,
-)
-
-token = os.environ.pop("PREFLIGHT_GRAPH_TOKEN", "")
-copilot_result = check_copilot_license_availability(token)
-if copilot_result.status == "pass":
-    print(f"  \033[0;32m✅ Copilot license available: {copilot_result.detail}\033[0m")
-else:
-    print(format_report([copilot_result], color=sys.stdout.isatty()))
-PY
-        fi
-        set -e
-    fi
-fi
-unset GRAPH_TOKEN
-
-# If --teams-user was specified, resolve user(s) for Teams (comma-separated for group chat)
-HUMAN_USER_IDS=""
-HUMAN_UPNS=""
-HUMAN_USER_TENANT_IDS=""
-HUMAN_USER_MAILS=""
-HUMAN_USER_TYPES=""
-if [ -n "$TEAMS_USER_EMAIL" ]; then
-    IFS=',' read -ra TEAMS_USERS <<< "$TEAMS_USER_EMAIL"
-    RESOLVED_IDS=()
-    RESOLVED_UPNS=()
-    RESOLVED_TENANT_IDS=()
-    RESOLVED_MAILS=()
-    RESOLVED_TYPES=()
-    for TU in "${TEAMS_USERS[@]}"; do
-        TU=$(echo "$TU" | xargs)  # trim whitespace
-        # Query user details including userType and mail for guest detection
-        TU_JSON=$(az ad user show --id "$TU" --query "{id:id, userType:userType, mail:mail, upn:userPrincipalName}" -o json 2>/dev/null) || true
-        if [ -z "$TU_JSON" ]; then
-            fail "Could not find Teams user '$TU' in Entra. Check the email/ID."
-        fi
-        TU_ID=$(echo "$TU_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
-        TU_TYPE=$(echo "$TU_JSON" | python3 -c "import sys,json; v=json.load(sys.stdin)['userType']; print(v if v else '')")
-        TU_MAIL=$(echo "$TU_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('mail') or '')")
-        TU_UPN=$(echo "$TU_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['upn'])")
-
-        # If userType is null/empty, infer from UPN pattern (#EXT# = guest)
-        if [ -z "$TU_TYPE" ]; then
-            if echo "$TU_UPN" | grep -q '#EXT#'; then
-                TU_TYPE="Guest"
-            else
-                TU_TYPE="Member"
-            fi
-        fi
-
-        RESOLVED_IDS+=("$TU_ID")
-        RESOLVED_UPNS+=("$TU")
-        RESOLVED_MAILS+=("$TU_MAIL")
-        RESOLVED_TYPES+=("$TU_TYPE")
-
-        if [ "$TU_TYPE" = "Guest" ]; then
-            success "  User '$TU' is a B2B Guest — will use federated chat (Example 7)"
-            # Extract home domain from UPN: user_domain.com#EXT#@tenant.onmicrosoft.com
-            HOME_DOMAIN=$(echo "$TU_UPN" | python3 -c "
-import sys
-upn = sys.stdin.read().strip()
-# Pattern: user_domain.com#EXT#@tenant.onmicrosoft.com
-if '#EXT#' in upn:
-    local_part = upn.split('#EXT#')[0]  # user_domain.com
-    # Domain is after the last underscore
-    parts = local_part.rsplit('_', 1)
-    print(parts[1] if len(parts) > 1 else '')
-else:
-    print('')
-")
-            if [ -n "$HOME_DOMAIN" ]; then
-                # Look up home tenant GUID via OpenID discovery
-                HOME_TENANT_ID=$(curl -s "https://login.microsoftonline.com/${HOME_DOMAIN}/.well-known/openid-configuration" \
-                    | python3 -c "import sys,json; issuer=json.load(sys.stdin).get('issuer',''); parts=issuer.rstrip('/').split('/'); print(parts[-1] if len(parts)>3 else '')")
-                if [ -n "$HOME_TENANT_ID" ]; then
-                    success "  Guest '$TU' → home tenant: $HOME_DOMAIN ($HOME_TENANT_ID)"
-                    RESOLVED_TENANT_IDS+=("$HOME_TENANT_ID")
-                else
-                    warn "Could not resolve home tenant for guest '$TU' (domain: $HOME_DOMAIN)"
-                    RESOLVED_TENANT_IDS+=("")
-                fi
-            else
-                warn "Could not extract home domain from guest UPN: $TU_UPN"
-                RESOLVED_TENANT_IDS+=("")
-            fi
-        else
-            # In-tenant member — no tenantId needed
-            RESOLVED_TENANT_IDS+=("")
-        fi
-    done
-    # Join arrays with commas
-    HUMAN_USER_IDS=$(IFS=','; echo "${RESOLVED_IDS[*]}")
-    HUMAN_UPNS=$(IFS=','; echo "${RESOLVED_UPNS[*]}")
-    HUMAN_USER_TENANT_IDS=$(IFS=','; echo "${RESOLVED_TENANT_IDS[*]}")
-    HUMAN_USER_MAILS=$(IFS=','; echo "${RESOLVED_MAILS[*]}")
-    HUMAN_USER_TYPES=$(IFS=','; echo "${RESOLVED_TYPES[*]}")
-    # First user is the primary (backward compat)
-    HUMAN_USER_ID="${RESOLVED_IDS[0]}"
-    HUMAN_UPN="${RESOLVED_UPNS[0]}"
-    success "Admin:      $(az account show --query 'user.name' -o tsv) (provisioning)"
-    if [ ${#TEAMS_USERS[@]} -gt 1 ]; then
-        success "Teams users: $HUMAN_UPNS (group chat)"
-    else
-        success "Teams user: $HUMAN_UPN ($HUMAN_USER_ID) [type: ${RESOLVED_TYPES[0]}]"
-    fi
-else
-    HUMAN_USER_IDS="$HUMAN_USER_ID"
-    HUMAN_UPNS="$HUMAN_UPN"
-    HUMAN_USER_TENANT_IDS=""
-    HUMAN_USER_MAILS="$HUMAN_UPN"
-    HUMAN_USER_TYPES="Member"
-    success "Human user: $HUMAN_UPN ($HUMAN_USER_ID)"
-fi
-
-success "Tenant:     $TENANT_ID"
-success "Account:    $ACCOUNT_NAME"
-
-# ════════════════════════════════════════════════════════════════════════════
-# Step 3: Ensure Python dependencies for provisioning scripts
-# ════════════════════════════════════════════════════════════════════════════
-step 3 "Setting up the Python environment for the provisioning scripts"
-
-# The provisioning scripts import this project (entrabot.*), so it has to be installed
-# before any of them runs. On a machine with no .venv yet they used to be started with the
-# system Python: that died on the import, and installing into the system Python is refused
-# on distributions that manage it (PEP 668). So the environment is made here, first, and
-# nothing is ever installed into the system Python.
-SCRIPT_PYTHON="$PROJECT_ROOT/.venv/bin/python3"
-if [ ! -x "$SCRIPT_PYTHON" ]; then
-    if ! "$PYTHON" -m venv "$PROJECT_ROOT/.venv"; then
-        err "Could not create the Python environment ($PROJECT_ROOT/.venv)."
-        echo "     On Debian or Ubuntu, install the venv module first:  sudo apt install python3-venv" >&2
-        exit 1
-    fi
-    success "Created .venv"
-fi
-
-# Install only when something is missing, so a repeat run stays quick. A failed install
-# stops setup with pip's own message; it is never hidden or reported as success.
-if ! "$SCRIPT_PYTHON" - <<'PY'
-import importlib.util
-import sys
-
-
-def have(name: str) -> bool:
+venv_is_ready() {
+    [ -x "$VENV_PY" ] || return 1
+    [ -f "$STAMP_FILE" ] && [ "$(cat "$STAMP_FILE")" = "$(stamp_of_project)" ] || return 1
+    # The packages setup itself imports. Anything missing means the install did not finish.
+    # Asked as a question, so a missing one prints nothing and nothing has to be hidden.
+    "$VENV_PY" -c '
+import importlib.util, sys
+def there(name):
     try:
         return importlib.util.find_spec(name) is not None
-    except ModuleNotFoundError:
+    except ImportError:
         return False
-
-
-needed = ("entrabot", "azure.identity", "requests", "keyring", "cryptography")
-sys.exit(0 if all(have(name) for name in needed) else 1)
-PY
-then
-    # Python 3.12+ venvs no longer seed setuptools/wheel; the editable install needs both.
-    "$SCRIPT_PYTHON" -m pip install --quiet --upgrade pip setuptools wheel
-    "$SCRIPT_PYTHON" -m pip install --quiet -e "$PROJECT_ROOT[provisioning]"
-fi
-success "Project and provisioning dependencies installed in .venv"
-
-# ── Validate identity mode ────────────────────────────────────────────────
-if [ "$NEW_CHAIN" = true ] && [ -n "$USE_BLUEPRINT" ]; then
-    echo "ERROR: --new and --use-blueprint are mutually exclusive." >&2
-    echo "  --new creates a fresh identity chain." >&2
-    echo "  --use-blueprint attaches to an existing one." >&2
-    exit 1
-fi
-
-if [ "$NEW_CHAIN" = false ] && [ -z "$USE_BLUEPRINT" ]; then
-    echo ""
-    echo "ERROR: No identity mode specified." >&2
-    echo "" >&2
-    echo "  Choose one:" >&2
-    echo "    --new --with-upn-suffix=NAME    Create a fresh identity chain" >&2
-    echo "    --use-blueprint=APP_ID          Attach to an existing Blueprint" >&2
-    echo "" >&2
-    exit 1
-fi
-
-# ── Handle --use-blueprint: reuse existing identity, add cert for this machine ─
-#
-# Two scenarios this has to handle cleanly:
-#   (a) Fresh machine / no state — just record BLUEPRINT_APP_ID; the rest of
-#       the script discovers everything under it.
-#   (b) Existing state pointing at a DIFFERENT Blueprint — treat this as a
-#       switch. create_entra_agent_ids.py goes by the recorded BLUEPRINT_APP_ID
-#       alone (a leftover BLUEPRINT_OBJECT_ID can no longer pin it to the old
-#       Blueprint), but everything else recorded belongs to the old agent: its
-#       Agent Identity, Agent User and certificate thumbprint. Wipe all
-#       identity-derived state so they are rediscovered under the new
-#       Blueprint. Keep PROVISIONER_* and TENANT_ID (the helper app is
-#       machine-scoped, unaffected by the switch).
-# The Agent User UPN in .env needs the same care, below.
-HIDE_ENV_AGENT_USER_UPN=false
-if [ -n "$USE_BLUEPRINT" ] && [ "$NEW_CHAIN" = false ]; then
-    STATE_FILE="$PROJECT_ROOT/.entrabot-state.json"
-    CURRENT_BP=$(read_state "BLUEPRINT_APP_ID")
-
-    if [ -n "$CURRENT_BP" ] && ! same_id "$CURRENT_BP" "$USE_BLUEPRINT"; then
-        BACKUP="$STATE_FILE.bak.$(date +%Y%m%d-%H%M%S)"
-        cp "$STATE_FILE" "$BACKUP"
-        echo -e "  ${YELLOW}Switching Blueprint: ${CURRENT_BP} → ${USE_BLUEPRINT}${NC}"
-        echo -e "  ${YELLOW}Backed up prior state to $(basename "$BACKUP")${NC}"
-        echo -e "  ${YELLOW}Note: this machine's cert on the OLD Blueprint is NOT revoked."
-        echo -e "        Remove it manually with ./scripts/cleanup-orphans.sh or via"
-        echo -e "        'az ad app credential delete' if you want a clean break.${NC}"
-        # The state file and the Blueprint App ID are arguments, never part of the program.
-        "$SCRIPT_PYTHON" -c '
-import json, pathlib, sys
-sf, blueprint_app_id = pathlib.Path(sys.argv[1]), sys.argv[2]
-data = json.loads(sf.read_text(encoding="utf-8")) if sf.is_file() else {}
-# Keep provisioner app + tenant; drop everything tied to the old chain
-keep = {
-    k: v for k, v in data.items()
-    if k.startswith("PROVISIONER") or k == "TENANT_ID"
-}
-keep["BLUEPRINT_APP_ID"] = blueprint_app_id
-sf.write_text(json.dumps(keep, indent=2), encoding="utf-8")
-print("  Cleared stale Blueprint/Agent/User state (kept Provisioner + tenant)")
-' "$STATE_FILE" "$USE_BLUEPRINT"
-    else
-        echo -e "  ${GREEN}Using existing Blueprint: ${USE_BLUEPRINT}${NC}"
-        # Fresh machine or re-run with the same ID — just record it.
-        "$SCRIPT_PYTHON" -c '
-import json, pathlib, sys
-sf, blueprint_app_id = pathlib.Path(sys.argv[1]), sys.argv[2]
-data = json.loads(sf.read_text(encoding="utf-8")) if sf.is_file() else {}
-data["BLUEPRINT_APP_ID"] = blueprint_app_id
-sf.write_text(json.dumps(data, indent=2), encoding="utf-8")
-' "$STATE_FILE" "$USE_BLUEPRINT"
-        echo "  State file updated with Blueprint ID"
-    fi
-    # Which Agent User. Step 7 writes .env's ENTRABOT_AGENT_USER_UPN together with the
-    # Blueprint it belongs to, and create_entra_agent_ids.py loads .env for any variable that
-    # is not set. So unless --agent-user-upn or --with-upn-suffix names one, a run for a
-    # Blueprint other than the one .env names hands the helper that variable set but empty
-    # (Step 5): otherwise the previous agent's Agent User would be looked for under this one.
-    if [ -n "$AGENT_USER_UPN" ]; then
-        export ENTRABOT_AGENT_USER_UPN="$AGENT_USER_UPN"
-        echo -e "  ${GREEN}Using existing Agent User UPN: ${AGENT_USER_UPN}${NC}"
-    elif [ -n "$UPN_SUFFIX" ]; then
-        export _ENTRABOT_UPN_SUFFIX="$UPN_SUFFIX"
-        echo -e "  ${GREEN}Using existing Agent User suffix: ${UPN_SUFFIX}${NC}"
-    else
-        ENV_BLUEPRINT_APP_ID=$(read_env_value ENTRABOT_BLUEPRINT_APP_ID)
-        if ! same_id "$ENV_BLUEPRINT_APP_ID" "$USE_BLUEPRINT"; then
-            HIDE_ENV_AGENT_USER_UPN=true
-            ENV_AGENT_USER_UPN=$(read_env_value ENTRABOT_AGENT_USER_UPN)
-            if [ -n "$ENV_AGENT_USER_UPN" ]; then
-                echo -e "  ${YELLOW}Not reusing the Agent User named in .env (${ENV_AGENT_USER_UPN}):${NC}"
-                echo -e "  ${YELLOW}.env was written for Blueprint ${ENV_BLUEPRINT_APP_ID:-(none recorded)}, not ${USE_BLUEPRINT}.${NC}"
-                echo -e "  ${YELLOW}To use one of ${USE_BLUEPRINT}'s Agent Users, pass --agent-user-upn=UPN or --with-upn-suffix=NAME.${NC}"
-            fi
-        fi
-    fi
-    # From here create_entra_agent_ids.py discovers Agent Identity + Agent User
-    # under the chosen Blueprint. Step 6 generates/reuses a cert as appropriate.
-fi
-
-# ── Handle --new: back up state, force fresh identity chain ───────────────
-if [ "$NEW_CHAIN" = true ]; then
-    STATE_FILE="$PROJECT_ROOT/.entrabot-state.json"
-    if [ -f "$STATE_FILE" ]; then
-        BACKUP="$STATE_FILE.bak.$(date +%Y%m%d-%H%M%S)"
-        cp "$STATE_FILE" "$BACKUP"
-        echo -e "  ${YELLOW}--new: backed up state to $(basename "$BACKUP")${NC}"
-        # Clear identity keys but keep the provisioner app (it can be reused)
-        "$SCRIPT_PYTHON" -c '
-import json, pathlib, sys
-sf = pathlib.Path(sys.argv[1])
-data = json.loads(sf.read_text(encoding="utf-8")) if sf.is_file() else {}
-# Keep provisioner app — it is a helper, not part of the agent identity
-keep = {k: v for k, v in data.items() if k.startswith("PROVISIONER")}
-sf.write_text(json.dumps(keep, indent=2), encoding="utf-8")
-print("  Cleared identity state (kept provisioner app)")
-' "$STATE_FILE"
-    fi
-    # Resolve UPN — explicit UPN wins; otherwise suffix comes from flag or prompt.
-    # Example: ./scripts/setup.sh --new --agent-user-upn=entrabot-agent@yourtenant.onmicrosoft.com
-    if [ -n "$AGENT_USER_UPN" ]; then
-        export ENTRABOT_AGENT_USER_UPN="$AGENT_USER_UPN"
-        echo -e "  ${GREEN}--new: will create explicit Agent User UPN '${AGENT_USER_UPN}'${NC}"
-    elif [ -z "$UPN_SUFFIX" ]; then
-        echo ""
-        echo -e "  ${YELLOW}--new requires a UPN suffix to avoid collision with existing agents.${NC}"
-        echo "  This becomes part of the Agent User's email-like identity:"
-        echo "    entrabot-<suffix>@yourdomain.com"
-        echo ""
-        echo "  Examples: sati-agent, dev-bot, test-agent"
-        echo ""
-        printf "  Enter UPN suffix: "
-        read -r UPN_SUFFIX
-        if [ -z "$UPN_SUFFIX" ]; then
-            echo "ERROR: UPN suffix is required with --new" >&2
-            exit 1
-        fi
-        export _ENTRABOT_UPN_SUFFIX="$UPN_SUFFIX"
-    else
-        export _ENTRABOT_UPN_SUFFIX="$UPN_SUFFIX"
-    fi
-
-    # Tell create_entra_agent_ids.py to skip display-name lookups
-    export ENTRABOT_NEW_CHAIN=1
-    if [ -n "$UPN_SUFFIX" ]; then
-        echo -e "  ${YELLOW}--new: will create fresh identity chain with suffix '${UPN_SUFFIX}'${NC}"
-    fi
-fi
-
-# ════════════════════════════════════════════════════════════════════════════
-# Step 4: Bootstrap provisioner app (Python)
-# ════════════════════════════════════════════════════════════════════════════
-step 4 "Bootstrapping Entra provisioner app"
-
-echo "  Running entra_provisioning.py..."
-if ! "$SCRIPT_PYTHON" "$SCRIPT_DIR/entra_provisioning.py"; then
-    fail "Provisioner bootstrap failed. Check errors above."
-fi
-success "Provisioner app ready"
-
-# ════════════════════════════════════════════════════════════════════════════
-# Step 5: Create Blueprint + Agent Identity + Agent User (Python)
-# ════════════════════════════════════════════════════════════════════════════
-step 5 "Creating Entra Agent Identities + Agent User"
-
-echo "  Running create_entra_agent_ids.py..."
-CREATE_AGENT=("$SCRIPT_PYTHON" "$SCRIPT_DIR/create_entra_agent_ids.py")
-if [ "$HIDE_ENV_AGENT_USER_UPN" = true ]; then
-    # Set but empty, for the helper alone, so its .env load can't bring back the previous
-    # agent's UPN (see --use-blueprint above). Later steps, the smoke test among them, read
-    # the .env Step 7 writes; an empty value left set would also turn off the smoke test's
-    # check that the token is this agent's.
-    CREATE_AGENT=(env "ENTRABOT_AGENT_USER_UPN=" "${CREATE_AGENT[@]}")
-fi
-if ! "${CREATE_AGENT[@]}"; then
-    fail "Agent Identity provisioning failed. Check errors above."
-fi
-
-# Read back IDs from state file
-BLUEPRINT_APP_ID=$(read_state "BLUEPRINT_APP_ID")
-BLUEPRINT_OBJECT_ID=$(read_state "BLUEPRINT_OBJECT_ID")
-AGENT_ID=$(read_state "AGENT_ID")
-AGENT_OBJECT_ID=$(read_state "AGENT_OBJECT_ID")
-AGENT_USER_ID=$(read_state "AGENT_USER_ID")
-AGENT_USER_UPN=$(read_state "AGENT_USER_UPN")
-PROV_CLIENT_ID=$(read_state "PROVISIONER_CLIENT_ID")
-
-if [ -z "$BLUEPRINT_APP_ID" ] || [ -z "$AGENT_ID" ]; then
-    fail "Agent Identity provisioning completed but IDs not found in state file"
-fi
-
-# Defence in depth, as the Windows wizard has: the steps below configure the Blueprint recorded
-# here (Work IQ) and register this machine's certificate on it, so it must be the one
-# --use-blueprint asked for. create_entra_agent_ids.py never takes another, so this should not
-# fire.
-if [ -n "$USE_BLUEPRINT" ] && ! same_id "$BLUEPRINT_APP_ID" "$USE_BLUEPRINT"; then
-    err "You asked to join Blueprint $USE_BLUEPRINT, but create_entra_agent_ids.py recorded Blueprint $BLUEPRINT_APP_ID in .entrabot-state.json."
-    echo "     Setup stopped before this machine's certificate step: no certificate was registered on either Blueprint, and .env was not written."
-    fail "Check that $USE_BLUEPRINT is the right Blueprint App ID, then run ./scripts/setup.sh --use-blueprint=$USE_BLUEPRINT again."
-fi
-
-success "Blueprint: $BLUEPRINT_APP_ID"
-success "Agent ID:  $AGENT_ID"
-success "Agent User: ${AGENT_USER_UPN:-not created} (${AGENT_USER_ID:-n/a})"
-
-if [ "$CONFIGURE_A365_WORK_IQ" = true ]; then
-    configure_a365_work_iq
-fi
-
-# ════════════════════════════════════════════════════════════════════════════
-# Step 6: Generate Blueprint certificate (for three-hop flow)
-# ════════════════════════════════════════════════════════════════════════════
-step 6 "Managing Blueprint certificate"
-
-# Ensure venv + deps are available (cryptography + keyring needed for cert generation)
-if [ ! -d ".venv" ]; then
-    "$PYTHON" -m venv .venv
-fi
-# shellcheck disable=SC1091
-source .venv/bin/activate
-# Python 3.12+ venv no longer seeds setuptools/wheel; editable install from
-# pyproject.toml needs both. Seed them before the editable install.
-pip install --quiet --upgrade pip setuptools wheel
-pip install --quiet -e ".[dev]" 2>/dev/null || pip install --quiet -e "." 2>/dev/null
-VENV_PY="$PROJECT_ROOT/.venv/bin/python3"
-
-# The Blueprint authenticates with a certificate, not a client secret.
-# Private key is stored in the OS credential store (Keychain/TPM/Keyring).
-# Only the public certificate is uploaded to the Blueprint app in Entra.
-# See ADR-003 for rationale.
-#
-# find_local_blueprint_cert.py exits 0 (this machine's key matches a registered
-# certificate), 1 (checked: it doesn't), or anything else (COULD NOT CHECK). Only an
-# explicit 1 may lead to a new certificate: a failed check says nothing about the
-# Blueprint, so it stops setup here. Capturing the status with `|| STATUS=$?` keeps
-# `set -e` from ending the script before the message.
-#
-# The thumbprint cached in the state file is never trusted on its own. It can be stale,
-# or can belong to an earlier key: after an unconfirmed --remove-all-existing-certs, or
-# a failed state write, the active key may no longer pair with it.
-CERT_THUMBPRINT=$(read_state "BLUEPRINT_CERT_THUMBPRINT")
-
-# Defense in depth: the thumbprint is SHA-256 DER base64url-no-padding (43 chars,
-# [A-Za-z0-9_-]). If anything else lands here, the state and .env files are about to
-# be corrupted (Learning #29) — fail loudly instead of writing garbage.
-require_thumbprint_shape() {
-    if ! [[ "$1" =~ ^[A-Za-z0-9_-]{43}$ ]]; then
-        fail "Captured thumbprint doesn't look like a SHA-256 base64url digest: '$1'"
-    fi
+wanted = ("azure.identity", "cryptography", "entrabot.winsetup", "httpx", "keyring", "requests")
+sys.exit(0 if all(there(name) for name in wanted) else 1)'
 }
 
-if [ "$REMOVE_ALL_EXISTING_CERTS" = true ]; then
-    # Regenerate even if the cached certificate is still valid: the request is to
-    # replace every certificate, this machine's current one included.
-    CERT_THUMBPRINT=""
-else
-    # find_local_blueprint_cert.py proves that the local private key matches a
-    # certificate registered on the Blueprint, and returns THAT certificate's thumbprint.
-    # It also exits 1 while a new key is waiting under the pending keystore account, so
-    # that register_blueprint_cert.py, the one place that reconciles a pending key,
-    # runs. (verify_blueprint_cert.py is an operator tool; setup does not call it.)
-    FIND_STATUS=0
-    RECOVERED_THUMBPRINT=$(PYTHONPATH="$PROJECT_ROOT/scripts" "$VENV_PY" \
-        "$PROJECT_ROOT/scripts/find_local_blueprint_cert.py" "$BLUEPRINT_OBJECT_ID") || FIND_STATUS=$?
-    case "$FIND_STATUS" in
-        0)
-            require_thumbprint_shape "$RECOVERED_THUMBPRINT"
-            if [ "$RECOVERED_THUMBPRINT" != "$CERT_THUMBPRINT" ]; then
-                # The state file is missing the thumbprint or holds a stale one. This is the
-                # registration path's writer, which can't leave invalid JSON behind.
-                CERT_THUMBPRINT="$RECOVERED_THUMBPRINT"
-                PYTHONPATH="$PROJECT_ROOT/scripts" "$VENV_PY" -c 'import pathlib, sys; from register_blueprint_cert import write_state; write_state(pathlib.Path(sys.argv[1]), sys.argv[2])' \
-                    "$PROJECT_ROOT/.entrabot-state.json" "$CERT_THUMBPRINT" \
-                    || fail "Could not save the certificate thumbprint to .entrabot-state.json (see above). Nothing on the Blueprint changed, so fix that and re-run setup."
+build_venv() {
+    local python
+    if [ ! -x "$VENV_PY" ]; then
+        python="$(find_python)" || python_missing
+        say "Creating Entrabot's Python environment (.venv)..."
+        if ! "$python" -m venv "$PROJECT_ROOT/.venv"; then
+            say ""
+            say "Python could not create a virtual environment."
+            if [ "$(uname -s)" = "Linux" ]; then
+                say "On Debian and Ubuntu that needs one more package:  sudo apt install python3-venv"
             fi
-            success "Using registered local certificate (thumbprint: ${CERT_THUMBPRINT:0:16}...)"
-            ;;
-        1)
-            # This machine's key matches no registered certificate, or a new key is
-            # waiting to be confirmed: register below, whatever thumbprint is cached.
-            CERT_THUMBPRINT=""
-            ;;
-        *)
-            fail "Could not check whether this machine's key matches a registered certificate (exit $FIND_STATUS). No certificate was generated or changed. Fix the error above and re-run setup."
-            ;;
-    esac
-fi
-
-if [ -z "$CERT_THUMBPRINT" ]; then
-    REGISTER_ARGS=(
-        --blueprint-object-id "$BLUEPRINT_OBJECT_ID"
-        --blueprint-app-id "$BLUEPRINT_APP_ID"
-        --state-file "$PROJECT_ROOT/.entrabot-state.json"
-    )
-    if [ "$REMOVE_ALL_EXISTING_CERTS" = true ]; then
-        REGISTER_ARGS+=(--remove-all-existing-certs)
+            die "Fix the problem above, then run ./scripts/setup.sh again."
+        fi
+    elif ! is_new_enough "$VENV_PY"; then
+        die "The Python in .venv is older than 3.12. Move .venv aside and run ./scripts/setup.sh again."
     fi
-
-    echo "  Registering a certificate for this machine..."
-
-    # Generates the key and certificate, stores the private key in the OS keyring, and
-    # adds the public certificate to the Blueprint without removing any other. Only the
-    # thumbprint goes to stdout; messages and any y/N prompt go to stderr and read the
-    # terminal directly, so they aren't swallowed by this capture.
-    REGISTER_STATUS=0
-    CERT_THUMBPRINT=$(PYTHONPATH="$PROJECT_ROOT/scripts" "$VENV_PY" \
-        "$PROJECT_ROOT/scripts/register_blueprint_cert.py" "${REGISTER_ARGS[@]}") || REGISTER_STATUS=$?
-    case "$REGISTER_STATUS" in
-        0)
-            ;;
-        3)
-            fail "Could not confirm the certificate update (see above). The Blueprint may have changed. Re-run setup: it picks up where this left off."
-            ;;
-        *)
-            fail "The Blueprint certificate was not registered (exit $REGISTER_STATUS, see above)."
-            ;;
-    esac
-
-    if [ -z "$CERT_THUMBPRINT" ]; then
-        fail "Could not generate Blueprint certificate"
-    fi
-    require_thumbprint_shape "$CERT_THUMBPRINT"
-
-    success "Certificate generated, uploaded to Entra, private key stored in OS keyring"
-fi
-
-# ════════════════════════════════════════════════════════════════════════════
-# Step 7: Python venv + dependencies + .env
-# ════════════════════════════════════════════════════════════════════════════
-step 7 "Setting up Python virtual environment and writing .env"
-
-if [ ! -d ".venv" ]; then
-    "$PYTHON" -m venv .venv
-    success "Created .venv"
-else
-    success "Virtual environment .venv already exists"
-fi
-
-# shellcheck disable=SC1091
-source .venv/bin/activate
-
-# Python 3.12+ venv no longer seeds setuptools/wheel; editable install from
-# pyproject.toml needs both. Seed them before the editable install.
-pip install --quiet --upgrade pip setuptools wheel
-pip install --quiet -e ".[dev]"
-success "Installed dependencies (including dev)"
-
-# ── Keep what a re-run must not silently change ────────────────────────────
-#
-# .env is written from scratch below, so read the old one first, before it is
-# truncated. Two settings must survive a re-run that doesn't mention them, such
-# as the documented repair command ./scripts/setup.sh --use-blueprint=ID:
-#   - The sponsor (ENTRABOT_HUMAN_*). Without this it becomes whoever az is
-#     signed in as, which isn't always the sponsor.
-#   - Cloud memory. Without this an agent on Azure Blob moves to an empty local
-#     store, because ENTRABOT_KEEP_MEMORY_LOCAL beats the blob settings.
-# Both belong to ONE Agent User: the blob container is scoped to it and the
-# sponsor is that agent's. A run for a different one (--new, or another
-# --use-blueprint) carries nothing over. Other lines added to .env by hand are
-# not kept.
-OLD_AGENT_USER_ID=$(read_env_value ENTRABOT_AGENT_USER_ID)
-OLD_HUMAN_USER_ID=$(read_env_value ENTRABOT_HUMAN_USER_ID)
-OLD_HUMAN_UPN=$(read_env_value ENTRABOT_HUMAN_UPN)
-OLD_HUMAN_USER_IDS=$(read_env_value ENTRABOT_HUMAN_USER_IDS)
-OLD_HUMAN_UPNS=$(read_env_value ENTRABOT_HUMAN_UPNS)
-OLD_HUMAN_USER_TENANT_IDS=$(read_env_value ENTRABOT_HUMAN_USER_TENANT_IDS)
-OLD_HUMAN_USER_MAILS=$(read_env_value ENTRABOT_HUMAN_USER_MAILS)
-OLD_HUMAN_USER_TYPES=$(read_env_value ENTRABOT_HUMAN_USER_TYPES)
-OLD_BLOB_ENDPOINT=$(read_env_value ENTRABOT_BLOB_ENDPOINT)
-OLD_BLOB_CONTAINER=$(read_env_value ENTRABOT_BLOB_CONTAINER)
-OLD_KEEP_MEMORY_LOCAL=$(read_env_value ENTRABOT_KEEP_MEMORY_LOCAL)
-
-SAME_AGENT=false
-if [ -n "${AGENT_USER_ID:-}" ] && [ "${AGENT_USER_ID:-}" = "$OLD_AGENT_USER_ID" ]; then
-    SAME_AGENT=true
-fi
-
-# --teams-user and --switch-user both say who the sponsor is, so they win. Without
-# them, a sponsor the old file names is kept. All seven values come from it together,
-# because the lists are index-aligned.
-if [ "$SAME_AGENT" = true ] && [ -z "$TEAMS_USER_EMAIL" ] && [ "$SWITCH_USER" = false ] \
-    && [ -n "$OLD_HUMAN_USER_ID$OLD_HUMAN_USER_IDS$OLD_HUMAN_UPN$OLD_HUMAN_UPNS" ]; then
-    HUMAN_USER_ID="$OLD_HUMAN_USER_ID"
-    HUMAN_UPN="$OLD_HUMAN_UPN"
-    HUMAN_USER_IDS="$OLD_HUMAN_USER_IDS"
-    HUMAN_UPNS="$OLD_HUMAN_UPNS"
-    HUMAN_USER_TENANT_IDS="$OLD_HUMAN_USER_TENANT_IDS"
-    HUMAN_USER_MAILS="$OLD_HUMAN_USER_MAILS"
-    HUMAN_USER_TYPES="$OLD_HUMAN_USER_TYPES"
-    KEPT_SPONSOR="${OLD_HUMAN_UPNS:-${OLD_HUMAN_UPN:-${OLD_HUMAN_USER_IDS:-$OLD_HUMAN_USER_ID}}}"
-    success "Kept the sponsor already in .env: $KEPT_SPONSOR (pass --teams-user=EMAIL to change it)"
-fi
-
-# Cloud memory is already set when the old file has both blob settings and doesn't
-# switch to local. The runtime gives ENTRABOT_KEEP_MEMORY_LOCAL priority and reads
-# only true, 1 and yes (any case) as on, so this does too. Half a cloud config
-# doesn't count.
-ON_CLOUD_MEMORY=false
-if [ "$SAME_AGENT" = true ] && [ -n "$OLD_BLOB_ENDPOINT" ] && [ -n "$OLD_BLOB_CONTAINER" ]; then
-    case "$OLD_KEEP_MEMORY_LOCAL" in
-        [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]) ;;
-        *) ON_CLOUD_MEMORY=true ;;
-    esac
-fi
-
-cat > .env << EOF
-# EntraBot Identity Research — generated by scripts/setup.sh
-# Uses Agent User (three-hop flow) with certificate auth — no secrets on disk
-# Private key stored in OS credential store (Keychain/TPM/Keyring)
-# DO NOT commit this file (it is in .gitignore)
-
-ENTRABOT_TENANT_ID=$TENANT_ID
-ENTRABOT_BLUEPRINT_APP_ID=$BLUEPRINT_APP_ID
-ENTRABOT_BLUEPRINT_OBJECT_ID=$BLUEPRINT_OBJECT_ID
-ENTRABOT_BLUEPRINT_CERT_THUMBPRINT=$CERT_THUMBPRINT
-ENTRABOT_AGENT_ID=$AGENT_ID
-ENTRABOT_AGENT_OBJECT_ID=$AGENT_OBJECT_ID
-ENTRABOT_AGENT_USER_ID=${AGENT_USER_ID:-}
-ENTRABOT_AGENT_USER_UPN=${AGENT_USER_UPN:-}
-ENTRABOT_HUMAN_USER_ID=$HUMAN_USER_ID
-ENTRABOT_HUMAN_UPN=$HUMAN_UPN
-ENTRABOT_HUMAN_USER_IDS=$HUMAN_USER_IDS
-ENTRABOT_HUMAN_UPNS=$HUMAN_UPNS
-ENTRABOT_HUMAN_USER_TENANT_IDS=$HUMAN_USER_TENANT_IDS
-ENTRABOT_HUMAN_USER_MAILS=$HUMAN_USER_MAILS
-ENTRABOT_HUMAN_USER_TYPES=$HUMAN_USER_TYPES
-ENTRABOT_PROVISIONER_APP_ID=$PROV_CLIENT_ID
-ENTRABOT_LOG_LEVEL=INFO
-EOF
-
-chmod 600 .env
-success ".env file created (chmod 600)"
-
-# ════════════════════════════════════════════════════════════════════════════
-# Step 7b: Azure Blob Storage provisioning (ADR-005)
-# ════════════════════════════════════════════════════════════════════════════
-
-# Writes back the blob settings the old .env had, so a run that must not move an
-# agent on cloud memory to an empty local store doesn't: no memory flag was given,
-# or the provisioning it asked for failed.
-keep_existing_cloud_memory() {
-    {
-        echo ""
-        echo "# ADR-005: cloud-hosted agent memory (Azure Blob Storage), kept from the previous .env"
-        printf 'ENTRABOT_BLOB_ENDPOINT=%s\n' "$OLD_BLOB_ENDPOINT"
-        printf 'ENTRABOT_BLOB_CONTAINER=%s\n' "$OLD_BLOB_CONTAINER"
-    } >> .env
+    say "Installing what setup needs into .venv (a minute or two the first time)..."
+    # Python 3.12 no longer puts setuptools and wheel in a new environment; an editable
+    # install from pyproject.toml needs both.
+    "$VENV_PY" -m pip install --quiet --disable-pip-version-check --upgrade pip setuptools wheel \
+        || die "pip could not be updated in .venv (see above). Check the network connection, then run ./scripts/setup.sh again."
+    (cd "$PROJECT_ROOT" && "$VENV_PY" -m pip install --quiet --disable-pip-version-check -e ".[provisioning]") \
+        || die "Entrabot's packages could not be installed (see above). Check the network connection, then run ./scripts/setup.sh again."
+    stamp_of_project > "$STAMP_FILE"
 }
 
-if [ "$MEMORY_FLAG_PASSED" = false ] && [ "$ON_CLOUD_MEMORY" = true ]; then
-    keep_existing_cloud_memory
-    success "Memory mode: CLOUD (already set in .env: $OLD_BLOB_ENDPOINT/$OLD_BLOB_CONTAINER). Pass --keep-memory-local to switch to local."
-elif [ "$KEEP_MEMORY_LOCAL" = true ]; then
-    echo "" >> .env
-    echo "# ADR-005: keep agent memory local (skip cloud sync)" >> .env
-    echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> .env
-    success "Memory mode: LOCAL (--keep-memory-local set)"
-elif [ -z "${AGENT_USER_ID:-}" ]; then
-    # ON_CLOUD_MEMORY needs an Agent User, so there is no cloud memory to keep here.
-    warn "Skipping blob storage — no Agent User to scope RBAC against"
-else
-    echo ""
-    echo -e "${BLUE}[7b]${NC} Provisioning Azure Blob Storage for agent memory (ADR-005)"
-
-    PROVISION_ARGS=(
-        --tenant-id "$TENANT_ID"
-        --agent-user-object-id "$AGENT_USER_ID"
-    )
-    if [ -n "$WITH_STORAGE_ACCOUNT" ]; then
-        PROVISION_ARGS+=(--with-storage-account "$WITH_STORAGE_ACCOUNT")
-    fi
-    if [ -n "$WITH_CONTAINER" ]; then
-        PROVISION_ARGS+=(--with-container "$WITH_CONTAINER")
-    fi
-    if [ "$CREATE_NEW_STORAGE" = true ]; then
-        PROVISION_ARGS+=(--create-new-storage)
-    fi
-
-    # A failure is handled below, so keep it from ending the script here: under
-    # set -e a failed command substitution exits before $? can be read, and the
-    # fallbacks below could never run.
-    PROVISION_RC=0
-    PROVISION_OUT=$("$PYTHON" "$PROJECT_ROOT/scripts/provision_blob_storage.py" \
-        "${PROVISION_ARGS[@]}" \
-        2>&1 1>/tmp/entrabot-provision-stdout.$$) || PROVISION_RC=$?
-    PROVISION_STDOUT=$(cat /tmp/entrabot-provision-stdout.$$)
-    rm -f /tmp/entrabot-provision-stdout.$$
-    # Echo the provisioner's progress lines (it prints them to stderr)
-    echo "$PROVISION_OUT" | sed 's/^/  /'
-
-    if [ $PROVISION_RC -ne 0 ]; then
-        if [ "$ON_CLOUD_MEMORY" = true ]; then
-            warn "Blob storage provisioning failed — keeping the cloud memory already set in .env"
-            keep_existing_cloud_memory
-        else
-            warn "Blob storage provisioning failed — falling back to local-only memory"
-            echo "" >> .env
-            echo "# ADR-005: provisioning failed, using local-only memory" >> .env
-            echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> .env
-        fi
-    else
-        # grep exits 1 when a line is missing, which pipefail turns into a failed
-        # assignment; an empty value is handled by the check below.
-        BLOB_ENDPOINT=$(echo "$PROVISION_STDOUT" | grep '^BLOB_ENDPOINT=' | cut -d= -f2-) || BLOB_ENDPOINT=""
-        BLOB_CONTAINER=$(echo "$PROVISION_STDOUT" | grep '^BLOB_CONTAINER=' | cut -d= -f2-) || BLOB_CONTAINER=""
-        if [ -z "$BLOB_ENDPOINT" ] || [ -z "$BLOB_CONTAINER" ]; then
-            if [ "$ON_CLOUD_MEMORY" = true ]; then
-                warn "Provisioner returned no endpoint/container — keeping the cloud memory already set in .env"
-                keep_existing_cloud_memory
-            else
-                warn "Provisioner returned no endpoint/container — using local-only memory"
-                echo "" >> .env
-                echo "ENTRABOT_KEEP_MEMORY_LOCAL=true" >> .env
-            fi
-        else
-            echo "" >> .env
-            echo "# ADR-005: cloud-hosted agent memory (Azure Blob Storage)" >> .env
-            echo "ENTRABOT_BLOB_ENDPOINT=$BLOB_ENDPOINT" >> .env
-            echo "ENTRABOT_BLOB_CONTAINER=$BLOB_CONTAINER" >> .env
-            success "Blob storage ready: $BLOB_ENDPOINT/$BLOB_CONTAINER"
-
-            # Migration prompt — upload existing local data + Claude Code
-            # persona memory (ADR-005 Phase 6a), leave both trees in place.
-            DATA_DIR="${ENTRABOT_DATA_DIR:-$HOME/.entrabot/data}"
-            # Resolve Claude Code per-project memory dir (may be absent). The project folder is an
-            # argument, never part of the program.
-            PERSONA_DIR=$("$PYTHON" -c '
-import sys
-from pathlib import Path
-from entrabot.storage.persona import claude_code_memory_dir
-print(claude_code_memory_dir(Path(sys.argv[1])))
-' "$PROJECT_ROOT" || echo "")
-            HAS_DATA=false
-            HAS_PERSONA=false
-            [ -d "$DATA_DIR" ] && [ -n "$(ls -A "$DATA_DIR" 2>/dev/null)" ] && HAS_DATA=true
-            [ -n "$PERSONA_DIR" ] && [ -d "$PERSONA_DIR" ] && [ -n "$(ls -A "$PERSONA_DIR" 2>/dev/null)" ] && HAS_PERSONA=true
-
-            if [ "$HAS_DATA" = true ] || [ "$HAS_PERSONA" = true ]; then
-                TOTAL_KB=0
-                DESC_PARTS=""
-                if [ "$HAS_DATA" = true ]; then
-                    DATA_KB=$(du -sk "$DATA_DIR" 2>/dev/null | awk '{print $1}')
-                    TOTAL_KB=$((TOTAL_KB + DATA_KB))
-                    DESC_PARTS="agent data"
-                fi
-                if [ "$HAS_PERSONA" = true ]; then
-                    PERSONA_KB=$(du -sk "$PERSONA_DIR" 2>/dev/null | awk '{print $1}')
-                    TOTAL_KB=$((TOTAL_KB + PERSONA_KB))
-                    if [ -n "$DESC_PARTS" ]; then
-                        DESC_PARTS="$DESC_PARTS + Claude Code persona memory"
-                    else
-                        DESC_PARTS="Claude Code persona memory"
-                    fi
-                fi
-                echo ""
-                echo -n "  Upload existing local memory (~${TOTAL_KB} KB, $DESC_PARTS) to blob? [y/N] "
-                read -r MIGRATE_REPLY
-                if [ "$MIGRATE_REPLY" = "y" ] || [ "$MIGRATE_REPLY" = "Y" ]; then
-                    MIGRATION_RC=0
-                    # The folders are arguments, never part of the program.
-                    "$PYTHON" -c '
-import sys
-from pathlib import Path
-from entrabot.storage.backend import get_backend
-from entrabot.storage.migration import migrate_local_to_backend
-RED = "\033[0;31m"
-GREEN = "\033[0;32m"
-NC = "\033[0m"
-has_data, data_dir, has_persona, persona_dir = sys.argv[1:5]
-sources = []
-if has_data == "true":
-    sources.append((Path(data_dir), ""))
-if has_persona == "true":
-    sources.append((Path(persona_dir), "claude_memory"))
-report = migrate_local_to_backend(sources, get_backend())
-print(f"  {GREEN}Copied:{NC} {report.copied} files ({report.bytes_copied} bytes)")
-print(f"  Skipped (already in cloud): {report.skipped}")
-if report.errors:
-    print(f"  {RED}Errors: {len(report.errors)}{NC}")
-    for k, e in report.errors[:5]:
-        print(f"    {RED}- {k}:{NC} {e}")
-    sys.exit(2)
-' "$HAS_DATA" "$DATA_DIR" "$HAS_PERSONA" "$PERSONA_DIR" || MIGRATION_RC=$?
-                    if [ "$MIGRATION_RC" -ne 0 ]; then
-                        MIGRATION_FAILED=true
-                        err "Migration FAILED — cloud memory is not in sync with local"
-                        echo -e "    ${YELLOW}Hint:${NC} most common cause is missing storage consent for the"
-                        echo -e "          Agent Identity. Re-run ${BLUE}./scripts/setup.sh${NC} (idempotent) or"
-                        echo -e "          ${BLUE}python scripts/create_entra_agent_ids.py${NC} to grant it, then retry."
-                    else
-                        success "Migration complete (local files left untouched)"
-                    fi
-                else
-                    echo "  Skipped migration. You can run it later with:"
-                    echo "    .venv/bin/python scripts/claude_memory_sync.py push   # persona files"
-                    echo "    .venv/bin/python -c 'from entrabot.storage.backend import get_backend; from entrabot.storage.migration import migrate_local_to_backend; from pathlib import Path; print(migrate_local_to_backend([(Path(\"$DATA_DIR\"), \"\")], get_backend()))'"
-                fi
-            fi
-        fi
-    fi
+if [ "$COMMAND" = "setup" ] && ! venv_is_ready; then
+    build_venv
 fi
 
-# ════════════════════════════════════════════════════════════════════════════
-# Step 8: Summary
-# ════════════════════════════════════════════════════════════════════════════
-step 8 "Setup complete — summary"
+# ── The wizard ───────────────────────────────────────────────────────────────
 
-# ── Post-setup smoke test ──────────────────────────────────────────────────
-# Verify the agent user can actually mint a token, identify itself to Graph,
-# and reach the Teams scope. This is the single check that distinguishes a
-# "looks complete" setup from an "actually works" setup. Skip with
-# --skip-smoke in CI environments where no live tenant is reachable.
-SMOKE_FAILED=false
-if [ "$SKIP_SMOKE" = true ]; then
-    warn "Smoke test skipped (--skip-smoke)"
-elif [ -d "$PROJECT_ROOT/.venv" ] && [ -f "$PROJECT_ROOT/.env" ]; then
-    echo ""
-    echo -e "  ${BLUE}Running smoke test (token + Graph identity + Teams scope)...${NC}"
-    set +e
-    # entrabot.config reads .env as data. It is never sourced: a value could hold $(...).
-    "$PROJECT_ROOT/.venv/bin/python" - <<'PY'
-import sys
-from entrabot.config import EntraBotConfig
-from entrabot.preflight import format_report, overall_exit_code, run_smoke_checks
-
-config = EntraBotConfig.from_env()
-checks = run_smoke_checks(config)
-print(format_report(checks, color=sys.stdout.isatty()))
-sys.exit(overall_exit_code(checks))
-PY
-    SMOKE_EXIT=$?
-    set -e
-    if [ "$SMOKE_EXIT" -ne 0 ]; then
-        SMOKE_FAILED=true
-        warn "Smoke test failed. The agent provisioning succeeded, but the agent"
-        warn "can't yet authenticate end-to-end. Most common cause: Teams license"
-        warn "was just assigned and replication hasn't completed (10-15 min)."
-        warn "Re-run ./scripts/setup.sh --diagnose later to confirm."
-    fi
-fi
-
-echo ""
-if [ "$MIGRATION_FAILED" = true ]; then
-    echo -e "${RED}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${RED}║  Setup INCOMPLETE — migration failed                         ║${NC}"
-    echo -e "${RED}║  Cloud memory is not in sync with local disk.                ║${NC}"
-    echo -e "${RED}╚══════════════════════════════════════════════════════════════╝${NC}"
-else
-    echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║  Setup complete!                                             ║${NC}"
-    echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
-fi
-echo ""
-echo -e "  Provisioner: ${BLUE}$PROV_CLIENT_ID${NC}"
-echo -e "  Blueprint:   ${BLUE}$BLUEPRINT_APP_ID${NC}"
-echo -e "  Agent ID:    ${BLUE}$AGENT_ID${NC}"
-echo -e "  Agent User:  ${BLUE}${AGENT_USER_UPN:-not created}${NC} (${AGENT_USER_ID:-n/a})"
-echo -e "  Human User:  ${BLUE}$HUMAN_UPN${NC}"
-echo -e "  Auth Flow:   ${BLUE}Three-hop (Blueprint cert → Agent Identity → Agent User)${NC}"
-echo -e "  Credential:  ${BLUE}Certificate (private key in OS keyring, no secrets on disk)${NC}"
-echo ""
-
-if [ -z "$AGENT_USER_ID" ]; then
-    echo -e "  ${YELLOW}⚠️  Agent User was not created — check permissions above${NC}"
-    echo ""
-fi
-
-AGENT_LICENSE=$(read_state "AGENT_USER_LICENSE_SKU")
-if [ -n "$AGENT_LICENSE" ]; then
-    echo -e "  License:     ${BLUE}$AGENT_LICENSE${NC} (Teams provisioning in 10-15 min)"
-fi
-
-# Write MCP server config to both Claude Code and Copilot CLI config paths.
-# Claude Code reads ``<project-root>/.mcp.json``. Copilot CLI reads
-# ``$COPILOT_HOME/mcp-config.json`` (default ``~/.copilot/mcp-config.json``)
-# and also honors the project-local ``.mcp.json``. Both entries are byte-
-# identical; the leader/slave split is done inside the MCP server at
-# session initialize via ``clientInfo.name``.
-#
-# The actual upsert (idempotent, preserves unrelated entries, backs up
-# corrupt files) lives in ``scripts/mcp_config.py`` so it's unit-tested.
-#
-# To add persona-sati (mind server), see .mcp.json.example for the dual-
-# server configuration. persona-sati is optional — entrabot works
-# standalone as a Teams tool server without it.
-ENTRABOT_MCP_BIN="$PROJECT_ROOT/.venv/bin/entrabot-mcp"
-"$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/scripts/mcp_config.py" \
-    --binary "$ENTRABOT_MCP_BIN" \
-    --project-root "$PROJECT_ROOT"
-success "MCP server config written (.mcp.json + ~/.copilot/mcp-config.json)"
-
-echo -e "  ${YELLOW}NEXT STEPS:${NC}"
-echo -e "  1. Wait 10-15 min for Teams/mailbox provisioning (if license was just assigned)"
-echo -e "  2. Run tests: ${BLUE}$PROJECT_ROOT/.venv/bin/pytest -v${NC}"
-echo -e "  3. Restart Claude Code / Copilot CLI in this project — the MCP server"
-echo -e "     will be auto-discovered from ${BLUE}.mcp.json${NC}"
-echo ""
-
-echo -e "  ${YELLOW}Persona-sati host bootstrap:${NC}"
-echo -e "  If this host uses persona-sati, copy ${BLUE}docs/clients/persona-sati-host-bootstrap.md${NC}"
-echo -e "  into host global instruction file. FastMCP instructions are not enough — hosts"
-echo -e "  do not inject them into the LLM system prompt."
-echo -e "    - Claude Code: ${BLUE}~/.claude/CLAUDE.md${NC}"
-echo -e "    - Copilot CLI: use configured global Copilot instruction location for this install"
-echo -e "    - Repo-local fallback: ${BLUE}CLAUDE.md, AGENTS.md, .github/copilot-instructions.md${NC}"
-echo -e "  Required first call in new sessions: ${BLUE}bootstrap_session()${NC}"
-echo -e "  Per-turn cognition uses: ${BLUE}observe, reflect, recall${NC}"
-echo -e "  If ${BLUE}mind_contract_available=false${NC}: body-only mode; do not impersonate persona."
-echo ""
-
-if [ "$MIGRATION_FAILED" = true ]; then
-    # Name the store this run just provisioned: --use-cloud-memory alone picks the default one.
-    BLOB_ENDPOINT_ACCOUNT="${BLOB_ENDPOINT#https://}"
-    BLOB_ENDPOINT_ACCOUNT="${BLOB_ENDPOINT_ACCOUNT%%.*}"
-    echo -e "  ${RED}After fixing the migration error above, re-run:${NC}"
-    echo -e "  ${BLUE}./scripts/setup.sh --use-blueprint=$BLUEPRINT_APP_ID --use-cloud-memory --with-storage-account=${BLOB_ENDPOINT_ACCOUNT} --with-container=$BLOB_CONTAINER${NC}"
-    echo ""
-    exit 2
-fi
-
-if [ "$SMOKE_FAILED" = true ]; then
-    echo -e "  ${YELLOW}Smoke test failed — provisioning is done but auth path isn't healthy yet.${NC}"
-    echo -e "  ${YELLOW}Re-run ${BLUE}./scripts/setup.sh --diagnose${YELLOW} after replication completes.${NC}"
-    echo ""
-    exit 3
-fi
+cd "$PROJECT_ROOT"
+exec "$VENV_PY" -m entrabot.winsetup "$COMMAND" --project-root "$PROJECT_ROOT" \
+    ${ARGS[@]+"${ARGS[@]}"}

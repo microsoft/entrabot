@@ -71,6 +71,9 @@ class FakeStore:
     key_stuck_keeps_cert: bool = False
     unreadable: bool = False  # the store itself can't be read
     tpm_reason: str | None = None
+    # What a created certificate says its key is kept in. None: as on Windows, the TPM or,
+    # with tpm_reason, the software key store.
+    created_ksp: str | None = None
     created: list[dict[str, object]] = field(default_factory=list)
     deleted: list[tuple[str, bool]] = field(default_factory=list)
     events: list[str] = field(default_factory=list)
@@ -105,7 +108,7 @@ class FakeStore:
             friendly_name=friendly_name,
             not_before=NOW - timedelta(minutes=10),
             not_after=NOW + timedelta(days=days),
-            ksp="software" if self.tpm_reason else "tpm",
+            ksp=self.created_ksp or ("software" if self.tpm_reason else "tpm"),
         )
         self.certs[NEW_SHA1] = cert
         return cert, self.tpm_reason
@@ -226,6 +229,8 @@ def make_project(
     with_az: bool = True,
     certs: list[StoreCert] | None = None,
     state: dict[str, str] | None = None,
+    platform: str = "win32",
+    store: FakeStore | None = None,
 ) -> Project:
     root = tmp_path / "entrabot"
     scripts = root / "scripts"
@@ -250,7 +255,7 @@ def make_project(
         paths.env_file.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
     paths.state_file.write_text(json.dumps(STATE if state is None else state), encoding="utf-8")
 
-    store = FakeStore()
+    store = store or FakeStore()
     for cert in [blueprint_cert()] if certs is None else certs:
         store.certs[cert.sha1_hex] = cert
 
@@ -273,7 +278,7 @@ def make_project(
         Reply(stdout=json.dumps(ACCOUNT)) if signed_in else Reply(returncode=1, stderr="az login"),
     )
 
-    world = World(env=env, platform="win32", now=lambda: NOW, which=which, wincert=store)
+    world = World(env=env, platform=platform, now=lambda: NOW, which=which, wincert=store)
     return Project(root=root, paths=paths, world=world, store=store, spawn=spawn, env=env)
 
 

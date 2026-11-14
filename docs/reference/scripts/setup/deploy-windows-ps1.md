@@ -113,3 +113,5 @@ starts.
   PC's certificate from the Blueprint.
 - [`rotate_cert_windows.py`](../auth-and-certs/rotate-cert-windows-py.md) — the
   same rotation, run from Python.
+- [`setup.sh --rotate-cert`](setup-sh.md#certificate-rotation) — the same
+  rotation on macOS and Linux.
