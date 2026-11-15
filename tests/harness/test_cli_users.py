@@ -40,7 +40,7 @@ def test_users_list_empty(tmp_path, monkeypatch, capsys):
 
 def test_users_list_shows_sponsors(tmp_path, monkeypatch, capsys):
     _seed_global(monkeypatch, tmp_path)
-    _mock_fetch(monkeypatch, ["jaly@microsoft.com", "bob@corp.com"])
+    _mock_fetch(monkeypatch, ["sponsor@contoso.com", "bob@fabrikam.com"])
     assert cli._cmd_users([], set()) == 0
     out = capsys.readouterr().out
-    assert "jaly@microsoft.com" in out and "bob@corp.com" in out
+    assert "sponsor@contoso.com" in out and "bob@fabrikam.com" in out

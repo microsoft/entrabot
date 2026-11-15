@@ -36,10 +36,10 @@ async def test_users_list_empty(monkeypatch):
 
 
 async def test_users_list_shows_sponsors(monkeypatch):
-    _mock_fetch(monkeypatch, ["jaly@microsoft.com"])
+    _mock_fetch(monkeypatch, ["sponsor@contoso.com"])
     sess, lines = _fake_session()
     await InteractiveSession._handle_users(sess, [])
-    assert any("jaly@microsoft.com" in ln for ln in lines)
+    assert any("sponsor@contoso.com" in ln for ln in lines)
 
 
 def test_load_sponsors_reads_core_gate(monkeypatch):

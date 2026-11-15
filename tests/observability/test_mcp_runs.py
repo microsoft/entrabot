@@ -328,3 +328,51 @@ class TestServerStart:
 
         assert start_server_telemetry(mcp, self._config(), session_id="s", initialize=boom) is None
         assert mcp._tool_manager._tools["whoami"].fn is original
+
+
+class TestConsoleSpansStayOffStdout:
+    """Standard output is the MCP protocol channel of a stdio server, and the distro's console
+    exporter writes there. The server must print console spans to standard error instead."""
+
+    def test_the_distro_is_initialised_without_its_console_exporter(self) -> None:
+        from entrabot.observability.mcp_runs import start_server_telemetry
+
+        mcp = TestServerStart.FakeMcp()
+        seen: list[bool] = []
+        moved: list[bool] = []
+        tracker = start_server_telemetry(
+            mcp,
+            TestServerStart()._config(a365_console_enabled=True),
+            session_id="s",
+            initialize=lambda config, *, agent_name: seen.append(config.a365_console_enabled),
+            console_to_stderr=lambda: moved.append(True),
+        )
+        assert tracker is not None
+        assert seen == [False] and moved == [True]
+
+    def test_without_console_nothing_is_added(self) -> None:
+        from entrabot.observability.mcp_runs import start_server_telemetry
+
+        moved: list[bool] = []
+        start_server_telemetry(
+            TestServerStart.FakeMcp(),
+            TestServerStart()._config(),
+            session_id="s",
+            initialize=lambda config, *, agent_name: None,
+            console_to_stderr=lambda: moved.append(True),
+        )
+        assert moved == []
+
+    def test_console_spans_go_to_stderr_not_stdout(self, capsys) -> None:
+        from opentelemetry.sdk.trace import TracerProvider
+
+        from entrabot.observability.mcp_runs import console_spans_to_stderr
+
+        provider = TracerProvider()
+        console_spans_to_stderr(provider)
+        with provider.get_tracer("t").start_as_current_span("execute_tool whoami"):
+            pass
+        provider.shutdown()
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "execute_tool whoami" in captured.err
