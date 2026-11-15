@@ -5,8 +5,9 @@ agent, who it works for, where its memory lives. Nothing in the tenant or on dis
 until the person confirms the review screen, apart from an Azure CLI the person agrees to
 install. The second half does the work, one step at a time, and every step is safe to run
 again: re-running setup is the repair path. After the last step, and before the summary,
-Word, Excel and OneDrive files are switched on when they were asked for (``workiq``), and the
-licence walkthrough (``licences``) can get the agent the Microsoft 365 licences it still lacks.
+Word, Excel and OneDrive files are switched on when they were asked for (``workiq``), then
+Agent 365 integration (``telemetry``, then the registry, ``agentregistry``), and the licence
+walkthrough (``licences``) can get the agent the Microsoft 365 licences it still lacks.
 
 Exit codes: 0 done, 1 failed, 2 usage or a missing answer under ``--yes``, 3 set up but with
 something to check (the end-to-end test failed, a sponsor could not be confirmed, Claude Code

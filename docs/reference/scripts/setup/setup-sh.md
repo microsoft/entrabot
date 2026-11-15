@@ -145,7 +145,7 @@ Memory:
 With neither memory option, a later run for the same agent keeps the setting it
 finds, and a new agent uses local memory.
 
-Word, Excel and OneDrive files:
+Agent 365 integration:
 
 - `--configure-a365` — also switch on Agent 365 integration, as answering yes
   to that question does. It has two halves, each reporting its own result; a
@@ -169,6 +169,9 @@ Word, Excel and OneDrive files:
 - `--configure-a365-observability` — the older name of `--configure-a365`
   (0.2.0, when it switched on telemetry alone). It now does the same as
   `--configure-a365`.
+
+Word, Excel and OneDrive files:
+
 - `--configure-a365-work-iq` — also switch on Word, Excel and OneDrive files
   (Microsoft Agent 365 Work IQ), as answering yes to that question does. The
   wizard does it itself, with nothing to install: no Agent 365 CLI, no .NET SDK,
