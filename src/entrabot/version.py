@@ -16,12 +16,15 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _RELEASE_TAGS = "v[0-9]*"
+# The name pyproject.toml gives the project, which is what pip installs it as. The import
+# package is "entrabot"; the distribution is not (a test pins this to pyproject).
+DISTRIBUTION = "entrabot-identity-research"
 
 
 def installed_version() -> str:
     """The installed package's version, or "unknown" when it is not installed."""
     try:
-        return _dist_version("entrabot")
+        return _dist_version(DISTRIBUTION)
     except PackageNotFoundError:
         return "unknown"
 
