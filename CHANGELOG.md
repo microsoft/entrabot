@@ -93,6 +93,7 @@ planned for 0.3.0. What this release was checked against is in
 
 ### Fixed
 
+- The Word and Excel tools raised a raw network exception when a request to Work IQ failed before an answer (connect, proxy, timeout), instead of their documented `{"error", "error_type"}` reply. Found running `create_word_document` on Linux.
 - Joining an agent by its Blueprint App ID (`--use-blueprint`, `-UseBlueprint` on Windows) with no Agent User named looked only for an Agent User called `entrabot-agent@<domain>`. When the agent had another name, setup created a second Agent Identity and Agent User under the Blueprint and connected the computer to that new, unlicensed agent. Setup now uses the Blueprint's Agent User: the one recorded on the computer, or else its only one. When it has several, setup stops and lists them; name one with `--agent-user-upn` (`-AgentUserUpn`). Found joining a Linux-created agent from Windows.
 - On Windows, after winget installed the Azure CLI, setup said "winget did not install the Azure CLI (exit 0)" and installed a private copy as well, which takes several minutes. It looked up `ProgramFiles` in an environment whose names Windows had spelled in capitals.
 - `read_file` didn't follow Graph's redirect to a file's download URL, so a `.txt`, `.md` or `.html` file read back empty and PDF and Word files failed. Found in a real end-to-end run.
