@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.3.0 — 2026-11-15
+
+Agent 365 integration: the agent's entry in the Agent 365 registry, set up with its telemetry
+by one setup question. Process containment of the MCP server is not in this release; it is
+planned for 0.4.0. What this release was checked against is in
+`docs/project/verification.md`.
+
 ### Added
 
 - Registration in the Agent 365 registry as part of setup. Saying yes to Agent 365 integration now also registers the agent (Agent Registry API, Graph beta), so Microsoft lists it in the Microsoft 365 admin center under Agents > All agents > Registry. Setup adds the Microsoft Graph application permission `AgentRegistration.ReadWrite.All` to the setup (Provisioner) app with admin consent, through the signed-in administrator's Azure CLI, the way it gives the app its other permissions, and only on a yes. The registration's ID is kept in `.entrabot-state.json` (`AGENT_REGISTRATION_ID`), so a later run updates it; a computer that joined an agent that already existed does not register it a second time. A failure never stops setup or undoes telemetry. Run for real on Linux (Ubuntu 24.04): setup registered the agent, and about a minute later the Microsoft 365 admin center listed it. That first run found that admin consent can answer success without granting a permission added moments before, so setup ticked the permission and the registration then failed for want of it. Setup now ticks it only once the grant shows on the setup app, consents again while it does not (up to six times, about three minutes at most), and says so if it never shows. Run for real on Linux: the grant showed after the third consent, about 50 seconds in, and the agent was registered in the same run. `register_agent_instance.py --delete --apply` and teardown with `--delete-agent` deleted the registration for real on Linux; the admin center stopped listing the agent a few minutes later. A setup app taken over on an administrator's earlier approval (a second or later computer in a tenant) is given this one permission on its own, with an app role assignment, instead of nothing: before, such a computer needed a second setup run to be registered. Run for real on Windows, on a computer new to the tenant's setup app: the first run granted the permission on its own about 10 seconds in, ran no admin consent, created the agent and registered it, and exited `0`. Run for real on Windows 11 too: registration, `-Diagnose`, the admin center listing, telemetry and teardown's delete. Not run on macOS, nor with a second computer joining a registered agent, nor on Windows as a standard user.
@@ -15,7 +24,7 @@
 
 ### Fixed
 
-- Setup could say that Word, Excel and OneDrive files could not be switched on when it had switched them on. On a new Windows 11 PC, `ensure_a365_work_iq_permissions.py` wrote the Blueprint's inheritable permission for the Work IQ Word server and read it back, but the read in its final check did not show it yet, and writing it again was refused with `400 Request_BadRequest` ("An inheritable permission for resource app ID '…' already exists."): the script took only a `409` to mean that, so it exited `1`. That answer, or a `409`, now counts as written once a read shows the entry, with the waits the other read-backs use (2 to 20 seconds, about a minute in all). An entry with fewer scopes is widened as before, one that never shows up is still an error (now with Graph's answer), and any other refusal still fails at once, so setup still puts `ToolingManifest.json` back.
+- Setup could say that Word, Excel and OneDrive files could not be switched on when it had switched them on. On a new Windows 11 PC, `ensure_a365_work_iq_permissions.py` wrote the Blueprint's inheritable permission for the Work IQ Word server and read it back, but the read in its final check did not show it yet, and writing it again was refused with `400 Request_BadRequest` ("An inheritable permission for resource app ID '…' already exists."): the script took only a `409` to mean that, so it exited `1`. That answer, or a `409`, now counts as written once a read shows the entry, with the waits the other read-backs use (2 to 20 seconds, about a minute in all). An entry with fewer scopes is widened as before, one that never shows up is still an error (now with Graph's answer), and any other refusal still fails at once, so setup still puts `ToolingManifest.json` back (#153).
 
 ## 0.2.0 — 2026-11-15
 

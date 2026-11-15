@@ -7,10 +7,10 @@ Setup on Windows is one script. It needs nothing installed first: no PowerShell 
 1. **Get the Entrabot folder onto your PC.** Either download the source code ZIP of the latest release from <https://github.com/microsoft/entrabot/releases/latest> and extract it, or clone it:
 
     ```powershell
-    git clone --branch v0.2.0 https://github.com/microsoft/entrabot.git
+    git clone --branch v0.3.0 https://github.com/microsoft/entrabot.git
     ```
 
-    This clones the latest release, v0.2.0. `main` is development and may be ahead of it. Git then prints a note about a "detached HEAD": that is normal when you check out a release tag, not an error. To upgrade an existing install, see [Upgrading to a new release](../troubleshooting/migrations-and-upgrades.md#upgrading-to-a-new-release).
+    This clones the latest release, v0.3.0. `main` is development and may be ahead of it. Git then prints a note about a "detached HEAD": that is normal when you check out a release tag, not an error. To upgrade an existing install, see [Upgrading to a new release](../troubleshooting/migrations-and-upgrades.md#upgrading-to-a-new-release).
 
 2. **Double-click `scripts\setup-windows.cmd`**, or run it from a terminal in the Entrabot folder:
 
