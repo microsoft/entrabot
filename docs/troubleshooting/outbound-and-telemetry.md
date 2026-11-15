@@ -23,8 +23,9 @@ MCP host. A domain entry covers that domain only, not its subdomains.
 
 A sponsor whose user record the agent can't read (Graph answers 403 for that user) is known
 by user ID only, so mail to that sponsor passes only as a home-tenant address and is otherwise
-refused like any outside address. Allowlist it, or let the Agent User read user profiles
-(delegated `User.Read.All`). `--diagnose` warns about this ("Agent sponsor").
+refused like any outside address. The usual cause is an install set up before 0.2.0, whose
+setup could write the agent's Microsoft Graph permissions onto another resource's grant: run
+setup again. `--diagnose` warns about this ("Agent sponsor").
 
 ### The daily summary goes to the wrong person, or to nobody
 
@@ -42,8 +43,8 @@ the "Agent sponsor" line:
   the Microsoft Entra admin center.
 - **The agent cannot read a sponsor's user record.** That sponsor is matched by user ID only,
   mail to them passes the recipient policy only as a home-tenant address, and when no
-  sponsor's record can be read the summary falls back to `.env`. Let the Agent User read
-  user profiles (delegated `User.Read.All`).
+  sponsor's record can be read the summary falls back to `.env`. Run setup again: it grants
+  the agent's Microsoft Graph permissions, which let it read user records.
 - **Could not read the Agent Identity's sponsors.** The summary falls back to `.env`. Run the
   check again; if it persists, check the agent in the Microsoft Entra admin center.
 
