@@ -44,11 +44,11 @@ then
     "$VENV_PYTHON" -m pip install -e ".[provisioning]"
 fi
 
-if [ -f "$PROJECT_ROOT/.env" ]; then
-    set -a
-    # shellcheck disable=SC1091
-    . "$PROJECT_ROOT/.env"
-    set +a
+# .env is not loaded here: entrabot.config reads it as data when show_agent_status.py imports
+# it. It used to be sourced, which ran any value holding $(...), backticks or ";" as a command.
+if [ -f "$PROJECT_ROOT/.env" ] && [ ! -r "$PROJECT_ROOT/.env" ]; then
+    echo "ERROR: .env exists but cannot be read." >&2
+    exit 1
 fi
 
 # Setup installs its own Azure CLI when the computer has none (~/.entrabot/tools/azure-cli).
