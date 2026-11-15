@@ -154,6 +154,11 @@ class Scenario:
     work_iq_permissions: Reply = field(default_factory=Reply)
     work_iq_honoured_after: int = 1
     work_iq_checks: int = 0
+    # Agent 365 telemetry: the permission script's answer, and how many checks pass before the
+    # agent's token carries Agent365.Observability.OtelWrite (0: none within the wait).
+    telemetry_permissions: Reply = field(default_factory=Reply)
+    telemetry_honoured_after: int = 1
+    telemetry_checks: int = 0
     directory: FakeDirectory = field(
         default_factory=lambda: FakeDirectory(users=[dict(PAT), dict(ADMIN_USER)])
     )
@@ -309,6 +314,11 @@ class Scenario:
         self.licences.attach(self.spawn)  # after the agent step: the licence-only calls
         on(script("ensure_a365_work_iq_permissions.py"), lambda _r: self.work_iq_permissions)
         on(snippet("work_iq_token_scopes"), self.work_iq_check)
+        on(
+            script("ensure_a365_observability_permissions.py"),
+            lambda _r: self.telemetry_permissions,
+        )
+        on(snippet("telemetry_token_scope"), self.telemetry_check)
         on(script("verify_blueprint_cert.py"), Reply())
         on(script("register_windows_blueprint_cert.py"), Reply())
         on(
@@ -409,6 +419,13 @@ class Scenario:
             for audience in ("c2d0c2b6-8013-4346-9f8b-b81d3b754a29", AGENT_TOOLS_AUDIENCE)
         ]
         return Reply(stdout=RESULT_MARKER + json.dumps(results))
+
+    def telemetry_check(self, request: RunRequest) -> Reply:
+        """Stands in for setup's check, as the agent, of its telemetry token's scope."""
+        self.telemetry_checks += 1
+        ok = 0 < self.telemetry_honoured_after <= self.telemetry_checks
+        body = {"ok": ok, "error": "" if ok else "invalid_grant: AADSTS65001: no consent"}
+        return Reply(stdout=RESULT_MARKER + json.dumps(body))
 
     def install_helper(self, request: RunRequest) -> Reply:
         """Stands in for scripts\\prereqs-windows.ps1: puts each tool where its installer does."""
@@ -3695,3 +3712,67 @@ class TestTheWorkIqQuestion:
         assert world.run(answers=answers, typed="\n" * 40) == 130
         assert "Work IQ:     yes (Word, Excel and OneDrive files)" in world.out
         assert "Nothing has been changed yet." in world.out
+
+
+class TestAgent365Telemetry:
+    """Switched on like Work IQ: asked for, done by setup itself, confirmed as the agent and by
+    reading .env back, and never a reason for setup to stop."""
+
+    SWITCHES = ("ENTRABOT_A365_OBSERVABILITY_ENABLED", "ENTRABOT_A365_EXPORT_ENABLED")
+
+    def test_asked_for_unattended_it_is_switched_on_after_the_agent_works(
+        self, world: Scenario
+    ) -> None:
+        assert world.run(new_chain=True, upn_suffix="sati", configure_telemetry=True) == 0, (
+            world.out
+        )
+        (grant,) = world.ran("ensure_a365_observability_permissions.py")
+        assert grant.argv[-8:-6] == ["--blueprint-app-id", BP_APP]
+        assert world.telemetry_checks == 1
+        calls = world.spawn.calls
+        smoke = next(i for i, call in enumerate(calls) if snippet("run_smoke_checks")(call))
+        assert smoke < calls.index(grant)
+        assert all(world.dotenv[key] == "true" for key in self.SWITCHES)
+        assert "Agent 365 telemetry is switched on" in world.out
+        assert "Microsoft 365 E7" in world.out  # the licence condition is said, not hidden
+        assert "Telemetry:   yes (Agent 365)" in world.out
+
+    def test_not_asked_for_nothing_is_granted_or_switched_on(self, world: Scenario) -> None:
+        assert world.run(new_chain=True, upn_suffix="sati") == 0, world.out
+        assert world.ran("ensure_a365_observability_permissions.py") == []
+        assert not any(key in world.dotenv for key in self.SWITCHES)
+        assert "Telemetry:   no" in world.out
+
+    def test_a_failed_permission_step_never_stops_setup(self, world: Scenario) -> None:
+        world.telemetry_permissions = Reply(
+            returncode=1, stderr="ERROR: create Blueprint-principal OAuth grant failed (403)"
+        )
+        assert world.run(new_chain=True, upn_suffix="sati", configure_telemetry=True) == 3
+        assert world.env_file.exists() and (world.root / ".mcp.json").exists()
+        assert not any(key in world.dotenv for key in self.SWITCHES)
+        flat = _flat(_last_screen(world))
+        assert "Agent 365 telemetry was asked for, but it is not switched on." in flat
+        assert "(403)" not in _last_screen(world) and "(403)" in world.log
+        assert world.telemetry_checks == 0
+
+    def test_set_up_but_not_honoured_yet_is_a_thing_to_check(self, world: Scenario) -> None:
+        world.telemetry_honoured_after = 0
+        assert world.run(new_chain=True, upn_suffix="sati", configure_telemetry=True) == 3
+        flat = _flat(_last_screen(world))
+        assert "Agent 365 telemetry is set up, but Microsoft has not started honouring" in flat
+        assert "-Diagnose" in flat
+        assert all(world.dotenv[key] == "true" for key in self.SWITCHES)
+
+    def test_at_a_terminal_it_is_a_question_whose_default_is_no(self, world: Scenario) -> None:
+        world.run(typed="\n" * 40)
+        out = world.out
+        question = out.index("Switch on Agent 365 telemetry? [y/N]")
+        explained = out.rfind("report what it does to Microsoft Agent 365", 0, question)
+        assert explained != -1 and "Microsoft 365 E7" in out[explained:question]
+        assert world.ran("ensure_a365_observability_permissions.py") == []  # Enter: no
+
+    def test_yes_at_the_question_switches_it_on(self, world: Scenario) -> None:
+        answers = {"identity": "new", "upn_suffix": "sati", "telemetry": "yes"}
+        assert world.run(answers=answers, typed="\n" * 40) == 0, world.out
+        assert world.ran("ensure_a365_observability_permissions.py")
+
