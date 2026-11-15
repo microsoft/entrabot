@@ -387,6 +387,41 @@ class TestListRecentFiles:
 
 
 class TestReadFile:
+    # Graph answers GET /items/{id}/content with a 302 to a pre-authenticated SharePoint
+    # download URL. Measured against a real tenant: without following it, a .txt file read
+    # back as an empty envelope.
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_follows_graphs_redirect_to_the_download_url(self, make_file_ref) -> None:
+        ref = make_file_ref(name="notes.txt", mime_type="text/plain")
+        url = f"{GRAPH_V1_HOST}/drives/{ref.drive_id}/items/{ref.item_id}/content"
+        download = "https://contoso.sharepoint.com/_layouts/15/download.aspx?UniqueId=abc&tempauth=x"
+        respx.get(url).mock(return_value=httpx.Response(302, headers={"location": download}))
+        target = respx.get(download).mock(return_value=httpx.Response(200, content=b"line1\nline2"))
+        content = await read_file(ref, token=TOKEN)
+        assert "line1\nline2" in content.text
+        # The download URL is pre-authenticated; the Graph token must not follow it.
+        assert "authorization" not in {k.lower() for k in target.calls.last.request.headers}
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_follows_the_redirect_for_pdf_too(self, make_file_ref, monkeypatch) -> None:
+        import entrabot.tools.files as files_mod
+
+        ref = make_file_ref(name="a.pdf", mime_type="application/pdf")
+
+        async def no_size_check(**_kwargs: object) -> None:
+            return None
+
+        monkeypatch.setattr(files_mod, "_check_size_or_raise", no_size_check)
+        monkeypatch.setattr(files_mod, "_extract_pdf_text", lambda data: (data.decode(), 1))
+        url = f"{GRAPH_V1_HOST}/drives/{ref.drive_id}/items/{ref.item_id}/content"
+        download = "https://contoso.sharepoint.com/_layouts/15/download.aspx?UniqueId=pdf"
+        respx.get(url).mock(return_value=httpx.Response(302, headers={"location": download}))
+        respx.get(download).mock(return_value=httpx.Response(200, content=b"pdf text"))
+        content = await read_file(ref, token=TOKEN)
+        assert "pdf text" in content.text
+
     @pytest.mark.asyncio
     @respx.mock
     async def test_reads_md_as_raw_text(self, make_file_ref) -> None:
