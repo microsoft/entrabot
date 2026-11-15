@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import subprocess
+import tomllib
+from pathlib import Path
 
 import pytest
 
@@ -24,6 +26,27 @@ def _git(answers: dict[str, str | None]):
 
     return run
 
+
+PYPROJECT = tomllib.loads(
+    (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+)["project"]
+
+
+class TestTheRealInstalledPackage:
+    def test_the_real_installed_package_reports_pyprojects_version(self) -> None:
+        # The defect, seen on a Linux VM on 2026-11-15: --diagnose said "Entrabot unknown"
+        # and whoami's version was "unknown". The lookup asked for a distribution named
+        # "entrabot", but the project is installed as pyproject's name. Every other test here
+        # replaced the lookup, so none saw it. Nothing is replaced in this one.
+        assert version_mod.installed_version() == PYPROJECT["version"]
+
+    def test_asks_for_the_distribution_pyproject_names(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        asked: list[str] = []
+        monkeypatch.setattr(version_mod, "_dist_version", lambda name: asked.append(name) or "x")
+        version_mod.installed_version()
+        assert asked == [PYPROJECT["name"]]
 
 class TestInstalledVersion:
     def test_from_the_package_metadata(self, monkeypatch: pytest.MonkeyPatch) -> None:
