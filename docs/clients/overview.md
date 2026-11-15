@@ -12,7 +12,7 @@ The product names below identify the hosts Entrabot has been tested against and 
 | GitHub Copilot CLI | No | `send_teams_message` auto-blocks after sending and returns the sponsor's reply inline as `sponsor_reply` | [GitHub Copilot CLI](copilot-cli.md) |
 | Other MCP hosts | Not recognized by default | Unrecognized `clientInfo.name` values default to the safer auto-block behavior — sends return `sponsor_reply` | [Other MCP Hosts](other-hosts.md) |
 
-Entrabot also ships an optional terminal front end, the harness (`entrabot`, built on the GitHub Copilot SDK), which runs the model loop itself instead of an MCP host. It is unit-tested only; see `src/entrabot/harness/README.md`.
+Entrabot also ships an optional terminal front end, the harness (`entrabot`, built on the GitHub Copilot SDK), which runs the model loop itself instead of an MCP host. It is unit-tested only and has not been run against a real Copilot runtime; making it ready for real use is planned for 0.5.0. See `src/entrabot/harness/README.md`.
 
 ## Sponsor DM wait pattern
 

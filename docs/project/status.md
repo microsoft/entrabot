@@ -60,8 +60,8 @@
 
 ## Active development
 
-- Process containment: the MCP server is not contained in 0.3.0; it runs with all of its user's rights. Containing it on macOS and Linux is planned for 0.4.0.
-- Headless and cloud operation on the harness: proposal in `engineering-history/plans/headless-cloud-runtime.md`, for a decision.
+- Process containment: the MCP server is not contained in 0.3.0; it runs with all of its user's rights. Planned for 0.4.0: process containment of the MCP server on macOS and Linux with Microsoft eXecution Container (MXC), where it is installed, and the system's own sandbox otherwise (Seatbelt on macOS, bubblewrap on Linux), as in [pull request #156](https://github.com/microsoft/entrabot/pull/156). MXC has not been run for real. Windows is not part of it: MXC has open issues there with Python asyncio and stdio servers when egress is denied.
+- Planned for 0.5.0: GitHub Copilot SDK harness support, the harness made ready for real use (run against a real Copilot runtime, with the body's audit events and the outbound recipient policy applied to its Teams tools, and Teams state that survives a restart), together with running Entrabot in a container for headless operation. The harness has not been run against a real Copilot runtime, and today its Teams tools lack the audit events and the recipient policy, and its Teams bridge keeps its state in memory (see Known limitations). The design note is in [pull request #161](https://github.com/microsoft/entrabot/pull/161).
 - Agent 365 integration's registry half (0.3.0): runs on macOS, with a second computer joining a registered agent, and on Windows as a standard user. The permission grant, the request body and the admin center listing were run for real on Linux and Windows.
 
 ## Known limitations
