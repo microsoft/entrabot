@@ -47,6 +47,19 @@ def test_a_cp1252_stream_gets_a_replacement_instead_of_an_error() -> None:
     assert stream.encoding == "cp1252"
 
 
+def test_a_redirected_windows_stdout_gets_a_replacement_too() -> None:
+    # Seen live on Windows 11: a redirected stdout is cp1252 with "surrogateescape", not
+    # "strict", and it raises on the check mark just the same.
+    stream = _stream("cp1252", errors="surrogateescape")
+    with pytest.raises(UnicodeEncodeError):
+        print("  ✅ ready", file=stream)
+    stream = _stream("cp1252", errors="surrogateescape")
+    make_output_safe(stream)
+    print("  ✅ ready", file=stream)
+    assert _written(stream) == b"  ? ready\n"
+    assert stream.errors == "replace"
+
+
 def test_a_utf8_stream_prints_exactly_what_it_did() -> None:
     before, after = _stream("utf-8"), _stream("utf-8")
     make_output_safe(after)

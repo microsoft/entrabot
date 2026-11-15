@@ -17,6 +17,11 @@ import contextlib
 import sys
 from typing import TextIO
 
+# Error handlers that never raise on a character the encoding lacks. Every other handler does:
+# "strict", and also "surrogateescape", which is what a redirected stdout has on Windows
+# (seen live: cp1252 with surrogateescape still raised on the check mark).
+_COPES = frozenset({"replace", "backslashreplace", "xmlcharrefreplace", "namereplace", "ignore"})
+
 
 def make_output_safe(*streams: TextIO) -> None:
     """Let each stream (stdout and stderr by default) print a character it cannot encode as a
@@ -24,7 +29,7 @@ def make_output_safe(*streams: TextIO) -> None:
     ``PYTHONIOENCODING=utf-8`` the output is exactly what it was. A stream that already
     copes (Python's stderr uses ``backslashreplace``) is left alone."""
     for stream in streams or (sys.stdout, sys.stderr):
-        if getattr(stream, "errors", None) != "strict":
+        if getattr(stream, "errors", None) in _COPES:
             continue
         with contextlib.suppress(AttributeError, ValueError, OSError):
             stream.reconfigure(errors="replace")  # type: ignore[union-attr]

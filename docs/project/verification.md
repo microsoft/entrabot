@@ -31,7 +31,11 @@ on, is what 0.2.0 was checked against, and still holds for that code.
     unchanged. 0.2.0's script failed on the same answer.
   - Not run on Linux or macOS.
 - **Scripts run on their own with redirected output** (Windows, a code page without "✅"):
-  the failure was seen live on Windows 11 in the #153 run; the fix is unit-tested.
+  the failure was seen live on Windows 11 in the #153 run. The first fix passed its unit tests
+  and still failed there, because a redirected stdout on Windows uses the `surrogateescape`
+  error handler, not `strict`. With that handled, run for real on Windows 11:
+  `ensure_a365_work_iq_permissions.py` with its output redirected to a file exited `0` and
+  printed "?" for the check mark.
 - **The release branch itself** (the version, the merges, the documentation): the full test
   suite and `ruff` on macOS; on Windows 11, the #153 run above. The Windows CI job
   (`test-windows`) runs on the release's pull request; this record was written before it ran.
