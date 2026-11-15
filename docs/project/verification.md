@@ -9,9 +9,9 @@ Last updated: 2026-11-15, for 0.3.0.
 
 ## What 0.3.0 rests on
 
-0.3.0 is 0.2.0 with the Agent 365 integration (pull request #162) and one fix carried with it
-(#153). The MCP server's code is the same as in 0.2.0: what changed is setup, teardown, the
-health check and the provisioning scripts. The rest of this record, from "What 0.2.0 rests on"
+0.3.0 is 0.2.0 with the Agent 365 integration (pull request #162) and two fixes carried with
+it: #153, and the scripts' output on Windows. The MCP server's code is the same as in 0.2.0:
+what changed is setup, teardown, the health check and the provisioning scripts. The rest of this record, from "What 0.2.0 rests on"
 on, is what 0.2.0 was checked against, and still holds for that code.
 
 - **The Agent 365 registry through setup** was run for real on 2026-11-15 on Linux (Ubuntu
@@ -20,10 +20,20 @@ on, is what 0.2.0 was checked against, and still holds for that code.
   Linux runs came before the last change, the grant a takeover run makes on its own, which was
   run on Windows only. See [0.3.0: the Agent 365 registry through
   setup](#030-the-agent-365-registry-through-setup) below.
-- **The Work IQ "already exists" fix (#153)** has unit tests only. It was not run against a
-  real tenant.
-- **The release branch itself** (the version, the merge of #153, the documentation): the full
-  test suite and `ruff` on macOS. It was not run against a real tenant. The Windows CI job
+- **The Work IQ "already exists" fix (#153)** was run for real on 2026-11-15 on Windows 11,
+  from the release branch, with a throwaway agent:
+  - Setup with `-ConfigureA365WorkIq` switched Word, Excel and OneDrive files on. The agent
+    had no Microsoft 365 Copilot licence, so setup ended with that as a to-do (exit `3`).
+  - With Graph's read of the Blueprint's inheritable permissions made to lag once (the Work IQ
+    Word entry hidden from the script's first read; every request, the create included, went
+    to Microsoft Graph), Graph answered the create with `400` "already exists". The fixed
+    script read the entry back and reported it written, exit `0`, and the entry was
+    unchanged. 0.2.0's script failed on the same answer.
+  - Not run on Linux or macOS.
+- **Scripts run on their own with redirected output** (Windows, a code page without "✅"):
+  the failure was seen live on Windows 11 in the #153 run; the fix is unit-tested.
+- **The release branch itself** (the version, the merges, the documentation): the full test
+  suite and `ruff` on macOS; on Windows 11, the #153 run above. The Windows CI job
   (`test-windows`) runs on the release's pull request; this record was written before it ran.
 - **Not run:** macOS; this step on Windows as a standard (non-administrator) user; a second
   computer joining an agent that is already registered.
