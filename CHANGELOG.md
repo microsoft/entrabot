@@ -13,6 +13,10 @@
 - Setup asks one question, "Switch on Agent 365 integration?", instead of "Switch on Agent 365 telemetry?". Yes switches on telemetry exactly as before and then registers the agent. The review screen and the last screen say "Agent 365 integration", the last screen with each half's result. The new flag is `--configure-a365` (`-ConfigureA365` on Windows); `--configure-a365-observability` and `-ConfigureA365Observability` from 0.2.0 still work and now mean the same. An answers key of `telemetry` still works; the new key is `a365`.
 - Teardown with `--delete-agent` (`-DeleteAgent`) also deletes the agent's Agent 365 registration when this computer recorded one, best-effort: one it cannot delete is a to-do with where to delete it. A disconnect alone leaves it alone.
 
+### Fixed
+
+- Setup could say that Word, Excel and OneDrive files could not be switched on when it had switched them on. On a new Windows 11 PC, `ensure_a365_work_iq_permissions.py` wrote the Blueprint's inheritable permission for the Work IQ Word server and read it back, but the read in its final check did not show it yet, and writing it again was refused with `400 Request_BadRequest` ("An inheritable permission for resource app ID '…' already exists."): the script took only a `409` to mean that, so it exited `1`. That answer, or a `409`, now counts as written once a read shows the entry, with the waits the other read-backs use (2 to 20 seconds, about a minute in all). An entry with fewer scopes is widened as before, one that never shows up is still an error (now with Graph's answer), and any other refusal still fails at once, so setup still puts `ToolingManifest.json` back.
+
 ## 0.2.0 — 2026-11-15
 
 Everything since v0.1. Process containment of the MCP server is not in this release; it is

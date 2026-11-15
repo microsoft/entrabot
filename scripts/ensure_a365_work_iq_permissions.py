@@ -457,6 +457,20 @@ def _read_inheritable(
     }
 
 
+def _already_exists(response: ResponseLike) -> bool:
+    """Whether Graph refused a create because the entry is there already. On a real tenant it
+    answered ``400 Request_BadRequest``, "An inheritable permission for resource app ID '…'
+    already exists."; a 409 is taken the same way. Any other refusal is not."""
+    if response.status_code == 409:
+        return True
+    if response.status_code != 400:
+        return False
+    body = _json_or_empty(response)
+    error = body.get("error") if isinstance(body, dict) else None
+    message = error.get("message") if isinstance(error, dict) else None
+    return isinstance(message, str) and "already exists" in message.lower()
+
+
 def _wait_for_entry(
     app_id: str,
     scopes: tuple[str, ...],
@@ -507,7 +521,8 @@ def _ensure_inheritable(
     request: RequestFn,
     sleep: SleepFn,
 ) -> None:
-    """One resource's entry: written if missing, widened if narrower, then read back."""
+    """One resource's entry: written if missing, widened if narrower, then read back. A create
+    Graph refuses because the entry is already there counts as written once a read shows it."""
     name = RESOURCE_NAMES.get(app_id, app_id)
     entry = _read_inheritable(blueprint_app_id, token, request=request).get(app_id.lower())
     if _covers(entry, scopes):
@@ -524,7 +539,8 @@ def _ensure_inheritable(
                 "inheritableRoles": dict(_NO_ROLES),
             },
         )
-        if response.status_code == 409:  # it exists, though the read did not show it yet
+        if _already_exists(response):  # it is there, though the read did not show it yet
+            print(f"  [wait] {name}: Microsoft Graph already has it; reading it back")
             for wait in CONFIRM_WAITS:
                 sleep(wait)
                 entry = _read_inheritable(blueprint_app_id, token, request=request).get(
@@ -535,7 +551,8 @@ def _ensure_inheritable(
             if entry is None:
                 raise A365PermissionError(
                     f"The inheritable permissions for {name} already exist but could not be "
-                    "read back"
+                    f"read back. Microsoft Graph answered ({response.status_code}): "
+                    f"{response.text[:400]}"
                 )
             if not _covers(entry, scopes):
                 _widen(app_id, scopes, entry, blueprint_app_id, token, request=request)
@@ -568,7 +585,8 @@ def ensure_inheritable_permissions(
     those scopes, and no app roles. An entry that already covers them is left alone, and
     nothing is ever narrowed. Entries are written one at a time, each read back before the
     next, and all are checked again at the end: a write can be lost when another lands
-    moments later, and one that was is written again."""
+    moments later, and one that was is written again. A read can also miss an entry that is
+    there; writing it again is then refused as already there, and it is read back instead."""
     if not blueprint_app_id.strip():
         raise A365PermissionError("Blueprint App ID is required")
     blueprint_app_id = blueprint_app_id.strip()

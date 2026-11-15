@@ -84,13 +84,21 @@ grant exist. All calls use the v1.0 Graph endpoint.
   (every scope and every role), is left alone. An entry with fewer scopes is
   widened with `PATCH .../inheritablePermissions/{resourceAppId}`, which keeps
   its scopes and does not touch its roles; nothing is ever narrowed. A create
-  answered `409` (it exists) is read back and widened.
+  refused because the entry is already there counts as written once a read shows
+  it: Microsoft Graph answers `400 Request_BadRequest` ("An inheritable
+  permission for resource app ID '…' already exists."), and a `409` is taken the
+  same way. The entry is then read back with the waits below and widened if it
+  has fewer scopes. Any other refusal is an error.
 
   Entries are written one at a time, and each is read back before the next is
   written: on a real tenant a read straight after a `201` came back empty, and
   of two creates sent back to back, both answered `201`, only one was kept. The
   read-back waits 2, 3, 5, 10, 15 and 20 seconds between tries. At the end
-  every entry is checked again, and one that was lost is written again. Even
+  every entry is checked again, and one that was lost is written again. A read
+  can also miss an entry an earlier read showed: on a real tenant the final
+  check did not show an entry read back seconds before, and writing it again
+  was refused as already there, which is why that answer is read back rather
+  than taken as a failure. Even
   once an entry can be read, Microsoft's token service took 20 to 45 seconds on
   a real tenant to honour it.
 
@@ -117,8 +125,8 @@ re-run reports the current materialized state without implying a stale history.
   grant it had just listed, even after the retries. Run the script again; it
   picks up from the grants that exist.
 - **`The inheritable permissions for ... could not be read back`** — Microsoft
-  Graph accepted a write but did not show it within about a minute. Run the
-  script again.
+  Graph accepted a write, or said the entry already exists, but did not show it
+  within about a minute. Run the script again.
 - **The agent's Word, Excel or OneDrive token fails with `AADSTS65001`** — the
   inheritable permissions are missing or not honoured yet. Run the script, or run
   setup and answer yes to Word, Excel and OneDrive (`scripts\setup-windows.cmd`
