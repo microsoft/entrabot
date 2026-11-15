@@ -331,7 +331,7 @@ setup does it in two steps:
    registration may need it. Consent answering success is not taken as
    proof: right after the permission is added, Microsoft can answer success
    and grant nothing. Setup checks that the grant shows on the setup app and
-   consents again until it does, for about a minute and a half at most. If it
+   consents again until it does, for about three minutes at most. If it
    cannot be added or never shows, setup says why and carries on.
 2. **The registration**, after telemetry:
    `scripts/register_agent_instance.py --apply`, with the setup app's token.
@@ -359,14 +359,17 @@ created the agent.
 Teardown with `--delete-agent` (`-DeleteAgent`) deletes the registration this
 computer recorded (`DELETE .../agentRegistrations/{id}`), after the agent,
 best-effort; one it cannot delete is a to-do with where to delete it. A
-disconnect alone leaves the registration alone.
+disconnect alone leaves the registration alone. The admin center can keep
+listing a deleted agent for a few minutes.
 
 Run for real on Linux (see the [Verification Record](../project/verification.md)):
 setup registered the agent, Graph accepted the app IDs above, and for an Entra
 agent identity the registration ID Graph returned was the agent identity's ID.
 About a minute later the admin center listed the agent with platform
-"Entrabot", the sponsor as owner and the Entra agent ID. Not yet run on Windows
-or macOS, nor teardown's delete.
+"Entrabot", the sponsor as owner and the Entra agent ID. Teardown's delete
+worked, and the admin center stopped listing the agent a few minutes after it.
+Not yet run on Windows or macOS, nor with a second computer joining a
+registered agent.
 
 Microsoft's other route, the Agent 365 CLI's `a365 setup all`, creates its own
 Blueprint with a client secret and an Azure App Service. Do not run it against

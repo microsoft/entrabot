@@ -97,7 +97,9 @@ The "Agent 365 registry" line in `--diagnose` says what this computer knows:
   `--configure-a365` to register the agent again.
 
 The registry lists the agent in the Microsoft 365 admin center under Agents > All agents >
-Registry.
+Registry. The admin center lags Microsoft Graph: in a real run it listed a new registration
+about a minute after it was made, and still listed a deleted one about a minute after the
+delete (it was gone a few minutes later).
 
 ### Console spans
 

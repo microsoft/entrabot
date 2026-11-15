@@ -161,9 +161,8 @@ It also showed that two computers running one agent with local memory both push 
   always wrapped, as the sponsor's email showed.
 - Sends from the 0.2.0 release branch on macOS; they were run on the combined branch (run 2), and from the release branch on Linux and Windows (run 3).
 - The daily summary actually sent: run 1 checked who it would go to, without sending.
-- Whether the exported telemetry shows in Defender (a portal check, not done here). The
-  Microsoft 365 admin center showed it after 0.2.0, for a registered agent: see the registry
-  section below.
+- Whether the exported telemetry shows in Defender or the Microsoft 365 admin center was not
+  checked for 0.2.0 itself. Both showed it after 0.2.0: see the registry section below.
 - Disabling the agent and watching a running server stop.
 
 ## By platform
@@ -173,7 +172,7 @@ It also showed that two computers running one agent with local memory both push 
 | The MCP server against a real tenant | Run for real (runs 1 and 2) | Run for real (run 3, Ubuntu 24.04, headless keyring) | Run for real (run 3, Windows 11 24H2, elevated desktop task) |
 | Setup wizard against a real tenant | Repair run and health check | Run for real: new agent, repair, health check | Run for real: join, repair, health check |
 | Telemetry setup step and the `--diagnose` check | Run for real | Run for real | Run for real |
-| Agent 365 registry through setup (after 0.2.0, on `main`): the setup app's permission, the registration, its `--diagnose` line, teardown's delete | Unit-tested | Run for real (2026-11-15, Ubuntu 24.04): the permission, the registration, `--diagnose`, the admin center listing. Unit-tested: the fixed consent check, teardown's delete | Unit-tested |
+| Agent 365 registry through setup (after 0.2.0, on `main`): the setup app's permission, the registration, its `--diagnose` line, teardown's delete | Unit-tested | Run for real (2026-11-15, Ubuntu 24.04): the permission and its consent check, the registration, `--diagnose`, the admin center listing, the script's delete, teardown's delete. Not run: a second computer joining a registered agent | Unit-tested |
 | `status.sh` and `setup_delegated.sh` read `.env` as data | Run for real (the old scripts fail the tests, the new ones pass) | Unit-tested | n/a |
 | The full test suite | Every commit | Not run | CI (`test-windows`) on each pull request |
 | Process containment | Not in 0.2.0: planned for 0.3.0 | Not in 0.2.0 | Not in 0.2.0 |
@@ -200,7 +199,18 @@ Run for real on 2026-11-15 on Ubuntu 24.04, with a throwaway agent:
   permission was added but granted nothing, so setup ticked the permission and the
   registration then failed for want of it (setup exited `3`). Running consent again a few
   minutes later granted it, and the next setup run registered the agent at once. Setup now
-  checks that the grant is recorded and consents again, up to four times, until it is. That fix is
-  unit-tested; re-run for real: not yet.
+  checks that the grant is recorded and consents again, up to six times, until it is.
+- The fix, run for real after the permission and the registration had been removed again: the
+  first two consents answered success and recorded nothing; the grant showed after the third,
+  about 50 seconds in. Setup then ticked the permission, registered the agent on the first try
+  in the same run, and exited `0`.
+- Defender's advanced hunting (`CloudAppEvents`) showed the agent's tool-call rows from its
+  first telemetry, sent before it was registered.
+- `register_agent_instance.py --delete --apply`: Graph deleted the registration, the recorded
+  ID was cleared, and `--diagnose` then reported "not registered".
+- Teardown with `--delete-agent`: it said which registration it would delete, deleted the agent
+  and the registration (a tick for each), and exited `0`. About a minute after the delete the
+  admin center's registry still listed the agent; a few minutes after, it no longer did (a
+  search for it found none). "Deleted agents" stayed empty.
 
-Not run: Windows, macOS, and teardown's delete of the registration.
+Not run: Windows, macOS, and a second computer joining a registered agent.
