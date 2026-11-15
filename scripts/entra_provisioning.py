@@ -1340,9 +1340,11 @@ def optional_permission_values() -> list[str]:
 # against the service principal's app role assignments. One pause per attempt, so at most
 # len() consent calls: after a consent az reports as done, the pause is spent waiting for
 # Microsoft to record it before consenting again; after one that failed, it is the wait
-# before the next try. At worst 50 seconds of waiting, plus 4 consent calls and 8 reads of
-# the consented permissions (3 az calls each): roughly a minute and a half.
-_OPTIONAL_CONSENT_WAITS = (5, 10, 15, 20)
+# before the next try. Live, the grant was recorded only after the third consent, about 50
+# seconds in, so there is room for twice that. At worst 110 seconds of waiting, plus 6
+# consent calls and 12 reads of the consented permissions (3 az calls each): roughly three
+# minutes.
+_OPTIONAL_CONSENT_WAITS = (5, 10, 15, 20, 30, 30)
 
 
 def _ensure_optional_permission(client_id: str, value: str, *, may_consent: bool) -> dict[str, str]:
@@ -1440,7 +1442,7 @@ def _ensure_optional_permission(client_id: str, value: str, *, may_consent: bool
     if rc == 0:
         reason = (
             "Microsoft accepted the admin consent for it, but had still not recorded it on the "
-            f"setup app after {attempts} tries over about a minute; run setup again to try "
+            f"setup app after {attempts} tries over about three minutes; run setup again to try "
             "once more"
         )
     elif _is_missing_privilege(err):

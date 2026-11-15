@@ -3890,7 +3890,7 @@ class TestAgent365Integration:
         world.registry_permission = {
             "status": "failed",
             "reason": "Microsoft accepted the admin consent for it, but had still not recorded "
-            "it on the setup app after 4 tries over about a minute; run setup again to try "
+            "it on the setup app after 6 tries over about three minutes; run setup again to try "
             "once more",
         }
         world.registry_replies = [

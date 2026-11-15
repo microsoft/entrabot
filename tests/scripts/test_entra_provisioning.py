@@ -1795,9 +1795,23 @@ def test_a_consent_that_records_nothing_is_run_again(
     assert az.sleeps == [5]
     out = capsys.readouterr().out
     assert "Microsoft has not recorded the admin consent" in out
-    assert "running admin consent again (attempt 2/4)" in out
+    assert "running admin consent again (attempt 2/6)" in out
     assert out.count(f"Admin consent granted for {REGISTRY_VALUE}") == 1
     assert out.rindex("running admin consent again") < out.index("Admin consent granted")
+
+
+def test_a_consent_recorded_only_on_the_third_call_is_granted(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # As live: the first two consents answered 0 and recorded nothing, the third took.
+    az = _Consent(provisioning_module, monkeypatch)
+    az.unrecorded = 2
+    outcome = provisioning_module._ensure_optional_permission(APP, REGISTRY_VALUE, may_consent=True)
+    assert outcome["status"] == "granted"
+    assert az.verbs() == ["add", *["admin-consent"] * 3]
+    assert az.sleeps == [5, 10]
+    out = capsys.readouterr().out
+    assert "(attempt 2/6)" in out and "(attempt 3/6)" in out
 
 
 def test_a_consent_never_recorded_fails_and_takes_the_declaration_back(
@@ -1809,9 +1823,10 @@ def test_a_consent_never_recorded_fails_and_takes_the_declaration_back(
     assert outcome["status"] == "failed"
     assert "had still not recorded it on the setup app" in outcome["reason"]
     assert "run setup again" in outcome["reason"]
-    assert az.verbs() == ["add", *["admin-consent"] * 4, "delete"]
+    assert "after 6 tries over about three minutes" in outcome["reason"]
+    assert az.verbs() == ["add", *["admin-consent"] * 6, "delete"]
     assert az.declared == set() and az.consented == set()
-    assert az.sleeps == [5, 10, 15, 20]  # bounded: under a minute of waiting in all
+    assert az.sleeps == [5, 10, 15, 20, 30, 30]  # bounded: under two minutes of waiting
     assert "Admin consent granted" not in capsys.readouterr().out
 
 
@@ -1823,7 +1838,7 @@ def test_a_consent_never_recorded_leaves_a_declaration_it_did_not_add(
     az.unrecorded = 99
     outcome = provisioning_module._ensure_optional_permission(APP, REGISTRY_VALUE, may_consent=True)
     assert outcome["status"] == "failed"
-    assert az.verbs() == ["admin-consent"] * 4
+    assert az.verbs() == ["admin-consent"] * 6
     assert az.declared == {REGISTRY_ROLE}
 
 
