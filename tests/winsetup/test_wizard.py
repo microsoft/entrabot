@@ -1567,6 +1567,7 @@ class TestTheAgentStepSaysWhyItStopped:
     AMBIGUOUS = "ENTRABOT_RESULT=blueprint-ambiguous"
     WRONG_BLUEPRINT = "ENTRABOT_RESULT=agent-user-wrong-blueprint"
     AGENT_COULD_NOT_CHECK = "ENTRABOT_RESULT=agent-lookup-could-not-check"
+    AGENT_USER_AMBIGUOUS = "ENTRABOT_RESULT=agent-user-ambiguous"
 
     @staticmethod
     def _stops(world: Scenario, marker: str, explanation: str = "  ERROR: why it stopped") -> None:
@@ -1674,6 +1675,22 @@ class TestTheAgentStepSaysWhyItStopped:
         out = world.out
         assert "The name chosen for the agent already belongs to a different agent." in out
         assert "-UseBlueprint" in out and "-UpnSuffix" in out  # join that one, or another name
+        self._stopped_there(world)
+
+    def test_a_blueprint_with_several_agent_users_and_none_named(self, world: Scenario) -> None:
+        self._stops(
+            world,
+            self.AGENT_USER_AMBIGUOUS,
+            f"  ERROR: Blueprint {BP_APP} has 2 Agent Users\n"
+            "    entrabot-agent-a@contoso.com\n    entrabot-agent-b@contoso.com",
+        )
+
+        assert world.run(use_blueprint=BP_APP) == 1
+
+        out = world.out
+        assert "This agent has more than one Agent User, so setup can't tell which one" in out
+        assert "entrabot-agent-a@contoso.com" in out and "entrabot-agent-b@contoso.com" in out
+        assert "-AgentUserUpn" in out and "-UseBlueprint" in out
         self._stopped_there(world)
 
     def test_a_stop_without_a_marker_keeps_the_general_message(self, world: Scenario) -> None:

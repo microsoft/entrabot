@@ -145,7 +145,8 @@ Each exits `0` when it did what it says and `1` with `licence-could-not-read`
   (`ProvisionerBootstrapError`), the Blueprint recorded for this machine does
   not exist or could not be checked, more than one application has the
   Blueprint's name and none is recorded, an existing Agent User with the
-  sign-in name this run wants belongs to a different Blueprint, a lookup of the
+  sign-in name this run wants belongs to a different Blueprint, no Agent User
+  was named and the Blueprint has several, a lookup of the
   agent's Agent Identity or Agent User could not be completed, the delegated
   Graph consent grant failed (a
   blocking error, because the third hop cannot mint an Agent User token without
@@ -167,6 +168,7 @@ message, naming the outcome:
 | `ENTRABOT_RESULT=blueprint-ambiguous` | No Blueprint is recorded, and more than one application has the Blueprint's name. |
 | `ENTRABOT_RESULT=agent-user-wrong-blueprint` | The Agent User with the sign-in name this run wants belongs to a different Blueprint. |
 | `ENTRABOT_RESULT=agent-lookup-could-not-check` | A lookup of the agent's Agent Identity or Agent User could not be completed, including which Blueprint an existing Agent User belongs to. |
+| `ENTRABOT_RESULT=agent-user-ambiguous` | No Agent User was named, the existing Blueprint has several, and none of them is recorded on this machine. |
 
 The setup wizard (`setup.sh` on macOS and Linux, `setup-windows.cmd` on
 Windows) reads this line to explain the stop in its own words, and keeps it off
@@ -184,7 +186,18 @@ agent's Blueprint. Only when no Blueprint is recorded at all does the script
 search by display name; one exact match is used, none means a new Blueprint is
 created, and more than one stops the run and lists them.
 
-Before it creates an Agent Identity, the script searches the tenant for an
+When no Agent User is named (no `ENTRABOT_AGENT_USER_UPN`, from the
+environment or `.env`, and no `_ENTRABOT_UPN_SUFFIX`) and the Blueprint already
+exists, the script first lists the Blueprint's Agent Identities and their Agent
+Users. This is what joining an agent by its Blueprint App ID does
+(`setup.sh --use-blueprint`, `-UseBlueprint` on Windows). It uses the Agent
+User recorded on this machine (`AGENT_USER_ID`) when it is one of them, or else
+the only one. Several, none recorded here, stop the run with
+`agent-user-ambiguous` and a list of their sign-in names. A listing that fails
+stops it as "could not check". When the Blueprint has no Agent User yet, the
+script goes on as below.
+
+Otherwise, before it creates an Agent Identity, the script searches the tenant for an
 existing Agent User with the sign-in name this run wants (see
 `ENTRABOT_AGENT_USER_UPN` and `_ENTRABOT_UPN_SUFFIX` above). It reuses that
 Agent User, and its parent Agent Identity, only when the Agent Identity belongs

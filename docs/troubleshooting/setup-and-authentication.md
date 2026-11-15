@@ -210,6 +210,55 @@ name is not looked for under the Blueprint you are joining. Earlier versions of
 `setup.sh` printed "Not reusing the Agent User named in .env" when they did
 this; the wizard does it without a message.
 
+## Setup stops because the agent has several Agent Users
+
+Setup stops at its step "Creating your agent" with "This agent has more than
+one Agent User, so setup can't tell which one this computer is for." and exits
+`1`. Above it, `create_entra_agent_ids.py` lists each of the Blueprint's Agent
+Users.
+
+**Cause.** When you join an agent by its Blueprint App ID
+(`--use-blueprint`, `-UseBlueprint` on Windows) and name no Agent User, setup
+uses the Blueprint's Agent User: the one this computer has recorded, or else
+the only one. This Blueprint has several, and none is recorded here. Nothing
+was created, granted, or recorded.
+
+Before this was fixed in 0.2.0, setup looked only for an Agent User called
+`entrabot-agent@<domain>` in this case. When the agent had another name, setup
+created a second Agent Identity and Agent User under the Blueprint, and
+connected the computer to that new agent. It had no licences and no chat
+with you. If that happened to you, see
+[Setup connected this computer to a new agent instead of joining
+one](#setup-connected-this-computer-to-a-new-agent-instead-of-joining-one).
+
+**Fix.** Name the Agent User this computer is for:
+
+```bash
+./scripts/setup.sh --use-blueprint=<blueprint-app-id> --agent-user-upn=<upn>
+```
+
+On Windows: `scripts\setup-windows.cmd -UseBlueprint <blueprint-app-id> -AgentUserUpn <upn>`.
+
+## Setup connected this computer to a new agent instead of joining one
+
+Setup before this fix said "Connected this computer to the agent:
+entrabot-agent@<domain>" after a join with `--use-blueprint` (`-UseBlueprint`)
+and no Agent User named, although the agent you meant has another name.
+
+**Cause.** See the section above: setup created a second Agent Identity
+(named "EntraBot Agent - <this computer's name>") and Agent User under the
+same Blueprint.
+
+**Fix.** Ask an administrator to delete the extra Agent User and its Agent
+Identity in the Entra admin center, under Agent ID. Check the creation time
+first, so you delete only the one setup created by mistake. Then run setup
+again on this computer with the agent's address:
+`--use-blueprint=<blueprint-app-id> --agent-user-upn=<upn>`
+(`-UseBlueprint <blueprint-app-id> -AgentUserUpn <upn>` on Windows). The address
+is needed because the earlier run wrote the extra agent's address into this
+computer's `.env`. Its certificate was registered on the right Blueprint, so
+it is kept.
+
 ## Setup stops because a different Blueprint was recorded
 
 Setup stops at its step "Creating your agent" with "You asked to join the agent
