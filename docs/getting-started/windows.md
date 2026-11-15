@@ -101,6 +101,8 @@ rem Check an existing setup. Changes nothing.
 scripts\setup-windows.cmd -Diagnose
 ```
 
+With local memory, two computers running the same agent at the same time both answer every Teams message and email. Use cloud memory for that, or run the agent on one computer at a time. See [One agent on more than one computer](../guides/storage-configuration.md#one-agent-on-more-than-one-computer-with-local-memory).
+
 | Exit code | Meaning |
 |---|---|
 | `0` | Set up, and the end-to-end test passed. |

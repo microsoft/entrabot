@@ -61,6 +61,20 @@ Drawbacks:
 - No remote backup
 - Two MCP instances on different machines write to different local stores — there's no canonical truth
 
+### One agent on more than one computer, with local memory
+
+Each computer keeps its own chat cursors and email cursor. While Entrabot runs on two
+computers at once, **both push every new Teams message and email to their own host, so both
+assistants answer it.** A computer that was off catches up when its server next starts:
+it pushes every message in its watched chats that arrived since its own cursor, including
+ones the other computer has already answered. This was seen on 2026-11-15: a message
+answered on one computer was pushed again on the other as soon as its server started.
+
+The fleet-safe delivery that stops this ([Messaging and Delivery](../architecture/messaging-and-delivery.md#fleet-safe-delivery))
+needs the cursors to be shared, which only cloud memory does. So for one agent on more than
+one computer, either use cloud memory, or run Entrabot on one computer at a time and expect
+the catch-up push when you switch.
+
 ## Choosing cloud (recommended)
 
 Fine for:

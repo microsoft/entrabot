@@ -27,7 +27,7 @@ Every Teams tool requires an explicit `chat_id` — there is no default group ch
 
 ## Fleet-safe delivery
 
-`chat_cursors.claim_delivery()` is the mechanism that lets more than one Entrabot instance poll the same chat without double-delivering a message:
+`chat_cursors.claim_delivery()` is the mechanism that lets more than one Entrabot instance poll the same chat without double-delivering a message. It works only when the instances share their cursors, which is cloud memory. With local memory each computer has its own cursors, and each pushes every message (see [One agent on more than one computer](../guides/storage-configuration.md#one-agent-on-more-than-one-computer-with-local-memory)):
 
 - It reads the shared cursor with its ETag, computes which candidate message IDs aren't already recorded as delivered, and writes the merged cursor back with an `If-Match` precondition — an atomic compare-and-swap.
 - Across N instances racing on the same message, exactly one wins the CAS for a given ID; the losers hit a `ConcurrencyError`, re-read, see the ID already claimed, and push nothing for it.
