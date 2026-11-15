@@ -60,11 +60,16 @@ Word, Excel and OneDrive files:
                            install. The agent needs a Microsoft 365 Copilot licence.
   --with-a365-work-iq      The older name for the same thing.
 
-Agent 365 telemetry:
+Agent 365 integration:
+  --configure-a365         Register the agent in the Agent 365 registry (it is listed in the
+                           Microsoft 365 admin center under Agents > All agents > Registry;
+                           setup's own app gets the Microsoft Graph permission
+                           AgentRegistration.ReadWrite.All for it) and switch on Agent 365
+                           telemetry (who asked the agent what, in which chat, which tool ran;
+                           never message text). Agent 365 keeps the telemetry only if someone
+                           in the organization has a Microsoft 365 E7 or Agent 365 licence.
   --configure-a365-observability
-                           Switch on Agent 365 telemetry (who asked the agent what, which tool
-                           ran; never message text). Agent 365 keeps it only if someone in the
-                           organization has a Microsoft 365 E7 or Agent 365 licence.
+                           The older name for the same thing.
 
 Certificates:
   --remove-all-existing-certs
@@ -167,7 +172,7 @@ for arg in ${GIVEN[@]+"${GIVEN[@]}"}; do
         --location=*)                ARGS+=(--location "$(value_of "$arg")") ;;
         --subscription=*)            ARGS+=(--subscription "$(value_of "$arg")") ;;
         --configure-a365-work-iq)    ARGS+=(--configure-a365-work-iq) ;;
-        --configure-a365-observability) ARGS+=(--configure-a365-observability) ;;
+        --configure-a365|--configure-a365-observability) ARGS+=(--configure-a365) ;;
         --with-a365-work-iq)
             warn "--with-a365-work-iq is now the same as --configure-a365-work-iq: setup switches Word, Excel and OneDrive files on itself, with no Agent 365 CLI to install."
             ARGS+=(--configure-a365-work-iq)

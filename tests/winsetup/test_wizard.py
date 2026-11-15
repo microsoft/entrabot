@@ -159,6 +159,15 @@ class Scenario:
     telemetry_permissions: Reply = field(default_factory=Reply)
     telemetry_honoured_after: int = 1
     telemetry_checks: int = 0
+    # The Agent 365 registry: what the bootstrap says it did about the setup app's
+    # permission when asked (ENTRABOT_GRANT_AGENT_REGISTRATION=1), and what the registration
+    # script answers, one reply per run (the last one repeats).
+    registry_permission: dict = field(
+        default_factory=lambda: {"status": "granted", "reason": ""}
+    )
+    registry_replies: list[dict] = field(
+        default_factory=lambda: [{"outcome": "created", "id": "registration-1", "reason": ""}]
+    )
     directory: FakeDirectory = field(
         default_factory=lambda: FakeDirectory(users=[dict(PAT), dict(ADMIN_USER)])
     )
@@ -306,7 +315,7 @@ class Scenario:
         on(words("rest"), roles)
         self.directory.attach(self.spawn)  # after the roles rule, so /users lookups land here
         on(words("account", "get-access-token"), Reply(stdout=json.dumps({"accessToken": "tok"})))
-        on(script("entra_provisioning.py"), Reply(stdout=PROVISION_CHATTER))
+        on(script("entra_provisioning.py"), self.provisioner_helper)
         on(snippet("_add_sponsor"), self.sponsor_helper)
         on(lambda r: r.argv[0].endswith("powershell.exe"), self.install_helper)
         on(script("create_entra_agent_ids.py"), create)
@@ -319,6 +328,7 @@ class Scenario:
             lambda _r: self.telemetry_permissions,
         )
         on(snippet("telemetry_token_scope"), self.telemetry_check)
+        on(script("register_agent_instance.py"), self.registry_helper)
         on(script("verify_blueprint_cert.py"), Reply())
         on(script("register_windows_blueprint_cert.py"), Reply())
         on(
@@ -420,6 +430,28 @@ class Scenario:
         ]
         return Reply(stdout=RESULT_MARKER + json.dumps(results))
 
+    def provisioner_helper(self, request: RunRequest) -> Reply:
+        """Stands in for scripts/entra_provisioning.py: with the registry permission's line
+        only when setup asked for that permission."""
+        out = PROVISION_CHATTER
+        if (request.env or {}).get("ENTRABOT_GRANT_AGENT_REGISTRATION") == "1":
+            line = {"permission": "AgentRegistration.ReadWrite.All", **self.registry_permission}
+            out += "ENTRABOT_REGISTRY_PERMISSION=" + json.dumps(line) + "\n"
+        return Reply(stdout=out)
+
+    def registry_helper(self, request: RunRequest) -> Reply:
+        """Stands in for scripts/register_agent_instance.py --print-result: records the ID in
+        the state file, as the script does, when it registered."""
+        reply = self.registry_replies.pop(0) if len(self.registry_replies) > 1 else (
+            self.registry_replies[0]
+        )
+        if reply["outcome"] in ("created", "updated", "recreated"):
+            current = json.loads(self.state_file.read_text("utf-8"))
+            current["AGENT_REGISTRATION_ID"] = reply["id"]
+            self.state_file.write_text(json.dumps(current), encoding="utf-8")
+        code = 0 if reply["outcome"] in ("created", "updated", "recreated") else 1
+        return Reply(returncode=code, stdout=RESULT_MARKER + json.dumps(reply))
+
     def telemetry_check(self, request: RunRequest) -> Reply:
         """Stands in for setup's check, as the agent, of its telemetry token's scope."""
         self.telemetry_checks += 1
@@ -509,6 +541,10 @@ class Scenario:
     @property
     def dotenv(self) -> dict[str, str]:
         return read_env(self.env_file)
+
+    @property
+    def state(self) -> dict[str, str]:
+        return json.loads(self.state_file.read_text("utf-8"))
 
     def existing(self, *, env: list[str] | None = None, state: dict | None = None) -> None:
         self.state_file.write_text(json.dumps(state or CREATED_STATE), encoding="utf-8")
@@ -687,6 +723,7 @@ class TestOtherIdentityModes:
             "TENANT_ID": TENANT,
             "PROVISIONER_CLIENT_ID": "prov-app",
             "BLUEPRINT_APP_ID": BP_APP,
+            "JOINED_EXISTING_AGENT": "true",
         }
         assert list(world.root.glob(".entrabot-state.json.bak.*"))
         # The previous agent's sponsor and blob store do not carry over to this one.
@@ -3731,68 +3768,219 @@ class TestTheWorkIqQuestion:
         assert "Nothing has been changed yet." in world.out
 
 
-class TestAgent365Telemetry:
-    """Switched on like Work IQ: asked for, done by setup itself, confirmed as the agent and by
-    reading .env back, and never a reason for setup to stop."""
+class TestAgent365Integration:
+    """One question, "Agent 365 integration": yes switches on telemetry and registers the agent
+    in the Agent 365 registry. Asked for like Work IQ, done by setup itself, each half
+    confirmed on its own, and never a reason for setup to stop."""
 
     SWITCHES = ("ENTRABOT_A365_OBSERVABILITY_ENABLED", "ENTRABOT_A365_EXPORT_ENABLED")
 
-    def test_asked_for_unattended_it_is_switched_on_after_the_agent_works(
+    def test_asked_for_unattended_both_halves_run_after_the_agent_works(
         self, world: Scenario
     ) -> None:
-        assert world.run(new_chain=True, upn_suffix="sati", configure_telemetry=True) == 0, (
-            world.out
-        )
+        assert world.run(new_chain=True, upn_suffix="sati", configure_a365=True) == 0, world.out
         (grant,) = world.ran("ensure_a365_observability_permissions.py")
         assert grant.argv[-8:-6] == ["--blueprint-app-id", BP_APP]
         assert world.telemetry_checks == 1
+        (registration,) = world.ran("register_agent_instance.py")
         calls = world.spawn.calls
         smoke = next(i for i, call in enumerate(calls) if snippet("run_smoke_checks")(call))
-        assert smoke < calls.index(grant)
+        # Telemetry first, then the registration: both after the end-to-end test.
+        assert smoke < calls.index(grant) < calls.index(registration)
+        assert registration.argv[2:] == [
+            "--apply",
+            "--owner-id",
+            "admin-object",
+            "--print-result",
+        ]
         assert all(world.dotenv[key] == "true" for key in self.SWITCHES)
-        assert "Agent 365 telemetry is switched on" in world.out
-        assert "Microsoft 365 E7" in world.out  # the licence condition is said, not hidden
-        assert "Telemetry:   yes (Agent 365)" in world.out
+        assert world.state["AGENT_REGISTRATION_ID"] == "registration-1"
+        out = world.out
+        assert "Agent 365 integration" in out
+        assert "Agent 365 telemetry is switched on" in out
+        assert "Microsoft 365 E7" in out  # the licence condition is said, not hidden
+        registered = "Registered the agent in the Agent 365 registry"
+        assert f"{registered} (registration ID registration-1)" in out
+        assert "Agents > All agents > Registry" in out
+        assert "Agent 365 integration: yes (registry and telemetry)" in out
+        assert "Agent 365 integration: telemetry on; registered (ID registration-1)" in out
 
-    def test_not_asked_for_nothing_is_granted_or_switched_on(self, world: Scenario) -> None:
+    def test_the_setup_app_is_asked_for_the_registry_permission_only_on_yes(
+        self, world: Scenario
+    ) -> None:
+        assert world.run(new_chain=True, upn_suffix="sati", configure_a365=True) == 0, world.out
+        (bootstrap,) = world.ran("entra_provisioning.py")
+        assert bootstrap.env["ENTRABOT_GRANT_AGENT_REGISTRATION"] == "1"
+        assert "Gave the setup app the permission to register the agent in Agent 365" in (
+            world.out
+        )
+
+    def test_not_asked_for_nothing_is_granted_registered_or_switched_on(
+        self, world: Scenario
+    ) -> None:
+        world.env["ENTRABOT_GRANT_AGENT_REGISTRATION"] = "1"  # left in the shell: not inherited
         assert world.run(new_chain=True, upn_suffix="sati") == 0, world.out
+        (bootstrap,) = world.ran("entra_provisioning.py")
+        assert "ENTRABOT_GRANT_AGENT_REGISTRATION" not in bootstrap.env
+        for helper in world.ran("create_entra_agent_ids.py"):
+            assert "ENTRABOT_GRANT_AGENT_REGISTRATION" not in helper.env
         assert world.ran("ensure_a365_observability_permissions.py") == []
+        assert world.ran("register_agent_instance.py") == []
         assert not any(key in world.dotenv for key in self.SWITCHES)
-        assert "Telemetry:   no" in world.out
+        assert "Agent 365 integration: no" in world.out
+        assert "Agent 365 integration: telemetry" not in world.out
 
-    def test_a_failed_permission_step_never_stops_setup(self, world: Scenario) -> None:
+    def test_a_failed_telemetry_step_never_stops_setup_or_the_registration(
+        self, world: Scenario
+    ) -> None:
         world.telemetry_permissions = Reply(
             returncode=1, stderr="ERROR: create Blueprint-principal OAuth grant failed (403)"
         )
-        assert world.run(new_chain=True, upn_suffix="sati", configure_telemetry=True) == 3
+        assert world.run(new_chain=True, upn_suffix="sati", configure_a365=True) == 3
         assert world.env_file.exists() and (world.root / ".mcp.json").exists()
         assert not any(key in world.dotenv for key in self.SWITCHES)
+        assert world.ran("register_agent_instance.py")  # the other half still ran
         flat = _flat(_last_screen(world))
         assert "Agent 365 telemetry was asked for, but it is not switched on." in flat
+        assert "answer yes to the Agent 365 integration question" in flat
         assert "(403)" not in _last_screen(world) and "(403)" in world.log
         assert world.telemetry_checks == 0
+        assert "telemetry not switched on; registered (ID registration-1)" in flat
 
     def test_set_up_but_not_honoured_yet_is_a_thing_to_check(self, world: Scenario) -> None:
         world.telemetry_honoured_after = 0
-        assert world.run(new_chain=True, upn_suffix="sati", configure_telemetry=True) == 3
+        assert world.run(new_chain=True, upn_suffix="sati", configure_a365=True) == 3
         flat = _flat(_last_screen(world))
         assert "Agent 365 telemetry is set up, but Microsoft has not started honouring" in flat
         assert "-Diagnose" in flat
         assert all(world.dotenv[key] == "true" for key in self.SWITCHES)
 
-    def test_at_a_terminal_it_is_a_question_whose_default_is_no(self, world: Scenario) -> None:
+    def test_a_missing_permission_never_stops_setup_or_hides_telemetry(
+        self, world: Scenario
+    ) -> None:
+        world.registry_permission = {
+            "status": "failed",
+            "reason": "admin consent for it needs the Global Administrator or Privileged Role "
+            "Administrator role",
+        }
+        world.registry_replies = [
+            {"outcome": "permission-missing", "id": "", "reason": "the setup app lacks it"}
+        ]
+        assert world.run(new_chain=True, upn_suffix="sati", configure_a365=True) == 3
+        assert len(world.ran("register_agent_instance.py")) == 1  # not granted: no retry
+        assert 15 not in world.slept
+        assert all(world.dotenv[key] == "true" for key in self.SWITCHES)
+        assert "AGENT_REGISTRATION_ID" not in world.state
+        out = world.out
+        assert "The setup app could not get the permission to register the agent." in out
+        assert "Agent 365 telemetry is switched on" in out
+        flat = _flat(_last_screen(world))
+        assert "The agent was not registered in the Agent 365 registry." in flat
+        assert "Privileged Role Administrator" in flat
+        assert "telemetry on; not registered" in flat
+        # Nothing about the admin center is claimed for an agent that was not registered.
+        assert "Registered the agent in the Agent 365 registry" not in out
+        assert "Microsoft lists registered agents" not in out
+
+    def test_a_permission_granted_moments_ago_is_waited_for(self, world: Scenario) -> None:
+        world.registry_replies = [
+            {"outcome": "permission-missing", "id": "", "reason": "not in the token yet"},
+            {"outcome": "created", "id": "registration-9", "reason": ""},
+        ]
+        assert world.run(new_chain=True, upn_suffix="sati", configure_a365=True) == 0, world.out
+        assert len(world.ran("register_agent_instance.py")) == 2
+        assert 15 in world.slept
+        assert world.state["AGENT_REGISTRATION_ID"] == "registration-9"
+
+    def test_graph_refusing_never_stops_setup(self, world: Scenario) -> None:
+        world.registry_replies = [
+            {
+                "outcome": "refused",
+                "id": "",
+                "reason": "the registration was refused (HTTP 400: invalid ownerIds)",
+            }
+        ]
+        assert world.run(new_chain=True, upn_suffix="sati", configure_a365=True) == 3
+        assert all(world.dotenv[key] == "true" for key in self.SWITCHES)
+        flat = _flat(_last_screen(world))
+        assert "The agent was not registered in the Agent 365 registry." in flat
+        assert "HTTP 400" in flat
+        assert "Agent 365 telemetry is not affected" in flat
+
+    def test_a_rerun_updates_the_recorded_registration(self, world: Scenario) -> None:
+        world.existing(state={**CREATED_STATE, "AGENT_REGISTRATION_ID": "registration-1"})
+        world.registry_replies = [{"outcome": "updated", "id": "registration-1", "reason": ""}]
+        assert world.run(configure_a365=True) == 0, world.out
+        up_to_date = "The agent's Agent 365 registration is up to date"
+        assert f"{up_to_date} (registration ID registration-1)" in world.out
+
+    def test_a_recorded_registration_that_is_gone_is_made_again(self, world: Scenario) -> None:
+        world.existing(state={**CREATED_STATE, "AGENT_REGISTRATION_ID": "registration-1"})
+        world.registry_replies = [{"outcome": "recreated", "id": "registration-2", "reason": ""}]
+        assert world.run(configure_a365=True) == 0, world.out
+        assert "registration recorded here no longer existed (registration ID registration-2)" in (
+            world.out
+        )
+        assert world.state["AGENT_REGISTRATION_ID"] == "registration-2"
+
+    def test_a_computer_that_joined_an_existing_agent_does_not_register_it_again(
+        self, world: Scenario
+    ) -> None:
+        assert world.run(use_blueprint=BP_APP, configure_a365=True) == 0, world.out
+        assert world.ran("register_agent_instance.py") == []
+        assert world.ran("ensure_a365_observability_permissions.py")  # telemetry is per computer
+        flat = _flat(world.out)
+        assert "joined an agent that already existed" in flat
+        assert "--registration-id <ID> --apply" in flat
+        assert "not registered from this PC (it joined an existing agent)" in flat
+
+    def test_a_joined_computer_updates_a_registration_it_has_recorded(
+        self, world: Scenario
+    ) -> None:
+        world.existing(
+            state={
+                **CREATED_STATE,
+                "JOINED_EXISTING_AGENT": "true",
+                "AGENT_REGISTRATION_ID": "registration-1",
+            }
+        )
+        world.registry_replies = [{"outcome": "updated", "id": "registration-1", "reason": ""}]
+        assert world.run(configure_a365=True) == 0, world.out
+        assert len(world.ran("register_agent_instance.py")) == 1
+
+    def test_at_a_terminal_it_is_one_question_whose_default_is_no(self, world: Scenario) -> None:
         world.run(typed="\n" * 40)
         out = world.out
-        question = out.index("Switch on Agent 365 telemetry? [y/N]")
-        explained = out.rfind("report what it does to Microsoft Agent 365", 0, question)
-        assert explained != -1 and "Microsoft 365 E7" in out[explained:question]
+        question = out.index("Switch on Agent 365 integration? [y/N]")
+        explained = out.rfind("Agent 365 integration (optional)", 0, question)
+        assert explained != -1
+        said = " ".join(out[explained:question].split())
+        for text in (
+            "Registers the agent in Microsoft Agent 365",
+            "Agents > All agents > Registry",
+            "when it is asked something, by whom, and in which chat",
+            "Not what the messages say",
+            "Microsoft Defender and the Microsoft 365 admin center show that activity",
+            "Microsoft 365 E7 or Agent 365 licence",
+            "AgentRegistration.ReadWrite.All",
+        ):
+            assert text in said, text
+        assert "telemetry?" not in out  # the old question is gone
         assert world.ran("ensure_a365_observability_permissions.py") == []  # Enter: no
+        assert world.ran("register_agent_instance.py") == []
 
-    def test_yes_at_the_question_switches_it_on(self, world: Scenario) -> None:
-        answers = {"identity": "new", "upn_suffix": "sati", "telemetry": "yes"}
+    @pytest.mark.parametrize("key", ["a365", "telemetry"])
+    def test_yes_in_the_answers_switches_it_on(self, world: Scenario, key: str) -> None:
+        # "telemetry" is the answer's name in 0.2.0; answers written for it still work.
+        answers = {"identity": "new", "upn_suffix": "sati", key: "yes"}
         assert world.run(answers=answers, typed="\n" * 40) == 0, world.out
         assert world.ran("ensure_a365_observability_permissions.py")
+        assert world.ran("register_agent_instance.py")
 
+    def test_no_in_the_answers_is_no(self, world: Scenario) -> None:
+        answers = {"identity": "new", "upn_suffix": "sati", "a365": "no"}
+        assert world.run(answers=answers, typed="\n" * 40) == 0, world.out
+        assert world.ran("register_agent_instance.py") == []
 
 
 class TestTheReviewNamesTheAgentThisRunIsFor:

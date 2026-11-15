@@ -26,6 +26,12 @@ from entrabot.winsetup.words import Words, words_for
 
 IdentityMode = Literal["new", "join", "continue"]
 
+# Recorded when this computer joins an agent that existed before it (a second computer). The
+# Agent 365 registry has no lookup, so a computer that joined cannot tell whether another one
+# registered the agent already, and setup does not register it from here
+# (entrabot.winsetup.agentregistry). Part of the agent's record: a switch to another agent drops it.
+JOINED_EXISTING_KEY = "JOINED_EXISTING_AGENT"
+
 # Left behind in a shell by an earlier run; never inherited.
 _IDENTITY_ENV_KEYS = ("ENTRABOT_NEW_CHAIN", "_ENTRABOT_UPN_SUFFIX", "ENTRABOT_AGENT_USER_UPN")
 
@@ -203,6 +209,7 @@ def apply_identity_choice(
         backup = _backup(path, now)
         kept = {key: value for key, value in state.items() if _this_computers(key)}
         kept["BLUEPRINT_APP_ID"] = choice.blueprint_app_id
+        kept[JOINED_EXISTING_KEY] = "true"
         _write_state(path, kept)
         notes = [f"Switching agents. Backed up the previous record to {backup.name}."]
         if env_values is None or certificate_recorded_on(
@@ -212,6 +219,8 @@ def apply_identity_choice(
         return notes
     if current != choice.blueprint_app_id:
         state["BLUEPRINT_APP_ID"] = choice.blueprint_app_id
+        if not current:  # nothing recorded here: an agent that existed before this computer
+            state[JOINED_EXISTING_KEY] = "true"
         _write_state(path, state)
     return []
 

@@ -161,6 +161,9 @@ class TestFlagsReachTheWizard:
             ("--location=westus2", ["--location", "westus2"]),
             ("--subscription=My Sub", ["--subscription", "My Sub"]),
             ("--configure-a365-work-iq", ["--configure-a365-work-iq"]),
+            ("--configure-a365", ["--configure-a365"]),
+            # The 0.2.0 telemetry flag: the older name of --configure-a365.
+            ("--configure-a365-observability", ["--configure-a365"]),
             ("--remove-all-existing-certs", ["--remove-all-existing-certs"]),
             ("--hosts=claude", ["--hosts", "claude"]),
             ("--skip-smoke", ["--skip-smoke"]),
@@ -365,6 +368,8 @@ class TestOtherCommands:
             "--create-new-storage",
             "--configure-a365-work-iq",
             "--with-a365-work-iq",
+            "--configure-a365 ",
+            "--configure-a365-observability",
             "--remove-all-existing-certs",
             "--rotate-cert",
             "--diagnose",
