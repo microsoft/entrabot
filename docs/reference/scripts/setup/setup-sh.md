@@ -342,7 +342,9 @@ With `--diagnose`, none of the above runs. It checks the state file, the
 certificate (in the key store, in date, and its key signs; a warning when 30
 days or fewer remain), the three-hop sign-in, the Graph identity, the Teams
 scope, the MCP configuration, Word, Excel and OneDrive files when
-`ToolingManifest.json` exists, Agent 365 telemetry (whether it is on and whether
+`ToolingManifest.json` exists, the agent's sponsor ("Agent sponsor": whether
+`.env` names a sponsor the directory lists on the Agent Identity, and whether
+the agent can read each sponsor's user record), Agent 365 telemetry (whether it is on and whether
 the agent's token carries `Agent365.Observability.OtelWrite`), and the optional
 `persona-sati` entry in `.mcp.json`. The persona-sati check is advisory: it can report `SKIP` or `WARN`
 but never a failure, and it connects only to loopback addresses (see

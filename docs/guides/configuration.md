@@ -6,7 +6,7 @@ EntraBot is configured entirely through environment variables prefixed `ENTRABOT
 
 Configuration is not a value frozen once at boot. `get_config()` calls `EntraBotConfig.from_env()` fresh every time it's invoked, building a new immutable `EntraBotConfig` dataclass instance from whatever is in `os.environ` **at that moment**. In practice this means:
 
-- Values set before the process starts (shell export, `.env`, systemd `Environment=`, etc.) are what most code sees, because little in this codebase changes `os.environ` after boot: `_load_dotenv()` itself and the Copilot SDK harness (which overlays the `.env` of the agent it was started for).
+- Values set before the process starts (shell export, `.env`, systemd `Environment=`, etc.) are what most code sees, because little in this codebase changes `os.environ` after boot: `_load_dotenv()` itself, the Copilot SDK harness (which overlays the `.env` of the agent it was started for), and the telemetry start-up (which sets the distro's three Azure Monitor switches, below).
 - Tests and scripts that call `os.environ[...] = ...` and then call `get_config()` again will see the change immediately — there is no cached singleton to invalidate.
 - The returned `EntraBotConfig` instance itself is `frozen=True` (immutable) — once you have one, its fields cannot change. Call `get_config()` again to see a new read of the environment.
 
@@ -44,6 +44,7 @@ The human "sponsor" behind an Agent User can be one person or several (e.g. a sh
 Precedence and list rules:
 
 - The plural CSV variables (`_IDS`, `_UPNS`) take precedence when set. If a plural variable is empty or unset, it falls back to parsing the corresponding singular variable (`ENTRABOT_HUMAN_USER_ID` / `ENTRABOT_HUMAN_UPN`) as a one-item (or comma-separated) list.
+- The server takes its sponsors from the directory (the Agent Identity's sponsors), not from these variables, when it checks senders and recipients and when it sends the daily summary. `.env`'s first `ENTRABOT_HUMAN_USER_MAILS` address gets the daily summary only when the directory gives no sponsor address. `--diagnose` warns when `.env` names a sponsor the directory doesn't list ("Agent sponsor").
 - `ENTRABOT_HUMAN_USER_TENANT_IDS` and `ENTRABOT_HUMAN_USER_TYPES` are parsed preserving empty entries between commas (rather than dropping them), because they are **parallel lists**: position *N* in the tenant-IDs list corresponds to position *N* in the sponsor-IDs/UPNs list. Dropping an empty entry would silently misalign every sponsor after it.
 
 ## Runtime mode and behavior
@@ -69,7 +70,7 @@ These are read where they are used, not by `EntraBotConfig`, except the telemetr
 
 - **Recipient policy.** `ENTRABOT_OUTBOUND_ALLOW` lists the addresses or domains, beyond sponsors, the requesting chat and the home tenant, that `send_email`, `create_chat`, `add_teams_member`, `share_file` and the daily summary may reach. `ENTRABOT_HOME_DOMAINS` names the home tenant's domains when Microsoft's sign-in discovery shouldn't be relied on. See [Security Boundaries](../architecture/security-boundaries.md#outbound-recipient-policy).
 - **Token age.** `ENTRABOT_TOKEN_MAX_AGE_SECONDS` (default 600, clamped to 60–3300) is how old the agent's token may get before the server signs in again. Lower means a disabled agent stops sooner, at the cost of more sign-ins.
-- **Agent 365 telemetry.** `ENTRABOT_A365_OBSERVABILITY_ENABLED` and `ENTRABOT_A365_EXPORT_ENABLED` are written by setup when you switch telemetry on; `ENTRABOT_A365_CONSOLE_ENABLED` prints spans to standard error for debugging; `ENTRABOT_A365_SERVICE_NAMESPACE` sets `service.namespace`. See [Microsoft Agent 365](../platform-docs/microsoft-agent-365.md).
+- **Agent 365 telemetry.** `ENTRABOT_A365_OBSERVABILITY_ENABLED` and `ENTRABOT_A365_EXPORT_ENABLED` are written by setup when you switch telemetry on; `ENTRABOT_A365_CONSOLE_ENABLED` prints spans to standard error for debugging; `ENTRABOT_A365_SERVICE_NAMESPACE` sets `service.namespace`. Before it starts the Microsoft OpenTelemetry Distro, Entrabot sets `MICROSOFT_OTEL_SDKSTATS_DISABLED`, `APPLICATIONINSIGHTS_STATSBEAT_DISABLED_ALL` and `APPLICATIONINSIGHTS_CONTROLPLANE_DISABLED` to `true` unless they are already set; they stop the distro's own calls to Azure Monitor. See [Microsoft Agent 365](../platform-docs/microsoft-agent-365.md#telemetry-and-the-agent-365-registry).
 
 ## Local paths
 

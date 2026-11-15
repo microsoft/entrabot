@@ -21,9 +21,31 @@ Nothing reaches Microsoft Graph. To allow an outside recipient, an administrator
 address, or its domain (`fabrikam.com`), to `ENTRABOT_OUTBOUND_ALLOW` in `.env` and restarts the
 MCP host. A domain entry covers that domain only, not its subdomains.
 
-A sponsor that the agent can't read in the directory (Graph answers 403 for that user) has no
-known address, so mail to that sponsor is refused like any outside address. Allowlist it, or
-grant the agent read access to that user.
+A sponsor whose user record the agent can't read (Graph answers 403 for that user) is known
+by user ID only, so mail to that sponsor passes only as a home-tenant address and is otherwise
+refused like any outside address. Allowlist it, or let the Agent User read user profiles
+(delegated `User.Read.All`). `--diagnose` warns about this ("Agent sponsor").
+
+### The daily summary goes to the wrong person, or to nobody
+
+The daily summary goes to every sponsor the directory lists on the Agent Identity whose user
+record gives an address. `.env`'s first `ENTRABOT_HUMAN_USER_MAILS` address is used only when
+the directory gives none. The result's `recipient_source` says which was used (`directory` or
+`env`). The recipient policy still checks each recipient.
+
+Run `./scripts/setup.sh --diagnose` (Windows: `scripts\setup-windows.cmd -Diagnose`) and read
+the "Agent sponsor" line:
+
+- **`.env` names a sponsor who is not among the Agent Identity's sponsors.** Usually the
+  sponsors changed after setup. Make `ENTRABOT_HUMAN_USER_ID`, `ENTRABOT_HUMAN_UPN` and
+  `ENTRABOT_HUMAN_USER_MAILS` name the directory's sponsor, or change the agent's sponsors in
+  the Microsoft Entra admin center.
+- **The agent cannot read a sponsor's user record.** That sponsor is matched by user ID only,
+  mail to them passes the recipient policy only as a home-tenant address, and when no
+  sponsor's record can be read the summary falls back to `.env`. Let the Agent User read
+  user profiles (delegated `User.Read.All`).
+- **Could not read the Agent Identity's sponsors.** The summary falls back to `.env`. Run the
+  check again; if it persists, check the agent in the Microsoft Entra admin center.
 
 ## Audit
 
@@ -45,6 +67,14 @@ least one user in the tenant has a Microsoft 365 E7 or Agent 365 licence assigne
 Also check, in `--diagnose`, that the "Agent 365 telemetry" line shows the agent's token
 carrying `Agent365.Observability.OtelWrite`. If it doesn't, run setup again with
 `--configure-a365-observability` (Windows: `-ConfigureA365Observability`).
+
+### Connections to Application Insights or settings.sdk.monitor.azure.com
+
+Entrabot never enables the distro's Azure Monitor export, and it switches off the distro's
+own usage statistics and settings lookup by setting `MICROSOFT_OTEL_SDKSTATS_DISABLED`,
+`APPLICATIONINSIGHTS_STATSBEAT_DISABLED_ALL` and `APPLICATIONINSIGHTS_CONTROLPLANE_DISABLED`
+to `true` before the distro starts. A value already in the environment is kept, so if you see
+these connections, check that none of the three is set to `false` in the shell or `.env`.
 
 ### Console spans
 

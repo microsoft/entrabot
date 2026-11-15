@@ -191,7 +191,7 @@ This is a research repo, not a production service. It runs reliably on a develop
 
 - Two authenticated session types: `agent_user` (full three-hop), `delegated` (MSAL interactive for demos or environments without a provisioned Agent User)
 - Teams: 1:1 DMs, group chats, cross-tenant B2B chats with federated home-tenant resolution
-- Outlook: background email poll, Purview-encrypted detection, and a daily summary scheduler
+- Outlook: background email poll, Purview-encrypted detection, and a daily summary scheduler that mails the agent's directory sponsors
 - Files: SharePoint / OneDrive read, write, upload, share — three-stage sponsor authorization on share (sponsor allowlist, active-channel binding, Graph chat membership)
 - Microsoft Agent 365 Work IQ Word: create, read, comment, reply-to-comment
 - Storage: `LocalBackend` (default) and `BlobBackend` (Azure Blob Storage, opt-in via `setup.sh --use-cloud-memory` or the Windows setup wizard)

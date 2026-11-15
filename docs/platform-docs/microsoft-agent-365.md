@@ -286,6 +286,15 @@ agent that its token carries the scope, and only then writes
 `--diagnose` (`-Diagnose`) reports whether telemetry is on and whether the
 agent's token carries the scope.
 
+**No Azure Monitor.** Entrabot exports only to Agent 365 and never enables the
+distro's Azure Monitor export. The distro still makes two calls of its own:
+usage statistics to an Application Insights ingestion host, and a settings
+lookup at `settings.sdk.monitor.azure.com` by the Azure Monitor exporter it
+loads. Before it starts the distro, Entrabot sets
+`MICROSOFT_OTEL_SDKSTATS_DISABLED`, `APPLICATIONINSIGHTS_STATSBEAT_DISABLED_ALL`
+and `APPLICATIONINSIGHTS_CONTROLPLANE_DISABLED` to `true`, which stops both. A
+value you have already set is kept (`src/entrabot/observability/runtime.py`).
+
 **Licence.** Microsoft accepts the spans with `200 OK` but drops them
 (`tenant_not_licensed`) unless at least one user in the tenant has a
 **Microsoft 365 E7 or Microsoft Agent 365 licence assigned**

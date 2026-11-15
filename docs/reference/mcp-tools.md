@@ -622,7 +622,7 @@ Returns counts for today's activity, top chats, open promises, watched-chat coun
 async def run_daily_summary(day: str = "", send: bool = True) -> str
 ```
 
-Triage today's interactions and optionally email a summary. Reads the interaction log for `day` (UTC, `YYYY-MM-DD`; defaults to today). Sorts entries into `needs_you`, `handled`, `heads_up`; renders an HTML summary; archives it via the storage backend (`LocalBackend` or `BlobBackend`) under `summaries/<day>.html`; emails it to the primary sponsor via Graph `/me/sendMail` when `send=True` and that address passes the recipient policy (otherwise the result is `refused`).
+Triage today's interactions and optionally email a summary. Reads the interaction log for `day` (UTC, `YYYY-MM-DD`; defaults to today). Sorts entries into `needs_you`, `handled`, `heads_up`; renders an HTML summary; archives it via the storage backend (`LocalBackend` or `BlobBackend`) under `summaries/<day>.html`; emails it via Graph `/me/sendMail` when `send=True` to every directory sponsor of the Agent Identity whose user record gives an address, or, only when the directory gives none, to `.env`'s first `ENTRABOT_HUMAN_USER_MAILS` address. Every recipient must pass the recipient policy (otherwise the result is `refused`). The result's `recipient_source` is `directory` or `env`.
 
 ## Related
 

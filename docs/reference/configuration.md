@@ -30,7 +30,7 @@ See [Configuration guide § Identity and tenant](../guides/configuration.md#iden
 | `ENTRABOT_HUMAN_USER_ID` / `ENTRABOT_HUMAN_USER_IDS` | Unset by default; at least one sponsor identifier is expected in practice. Plural CSV takes precedence over the singular. |
 | `ENTRABOT_HUMAN_UPN` / `ENTRABOT_HUMAN_UPNS` | Unset by default. Plural CSV takes precedence over the singular. |
 | `ENTRABOT_HUMAN_USER_TENANT_IDS` | Unset by default; optional, index-aligned with the sponsor ID/UPN lists (cross-tenant sponsors). |
-| `ENTRABOT_HUMAN_USER_MAILS` | Unset by default; optional. |
+| `ENTRABOT_HUMAN_USER_MAILS` | Unset by default; optional. The first address gets the daily summary only when the directory gives no sponsor address. |
 | `ENTRABOT_HUMAN_USER_TYPES` | Unset by default; optional, index-aligned with the sponsor ID/UPN lists (e.g. member/guest). |
 
 See [Configuration guide § Sponsor / human owner](../guides/configuration.md#sponsor-human-owner).
@@ -59,6 +59,7 @@ See [Configuration guide § Runtime mode and behavior](../guides/configuration.m
 | `ENTRABOT_TOKEN_MAX_AGE_SECONDS` | `600`. How long the server reuses an access token before asking again (60 to 3300). Bounds how long a disabled agent keeps acting. |
 | `ENTRABOT_A365_OBSERVABILITY_ENABLED` / `ENTRABOT_A365_EXPORT_ENABLED` | `false`. Agent 365 telemetry and its export; setup writes both once the agent's token carries `Agent365.Observability.OtelWrite`. See [Telemetry and the Agent 365 registry](../platform-docs/microsoft-agent-365.md#telemetry-and-the-agent-365-registry). |
 | `ENTRABOT_A365_CONSOLE_ENABLED` / `ENTRABOT_A365_SERVICE_NAMESPACE` | `false` / unset. Print spans to the server's standard error (never standard output, the MCP channel); the `service.namespace` resource attribute. |
+| `MICROSOFT_OTEL_SDKSTATS_DISABLED` / `APPLICATIONINSIGHTS_STATSBEAT_DISABLED_ALL` / `APPLICATIONINSIGHTS_CONTROLPLANE_DISABLED` | Set to `true` by Entrabot when telemetry starts, unless already set. Read by the Microsoft OpenTelemetry Distro and its Azure Monitor exporter: the first two stop the distro's usage statistics to Application Insights, the third its settings lookup at `settings.sdk.monitor.azure.com`. Entrabot never enables the distro's Azure Monitor export. |
 
 ## Local paths
 

@@ -117,7 +117,9 @@ Other:
   provisioning helpers print. By default each step is a one-line summary and
   the full output goes to the log.
 - `-Diagnose` — check an existing setup and explain what is wrong. Never
-  installs, repairs or moves anything. Includes the Agent 365 telemetry check.
+  installs, repairs or moves anything. Includes the "Agent sponsor" check
+  (whether `.env` names a sponsor the directory lists, and whether the agent
+  can read each sponsor's user record) and the Agent 365 telemetry check.
 - `-BootstrapOnly` — stop once Python and `.venv` are ready, without starting
   the wizard.
 - `-Status`, with `-Json`, `-HealthOnly`, `-Strict` — show the agent's status
