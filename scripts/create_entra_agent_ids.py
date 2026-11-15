@@ -60,6 +60,17 @@ import requests
 _FORCE_NEW = os.environ.get("ENTRABOT_NEW_CHAIN") == "1"
 _ASSIGN_TEAMS_LICENSE = os.environ.get("ENTRABOT_ASSIGN_TEAMS_LICENSE", "1") == "1"
 _ASSIGN_WORK_IQ_LICENSE = os.environ.get("ENTRABOT_ASSIGN_WORK_IQ_LICENSE") == "1"
+# The harness's add_agent.py mints a second, distinctly named agent under the shared Blueprint.
+# It sets this flag; nothing else does, so the single-agent setup path is unchanged by it.
+_ADDITIONAL_AGENT_FLAG = "_ENTRABOT_ADDITIONAL_AGENT"
+# A UPN in the environment when this module is imported (the wizard's explicit choice, or what a
+# clone's .env left there). add_agent.py passes explicit_upn="" so it is never reused for a
+# second agent.
+_EXPLICIT_AGENT_USER_UPN = os.environ.get("ENTRABOT_AGENT_USER_UPN", "").strip()
+
+
+def _additional_agent() -> bool:
+    return os.environ.get(_ADDITIONAL_AGENT_FLAG) == "1"
 
 # entra_provisioning.py lives in the same directory
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
@@ -596,7 +607,11 @@ def _agent_display_name() -> str:
         hostname = socket.gethostname().split(".")[0]
     except Exception:
         hostname = platform.node() or "unknown"
-    return f"EntraBot Agent - {hostname}"
+    base = f"EntraBot Agent - {hostname}"
+    suffix = os.environ.get("_ENTRABOT_UPN_SUFFIX", "").strip()
+    # Only an additional agent's Agent Identity carries its suffix, so it gets an identity of its
+    # own; the single agent of this machine keeps the name earlier runs gave it.
+    return f"{base} - {suffix}" if suffix and _additional_agent() else base
 
 
 def find_existing_agent_identity(
@@ -691,7 +706,8 @@ def create_agent_identity(token: str, blueprint_app_id: str) -> tuple[str, str]:
     print("\n--- Creating Agent Identity ---\n")
 
     display_name = _agent_display_name()
-    stored_app_id = get_state("AGENT_ID")
+    # The recorded AGENT_ID is this machine's first agent. An additional agent never takes it.
+    stored_app_id = None if _additional_agent() else get_state("AGENT_ID")
 
     if _FORCE_NEW:
         print("  [--new] Skipping existing Agent Identity lookup — creating fresh")
@@ -774,7 +790,7 @@ AZURE_STORAGE_APP_ID = "e406a681-f3d4-42a8-90b6-c2b029497af1"
 AZURE_STORAGE_SCOPE = "user_impersonation"
 
 
-def _agent_user_upn(token: str) -> str:
+def _agent_user_upn(token: str, *, explicit_upn: str | None = None) -> str:
     """Generate the UPN for the Agent User.
 
     Queries the tenant's verified domains via Graph API (using the Provisioner
@@ -786,8 +802,12 @@ def _agent_user_upn(token: str) -> str:
     """
     # Setup sets a suffix only when no UPN was asked for, so a UPN alongside one is just what an
     # earlier run left in .env, and the suffix is what this run wants.
-    explicit_upn = os.environ.get("ENTRABOT_AGENT_USER_UPN", "").strip()
-    if explicit_upn and not os.environ.get("_ENTRABOT_UPN_SUFFIX", "").strip():
+    # A caller that passes explicit_upn decides alone: "" means derive one from the suffix.
+    if explicit_upn is None:
+        explicit_upn = os.environ.get("ENTRABOT_AGENT_USER_UPN", "").strip()
+        if os.environ.get("_ENTRABOT_UPN_SUFFIX", "").strip():
+            explicit_upn = ""
+    if explicit_upn:
         print(f"  Using explicit Agent User UPN: {explicit_upn}")
         return explicit_upn
 
@@ -1004,8 +1024,11 @@ def agent_identity_to_reuse(token: str, user: dict, blueprint_app_id: str) -> di
 def create_agent_user(
     token: str,
     agent_identity_obj_id: str,
+    *,
+    explicit_upn: str | None = None,
 ) -> tuple[str, str]:
-    """Create or find the Agent User. Returns (user_object_id, user_upn)."""
+    """Create or find the Agent User. Returns (user_object_id, user_upn). ``explicit_upn``
+    goes to :func:`_agent_user_upn`; ``""`` derives the UPN from the suffix."""
     print("\n--- Creating Agent User ---\n")
 
     if _FORCE_NEW:
@@ -1021,10 +1044,13 @@ def create_agent_user(
         set_state("AGENT_USER_UPN", upn)
         return user_id, upn
 
-    upn = _agent_user_upn(token)
+    upn = _agent_user_upn(token, explicit_upn=explicit_upn)
     upn_suffix = os.environ.get("_ENTRABOT_UPN_SUFFIX", "")
     mail_nick = f"entrabot-agent-{upn_suffix}" if upn_suffix else "entrabot-agent"
     display = f"EntraBot Agent ({upn_suffix})" if upn_suffix else "EntraBot Agent"
+    if _additional_agent():
+        # The harness lets an additional agent have a friendly Teams name ("Nemo").
+        display = os.environ.get("ENTRABOT_AGENT_DISPLAY_NAME", "").strip() or display
     body = {
         "@odata.type": "microsoft.graph.agentUser",
         "displayName": display,

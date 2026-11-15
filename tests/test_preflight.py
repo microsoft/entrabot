@@ -1709,3 +1709,116 @@ class TestMacAndLinuxCertificateStore:
 
         assert result.status == "pass"
         assert asked == [("entrabot", "blueprint-private-key")]
+
+
+# ─── Agent 365 telemetry: switched on, and does the agent's token carry the write scope? ───
+
+
+OTEL_WRITE = "Agent365.Observability.OtelWrite"
+
+
+def _telemetry_config(*, enabled: bool = True, export: bool = True) -> EntraBotConfig:
+    from dataclasses import replace
+
+    return replace(
+        _config_complete(), a365_observability_enabled=enabled, a365_export_enabled=export
+    )
+
+
+class TestTelemetryTokenScope:
+    def test_asks_for_the_observability_scope_the_runtime_uses(self) -> None:
+        from entrabot.observability.tokens import OBSERVABILITY_SCOPE
+        from entrabot.preflight import telemetry_token_scope
+
+        asked: list[str] = []
+
+        def acquire(config: EntraBotConfig, *, resource_scope: str) -> str:
+            asked.append(resource_scope)
+            return _jwt({"scp": f"User.Read {OTEL_WRITE}"})
+
+        assert telemetry_token_scope(_telemetry_config(), acquire=acquire) == {
+            "ok": True,
+            "error": "",
+        }
+        assert asked == [OBSERVABILITY_SCOPE]
+
+    def test_a_token_without_the_scope_is_not_ok_and_is_never_returned(self) -> None:
+        from entrabot.preflight import telemetry_token_scope
+
+        token = _jwt({"scp": "User.Read"})
+        result = telemetry_token_scope(
+            _telemetry_config(), acquire=lambda config, *, resource_scope: token
+        )
+        assert result["ok"] is False and OTEL_WRITE in str(result["error"])
+        assert token not in json.dumps(result)
+
+    def test_not_consented_is_a_result_not_a_crash(self) -> None:
+        from entrabot.preflight import telemetry_token_scope
+
+        def refuse(config: EntraBotConfig, *, resource_scope: str) -> str:
+            raise TokenExchangeError("hop3:agent_user", "invalid_grant", "AADSTS65001: no consent")
+
+        result = telemetry_token_scope(_telemetry_config(), acquire=refuse)
+        assert result["ok"] is False and "AADSTS65001" in str(result["error"])
+
+
+class TestTelemetryDiagnosis:
+    def test_off_is_reported_as_off_with_how_to_switch_it_on(self) -> None:
+        from entrabot.preflight import TELEMETRY_CHECK_NAME, check_a365_telemetry
+
+        check = check_a365_telemetry(
+            _telemetry_config(enabled=False, export=False),
+            acquire=lambda config, *, resource_scope: pytest.fail("no token when it is off"),
+        )
+        assert check.name == TELEMETRY_CHECK_NAME
+        assert check.status == "skip"
+        assert "not switched on" in check.detail
+        assert "--configure-a365-observability" in (check.remediation or "") or (
+            "-ConfigureA365Observability" in (check.remediation or "")
+        )
+
+    def test_on_with_the_scope_passes_and_names_the_licence_condition(self) -> None:
+        from entrabot.preflight import check_a365_telemetry
+
+        check = check_a365_telemetry(
+            _telemetry_config(),
+            acquire=lambda config, *, resource_scope: _jwt({"scp": OTEL_WRITE}),
+        )
+        assert check.status == "pass"
+        assert OTEL_WRITE in check.detail
+        # Microsoft drops the spans unless someone in the tenant has the licence assigned; the
+        # check cannot see that, so it says so rather than implying telemetry arrives.
+        assert "Microsoft 365 E7" in check.detail and "Agent 365" in check.detail
+
+    def test_on_without_the_scope_is_a_warning(self) -> None:
+        from entrabot.preflight import check_a365_telemetry
+
+        check = check_a365_telemetry(
+            _telemetry_config(),
+            acquire=lambda config, *, resource_scope: _jwt({"scp": "User.Read"}),
+        )
+        assert check.status == "warn"
+        assert OTEL_WRITE in check.detail
+
+    def test_switched_on_but_export_off_is_a_warning(self) -> None:
+        from entrabot.preflight import check_a365_telemetry
+
+        check = check_a365_telemetry(
+            _telemetry_config(export=False),
+            acquire=lambda config, *, resource_scope: pytest.fail("no token when export is off"),
+        )
+        assert check.status == "warn"
+        assert "export" in check.detail.lower()
+
+    def test_run_diagnostics_includes_the_telemetry_check(self, tmp_path: Path) -> None:
+        from entrabot.preflight import TELEMETRY_CHECK_NAME
+
+        with patch("entrabot.preflight.run_smoke_checks", return_value=[]):
+            checks = run_diagnostics(
+                _telemetry_config(enabled=False, export=False),
+                state_path=tmp_path / "state.json",
+                expected_binary=tmp_path / "bin" / "entrabot-mcp",
+                claude_mcp_path=tmp_path / "absent.json",
+                copilot_mcp_path=tmp_path / "absent2.json",
+            )
+        assert TELEMETRY_CHECK_NAME in [c.name for c in checks]

@@ -20,7 +20,7 @@ venv/
 .pyright/
 .openclaw-state.json
 .entrabot-state.json
-.entrabot-state.json.bak.*
+.entrabot-state.json.bak*
 .mcp.json
 a365.config.json
 a365.generated.config.json
@@ -51,3 +51,6 @@ pip.ini
 engineering-history/investigations/session-*.md
 docs/superpowers/
 uv.lock
+
+# ENTRABOT harness per-directory config (local)
+.entrabot/

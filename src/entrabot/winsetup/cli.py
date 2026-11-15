@@ -121,6 +121,13 @@ def build_parser() -> argparse.ArgumentParser:
         "Nothing else to install; the agent needs a Microsoft 365 Copilot licence.",
     )
     extras.add_argument(
+        "--configure-a365-observability",
+        action="store_true",
+        help="Also switch on Agent 365 telemetry (Microsoft OpenTelemetry Distro): grants the "
+        "agent the delegated Agent365.Observability.OtelWrite permission. Agent 365 keeps it "
+        "only if someone in the organization has a Microsoft 365 E7 or Agent 365 licence.",
+    )
+    extras.add_argument(
         "--remove-all-existing-certs",
         action="store_true",
         help="Replace EVERY certificate on the agent's Blueprint, other computers' included, "
@@ -241,6 +248,7 @@ def options_from_args(args: argparse.Namespace) -> Options:
         location=args.location.strip(),
         subscription=args.subscription.strip(),
         configure_work_iq=args.configure_a365_work_iq,
+        configure_telemetry=args.configure_a365_observability,
         tenant=args.tenant.strip(),
         device_code=args.device_code,
         switch_user=args.switch_user,

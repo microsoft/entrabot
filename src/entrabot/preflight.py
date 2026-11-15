@@ -477,6 +477,86 @@ def check_work_iq_tokens(
     )
 
 
+# ─── Agent 365 telemetry ─────────────────────────────────────────────────────
+
+TELEMETRY_CHECK_NAME = "Agent 365 telemetry"
+OBSERVABILITY_WRITE_SCOPE = "Agent365.Observability.OtelWrite"
+# Microsoft Learn, "Agent 365 observability concepts", drop condition 2: spans are accepted
+# (200 OK) but rejected as tenant_not_licensed unless a user in the tenant has the licence.
+TELEMETRY_LICENCE_NOTE = (
+    "Agent 365 keeps the spans only when at least one person in the organization has a "
+    "Microsoft 365 E7 or Microsoft Agent 365 licence assigned; this check cannot see that."
+)
+
+
+def _telemetry_flag() -> str:
+    return "-ConfigureA365Observability" if _is_windows() else "--configure-a365-observability"
+
+
+def telemetry_token_scope(
+    config: EntraBotConfig, *, acquire: Callable[..., str] | None = None
+) -> dict[str, object]:
+    """Whether a token the agent gets for Agent 365 telemetry, asked for exactly the way the
+    runtime asks (``entrabot.observability.tokens``), carries the delegated write scope.
+    A result only; the token is never returned, printed or logged."""
+    from entrabot.observability.tokens import OBSERVABILITY_SCOPE
+
+    get_token = acquire or acquire_agent_user_token
+    try:
+        token = get_token(config, resource_scope=OBSERVABILITY_SCOPE)
+    except TokenExchangeError as exc:
+        return {"ok": False, "error": f"{exc.error}: {exc.description}"[:300]}
+    except Exception as exc:  # noqa: BLE001 - reported, never raised: this only looks
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:300]}
+    if OBSERVABILITY_WRITE_SCOPE in _token_scopes(token):
+        return {"ok": True, "error": ""}
+    return {"ok": False, "error": f"the token does not carry {OBSERVABILITY_WRITE_SCOPE}"}
+
+
+def check_a365_telemetry(
+    config: EntraBotConfig, *, acquire: Callable[..., str] | None = None
+) -> Check:
+    """Diagnostics: is Agent 365 telemetry switched on, and does Microsoft give the agent a
+    token that may write it? Never a failure: telemetry is optional."""
+    remediation = f"Run {_setup_command()} {_telemetry_flag()} to switch it on."
+    if not config.a365_observability_enabled:
+        return Check(
+            name=TELEMETRY_CHECK_NAME,
+            status="skip",
+            detail="not switched on.",
+            remediation=remediation,
+        )
+    if not config.a365_export_enabled:
+        return Check(
+            name=TELEMETRY_CHECK_NAME,
+            status="warn",
+            detail="switched on, but export to Agent 365 is off (ENTRABOT_A365_EXPORT_ENABLED).",
+            remediation=remediation,
+        )
+    result = telemetry_token_scope(config, acquire=acquire)
+    if result["ok"]:
+        return Check(
+            name=TELEMETRY_CHECK_NAME,
+            status="pass",
+            detail=(
+                f"switched on; the agent's token carries {OBSERVABILITY_WRITE_SCOPE}. "
+                + TELEMETRY_LICENCE_NOTE
+            ),
+        )
+    return Check(
+        name=TELEMETRY_CHECK_NAME,
+        status="warn",
+        detail=(
+            f"switched on, but the agent cannot get a token with {OBSERVABILITY_WRITE_SCOPE} "
+            f"({result['error']})."
+        ),
+        remediation=(
+            f"If it was set up in the last few minutes, wait and run {_diagnose_command()} "
+            f"again. Otherwise {remediation[0].lower()}{remediation[1:]}"
+        ),
+    )
+
+
 # ─── Phase 3: diagnostics extras ─────────────────────────────────────────────
 
 
@@ -1019,6 +1099,7 @@ def run_diagnostics(
         work_iq = check_work_iq_tokens(config, work_iq_manifest)
         if work_iq is not None:
             checks.append(work_iq)
+    checks.append(check_a365_telemetry(config))
     return checks
 
 
@@ -1056,6 +1137,9 @@ def overall_exit_code(checks: Iterable[Check]) -> int:
 
 __all__ = [
     "Check",
+    "TELEMETRY_CHECK_NAME",
+    "check_a365_telemetry",
+    "telemetry_token_scope",
     "COPILOT_CAPABLE_SKUS",
     "TEAMS_CAPABLE_SKUS",
     "check_copilot_license_availability",

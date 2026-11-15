@@ -54,6 +54,7 @@ class TestFlags:
             "--subscription",
             "sub-1",
             "--configure-a365-work-iq",
+            "--configure-a365-observability",
             "--tenant",
             "contoso.com",
             "--device-code",
@@ -70,6 +71,7 @@ class TestFlags:
         assert (opts.memory, opts.storage_account, opts.container) == ("cloud", "acct", "box")
         assert (opts.location, opts.subscription) == ("westus2", "sub-1")
         assert opts.configure_work_iq and opts.device_code and opts.skip_smoke and opts.yes
+        assert opts.configure_telemetry
         assert (opts.tenant, opts.hosts, opts.log_file) == (
             "contoso.com",
             "claude",
