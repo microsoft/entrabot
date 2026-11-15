@@ -204,6 +204,10 @@ class TestDotenvStillDrivesTheBackend:
             config_module, "__file__", str(fake_root / "src" / "entrabot" / "config.py")
         )
         monkeypatch.chdir(tmp_path)
+        # The layered loader takes the clone's .env from _dotenv_candidates, which the
+        # suite-wide fixture empties, and a shared global.env from ENTRABOT_HOME.
+        monkeypatch.setattr(config_module, "_dotenv_candidates", lambda: [fake_root / ".env"])
+        monkeypatch.setattr(config_module, "_entrabot_home", lambda: tmp_path / "home")
 
         config_module._load_dotenv()
 

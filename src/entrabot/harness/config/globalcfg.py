@@ -1,0 +1,242 @@
+"""Global (tenant + blueprint) vs per-agent (agent identity) config split.
+
+The identity chain has a shared root and a per-agent leaf:
+
+    Tenant ─ Blueprint app (+ cert)        → GLOBAL, provisioned once  → ~/.entrabot/global.env
+       └─ Agent Identity ─ Agent User      → PER-AGENT, one per name   → <dir>/.entrabot/.env
+
+So a second agent that "goes by a different name" reuses the global blueprint and only mints a
+new Agent User — no re-init. This module is the pure read/write/split plumbing; the wizard and
+``entrabot migrate`` drive it. Single-tenant by design (one global block); multi-tenant would be
+additional named blocks here.
+"""
+
+from __future__ import annotations
+
+import os
+
+# Keys unique to one agent (its Entra identity + Teams user). One set per directory. The shared
+# root keys (tenant/blueprint/cert) are simply "everything that isn't an AGENT_KEY" — see split().
+AGENT_KEYS = (
+    "ENTRABOT_AGENT_ID",
+    "ENTRABOT_AGENT_OBJECT_ID",
+    "ENTRABOT_AGENT_USER_ID",
+    "ENTRABOT_AGENT_USER_UPN",
+    # Export authorization is per identity, not inherited by every child of a Blueprint.
+    "ENTRABOT_A365_OBSERVABILITY_ENABLED",
+    "ENTRABOT_A365_EXPORT_ENABLED",
+)
+
+TENANT_BLUEPRINT_KEYS = (
+    "ENTRABOT_TENANT_ID",
+    "ENTRABOT_BLUEPRINT_APP_ID",
+    "ENTRABOT_BLUEPRINT_OBJECT_ID",
+)
+
+BLUEPRINT_CERT_KEYS = (
+    "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT",
+    "ENTRABOT_BLUEPRINT_CERT_SHA1",
+    "ENTRABOT_BLUEPRINT_KSP",
+)
+
+SHARED_CONFIG_KEYS = (*TENANT_BLUEPRINT_KEYS, *BLUEPRINT_CERT_KEYS)
+
+GLOBAL_ENV_FILENAME = "global.env"
+AGENT_ENV_FILENAME = ".env"
+
+
+def global_dir() -> str:
+    """Directory holding the shared global config. Delegates to the core `entrabot_home()` so it
+    matches the platform data root (`%LOCALAPPDATA%\\entrabot` on Windows, `~/.entrabot` else,
+    `$ENTRABOT_HOME` override) and never collides with the legacy `~/.entrabot` migration."""
+    from entrabot import config as _config
+
+    return str(_config.entrabot_home())
+
+
+def global_env_path() -> str:
+    return os.path.join(global_dir(), GLOBAL_ENV_FILENAME)
+
+
+def agent_env_path(root: str) -> str:
+    return os.path.join(root, ".entrabot", AGENT_ENV_FILENAME)
+
+
+def home_agent_env_path() -> str:
+    """The default agent's ``.env``, alongside global.env in the home config dir (``~/.entrabot``,
+    or ``$ENTRABOT_HOME``). This is what bare ``entrabot`` from home runs."""
+    return os.path.join(global_dir(), AGENT_ENV_FILENAME)
+
+
+def _is_valid_env_line(line: str) -> bool:
+    """True for a non-blank, non-comment ``KEY=VALUE`` line."""
+    return bool(line) and not line.startswith("#") and "=" in line
+
+
+def read_env(path: str, *, strict: bool = False) -> dict[str, str]:
+    """Parse KEY=VALUE pairs. Missing file → {}; strict mode surfaces other I/O failures."""
+    out: dict[str, str] = {}
+    from pathlib import Path
+
+    from entrabot.config import _read_dotenv_text
+
+    try:
+        # UTF-8 with or without a byte-order mark, falling back to the locale for a file
+        # saved by hand in an ANSI code page: the same rule the runtime used before layering.
+        text = _read_dotenv_text(Path(path))
+    except FileNotFoundError:
+        return out
+    except OSError:
+        if strict:
+            raise
+        return out
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not _is_valid_env_line(line):
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        # First occurrence wins — matches the dotenv loader (config._overlay), which never
+        # overwrites an already-set key. A combined .env that accumulated duplicate keys across
+        # setup runs (e.g. rotated cert thumbprints) must resolve to the SAME value the runtime
+        # uses, or migrate would capture a stale/unregistered one.
+        out.setdefault(key, value.strip())
+    return out
+
+
+def write_env(path: str, mapping: dict[str, str], header: str = "") -> None:
+    """Write a ``.env`` file (creating parent dirs). Sorted for stable diffs."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    lines = []
+    if header:
+        lines += ["# " + header_line for header_line in header.splitlines()]
+    for key in sorted(mapping):
+        lines.append(f"{key}={mapping[key]}")
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write("\n".join(lines) + "\n")
+
+
+def resolve_shared_config(*mappings: dict[str, str]) -> dict[str, str]:
+    """Resolve shared identity settings in precedence order, rejecting mixed chains."""
+    for key in TENANT_BLUEPRINT_KEYS:
+        values = {mapping[key] for mapping in mappings if mapping.get(key)}
+        if len(values) > 1:
+            raise ValueError(
+                f"Conflicting {key} in shared and selected-agent configuration. "
+                "Select the correct ENTRABOT_HOME and agent root."
+            )
+
+    resolved: dict[str, str] = {}
+    for key in TENANT_BLUEPRINT_KEYS:
+        for mapping in mappings:
+            value = mapping.get(key, "").strip()
+            if value:
+                resolved[key] = value
+                break
+    # The chosen certificate's SHA-1/KSP must never come from a different generation.
+    for mapping in mappings:
+        if mapping.get("ENTRABOT_BLUEPRINT_CERT_THUMBPRINT", "").strip():
+            resolved.update(
+                (key, mapping[key].strip())
+                for key in BLUEPRINT_CERT_KEYS if mapping.get(key, "").strip()
+            )
+            break
+    return resolved
+
+
+def resolve_agent_env(*bases: dict[str, str], agent: dict[str, str]) -> dict[str, str]:
+    """Compose one selected identity over shared bases (highest precedence first).
+
+    Only ``agent`` supplies agent IDs/export flags. Shared-chain conflicts fail instead of
+    overriding; the highest-precedence certificate supplies its complete metadata tuple.
+    """
+    shared = resolve_shared_config(*bases, agent)
+    resolved: dict[str, str] = {}
+    for base in reversed(bases):
+        resolved.update(
+            (key, value) for key, value in base.items()
+            if key not in AGENT_KEYS and key not in SHARED_CONFIG_KEYS
+        )
+    resolved.update((key, value) for key, value in agent.items() if key not in SHARED_CONFIG_KEYS)
+    resolved.update(shared)
+    return resolved
+
+
+def persist_global_from_env(source: str, *, target: str | None = None) -> str:
+    """Persist only tenant/Blueprint/cert settings; leave existing shared preferences intact."""
+    source_env = read_env(source, strict=True)
+    source_global = {key: source_env[key] for key in SHARED_CONFIG_KEYS if source_env.get(key)}
+    required = (*TENANT_BLUEPRINT_KEYS, "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT")
+    missing = [key for key in required if not source_global.get(key, "").strip()]
+    if missing:
+        raise ValueError(
+            "Cannot persist incomplete shared configuration; missing: " + ", ".join(missing)
+        )
+
+    destination = target or global_env_path()
+    existing = read_env(destination, strict=True)
+    resolve_shared_config(source_global, existing)
+
+    merged = {key: value for key, value in existing.items() if key not in AGENT_KEYS}
+    # Certificate metadata describes one credential generation. If setup rotates or changes
+    # platform, fields absent from the new generation must not survive from the old one.
+    for key in BLUEPRINT_CERT_KEYS:
+        merged.pop(key, None)
+    merged.update(source_global)
+    if merged == existing:
+        return destination
+    write_env(
+        destination,
+        merged,
+        header="ENTRABOT global config — shared tenant + Blueprint. Do not commit.",
+    )
+    return destination
+
+
+def validate_setup_context(
+    *, tenant_id: str, blueprint_app_id: str = "", new_chain: bool = False,
+) -> None:
+    """Reject a conflicting shared home before setup makes any remote changes."""
+    if not tenant_id.strip():
+        raise ValueError("A tenant must be selected before setup.")
+    existing = read_env(global_env_path(), strict=True)
+    if new_chain and existing.get("ENTRABOT_BLUEPRINT_APP_ID"):
+        raise ValueError(
+            "ENTRABOT_HOME already has a shared Blueprint. Use a separate ENTRABOT_HOME "
+            "for a new chain, or omit -NewChain/--new to reuse the existing chain."
+        )
+    resolve_shared_config(existing, {
+        "ENTRABOT_TENANT_ID": tenant_id,
+        "ENTRABOT_BLUEPRINT_APP_ID": blueprint_app_id,
+    })
+
+
+def split(env: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
+    """Partition a combined env into (global, per-agent). Per-agent = identity + export flags;
+    global = everything else (tenant/blueprint/cert, shared HUMAN_*, and any runtime prefs), so
+    no key is ever dropped on the round-trip."""
+    agent = {key: value for key, value in env.items() if key in AGENT_KEYS and value}
+    glob = {key: value for key, value in env.items() if key not in AGENT_KEYS and value}
+    return glob, agent
+
+
+def read_global() -> dict[str, str]:
+    return read_env(global_env_path())
+
+
+def global_exists() -> bool:
+    """True once the shared tenant + blueprint have been provisioned."""
+    global_env = read_global()
+    return bool(
+        global_env.get("ENTRABOT_TENANT_ID") and global_env.get("ENTRABOT_BLUEPRINT_APP_ID")
+    )
+
+
+def agent_exists(root: str) -> bool:
+    """True once an agent identity is provisioned in ``root`` (its .env carries an Agent User
+    UPN). Idempotent ``init`` keys off this to resume instead of minting another agent."""
+    return bool(read_env(agent_env_path(root)).get("ENTRABOT_AGENT_USER_UPN"))
+
+
+def blueprint_app_id() -> str:
+    return read_global().get("ENTRABOT_BLUEPRINT_APP_ID", "")

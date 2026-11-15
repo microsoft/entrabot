@@ -484,6 +484,8 @@ class TestTheReaderAgreesWithConfigPy:
         (project / "src" / "entrabot").mkdir(parents=True)
         (project / ".env").write_bytes(TRICKY)
         monkeypatch.setattr(config, "__file__", str(project / "src" / "entrabot" / "config.py"))
+        monkeypatch.setattr(config, "_dotenv_candidates", lambda: [project / ".env"])
+        monkeypatch.setattr(config, "_entrabot_home", lambda: tmp_path / "home")
         fresh: dict[str, str] = {}
         with mock.patch.object(config, "os", mock.Mock(environ=fresh)):
             config._load_dotenv()

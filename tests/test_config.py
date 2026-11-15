@@ -283,6 +283,10 @@ class TestLoadDotenvEncoding:
         (project / "src" / "entrabot").mkdir(parents=True)
         (project / ".env").write_bytes(raw)
         monkeypatch.setattr(config, "__file__", str(project / "src" / "entrabot" / "config.py"))
+        # The layered loader reads the clone's .env through _dotenv_candidates (which the
+        # suite-wide fixture empties) and a shared global.env under ENTRABOT_HOME.
+        monkeypatch.setattr(config, "_dotenv_candidates", lambda: [project / ".env"])
+        monkeypatch.setattr(config, "_entrabot_home", lambda: tmp_path / "home")
         force_locale_codec(monkeypatch)
         cleaned = {k: v for k, v in os.environ.items() if not k.startswith("ENTRABOT_")}
         with patch.dict(os.environ, cleaned, clear=True):
@@ -323,3 +327,46 @@ class TestLoadDotenvEncoding:
             "ENTRABOT_TENANT_ID": "tenant-1",
             "ENTRABOT_HUMAN_UPN": "josé@contoso.com",
         }
+
+
+class TestA365ObservabilityConfig:
+    def test_observability_and_export_default_to_false(self, monkeypatch) -> None:
+        for name in (
+            "ENTRABOT_A365_OBSERVABILITY_ENABLED",
+            "ENTRABOT_A365_EXPORT_ENABLED",
+            "ENTRABOT_A365_SERVICE_NAMESPACE",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        cfg = EntraBotConfig.from_env()
+
+        assert cfg.a365_observability_enabled is False
+        assert cfg.a365_export_enabled is False
+        assert cfg.a365_service_namespace is None
+        assert EntraBotConfig().a365_service_namespace is None
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [("", None), (" \t ", None), ("example.support", "example.support"),
+         ("  example.support  ", "example.support")],
+    )
+    def test_service_namespace(self, value: str, expected: str | None) -> None:
+        with patch.dict(os.environ, {"ENTRABOT_A365_SERVICE_NAMESPACE": value}):
+            cfg = EntraBotConfig.from_env()
+
+        assert cfg.a365_service_namespace == expected
+
+    def test_console_defaults_to_false(self) -> None:
+        cfg = EntraBotConfig()
+
+        assert cfg.a365_console_enabled is False
+
+    @pytest.mark.parametrize("value", ["true", "True", "1", "yes", "YeS"])
+    def test_console_truthy_values(self, value: str) -> None:
+        with patch.dict(
+            os.environ,
+            {"ENTRABOT_A365_CONSOLE_ENABLED": value},
+            clear=False,
+        ):
+            cfg = EntraBotConfig.from_env()
+
+        assert cfg.a365_console_enabled is True

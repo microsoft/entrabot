@@ -856,12 +856,18 @@ _STATE_FILE = Path(__file__).resolve().parent.parent / ".entrabot-state.json"
 
 
 def _load_state() -> dict:
-    if _STATE_FILE.is_file():
-        try:
-            return json.loads(_STATE_FILE.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return {}
-    return {}
+    try:
+        state = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (json.JSONDecodeError, UnicodeError, OSError) as error:
+        raise ProvisionerBootstrapError(
+            "Cannot read provisioning state. Restore a valid .entrabot-state.json "
+            "before retrying; existing state must not be treated as a fresh installation."
+        ) from error
+    if not isinstance(state, dict):
+        raise ProvisionerBootstrapError("Provisioning state must be a JSON object.")
+    return state
 
 
 def _save_state(state: dict) -> None:
@@ -2031,7 +2037,9 @@ def ensure_app_registration(
     taking over, else a new one; an app with the name that can't be shown to be safe stops
     setup before anything in Entra changes.
     """
-    tenant_id = os.environ.get("ENTRABOT_TENANT_ID") or get_state("TENANT_ID")
+    configured_tenant_id = os.environ.get("ENTRABOT_TENANT_ID")
+    saved_tenant_id = get_state("TENANT_ID")
+    tenant_id = configured_tenant_id or saved_tenant_id
     if not tenant_id:
         rc, out, err = run_az(["account", "show", "--query", "tenantId", "-o", "json"])
         tenant_id = _az_scalar(out) if rc == 0 else ""
@@ -2040,6 +2048,12 @@ def ensure_app_registration(
                 err or "cannot determine tenant ID; run 'az login' first"
             )
         set_state("TENANT_ID", tenant_id)
+    elif configured_tenant_id and configured_tenant_id != saved_tenant_id:
+        if saved_tenant_id:
+            print("  Active tenant changed; clearing cached tenant-scoped provisioner state.")
+            clear_state("PROVISIONER_CLIENT_ID")
+            clear_state("PROVISIONER_CERT_THUMBPRINT")
+        set_state("TENANT_ID", configured_tenant_id)
 
     # SECURITY: legacy migration path — if a prior (secret-auth) run
     # left PROVISIONER_CLIENT_SECRET in the state file, we purge it
@@ -2165,11 +2179,18 @@ def load_existing_app_registration() -> tuple[str, str | CngProvisionerCert, str
     Utility scripts use this path so read/status/action commands don't create
     app registrations, add permissions, grant consent, or wait for propagation.
     """
-    tenant_id = os.environ.get("ENTRABOT_TENANT_ID") or get_state("TENANT_ID")
+    saved_tenant_id = get_state("TENANT_ID")
+    tenant_id = os.environ.get("ENTRABOT_TENANT_ID") or saved_tenant_id
     client_id = get_state("PROVISIONER_CLIENT_ID")
     if not tenant_id or not client_id:
         raise ProvisionerBootstrapError(
             "Provisioner app is not bootstrapped. Run: python3 scripts/entra_provisioning.py"
+        )
+
+    if saved_tenant_id and tenant_id != saved_tenant_id:
+        raise ProvisionerBootstrapError(
+            "Provisioner state belongs to a different tenant. "
+            "Select the checkout and provisioner state for the requested tenant."
         )
 
     status = _application_status(client_id)

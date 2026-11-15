@@ -19,6 +19,12 @@ dependencies = [
     "PyJWT>=2.8.0",
     "pypdf>=4.0",
     "click>=8.1.0",
+    "microsoft-opentelemetry>=1.3.8",
+    # ENTRABOT harness: drives a Copilot agent session (sessions, streaming, tools,
+    # MCP, per-call permission hook). Sibling of the .NET GitHub.Copilot.SDK.
+    "github-copilot-sdk>=1.0.2",
+    # Full-screen TUI for the harness (the default UI; ENTRABOT_CONSOLE=1 falls back to plain).
+    "textual>=0.60",
 ]
 
 [project.optional-dependencies]
@@ -84,4 +90,6 @@ exclude_lines = [
 where = ["src"]
 
 [project.scripts]
+entrabot = "entrabot.harness.cli:main"
 entrabot-mcp = "entrabot.mcp_server:main"
+entrabot-harness = "entrabot.harness.cli:main"  # alias (back-compat)
