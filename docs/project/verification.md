@@ -16,7 +16,7 @@ virtual machine with a second agent made for the purpose:
    sent nothing: it covered start-up, sign-in, reads, the recipient-policy refusals, console
    telemetry, the background polls and a clean stop.
 2. **An earlier end-to-end run on a combined branch.** That build held everything in 0.2.0
-   **and** the process containment planned for 0.3.0, and the server ran **inside the sandbox**
+   **and** the process containment now planned for 0.4.0, and the server ran **inside the sandbox**
    for the whole run. The real sends, the inbound pushes, token re-acquisition, audit
    fail-closed and the export to Agent 365 were proven there, not on the release branch.
    Apart from the sandbox launcher, its proxy and the proxy-aware Graph transport, the code
@@ -175,7 +175,7 @@ It also showed that two computers running one agent with local memory both push 
 | Agent 365 registry through setup (after 0.2.0, on `main`): the setup app's permission, the registration, its `--diagnose` line, teardown's delete | Unit-tested | Run for real (2026-11-15, Ubuntu 24.04): the permission and its consent check, the registration, `--diagnose`, the admin center listing, the script's delete, teardown's delete. Not run: a second computer joining a registered agent | Run for real (2026-11-15, Windows 11 Pro 25H2, built-in Administrator): the permission, the registration, `-Diagnose`, the admin center listing, telemetry, teardown's delete. Run for real: the takeover run's grant, on a first run. Not run: a standard user |
 | `status.sh` and `setup_delegated.sh` read `.env` as data | Run for real (the old scripts fail the tests, the new ones pass) | Unit-tested | n/a |
 | The full test suite | Every commit | Not run | CI (`test-windows`) on each pull request |
-| Process containment | Not in 0.2.0: planned for 0.3.0 | Not in 0.2.0 | Not in 0.2.0 |
+| Process containment | Not in 0.2.0 or 0.3.0: planned for 0.4.0 | Not in 0.2.0 or 0.3.0 | Not in 0.2.0 or 0.3.0 |
 
 ## Never run
 

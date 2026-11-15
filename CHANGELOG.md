@@ -20,7 +20,7 @@
 ## 0.2.0 — 2026-11-15
 
 Everything since v0.1. Process containment of the MCP server is not in this release; it is
-planned for 0.3.0. What this release was checked against is in
+planned for 0.4.0. What this release was checked against is in
 `docs/project/verification.md`; how it is cut is in `RELEASING.md`.
 
 ### Added

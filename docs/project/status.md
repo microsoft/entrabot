@@ -60,7 +60,7 @@
 
 ## Active development
 
-- Process containment: the MCP server is not contained in 0.2.0; it runs with all of its user's rights. Containing it on macOS and Linux is planned for 0.3.0.
+- Process containment: the MCP server is not contained in 0.3.0; it runs with all of its user's rights. Containing it on macOS and Linux is planned for 0.4.0.
 - Headless and cloud operation on the harness: proposal in `engineering-history/plans/headless-cloud-runtime.md`, for a decision.
 - Agent 365 integration's registry half: a run against a real tenant, to confirm the permission grant, the request body's IDs and display name, and the listing in the Microsoft 365 admin center.
 

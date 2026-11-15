@@ -215,7 +215,7 @@ This is a research repo, not a production service. It runs reliably on a develop
 
 **Open:**
 
-- Process containment is not shipped: the MCP server is not contained in 0.2.0 and runs with all of its user's rights. Containing it on macOS and Linux is planned for 0.3.0.
+- Process containment is not shipped: the MCP server is not contained in 0.3.0 and runs with all of its user's rights. Containing it on macOS and Linux is planned for 0.4.0.
 - Registration in the Agent 365 registry through setup has been run against a tenant on Linux and Windows: not yet on macOS, nor with a second computer joining a registered agent.
 - Headless and cloud operation: see the proposal in `engineering-history/plans/headless-cloud-runtime.md`.
 
