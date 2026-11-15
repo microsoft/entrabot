@@ -37,6 +37,14 @@ would grant nobody anything: an administrator has already approved it for every 
 setup needs, or nobody else can use it. Otherwise setup stops and says why; set
 ENTRABOT_PROVISIONER_APP_ID_VERIFIED to the application ID of the app you have checked to
 use that one.
+
+One permission is added only when asked for: ``AgentRegistration.ReadWrite.All``, which lets
+the Provisioner app manage the agent's entry in the Agent 365 registry. Setup asks for it by
+setting ENTRABOT_GRANT_AGENT_REGISTRATION=1 when the person says yes to Agent 365
+integration. It is added and admin-consented the same way as the others, through the
+signed-in administrator's Azure CLI (``az ad app permission add`` and ``admin-consent``),
+never by the Provisioner app itself, and a failure only skips it: setup carries on. Its
+result is one ``ENTRABOT_REGISTRY_PERMISSION=<json>`` line.
 """
 
 from __future__ import annotations
@@ -77,6 +85,14 @@ AGENT_ID_PERMISSION_MATCHERS = [
     "AgentIdentity",
     "AgentIdUser",
 ]
+
+# Added only when the person says yes to Agent 365 integration (least privilege: a setup that
+# says no never gains it). Lets the Provisioner app create, update and delete the agent's entry
+# in the Agent 365 registry (scripts/register_agent_instance.py).
+REGISTRY_PERMISSION_VALUE = "AgentRegistration.ReadWrite.All"
+GRANT_REGISTRY_ENV = "ENTRABOT_GRANT_AGENT_REGISTRATION"
+# What the wizard (src/entrabot/winsetup/agentregistry.py) reads; tests on both sides pin it.
+REGISTRY_PERMISSION_MARKER = "ENTRABOT_REGISTRY_PERMISSION="
 
 
 class ProvisionerBootstrapError(RuntimeError):
@@ -1312,6 +1328,114 @@ def _ensure_permissions_and_consent(client_id: str, required_values: list[str]) 
     raise ProvisionerBootstrapError(consent_error or "admin consent failed")
 
 
+def optional_permission_values() -> list[str]:
+    """The permissions this run adds besides setup's own: the registry permission when setup
+    asks for it (``ENTRABOT_GRANT_AGENT_REGISTRATION=1``), else none."""
+    return [REGISTRY_PERMISSION_VALUE] if os.environ.get(GRANT_REGISTRY_ENV) == "1" else []
+
+
+# Between admin-consent attempts for an optional permission. The app and its service principal
+# exist by then (setup's own permissions were just ensured), so this is short.
+_OPTIONAL_CONSENT_WAITS = (10, 20)
+
+
+def _ensure_optional_permission(client_id: str, value: str, *, may_consent: bool) -> dict[str, str]:
+    """Add the Microsoft Graph application permission *value* to the Provisioner app and
+    grant admin consent for it, through the signed-in administrator's Azure CLI, exactly as
+    :func:`_ensure_permissions_and_consent` does for setup's own permissions.
+
+    Never raises: the result is ``{"permission", "status", "reason"}``, where status is
+
+    * ``present``: an administrator has already consented to it;
+    * ``granted``: added (if it was not declared) and consented in this run;
+    * ``skipped``: not consented, because this run consents nothing for this app (it was
+      taken over on an administrator's approval; see _confirm_already_approved);
+    * ``failed``: it could not be added or consented. A declaration this run added is taken
+      back, so no later admin consent grants it by surprise.
+    """
+
+    def result(status: str, reason: str = "") -> dict[str, str]:
+        return {"permission": value, "status": status, "reason": reason}
+
+    try:
+        role_id = resolve_graph_permissions().get(value)
+    except ProvisionerBootstrapError as exc:
+        return result("failed", f"Microsoft Graph's permissions could not be read ({exc})")
+    if not role_id:
+        return result(
+            "failed", f"Microsoft Graph has no application permission named {value} in this tenant"
+        )
+    role = str(role_id).lower()
+    if role in {item.lower() for item in _get_consented_graph_role_ids(client_id)}:
+        print(f"  Provisioner app already holds {value} (admin-consented)")
+        return result("present")
+    if not may_consent:
+        return result(
+            "skipped",
+            "setup took over an existing Provisioner app that an administrator had already "
+            "approved, and consents nothing for it in this run; run setup again to add it",
+        )
+    try:
+        declared = {item.lower() for item in _get_existing_permission_role_ids(client_id)}
+    except ProvisionerBootstrapError as exc:
+        return result("failed", f"the setup app's permissions could not be read ({exc})")
+    added = False
+    if role not in declared:
+        rc, _, err = run_az(
+            [
+                "ad",
+                "app",
+                "permission",
+                "add",
+                "--id",
+                client_id,
+                "--api",
+                MS_GRAPH_API_ID,
+                "--api-permissions",
+                f"{role_id}=Role",
+            ]
+        )
+        if rc != 0 and "already exists" not in err.lower():
+            return result("failed", f"it could not be added to the setup app: {_az_error(err, rc)}")
+        added = rc == 0
+    print(f"  Granting admin consent for {value} on the provisioner app...")
+    rc, err = 1, ""
+    for attempt, wait in enumerate((0, *_OPTIONAL_CONSENT_WAITS)):
+        if attempt:
+            print(f"  Retrying admin consent in {wait}s...")
+            time.sleep(wait)
+        rc, _, err = run_az(["ad", "app", "permission", "admin-consent", "--id", client_id])
+        if rc == 0:
+            print(f"  Admin consent granted for {value}")
+            return result("granted")
+        if _is_missing_privilege(err):
+            break
+    reason = (
+        f"admin consent for it needs the {_CONSENT_ROLES} role"
+        if _is_missing_privilege(err)
+        else f"admin consent for it failed: {_az_error(err, rc)}"
+    )
+    if added:
+        back, _, back_err = run_az(
+            [
+                "ad",
+                "app",
+                "permission",
+                "delete",
+                "--id",
+                client_id,
+                "--api",
+                MS_GRAPH_API_ID,
+                "--api-permissions",
+                str(role_id),
+            ]
+        )
+        if back != 0:
+            still = _az_error(back_err, back)
+            reason += f"; it stays declared on the setup app without consent ({still})"
+    return result("failed", reason)
+
+
 # ---------------------------------------------------------------------------
 # Which app registration is the Provisioner
 # ---------------------------------------------------------------------------
@@ -2017,6 +2141,7 @@ def _provisioner_app_for_this_machine(
 def ensure_app_registration(
     required_values: list[str],
     wait_for_propagation: bool = True,
+    optional_values: list[str] | None = None,
 ) -> tuple[str, str | CngProvisionerCert, str]:
     """Ensure the dedicated provisioner app exists with cert-auth.
 
@@ -2036,6 +2161,11 @@ def ensure_app_registration(
     existing app with the Provisioner's name that this run would grant nobody anything by
     taking over, else a new one; an app with the name that can't be shown to be safe stops
     setup before anything in Entra changes.
+
+    *optional_values* are permissions added after setup's own, best-effort
+    (:func:`_ensure_optional_permission`): each prints one ``REGISTRY_PERMISSION_MARKER``
+    line with its result, and none of them stops setup. They are not part of what decides
+    whether an existing app may be taken over.
     """
     configured_tenant_id = os.environ.get("ENTRABOT_TENANT_ID")
     saved_tenant_id = get_state("TENANT_ID")
@@ -2123,6 +2253,11 @@ def ensure_app_registration(
         # a run that stops here leaves nothing behind that a later run would consent for.
         permissions_changed = _confirm_already_approved(client_id, required_values)
         _record_provisioner_app(client_id)
+
+    for value in optional_values or []:
+        outcome = _ensure_optional_permission(client_id, value, may_consent=may_consent)
+        print(REGISTRY_PERMISSION_MARKER + json.dumps(outcome))
+        permissions_changed = permissions_changed or outcome["status"] == "granted"
 
     # SECURITY: any leftover password credentials on the app are a
     # backdoor — remove them unconditionally. This closes the window
@@ -2444,7 +2579,7 @@ def bootstrap_cli() -> int:
     """Bootstrap the provisioner app and print summary."""
     try:
         required_values = build_required_permission_values()
-        ensure_app_registration(required_values)
+        ensure_app_registration(required_values, optional_values=optional_permission_values())
         print("")
         print("Provisioner bootstrap complete")
         print(f"  Permissions: {', '.join(required_values)}")

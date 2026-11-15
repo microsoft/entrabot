@@ -1601,3 +1601,209 @@ def test_unreadable_saved_state_does_not_trigger_provisioner_creation(
     with pytest.raises(provisioning_module.ProvisionerBootstrapError, match="state"):
         provisioning_module.ensure_app_registration([], wait_for_propagation=False)
     cli.assert_not_called()
+
+
+# ─── The Agent 365 registry permission: added only when asked for ────────────
+#
+# AgentRegistration.ReadWrite.All is added to the Provisioner app only when setup asks for it
+# (ENTRABOT_GRANT_AGENT_REGISTRATION=1, the person said yes to Agent 365 integration), and
+# the way setup's own permissions are: the signed-in administrator's az adds and consents it.
+# The Provisioner app never grants it to itself, and a failure never stops setup.
+
+REGISTRY_ROLE = "eeeeeeee-0000-0000-0000-0000000000a5"
+REGISTRY_MARKER = "ENTRABOT_REGISTRY_PERMISSION="
+
+
+class _Consent:
+    """The signed-in administrator's ``az``, as far as adding and consenting one permission
+    goes. Every call is recorded; the Provisioner's own token is never used."""
+
+    def __init__(self, module: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.declared: set[str] = set()
+        self.consented: set[str] = set()
+        self.consent_errors: list[str] = []  # one per admin-consent attempt that fails
+        self.add_error = ""
+        self.delete_error = ""
+        self.calls: list[list[str]] = []
+        self.sleeps: list[float] = []
+        monkeypatch.setattr(module, "run_az", self.run_az)
+        monkeypatch.setattr(
+            module,
+            "resolve_graph_permissions",
+            lambda: {"Application.ReadWrite.All": GRAPH_ROLE, REGISTRY_VALUE: REGISTRY_ROLE},
+        )
+        monkeypatch.setattr(
+            module, "_get_existing_permission_role_ids", lambda client_id: set(self.declared)
+        )
+        monkeypatch.setattr(
+            module, "_get_consented_graph_role_ids", lambda client_id: set(self.consented)
+        )
+        monkeypatch.setattr(module.time, "sleep", self.sleeps.append)
+
+    def run_az(self, args: list[str], capture: bool = True) -> tuple[int, str, str]:
+        self.calls.append(list(args))
+        if args[:4] == ["ad", "app", "permission", "add"]:
+            if self.add_error:
+                return 1, "", self.add_error
+            self.declared.add(args[-1].split("=", 1)[0])
+            return 0, "", ""
+        if args[:4] == ["ad", "app", "permission", "admin-consent"]:
+            if self.consent_errors:
+                return 1, "", self.consent_errors.pop(0)
+            self.consented |= self.declared
+            return 0, "", ""
+        if args[:4] == ["ad", "app", "permission", "delete"]:
+            if self.delete_error:
+                return 1, "", self.delete_error
+            self.declared.discard(args[-1])
+            return 0, "", ""
+        raise AssertionError(f"unexpected az call: {args}")
+
+    def verbs(self) -> list[str]:
+        return [call[3] for call in self.calls]
+
+
+REGISTRY_VALUE = "AgentRegistration.ReadWrite.All"
+
+
+def test_the_registry_permission_is_the_one_registration_needs(provisioning_module) -> None:
+    assert provisioning_module.REGISTRY_PERMISSION_VALUE == REGISTRY_VALUE
+    assert provisioning_module.REGISTRY_PERMISSION_MARKER == REGISTRY_MARKER
+    assert REGISTRY_VALUE not in provisioning_module.BASE_PERMISSION_VALUES
+
+
+@pytest.mark.parametrize(("value", "expected"), [("1", [REGISTRY_VALUE]), ("", []), ("0", [])])
+def test_it_is_asked_for_only_by_setups_switch(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch, value: str, expected: list[str]
+) -> None:
+    monkeypatch.setenv("ENTRABOT_GRANT_AGENT_REGISTRATION", value)
+    assert provisioning_module.optional_permission_values() == expected
+
+
+def test_it_is_added_and_consented_by_the_signed_in_administrator(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    az = _Consent(provisioning_module, monkeypatch)
+    outcome = provisioning_module._ensure_optional_permission(APP, REGISTRY_VALUE, may_consent=True)
+    assert outcome == {"permission": REGISTRY_VALUE, "status": "granted", "reason": ""}
+    assert az.verbs() == ["add", "admin-consent"]
+    add = az.calls[0]
+    assert add[add.index("--id") + 1] == APP
+    assert add[add.index("--api") + 1] == GRAPH_APP
+    assert add[-1] == f"{REGISTRY_ROLE}=Role"  # an application permission, not a scope
+
+
+def test_one_already_consented_is_left_alone(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    az = _Consent(provisioning_module, monkeypatch)
+    az.declared = az.consented = {REGISTRY_ROLE}
+    outcome = provisioning_module._ensure_optional_permission(
+        APP, REGISTRY_VALUE, may_consent=False
+    )
+    assert outcome["status"] == "present"
+    assert az.calls == []
+
+
+def test_one_declared_but_not_consented_is_only_consented(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    az = _Consent(provisioning_module, monkeypatch)
+    az.declared = {REGISTRY_ROLE}
+    outcome = provisioning_module._ensure_optional_permission(APP, REGISTRY_VALUE, may_consent=True)
+    assert outcome["status"] == "granted"
+    assert az.verbs() == ["admin-consent"]
+
+
+def test_an_app_taken_over_on_approval_is_given_nothing(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    az = _Consent(provisioning_module, monkeypatch)
+    outcome = provisioning_module._ensure_optional_permission(
+        APP, REGISTRY_VALUE, may_consent=False
+    )
+    assert outcome["status"] == "skipped" and "run setup again" in outcome["reason"]
+    assert az.calls == []
+
+
+def test_an_account_that_cannot_consent_takes_the_declaration_back(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    az = _Consent(provisioning_module, monkeypatch)
+    az.consent_errors = ["ERROR: Insufficient privileges to complete the operation."]
+    outcome = provisioning_module._ensure_optional_permission(APP, REGISTRY_VALUE, may_consent=True)
+    assert outcome["status"] == "failed"
+    assert "Privileged Role Administrator" in outcome["reason"]
+    assert az.verbs() == ["add", "admin-consent", "delete"]
+    assert az.declared == set() and az.sleeps == []  # no retry: it will not start working
+
+
+def test_a_transient_consent_failure_is_retried(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    az = _Consent(provisioning_module, monkeypatch)
+    az.consent_errors = ["Bad Request: service principal not found yet"]
+    outcome = provisioning_module._ensure_optional_permission(APP, REGISTRY_VALUE, may_consent=True)
+    assert outcome["status"] == "granted"
+    assert az.sleeps == [10]
+
+
+def test_a_permission_the_tenant_does_not_have_fails_without_a_call(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    az = _Consent(provisioning_module, monkeypatch)
+    monkeypatch.setattr(provisioning_module, "resolve_graph_permissions", lambda: {})
+    outcome = provisioning_module._ensure_optional_permission(APP, REGISTRY_VALUE, may_consent=True)
+    assert outcome["status"] == "failed" and REGISTRY_VALUE in outcome["reason"]
+    assert az.calls == []
+
+
+def test_a_refused_add_fails_without_consenting(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    az = _Consent(provisioning_module, monkeypatch)
+    az.add_error = "ERROR: Insufficient privileges"
+    outcome = provisioning_module._ensure_optional_permission(APP, REGISTRY_VALUE, may_consent=True)
+    assert outcome["status"] == "failed"
+    assert az.verbs() == ["add"]
+
+
+def _registered_app(entra: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """A machine whose Provisioner app is recorded and has its certificate: the optional
+    permission's step is all that is left to look at."""
+    entra.state.update(PROVISIONER_CLIENT_ID=APP, PROVISIONER_CERT_THUMBPRINT="thumb")
+    entra.keystore.pem = PEM_BUNDLE
+    asked: list[Any] = []
+
+    def optional(client_id: str, value: str, *, may_consent: bool) -> dict[str, str]:
+        asked.append((client_id, value, may_consent))
+        return {"permission": value, "status": "failed", "reason": "admin consent failed"}
+
+    monkeypatch.setattr(entra.module, "_ensure_optional_permission", optional)
+    return asked
+
+
+def test_setup_asks_for_it_only_when_told_to(
+    entra: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    asked = _registered_app(entra, monkeypatch)
+    monkeypatch.delenv("ENTRABOT_GRANT_AGENT_REGISTRATION", raising=False)
+    assert _bootstrap(entra, monkeypatch) == 0
+    assert asked == []
+    assert REGISTRY_MARKER not in capsys.readouterr().out
+
+
+def test_a_failed_registry_permission_never_stops_the_bootstrap(
+    entra: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    asked = _registered_app(entra, monkeypatch)
+    monkeypatch.setenv("ENTRABOT_GRANT_AGENT_REGISTRATION", "1")
+    assert _bootstrap(entra, monkeypatch) == 0
+    assert asked == [(APP, REGISTRY_VALUE, True)]
+    lines = [
+        line for line in capsys.readouterr().out.splitlines() if line.startswith(REGISTRY_MARKER)
+    ]
+    assert [json.loads(line.removeprefix(REGISTRY_MARKER)) for line in lines] == [
+        {"permission": REGISTRY_VALUE, "status": "failed", "reason": "admin consent failed"}
+    ]
+    assert entra.consents == [APP]  # setup's own permissions were ensured first, as always
