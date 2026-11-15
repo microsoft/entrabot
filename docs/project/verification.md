@@ -119,10 +119,10 @@ an automated test and went only to the sponsor or the agent itself.
 | `send_teams_message`, `post_thinking_placeholder` then `resolve_placeholder`, `send_card` in a new 1:1 chat with the sponsor (`create_chat`) | Run for real; each read back through Graph | Run for real; each read back through Graph |
 | `send_email` to the sponsor | Run for real; in Sent Items | Run for real; in Sent Items |
 | Word through Work IQ: `create_word_document`, `read_word_document` | Run for real (one failure, below) | Run for real |
-| `share_file` of that document with the sponsor | **Not run on Linux**: it needs a message from the sponsor in the same server session, and none arrived in one where sharing was on | Run for real, after the sponsor's message; the share is in the file's permissions |
+| `share_file` of that document with the sponsor | Run for real at the final release head, after the sponsor's message (it needs one in the same server session); the share is in the file's permissions | Run for real, after the sponsor's message; the share is in the file's permissions |
 | Deleting the document | Run for real (Graph answers 423 Locked for a few minutes after Work IQ creates a document) | Run for real |
 | Inbound Teams message from the sponsor | Run for real: pushed outside the envelope, sender matched by directory ID | Run for real: pushed outside the envelope, sender matched by directory ID |
-| Inbound email from another person | **Not run on this platform** (run on macOS, run 2) | **Not run on this platform** |
+| Inbound email from the sponsor | Run for real at the final release head: pushed inside the envelope | **Not run on this platform** (run on Linux, and on macOS in run 2) |
 | The agent's own mail | Run for real: the poll fetched the agent's email to itself and, by design, didn't push it | Run for real: the poll fetched the agent's sent mail and didn't push it |
 | Recipient policy: `send_email` and `share_file` to an address at a reserved domain | Run for real: both refused, a `denied` audit event each, no Graph request | Run for real: both refused, a `denied` audit event each, no Graph request |
 | Audit event before each send | Run for real: every `pending` event before Graph's time for the message | Run for real: every `pending` event before Graph's time for the message |
@@ -134,7 +134,7 @@ an automated test and went only to the sponsor or the agent itself.
 
 One `create_word_document` on Linux failed: the request to Work IQ got no answer, and the tool
 returned no error to the caller. Its tokens were all issued (HTTP 200); the cause was not
-established. It didn't happen again in 17 later creates inside the server on either platform. The
+established. It didn't happen again in 18 later creates inside the server on either platform. The
 tool now reports such a failure as a Work IQ error.
 
 Bugs run 3 found, fixed on the release branch with a test:
@@ -155,8 +155,7 @@ It also showed that two computers running one agent with local memory both push 
 ## Not proven
 
 - Work IQ beyond Word: Excel and OneDrive files through Work IQ (run 3 covered Word only).
-- Inbound email from someone else on Linux and Windows (run on macOS only).
-- `share_file` on Linux.
+- Inbound email on Windows (run on Linux and macOS; the code is the same).
 - Windows setup and the server in a standard user's session (run 3 ran elevated).
 - Inbound email from someone who isn't a sponsor (the test account had no mailbox). Email is
   always wrapped, as the sponsor's email showed.
