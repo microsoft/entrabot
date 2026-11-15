@@ -851,10 +851,12 @@ async def read_file(
             content_url = (
                 f"{GRAPH_V1_HOST}/drives/{file_ref.drive_id}/items/{file_ref.item_id}/content"
             )
-            resp = await client.get(content_url, headers=_bearer(token))
-            if resp.status_code not in (200, 302):
+            resp = await client.get(content_url, headers=_bearer(token), follow_redirects=True)
+            if resp.status_code != 200:
                 _raise_for_files_error(resp, target=resource, scope="Files.Read")
-            # httpx auto-follows redirects; resp.content is the file body.
+            # Graph answers with a 302 to a pre-authenticated download URL. httpx doesn't
+            # follow redirects unless asked, and drops the Authorization header when it
+            # follows one to another host, so the Graph token never reaches the download.
             text = resp.content.decode("utf-8", errors="replace")
 
         elif ext == ".pdf":
@@ -863,7 +865,7 @@ async def read_file(
             content_url = (
                 f"{GRAPH_V1_HOST}/drives/{file_ref.drive_id}/items/{file_ref.item_id}/content"
             )
-            resp = await client.get(content_url, headers=_bearer(token))
+            resp = await client.get(content_url, headers=_bearer(token), follow_redirects=True)
             if resp.status_code != 200:
                 _raise_for_files_error(resp, target=resource, scope="Files.Read")
             text, page_count = _extract_pdf_text(resp.content)
@@ -873,7 +875,7 @@ async def read_file(
                 f"{GRAPH_V1_HOST}/drives/{file_ref.drive_id}"
                 f"/items/{file_ref.item_id}/content?format=pdf"
             )
-            resp = await client.get(content_url, headers=_bearer(token))
+            resp = await client.get(content_url, headers=_bearer(token), follow_redirects=True)
             if resp.status_code != 200:
                 _raise_for_files_error(resp, target=resource, scope="Files.Read")
             pdf_bytes = resp.content
