@@ -380,7 +380,7 @@ About a minute later the admin center listed the agent with platform
 worked, and the admin center stopped listing the agent a few minutes after it.
 Run for real on Windows too: registration, `-Diagnose`, the admin center
 listing and teardown's delete. Not yet run on macOS, nor with a second
-computer joining a registered agent.
+computer joining a registered agent, nor on Windows as a standard user.
 
 Microsoft's other route, the Agent 365 CLI's `a365 setup all`, creates its own
 Blueprint with a client secret and an Azure App Service. Do not run it against

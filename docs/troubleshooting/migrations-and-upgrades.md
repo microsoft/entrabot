@@ -248,6 +248,14 @@ The changes are in setup and teardown:
   `AgentRegistration.ReadWrite.All`. The flag is `--configure-a365` (`-ConfigureA365` on
   Windows); 0.2.0's `--configure-a365-observability` and `-ConfigureA365Observability` still
   work and now mean the same.
+- **One registration per agent.** A computer that joined its agent with 0.2.0's setup has no
+  record that it joined, so setup there cannot tell it from the computer that created the
+  agent, and a yes registers the agent from it as well. If another computer has registered
+  the agent already, record that registration on this one before running setup with a yes:
+  `register_agent_instance.py --registration-id <ID> --apply`, with the ID the other
+  computer's `--diagnose` shows. Setup then updates that registration instead of making a
+  second one. See
+  [Telemetry and the Agent 365 registry](../platform-docs/microsoft-agent-365.md#telemetry-and-the-agent-365-registry).
 - **Teardown with `--delete-agent`** (`-DeleteAgent`) also deletes the agent's registration
   when this computer recorded one.
 
