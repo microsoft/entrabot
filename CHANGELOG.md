@@ -93,6 +93,8 @@ planned for 0.3.0. What this release was checked against is in
 
 ### Fixed
 
+- Joining an agent by its Blueprint App ID (`--use-blueprint`, `-UseBlueprint` on Windows) with no Agent User named looked only for an Agent User called `entrabot-agent@<domain>`. When the agent had another name, setup created a second Agent Identity and Agent User under the Blueprint and connected the computer to that new, unlicensed agent. Setup now uses the Blueprint's Agent User: the one recorded on the computer, or else its only one. When it has several, setup stops and lists them; name one with `--agent-user-upn` (`-AgentUserUpn`). Found joining a Linux-created agent from Windows.
+- On Windows, after winget installed the Azure CLI, setup said "winget did not install the Azure CLI (exit 0)" and installed a private copy as well, which takes several minutes. It looked up `ProgramFiles` in an environment whose names Windows had spelled in capitals.
 - `read_file` didn't follow Graph's redirect to a file's download URL, so a `.txt`, `.md` or `.html` file read back empty and PDF and Word files failed. Found in a real end-to-end run.
 - With console telemetry on (`ENTRABOT_A365_CONSOLE_ENABLED`), spans were printed to standard output, the MCP protocol channel. They now go to standard error.
 - Setup's consent step extended the first delegated grant it found on the Agent Identity, which could be another resource's (Azure Storage for cloud memory, a customer's own API), instead of the Microsoft Graph grant. Graph was then left without the agent's scopes, so its token lacked `User.ReadBasic.All` and the others and the sponsor lookup got 403. Run setup again on an install set up before this fix (`--diagnose`'s "Agent sponsor" check shows it).
