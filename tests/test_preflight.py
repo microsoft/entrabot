@@ -1194,12 +1194,17 @@ class TestCheckOldSetupKeys:
 
     def test_diagnostics_report_it_right_after_the_state_file(self, tmp_path: Path) -> None:
         names = [check.name for check in self._diagnose(_pending(tmp_path))]
-        assert names[:3] == ["State file", OLD_KEYS_CHECK, "Blueprint cert in OS keystore"]
+        assert names[:4] == [
+            "Entrabot version",
+            "State file",
+            OLD_KEYS_CHECK,
+            "Blueprint cert in OS keystore",
+        ]
 
     def test_diagnostics_with_nothing_pending_print_nothing_new(self, tmp_path: Path) -> None:
         names = [check.name for check in self._diagnose(_set_up_state(tmp_path))]
         assert OLD_KEYS_CHECK not in names
-        assert names[:2] == ["State file", "Blueprint cert in OS keystore"]
+        assert names[:3] == ["Entrabot version", "State file", "Blueprint cert in OS keystore"]
 
 
 # ─── format_report rendering ─────────────────────────────────────────────────
@@ -1893,3 +1898,31 @@ class TestAgentSponsorCheck:
             self._config(agent_object_id=None), fetch=lambda config: []
         )
         assert check.status == "skip"
+
+
+class TestVersionCheck:
+    def test_reports_the_running_version_and_never_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from entrabot import version as version_mod
+        from entrabot.preflight import VERSION_CHECK_NAME, check_version
+
+        monkeypatch.setattr(
+            version_mod, "release_status", lambda: ("warn", "Entrabot 0.2.0, not a release")
+        )
+        check = check_version()
+        assert (check.name, check.status) == (VERSION_CHECK_NAME, "warn")
+        assert "0.2.0" in check.detail and check.remediation
+
+    def test_run_diagnostics_includes_it(self, tmp_path: Path) -> None:
+        from entrabot.preflight import VERSION_CHECK_NAME
+
+        with patch("entrabot.preflight.run_smoke_checks", return_value=[]):
+            checks = run_diagnostics(
+                _telemetry_config(enabled=False, export=False),
+                state_path=tmp_path / "state.json",
+                expected_binary=tmp_path / "bin" / "entrabot-mcp",
+                claude_mcp_path=tmp_path / "absent.json",
+                copilot_mcp_path=tmp_path / "absent2.json",
+            )
+        assert checks[0].name == VERSION_CHECK_NAME

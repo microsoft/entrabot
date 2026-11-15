@@ -557,6 +557,26 @@ def check_a365_telemetry(
     )
 
 
+# ─── The running version ─────────────────────────────────────────────────────
+
+VERSION_CHECK_NAME = "Entrabot version"
+
+
+def check_version() -> Check:
+    """Diagnostics: which Entrabot this is, and whether its checkout is a release. Not being
+    on a release tag is a warning, never a failure."""
+    from entrabot import version
+
+    status, detail = version.release_status()
+    remediation = None
+    if status == "warn":
+        remediation = (
+            "To run a release: git fetch --tags, git checkout vX.Y.Z (the latest on the "
+            "project's Releases page), then run setup again."
+        )
+    return Check(VERSION_CHECK_NAME, status, detail + ".", remediation=remediation)  # type: ignore[arg-type]
+
+
 # ─── The agent's sponsor ─────────────────────────────────────────────────────
 
 SPONSOR_CHECK_NAME = "Agent sponsor"
@@ -1159,7 +1179,7 @@ def run_diagnostics(
     ``expected_binary`` is the MCP server setup installed; see
     :func:`default_expected_binary`.
     """
-    checks: list[Check] = []
+    checks: list[Check] = [check_version()]
     checks.append(check_state_file(state_path))
     old_setup_keys = check_old_setup_keys(state_path)
     if old_setup_keys is not None:
@@ -1219,7 +1239,9 @@ __all__ = [
     "Check",
     "SPONSOR_CHECK_NAME",
     "TELEMETRY_CHECK_NAME",
+    "VERSION_CHECK_NAME",
     "check_agent_sponsor",
+    "check_version",
     "check_a365_telemetry",
     "telemetry_token_scope",
     "COPILOT_CAPABLE_SKUS",

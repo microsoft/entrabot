@@ -5076,6 +5076,9 @@ async def whoami() -> str:
     token = _state.get("token") or (_identity.session.token if _identity else None)
     result = await _whoami(token=str(token) if token else None)
     result["teams_chat_id"] = _state.get("chat_id", "not_connected")
+    from entrabot import version as _version
+
+    result["version"] = _version.installed_version()
     # Add identity state info
     if _identity:
         result["identity_state"] = _identity.state.value
