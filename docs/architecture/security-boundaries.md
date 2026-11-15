@@ -24,6 +24,24 @@ Both paths produce the same JWT shape (`x5t#S256` header, 10-minute assertion li
 
 `log_event()` is called before a sensitive action proceeds, and again after it resolves, for security-sensitive call sites (Files Graph calls via `_audit_graph_call()`, Teams member adds, file shares): a `pending` event first, then `success` or `failure`. Other tools audit once, immediately before the side effect.
 
+Every tool that sends, creates, shares or deletes writes its `pending` event first and does nothing when that write fails: `send_teams_message`, `send_card`, `post_thinking_placeholder`, `create_chat`, `send_email`, `delete_teams_message`, `resolve_placeholder`, `add_teams_member`, `share_file`, the Files and Work IQ writes, and the daily summary. Files and Work IQ reads are audited the same way. `update_placeholder` (editing the agent's own progress message) and the Teams and mail read tools (`read_teams_messages`, `read_email`, `list_chat_members`, the waits) are not audited; they go to the interaction log, which is best effort. Each event is flushed to disk (`fsync`) before the action runs. The audit log is a local append-only JSONL file under the data directory: it is not signed, and anything running as the same OS user can edit it.
+
+Every event carries `origin`: `"system"` for the server's own events, `"model"` for events the model wrote through the `audit_log` tool. A model-authored event is the model's claim, never the server's record.
+
+## Outbound recipient policy
+
+`security/recipients.py` decides, in the server and before Microsoft Graph is called, whether the agent may reach an address. It applies to `send_email` (every `to`, `cc` and `bcc` address; one refusal stops the message), `create_chat`, `add_teams_member` (the invitee), `share_file` (the recipient) and the daily summary. Allowed by default:
+
+- the agent's sponsors as the directory lists them on the Agent Identity, cross-tenant sponsors included;
+- members of the chat the last pushed message came from, for 30 minutes after it;
+- the home tenant: the Agent User's domain, any domain in `ENTRABOT_HOME_DOMAINS`, or a domain whose sign-in discovery resolves to the agent's tenant ID.
+
+Everyone else needs an entry in `ENTRABOT_OUTBOUND_ALLOW` (exact addresses, or domains as `fabrikam.com` or `@fabrikam.com`; a domain entry does not cover its subdomains). A sponsor list or member list that cannot be read counts as empty, and a domain that cannot be resolved counts as external. A refusal returns an error to the model and writes a `denied` audit event. `share_file` and `add_teams_member` still also require a sponsor's live request (below); the policy narrows who the sponsor can direct them at. An external sponsor still receives the daily summary, which contains other people's messages; leave `ENTRABOT_HUMAN_USER_MAILS` on an address in the tenant to avoid that.
+
+## Token lifetime and revocation
+
+An access token Entra has issued stays valid until it expires, even after the agent is disabled. Continuous access evaluation (CAE) would let Microsoft Graph reject it sooner, but Microsoft Learn documents CAE for users and for single-tenant workload identities (line-of-business service principals), not for Agent Identities or for the Agent User `user_fic` grant, and asking for it (`xms_cc` `cp1`) makes Entra issue tokens that live up to 24 to 28 hours. Entrabot therefore does not request CAE. Instead the server asks for a fresh three-hop token when its current one is older than `ENTRABOT_TOKEN_MAX_AGE_SECONDS` (default 600, from 60 to 3300). Once the agent is disabled that sign-in fails and every tool fails with it, so a disabled agent keeps acting for at most about ten minutes by default. Revisit this if Microsoft documents CAE for Agent Users.
+
 Attribution itself fails closed: if `agent_id` isn't supplied and none can be resolved from the active identity session, config, or the credential store, `log_event()` raises `AuditAttributionError` rather than logging `"unknown"` — **unless** the caller explicitly opts in with `attribution_type="none"` (reserved for bootstrap/preflight code that genuinely runs before any identity exists). This scope is specifically about *attribution*; it does not mean every possible agent action is audited today — it means an action that is meant to be agent-attributed cannot silently become an orphaned log line.
 
 ## External-content / XPIA boundary

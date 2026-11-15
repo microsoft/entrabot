@@ -16,12 +16,45 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Load .env
-if [ -f .env ]; then
-    set -a
-    source .env
-    set +a
-fi
+# One value from .env, read as data the way entrabot.config reads the file: a UTF-8 byte-order
+# mark and CRLF line ends are tolerated, each line is trimmed, blank lines, comments and lines
+# with no "=" are skipped, the line is split at the FIRST "=", key and value are trimmed (a value
+# is not unquoted), and the FIRST value of a repeated key wins. Prints the value and returns 0;
+# returns 1 when the file or the key is absent. Nothing in the file is ever run: other tools write
+# .env too, and running it as shell code would run a value holding $(...), backticks or ";".
+env_file_value() {
+    local file="$1" wanted="$2" line key first=true
+    [ -f "$file" ] || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+        if [ "$first" = true ]; then
+            line="${line#$'\xef\xbb\xbf'}"
+            first=false
+        fi
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        case "$line" in
+            '' | '#'*) continue ;;
+            *=*) ;;
+            *) continue ;;
+        esac
+        key="${line%%=*}"
+        key="${key%"${key##*[![:space:]]}"}"
+        if [ "$key" = "$wanted" ]; then
+            line="${line#*=}"
+            printf '%s' "${line#"${line%%[![:space:]]*}"}"
+            return 0
+        fi
+    done < "$file"
+    return 1
+}
+
+# Only the two values this script needs, read as data (never run: a value holding $(...),
+# backticks or ";" stays text). A value already in the environment wins, as in entrabot.config.
+for key in ENTRABOT_CLIENT_ID ENTRABOT_TENANT_ID; do
+    if [ -z "${!key:-}" ] && value="$(env_file_value .env "$key")"; then
+        export "$key=$value"
+    fi
+done
 
 if [ -z "${ENTRABOT_CLIENT_ID:-}" ]; then
     echo "ERROR: ENTRABOT_CLIENT_ID not set in .env"
