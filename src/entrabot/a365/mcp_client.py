@@ -84,16 +84,25 @@ class WorkIqMcpClient:
                 "arguments": arguments,
             },
         }
-        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
-            response = await client.post(
-                endpoint,
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/json, text/event-stream",
-                    "Content-Type": "application/json",
-                },
-            )
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._timeout, transport=self._transport
+            ) as client:
+                response = await client.post(
+                    endpoint,
+                    json=payload,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Accept": "application/json, text/event-stream",
+                        "Content-Type": "application/json",
+                    },
+                )
+        except httpx.HTTPError as exc:
+            # No answer at all (connect, proxy, timeout, dropped connection). The tools promise
+            # a Work IQ error for every Work IQ failure; the exception's text is not included,
+            # as it can carry the request.
+            reason = f"the request failed before an answer ({type(exc).__name__})"
+            raise A365McpCallError(server_name, tool_name, reason) from exc
 
         if response.status_code == 401:
             raise A365McpCallError(server_name, tool_name, "token rejected with 401")
