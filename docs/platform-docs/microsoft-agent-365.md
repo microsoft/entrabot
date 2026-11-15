@@ -47,8 +47,9 @@ provide the capability, such as document-level Word comments — Microsoft
 Graph drive-item `/comments` is not a substitute for Word comments on `.docx`
 files.
 
-Agent 365 tenant-wide OpenTelemetry observability is a separate integration
-surface; Entrabot maintains its own fail-closed audit log.
+Agent 365 telemetry (OpenTelemetry) is optional and separate from Work IQ;
+see [Telemetry and the Agent 365 registry](#telemetry-and-the-agent-365-registry).
+It does not replace Entrabot's own audit log.
 
 ## `ToolingManifest.json` is authoritative
 
@@ -237,6 +238,81 @@ or `./scripts/setup.sh --diagnose` on macOS and Linux) runs the same check.
 Use the generated manifest and live tenant consent state as the source of
 truth. Server availability, license requirements, and admin-center
 presentation vary by tenant.
+
+## Telemetry and the Agent 365 registry
+
+Agent 365 shows an agent's activity in Microsoft Defender, the Microsoft 365
+admin center and Microsoft Purview from OpenTelemetry spans the agent sends,
+and lists the agent in the Agent 365 registry only once it is registered.
+These are two separate things, and Entrabot does the first and offers the
+second as an opt-in script.
+
+**Which SDK.** Entrabot uses Microsoft's OpenTelemetry Distro,
+[`microsoft-opentelemetry`](https://learn.microsoft.com/microsoft-agent-365/developer/microsoft-opentelemetry)
+(its Agent 365 exporter and scopes), which Microsoft Learn recommends for new
+Agent 365 observability integrations; the older Agent 365 Observability SDK is
+deprecated. Entrabot does not use the Agent 365 tooling SDK
+(`microsoft-agents-a365-tooling`): Work IQ is called by Entrabot's own MCP
+client in `src/entrabot/a365/`, so that every call goes through the audit log
+and the external-content envelope.
+
+**What is sent.** Content is suppressed: each request and response is
+`[content suppressed]`, tool spans carry only the tool's name, and errors only
+"failed". The spans carry the agent's IDs, the conversation (chat) ID, the
+channel and, for a Teams message, the sender's Entra object ID.
+
+- The harness (`entrabot`, from PR #122) sends one `invoke_agent` span per
+  turn.
+- The MCP server sends them too, from what it can see, because under Claude
+  Code or Copilot CLI the host runs the model loop: an inbound Teams message
+  or email pushed to the model starts a run, each tool call is an
+  `execute_tool` span in it, and a tool call with no run open starts one in
+  the `cli` channel. A run ends at the next inbound message, after five quiet
+  minutes, or when the server stops (`src/entrabot/observability/mcp_runs.py`).
+
+It uses the delegated route: the agent's own Agent User token for
+`Agent365.Observability.OtelWrite` on the Agent 365 Observability resource
+(`9b975845-388f-4429-889e-eab1ef63949c`), kept fresh in the background.
+
+**Switching it on.** Answer yes to the telemetry question in setup, or pass
+`--configure-a365-observability` to `./scripts/setup.sh` (macOS, Linux) or
+`-ConfigureA365Observability` to `scripts\setup-windows.cmd`. Setup runs
+`scripts/ensure_a365_observability_permissions.py` with the setup credential
+(the Blueprint principal's tenant-wide grant, the Blueprint's inheritable
+permission and the Agent Identity's grant for its Agent User), checks as the
+agent that its token carries the scope, and only then writes
+`ENTRABOT_A365_OBSERVABILITY_ENABLED=true` and
+`ENTRABOT_A365_EXPORT_ENABLED=true` to `.env`. A failure never stops setup.
+`--diagnose` (`-Diagnose`) reports whether telemetry is on and whether the
+agent's token carries the scope.
+
+**Licence.** Microsoft accepts the spans with `200 OK` but drops them
+(`tenant_not_licensed`) unless at least one user in the tenant has a
+**Microsoft 365 E7 or Microsoft Agent 365 licence assigned**
+([drop conditions](https://learn.microsoft.com/microsoft-agent-365/developer/observability-concepts#limits-and-drop-conditions)).
+Neither setup nor diagnose can see that; both say so.
+
+**The registry.** Learn: "Creating a Microsoft Entra identity alone doesn't
+register the instance." An agent whose Blueprint was made through Microsoft
+Graph, as Entrabot's is, registers with the Agent Registry API
+(`POST https://graph.microsoft.com/beta/copilot/agentRegistrations`,
+`AgentRegistration.ReadWrite.All`). `scripts/register_agent_instance.py` does
+that for this machine's agent: a dry run by default, `--apply` to write, the
+registration's ID kept in `.entrabot-state.json` so a later run updates it
+instead of creating another. It is not part of setup, because:
+
+- the setup (Provisioner) app does not hold `AgentRegistration.ReadWrite.All`;
+  an administrator has to add it and consent, and the script stops when the
+  token lacks it;
+- the API is beta, has no documented list call, and Learn does not say whether
+  `agentIdentityId` takes the Agent Identity's app ID or object ID (the script
+  sends app IDs);
+- it has not been run against a tenant.
+
+Microsoft's other route, the Agent 365 CLI's `a365 setup all`, creates its own
+Blueprint with a client secret and an Azure App Service. Do not run it against
+an Entrabot agent: that is how an earlier attempt ended up with a second
+Blueprint holding a secret and broad grants.
 
 ## Related
 
