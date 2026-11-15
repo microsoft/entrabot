@@ -172,7 +172,7 @@ It also showed that two computers running one agent with local memory both push 
 | The MCP server against a real tenant | Run for real (runs 1 and 2) | Run for real (run 3, Ubuntu 24.04, headless keyring) | Run for real (run 3, Windows 11 24H2, elevated desktop task) |
 | Setup wizard against a real tenant | Repair run and health check | Run for real: new agent, repair, health check | Run for real: join, repair, health check |
 | Telemetry setup step and the `--diagnose` check | Run for real | Run for real | Run for real |
-| Agent 365 registry through setup (after 0.2.0, on `main`): the setup app's permission, the registration, its `--diagnose` line, teardown's delete | Unit-tested | Run for real (2026-11-15, Ubuntu 24.04): the permission and its consent check, the registration, `--diagnose`, the admin center listing, the script's delete, teardown's delete. Not run: a second computer joining a registered agent | Run for real (2026-11-15, Windows 11 Pro 25H2, built-in Administrator): the permission, the registration, `-Diagnose`, the admin center listing, telemetry, teardown's delete. Unit-tested: the takeover run's grant. Not run: a standard user |
+| Agent 365 registry through setup (after 0.2.0, on `main`): the setup app's permission, the registration, its `--diagnose` line, teardown's delete | Unit-tested | Run for real (2026-11-15, Ubuntu 24.04): the permission and its consent check, the registration, `--diagnose`, the admin center listing, the script's delete, teardown's delete. Not run: a second computer joining a registered agent | Run for real (2026-11-15, Windows 11 Pro 25H2, built-in Administrator): the permission, the registration, `-Diagnose`, the admin center listing, telemetry, teardown's delete. Run for real: the takeover run's grant, on a first run. Not run: a standard user |
 | `status.sh` and `setup_delegated.sh` read `.env` as data | Run for real (the old scripts fail the tests, the new ones pass) | Unit-tested | n/a |
 | The full test suite | Every commit | Not run | CI (`test-windows`) on each pull request |
 | Process containment | Not in 0.2.0: planned for 0.3.0 | Not in 0.2.0 | Not in 0.2.0 |
@@ -226,8 +226,10 @@ that already had the setup app.
   agent with a TPM-held key and switched telemetry on, but did not register the agent: a
   takeover run consents nothing, so the setup app did not get the permission, and setup
   exited `3`. A takeover run now grants that one permission on its own, with an app role
-  assignment, and still runs no admin consent. That fix is unit-tested; run for real: not
-  yet.
+  assignment, and still runs no admin consent. Run for real on a third run,
+  after teardown had made the computer new to the setup app again: setup granted the
+  permission on its own about 10 seconds in, ran no admin consent, created the agent and
+  registered it, and exited `0`.
 - The second run (no longer a takeover): admin consent was recorded on the second attempt,
   about 20 seconds in, and the agent was registered in the same run. Setup exited `0`.
 - `-Diagnose` reported "Agent 365 registry: registered", and Microsoft Graph returned the
