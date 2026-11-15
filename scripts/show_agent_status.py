@@ -229,6 +229,16 @@ def _old_setup_key_checks() -> list[Check]:
     return [Check(name, "pass", "No older setup key is waiting to be switched off")]
 
 
+def _containment_checks() -> list[Check]:
+    """Whether the running server is contained, and by what (entrabot.sandbox.launch)."""
+    try:
+        from entrabot.sandbox.launch import describe_running
+    except ImportError:
+        return []
+    status, detail = describe_running()
+    return [Check("Server containment", status, detail)]
+
+
 def _graph_list(
     method: str, path: str, token: str, *, base_url: str
 ) -> tuple[list[dict] | None, str | None]:
@@ -533,6 +543,7 @@ def _snapshot(token: str, *, full_thumbprints: bool = False) -> dict[str, object
     )
     checks.extend(_local_certificate_checks(state))
     checks.extend(_old_setup_key_checks())
+    checks.extend(_containment_checks())
     failed = sum(1 for check in checks if check.status == "fail")
     warned = sum(1 for check in checks if check.status == "warn")
     passed = sum(1 for check in checks if check.status == "pass")

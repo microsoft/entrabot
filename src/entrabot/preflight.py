@@ -557,6 +557,25 @@ def check_a365_telemetry(
     )
 
 
+CONTAINMENT_CHECK_NAME = "Server containment"
+
+
+def check_containment(state_root: Path | None = None) -> Check:
+    """Is the running server contained, and by what? (``entrabot.sandbox.launch``)"""
+    from entrabot.sandbox.launch import describe_running
+
+    status, detail = describe_running(state_root)
+    remediation = None
+    if status == "warn":
+        remediation = (
+            "Install bubblewrap (bwrap) on Linux; on macOS check ENTRABOT_CONTAINMENT. "
+            "Windows is not contained yet."
+        )
+    return Check(
+        name=CONTAINMENT_CHECK_NAME, status=status, detail=detail + ".", remediation=remediation
+    )  # type: ignore[arg-type]
+
+
 # ─── Phase 3: diagnostics extras ─────────────────────────────────────────────
 
 
@@ -1100,6 +1119,7 @@ def run_diagnostics(
         if work_iq is not None:
             checks.append(work_iq)
     checks.append(check_a365_telemetry(config))
+    checks.append(check_containment())
     return checks
 
 

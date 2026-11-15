@@ -4758,6 +4758,9 @@ async def whoami() -> str:
         result["identity_state"] = _identity.state.value
         result["attribution_type"] = _identity.session.attribution_type
         result["auth_mode"] = _identity.session.auth_mode
+    # How this server process is contained (entrabot.sandbox.launch): seatbelt, bwrap, mxc,
+    # or none.
+    result["containment"] = os.environ.get("ENTRABOT_CONTAINED", "none")
     return json.dumps(result, indent=2)
 
 
@@ -6383,8 +6386,6 @@ def main() -> None:
     """Entry point for ``entrabot-mcp`` console script."""
     import anyio
 
-    from entrabot.singleton import run_or_exit_if_held
-
     # Acquire the process-singleton lock BEFORE any side-effecting work
     # (logging, keychain reads, blob clients). When two MCP hosts attach to
     # the same workstation simultaneously, every spawn after the first will
@@ -6397,6 +6398,16 @@ def main() -> None:
     # The handle is bound to ``_singleton_handle`` so the GC can't release
     # it; the lock lives for the process lifetime and the kernel cleans up
     # on exit.
+    # Containment first (entrabot.sandbox.launch): unless this process already is the
+    # contained server, it becomes the launcher, runs the server inside the OS sandbox with
+    # the same stdio, and exits with its code. The contained server takes the lock below.
+    from entrabot.sandbox.launch import maybe_contain
+    from entrabot.singleton import run_or_exit_if_held
+
+    contained_exit = maybe_contain()
+    if contained_exit is not None:
+        sys.exit(contained_exit)
+
     _singleton_handle = run_or_exit_if_held()  # noqa: F841
 
     global logger
