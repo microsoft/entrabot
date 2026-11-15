@@ -16,9 +16,16 @@ Usage::
     # Remove all scopes (delete the grant entirely)
     python3 scripts/revoke_consent.py --all
 
+    # The grant on another resource (Azure Storage, or any API registered in the tenant)
+    python3 scripts/revoke_consent.py --all --resource-app-id <resource-app-id>
+
+The Agent Identity holds one grant per resource (Microsoft Graph, Azure Storage, and any
+other API it was given). The script changes only the grant on one resource: Microsoft
+Graph unless ``--resource-app-id`` names another, the same default as ``grant_consent.py``.
+
 The script:
   1. Reads AGENT_OBJECT_ID + AGENT_USER_ID from ``.entrabot-state.json``.
-  2. Finds the matching ``oauth2PermissionGrant`` via Graph v1.0.
+  2. Finds the ``oauth2PermissionGrant`` on that resource via Graph v1.0.
   3a. If ``--scopes`` is partial: PATCHes the grant to remove those scopes.
   3b. If ``--all`` or remaining scopes are empty: DELETEs the grant.
 """
@@ -40,23 +47,44 @@ from script_output import make_output_safe  # noqa: E402
 
 
 GRAPH_V1 = "https://graph.microsoft.com/v1.0"
+MS_GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000"
 
 
 def _print_usage() -> None:
-    print("usage: revoke_consent.py (--scopes 'Scope1,Scope2' | --all)")
+    print(
+        "usage: revoke_consent.py (--scopes 'Scope1,Scope2' | --all) [--resource-app-id ID]"
+    )
     print("")
     print("Options:")
-    print("  --scopes SCOPES   Comma- or space-separated scopes to remove")
-    print("  --all             Delete the entire Agent Identity -> Agent User grant")
-    print("  --help, -h        Show this help")
+    print("  --scopes SCOPES        Comma- or space-separated scopes to remove")
+    print("  --all                  Delete the entire Agent Identity -> Agent User grant")
+    print("  --resource-app-id ID   The resource whose grant to change")
+    print(f"                         (default: Microsoft Graph {MS_GRAPH_APP_ID})")
+    print("  --help, -h             Show this help")
+
+
+def _resolve_sp_object_id(token: str, app_id: str) -> str | None:
+    """Return the object ID of the service principal for *app_id*, or None."""
+    resp = requests.get(
+        f"{GRAPH_V1}/servicePrincipals?$filter=appId eq '{app_id}'",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=15,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"Failed to look up the service principal: {resp.status_code} {resp.text}"
+        )
+    values = resp.json().get("value", [])
+    return values[0]["id"] if values else None
 
 
 def _find_consent_grant(
     token: str,
     agent_identity_object_id: str,
     agent_user_id: str,
+    resource_sp_id: str,
 ) -> dict | None:
-    """Find the oauth2PermissionGrant for agent identity → agent user."""
+    """Find the oauth2PermissionGrant for agent identity → agent user on one resource."""
     url = (
         f"{GRAPH_V1}/oauth2PermissionGrants"
         f"?$filter=clientId eq '{agent_identity_object_id}'"
@@ -67,8 +95,10 @@ def _find_consent_grant(
         raise RuntimeError(
             f"Failed to list consent grants: {resp.status_code} {resp.text}"
         )
-    grants = resp.json().get("value", [])
-    return grants[0] if grants else None
+    for grant in resp.json().get("value", []):
+        if grant.get("resourceId") == resource_sp_id:
+            return grant
+    return None
 
 
 def main(argv: list[str]) -> int:
@@ -80,6 +110,7 @@ def main(argv: list[str]) -> int:
 
     scopes_to_remove: set[str] = set()
     revoke_all = False
+    resource_app_id = MS_GRAPH_APP_ID
 
     i = 1
     while i < len(argv):
@@ -90,6 +121,9 @@ def main(argv: list[str]) -> int:
         elif argv[i] == "--all":
             revoke_all = True
             i += 1
+        elif argv[i] == "--resource-app-id" and i + 1 < len(argv):
+            resource_app_id = argv[i + 1].strip()
+            i += 2
         else:
             i += 1
 
@@ -115,9 +149,16 @@ def main(argv: list[str]) -> int:
         return 1
 
     # ---- find grant ----
-    grant = _find_consent_grant(token, agent_obj_id, agent_user_id)
+    resource_sp_id = _resolve_sp_object_id(token, resource_app_id)
+    if not resource_sp_id:
+        print(f"ERROR: No service principal found for resource {resource_app_id}.")
+        return 1
+    grant = _find_consent_grant(token, agent_obj_id, agent_user_id, resource_sp_id)
     if not grant:
-        print("No consent grant found for this agent identity / agent user pair.")
+        print(
+            "No consent grant found for this agent identity / agent user pair "
+            f"on resource {resource_app_id}."
+        )
         return 1
 
     grant_id = grant["id"]

@@ -215,7 +215,7 @@ commands:
     category: auth-and-certs
     page: reference/scripts/auth-and-certs/revoke-consent-py.md
     platforms: [macos, linux, windows]
-    summary: Revokes specific --scopes from, or --all of (deleting), the oauth2PermissionGrant that lets the Agent Identity act as the Agent User. Inverse of grant_consent.py.
+    summary: Revokes specific --scopes from, or --all of (deleting), the oauth2PermissionGrant that lets the Agent Identity act as the Agent User, on Microsoft Graph or another --resource-app-id. Inverse of grant_consent.py.
   - id: provisioner-token-py
     path: scripts/provisioner-token.py
     category: auth-and-certs
