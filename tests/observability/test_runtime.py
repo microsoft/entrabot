@@ -113,3 +113,48 @@ def test_failed_initialization_remains_retryable(
 
     assert attempts == 2
     assert runtime._initialized is True
+
+
+_AZURE_MONITOR_SWITCHES = (
+    "MICROSOFT_OTEL_SDKSTATS_DISABLED",
+    "APPLICATIONINSIGHTS_STATSBEAT_DISABLED_ALL",
+    "APPLICATIONINSIGHTS_CONTROLPLANE_DISABLED",
+)
+
+
+def _initialize_with_fake_distro(monkeypatch: pytest.MonkeyPatch) -> dict[str, str | None]:
+    import os
+
+    from microsoft import opentelemetry
+
+    seen: dict[str, str | None] = {}
+
+    def fake_initialize(**kwargs: object) -> None:
+        seen.update({name: os.environ.get(name) for name in _AZURE_MONITOR_SWITCHES})
+
+    monkeypatch.setattr(opentelemetry, "use_microsoft_opentelemetry", fake_initialize)
+    runtime.initialize_observability(
+        EntraBotConfig(a365_observability_enabled=True), agent_name="fixture-agent"
+    )
+    return seen
+
+
+def test_the_distros_azure_monitor_calls_are_switched_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Entrabot exports only to Agent 365, but the distro also sends its own usage statistics
+    # to Application Insights and fetches settings from settings.sdk.monitor.azure.com.
+    for name in _AZURE_MONITOR_SWITCHES:
+        monkeypatch.setenv(name, "unset")  # so teardown removes what the code sets
+        monkeypatch.delenv(name)
+    assert _initialize_with_fake_distro(monkeypatch) == dict.fromkeys(
+        _AZURE_MONITOR_SWITCHES, "true"
+    )
+
+
+def test_an_operators_own_setting_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in _AZURE_MONITOR_SWITCHES:
+        monkeypatch.setenv(name, "false")
+    assert _initialize_with_fake_distro(monkeypatch) == dict.fromkeys(
+        _AZURE_MONITOR_SWITCHES, "false"
+    )
