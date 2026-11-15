@@ -8,13 +8,15 @@ Entrabot gives an autonomous agent its own Microsoft Entra Agent Identity and Ag
 
 ## macOS or Linux
 
-Setup needs Python 3.12 or newer and nothing else first: no Azure CLI and no `az login`. Clone or download the repository, then run setup from a terminal in it:
+Setup needs Python 3.12 or newer and nothing else first: no Azure CLI and no `az login`. Clone the latest release (or download its source code ZIP from <https://github.com/microsoft/entrabot/releases/latest>), then run setup from a terminal in it:
 
 ```bash
-git clone https://github.com/microsoft/entrabot.git
+git clone --branch v0.2.0 https://github.com/microsoft/entrabot.git
 cd entrabot
 ./scripts/setup.sh
 ```
+
+This clones the latest release, v0.2.0. `main` is development and may be ahead of it. Git then prints a note about a "detached HEAD": that is normal when you check out a release tag, not an error. To upgrade an existing install, see [Upgrading to a new release](../troubleshooting/migrations-and-upgrades.md#upgrading-to-a-new-release).
 
 Setup builds `.venv`, then asks a few questions (each has a suggested answer), signs you in to Microsoft, and creates the agent. To answer up front instead:
 
@@ -30,10 +32,10 @@ The agent's signing key is kept in your login keychain on a Mac, or a Secret Ser
 
 ## Windows
 
-Nothing needs installing first. Download or clone the repository, then double-click `scripts\setup-windows.cmd`, or run it from a terminal:
+Nothing needs installing first. Download the latest release's source code ZIP or clone it, then double-click `scripts\setup-windows.cmd`, or run it from a terminal:
 
 ```bat
-git clone https://github.com/microsoft/entrabot.git
+git clone --branch v0.2.0 https://github.com/microsoft/entrabot.git
 cd entrabot
 scripts\setup-windows.cmd
 ```

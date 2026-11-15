@@ -572,7 +572,7 @@ Read a small binary file from OneDrive / SharePoint through Work IQ (`readSmallB
 async def whoami() -> str
 ```
 
-Show the current agent identity, Teams connection status, and permissions. Verifies the agent is authenticated and connected.
+Show the current agent identity, Teams connection status, and permissions. Verifies the agent is authenticated and connected. The `version` field is the running Entrabot version, from the installed package.
 
 ### `audit_log`
 

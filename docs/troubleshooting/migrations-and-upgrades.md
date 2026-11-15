@@ -188,7 +188,57 @@ same email as an upgraded one.
 
 See [Poll state](../architecture/storage-and-memory.md#poll-state).
 
-## Upgrading to v0.2
+## Upgrading to a new release
+
+Entrabot is released as tags; the latest release is on
+<https://github.com/microsoft/entrabot/releases/latest>. `main` is development and may be
+ahead of it. To move an existing install to a release, in the Entrabot folder:
+
+=== "macOS or Linux"
+
+    ```bash
+    git fetch --tags
+    git checkout v0.2.0
+    ./scripts/setup.sh
+    ```
+
+=== "Windows"
+
+    ```bat
+    git fetch --tags
+    git checkout v0.2.0
+    scripts\setup-windows.cmd
+    ```
+
+Setup continues with the existing agent and reinstalls Entrabot's packages when they changed.
+Then do the [post-upgrade verification](#post-upgrade-verification). Git prints a note about a
+"detached HEAD" after the checkout: that is normal for a release tag, not an error. The
+"Entrabot version" check in `--diagnose` and the status report says which release is running.
+
+Read the section below for the release you are moving to before restarting the agent.
+
+**If the folder has local changes.** Your `.env`, `.mcp.json`, `.entrabot-state.json` and
+`ToolingManifest.json` are not tracked by git, so the checkout keeps them. For files you
+changed yourself, `git status` lists them, and `git checkout` stops if the release changes one
+of them. To keep your edits, put them aside first and reapply them after:
+
+```bash
+git stash push -m "my Entrabot changes"
+git checkout v0.2.0
+git stash pop
+```
+
+`git stash pop` stops on a conflict and keeps the stash until you resolve it. To discard your
+edits instead, `git restore <file>` before the checkout. If you have commits of your own,
+keep them on a branch (`git switch -c my-changes` before the checkout) and merge the release
+into it instead of checking the tag out.
+
+**If you installed from a ZIP.** A ZIP has no git history to update. Clone the release into a
+new folder as in the getting-started guide, copy `.env` and `.entrabot-state.json` from the old
+folder into it, and run setup in the new folder. Start the agent from the new folder from then
+on.
+
+## Upgrading to 0.2.0
 
 Two behaviour changes take effect with no setting:
 

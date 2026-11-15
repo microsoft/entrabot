@@ -338,7 +338,8 @@ It does **not** create or watch any Teams chat. There is no default chat; every
 Teams tool needs an explicit chat ID at runtime. See
 [Messaging and delivery](../../../architecture/messaging-and-delivery.md).
 
-With `--diagnose`, none of the above runs. It checks the state file, the
+With `--diagnose`, none of the above runs. It checks the Entrabot version (a
+warning, never a failure, when the folder is not on a release tag), the state file, the
 certificate (in the key store, in date, and its key signs; a warning when 30
 days or fewer remain), the three-hop sign-in, the Graph identity, the Teams
 scope, the MCP configuration, Word, Excel and OneDrive files when
