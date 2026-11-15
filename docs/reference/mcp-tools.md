@@ -572,7 +572,7 @@ Read a small binary file from OneDrive / SharePoint through Work IQ (`readSmallB
 async def whoami() -> str
 ```
 
-Show the current agent identity, Teams connection status, and permissions. Verifies the agent is authenticated and connected. The `containment` field says how the server process is contained: `seatbelt`, `bwrap`, `mxc`, or `none`.
+Show the current agent identity, Teams connection status, and permissions. Verifies the agent is authenticated and connected.
 
 ### `audit_log`
 

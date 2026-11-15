@@ -57,9 +57,6 @@ name is forwarded verbatim (`"$@"`) to `scripts/show_agent_status.py` — see
 No Graph calls or local-state writes happen in `status.sh` itself; all of
 that lives in `show_agent_status.py`.
 
-The report includes a **Server containment** line: whether the running MCP
-server is contained, and by what (see [Process Containment](../../../guides/containment.md)).
-
 ## Exit behavior
 
 - Exits `1` with `ERROR: Python 3.12+ is required to run EntraBot status.`

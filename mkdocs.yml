@@ -119,7 +119,6 @@ nav:
       - Email Workflows: guides/email-workflows.md
       - Files and Microsoft Agent 365 Work IQ: guides/files-and-work-iq.md
       - Identity Lifecycle and Deprovisioning: guides/identity-lifecycle.md
-      - Process Containment: guides/containment.md
   - Clients:
       - Overview: clients/overview.md
       - Claude Code: clients/claude-code.md
@@ -229,7 +228,7 @@ nav:
       - Storage: troubleshooting/storage.md
       - MCP Connectivity: troubleshooting/mcp-connectivity.md
       - Migrations and Upgrades: troubleshooting/migrations-and-upgrades.md
-      - Containment, Outbound Controls and Telemetry: troubleshooting/containment-and-outbound.md
+      - Outbound Controls and Telemetry: troubleshooting/outbound-and-telemetry.md
   - Project:
       - Current Status: project/status.md
       - Changelog: project/changelog.md

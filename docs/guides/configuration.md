@@ -6,7 +6,7 @@ EntraBot is configured entirely through environment variables prefixed `ENTRABOT
 
 Configuration is not a value frozen once at boot. `get_config()` calls `EntraBotConfig.from_env()` fresh every time it's invoked, building a new immutable `EntraBotConfig` dataclass instance from whatever is in `os.environ` **at that moment**. In practice this means:
 
-- Values set before the process starts (shell export, `.env`, systemd `Environment=`, etc.) are what most code sees, because little in this codebase changes `os.environ` after boot: `_load_dotenv()` itself, the containment launcher (which sets `ENTRABOT_CONTAINED`, the proxy variables and `TMPDIR` for the contained server), and the Copilot SDK harness (which overlays the `.env` of the agent it was started for).
+- Values set before the process starts (shell export, `.env`, systemd `Environment=`, etc.) are what most code sees, because little in this codebase changes `os.environ` after boot: `_load_dotenv()` itself and the Copilot SDK harness (which overlays the `.env` of the agent it was started for).
 - Tests and scripts that call `os.environ[...] = ...` and then call `get_config()` again will see the change immediately — there is no cached singleton to invalidate.
 - The returned `EntraBotConfig` instance itself is `frozen=True` (immutable) — once you have one, its fields cannot change. Call `get_config()` again to see a new read of the environment.
 
@@ -63,12 +63,11 @@ Precedence and list rules:
 | `ENTRABOT_FILES_MAX_PDF_BYTES` | Largest PDF `read_file` will download, in bytes. Defaults to `52428800` (50 MiB). |
 | `ENTRABOT_FILES_MAX_WORKBOOK_CELLS` | Most cells one `read_workbook_range` call can read. Defaults to `5000`. Larger requests fail with `WorkbookRangeTooLargeError` before any cell data is fetched. A zero, negative, or unparseable value falls back to the default and logs a warning. |
 
-## Outbound policy, containment, token age and telemetry
+## Outbound policy, token age and telemetry
 
-These are read where they are used, not by `EntraBotConfig`, except the telemetry switches. Values and defaults are listed in the [Configuration reference](../reference/configuration.md#outbound-policy-containment-and-telemetry).
+These are read where they are used, not by `EntraBotConfig`, except the telemetry switches. Values and defaults are listed in the [Configuration reference](../reference/configuration.md#outbound-policy-and-telemetry).
 
 - **Recipient policy.** `ENTRABOT_OUTBOUND_ALLOW` lists the addresses or domains, beyond sponsors, the requesting chat and the home tenant, that `send_email`, `create_chat`, `add_teams_member`, `share_file` and the daily summary may reach. `ENTRABOT_HOME_DOMAINS` names the home tenant's domains when Microsoft's sign-in discovery shouldn't be relied on. See [Security Boundaries](../architecture/security-boundaries.md#outbound-recipient-policy).
-- **Containment.** `ENTRABOT_CONTAINMENT`, `ENTRABOT_SANDBOX_EXTRA_HOSTS`, `ENTRABOT_SANDBOX_EXTRA_READ`, `ENTRABOT_MXC_EXECUTOR` and `ENTRABOT_MXC_SHA256` are read by the launcher when the server starts. See [Process Containment](containment.md).
 - **Token age.** `ENTRABOT_TOKEN_MAX_AGE_SECONDS` (default 600, clamped to 60–3300) is how old the agent's token may get before the server signs in again. Lower means a disabled agent stops sooner, at the cost of more sign-ins.
 - **Agent 365 telemetry.** `ENTRABOT_A365_OBSERVABILITY_ENABLED` and `ENTRABOT_A365_EXPORT_ENABLED` are written by setup when you switch telemetry on; `ENTRABOT_A365_CONSOLE_ENABLED` prints spans to standard error for debugging; `ENTRABOT_A365_SERVICE_NAMESPACE` sets `service.namespace`. See [Microsoft Agent 365](../platform-docs/microsoft-agent-365.md).
 

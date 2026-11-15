@@ -117,9 +117,7 @@ Other:
   provisioning helpers print. By default each step is a one-line summary and
   the full output goes to the log.
 - `-Diagnose` — check an existing setup and explain what is wrong. Never
-  installs, repairs or moves anything. Includes the Agent 365 telemetry check
-  and "Server containment", which on Windows reports a running server as not
-  contained.
+  installs, repairs or moves anything. Includes the Agent 365 telemetry check.
 - `-BootstrapOnly` — stop once Python and `.venv` are ready, without starting
   the wizard.
 - `-Status`, with `-Json`, `-HealthOnly`, `-Strict` — show the agent's status

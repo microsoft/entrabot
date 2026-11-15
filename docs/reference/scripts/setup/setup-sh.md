@@ -343,8 +343,7 @@ certificate (in the key store, in date, and its key signs; a warning when 30
 days or fewer remain), the three-hop sign-in, the Graph identity, the Teams
 scope, the MCP configuration, Word, Excel and OneDrive files when
 `ToolingManifest.json` exists, Agent 365 telemetry (whether it is on and whether
-the agent's token carries `Agent365.Observability.OtelWrite`), whether the
-running MCP server is contained ("Server containment"), and the optional
+the agent's token carries `Agent365.Observability.OtelWrite`), and the optional
 `persona-sati` entry in `.mcp.json`. The persona-sati check is advisory: it can report `SKIP` or `WARN`
 but never a failure, and it connects only to loopback addresses (see
 [MCP connectivity](../../../troubleshooting/mcp-connectivity.md#persona-sati-does-not-connect)).

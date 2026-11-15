@@ -190,21 +190,16 @@ See [Poll state](../architecture/storage-and-memory.md#poll-state).
 
 ## Upgrading to v0.2
 
-Three behaviour changes take effect with no setting:
+Two behaviour changes take effect with no setting:
 
-- **Containment.** On macOS, and on Linux with `bwrap`, the MCP server now runs in a sandbox.
-  Anything it needs outside its repository and state, or any host other than Microsoft's, is
-  refused. Check with `./status.sh` ("Server containment") and see
-  [Process Containment](../guides/containment.md). `ENTRABOT_CONTAINMENT=off` restores the
-  old behaviour.
 - **Recipient policy.** `send_email`, `create_chat`, `add_teams_member`, `share_file` and the
   daily summary now refuse addresses outside the agent's sponsors, the requesting chat and the
   home tenant. List outside partners in `ENTRABOT_OUTBOUND_ALLOW`.
 - **Audit before sending.** `send_teams_message`, `send_card`, `post_thinking_placeholder` and
   `create_chat` now refuse to act when the audit log can't be written.
 
-Restart the MCP host after upgrading: a server started by an older version is reported as not
-contained until it restarts.
+Restart the MCP host after upgrading: a server started by an older version keeps running the
+old code until it restarts.
 
 ## Post-upgrade verification
 

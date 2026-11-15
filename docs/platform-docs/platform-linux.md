@@ -114,12 +114,6 @@ There is no dedicated Linux prerequisites installer. Setup itself needs only:
 - **A keyring provider that is running and unlocked** in a D-Bus session that
   setup, and later the agent, can reach: GNOME Keyring (Secret Service),
   KWallet, or libsecret.
-- **bubblewrap**, for process containment: `sudo apt install bubblewrap` or
-  `sudo dnf install bubblewrap`. Without it the server runs uncontained. Under
-  bubblewrap the D-Bus session bus must be a path socket
-  (`DBUS_SESSION_BUS_ADDRESS=unix:path=...`); with an abstract socket the
-  sign-in fails closed. Check which one `dbus-run-session` gives you with
-  `echo $DBUS_SESSION_BUS_ADDRESS`.
 
 Git and the Azure CLI are optional: download the repository as a ZIP if there is
 no Git, and setup offers to install a private Azure CLI under
@@ -172,7 +166,7 @@ server, and runs an end-to-end test. Operational storage stays local by default;
 pass `--use-cloud-memory` to opt into Azure Blob-backed storage.
 `./scripts/setup.sh --rotate-cert` replaces the certificate,
 `./scripts/setup.sh --diagnose` checks the setup, and `./scripts/teardown.sh`
-disconnects this computer. Setup has been run against a real tenant on Ubuntu 24.04 (before containment existed); see
+disconnects this computer. Setup has been run against a real tenant on Ubuntu 24.04; see
 [What has been tested](../getting-started/macos-linux.md#what-has-been-tested).
 
 For step-by-step setup, see [macOS and Linux setup](../getting-started/macos-linux.md)
@@ -180,16 +174,10 @@ and [Prerequisites](../getting-started/prerequisites.md).
 
 ## Process containment
 
-When bubblewrap (`bwrap`) is installed, the MCP server runs inside it by default: the home
-directory is an empty tmpfs with the repository, virtual environment, state and sign-in cache
-mounted back, `/tmp` is private, and the server has its own network namespace whose only exit
-is the launcher's allowlisting proxy. The D-Bus session bus socket is mounted in for the Secret
-Service when `DBUS_SESSION_BUS_ADDRESS` is a path; with an abstract socket, sign-in fails
-closed. Without `bwrap` the server runs uncontained and says so (`--diagnose` warns).
-
-Status: implemented and unit-tested, **not yet run on a real Linux machine**. Install `bwrap`
-(`apt install bubblewrap`, `dnf install bubblewrap`) and run `python -m entrabot.sandbox.selftest`
-to check it on yours. Settings and how to turn it off: [Process Containment](../guides/containment.md).
+The MCP server is **not contained** in 0.2.0. It runs with all of its user's rights: it can
+read every file that user can and connect to any host. Containing it on Linux and macOS is
+planned for 0.3.0. The recipient policy and audit apply on every platform. See
+[Security Boundaries](../architecture/security-boundaries.md).
 
 ## Default paths
 

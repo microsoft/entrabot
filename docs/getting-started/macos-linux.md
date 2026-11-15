@@ -78,7 +78,7 @@ The licence walkthrough is the same as on Windows; see [Licences for the agent](
 
 ## The first start
 
-The MCP server starts inside a sandbox (Seatbelt on macOS, bubblewrap on Linux when `bwrap` is installed): it can read only its own folder and state, and reach only Microsoft's sign-in, Graph and Agent 365 hosts. Nothing needs setting up for it. See [Process Containment](../guides/containment.md).
+The MCP server is not contained in 0.2.0: it runs with all of your account's rights. Containing it on macOS and Linux is planned for 0.3.0. See [Security Boundaries](../architecture/security-boundaries.md#current-limitation-no-shipped-execution-sandbox).
 
 The first time Claude Code opens the Entrabot folder it asks some questions; `./start-entrabot.sh` and setup's last screen both say so. If this computer has not used Claude Code before, it asks you to sign in to Claude. Then it asks whether to trust this folder, whether to use the `entrabot` MCP server, and whether to load a development channel. Say yes to each: the folder is the one you just set up, the server is your agent, and the channel is how Teams messages reach it. Then say *Who are you?*
 

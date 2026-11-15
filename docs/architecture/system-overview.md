@@ -30,7 +30,6 @@ See [Identity and Token Flow](identity-and-token-flow.md) for the token exchange
 | `identity/` | The non-linear identity state machine, sponsor-relationship resolution, and the active-channel sponsor/chat binding used for authorization. |
 | `tools/` | The MCP tool implementations: Teams messaging and chat management, Files/Graph access, email polling, audit logging, Adaptive Cards, promises, and the daily summary. |
 | `a365/` | The Microsoft Agent 365 Work IQ MCP provider boundary and its Word document adapter. |
-| `sandbox/` | Process containment: the launcher, the allowlisting proxy, and the Seatbelt, bubblewrap and MXC backends. See [Process Containment](../guides/containment.md). |
 | `security/` | The external-content envelope (XPIA) and the server-side recipient policy for every tool that reaches someone new. |
 | `observability/` | Agent 365 telemetry: the Microsoft OpenTelemetry Distro, and the MCP server's `invoke_agent` and `execute_tool` spans (opt-in). |
 | `harness/` | An optional terminal front end built on the GitHub Copilot SDK that runs the model loop itself. |
@@ -41,11 +40,7 @@ See [Identity and Token Flow](identity-and-token-flow.md) for the token exchange
 
 ```
 MCP host
-  |-- stdio --> launcher (entrabot-mcp) --stdio--> Entrabot, inside the OS sandbox
-  |               `-- allowlisting proxy <------- all of the server's network traffic
-  |
-  |   the server's connections, through the proxy:
-  |                                      Entrabot
+  |-- stdio --------------------------> Entrabot
   |                                      |---> Microsoft Entra ID / Graph API
   |                                      |---> Azure Blob Storage (optional)
   |                                      |---> Agent 365 Work IQ

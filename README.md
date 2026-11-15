@@ -198,7 +198,6 @@ This is a research repo, not a production service. It runs reliably on a develop
 - Body-first prompt architecture with optional persona layer from a separate MCP (`persona-sati`)
 - Audit before acting: every tool that sends, creates, shares or deletes writes its audit event first (to a local JSONL file, flushed to disk) and does nothing if that write fails. Teams and mail reads are not audited. Events the model writes through `audit_log` are marked as the model's
 - Outbound recipient policy, enforced in the server: the agent may reach its sponsors, the members of the chat a request came from, and its own tenant; anyone else needs `ENTRABOT_OUTBOUND_ALLOW`
-- Process containment on macOS (Seatbelt) and Linux (bubblewrap), or MXC when installed: outside the system folders the server reads only its repo, its state and the keychain, writes only its state, and connects only to the Microsoft hosts it needs, through an allowlisting proxy. Run for real on macOS; Linux and MXC are unit-tested only; Windows is not contained yet. See the [Verification Record](docs/project/verification.md)
 - Agent 365 telemetry (opt-in in setup): content-suppressed spans from the MCP server and from the harness (`entrabot`, an optional terminal front end on the GitHub Copilot SDK that runs the model loop itself). Agent 365 keeps them only if the tenant has a Microsoft 365 E7 or Agent 365 licence assigned
 - `pytest -v --tb=short && ruff check .` gates every commit
 
@@ -208,13 +207,13 @@ This is a research repo, not a production service. It runs reliably on a develop
 
 | OS | Status |
 |---|---|
-| macOS | The same setup wizard as Windows, with one Keychain item per certificate (the certificate and its key), certificate rotation, and teardown that disconnects this computer. Against a real tenant only a repair run and the health check have been run; a new agent, rotation and teardown are covered by unit and script tests. The contained server's sign-in was run for real under Seatbelt. See [macOS and Linux installation](docs/getting-started/macos-linux.md#what-has-been-tested). |
-| Linux | The same wizard and runtime, with the key in a Secret Service, KWallet or libsecret keyring that is running and unlocked. Run end to end on Ubuntu 24.04.5 against a real tenant (new agent, rotation, joining, teardown). Containment with bubblewrap is unit-tested only. |
+| macOS | The same setup wizard as Windows, with one Keychain item per certificate (the certificate and its key), certificate rotation, and teardown that disconnects this computer. Against a real tenant only a repair run and the health check have been run; a new agent, rotation and teardown are covered by unit and script tests. See [macOS and Linux installation](docs/getting-started/macos-linux.md#what-has-been-tested). |
+| Linux | The same wizard and runtime, with the key in a Secret Service, KWallet or libsecret keyring that is running and unlocked. Run end to end on Ubuntu 24.04.5 against a real tenant (new agent, rotation, joining, teardown). |
 | Windows | Shipped — one-step setup wizard, non-exportable CNG keys (TPM first, software key store otherwise), certificate rotation, teardown. Setup, repair, rotation, status and teardown were run end to end on Windows 11 25H2 x64 with a virtual TPM, as a non-administrator. Not yet tested: ARM64, physical TPMs, Windows 10, Entra-joined or Intune-managed PCs. See [Windows installation](docs/getting-started/windows.md#what-has-been-tested). |
 
 **Open:**
 
-- Windows containment (MXC ProcessContainer) is not shipped.
+- Process containment is not shipped: the MCP server is not contained in 0.2.0 and runs with all of its user's rights. Containing it on macOS and Linux is planned for 0.3.0.
 - Registration in the Agent 365 registry is an opt-in script (`scripts/register_agent_instance.py`), not part of setup.
 - Headless and cloud operation: see the proposal in `engineering-history/plans/headless-cloud-runtime.md`.
 

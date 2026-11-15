@@ -3,13 +3,7 @@
 ## The MCP host cannot start `entrabot`
 
 Entrabot is a local stdio server. The host must launch the executable and keep
-its stdin/stdout pipe open; there is no Entrabot HTTP listener. On macOS and
-Linux `entrabot-mcp` starts as a launcher and runs the server inside a sandbox
-with the same pipe. With `ENTRABOT_CONTAINMENT=required` (or a named sandbox)
-it exits with code 2 and says why when that sandbox isn't available; a
-persona-sati token command that reads files outside the repository needs
-`ENTRABOT_SANDBOX_EXTRA_READ`. See [Containment, outbound controls and
-telemetry](containment-and-outbound.md).
+its stdin/stdout pipe open; there is no Entrabot HTTP listener.
 
 Confirm the configured command exists:
 
