@@ -4,7 +4,7 @@ Entrabot requires:
 
 - A Microsoft 365 development tenant where you can create app registrations and grant admin consent
 - A license that includes Teams and Outlook (E3 or E5 dev tenant licenses work)
-- On macOS and Linux: Python 3.12 or newer, and a key store for the agent's sign-in key (the login keychain on a Mac; a Secret Service keyring such as GNOME Keyring or KWallet on Linux)
+- On macOS and Linux: Python 3.12 or newer, and a key store for the agent's sign-in key (the login keychain on a Mac; a Secret Service keyring such as GNOME Keyring or KWallet on Linux). On Linux, also bubblewrap (`bwrap`) so the MCP server runs contained; without it the server runs uncontained and says so. macOS has its sandbox (`sandbox-exec`) built in
 
 You do not need the Azure CLI, an `az login`, or Git first: setup offers to install a private Azure CLI, signs you in itself, and works from a downloaded ZIP of the repository.
 

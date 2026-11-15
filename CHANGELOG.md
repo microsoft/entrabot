@@ -83,6 +83,9 @@ Everything since v0.1. Before tagging, see "Cutting v0.2" at the end of this sec
 
 ### Fixed
 
+- `read_file` didn't follow Graph's redirect to a file's download URL, so a `.txt`, `.md` or `.html` file read back empty and PDF and Word files failed. Found in a real end-to-end run.
+- With console telemetry on (`ENTRABOT_A365_CONSOLE_ENABLED`), spans were printed to standard output, the MCP protocol channel. They now go to standard error.
+- Inside the sandbox, Teams, mail and Files calls bypassed the proxy and failed; and on macOS the sandbox let the server read outside the home directory (other users' folders, other volumes). Both found by running the full server contained.
 - `./scripts/setup.sh` and `./scripts/teardown.sh` take an option's value after a space as well as after `=` (`--log-file /tmp/setup.log`). On a real macOS run the space form was refused as an unknown option, although the help lists the option. An option left without its value is a usage error (exit `2`).
 - Setup, the health check, rotation, teardown and status stop before anything when the code they run is one copy of the project and `--project-root` names another copy (exit `2`). The runtime reads `.env` from the folder its code is in, so the two silently disagreed: a health check of a folder that was set up said "Agent User credentials not configured". The message names both folders and how to run it from the right one. A `.venv` whose editable install was re-pointed at a git worktree is caught the same way.
 - Teardown keeps this computer's setup (Provisioner) certificate when the same agent has another certificate in this account's key store, as it does when it is set up in a second folder on the computer (every platform). On a real Linux run, disconnecting one of two folders retired the setup certificate, and the other folder's `./status.sh` stopped with "Provisioner certificate private key is missing locally" until setup was run there again. The report says why it was kept and how to remove it by hand.
@@ -165,8 +168,8 @@ Everything since v0.1. Before tagging, see "Cutting v0.2" at the end of this sec
 
 What the owner has to do; nothing here has been done:
 
-1. Review and push the local branches (`ws1/a365-observability`, `ws2/outbound-audit`, `ws3/containment`, `ws4/headless-design`, `ws5/docs-v0.2`) and open pull requests; agree the PR #122 merge (and the parts of it this branch changed or dropped) with Jacob Lyons and Rick Rybinski, and close or supersede PR #122.
-2. Run the contained MCP server for real on macOS (stop the running one first) and the Linux bubblewrap path on Ubuntu, and switch telemetry on against a tenant with an E7 or Agent 365 licence assigned, confirming the spans appear in Defender; record the results in `docs/project/status.md`.
+1. Merge the pull requests: Agent 365 telemetry (`feat/a365-telemetry`, #154), outbound controls (`feat/outbound-audit`, #155), containment (`feat/containment`, stacked on telemetry) and these docs (`docs/v0.2`, last).
+2. Still to run for real: the Linux bubblewrap path on Ubuntu; telemetry against a tenant with an E7 or Agent 365 licence assigned (then check Defender); optionally `register_agent_instance.py --apply`. The macOS end-to-end run is recorded in `docs/project/verification.md`.
 3. Bump `version` in `pyproject.toml` from `0.1` to `0.2`, retitle this section with the date, and update the GitHub issues (#136 for telemetry and registration) per `AGENTS.md`.
 4. Tag `v0.2` on `main` and publish a GitHub release with this section as its notes.
 

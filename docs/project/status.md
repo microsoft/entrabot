@@ -33,10 +33,10 @@
 
 ### Security and runtime
 
-- Audit before acting: every tool that sends, creates, shares or deletes writes its audit event first, flushed to disk, and does nothing when that write fails. Teams and mail reads and `update_placeholder` are not audited. The audit log is a local JSONL file, not signed. Events the model writes through `audit_log` carry `origin: model`.
-- Outbound recipient policy in the server: `send_email` (to, cc, bcc), `create_chat`, `add_teams_member`, `share_file` and the daily summary reach only the agent's directory sponsors, members of the chat the last pushed message came from, and the home tenant, unless `ENTRABOT_OUTBOUND_ALLOW` lists an address or domain. Unit-tested; not run against a tenant.
-- Process containment by default on macOS (generated Seatbelt profile) and Linux (bubblewrap), or MXC 1.0.x when its executor is installed: read-only repository and virtual environment, read-write Entrabot state only, nothing else under the home directory, and network only to the Microsoft hosts the code calls, through an allowlisting proxy. `ENTRABOT_CONTAINMENT` opts out or requires it. `./status.sh`, `--diagnose` and `whoami` report it. On macOS 27 the contained sign-in (`python -m entrabot.sandbox.selftest`) was run for real against a real tenant, and a home-file read, a repository write and connections to a non-allowed host were refused; the full MCP server has not yet been run contained, and Linux and MXC are unit-tested only.
-- Tokens are re-acquired every ten minutes by default (`ENTRABOT_TOKEN_MAX_AGE_SECONDS`), which bounds how long a disabled agent keeps acting; continuous access evaluation is not requested because Microsoft does not document it for Agent Users.
+- Audit before acting: every tool that sends, creates, shares or deletes writes its audit event first, flushed to disk, and does nothing when that write fails (run for real on macOS: a read-only audit directory stopped a Teams send before Graph). Teams and mail reads and `update_placeholder` are not audited. The audit log is a local JSONL file, not signed. Events the model writes through `audit_log` carry `origin: model`.
+- Outbound recipient policy in the server: `send_email` (to, cc, bcc), `create_chat`, `add_teams_member`, `share_file` and the daily summary reach only the agent's directory sponsors, members of the chat the last pushed message came from, and the home tenant, unless `ENTRABOT_OUTBOUND_ALLOW` lists an address or domain. Run for real on macOS: an email and a file share to a reserved domain were refused with no Graph request.
+- Process containment by default on macOS (generated Seatbelt profile) and Linux (bubblewrap), or MXC 1.0.x when its executor is installed: read-only repository and virtual environment, read-write Entrabot state only, nothing else under the home directory, and network only to the Microsoft hosts the code calls, through an allowlisting proxy. `ENTRABOT_CONTAINMENT` opts out or requires it. `./status.sh`, `--diagnose` and `whoami` report it. On macOS 27 the full MCP server has been run contained against a real tenant, with real sends, reads, file sharing, inbound Teams and email pushes and the background polls; see the [Verification Record](verification.md). Linux and MXC are unit-tested only.
+- Tokens are re-acquired every ten minutes by default (`ENTRABOT_TOKEN_MAX_AGE_SECONDS`; run for real at 60 seconds), which bounds how long a disabled agent keeps acting; continuous access evaluation is not requested because Microsoft does not document it for Agent Users.
 - An authoritative external-content boundary wraps untrusted Teams, email, Files, and Work IQ content before it reaches the model.
 - Host-gated sponsor reply behavior adapts to the calling client.
 - A body-first prompt governs core behavior, with an optional persona layered on top.
@@ -55,7 +55,7 @@
 
 ### Documentation and operations
 
-- Public site with nine task-oriented sections and source-audited references for all registered MCP tools and all 47 supported operator commands.
+- Public site with nine task-oriented sections and source-audited references for all registered MCP tools and the supported operator commands. What has and hasn't been run for real is in the [Verification Record](verification.md).
 - Legacy URLs redirect to current pages; plans, specs, investigations, and research are retained only under non-published `engineering-history/`.
 
 ## Active development

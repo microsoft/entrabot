@@ -1,6 +1,6 @@
 # Audit
 
-Audit logging proves which identity performed an action — the Agent User, a delegated human, or nobody resolvable. Source: `src/entrabot/tools/audit.py`, plus call sites in `src/entrabot/tools/teams.py`, `src/entrabot/tools/files.py`, `src/entrabot/tools/daily_summary.py`, and `src/entrabot/a365/provider.py`.
+Audit logging proves which identity performed an action — the Agent User, a delegated human, or nobody resolvable. Source: `src/entrabot/tools/audit.py`, plus call sites in `src/entrabot/mcp_server.py` (`send_email`, `send_teams_message`, `send_card`, `post_thinking_placeholder`, `create_chat`, and recipient-policy refusals), `src/entrabot/tools/teams.py`, `src/entrabot/tools/files.py`, `src/entrabot/tools/daily_summary.py`, and `src/entrabot/a365/provider.py`.
 
 This page documents *attribution* fail-closed behavior and where `pending`/`success`/`failure` outcomes are actually emitted. It is not a claim that every possible agent action is audited — coverage is call-site by call-site, as described below.
 
@@ -14,10 +14,11 @@ def log_event(
     agent_id: str | None = None,
     metadata: dict | None = None,
     attribution_type: str = "agent",
+    origin: str = "system",
 ) -> dict
 ```
 
-Write an audit event and return it as a dict. Appends a single JSON line to `~/.entrabot/audit/<YYYY-MM-DD>.jsonl` (macOS/Linux) or `%LOCALAPPDATA%\entrabot\audit\<YYYY-MM-DD>.jsonl` (Windows) — configurable via `ENTRABOT_AUDIT_DIR`. Also logs a summary line via the `entrabot.tools.audit` logger.
+Write an audit event and return it as a dict. Appends a single JSON line to `~/.entrabot/audit/<YYYY-MM-DD>.jsonl` (macOS/Linux) or `%LOCALAPPDATA%\entrabot\audit\<YYYY-MM-DD>.jsonl` (Windows) — configurable via `ENTRABOT_AUDIT_DIR` — and flushes it to disk (`fsync`) before returning. Also logs a summary line via the `entrabot.tools.audit` logger.
 
 | Field | Source | Notes |
 |-------|--------|-------|
@@ -26,9 +27,10 @@ Write an audit event and return it as a dict. Appends a single JSON line to `~/.
 | `agent_id` | Argument, or resolved (see below) | Never silently `"unknown"` for `attribution_type="agent"`. |
 | `action` | Argument | e.g. `"teams.add_member"`, `"files.read_file"`. |
 | `resource` | Argument | What is being acted on. |
-| `outcome` | Argument | `"pending"`, `"success"`, or `"failure"`. |
+| `outcome` | Argument | `"pending"`, `"success"`, `"failure"`, or `"denied"` (a recipient-policy refusal; no Graph call was made). |
 | `attribution_type` | Argument | `"agent"`, `"delegated-human"`, or `"none"`. |
 | `metadata` | Argument | Arbitrary JSON-safe dict; defaults to `{}`. |
+| `origin` | Argument | `"system"` (default) for events the server writes; `"model"` for events written through the `audit_log` tool. |
 
 ### Agent ID resolution and fail-closed attribution
 
@@ -58,7 +60,11 @@ def audit_log(
 
 Thin wrapper around `log_event`, exposed so a host model can record its own deliberation steps. `metadata` is a JSON string (not a dict), because MCP tool parameters are scalar-only — the wrapper parses it with `json.loads`. Agent ID and attribution type come from the active identity session (`_identity.session.user_id` / `_identity.session.attribution_type`) when one exists, falling back to `cfg.agent_id` / `cfg.blueprint_app_id` with `attribution_type="agent"` (or `"none"` if no ID is configured) when there is no active session.
 
-Many resource-touching tools already emit their own audit events internally before or after they act — `audit_log` is for actions not covered by one of those internal calls, such as filesystem or code-execution activity outside the MCP tool surface.
+Events written through `audit_log` carry `origin: "model"`, so they can't be mistaken for the server's own records. Every tool that sends, creates, shares or deletes already writes its own `pending` event before it acts and refuses to act if that write fails; `audit_log` is for actions not covered by those internal calls, such as filesystem or code-execution activity outside the MCP tool surface.
+
+## Server-side send audit and refusals
+
+`src/entrabot/mcp_server.py::_audit_before` writes the `pending` event for `send_email`, `send_teams_message`, `send_card`, `post_thinking_placeholder` and `create_chat` before the Graph call; if the write raises, the tool returns `{"error": "the audit event could not be recorded, so <tool> did not run"}` and does nothing. `_refuse_unless_allowed` writes a `denied` event, with each refused address and reason in `metadata`, when the recipient policy refuses a recipient; the tool then returns an error without calling Graph.
 
 ## `_audit_graph_call` (Files tools)
 

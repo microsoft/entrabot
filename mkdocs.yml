@@ -119,6 +119,7 @@ nav:
       - Email Workflows: guides/email-workflows.md
       - Files and Microsoft Agent 365 Work IQ: guides/files-and-work-iq.md
       - Identity Lifecycle and Deprovisioning: guides/identity-lifecycle.md
+      - Process Containment: guides/containment.md
   - Clients:
       - Overview: clients/overview.md
       - Claude Code: clients/claude-code.md
@@ -187,6 +188,8 @@ nav:
               - assign_agent_user_licenses.py: reference/scripts/provisioning/assign-agent-user-licenses-py.md
               - remove_agent_user_licenses.py: reference/scripts/provisioning/remove-agent-user-licenses-py.md
               - ensure_a365_work_iq_permissions.py: reference/scripts/provisioning/ensure-a365-work-iq-permissions-py.md
+              - ensure_a365_observability_permissions.py: reference/scripts/provisioning/ensure-a365-observability-permissions-py.md
+              - register_agent_instance.py: reference/scripts/provisioning/register-agent-instance-py.md
           - Auth and Certificates:
               - grant_consent.py: reference/scripts/auth-and-certs/grant-consent-py.md
               - grant_files_consent.py: reference/scripts/auth-and-certs/grant-files-consent-py.md
@@ -226,6 +229,8 @@ nav:
       - Storage: troubleshooting/storage.md
       - MCP Connectivity: troubleshooting/mcp-connectivity.md
       - Migrations and Upgrades: troubleshooting/migrations-and-upgrades.md
+      - Containment, Outbound Controls and Telemetry: troubleshooting/containment-and-outbound.md
   - Project:
       - Current Status: project/status.md
       - Changelog: project/changelog.md
+      - Verification Record: project/verification.md

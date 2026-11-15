@@ -227,7 +227,7 @@ Permissions are scoped per recipient, survive link revocation, and create an
 audit trail; the recipient sees the file in their `sharedWithMe`. This is the
 right primitive for Entrabot.
 
-**Authorization model — the requester is sponsor-gated, not the recipient.**
+**Authorization model — the requester is sponsor-gated, and the recipient must pass the recipient policy.**
 Entrabot's `share_file` enforces three checks before calling Graph `/invite`:
 
 1. **The requester is a sponsor.** The human who directed the share
@@ -245,8 +245,9 @@ Entrabot's `share_file` enforces three checks before calling Graph `/invite`:
    sponsor's user ID must also appear in the `chat_id`'s member list, as a
    defense-in-depth check independent of the active-channel binding.
 
-The **recipient** is not sponsor-gated — a sponsor may share with anyone they
-choose, and the recipient is passed through to Graph `/invite`. Existing
+The **recipient** must pass the server's recipient policy: a sponsor, a member of the requesting chat, someone in the agent's home tenant, or an address or domain listed in `ENTRABOT_OUTBOUND_ALLOW`.
+Anyone else is refused before Graph `/invite` is called, and a `denied` audit
+event is written. Existing
 permissions can be listed and revoked:
 
 ```http

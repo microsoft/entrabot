@@ -40,8 +40,8 @@ The script takes no arguments and no flags.
 
 ## Effects
 
-1. Loads `.env` (if present) into the environment and validates
-   `ENTRABOT_CLIENT_ID` is set.
+1. Reads `ENTRABOT_CLIENT_ID` from `.env` (if present) as data, never running
+   the file, and validates that it is set.
 2. Activates `.venv` if `.venv/bin/activate` exists.
 3. Constructs an `entrabot.auth.delegated.MsalDelegatedAuth` client for the
    configured client ID and tenant (`Chat.ReadWrite` and `User.Read` scopes).

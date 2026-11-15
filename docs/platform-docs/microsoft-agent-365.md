@@ -226,8 +226,8 @@ or `./scripts/setup.sh --diagnose` on macOS and Linux) runs the same check.
    this itself, with no Agent 365 CLI, .NET SDK, PowerShell 7 or
    `a365.config.json`: answer yes to the Word, Excel and OneDrive question, or
    pass `-ConfigureA365WorkIq` on Windows and `--configure-a365-work-iq` to
-   `./scripts/setup.sh` on macOS and Linux. On macOS and Linux this path has not
-   yet been run against a real tenant.
+   `./scripts/setup.sh` on macOS and Linux. On Linux this path has been run
+   against a real tenant (Ubuntu 24.04); on macOS it has not.
 3. Keep the generated `ToolingManifest.json` in a location Entrabot
    discovers, or set the configured manifest path.
 4. Run the relevant Word MCP tool and confirm the audit event identifies the

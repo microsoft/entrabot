@@ -122,6 +122,10 @@ def acquire_agent_identity_token(
 
 Two-hop variant. Stops at the Agent Identity — no `user_fic` grant. Used by `entrabot.identity.sponsors` to read the Agent Identity's Graph sponsors relationship, which requires app-only auth rather than the Agent User's delegated token.
 
+## Token age
+
+The MCP server re-acquires the Agent User token when the current one is older than `ENTRABOT_TOKEN_MAX_AGE_SECONDS` (default 600, clamped to 60–3300), in `mcp_server._ensure_valid_token()`. That bounds how long a disabled agent keeps working; continuous access evaluation isn't requested. See [Security Boundaries](../../architecture/security-boundaries.md#token-lifetime-and-revocation).
+
 ## Common errors
 
 Every token response is checked for an `"error"` key BEFORE accessing `"access_token"` — Entra returns error dicts, not HTTP exceptions, on most failures.

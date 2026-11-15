@@ -4,7 +4,7 @@
 
 Entrabot is a stdio [MCP](https://modelcontextprotocol.io/) server built on FastMCP. Every host-facing capability — Teams, email, Files, cards, promises, the daily summary, A365 Work IQ — is registered as an `@mcp.tool()` function in `src/entrabot/mcp_server.py`. Each tool wrapper does its work and returns a JSON string (`json.dumps(...)`), not a raw Python object, so every tool has the same wire shape regardless of what it does internally.
 
-`_run_stdio_with_write_stream()` is the process entry point: it opens the stdio transport, stashes the write stream in module state (`_state["_write_stream"]`) so background tasks can push notifications outside of a tool call, discovers efferent-copy sinks, eagerly schedules `_initialize()`, and hands control to FastMCP's request loop.
+`entrabot-mcp` first runs `entrabot.sandbox.launch.maybe_contain()`: on macOS and Linux (by default) that process becomes the launcher, starts the allowlisting proxy, and starts the server again inside the OS sandbox with the same standard input and output; see [Process Containment](../guides/containment.md). Inside that contained process, `_run_stdio_with_write_stream()` is the server's entry point: it opens the stdio transport, stashes the write stream in module state (`_state["_write_stream"]`) so background tasks can push notifications outside of a tool call, discovers efferent-copy sinks, eagerly schedules `_initialize()`, and hands control to FastMCP's request loop.
 
 ## Initialization lifecycle
 
@@ -59,6 +59,13 @@ The channel-push notification (`notifications/claude/channel`) fires uncondition
 ## Degraded / body-only mode
 
 Without persona-sati configured (or with it unreachable), Entrabot runs in body-only mode: identity, Teams/email/Files tools, and audit all continue to work exactly as documented, but no personality, long-term memory, or `observe`/`reflect`/`recall` cognition loop is available. This is distinct from the efferent-copy mechanism above — a session can have efferent-copy enabled with zero eligible sinks (also effectively degraded) independent of whether a host has separately wired up persona-sati's own tools in `.mcp.json`.
+
+
+## Token age and telemetry
+
+Before Graph calls and on every poll cycle, `_ensure_valid_token()` gets a fresh three-hop token when the current one is older than `ENTRABOT_TOKEN_MAX_AGE_SECONDS` (default 600). That bounds how long a disabled agent keeps working; see [Security Boundaries](security-boundaries.md#token-lifetime-and-revocation).
+
+When Agent 365 telemetry is switched on (`ENTRABOT_A365_OBSERVABILITY_ENABLED`) and the session is an Agent User session, `_start_a365_telemetry()` initialises the Microsoft OpenTelemetry Distro and wraps every tool: an inbound Teams message or email pushed to the model starts an `invoke_agent` span, and each tool call is an `execute_tool` child span, with message content suppressed. Console spans (`ENTRABOT_A365_CONSOLE_ENABLED`) go to standard error, because standard output is the MCP channel. Telemetry failures are logged and never affect a tool.
 
 ## See also
 

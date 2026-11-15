@@ -19,8 +19,8 @@ how a setup is repaired or changed. The same script runs the health check
 (`--diagnose`), certificate rotation (`--rotate-cert`) and the status view
 (`--status`).
 
-The macOS and Linux paths of the wizard have not yet been run against a real
-tenant; see
+The wizard has been run against a real tenant on Ubuntu 24.04, and on macOS for
+a repair run and the health check; see
 [What has been tested](../../../getting-started/macos-linux.md#what-has-been-tested).
 
 ## Requirements
@@ -147,6 +147,13 @@ finds, and a new agent uses local memory.
 
 Word, Excel and OneDrive files:
 
+- `--configure-a365-observability` — also switch on Agent 365 telemetry, as
+  answering yes to that question does: setup grants the agent
+  `Agent365.Observability.OtelWrite`, checks for about two minutes that the
+  agent's token carries it, then writes `ENTRABOT_A365_OBSERVABILITY_ENABLED`
+  and `ENTRABOT_A365_EXPORT_ENABLED` to `.env` and reads them back. A failure
+  never stops setup. Agent 365 keeps the telemetry only if someone in the
+  organization has a Microsoft 365 E7 or Agent 365 licence.
 - `--configure-a365-work-iq` — also switch on Word, Excel and OneDrive files
   (Microsoft Agent 365 Work IQ), as answering yes to that question does. The
   wizard does it itself, with nothing to install: no Agent 365 CLI, no .NET SDK,
@@ -335,8 +342,10 @@ With `--diagnose`, none of the above runs. It checks the state file, the
 certificate (in the key store, in date, and its key signs; a warning when 30
 days or fewer remain), the three-hop sign-in, the Graph identity, the Teams
 scope, the MCP configuration, Word, Excel and OneDrive files when
-`ToolingManifest.json` exists, and the optional `persona-sati` entry in
-`.mcp.json`. The persona-sati check is advisory: it can report `SKIP` or `WARN`
+`ToolingManifest.json` exists, Agent 365 telemetry (whether it is on and whether
+the agent's token carries `Agent365.Observability.OtelWrite`), whether the
+running MCP server is contained ("Server containment"), and the optional
+`persona-sati` entry in `.mcp.json`. The persona-sati check is advisory: it can report `SKIP` or `WARN`
 but never a failure, and it connects only to loopback addresses (see
 [MCP connectivity](../../../troubleshooting/mcp-connectivity.md#persona-sati-does-not-connect)).
 

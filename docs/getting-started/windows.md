@@ -42,6 +42,7 @@ Running `scripts\setup-windows.cmd` again is how you repair or change a setup. I
 | The agent's sponsor | You | The people the agent takes instructions from in Teams. When joining an existing agent, the suggested answer keeps its current sponsors. |
 | Memory | On this computer | Cloud memory (Azure Blob Storage) is offered when your account has an Azure subscription in the tenant. |
 | Switch on Word, Excel and OneDrive files? | No | Work IQ: the agent reads and edits Word, Excel and OneDrive files. Setup says first that the agent then needs a Microsoft 365 Copilot licence of its own. Most people skip this. There is nothing to install for them, and setup switches them on itself, over SSH and unattended too. |
+| Switch on Agent 365 telemetry? | No | The agent reports what it does to Microsoft Agent 365: when it is asked something, by whom and in which chat, never what the messages say. Microsoft Defender and the Microsoft 365 admin center show its activity from it. Agent 365 keeps it only if someone in your organization has a Microsoft 365 E7 or Agent 365 licence. |
 | Start setting up? | Yes | The review screen. Nothing has been changed before this point, apart from an Azure CLI you agreed to install. |
 | Install Git for Windows and Claude Code now? | Yes | Only asked if one is missing. |
 | Set up the agent's licence now? | Yes | Only asked when the agent has no licence that includes Teams, or no Microsoft 365 Copilot licence while Word, Excel and OneDrive files are on. See [Licences for the agent](#licences-for-the-agent). |
@@ -54,6 +55,8 @@ Setup signs in through your browser, not through the Windows account sign-in win
 In a remote session (SSH, for example) setup signs in with a device code instead of the browser: it prints a web address and a short code to enter there.
 
 Setup then creates or connects the agent, creates this PC's certificate, saves settings, registers the agent with Claude Code and GitHub Copilot CLI, and tests that the agent can sign in and reach Teams. After that test, and only if you switched them on, it sets up Word, Excel and OneDrive files. It lists their tools for the agent, gives the agent's Blueprint the permissions they need, and then checks, as the agent, that Microsoft honours them; that can take a minute, and setup waits up to about two minutes. A failure there never stops setup, and the last screen says why and what to do. When Microsoft has not started honouring them by then, the last screen says so and how to check later (`scripts\setup-windows.cmd -Diagnose`).
+
+Then, only if you switched it on, it sets up Agent 365 telemetry: it gives the agent the `Agent365.Observability.OtelWrite` permission, checks for about two minutes, as the agent, that the agent's token carries it, and only then switches telemetry on in `.env` and reads it back. A failure there never stops setup either. Setup can't check the licence, so the last screen says that Agent 365 drops the agent's telemetry unless someone in the organization has a Microsoft 365 E7 or Agent 365 licence. `--diagnose` reports whether telemetry is on and whether the token carries the permission.
 
 ## Licences for the agent
 
@@ -68,6 +71,8 @@ The Microsoft 365 Copilot part comes after the Teams part, and only when that ru
 The admin center paths it gives (**Billing > Your products**, **Billing > Licenses**, **Marketplace**) are those of the admin center's **Dashboard view**, which most people see. In the **simplified view**, products are under **Subscriptions** and new ones under **Billing > Add more products**; a button at the top of the admin center switches views. Run unattended, setup asks nothing: it only reads the organization's licences, so the last screen can say what to do. Details are in [Windows troubleshooting](../troubleshooting/windows.md#no-teams-licence-or-graph-returned-403-for-mechats).
 
 ## The first start
+
+On Windows the MCP server is not contained: it runs with all of your account's rights. On macOS and Linux it starts inside a sandbox. See [Process Containment](../guides/containment.md).
 
 The first time Claude Code opens the Entrabot folder it asks some questions; `start-entrabot.cmd` and setup's last screen both say so. If this PC has not used Claude Code before, it asks you to sign in to Claude. Then it asks whether to trust this folder, whether to use the `entrabot` MCP server, and whether to load a development channel. Say yes to each: the folder is the one you just set up, the server is your agent, and the channel is how Teams messages reach it. Then say *Who are you?*
 

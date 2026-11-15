@@ -11,7 +11,10 @@ tracked across restarts.
 A `chat_id` reaches the agent one of four ways:
 
 1. **`create_chat`** — creates (or finds) a 1:1 DM with a target user and
-   registers it as a watched chat.
+   registers it as a watched chat. The user must pass the recipient policy (a
+   sponsor, a member of the requesting chat, the home tenant, or
+   `ENTRABOT_OUTBOUND_ALLOW`), and the audit event is written before the chat
+   is created.
 2. **Channel notification metadata** — every inbound message pushed through
    `notifications/claude/channel` carries the originating chat's ID.
 3. **Persisted `watched_chats`** — chats registered in a previous session are
