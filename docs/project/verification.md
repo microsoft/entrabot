@@ -161,9 +161,8 @@ It also showed that two computers running one agent with local memory both push 
   always wrapped, as the sponsor's email showed.
 - Sends from the 0.2.0 release branch on macOS; they were run on the combined branch (run 2), and from the release branch on Linux and Windows (run 3).
 - The daily summary actually sent: run 1 checked who it would go to, without sending.
-- The agent in the Agent 365 registry (`register_agent_instance.py --apply` needs a permission the
-  setup app doesn't hold), and whether the exported telemetry shows in Defender or the Microsoft
-  365 admin center (a portal check, not done here).
+- Whether the exported telemetry shows in Defender or the Microsoft 365 admin center was not
+  checked for 0.2.0 itself. Both showed it after 0.2.0: see the registry section below.
 - Disabling the agent and watching a running server stop.
 
 ## By platform
@@ -173,6 +172,7 @@ It also showed that two computers running one agent with local memory both push 
 | The MCP server against a real tenant | Run for real (runs 1 and 2) | Run for real (run 3, Ubuntu 24.04, headless keyring) | Run for real (run 3, Windows 11 24H2, elevated desktop task) |
 | Setup wizard against a real tenant | Repair run and health check | Run for real: new agent, repair, health check | Run for real: join, repair, health check |
 | Telemetry setup step and the `--diagnose` check | Run for real | Run for real | Run for real |
+| Agent 365 registry through setup (after 0.2.0, on `main`): the setup app's permission, the registration, its `--diagnose` line, teardown's delete | Unit-tested | Run for real (2026-11-15, Ubuntu 24.04): the permission and its consent check, the registration, `--diagnose`, the admin center listing, the script's delete, teardown's delete. Not run: a second computer joining a registered agent | Run for real (2026-11-15, Windows 11 Pro 25H2, built-in Administrator): the permission, the registration, `-Diagnose`, the admin center listing, telemetry, teardown's delete. Run for real: the takeover run's grant, on a first run. Not run: a standard user |
 | `status.sh` and `setup_delegated.sh` read `.env` as data | Run for real (the old scripts fail the tests, the new ones pass) | Unit-tested | n/a |
 | The full test suite | Every commit | Not run | CI (`test-windows`) on each pull request |
 | Process containment | Not in 0.2.0: planned for 0.3.0 | Not in 0.2.0 | Not in 0.2.0 |
@@ -180,4 +180,66 @@ It also showed that two computers running one agent with local memory both push 
 ## Never run
 
 - The Copilot SDK harness against a real Copilot runtime.
-- The agent in the Agent 365 registry.
+- Registering the agent with 0.2.0's own `register_agent_instance.py --apply`, which needs a
+  permission the 0.2.0 setup app doesn't hold. Setup on `main` after 0.2.0 does it; see below.
+
+## After 0.2.0: the Agent 365 registry through setup
+
+### Linux
+
+Run for real on 2026-11-15 on Ubuntu 24.04, with a throwaway agent:
+
+- Setup with `--configure-a365` registered the agent. `--diagnose` reported it "registered",
+  and Microsoft Graph returned the registration.
+- Before registration the agent was not listed in the Microsoft 365 admin center (Agents > All
+  agents > Registry). About a minute after, it was, with platform "Entrabot", the sponsor as
+  owner, and the Entra agent ID. Its Activity tab showed sessions from Agent 365 telemetry,
+  including telemetry sent before the agent was registered.
+- Graph accepted the request body as setup builds it (application IDs). For an Entra agent
+  identity, the registration ID Graph returned was the agent identity's ID.
+- The first run found a bug: admin consent answered success about two seconds after the
+  permission was added but granted nothing, so setup ticked the permission and the
+  registration then failed for want of it (setup exited `3`). Running consent again a few
+  minutes later granted it, and the next setup run registered the agent at once. Setup now
+  checks that the grant is recorded and consents again, up to six times, until it is.
+- The fix, run for real after the permission and the registration had been removed again: the
+  first two consents answered success and recorded nothing; the grant showed after the third,
+  about 50 seconds in. Setup then ticked the permission, registered the agent on the first try
+  in the same run, and exited `0`.
+- Defender's advanced hunting (`CloudAppEvents`) showed the agent's tool-call rows from its
+  first telemetry, sent before it was registered.
+- `register_agent_instance.py --delete --apply`: Graph deleted the registration, the recorded
+  ID was cleared, and `--diagnose` then reported "not registered".
+- Teardown with `--delete-agent`: it said which registration it would delete, deleted the agent
+  and the registration (a tick for each), and exited `0`. About a minute after the delete the
+  admin center's registry still listed the agent; a few minutes after, it no longer did (a
+  search for it found none). "Deleted agents" stayed empty.
+
+### Windows
+
+Run for real on 2026-11-15 on Windows 11 Pro 25H2 with a TPM, with a throwaway agent. Setup
+ran in the console session of an automatic logon (no remote desktop), as the computer's
+built-in Administrator, elevated, not as a standard user. The computer was new to a tenant
+that already had the setup app.
+
+- The first run took the setup app over on an administrator's earlier approval, created the
+  agent with a TPM-held key and switched telemetry on, but did not register the agent: a
+  takeover run consents nothing, so the setup app did not get the permission, and setup
+  exited `3`. A takeover run now grants that one permission on its own, with an app role
+  assignment, and still runs no admin consent. Run for real on a third run,
+  after teardown had made the computer new to the setup app again: setup granted the
+  permission on its own about 10 seconds in, ran no admin consent, created the agent and
+  registered it, and exited `0`.
+- The second run (no longer a takeover): admin consent was recorded on the second attempt,
+  about 20 seconds in, and the agent was registered in the same run. Setup exited `0`.
+- `-Diagnose` reported "Agent 365 registry: registered", and Microsoft Graph returned the
+  registration. The Microsoft 365 admin center listed the agent.
+- Agent 365 accepted telemetry sent as that agent from Windows.
+- `teardown-windows.ps1 -DeleteAgent -Yes` deleted the agent and its registration, and exited
+  `0`.
+- The Windows CI job (`test-windows`) passes on the pull request.
+
+### Not run
+
+macOS, a second computer joining an agent that is already registered, and this step on
+Windows as a standard (non-administrator) user.

@@ -68,10 +68,16 @@
   Also set up Microsoft Agent 365 Work IQ (needs the a365 CLI; see
   scripts\prereqs-windows.ps1 -WithWorkIq).
 
+.PARAMETER ConfigureA365
+  Also switch on Agent 365 integration. Registers the agent in the Agent 365 registry, so
+  it is listed in the Microsoft 365 admin center under Agents > All agents > Registry (the
+  setup app gets the Microsoft Graph permission AgentRegistration.ReadWrite.All for it), and
+  switches on Agent 365 telemetry (the agent gets the delegated
+  Agent365.Observability.OtelWrite permission). Agent 365 keeps the telemetry only if
+  someone in the organization has a Microsoft 365 E7 or Agent 365 licence.
+
 .PARAMETER ConfigureA365Observability
-  Also switch on Agent 365 telemetry: grants the agent the delegated
-  Agent365.Observability.OtelWrite permission and records the runtime switches. Agent 365
-  keeps it only if someone in the organization has a Microsoft 365 E7 or Agent 365 licence.
+  The older name for -ConfigureA365. Does the same.
 
 .PARAMETER Tenant
   Sign in to this tenant (domain or tenant ID).
@@ -148,6 +154,7 @@ param(
     [string]$Location = "",
     [string]$Subscription = "",
     [switch]$ConfigureA365WorkIq,
+    [switch]$ConfigureA365,
     [switch]$ConfigureA365Observability,
     [string]$A365AgentName = "",
     [string]$Tenant = "",
@@ -637,8 +644,9 @@ function Get-WizardArguments {
     }
 
     if (Test-BoundSwitch $Bound 'ConfigureA365WorkIq') { $list.Add('--configure-a365-work-iq') }
-    if (Test-BoundSwitch $Bound 'ConfigureA365Observability') {
-        $list.Add('--configure-a365-observability')
+    if ((Test-BoundSwitch $Bound 'ConfigureA365') -or
+        (Test-BoundSwitch $Bound 'ConfigureA365Observability')) {
+        $list.Add('--configure-a365')
     }
     $tenantValue = Get-BoundText $Bound 'Tenant'
     if ($tenantValue) { $list.Add('--tenant'); $list.Add($tenantValue) }

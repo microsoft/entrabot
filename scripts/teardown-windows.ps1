@@ -22,7 +22,8 @@
   The agent itself, its memory, and Entrabot's data folder are NOT touched unless you ask:
 
     -DeleteAgent   also deletes the agent from your tenant (Agent User, Agent Identity,
-                   Blueprint) for every computer that uses it. This cannot be undone.
+                   Blueprint) for every computer that uses it, and its Agent 365
+                   registration if this computer recorded one. This cannot be undone.
     -PurgeData     also deletes Entrabot's data folder on this computer
                    (%LOCALAPPDATA%\entrabot): local memory, logs, and Entrabot's private
                    copies of Python and the Azure CLI. The project's .venv then needs

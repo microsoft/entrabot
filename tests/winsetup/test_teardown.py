@@ -18,7 +18,7 @@ import pytest
 
 from entrabot.winsetup import teardown
 from entrabot.winsetup.console import RunRequest
-from tests.winsetup.fakes import Reply, make_console, script
+from tests.winsetup.fakes import Reply, make_console, script, snippet
 from tests.winsetup.maintenance_fakes import (
     BP_APP,
     BP_OBJECT,
@@ -48,6 +48,13 @@ from tests.winsetup.maintenance_fakes import (
 SETUP_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "entra_provisioning.py"
 
 DEPROVISION = script("deprovision_entra_agent_identity.py")
+REGISTRY = script("register_agent_instance.py")
+
+
+def _registry_result(outcome: str, reason: str = "") -> Reply:
+    body = {"outcome": outcome, "id": "registration-1", "reason": reason}
+    code = 0 if outcome in ("deleted", "gone") else 1
+    return Reply(code, stdout="ENTRABOT_RESULT=" + json.dumps(body))
 OTHER_AGENT_CERT = StoreCert(
     sha1_hex="D" * 40,
     x5t_s256="d" * 43,
@@ -1247,6 +1254,92 @@ class TestDeleteAgent:
         assert project.env_file.exists() and project.paths.state_file.exists()
         assert project.store.find_cert(PROV_SHA1) is not None
         assert "was NOT deleted" in out
+
+    @staticmethod
+    def _registered(tmp_path: Path, reply: Reply) -> Project:
+        project = make_project(
+            tmp_path,
+            certs=[blueprint_cert(), provisioner_cert()],
+            state={**STATE, "AGENT_REGISTRATION_ID": "registration-1"},
+        )
+        project.spawn.on(DEPROVISION, Reply(0))
+        project.spawn.on(REMOVE_PROVISIONER_CREDENTIAL, result(0, removed=1, kept=0))
+        project.spawn.on(REGISTRY, reply)
+        return project
+
+    def test_its_agent_365_registration_is_deleted_after_the_agent(self, tmp_path: Path) -> None:
+        project = self._registered(tmp_path, _registry_result("deleted"))
+
+        code, out = tear_down(project, delete_agent=True)
+
+        assert code == teardown.EXIT_OK
+        (call,) = [call for call in project.spawn.calls if REGISTRY(call)]
+        assert call.argv[2:] == ["--delete", "--apply", "--print-result"]
+        calls = project.spawn.calls
+        removal = next(c for c in calls if snippet(REMOVE_PROVISIONER_CREDENTIAL)(c))
+        # After the agent, and before the setup certificate the script signs in with goes.
+        deprovision = next(c for c in calls if DEPROVISION(c))
+        assert calls.index(deprovision) < calls.index(call) < calls.index(removal)
+        flat = " ".join(out.split())
+        planned = "Its entry in the Agent 365 registry (registration ID registration-1)"
+        assert f"{planned} is deleted too" in flat
+        assert "Deleted the agent's Agent 365 registration (ID registration-1)" in flat
+
+    def test_a_registration_that_is_already_gone_is_fine(self, tmp_path: Path) -> None:
+        project = self._registered(tmp_path, _registry_result("gone"))
+        code, out = tear_down(project, delete_agent=True)
+        assert code == teardown.EXIT_OK
+        assert "Already gone: the agent's Agent 365 registration" in out
+
+    def test_a_registration_that_cannot_be_deleted_is_a_to_do_not_a_stop(
+        self, tmp_path: Path
+    ) -> None:
+        project = self._registered(
+            tmp_path,
+            _registry_result("refused", "deleting registration registration-1 was refused (403)"),
+        )
+
+        code, out = tear_down(project, delete_agent=True)
+
+        assert code == teardown.EXIT_INCOMPLETE
+        flat = " ".join(out.split())
+        assert "was NOT deleted" in flat and "(403)" in flat
+        assert "Agents > All agents > Registry" in flat
+        url = "https://graph.microsoft.com/beta/copilot/agentRegistrations/registration-1"
+        assert f"DELETE {url}" in flat
+        # The agent itself is gone, and the rest of the cleanup went ahead.
+        assert "Deleted the agent" in flat and not project.paths.state_file.exists()
+
+    def test_a_disconnect_leaves_the_registration_alone(self, tmp_path: Path) -> None:
+        project = self._registered(tmp_path, _registry_result("deleted"))
+        project.spawn.on(REMOVE_BLUEPRINT_CREDENTIAL, result(0, removed=1, kept=2))
+
+        code, out = tear_down(project)
+
+        assert code == teardown.EXIT_OK
+        assert [call for call in project.spawn.calls if REGISTRY(call)] == []
+        assert "its Agent 365 registration (ID registration-1)" in " ".join(out.split())
+
+    def test_nothing_recorded_runs_nothing(self, project: Project) -> None:
+        code, _ = tear_down(project, delete_agent=True)
+        assert code == teardown.EXIT_OK
+        assert [call for call in project.spawn.calls if REGISTRY(call)] == []
+
+    def test_a_joined_computer_says_where_another_registration_would_be(
+        self, tmp_path: Path
+    ) -> None:
+        project = make_project(
+            tmp_path,
+            certs=[blueprint_cert(), provisioner_cert()],
+            state={**STATE, "JOINED_EXISTING_AGENT": "true"},
+        )
+        project.spawn.on(DEPROVISION, Reply(0))
+        project.spawn.on(REMOVE_PROVISIONER_CREDENTIAL, result(0, removed=1, kept=0))
+
+        code, out = tear_down(project, delete_agent=True)
+
+        assert code == teardown.EXIT_OK
+        assert "No Agent 365 registration is recorded on this computer" in " ".join(out.split())
 
     def test_cloud_memory_is_never_deleted_and_the_command_is_given(self, tmp_path: Path) -> None:
         lines = [line for line in ENV_LINES if "KEEP_MEMORY_LOCAL" not in line] + [

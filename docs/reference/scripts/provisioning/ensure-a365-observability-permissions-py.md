@@ -31,5 +31,5 @@ python scripts/ensure_a365_observability_permissions.py --blueprint-app-id <id> 
 
 ## Related commands
 
-- [`setup.sh`](../setup/setup-sh.md) (`--configure-a365-observability`) and [`setup-windows.ps1`](../setup/setup-windows-ps1.md) (`-ConfigureA365Observability`).
-- [`register_agent_instance.py`](register-agent-instance-py.md): the separate, opt-in registry registration.
+- [`setup.sh`](../setup/setup-sh.md) (`--configure-a365`, or its older name `--configure-a365-observability`) and [`setup-windows.ps1`](../setup/setup-windows-ps1.md) (`-ConfigureA365`, or `-ConfigureA365Observability`): Agent 365 integration, whose telemetry half runs this script.
+- [`register_agent_instance.py`](register-agent-instance-py.md): the other half, the agent's entry in the Agent 365 registry.

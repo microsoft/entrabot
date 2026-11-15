@@ -145,15 +145,35 @@ Memory:
 With neither memory option, a later run for the same agent keeps the setting it
 finds, and a new agent uses local memory.
 
+Agent 365 integration:
+
+- `--configure-a365` — also switch on Agent 365 integration, as answering yes
+  to that question does. It has two halves, each reporting its own result; a
+  failure in either never stops setup or undoes the other.
+  - The registry: while it brings the setup (Provisioner) app's permissions up
+    to date, setup adds the Microsoft Graph application permission
+    `AgentRegistration.ReadWrite.All` and grants admin consent for it, through
+    your Azure CLI sign-in (Global Administrator or Privileged Role
+    Administrator). On a setup app it took over because an administrator had
+    already approved it, setup grants that one permission on its own and
+    runs no admin consent. After the telemetry half it runs
+    [`register_agent_instance.py`](../provisioning/register-agent-instance-py.md)
+    `--apply`, which registers the agent (it is then listed in the Microsoft
+    365 admin center under Agents > All agents > Registry) or updates the
+    registration recorded in `.entrabot-state.json`. A computer that joined an
+    agent that already existed does not register it again.
+  - Telemetry: setup grants the agent `Agent365.Observability.OtelWrite`,
+    checks for about two minutes that the agent's token carries it, then
+    writes `ENTRABOT_A365_OBSERVABILITY_ENABLED` and
+    `ENTRABOT_A365_EXPORT_ENABLED` to `.env` and reads them back. Agent 365
+    keeps the telemetry only if someone in the organization has a Microsoft
+    365 E7 or Agent 365 licence.
+- `--configure-a365-observability` — the older name of `--configure-a365`
+  (0.2.0, when it switched on telemetry alone). It now does the same as
+  `--configure-a365`.
+
 Word, Excel and OneDrive files:
 
-- `--configure-a365-observability` — also switch on Agent 365 telemetry, as
-  answering yes to that question does: setup grants the agent
-  `Agent365.Observability.OtelWrite`, checks for about two minutes that the
-  agent's token carries it, then writes `ENTRABOT_A365_OBSERVABILITY_ENABLED`
-  and `ENTRABOT_A365_EXPORT_ENABLED` to `.env` and reads them back. A failure
-  never stops setup. Agent 365 keeps the telemetry only if someone in the
-  organization has a Microsoft 365 E7 or Agent 365 licence.
 - `--configure-a365-work-iq` — also switch on Word, Excel and OneDrive files
   (Microsoft Agent 365 Work IQ), as answering yes to that question does. The
   wizard does it itself, with nothing to install: no Agent 365 CLI, no .NET SDK,
@@ -346,7 +366,9 @@ scope, the MCP configuration, Word, Excel and OneDrive files when
 `ToolingManifest.json` exists, the agent's sponsor ("Agent sponsor": whether
 `.env` names a sponsor the directory lists on the Agent Identity, and whether
 the agent can read each sponsor's user record), Agent 365 telemetry (whether it is on and whether
-the agent's token carries `Agent365.Observability.OtelWrite`), and the optional
+the agent's token carries `Agent365.Observability.OtelWrite`), the Agent 365
+registry (registered, with the ID Microsoft Graph confirms; not registered; or
+why it can't be checked), and the optional
 `persona-sati` entry in `.mcp.json`. The persona-sati check is advisory: it can report `SKIP` or `WARN`
 but never a failure, and it connects only to loopback addresses (see
 [MCP connectivity](../../../troubleshooting/mcp-connectivity.md#persona-sati-does-not-connect)).

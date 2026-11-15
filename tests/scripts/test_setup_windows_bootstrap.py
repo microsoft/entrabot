@@ -186,6 +186,8 @@ class TestRunsOnWindowsPowerShell51:
             .replace("--configure-a365-work-iq", "")
             .replace("configurea365observability", "")
             .replace("--configure-a365-observability", "")
+            .replace("configurea365", "")
+            .replace("--configure-a365", "")
             .replace("a365agentname", "")
         )
         assert "a365" not in without_flag_names
@@ -330,6 +332,8 @@ class TestBootstrapContract:
             "[string]$Location",
             "[string]$Subscription",
             "[switch]$ConfigureA365WorkIq",
+            "[switch]$ConfigureA365",
+            "[switch]$ConfigureA365Observability",
             "[string]$A365AgentName",
             "[string]$Tenant",
             "[switch]$DeviceCode",
@@ -805,6 +809,20 @@ class TestWizardArguments:
             "--hosts", "claude",
             "--skip-smoke",
         ]  # fmt: skip
+
+    def test_agent_365_integration_maps_to_its_flag(self, shell: str) -> None:
+        assert _args(shell, "@{ ConfigureA365 = $true }")[3:] == ["--configure-a365"]
+
+    def test_the_older_telemetry_parameter_asks_for_the_same_integration(
+        self, shell: str
+    ) -> None:
+        # -ConfigureA365Observability shipped in 0.2.0; it is the older name of -ConfigureA365.
+        assert _args(shell, "@{ ConfigureA365Observability = $true }")[3:] == [
+            "--configure-a365"
+        ]
+        both = "@{ ConfigureA365 = $true; ConfigureA365Observability = $true }"
+        assert _args(shell, both)[3:] == ["--configure-a365"]  # once, not twice
+        assert _args(shell, "@{ ConfigureA365 = $false }") == ["setup", "--project-root", ROOT]
 
     def test_keep_memory_local_maps_to_memory_local(self, shell: str) -> None:
         assert _args(shell, "@{ KeepMemoryLocal = $true }")[3:] == ["--memory", "local"]

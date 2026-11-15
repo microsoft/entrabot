@@ -67,7 +67,7 @@ least one user in the tenant has a Microsoft 365 E7 or Agent 365 licence assigne
 
 Also check, in `--diagnose`, that the "Agent 365 telemetry" line shows the agent's token
 carrying `Agent365.Observability.OtelWrite`. If it doesn't, run setup again with
-`--configure-a365-observability` (Windows: `-ConfigureA365Observability`).
+`--configure-a365` (Windows: `-ConfigureA365`).
 
 ### Connections to Application Insights or settings.sdk.monitor.azure.com
 
@@ -76,6 +76,30 @@ own usage statistics and settings lookup by setting `MICROSOFT_OTEL_SDKSTATS_DIS
 `APPLICATIONINSIGHTS_STATSBEAT_DISABLED_ALL` and `APPLICATIONINSIGHTS_CONTROLPLANE_DISABLED`
 to `true` before the distro starts. A value already in the environment is kept, so if you see
 these connections, check that none of the three is set to `false` in the shell or `.env`.
+
+### The agent is not in the Agent 365 registry
+
+The "Agent 365 registry" line in `--diagnose` says what this computer knows:
+
+- **not registered**: nothing is recorded here. Run setup again with `--configure-a365`
+  (Windows: `-ConfigureA365`).
+- **joined an agent that already existed**: this computer was set up with `--use-blueprint`,
+  and setup does not register an agent it cannot tell is unregistered (the registry cannot
+  be searched). On the computer that registered it, `--diagnose` shows the registration ID;
+  record it here with
+  `.venv/bin/python scripts/register_agent_instance.py --registration-id <ID> --apply`
+  (Windows: `.venv\Scripts\python.exe scripts\register_agent_instance.py ...`). If no
+  computer registered it, run the same script with `--apply` alone.
+- **cannot be checked: the setup app does not hold AgentRegistration.ReadWrite.All**: an
+  administrator with the Global Administrator or Privileged Role Administrator role runs
+  setup again with `--configure-a365`, which adds that permission to the setup app.
+- **no longer has it**: the registration was deleted in Microsoft 365. Run setup again with
+  `--configure-a365` to register the agent again.
+
+The registry lists the agent in the Microsoft 365 admin center under Agents > All agents >
+Registry. The admin center lags Microsoft Graph: in a real run it listed a new registration
+about a minute after it was made, and still listed a deleted one about a minute after the
+delete (it was gone a few minutes later).
 
 ### Console spans
 

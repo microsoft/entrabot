@@ -50,7 +50,7 @@ class Response:
 
 
 @pytest.fixture
-def module(monkeypatch: pytest.MonkeyPatch):
+def module(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     spec = importlib.util.spec_from_file_location("register_agent_instance", SCRIPT)
     mod = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, mod)
@@ -58,9 +58,25 @@ def module(monkeypatch: pytest.MonkeyPatch):
     state = dict(STATE)
     monkeypatch.setattr(mod, "get_state", state.get)
     monkeypatch.setattr(mod, "set_state", state.__setitem__)
+    monkeypatch.setattr(mod, "clear_state", lambda key: state.pop(key, None))
     monkeypatch.setattr(mod, "get_existing_graph_token", lambda: TOKEN)
+    # Never this checkout's own .env: a scratch one, empty unless a test writes it.
+    monkeypatch.setattr(mod, "ENV_FILE", tmp_path / ".env")
+    for key in (
+        "ENTRABOT_HUMAN_USER_ID",
+        "ENTRABOT_HUMAN_USER_IDS",
+        "ENTRABOT_HUMAN_USER_TYPES",
+        "ENTRABOT_AGENT_DISPLAY_NAME",
+    ):
+        monkeypatch.delenv(key, raising=False)
     mod._test_state = state
     return mod
+
+
+def _result(out: str) -> dict[str, Any]:
+    lines = [line for line in out.splitlines() if line.startswith("ENTRABOT_RESULT=")]
+    assert lines, out
+    return json.loads(lines[-1].removeprefix("ENTRABOT_RESULT="))
 
 
 class Graph:
@@ -137,7 +153,6 @@ def test_without_the_permission_it_stops_before_any_call(module, monkeypatch, ca
 
 def test_an_owner_is_required(module, monkeypatch, capsys) -> None:
     # App-only registration needs owners, and they must be users (Learn, bulk onboarding).
-    monkeypatch.delenv("ENTRABOT_HUMAN_USER_ID", raising=False)
     monkeypatch.setattr(module, "_request", Graph())
     assert module.main(["--apply"]) == 2
     assert "owner" in capsys.readouterr().err.lower()
@@ -154,3 +169,154 @@ def test_no_token_is_printed(module, monkeypatch, capsys) -> None:
     module.main(["--apply", "--owner-id", "owner-1"])
     captured = capsys.readouterr()
     assert TOKEN not in captured.out + captured.err
+
+
+def test_owners_and_the_display_name_come_from_dotenv(module, monkeypatch) -> None:
+    module.ENV_FILE.write_text(
+        "ENTRABOT_HUMAN_USER_IDS=member-1,guest-1\n"
+        "ENTRABOT_HUMAN_USER_TYPES=Member,Guest\n"
+        "ENTRABOT_AGENT_DISPLAY_NAME=Sati\n",
+        encoding="utf-8",
+    )
+    graph = Graph(Response(201, {"id": "registration-1"}))
+    monkeypatch.setattr(module, "_request", graph)
+    assert module.main(["--apply"]) == 0
+    body = graph.calls[0][2]
+    assert body["ownerIds"] == ["member-1"]
+    assert body["displayName"] == "Sati"
+
+
+def test_without_a_display_name_the_upn_prefix_is_used(module, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(module, "_request", Graph())
+    assert module.main(["--owner-id", "owner-1"]) == 0
+    assert '"displayName": "entrabot-agent-sati"' in capsys.readouterr().out
+
+
+def test_print_result_ends_with_one_marked_line(module, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(module, "_request", Graph(Response(201, {"id": "registration-1"})))
+    assert module.main(["--apply", "--owner-id", "owner-1", "--print-result"]) == 0
+    assert _result(capsys.readouterr().out) == {
+        "outcome": "created",
+        "id": "registration-1",
+        "reason": "",
+    }
+
+
+def test_a_missing_permission_is_its_own_outcome(module, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(module, "get_existing_graph_token", lambda: _jwt({"roles": []}))
+    monkeypatch.setattr(module, "_request", Graph())
+    assert module.main(["--apply", "--owner-id", "o", "--print-result"]) == 1
+    result = _result(capsys.readouterr().out)
+    assert result["outcome"] == "permission-missing"
+    assert "AgentRegistration.ReadWrite.All" in result["reason"]
+
+
+def test_graph_refusing_is_its_own_outcome_and_records_nothing(module, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(module, "_request", Graph(Response(403, {"error": "denied"})))
+    assert module.main(["--apply", "--owner-id", "o", "--print-result"]) == 1
+    result = _result(capsys.readouterr().out)
+    assert result["outcome"] == "refused" and "403" in result["reason"]
+    assert "AGENT_REGISTRATION_ID" not in module._test_state
+
+
+def test_no_setup_app_token_is_its_own_outcome(module, monkeypatch, capsys) -> None:
+    def refuse() -> str:
+        raise module.ProvisionerBootstrapError("not signed in")
+
+    monkeypatch.setattr(module, "get_existing_graph_token", refuse)
+    monkeypatch.setattr(module, "_request", Graph())
+    assert module.main(["--apply", "--owner-id", "o", "--print-result"]) == 1
+    assert _result(capsys.readouterr().out)["outcome"] == "no-access"
+
+
+def test_a_registration_made_elsewhere_is_adopted_not_duplicated(module, monkeypatch) -> None:
+    graph = Graph(Response(200, {"id": "elsewhere-1"}), Response(204))
+    monkeypatch.setattr(module, "_request", graph)
+    argv = ["--apply", "--owner-id", "o", "--registration-id", "elsewhere-1"]
+    assert module.main(argv) == 0
+    assert [(call[0], call[1]) for call in graph.calls] == [
+        ("GET", f"{URL}/elsewhere-1"),
+        ("PATCH", f"{URL}/elsewhere-1"),
+    ]
+    assert module._test_state["AGENT_REGISTRATION_ID"] == "elsewhere-1"
+
+
+def test_a_recorded_registration_for_another_agent_is_left_alone(
+    module, monkeypatch, capsys
+) -> None:
+    module._test_state["AGENT_REGISTRATION_ID"] = "registration-1"
+    graph = Graph(Response(200, {"id": "registration-1", "agentIdentityId": "other-agent"}))
+    monkeypatch.setattr(module, "_request", graph)
+    assert module.main(["--apply", "--owner-id", "o", "--print-result"]) == 1
+    assert [call[0] for call in graph.calls] == ["GET"]
+    assert _result(capsys.readouterr().out)["outcome"] == "not-ours"
+
+
+class TestCheck:
+    def test_nothing_recorded_is_an_answer_without_a_call(self, module, monkeypatch, capsys):
+        graph = Graph()
+        monkeypatch.setattr(module, "_request", graph)
+        assert module.main(["--check", "--print-result"]) == 0
+        assert _result(capsys.readouterr().out)["outcome"] == "not-recorded"
+        assert graph.calls == []
+
+    @pytest.mark.parametrize(("status", "outcome"), [(200, "present"), (404, "gone")])
+    def test_a_recorded_one_is_read(self, module, monkeypatch, capsys, status, outcome):
+        module._test_state["AGENT_REGISTRATION_ID"] = "registration-1"
+        graph = Graph(Response(status, {"id": "registration-1"}))
+        monkeypatch.setattr(module, "_request", graph)
+        assert module.main(["--check", "--print-result"]) == 0
+        assert graph.calls == [("GET", f"{URL}/registration-1", None)]
+        assert _result(capsys.readouterr().out) == {
+            "outcome": outcome,
+            "id": "registration-1",
+            "reason": "",
+        }
+
+    def test_one_that_cannot_be_read_says_why(self, module, monkeypatch, capsys):
+        module._test_state["AGENT_REGISTRATION_ID"] = "registration-1"
+        monkeypatch.setattr(module, "_request", Graph(Response(500, {"error": "x"})))
+        assert module.main(["--check", "--print-result"]) == 1
+        result = _result(capsys.readouterr().out)
+        assert result["outcome"] == "could-not-check" and "500" in result["reason"]
+
+    def test_without_the_permission_nothing_is_read(self, module, monkeypatch, capsys):
+        module._test_state["AGENT_REGISTRATION_ID"] = "registration-1"
+        monkeypatch.setattr(module, "get_existing_graph_token", lambda: _jwt({"roles": []}))
+        graph = Graph()
+        monkeypatch.setattr(module, "_request", graph)
+        assert module.main(["--check", "--print-result"]) == 1
+        assert _result(capsys.readouterr().out)["outcome"] == "permission-missing"
+        assert graph.calls == []
+
+
+class TestDelete:
+    def test_a_dry_run_deletes_nothing(self, module, monkeypatch, capsys):
+        module._test_state["AGENT_REGISTRATION_ID"] = "registration-1"
+        graph = Graph()
+        monkeypatch.setattr(module, "_request", graph)
+        assert module.main(["--delete"]) == 0
+        assert graph.calls == []
+        assert module._test_state["AGENT_REGISTRATION_ID"] == "registration-1"
+
+    @pytest.mark.parametrize(("status", "outcome"), [(204, "deleted"), (404, "gone")])
+    def test_apply_deletes_and_forgets_it(self, module, monkeypatch, capsys, status, outcome):
+        module._test_state["AGENT_REGISTRATION_ID"] = "registration-1"
+        graph = Graph(Response(status))
+        monkeypatch.setattr(module, "_request", graph)
+        assert module.main(["--delete", "--apply", "--print-result"]) == 0
+        assert graph.calls == [("DELETE", f"{URL}/registration-1", None)]
+        assert _result(capsys.readouterr().out)["outcome"] == outcome
+        assert "AGENT_REGISTRATION_ID" not in module._test_state
+
+    def test_a_refused_delete_keeps_the_record(self, module, monkeypatch, capsys):
+        module._test_state["AGENT_REGISTRATION_ID"] = "registration-1"
+        monkeypatch.setattr(module, "_request", Graph(Response(403, {"error": "denied"})))
+        assert module.main(["--delete", "--apply", "--print-result"]) == 1
+        assert _result(capsys.readouterr().out)["outcome"] == "refused"
+        assert module._test_state["AGENT_REGISTRATION_ID"] == "registration-1"
+
+    def test_nothing_recorded_is_nothing_to_delete(self, module, monkeypatch, capsys):
+        monkeypatch.setattr(module, "_request", Graph())
+        assert module.main(["--delete", "--apply", "--print-result"]) == 0
+        assert _result(capsys.readouterr().out)["outcome"] == "not-recorded"

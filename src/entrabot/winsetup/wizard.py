@@ -5,15 +5,17 @@ agent, who it works for, where its memory lives. Nothing in the tenant or on dis
 until the person confirms the review screen, apart from an Azure CLI the person agrees to
 install. The second half does the work, one step at a time, and every step is safe to run
 again: re-running setup is the repair path. After the last step, and before the summary,
-Word, Excel and OneDrive files are switched on when they were asked for (``workiq``), and the
-licence walkthrough (``licences``) can get the agent the Microsoft 365 licences it still lacks.
+Word, Excel and OneDrive files are switched on when they were asked for (``workiq``), then
+Agent 365 integration (``telemetry``, then the registry, ``agentregistry``), and the licence
+walkthrough (``licences``) can get the agent the Microsoft 365 licences it still lacks.
 
 Exit codes: 0 done, 1 failed, 2 usage or a missing answer under ``--yes``, 3 set up but with
 something to check (the end-to-end test failed, a sponsor could not be confirmed, Claude Code
 is too old for the project's safety checks, an older setup key could not be switched off in
 Microsoft Entra, or Word, Excel and OneDrive files were asked for and do not work yet: a step
 that switches them on failed, Microsoft does not honour them for the agent yet, or the agent
-has no Microsoft 365 Copilot licence), 130 cancelled.
+has no Microsoft 365 Copilot licence, or Agent 365 integration was asked for and its
+telemetry or its registration did not finish), 130 cancelled.
 """
 
 from __future__ import annotations
@@ -34,8 +36,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from entrabot.a365 import registry as a365_registry
 from entrabot.licensing import Report, friendly_name
 from entrabot.winsetup import (
+    agentregistry,
     agentsponsors,
     azcli,
     certstep,
@@ -85,6 +89,21 @@ EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_SMOKE_FAILED, EXIT_CANCELLED = 0, 1, 2, 3
 TOTAL_STEPS = 11
 DEFAULT_LOCATION = "eastus"
 RERUN = "Run setup again. It continues from here and keeps what already works."
+
+# Agent 365 integration, as the question explains it. Only what yes does; nothing about the
+# admin center is said as done until the registration has worked.
+ADMIN_CENTER_HINT = "Microsoft 365 admin center (Agents > All agents > Registry)"
+A365_EXPLANATION = (
+    "Agent 365 integration (optional). If you say yes, setup does two things:",
+    "  - Registers the agent in Microsoft Agent 365, so it is listed in the Microsoft 365",
+    "    admin center under Agents > All agents > Registry.",
+    "  - Switches on Agent 365 telemetry: the agent reports when it is asked something, by",
+    "    whom, and in which chat. Not what the messages say. Microsoft Defender and the",
+    "    Microsoft 365 admin center show that activity.",
+    "Agent 365 keeps the telemetry only if someone in your organization has a Microsoft 365",
+    "E7 or Agent 365 licence. For the registry, setup's own app gets one more Microsoft Graph",
+    "permission: AgentRegistration.ReadWrite.All.",
+)
 
 # What scripts/entra_provisioning.py prints after RESULT_MARKER, on a line of its own, when it
 # would not take over an existing app registration with the Provisioner's name. Tests on both
@@ -310,8 +329,9 @@ class Options:
     location: str = ""
     subscription: str = ""
     configure_work_iq: bool = False
-    # Agent 365 telemetry (Microsoft OpenTelemetry Distro): asked about like Work IQ.
-    configure_telemetry: bool = False
+    # Agent 365 integration: telemetry (Microsoft OpenTelemetry Distro) and the agent's entry
+    # in the Agent 365 registry, asked about like Work IQ.
+    configure_a365: bool = False
     tenant: str = ""
     device_code: bool = False
     # Sign in again even when an earlier sign-in still works: someone else is to own the agent.
@@ -430,8 +450,8 @@ class Plan:
     location: str = ""
     work_iq: bool = False  # to be switched on in this run (off again if a step fails)
     work_iq_asked: bool = False  # asked for, on the command line or at the question
-    telemetry: bool = False  # Agent 365 telemetry, to be switched on in this run
-    telemetry_asked: bool = False
+    a365: bool = False  # Agent 365 integration asked for, on the command line or at the question
+    telemetry: bool = False  # its telemetry, to be switched on in this run (off if a step fails)
     hosts: list[str] = field(default_factory=lambda: list(hosts.KNOWN_HOSTS))
 
 
@@ -498,6 +518,10 @@ class Wizard:
         self.work_iq_pending = False
         self.telemetry_failure: telemetry.TelemetryError | None = None
         self.telemetry_pending = False  # set up, but the token lacks the scope so far
+        # Agent 365 integration's registry half: what the bootstrap did about the setup app's
+        # permission, and what the registration step did (None: it did not run).
+        self.registry_permission = agentregistry.Permission("unknown")
+        self.registration: agentregistry.Registration | None = None
         # What setup did on this PC before the review screen, in words: the review says it.
         self.done_before_review: list[str] = []
         # What the organization has, as the licence walkthrough last read it: the last
@@ -1079,7 +1103,7 @@ class Wizard:
         self._decide_sponsor()
         self._decide_memory()
         self._decide_work_iq()
-        self._decide_telemetry()
+        self._decide_a365()
 
     def _self_sponsor(self) -> Sponsor | None:
         if self.me is None or self.account is None:
@@ -1369,29 +1393,26 @@ class Wizard:
         if wanted:
             plan.work_iq_asked = plan.work_iq = True
 
-    def _decide_telemetry(self) -> None:
-        """Agent 365 telemetry: explained first, then a yes or no (default no, like Work IQ).
-        It gives the agent a delegated permission and needs a licence in the organization,
-        so it is never switched on without being asked for."""
+    def _decide_a365(self) -> None:
+        """Agent 365 integration: explained first, then one yes or no (default no, like Work
+        IQ). Yes does two things: the agent's entry in the Agent 365 registry, and telemetry.
+        It gives the setup app one more permission and the agent a delegated one, and the
+        telemetry needs a licence in the organization, so it is never done without being
+        asked for. The answer's key is ``a365``; ``telemetry`` (its name in 0.2.0) still
+        works."""
         console, plan = self.console, self.plan
-        wanted = self.options.configure_telemetry
-        if not wanted and (console.interactive or "telemetry" in console.answers):
-            console.info(
-                "The agent can report what it does to Microsoft Agent 365 (telemetry): when it "
-                "is asked something, by whom, and in which chat. Not what the messages say."
-            )
-            console.info(
-                "Microsoft Defender and the Microsoft 365 admin center show its activity from it."
-            )
-            console.info(
-                "Agent 365 keeps it only if someone in your organization has a Microsoft 365 E7 "
-                "or Agent 365 licence."
-            )
+        wanted = self.options.configure_a365
+        keys = [key for key in ("a365", "telemetry") if key in console.answers]
+        if not wanted and (console.interactive or keys):
+            for line in A365_EXPLANATION:
+                console.info(line)
             wanted = console.confirm(
-                "Switch on Agent 365 telemetry?", default=False, key="telemetry"
+                "Switch on Agent 365 integration?",
+                default=False,
+                key=keys[0] if keys else "a365",
             )
         if wanted:
-            plan.telemetry_asked = plan.telemetry = True
+            plan.a365 = plan.telemetry = True
 
     def _work_iq_label(self) -> str:
         """Work IQ, for the review screen."""
@@ -1419,7 +1440,10 @@ class Wizard:
         console.info(f"Will take instructions in Teams from: {self._sponsor_line()}")
         console.info(f"Memory:      {plan.memory_label}")
         console.info(f"Work IQ:     {self._work_iq_label()}")
-        console.info(f"Telemetry:   {'yes (Agent 365)' if plan.telemetry else 'no'}")
+        console.info(
+            "Agent 365 integration: "
+            + ("yes (registry and telemetry)" if plan.a365 else "no")
+        )
         console.info(f"Assistants:  {', '.join(names[host] for host in plan.hosts)}")
         if self.options.remove_all_existing_certs:
             console.blank()
@@ -1462,7 +1486,7 @@ class Wizard:
         smoke = self._smoke(cert)
         # Optional, so after everything the agent needs is in place and tested.
         self._work_iq(identity)
-        self._telemetry(identity)
+        self._a365(identity)
         self._licences(identity, smoke)
         return self._finish(
             identity, cert, env_result, memory_result, upload_failed, host_report, smoke
@@ -1490,6 +1514,11 @@ class Wizard:
         env.pop("ENTRABOT_ASSIGN_WORK_IQ_LICENSE", None)
         if self.plan.work_iq:
             env["ENTRABOT_ASSIGN_WORK_IQ_LICENSE"] = "1"
+        # The setup app gets the Agent 365 registry permission only when this run asked for
+        # Agent 365 integration: a setup that says no never adds it.
+        env.pop(agentregistry.GRANT_ENV, None)
+        if self.plan.a365:
+            env[agentregistry.GRANT_ENV] = "1"
         return env
 
     def _expected_blueprint(self) -> str:
@@ -1574,6 +1603,9 @@ class Wizard:
                 f"roles on demand, activate them first. {RERUN}",
             )
         console.ok("Setup has the access it needs")
+        if self.plan.a365:
+            self.registry_permission = agentregistry.permission_from(bootstrap.stdout)
+            self._say_registry_permission()
         if "Created provisioner app" in bootstrap.stdout:
             console.detail(
                 "First time in this tenant: created the "
@@ -1706,14 +1738,33 @@ class Wizard:
             return
         self.work_iq_pending = outcome == "pending"
 
-    def _telemetry(self, identity: Identity) -> None:
-        """After the end-to-end test, not a numbered step: switch Agent 365 telemetry on
-        (:mod:`telemetry`). A failure never stops setup: it stays off, and the last screen
-        says why and what to do."""
-        plan, console = self.plan, self.console
-        if not plan.telemetry:
+    def _say_registry_permission(self) -> None:
+        """What the bootstrap did about the setup app's registry permission, in a line."""
+        console, permission = self.console, self.registry_permission
+        if permission.status == "granted":
+            console.ok(
+                "Gave the setup app the permission to register the agent in Agent 365 "
+                f"({a365_registry.REQUIRED_ROLE})"
+            )
+        elif permission.status in ("failed", "skipped"):
+            console.warn("The setup app could not get the permission to register the agent.")
+            for line in _wrapped(permission.reason[:1].upper() + permission.reason[1:] + "."):
+                console.detail(line)
+            console.detail("Setup carries on. The registration is tried at the end anyway.")
+
+    def _a365(self, identity: Identity) -> None:
+        """After the end-to-end test, not a numbered step: Agent 365 integration. Telemetry
+        first, then the registration. Each says its own result, and a failure in either
+        never stops setup or hides what the other did; the last screen says what to do."""
+        if not self.plan.a365:
             return
-        console.section("Agent 365 telemetry")
+        self.console.section("Agent 365 integration")
+        self._telemetry(identity)
+        self._registry()
+
+    def _telemetry(self, identity: Identity) -> None:
+        """Switch Agent 365 telemetry on (:mod:`telemetry`). A failure leaves it off."""
+        plan, console = self.plan, self.console
         try:
             outcome = telemetry.configure_telemetry(
                 paths=self.paths,
@@ -1732,10 +1783,77 @@ class Wizard:
             return
         self.telemetry_pending = outcome == "pending"
 
+    def _registry_owners(self) -> list[str]:
+        """Who owns the registration: the agent's sponsors in .env, else whoever is signed in."""
+        try:
+            owners = a365_registry.owner_ids(read_env(self.paths.env_file))
+        except (OSError, UnicodeDecodeError):
+            owners = []
+        if not owners and self.me is not None and self.me.object_id:
+            owners = [self.me.object_id]
+        return owners
+
+    def _registry(self) -> None:
+        """Register the agent in the Agent 365 registry (:mod:`agentregistry`)."""
+        console = self.console
+        recorded_id, joined = agentregistry.recorded(self.paths.state_file)
+        if joined and not recorded_id:
+            self.registration = agentregistry.Registration("joined")
+            console.info("Agent 365 registry: not registered from here.")
+            for line in self._joined_lines():
+                console.detail(line)
+            return
+        console.info("Registering the agent in the Agent 365 registry...")
+        result = agentregistry.register_agent(
+            state_file=self.paths.state_file,
+            helpers=self.helpers,
+            console=console,
+            owner_ids=self._registry_owners(),
+            permission=self.registry_permission,
+            sleep=self.world.sleep,
+        )
+        self.registration = result
+        if result.registered:
+            done = {
+                "created": "Registered the agent in the Agent 365 registry",
+                "updated": "The agent's Agent 365 registration is up to date",
+                "recreated": "Registered the agent in the Agent 365 registry again: the "
+                "registration recorded here no longer existed",
+            }[result.outcome]
+            console.ok(f"{done} (registration ID {result.registration_id})")
+            console.detail(f"Microsoft lists registered agents in the {ADMIN_CENTER_HINT}.")
+            return
+        if result.outcome == "joined":  # recorded() and register_agent() read the same file
+            for line in self._joined_lines():
+                console.detail(line)
+            return
+        console.warn("The agent could not be registered in the Agent 365 registry.")
+        if result.reason:
+            for line in _wrapped(result.reason[:1].upper() + result.reason[1:]):
+                console.detail(line)
+        console.detail("Setup carries on; telemetry is not affected. What to do is at the end.")
+
+    def _joined_lines(self) -> list[str]:
+        """Why a computer that joined an existing agent did not register it, and what to do."""
+        words = self.words
+        return [
+            *_wrapped(
+                f"This {words.computer} joined an agent that already existed, so setup did not "
+                "register it in the Agent 365 registry: the registry cannot be searched, so "
+                "setup cannot tell whether another computer registered it already, and a "
+                "second registration would list the agent twice."
+            ),
+            f"If another computer registered it, the health check there ({words.diagnose})",
+            "shows the registration ID. Record it here with:",
+            f"  {agentregistry.script_command(words, '--registration-id', '<ID>', '--apply')}",
+            "If none did, register it from here with:",
+            f"  {agentregistry.script_command(words, '--apply')}",
+        ]
+
     def _telemetry_attention(self) -> list[tuple[str, list[str]]]:
         """Telemetry was asked for and does not work yet: why, and what to do."""
         plan = self.plan
-        if plan.telemetry_asked and not plan.telemetry:
+        if plan.a365 and not plan.telemetry:
             failure = self.telemetry_failure or telemetry.TelemetryError(
                 "not switched on", reason=telemetry.PERMISSIONS_REASON
             )
@@ -1744,7 +1862,9 @@ class Wizard:
                 reason += "."
             body = [
                 *_wrapped(reason),
-                *_wrapped("Run setup again and answer yes to the Agent 365 telemetry question."),
+                *_wrapped(
+                    "Run setup again and answer yes to the Agent 365 integration question."
+                ),
             ]
             if self.console.log_file:
                 body += ["The details are in the setup log:", f"  {self.console.log_file}"]
@@ -1761,6 +1881,68 @@ class Wizard:
                 )
             ]
         return []
+
+    def _registry_attention(self) -> list[tuple[str, list[str]]]:
+        """The registration was asked for and did not happen: why, and what to do. A computer
+        that joined an existing agent is not a thing to check: it said so at the time."""
+        result = self.registration
+        if not self.plan.a365 or result is None or result.registered or result.outcome == "joined":
+            return []
+        rerun = "Run setup again and answer yes to the Agent 365 integration question."
+        fixes = {
+            "permission-missing": (
+                "The setup app needs the Microsoft Graph permission "
+                f"{a365_registry.REQUIRED_ROLE}, with admin consent. Run setup again as a Global "
+                "Administrator or Privileged Role Administrator and answer yes to the Agent 365 "
+                "integration question."
+            ),
+            "could-not-check": (
+                "Nothing new was registered, so the agent is not listed twice. "
+                f"{rerun} If it keeps happening, check with:  {self.words.diagnose}."
+            ),
+            "not-ours": (
+                f"The registration recorded on this {self.words.computer} names another agent, "
+                f"so it was left alone. Remove {a365_registry.STATE_KEY} from "
+                f".entrabot-state.json, then: {rerun[0].lower()}{rerun[1:]}"
+            ),
+            "bad-id": (
+                f"Remove {a365_registry.STATE_KEY} from .entrabot-state.json, then: "
+                f"{rerun[0].lower()}{rerun[1:]}"
+            ),
+            "no-id": (
+                "Microsoft Graph may have registered the agent without saying under which ID. "
+                f"Before running setup again, look in the {ADMIN_CENTER_HINT}, so the agent is "
+                "not listed twice."
+            ),
+        }
+        reason = result.reason or "setup could not say why"
+        reason = reason[:1].upper() + reason[1:]
+        body = [
+            *_wrapped(reason if reason.endswith(".") else reason + "."),
+            *_wrapped(fixes.get(result.outcome, rerun)),
+            *_wrapped("Agent 365 telemetry is not affected by this."),
+        ]
+        if self.console.log_file:
+            body += ["The details are in the setup log:", f"  {self.console.log_file}"]
+        return [("The agent was not registered in the Agent 365 registry.", body)]
+
+    def _a365_summary(self) -> str:
+        """Agent 365 integration, for the last screen: each half on its own."""
+        plan = self.plan
+        if not plan.telemetry:
+            told = "telemetry not switched on"
+        elif self.telemetry_pending:
+            told = "telemetry set up, not honoured by Microsoft yet"
+        else:
+            told = "telemetry on"
+        result = self.registration
+        if result is not None and result.registered:
+            listed = f"registered (ID {result.registration_id})"
+        elif result is not None and result.outcome == "joined":
+            listed = f"not registered from this {self.words.computer} (it joined an existing agent)"
+        else:
+            listed = "not registered"
+        return f"{told}; {listed}"
 
     def _agent_step_stopped(self, outcome: str, *, blueprint: str, recorded: bool) -> SetupFailed:
         """Why the agent step stopped, from the result line create_entra_agent_ids.py printed
@@ -2374,7 +2556,9 @@ class Wizard:
         old_keys = self._read_old_setup_keys()
         if self.old_keys.unreadable and not old_keys.unreadable:
             old_keys = replace(old_keys, unreadable=True)
-        work_iq_attention = self._work_iq_attention() + self._telemetry_attention()
+        work_iq_attention = (
+            self._work_iq_attention() + self._telemetry_attention() + self._registry_attention()
+        )
         healthy = (
             smoke in ("pass", "skipped")
             and not upload_failed
@@ -2398,6 +2582,8 @@ class Wizard:
         if cert.tpm_fallback_reason:
             console.detail(f"The hardware TPM was not used: {cert.tpm_fallback_reason}")
         console.info(f"Certificate:  valid until {cert.not_after:%d %b %Y}")
+        if self.plan.a365:
+            console.info(f"Agent 365 integration: {self._a365_summary()}")
         if console.log_file:
             console.info(f"Setup log:    {console.log_file}")
 

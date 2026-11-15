@@ -54,7 +54,7 @@ class TestFlags:
             "--subscription",
             "sub-1",
             "--configure-a365-work-iq",
-            "--configure-a365-observability",
+            "--configure-a365",
             "--tenant",
             "contoso.com",
             "--device-code",
@@ -71,12 +71,29 @@ class TestFlags:
         assert (opts.memory, opts.storage_account, opts.container) == ("cloud", "acct", "box")
         assert (opts.location, opts.subscription) == ("westus2", "sub-1")
         assert opts.configure_work_iq and opts.device_code and opts.skip_smoke and opts.yes
-        assert opts.configure_telemetry
+        assert opts.configure_a365
         assert (opts.tenant, opts.hosts, opts.log_file) == (
             "contoso.com",
             "claude",
             Path("setup.log"),
         )
+
+    def test_agent_365_integration_is_off_unless_asked_for(self) -> None:
+        assert _parse().configure_a365 is False
+        assert _parse("--configure-a365").configure_a365 is True
+
+    def test_the_older_telemetry_flag_asks_for_the_same_integration(self) -> None:
+        # --configure-a365-observability shipped in 0.2.0, for telemetry alone. It is now the
+        # older name of --configure-a365: telemetry and the registry.
+        assert _parse("--configure-a365-observability").configure_a365 is True
+        assert _parse("--configure-a365", "--configure-a365-observability").configure_a365
+
+    def test_the_help_names_both(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit):
+            build_parser().parse_args(["setup", "--help"])
+        out = " ".join(capsys.readouterr().out.split())
+        assert "--configure-a365, --configure-a365-observability" in out
+        assert "older name" in out and "AgentRegistration.ReadWrite.All" in out
 
     def test_verbose_is_off_unless_asked_for(self) -> None:
         assert _parse().verbose is False

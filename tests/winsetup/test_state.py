@@ -109,7 +109,9 @@ class TestJoinBlueprint:
     def test_a_fresh_machine_just_records_the_blueprint(self, tmp_path: Path) -> None:
         path = _state_file(tmp_path, None)
         apply_identity_choice(path, IdentityChoice(mode="join", blueprint_app_id=NEW_BP), now=NOW)
-        assert read_state(path) == {"BLUEPRINT_APP_ID": NEW_BP}
+        # ...and that it joined an agent that existed before it: the Agent 365 registry has
+        # no lookup, so this computer must not register the agent a second time.
+        assert read_state(path) == {"BLUEPRINT_APP_ID": NEW_BP, "JOINED_EXISTING_AGENT": "true"}
 
     def test_the_same_blueprint_keeps_everything(self, tmp_path: Path) -> None:
         path = _state_file(tmp_path)
@@ -129,9 +131,15 @@ class TestJoinBlueprint:
             "PROVISIONER_CLIENT_ID": "prov-app",
             "PROVISIONER_CERT_THUMBPRINT": "prov-thumb",
             "BLUEPRINT_APP_ID": NEW_BP,
+            "JOINED_EXISTING_AGENT": "true",
         }
         assert (tmp_path / ".entrabot-state.json.bak.20261111-093015").is_file()
         assert any("not revoked" in note.lower() for note in notes)
+
+    def test_a_new_agent_is_not_recorded_as_joined(self, tmp_path: Path) -> None:
+        path = _state_file(tmp_path)
+        apply_identity_choice(path, IdentityChoice(mode="new", upn_suffix="sati"), now=NOW)
+        assert "JOINED_EXISTING_AGENT" not in read_state(path)
 
     def test_the_helper_is_not_told_to_create_a_new_chain(self) -> None:
         choice = IdentityChoice(mode="join", blueprint_app_id=NEW_BP)
