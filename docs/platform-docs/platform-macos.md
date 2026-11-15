@@ -115,9 +115,24 @@ in-memory cache for that run rather than writing an unencrypted cache to disk.
   anything already present.
 
 For step-by-step setup, see [macOS and Linux setup](../getting-started/macos-linux.md)
-and [Prerequisites](../getting-started/prerequisites.md). Setup on macOS has
-not yet been run end to end against a real tenant; see
+and [Prerequisites](../getting-started/prerequisites.md). On macOS only a
+repair run and the health check of setup have been run against a real tenant; see
 [What has been tested](../getting-started/macos-linux.md#what-has-been-tested).
+
+## Process containment
+
+The MCP server runs inside a Seatbelt sandbox by default (`sandbox-exec` with a profile
+generated at each start, or Microsoft eXecution Container when its executor is installed). It
+can read its repository, virtual environment, state, sign-in cache and `~/Library/Keychains`,
+and nothing else under the home directory, `/Users` or `/Volumes`. It can write only its state
+and sign-in cache, and connect only through the launcher's allowlisting proxy to Microsoft's
+sign-in, Graph and Agent 365 hosts (plus the blob store and persona-sati when configured).
+
+The keychain folder has to stay readable: the Security framework reads the login keychain in
+the server's own process, and without it the certificate key isn't found and sign-in stops.
+
+This has been run for real on macOS 27 (see the [Verification Record](../project/verification.md)).
+Settings, checks and how to turn it off: [Process Containment](../guides/containment.md).
 
 ## Default paths
 

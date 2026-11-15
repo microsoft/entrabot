@@ -17,6 +17,7 @@ The setup wizard is the same on macOS, Linux and Windows, and so are most of its
 | Setup wizard | `~/.entrabot/logs/setup-<date>-<time>.log` |
 | Certificate rotation, teardown, diagnose | `~/.entrabot/logs/rotate-cert-*.log`, `teardown-*.log`, `diagnose-*.log` |
 | The agent (MCP server) | `~/.entrabot/logs/entrabot.log` |
+| Hosts the containment proxy refused | `~/.entrabot/logs/containment-refusals.jsonl` (see [Containment, outbound controls and telemetry](containment-and-outbound.md)) |
 
 The setup log holds everything the helper scripts printed. The screen shows a line or two per step; add `--verbose` to see the full output as it happens, or `--log-file=PATH` to write the log somewhere else. Setup removes tokens and full certificate thumbprints from what it prints and logs. Building `.venv`, before the wizard starts, prints to the terminal only.
 

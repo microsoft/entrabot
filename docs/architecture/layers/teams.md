@@ -22,7 +22,7 @@ Every Teams tool requires an explicit `chat_id`; Entrabot has no default or fall
 - **Group chat** (multiple humans) — `chatType: group` with a fixed topic. Group chat creation is **not** idempotent; each call creates a new chat.
 - **Cross-tenant / guest members** — when a home-tenant ID and email are supplied, the payload includes `tenantId` and an email-based `user@odata.bind` so Graph can resolve the federated identity. The member role remains `owner`, and chat type still depends on the human count: one human produces `oneOnOne`; multiple humans produce `group`.
 
-`add_member()` layers sponsor-gated authorization on top of a plain Graph member-add: the requester must match a known Agent Identity sponsor, and that sponsor must currently be bound to `chat_id` through the active-channel mechanism, before the invite is attempted.
+`add_member()` layers sponsor-gated authorization on top of a plain Graph member-add: the requester must match a known Agent Identity sponsor, and that sponsor must currently be bound to `chat_id` through the active-channel mechanism, before the invite is attempted. The invitee must also pass the server's recipient policy (see [Security Boundaries](../security-boundaries.md#outbound-recipient-policy)); a refusal writes a `denied` audit event and makes no Graph call.
 
 ## Reading messages
 

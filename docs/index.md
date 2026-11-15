@@ -12,7 +12,7 @@ Entrabot is a Python MCP server that gives a device-local agent its own Entra **
 
 The scripts take care of the rest: provisioning the Agent Identity Blueprint, Agent Identity, and Agent User in Entra; uploading a self-signed certificate; assigning the license; and configuring the local MCP server.
 
-**Microsoft Entra Agent ID** and **Microsoft Agent 365** — which enable these experiences — went GA on 2026-05-01. Entrabot is the reference implementation that pulls those primitives together on a real device, today.
+The **Microsoft Entra Agent ID** platform is generally available and **Microsoft Agent 365** is generally available, licensed per user. Agents with their own user account, the Agent User Entrabot is built on, are still available only to tenants in Microsoft's Frontier preview program (Microsoft Learn, November 2026). Entrabot is an open-source reference implementation that pulls those primitives together on a real device.
 
 ## Where to Start
 

@@ -26,7 +26,7 @@ Setup builds `.venv`, then asks a few questions (each has a suggested answer), s
 
 Use `--agent-user-upn=<existing-upn>` or `--with-upn-suffix=<label>` when the Blueprint has multiple Agent Users and auto-discovery would be ambiguous. Run `./scripts/setup.sh --help` for every option.
 
-The agent's signing key is kept in your login keychain on a Mac, or a Secret Service keyring on Linux; setup checks that it can use it before it changes anything. The wizard on macOS and Linux has not yet been run end to end against a real tenant. See [macOS and Linux installation](macos-linux.md) for what setup asks, what it installs, and its limits.
+The agent's signing key is kept in your login keychain on a Mac, or a Secret Service keyring on Linux; setup checks that it can use it before it changes anything. On Ubuntu 24.04 the wizard has been run end to end against a real tenant; on macOS only a repair run and the health check have. See [macOS and Linux installation](macos-linux.md) for what setup asks, what it installs, and its limits.
 
 ## Windows
 
@@ -72,6 +72,12 @@ The setup script registers Entrabot with supported MCP hosts. For Claude Code ch
 It runs `claude --dangerously-load-development-channels server:entrabot` in the Entrabot folder. On Windows, double-click `start-entrabot.cmd` in the Entrabot folder. It runs the same command.
 
 Then ask the host to call `whoami`. It should report the Agent User identity, not your human account.
+
+## What runs by default
+
+- On macOS, and on Linux with `bwrap` installed, the MCP server starts inside a sandbox that limits what it can read, write and connect to. Windows isn't contained. See [Process Containment](../guides/containment.md).
+- The agent can email, invite or share files only with its sponsors, the people in the chat a request came from, and your own organization. Anyone else needs `ENTRABOT_OUTBOUND_ALLOW`. See [Configuration](../reference/configuration.md).
+- Agent 365 telemetry is off unless you switch it on at setup. It needs a Microsoft 365 E7 or Agent 365 licence in your organization.
 
 ## Next steps
 

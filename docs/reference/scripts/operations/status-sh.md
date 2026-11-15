@@ -5,7 +5,7 @@
 Root-level status entry point for macOS and Linux. It exists so operators
 never have to think about the local Python environment: it bootstraps a
 `.venv` if one is missing, installs the dependencies the status check
-needs, loads `.env`, and then delegates entirely to
+needs, and then delegates entirely to
 [`scripts/show_agent_status.py`](show-agent-status-py.md), the canonical
 Agent Identity status/health command.
 
@@ -46,9 +46,10 @@ name is forwarded verbatim (`"$@"`) to `scripts/show_agent_status.py` — see
 2. Checks whether `import azure.identity, entrabot` succeeds in the venv;
    if not, prints `Installing EntraBot status dependencies into .venv...`
    to stderr and runs `pip install -e ".[provisioning]"`.
-3. If a `.env` file exists at the project root, sources it (`set -a` / `.
-   .env` / `set +a`) so every variable it defines is exported into the
-   process environment.
+3. Does not load `.env` itself: `entrabot.config` reads it as data
+   (`KEY=value` lines, never executed) when `show_agent_status.py` imports
+   it. If `.env` exists but can't be read, it stops with
+   `ERROR: .env exists but cannot be read.`
 4. `exec`s the venv's `python3` running `scripts/show_agent_status.py "$@"`
    — this replaces the shell process, so `status.sh`'s own exit code
    becomes whatever `show_agent_status.py` returns.
@@ -56,14 +57,19 @@ name is forwarded verbatim (`"$@"`) to `scripts/show_agent_status.py` — see
 No Graph calls or local-state writes happen in `status.sh` itself; all of
 that lives in `show_agent_status.py`.
 
+The report includes a **Server containment** line: whether the running MCP
+server is contained, and by what (see [Process Containment](../../../guides/containment.md)).
+
 ## Exit behavior
 
 - Exits `1` with `ERROR: Python 3.12+ is required to run EntraBot status.`
   on stderr if no suitable interpreter is found to create `.venv`.
+- Exits `1` with `ERROR: .env exists but cannot be read.` on stderr when
+  `.env` exists but isn't readable.
 - Otherwise, because of the final `exec`, the process exits with whatever
   code `scripts/show_agent_status.py` returns (`0` on success, `1` when
   `--strict`/`--health-only` checks fail or the status script can't
-  acquire a token). `status.sh` has no other exit paths of its own beyond
+  acquire a token). `status.sh` has no other exit paths of its own beyond those above and
   `set -euo pipefail` aborting on the first failing command.
 
 ## Common failures

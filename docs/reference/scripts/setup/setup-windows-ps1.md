@@ -98,6 +98,10 @@ Sign-in:
 
 Other:
 
+- `-ConfigureA365Observability` — also switch on Agent 365 telemetry, as
+  answering yes to that question does (see the macOS and Linux
+  `--configure-a365-observability`; the steps are the same). A failure never
+  stops setup.
 - `-ConfigureA365WorkIq` — also switch on Word, Excel and OneDrive files
   (Microsoft Agent 365 Work IQ), as answering yes to that question does. Setup
   does this itself, with nothing to install: no Agent 365 CLI, no .NET and no
@@ -113,7 +117,9 @@ Other:
   provisioning helpers print. By default each step is a one-line summary and
   the full output goes to the log.
 - `-Diagnose` — check an existing setup and explain what is wrong. Never
-  installs, repairs or moves anything.
+  installs, repairs or moves anything. Includes the Agent 365 telemetry check
+  and "Server containment", which on Windows reports a running server as not
+  contained.
 - `-BootstrapOnly` — stop once Python and `.venv` are ready, without starting
   the wizard.
 - `-Status`, with `-Json`, `-HealthOnly`, `-Strict` — show the agent's status

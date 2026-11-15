@@ -95,7 +95,7 @@ The example above includes `startTime` because some tenants reject the grant wit
 
 The MCP server uses two layers:
 
-1. `_ensure_valid_token()` refreshes eagerly once the token is within 5 minutes of its 60-minute expiry (a 55-minute threshold).
+1. `_ensure_valid_token()` refreshes eagerly once the token is older than `ENTRABOT_TOKEN_MAX_AGE_SECONDS` (default 600 seconds, at most 3300), which bounds how long a disabled agent keeps acting.
 2. `_with_token_retry()` retries once after a Graph 401.
 
 Tokens and assertions must never be logged. Failures surface as typed errors that identify the failed hop without exposing token material.

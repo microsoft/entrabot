@@ -30,7 +30,7 @@ Every parsed token response is checked for an `"error"` key before `"access_toke
 
 Two independent mechanisms keep the active token usable:
 
-- **Eager refresh** — `_ensure_valid_token()` in `mcp_server.py` refreshes whenever the cached token is older than 55 minutes (a 5-minute buffer on the 60-minute Entra expiry), dispatching to the three-hop flow in Agent User mode or an MSAL silent refresh in delegated mode.
+- **Eager refresh** — `_ensure_valid_token()` in `mcp_server.py` refreshes whenever the cached token is older than `ENTRABOT_TOKEN_MAX_AGE_SECONDS` (default 10 minutes, at most 55), dispatching to the three-hop flow in Agent User mode or an MSAL silent refresh in delegated mode.
 - **Lazy retry** — `_with_token_retry()` wraps Graph calls and, on `TokenExpiredError`, clears the cached expiry, forces a refresh, and retries the call exactly once.
 
 ## Delegated mode
