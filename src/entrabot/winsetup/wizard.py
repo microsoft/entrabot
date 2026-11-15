@@ -1398,7 +1398,7 @@ class Wizard:
         IQ). Yes does two things: the agent's entry in the Agent 365 registry, and telemetry.
         It gives the setup app one more permission and the agent a delegated one, and the
         telemetry needs a licence in the organization, so it is never done without being
-        asked for. The answer's key is ``a365``; ``telemetry`` (its name before 0.2.1) still
+        asked for. The answer's key is ``a365``; ``telemetry`` (its name in 0.2.0) still
         works."""
         console, plan = self.console, self.plan
         wanted = self.options.configure_a365
