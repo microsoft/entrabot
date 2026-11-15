@@ -121,10 +121,18 @@ repair run and the health check of setup have been run against a real tenant; se
 
 ## Process containment
 
-The MCP server is **not contained** in 0.2.0. It runs with all of its user's rights: it can
-read every file that user can and connect to any host. Containing it on macOS and Linux is
-planned for 0.3.0. The recipient policy and audit apply on every platform. See
-[Security Boundaries](../architecture/security-boundaries.md).
+The MCP server runs inside a Seatbelt sandbox by default (`sandbox-exec` with a profile
+generated at each start, or Microsoft eXecution Container when its executor is installed). It
+can read its repository, virtual environment, state, sign-in cache and `~/Library/Keychains`,
+and nothing else under the home directory, `/Users` or `/Volumes`. It can write only its state
+and sign-in cache, and connect only through the launcher's allowlisting proxy to Microsoft's
+sign-in, Graph and Agent 365 hosts (plus the blob store and persona-sati when configured).
+
+The keychain folder has to stay readable: the Security framework reads the login keychain in
+the server's own process, and without it the certificate key isn't found and sign-in stops.
+
+This has been run for real on macOS 27 (see the [Verification Record](../project/verification.md)).
+Settings, checks and how to turn it off: [Process Containment](../guides/containment.md).
 
 ## Default paths
 

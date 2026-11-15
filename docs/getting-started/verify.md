@@ -29,7 +29,7 @@ On macOS or Linux, re-run the full diagnostics without provisioning anything:
 ./scripts/setup.sh --diagnose
 ```
 
-It changes nothing. It exits `0` when no check fails and `1` otherwise. It covers the Entrabot version (and a warning when this folder is not on a release tag, which is not a failure), the state file, the certificate (in your keychain or keyring, in date, and its key signs; a warning when 30 days or fewer remain), the three-hop token, Graph identity, Teams scope, the MCP configuration files, the agent's sponsor ("Agent sponsor": whether `.env` names a sponsor the directory lists), and Agent 365 telemetry (when switched on: whether the agent's token carries the permission), and ends with an optional `persona-sati MCP` line. That line reports `SKIP` when `.mcp.json` has no `persona-sati` entry, and never fails the run: a `WARN` means the entry still has an unfilled `<...>` placeholder, points at a launcher or token command that is missing or not executable, or points at a `localhost` address where nothing is listening. A failed local connection does not mean a hosted persona-sati service is down; connect through the client launcher from your persona-sati install, per its own setup documentation. See [MCP connectivity](../troubleshooting/mcp-connectivity.md#persona-sati-does-not-connect).
+It changes nothing. It exits `0` when no check fails and `1` otherwise. It covers the Entrabot version (and a warning when this folder is not on a release tag, which is not a failure), the state file, the certificate (in your keychain or keyring, in date, and its key signs; a warning when 30 days or fewer remain), the three-hop token, Graph identity, Teams scope, the MCP configuration files, the agent's sponsor ("Agent sponsor": whether `.env` names a sponsor the directory lists), and Agent 365 telemetry (when switched on: whether the agent's token carries the permission), whether the running MCP server is contained, and ends with an optional `persona-sati MCP` line. That line reports `SKIP` when `.mcp.json` has no `persona-sati` entry, and never fails the run: a `WARN` means the entry still has an unfilled `<...>` placeholder, points at a launcher or token command that is missing or not executable, or points at a `localhost` address where nothing is listening. A failed local connection does not mean a hosted persona-sati service is down; connect through the client launcher from your persona-sati install, per its own setup documentation. See [MCP connectivity](../troubleshooting/mcp-connectivity.md#persona-sati-does-not-connect).
 
 On Windows, the same checks run with:
 
@@ -45,7 +45,7 @@ It changes nothing. It exits `0` when every check passes and `1` otherwise.
 ./status.sh
 ```
 
-This runs `scripts/show_agent_status.py` in the project's environment, and prints the Agent Identity's object ID, the Agent User's UPN, license assignment status, and certificate expiry. See [scripts/show_agent_status.py reference](../reference/scripts/operations/show-agent-status-py.md) for the full output shape.
+This runs `scripts/show_agent_status.py` in the project's environment, and prints the Agent Identity's object ID, the Agent User's UPN, license assignment status, certificate expiry, and whether the running MCP server is contained. See [scripts/show_agent_status.py reference](../reference/scripts/operations/show-agent-status-py.md) for the full output shape.
 
 ## Start the MCP host and send your first message
 
@@ -57,7 +57,7 @@ On macOS or Linux, from the Entrabot folder:
 
 It runs `claude --dangerously-load-development-channels server:entrabot` there. On Windows, double-click `start-entrabot.cmd` in the Entrabot folder. It runs the same command.
 
-Then ask the host to call `whoami` and send a Teams message. Both should report and act as the Agent User identity, not your human account. See [Identity and Token Flow](../architecture/identity-and-token-flow.md) for how the three-hop token exchange makes this possible.
+Then ask the host to call `whoami` and send a Teams message. Both should report and act as the Agent User identity, not your human account. `whoami` also reports `containment`: `seatbelt` on macOS, `bwrap` on Linux with bubblewrap installed, `none` on Windows. See [Identity and Token Flow](../architecture/identity-and-token-flow.md) for how the three-hop token exchange makes this possible.
 
 ## If something goes wrong
 

@@ -77,7 +77,7 @@ Then ask the host to call `whoami`. It should report the Agent User identity, no
 
 ## What runs by default
 
-- The MCP server is not contained: it runs with all of your account's rights. Containing it on macOS and Linux is planned for 0.3.0. See [Security Boundaries](../architecture/security-boundaries.md#current-limitation-no-shipped-execution-sandbox).
+- On macOS, and on Linux with `bwrap` installed, the MCP server starts inside a sandbox that limits what it can read, write and connect to. Windows isn't contained. See [Process Containment](../guides/containment.md).
 - The agent can email, invite or share files only with its sponsors, the people in the chat a request came from, and your own organization. Anyone else needs `ENTRABOT_OUTBOUND_ALLOW`. See [Configuration](../reference/configuration.md).
 - Agent 365 telemetry is off unless you switch it on at setup. It needs a Microsoft 365 E7 or Agent 365 licence in your organization.
 

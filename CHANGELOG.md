@@ -1,8 +1,30 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (unreleased)
 
-Nothing yet.
+Process containment of the MCP server. Run for real on macOS only: **Linux has never been run**
+(the bubblewrap backend is unit-tested only), the Microsoft eXecution Container backend has
+never been run anywhere, and **Windows is not contained**. A pre-release (`v0.3.0-rc.N`) is
+the way to try it; see `RELEASING.md`.
+
+### Added
+
+- Process containment for the MCP server by default on macOS (Seatbelt) and Linux (bubblewrap), or MXC 1.0.x when installed, behind an allowlisting proxy (`entrabot.sandbox`). Outside the system folders the server reads only its repository, virtual environment, state and (on macOS) the login keychain, writes only its state, and connects only to the Microsoft hosts it needs (plus its blob store and persona-sati when configured) on port 443. Refused hosts are logged to `~/.entrabot/logs/containment-refusals.jsonl`.
+- `ENTRABOT_CONTAINMENT` (`auto`, `required`, `off`, `seatbelt`, `bwrap`, `mxc`), `ENTRABOT_SANDBOX_EXTRA_HOSTS`, `ENTRABOT_SANDBOX_EXTRA_READ`, `ENTRABOT_MXC_EXECUTOR` and `ENTRABOT_MXC_SHA256`; `python -m entrabot.sandbox.selftest` runs a probe in exactly the server's sandbox.
+- A "Server containment" check in `./status.sh` and `--diagnose`, and `containment` in `whoami`.
+
+### Changed
+
+- **Breaking:** on macOS, and on Linux with `bwrap` installed, `entrabot-mcp` runs the server inside an OS sandbox by default. Anything it needs outside the allowed paths or hosts is refused; a persona-sati token command that reads files elsewhere needs `ENTRABOT_SANDBOX_EXTRA_READ`. Set `ENTRABOT_CONTAINMENT=off` to restore the old behaviour.
+- Teams, mail and Files calls use the launcher's proxy when contained (`proxied_async_transport`); uncontained behaviour is unchanged.
+
+### Known limitations
+
+- Linux: never run on a real machine. Install `bwrap` and run `python -m entrabot.sandbox.selftest` to check it on yours.
+- Microsoft eXecution Container: never run (no executor was installed).
+- Windows: not contained. The server runs with all of its user's rights there; MXC's ProcessContainer has open issues with Python asyncio and stdio servers under egress deny (microsoft/mxc #1261, #1709).
+- Containment protects against the server and what it is tricked into, not against other software running as the same user, and it does not limit what the agent may do through Microsoft Graph with its own permissions.
+
 
 ## 0.2.0 — 2026-11-14 (date to confirm on release)
 

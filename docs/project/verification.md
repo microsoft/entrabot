@@ -5,7 +5,30 @@ real agent, on the system named. "Unit-tested" means covered by the test suite
 (`pytest -v && ruff check .`, which every commit must pass) with Graph, Entra and the operating
 system faked. Nothing here names a tenant, account or machine.
 
-Last updated: 2026-11-15, for 0.2.0.
+Last updated: 2026-11-15, for 0.2.0 and the unreleased 0.3.0 (process containment).
+
+## Process containment (0.3.0, unreleased)
+
+Run for real on macOS only, in run 2 below, where the server ran contained for the whole run.
+**Linux has never been run, the Microsoft eXecution Container backend has never been run, and
+Windows is not contained.**
+
+| What | macOS | Linux | Windows |
+|---|---|---|---|
+| Server contained by default; `whoami`, `containment.json` and the check behind `./status.sh` and `--diagnose` report it | Run for real (Seatbelt) | Unit-tested (`bwrap` command, network bridge); never run | Not contained; reported as such |
+| Agent signs in inside the sandbox | Run for real (certificate key from the login keychain) | Never run | n/a |
+| Every connection through the allowlisting proxy (sends, reads, polls, token re-acquisition, the Agent 365 export) | Run for real | Never run | n/a |
+| Refusals from inside the live server's sandbox: reading the home directory, `/Users/Shared` or another volume; writing to the repository, the home directory or `/tmp`; a non-Microsoft host | Run for real (checked against the live server process and with real attempts under its profile) | Never run | n/a |
+| The telemetry distro's Azure Monitor calls (`settings.sdk.monitor.azure.com`, an Application Insights host) | Refused by the proxy (before 0.2.0 switched them off) | Never run | n/a |
+| Clean stop: no process left, status record and generated profile removed | Run for real | Never run | n/a |
+| Microsoft eXecution Container backend | Unit-tested; never run | Unit-tested; never run | Not supported |
+| Reading the status record never signals the process it checks | Unit-tested | Unit-tested | Unit-tested in CI (`test-windows`) |
+
+Bugs found before 0.3.0, fixed with a test each: the Seatbelt profile let the server read
+outside the home directory (other users' folders, other volumes); Teams, mail and Files calls
+didn't use the sandbox's proxy, so they failed inside it; and on Windows the status record's
+liveness check sent Ctrl+C to the process it checked (signal 0 is `CTRL_C_EVENT` there), found
+by the Windows CI run.
 
 ## What 0.2.0 rests on
 
@@ -107,9 +130,12 @@ sandbox refused both there. 0.2.0 switches both calls off (run 1 above).
 | Telemetry setup step and the `--diagnose` check | Run for real | Unit-tested | Unit-tested |
 | `status.sh` and `setup_delegated.sh` read `.env` as data | Run for real (the old scripts fail the tests, the new ones pass) | Unit-tested | n/a |
 | The full test suite | Every commit | Not run | CI (`test-windows`) on each pull request |
-| Process containment | Not in 0.2.0: planned for 0.3.0 | Not in 0.2.0 | Not in 0.2.0 |
+| Process containment | 0.3.0: run for real (above) | 0.3.0: unit-tested, never run | Not contained |
 
 ## Never run
+
+- Containment on a real Linux machine, and the MXC backend anywhere.
+- Containment on Windows (not implemented).
 
 - The Copilot SDK harness against a real Copilot runtime.
 - The agent in the Agent 365 registry.

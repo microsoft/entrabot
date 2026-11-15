@@ -121,7 +121,9 @@ Other:
   (the running version, and a warning, never a failure, when the folder is not on
   a release tag). Includes the "Agent sponsor" check
   (whether `.env` names a sponsor the directory lists, and whether the agent
-  can read each sponsor's user record) and the Agent 365 telemetry check.
+  can read each sponsor's user record), the Agent 365 telemetry check, and
+  "Server containment", which on Windows reports a running server as not
+  contained.
 - `-BootstrapOnly` — stop once Python and `.venv` are ready, without starting
   the wizard.
 - `-Status`, with `-Json`, `-HealthOnly`, `-Strict` — show the agent's status
