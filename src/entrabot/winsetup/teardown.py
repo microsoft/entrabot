@@ -11,7 +11,10 @@ Three scopes, each one explicit:
   and ``.entrabot-state.json`` are backed up and removed. The agent, its memory, and every
   other computer that uses it are untouched.
 * ``--delete-agent`` - additionally delete the agent from the tenant (Agent User, Agent
-  Identity, Blueprint), for every computer.
+  Identity, Blueprint), for every computer, and its entry in the Agent 365 registry when this
+  computer recorded one (``AGENT_REGISTRATION_ID``). That is best-effort: a registration that
+  can't be deleted is a to-do with where to delete it. A disconnect alone leaves the
+  registration alone: it belongs to the agent, not to this computer.
 * ``--purge-data`` - additionally delete Entrabot's data folder on this computer.
 
 The setup credential goes too. Setup signs in to Microsoft Entra with its own certificate
@@ -58,7 +61,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from entrabot.winsetup import certstep, hosts
+from entrabot.a365.registry import ADMIN_CENTER_PLACE, REGISTRATIONS_URL
+from entrabot.a365.registry import STATE_KEY as REGISTRATION_KEY
+from entrabot.winsetup import agentregistry, certstep, hosts
 from entrabot.winsetup.certstep import CertStepError
 from entrabot.winsetup.console import Cancelled, Console
 from entrabot.winsetup.directory import (
@@ -75,7 +80,7 @@ from entrabot.winsetup.directory import (
 from entrabot.winsetup.envfile import EnvLockError, lock_to_current_user, read_env
 from entrabot.winsetup.helpers import Paths
 from entrabot.winsetup.rotation import RETIRING_KEY
-from entrabot.winsetup.state import IdentityError, read_state
+from entrabot.winsetup.state import JOINED_EXISTING_KEY, IdentityError, read_state
 from entrabot.winsetup.wizard import World
 from entrabot.winsetup.words import words_for
 
@@ -173,6 +178,11 @@ class _Facts:
     @property
     def agent(self) -> str:
         return self.upn or "the agent"
+
+    @property
+    def registration_id(self) -> str:
+        """The agent's Agent 365 registration, when this computer recorded one."""
+        return self.state.get(REGISTRATION_KEY, "").strip()
 
     @property
     def current(self) -> _Cert | None:
@@ -632,6 +642,17 @@ class _Teardown:
                 "The Agent User, Agent Identity and Blueprint are deleted for every computer "
                 "that uses them. This cannot be undone."
             )
+            if facts.registration_id:
+                console.bullet(
+                    "Its entry in the Agent 365 registry (registration ID "
+                    f"{facts.registration_id}) is deleted too."
+                )
+            elif facts.state.get(JOINED_EXISTING_KEY) == "true":
+                console.bullet(
+                    "No Agent 365 registration is recorded on this computer. If another "
+                    "computer registered the agent, its entry stays in the registry: delete "
+                    f"it from that computer, or in the {ADMIN_CENTER_PLACE}."
+                )
             console.bullet("Cloud memory, if any, is not deleted.")
         if self.purge_data:
             console.blank()
@@ -645,6 +666,8 @@ class _Teardown:
         console.blank()
         if not self.delete_agent:
             untouched = f"Not touched: the agent itself ({facts.agent} still exists in your tenant)"
+            if facts.registration_id:
+                untouched += f", its Agent 365 registration (ID {facts.registration_id})"
             if not self.purge_data:
                 untouched += ", its memory, and Entrabot's data folder on this computer"
             console.info(untouched + ".")
@@ -760,7 +783,32 @@ class _Teardown:
         self.report.removed.append(
             f"The agent {facts.agent}: Agent User, Agent Identity and Blueprint."
         )
+        self._delete_registration(facts, access)
         return True
+
+    def _delete_registration(self, facts: _Facts, access: Access) -> None:
+        """After the agent is deleted: its entry in the Agent 365 registry, if this computer
+        recorded one. Best-effort; one that can't be deleted is a to-do with where to do it."""
+        registration_id = facts.registration_id
+        if not registration_id:
+            return
+        console = self.console
+        result = agentregistry.delete_registration(access.helpers)
+        if result.outcome in ("deleted", "gone"):
+            done = "Deleted" if result.outcome == "deleted" else "Already gone:"
+            console.ok(f"{done} the agent's Agent 365 registration (ID {registration_id})")
+            self.report.removed.append(
+                f"The agent's entry in the Agent 365 registry (registration ID {registration_id})."
+            )
+            return
+        reason = (result.reason or result.outcome).rstrip(".")
+        console.warn(f"The agent's Agent 365 registration (ID {registration_id}) was NOT deleted.")
+        console.detail(reason)
+        self.report.todo.append(
+            f"The agent's entry in the Agent 365 registry (registration ID {registration_id}) "
+            f"was NOT deleted: {reason}. Delete it in the {ADMIN_CENTER_PLACE}, or with "
+            f"Microsoft Graph: DELETE {REGISTRATIONS_URL}/{registration_id}"
+        )
 
     def _blueprint_place(self, facts: _Facts) -> str:
         name = (

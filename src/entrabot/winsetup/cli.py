@@ -192,7 +192,8 @@ def build_parser() -> argparse.ArgumentParser:
     down.add_argument(
         "--delete-agent",
         action="store_true",
-        help="Also delete the agent from the tenant, for every computer. Cannot be undone.",
+        help="Also delete the agent from the tenant, for every computer, and its Agent 365 "
+        "registration if this computer recorded one. Cannot be undone.",
     )
     down.add_argument(
         "--purge-data",

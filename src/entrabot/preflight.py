@@ -32,6 +32,7 @@ import os
 import shlex
 import shutil
 import socket
+import subprocess
 import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -490,7 +491,9 @@ TELEMETRY_LICENCE_NOTE = (
 
 
 def _telemetry_flag() -> str:
-    return "-ConfigureA365Observability" if _is_windows() else "--configure-a365-observability"
+    """The flag that switches on Agent 365 integration, telemetry included. The 0.2.0 name
+    (``--configure-a365-observability``) still works; messages name the current one."""
+    return "-ConfigureA365" if _is_windows() else "--configure-a365"
 
 
 def telemetry_token_scope(
@@ -518,7 +521,9 @@ def check_a365_telemetry(
 ) -> Check:
     """Diagnostics: is Agent 365 telemetry switched on, and does Microsoft give the agent a
     token that may write it? Never a failure: telemetry is optional."""
-    remediation = f"Run {_setup_command()} {_telemetry_flag()} to switch it on."
+    remediation = (
+        f"Run {_setup_command()} {_telemetry_flag()} to switch it on (Agent 365 integration)."
+    )
     if not config.a365_observability_enabled:
         return Check(
             name=TELEMETRY_CHECK_NAME,
@@ -554,6 +559,116 @@ def check_a365_telemetry(
             f"If it was set up in the last few minutes, wait and run {_diagnose_command()} "
             f"again. Otherwise {remediation[0].lower()}{remediation[1:]}"
         ),
+    )
+
+
+# ─── Agent 365 registry ──────────────────────────────────────────────────────
+
+REGISTRY_CHECK_NAME = "Agent 365 registry"
+_REGISTRY_SCRIPT = "register_agent_instance.py"
+_REGISTRY_TIMEOUT_SECONDS = 120
+
+
+def _read_registry_state(state_path: Path) -> tuple[str, bool, str]:
+    """(recorded registration ID, joined an existing agent, why the file could not be read)."""
+    from entrabot.a365.registry import STATE_KEY
+    from entrabot.winsetup.state import JOINED_EXISTING_KEY
+
+    if not state_path.is_file():
+        return "", False, ""
+    try:
+        data = json.loads(state_path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        return "", False, f"{state_path.name} could not be read ({type(exc).__name__})"
+    if not isinstance(data, dict):
+        return "", False, f"{state_path.name} is not a JSON object"
+    joined = str(data.get(JOINED_EXISTING_KEY) or "") == "true"
+    return str(data.get(STATE_KEY) or "").strip(), joined, ""
+
+
+def _look_up_registration(project_root: Path) -> dict[str, str]:
+    """Ask ``scripts/register_agent_instance.py --check`` (a read with the setup app's token,
+    in a child) whether Graph still has the recorded registration. Never raises."""
+    script = project_root / "scripts" / _REGISTRY_SCRIPT
+    if not script.is_file():
+        return {"outcome": "could-not-check", "reason": f"scripts/{_REGISTRY_SCRIPT} is missing"}
+    try:
+        result = subprocess.run(  # noqa: S603 - the project's own script, by full path
+            [sys.executable, str(script), "--check", "--print-result"],
+            capture_output=True,
+            text=True,
+            cwd=project_root,
+            timeout=_REGISTRY_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"outcome": "could-not-check", "reason": f"the check did not finish ({exc})"}
+    for line in reversed(result.stdout.splitlines()):
+        if line.startswith("ENTRABOT_RESULT="):
+            try:
+                data = json.loads(line.removeprefix("ENTRABOT_RESULT="))
+            except ValueError:
+                break
+            if isinstance(data, dict):
+                return {key: str(value or "") for key, value in data.items()}
+            break
+    tail = " ".join(result.stderr.strip().splitlines()[-2:])[-300:]
+    return {"outcome": "could-not-check", "reason": tail or f"the check exited {result.returncode}"}
+
+
+def check_a365_registry(
+    state_path: Path, *, look_up: Callable[[Path], dict[str, str]] | None = None
+) -> Check:
+    """Diagnostics: is the agent in the Agent 365 registry? Read from the registration ID the
+    state file records (the registry has no lookup by agent), then confirmed with Microsoft
+    Graph. Never a failure: the registry is optional, part of Agent 365 integration."""
+    remediation = (
+        f"Run {_setup_command()} {_telemetry_flag()} to register it (Agent 365 integration)."
+    )
+    registration_id, joined, unreadable = _read_registry_state(state_path)
+    if unreadable:
+        return Check(REGISTRY_CHECK_NAME, "warn", f"cannot be checked: {unreadable}.")
+    if not registration_id:
+        if joined:
+            return Check(
+                REGISTRY_CHECK_NAME,
+                "skip",
+                "no registration is recorded on this computer. It joined an agent that already "
+                "existed, so another computer may have registered it.",
+            )
+        return Check(REGISTRY_CHECK_NAME, "skip", "not registered.", remediation=remediation)
+    answer = (look_up or _look_up_registration)(state_path.parent)
+    outcome = answer.get("outcome", "")
+    if outcome == "present":
+        return Check(
+            REGISTRY_CHECK_NAME,
+            "pass",
+            f"registered (ID {registration_id}); Microsoft Graph returns it.",
+        )
+    if outcome == "gone":
+        return Check(
+            REGISTRY_CHECK_NAME,
+            "warn",
+            f"this computer records registration {registration_id}, but Microsoft Graph no "
+            "longer has it.",
+            remediation=f"Run {_setup_command()} {_telemetry_flag()} to register the agent again.",
+        )
+    why = answer.get("reason") or outcome or "no answer"
+    if outcome == "permission-missing":
+        why = "the setup app does not hold AgentRegistration.ReadWrite.All"
+        fix = (
+            f"An administrator (Global Administrator or Privileged Role Administrator) runs "
+            f"{_setup_command()} {_telemetry_flag()}, which gives the setup app that permission."
+        )
+    elif outcome == "no-access":
+        fix = f"Run {_diagnose_command()} from the computer that ran setup, or run setup again."
+    else:
+        fix = f"Run {_diagnose_command()} again later."
+    return Check(
+        REGISTRY_CHECK_NAME,
+        "warn",
+        f"recorded as registration {registration_id}, but cannot be checked: {why.rstrip('.')}.",
+        remediation=fix,
     )
 
 
@@ -1201,6 +1316,7 @@ def run_diagnostics(
             checks.append(work_iq)
     checks.append(check_agent_sponsor(config))
     checks.append(check_a365_telemetry(config))
+    checks.append(check_a365_registry(state_path))
     return checks
 
 
@@ -1238,11 +1354,13 @@ def overall_exit_code(checks: Iterable[Check]) -> int:
 
 __all__ = [
     "Check",
+    "REGISTRY_CHECK_NAME",
     "SPONSOR_CHECK_NAME",
     "TELEMETRY_CHECK_NAME",
     "VERSION_CHECK_NAME",
     "check_agent_sponsor",
     "check_version",
+    "check_a365_registry",
     "check_a365_telemetry",
     "telemetry_token_scope",
     "COPILOT_CAPABLE_SKUS",

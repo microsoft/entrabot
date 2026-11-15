@@ -1778,9 +1778,11 @@ class TestTelemetryDiagnosis:
         assert check.name == TELEMETRY_CHECK_NAME
         assert check.status == "skip"
         assert "not switched on" in check.detail
-        assert "--configure-a365-observability" in (check.remediation or "") or (
-            "-ConfigureA365Observability" in (check.remediation or "")
-        )
+        # The flag for Agent 365 integration, which switches telemetry on; the 0.2.0 name
+        # (--configure-a365-observability) still works but is not the one named.
+        remediation = check.remediation or ""
+        assert "--configure-a365 " in remediation or "-ConfigureA365 " in remediation
+        assert "Observability" not in remediation and "observability" not in remediation
 
     def test_on_with_the_scope_passes_and_names_the_licence_condition(self) -> None:
         from entrabot.preflight import check_a365_telemetry
@@ -1827,6 +1829,149 @@ class TestTelemetryDiagnosis:
                 copilot_mcp_path=tmp_path / "absent2.json",
             )
         assert TELEMETRY_CHECK_NAME in [c.name for c in checks]
+
+
+class TestRegistryDiagnosis:
+    """The second line of Agent 365 integration in --diagnose: the agent's entry in the Agent
+    365 registry, from the ID the state file records, confirmed with Microsoft Graph."""
+
+    @staticmethod
+    def _state(tmp_path: Path, **values: str) -> Path:
+        path = tmp_path / ".entrabot-state.json"
+        path.write_text(json.dumps({"AGENT_ID": "agent-app", **values}), encoding="utf-8")
+        return path
+
+    @staticmethod
+    def _never(_root: Path) -> dict[str, str]:
+        pytest.fail("nothing recorded: Graph is not asked")
+
+    def test_nothing_recorded_is_not_registered_without_asking_graph(self, tmp_path: Path) -> None:
+        from entrabot.preflight import REGISTRY_CHECK_NAME, check_a365_registry
+
+        check = check_a365_registry(self._state(tmp_path), look_up=self._never)
+        assert check.name == REGISTRY_CHECK_NAME == "Agent 365 registry"
+        assert (check.status, check.detail) == ("skip", "not registered.")
+        assert "--configure-a365" in (check.remediation or "") or "-ConfigureA365" in (
+            check.remediation or ""
+        )
+
+    def test_a_joined_computer_says_another_may_have_registered_it(self, tmp_path: Path) -> None:
+        from entrabot.preflight import check_a365_registry
+
+        state = self._state(tmp_path, JOINED_EXISTING_AGENT="true")
+        check = check_a365_registry(state, look_up=self._never)
+        assert check.status == "skip"
+        assert "another computer may have registered it" in check.detail
+
+    def test_registered_and_confirmed_passes_with_its_id(self, tmp_path: Path) -> None:
+        from entrabot.preflight import check_a365_registry
+
+        seen: list[Path] = []
+
+        def present(root: Path) -> dict[str, str]:
+            seen.append(root)
+            return {"outcome": "present", "id": "registration-1", "reason": ""}
+
+        state = self._state(tmp_path, AGENT_REGISTRATION_ID="registration-1")
+        check = check_a365_registry(state, look_up=present)
+        assert check.status == "pass"
+        assert check.detail == "registered (ID registration-1); Microsoft Graph returns it."
+        assert seen == [tmp_path]
+
+    def test_one_graph_no_longer_has_is_a_warning(self, tmp_path: Path) -> None:
+        from entrabot.preflight import check_a365_registry
+
+        state = self._state(tmp_path, AGENT_REGISTRATION_ID="registration-1")
+        check = check_a365_registry(state, look_up=lambda _root: {"outcome": "gone"})
+        assert check.status == "warn"
+        assert "registration-1" in check.detail and "no longer has it" in check.detail
+
+    @pytest.mark.parametrize(
+        ("answer", "said"),
+        [
+            (
+                {"outcome": "permission-missing", "reason": "long text"},
+                "the setup app does not hold AgentRegistration.ReadWrite.All",
+            ),
+            ({"outcome": "no-access", "reason": "no setup app token: signed out"}, "signed out"),
+            ({"outcome": "could-not-check", "reason": "HTTP 503: busy"}, "HTTP 503"),
+        ],
+    )
+    def test_one_that_cannot_be_checked_says_why(
+        self, tmp_path: Path, answer: dict[str, str], said: str
+    ) -> None:
+        from entrabot.preflight import check_a365_registry
+
+        state = self._state(tmp_path, AGENT_REGISTRATION_ID="registration-1")
+        check = check_a365_registry(state, look_up=lambda _root: answer)
+        assert check.status == "warn"
+        assert check.detail.startswith("recorded as registration registration-1, but cannot be")
+        assert said in check.detail
+        assert check.remediation
+
+    def test_an_unreadable_state_file_cannot_be_checked(self, tmp_path: Path) -> None:
+        from entrabot.preflight import check_a365_registry
+
+        path = tmp_path / ".entrabot-state.json"
+        path.write_text("{broken", encoding="utf-8")
+        check = check_a365_registry(path, look_up=self._never)
+        assert check.status == "warn" and "cannot be checked" in check.detail
+
+    def test_the_real_look_up_reads_the_scripts_result_line(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from entrabot import preflight
+
+        (tmp_path / "scripts").mkdir()
+        (tmp_path / "scripts" / "register_agent_instance.py").write_text("", encoding="utf-8")
+        ran: list[list[str]] = []
+
+        class Done:
+            returncode = 0
+            stdout = 'chatter\nENTRABOT_RESULT={"outcome": "present", "id": "r1", "reason": ""}\n'
+            stderr = ""
+
+        def run(argv: list[str], **kwargs: object) -> Done:
+            ran.append(argv)
+            assert kwargs["cwd"] == tmp_path and kwargs["timeout"]
+            return Done()
+
+        monkeypatch.setattr(preflight.subprocess, "run", run)
+        assert preflight._look_up_registration(tmp_path)["outcome"] == "present"
+        assert ran[0][1:] == [
+            str(tmp_path / "scripts" / "register_agent_instance.py"),
+            "--check",
+            "--print-result",
+        ]
+
+    def test_the_real_look_up_never_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from entrabot import preflight
+
+        assert preflight._look_up_registration(tmp_path)["outcome"] == "could-not-check"
+        (tmp_path / "scripts").mkdir()
+        (tmp_path / "scripts" / "register_agent_instance.py").write_text("", encoding="utf-8")
+
+        def hang(argv: list[str], **kwargs: object) -> object:
+            raise preflight.subprocess.TimeoutExpired(argv, 120)
+
+        monkeypatch.setattr(preflight.subprocess, "run", hang)
+        assert preflight._look_up_registration(tmp_path)["outcome"] == "could-not-check"
+
+    def test_run_diagnostics_reports_telemetry_then_the_registry(self, tmp_path: Path) -> None:
+        from entrabot.preflight import REGISTRY_CHECK_NAME, TELEMETRY_CHECK_NAME
+
+        with patch("entrabot.preflight.run_smoke_checks", return_value=[]):
+            checks = run_diagnostics(
+                _telemetry_config(enabled=False, export=False),
+                state_path=tmp_path / "state.json",
+                expected_binary=tmp_path / "bin" / "entrabot-mcp",
+                claude_mcp_path=tmp_path / "absent.json",
+                copilot_mcp_path=tmp_path / "absent2.json",
+            )
+        names = [check.name for check in checks]
+        assert names.index(TELEMETRY_CHECK_NAME) + 1 == names.index(REGISTRY_CHECK_NAME)
 
 
 class TestAgentSponsorCheck:
