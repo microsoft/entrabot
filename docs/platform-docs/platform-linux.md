@@ -166,11 +166,18 @@ server, and runs an end-to-end test. Operational storage stays local by default;
 pass `--use-cloud-memory` to opt into Azure Blob-backed storage.
 `./scripts/setup.sh --rotate-cert` replaces the certificate,
 `./scripts/setup.sh --diagnose` checks the setup, and `./scripts/teardown.sh`
-disconnects this computer. Setup has not yet been run on Linux at all; see
+disconnects this computer. Setup has been run against a real tenant on Ubuntu 24.04; see
 [What has been tested](../getting-started/macos-linux.md#what-has-been-tested).
 
 For step-by-step setup, see [macOS and Linux setup](../getting-started/macos-linux.md)
 and [Prerequisites](../getting-started/prerequisites.md).
+
+## Process containment
+
+The MCP server is **not contained** in 0.2.0. It runs with all of its user's rights: it can
+read every file that user can and connect to any host. Containing it on Linux and macOS is
+planned for 0.3.0. The recipient policy and audit apply on every platform. See
+[Security Boundaries](../architecture/security-boundaries.md).
 
 ## Default paths
 

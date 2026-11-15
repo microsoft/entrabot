@@ -145,6 +145,7 @@ BLUEPRINT_COULD_NOT_CHECK = "blueprint-could-not-check"
 BLUEPRINT_AMBIGUOUS = "blueprint-ambiguous"
 AGENT_USER_WRONG_BLUEPRINT = "agent-user-wrong-blueprint"
 AGENT_LOOKUP_COULD_NOT_CHECK = "agent-lookup-could-not-check"
+AGENT_USER_AMBIGUOUS = "agent-user-ambiguous"
 _DETAILS_ABOVE = "The details are in the lines above and in the setup log."
 
 
@@ -189,6 +190,13 @@ def _agent_user_wrong_blueprint_fix(w: Words) -> str:
         f"choose another name for this one ({w.flag('upn-suffix', 'NAME')}).\n{_DETAILS_ABOVE}"
     )
 
+
+def _agent_user_ambiguous_fix(w: Words) -> str:
+    return (
+        f"Run setup again with {w.flag('use-blueprint')} and its Blueprint App ID, and name the\n"
+        f"Agent User this computer is for ({w.flag('agent-user-upn', 'UPN')}, one of those listed"
+        f" above).\n{_DETAILS_ABOVE}"
+    )
 
 
 # What a failed sign-in test looks like when the only problem is the kind of session.
@@ -724,6 +732,26 @@ class Wizard:
                 or self.env_values.get("ENTRABOT_BLUEPRINT_APP_ID", "")
             )
         )
+
+    def _review_label(self) -> str:
+        """The agent this run continues with, as the review shows it: the Agent User named in
+        this run, else the one .env names. A join that names neither leaves the choice to the
+        agent step (the Blueprint's own Agent User), so the review does not show what the state
+        file last recorded, which may be an agent that no longer exists."""
+        identity = self.plan.identity
+        if identity.agent_user_upn:
+            return identity.agent_user_upn
+        if identity.upn_suffix:
+            return f"entrabot-agent-{identity.upn_suffix}"
+        named = self.env_values.get("ENTRABOT_AGENT_UPN") or self.env_values.get(
+            "ENTRABOT_AGENT_USER_UPN"
+        )
+        if identity.mode == "join" and not named:
+            return (
+                f"the agent with Blueprint {identity.blueprint_app_id} "
+                "(setup finds its Agent User)"
+            )
+        return self._existing_label()
 
     def _decide_identity(self) -> str:
         console, opts = self.console, self.options
@@ -1383,7 +1411,7 @@ class Wizard:
         elif identity.mode == "join" and not self._same_agent():
             agent = f"join the agent with Blueprint {identity.blueprint_app_id}"
         else:
-            agent = f"continue with {self._existing_label()}"
+            agent = f"continue with {self._review_label()}"
         names = {"claude": "Claude Code", "copilot": "GitHub Copilot CLI"}
         account = self.account
         console.info(f"Account:     {account.user if account else ''}")
@@ -1760,6 +1788,12 @@ class Wizard:
                 "Several applications in this tenant have the agent's name, and none is recorded "
                 "on this computer, so setup can't tell which one is your agent.",
                 fix=_blueprint_ambiguous_fix(self.console.words),
+            )
+        if outcome == AGENT_USER_AMBIGUOUS:
+            return SetupFailed(
+                "This agent has more than one Agent User, so setup can't tell which one this "
+                "computer is for.",
+                fix=_agent_user_ambiguous_fix(self.console.words),
             )
         if outcome == AGENT_USER_WRONG_BLUEPRINT:
             return SetupFailed(

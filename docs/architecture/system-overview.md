@@ -30,6 +30,9 @@ See [Identity and Token Flow](identity-and-token-flow.md) for the token exchange
 | `identity/` | The non-linear identity state machine, sponsor-relationship resolution, and the active-channel sponsor/chat binding used for authorization. |
 | `tools/` | The MCP tool implementations: Teams messaging and chat management, Files/Graph access, email polling, audit logging, Adaptive Cards, promises, and the daily summary. |
 | `a365/` | The Microsoft Agent 365 Work IQ MCP provider boundary and its Word document adapter. |
+| `security/` | The external-content envelope (XPIA) and the server-side recipient policy for every tool that reaches someone new. |
+| `observability/` | Agent 365 telemetry: the Microsoft OpenTelemetry Distro, and the MCP server's `invoke_agent` and `execute_tool` spans (opt-in). |
+| `harness/` | An optional terminal front end built on the GitHub Copilot SDK that runs the model loop itself. |
 | `storage/` | The operational `MemoryBackend` implementations (`LocalBackend` / `BlobBackend`) used for interaction logs, chat cursors, promises, and daily summaries — local by default, Azure Blob opt-in. `PersonaBackend` is a manual compatibility and migration utility, not a normal operational backend. |
 | `mcp_server.py` | The FastMCP entry point: registers every tool, drives the two authenticated session types, runs the background polling tasks, and pushes channel notifications to hosts that support them. |
 

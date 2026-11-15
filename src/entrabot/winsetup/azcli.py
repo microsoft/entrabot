@@ -240,8 +240,11 @@ def find_az(
     if found:
         return _from_launcher(Path(found), platform, "path")
     if platform == "win32":
+        # Windows variable names are not case-sensitive, and the wizard's environment is a
+        # plain dict made from os.environ, which on Windows spells them in capitals.
+        by_name = {name.upper(): value for name, value in env.items()}
         for variable in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
-            root = env.get(variable)
+            root = by_name.get(variable.upper())
             if not root:
                 continue
             launcher = Path(root) / "Microsoft SDKs" / "Azure" / "CLI2" / "wbin" / "az.cmd"

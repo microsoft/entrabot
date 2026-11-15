@@ -63,7 +63,7 @@ This makes a failure in the chain immediately attributable to a specific hop rat
 
 Two independent mechanisms in `mcp_server.py` keep the active token usable without a per-call round trip to Entra:
 
-- **Eager refresh** — `_ensure_valid_token()` refreshes whenever the cached token is older than 55 minutes (`TOKEN_REFRESH_THRESHOLD`, a 5-minute buffer on the 60-minute Entra expiry). Dispatches to the three-hop flow in Agent User mode, or an MSAL silent refresh in delegated mode.
+- **Eager refresh** — `_ensure_valid_token()` refreshes whenever the cached token is older than `ENTRABOT_TOKEN_MAX_AGE_SECONDS` (default 600; at most 3300, `TOKEN_REFRESH_THRESHOLD`). Asking again every ten minutes is what bounds how long a disabled agent keeps acting, since continuous access evaluation is not requested (see [Security Boundaries](security-boundaries.md#token-lifetime-and-revocation)). Dispatches to the three-hop flow in Agent User mode, or an MSAL silent refresh in delegated mode.
 - **Lazy retry** — `_with_token_retry()` wraps Graph calls; on `TokenExpiredError` it clears the cached expiry, forces one refresh via `_ensure_valid_token()`, and retries the call exactly once.
 
 ## Delegated mode

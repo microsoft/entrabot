@@ -199,6 +199,16 @@ administrator rights. Run them on a native Windows host, not under WSL —
 
 For step-by-step setup, see [Windows installation](../getting-started/windows.md).
 
+## Process containment
+
+The MCP server is **not contained** in 0.2.0, on Windows or any other platform. It runs with
+all of its user's rights: it can read every file that user can and connect to any host.
+Containing it on macOS and Linux is planned for 0.3.0. On Windows, Microsoft eXecution
+Container has open issues with Python asyncio and stdio servers when egress is denied
+(microsoft/mxc #1261, #1709). The certificate key itself is still non-exportable (see above),
+and the recipient policy and audit apply on every platform. See
+[Security Boundaries](../architecture/security-boundaries.md).
+
 ## Default paths
 
 - **Operational data, logs, and audit** default to a per-user directory under

@@ -67,6 +67,28 @@ class TestFindAz:
         assert location is not None and location.bin_dir == wbin
         assert location.command == (str(wbin / "az.cmd"),)
 
+    @pytest.mark.parametrize("name", ["PROGRAMFILES", "PROGRAMW6432", "programfiles"])
+    def test_windows_msi_install_is_found_whatever_the_case_of_the_variable(
+        self, tmp_path: Path, name: str
+    ) -> None:
+        # The defect, seen on Windows 11 on 2026-11-15: winget installed the Azure CLI (exit 0,
+        # the MSI reported success a second earlier) and setup said "winget did not install the
+        # Azure CLI", then spent five minutes installing a private copy. The wizard's
+        # environment is dict(os.environ), and on Windows that spells every name in capitals
+        # (PROGRAMFILES), so looking up "ProgramFiles" found nothing. Windows names are not
+        # case-sensitive; neither may this lookup be.
+        wbin = tmp_path / "Program Files" / "Microsoft SDKs" / "Azure" / "CLI2" / "wbin"
+        wbin.mkdir(parents=True)
+        (wbin / "az.cmd").write_text("@echo off\n", encoding="utf-8")
+        location = find_az(
+            env={name: str(tmp_path / "Program Files")},
+            data_dir=tmp_path / "data",
+            platform="win32",
+            which=lambda name: None,
+        )
+        assert location is not None and location.source == "standard"
+        assert location.bin_dir == wbin
+
     def test_windows_calls_the_bundled_python_directly_when_it_is_there(
         self, tmp_path: Path
     ) -> None:

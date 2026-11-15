@@ -2,13 +2,13 @@
 
 The EntraBot MCP server (`src/entrabot/mcp_server.py`) exposes 43 tools across five domains. Every tool that targets a Teams chat requires an explicit `chat_id` — there is no default chat.
 
-Entrabot authenticates through one of two session types: certificate-based Agent User (three-hop Blueprint → Agent Identity → Agent User) or delegated MSAL (the human's own token, with outbound messages prefixed `[EntraBot]`). Whichever session type is active, tokens are minted on demand and cached — no credentials need to be supplied at tool-call time. See [Auth](api/auth.md) and [Token Flows](token-flows.md) for how each session type acquires and refreshes tokens. Work IQ / Agent 365 auth is out of scope for this page — see [Microsoft Agent 365](../platform-docs/microsoft-agent-365.md).
+Entrabot authenticates through one of two session types: certificate-based Agent User (three-hop Blueprint → Agent Identity → Agent User) or delegated MSAL (the human's own token, with outbound messages prefixed `[EntraBot]`). Whichever session type is active, tokens are minted on demand, cached, and re-acquired at least every `ENTRABOT_TOKEN_MAX_AGE_SECONDS` (default 600) — no credentials need to be supplied at tool-call time. See [Auth](api/auth.md) and [Token Flows](token-flows.md) for how each session type acquires and refreshes tokens. Work IQ / Agent 365 auth is out of scope for this page — see [Microsoft Agent 365](../platform-docs/microsoft-agent-365.md).
 
 ## Messaging
 
 ### `send_teams_message`
 
-Send a message to a Teams chat.
+Send a message to a Teams chat. Writes a `pending` audit event first and does nothing if that write fails (`{"error": "the audit event could not be recorded, so ... did not run"}`).
 
 ```python
 async def send_teams_message(
@@ -36,7 +36,7 @@ Returns JSON with `message_id` and `sent_at`.
 
 ### `post_thinking_placeholder`
 
-Post a short placeholder so humans see the agent was triggered.
+Post a short placeholder so humans see the agent was triggered. Writes a `pending` audit event first and does nothing if that write fails (`{"error": "the audit event could not be recorded, so ... did not run"}`).
 
 ```python
 async def post_thinking_placeholder(chat_id: str, text: str = "thinking…") -> str
@@ -48,7 +48,7 @@ Returns JSON with `placeholder_id`.
 
 ### `update_placeholder`
 
-Patch a thinking placeholder with a short italic progress note.
+Patch a thinking placeholder with a short italic progress note. Not audited: it only edits the agent's own progress message.
 
 ```python
 async def update_placeholder(chat_id: str, placeholder_id: str, progress_text: str) -> str
@@ -90,7 +90,7 @@ Graph replaces the body with a tombstone visible to chat participants. You can o
 
 ### `send_email`
 
-Send an email from the Agent User's mailbox.
+Send an email from the Agent User's mailbox. Every recipient must pass the recipient policy (a sponsor, a member of the requesting chat, the agent's home tenant, or `ENTRABOT_OUTBOUND_ALLOW`); otherwise nothing is sent, a `denied` audit event is written, and the reply is `{"error": "recipient not allowed: nothing was sent", "refused": [...]}`. Writes a `pending` audit event first and does nothing if that write fails (`{"error": "the audit event could not be recorded, so ... did not run"}`).
 
 ```python
 async def send_email(
@@ -123,7 +123,7 @@ Use this when the email-poll preview was truncated. A 401 refreshes and retries 
 
 ### `send_card`
 
-Send an Adaptive Card to a Teams chat. Three card types:
+Send an Adaptive Card to a Teams chat. Writes a `pending` audit event first and does nothing if that write fails (`{"error": "the audit event could not be recorded, so ... did not run"}`). Three card types:
 
 ```python
 async def send_card(
@@ -173,7 +173,7 @@ Add a member to a Teams chat. Authorization model (mirrors `share_file`): the ag
 2. **Sponsor has a live active-channel binding matching `chat_id`.** The matched sponsor's user ID must have a recent active-channel binding — proof the server has actually pushed an inbound message from that sponsor in a chat — and the bound `chat_id` must equal the supplied `chat_id`. Missing binding raises `NoActiveSponsorChannelError`; a binding pointing at a different chat raises `SponsorChannelMismatchError`. This defends against a confused-deputy attack where an attacker in one chat directs a member add under a sponsor's authority from a different chat that sponsor happens to belong to.
 3. **Sponsor is a Graph member of `chat_id`.** Defense in depth: raises `RequesterNotInChatError` if the sponsor's user ID isn't in the chat's member list.
 
-Both `requester_email` and `chat_id` are required parameters — there is no no-chat bypass. The invitee (`email`) is unrestricted — a validated sponsor may invite anyone they choose. Dedicated tests: `tests/tools/test_add_member_channel_binding.py`.
+Both `requester_email` and `chat_id` are required parameters — there is no no-chat bypass. The invitee (`email`) must pass the recipient policy: a sponsor, a member of the requesting chat, someone in the agent's home tenant, or an address or domain listed in `ENTRABOT_OUTBOUND_ALLOW`; anyone else is refused with a `denied` audit event and no Graph call. Dedicated tests: `tests/tools/test_add_member_channel_binding.py`.
 
 ### `create_chat`
 
@@ -181,7 +181,7 @@ Both `requester_email` and `chat_id` are required parameters — there is no no-
 async def create_chat(target_email: str, target_tenant_id: str = "") -> str
 ```
 
-Create or reuse a 1:1 (`oneOnOne`) Teams chat with a single user by email. Graph's `oneOnOne` chat creation is idempotent, so calling this again with the same email returns the existing chat rather than creating a duplicate. This tool accepts exactly one `target_email` — it does not create group chats or accept multiple recipients.
+Create or reuse a 1:1 (`oneOnOne`) Teams chat with a single user by email. The user must pass the recipient policy, and the `pending` audit event must be written, before Graph is called. Graph's `oneOnOne` chat creation is idempotent, so calling this again with the same email returns the existing chat rather than creating a duplicate. This tool accepts exactly one `target_email` — it does not create group chats or accept multiple recipients.
 
 For a user in a different tenant, `target_tenant_id` is auto-resolved from the email domain via OpenID discovery, which allows the chat to be created with that user as a B2B guest; pass `target_tenant_id` explicitly only if auto-resolution fails. The new chat is automatically registered for background polling — replies push via channel notifications. Returns the `chat_id`.
 
@@ -227,7 +227,7 @@ Fetch and display an image from a Teams chat message. Pass the Graph API hosted 
 
 ## Promises
 
-Persistent commitment tracking that survives restart. Promises, along with the interaction log and daily-summary archives, are stored through the `MemoryBackend` abstraction (`LocalBackend` on disk, or `BlobBackend` when Azure Blob Storage is configured) as `promises.jsonl`. This is distinct from the watched-chat registry and the email poll cursor, which are plain local files under the data directory, not routed through `MemoryBackend` — see [Storage Backends](api/storage-backends.md).
+Persistent commitment tracking that survives restart. Promises, along with the interaction log and daily-summary archives, are stored through the `MemoryBackend` abstraction (`LocalBackend` on disk, or `BlobBackend` when Azure Blob Storage is configured) as `promises.jsonl`. The watched-chat registry and the email poll cursor also go through the backend (shared in Blob when cloud memory is on) — see [Storage Backends](api/storage-backends.md).
 
 ### `add_promise`
 
@@ -433,7 +433,7 @@ Share a file via Graph `/invite`. **The requester is sponsor-gated; the recipien
 2. **Sponsor has a live active-channel binding matching `chat_id`.** The matched sponsor's user ID must have a recent active-channel binding — proof the server has actually pushed an inbound message from that sponsor in a chat — and the bound `chat_id` must equal the supplied `chat_id`. Missing binding raises `NoActiveSponsorChannelError`; a binding pointing at a different chat raises `SponsorChannelMismatchError`. This defends against a confused-deputy attack where an attacker in one chat directs a share under a sponsor's authority from a different chat that sponsor happens to belong to.
 3. **Sponsor is a Graph member of `chat_id`.** Defense in depth: raises `RequesterNotInChatError` if the sponsor's user ID isn't in the chat's member list.
 
-Both `requester_email` and `chat_id` are required parameters — there is no no-chat bypass. `recipient_email` is unrestricted: a validated sponsor may share with anyone. `role` is `read` or `write`. SharePoint files are also checked against the site denylist (`SiteNotAllowedError`); other Graph failures surface as `GraphFilesError`.
+Both `requester_email` and `chat_id` are required parameters — there is no no-chat bypass. `recipient_email` must pass the recipient policy: a sponsor, a member of the requesting chat, someone in the agent's home tenant, or an address or domain listed in `ENTRABOT_OUTBOUND_ALLOW`; anyone else is refused with a `denied` audit event and no Graph call. `role` is `read` or `write`. SharePoint files are also checked against the site denylist (`SiteNotAllowedError`); other Graph failures surface as `GraphFilesError`.
 
 ## Agent 365 Work IQ
 
@@ -572,7 +572,7 @@ Read a small binary file from OneDrive / SharePoint through Work IQ (`readSmallB
 async def whoami() -> str
 ```
 
-Show the current agent identity, Teams connection status, and permissions. Verifies the agent is authenticated and connected.
+Show the current agent identity, Teams connection status, and permissions. Verifies the agent is authenticated and connected. The `version` field is the running Entrabot version, from the installed package.
 
 ### `audit_log`
 
@@ -585,7 +585,7 @@ def audit_log(
 ) -> str
 ```
 
-Explicitly record an audit event. Many resource-touching tools (Teams sends, file shares, promise mutations, and others) already emit their own audit events internally before or after they act — this tool is for recording events on behalf of actions that aren't covered by one of those internal audit calls, such as filesystem or code-execution activity outside the MCP tool surface. Events are written to `~/.entrabot/audit/` as daily JSONL files.
+Explicitly record an audit event. Many resource-touching tools (Teams sends, file shares, promise mutations, and others) already emit their own audit events internally, and every send, create, share and delete writes its event before it acts and fails closed — this tool is for recording events on behalf of actions that aren't covered by one of those internal audit calls, such as filesystem or code-execution activity outside the MCP tool surface. Events are written with `origin: "model"` to `ENTRABOT_AUDIT_DIR` (default `~/.entrabot/audit/`; `%LOCALAPPDATA%\entrabot\audit\` on Windows) as daily JSONL files.
 
 Attribution is fail-closed: if no active Agent ID can be resolved from the identity session, configuration, or credential store, the call raises rather than silently recording an `"unknown"` agent. See [Audit](api/audit.md).
 
@@ -622,7 +622,7 @@ Returns counts for today's activity, top chats, open promises, watched-chat coun
 async def run_daily_summary(day: str = "", send: bool = True) -> str
 ```
 
-Triage today's interactions and optionally email a summary. Reads the interaction log for `day` (UTC, `YYYY-MM-DD`; defaults to today). Sorts entries into `needs_you`, `handled`, `heads_up`; renders an HTML summary; archives it via the storage backend (`LocalBackend` or `BlobBackend`) under `summaries/<day>.html`; emails it to the primary sponsor via Graph `/me/sendMail` when `send=True`.
+Triage today's interactions and optionally email a summary. Reads the interaction log for `day` (UTC, `YYYY-MM-DD`; defaults to today). Sorts entries into `needs_you`, `handled`, `heads_up`; renders an HTML summary; archives it via the storage backend (`LocalBackend` or `BlobBackend`) under `summaries/<day>.html`; emails it via Graph `/me/sendMail` when `send=True` to every directory sponsor of the Agent Identity whose user record gives an address, or, only when the directory gives none, to `.env`'s first `ENTRABOT_HUMAN_USER_MAILS` address. Every recipient must pass the recipient policy (otherwise the result is `refused`). The result's `recipient_source` is `directory` or `env`.
 
 ## Related
 

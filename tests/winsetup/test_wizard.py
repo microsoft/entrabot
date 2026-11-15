@@ -1567,6 +1567,7 @@ class TestTheAgentStepSaysWhyItStopped:
     AMBIGUOUS = "ENTRABOT_RESULT=blueprint-ambiguous"
     WRONG_BLUEPRINT = "ENTRABOT_RESULT=agent-user-wrong-blueprint"
     AGENT_COULD_NOT_CHECK = "ENTRABOT_RESULT=agent-lookup-could-not-check"
+    AGENT_USER_AMBIGUOUS = "ENTRABOT_RESULT=agent-user-ambiguous"
 
     @staticmethod
     def _stops(world: Scenario, marker: str, explanation: str = "  ERROR: why it stopped") -> None:
@@ -1674,6 +1675,22 @@ class TestTheAgentStepSaysWhyItStopped:
         out = world.out
         assert "The name chosen for the agent already belongs to a different agent." in out
         assert "-UseBlueprint" in out and "-UpnSuffix" in out  # join that one, or another name
+        self._stopped_there(world)
+
+    def test_a_blueprint_with_several_agent_users_and_none_named(self, world: Scenario) -> None:
+        self._stops(
+            world,
+            self.AGENT_USER_AMBIGUOUS,
+            f"  ERROR: Blueprint {BP_APP} has 2 Agent Users\n"
+            "    entrabot-agent-a@contoso.com\n    entrabot-agent-b@contoso.com",
+        )
+
+        assert world.run(use_blueprint=BP_APP) == 1
+
+        out = world.out
+        assert "This agent has more than one Agent User, so setup can't tell which one" in out
+        assert "entrabot-agent-a@contoso.com" in out and "entrabot-agent-b@contoso.com" in out
+        assert "-AgentUserUpn" in out and "-UseBlueprint" in out
         self._stopped_there(world)
 
     def test_a_stop_without_a_marker_keeps_the_general_message(self, world: Scenario) -> None:
@@ -3776,3 +3793,45 @@ class TestAgent365Telemetry:
         assert world.run(answers=answers, typed="\n" * 40) == 0, world.out
         assert world.ran("ensure_a365_observability_permissions.py")
 
+
+
+class TestTheReviewNamesTheAgentThisRunIsFor:
+    """Seen on a Windows VM on 2026-11-15, repairing a PC that the join bug had connected to a
+    second agent: the review said "Agent: continue with entrabot-agent@..." (the address the
+    state file still held for that deleted agent), and the run then connected the PC to the
+    Blueprint's real agent. The review must name the agent this run is for, not a stale one."""
+
+    @staticmethod
+    def _agent_line(world: Scenario) -> str:
+        return next(line for line in world.out.splitlines() if line.strip().startswith("Agent:"))
+
+    def test_an_agent_user_named_on_the_command_line_is_the_one_shown(
+        self, world: Scenario
+    ) -> None:
+        world.existing()  # .env and the state file name entrabot-agent-sati@contoso.com
+
+        world.run(use_blueprint=BP_APP, agent_user_upn="bot@contoso.com")
+
+        assert self._agent_line(world).endswith("continue with bot@contoso.com")
+
+    def test_a_join_with_no_agent_user_named_does_not_show_a_stale_one(
+        self, world: Scenario
+    ) -> None:
+        env = [f"ENTRABOT_TENANT_ID={TENANT}", f"ENTRABOT_BLUEPRINT_APP_ID={BP_APP}"]
+        world.existing(env=env)  # the state file still holds an old AGENT_USER_UPN
+
+        world.run(use_blueprint=BP_APP)
+
+        line = self._agent_line(world)
+        assert "entrabot-agent-sati@contoso.com" not in line
+        assert f"the agent with Blueprint {BP_APP}" in line
+        assert "setup finds its Agent User" in line
+
+    def test_the_agent_env_names_is_still_shown_when_nothing_else_was_asked(
+        self, world: Scenario
+    ) -> None:
+        world.existing()
+
+        world.run(use_blueprint=BP_APP)
+
+        assert self._agent_line(world).endswith("continue with entrabot-agent-sati@contoso.com")

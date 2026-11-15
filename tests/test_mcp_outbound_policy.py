@@ -62,6 +62,7 @@ def world(monkeypatch: pytest.MonkeyPatch) -> dict:
         "_sponsor_addresses",
         AsyncMock(return_value=frozenset({"sponsor@fabrikam.com"})),
     )
+    monkeypatch.setattr(mcp_server, "_directory_sponsors", AsyncMock(return_value=None))
     monkeypatch.setattr("entrabot.tools.audit.log_event", fake_log_event)
     monkeypatch.delenv("ENTRABOT_OUTBOUND_ALLOW", raising=False)
     monkeypatch.delitem(mcp_server._state, "requesting_chat", raising=False)
@@ -185,6 +186,71 @@ class TestOtherToolsThatReachSomeoneNew:
         assert ("send_daily_summary", "denied") in [
             (event["action"], event["outcome"]) for event in world["audit"]
         ]
+
+
+class TestDailySummaryRecipient:
+    """The summary goes to the Agent Identity's sponsors as the directory lists them; .env
+    is used only when the directory gives no sponsor address."""
+
+    @pytest.fixture(autouse=True)
+    def _no_log(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("entrabot.tools.interaction_log.read_day", lambda day: [])
+        monkeypatch.setattr(
+            "entrabot.tools.daily_summary.archive_summary", lambda **kwargs: "/tmp/summary.html"
+        )
+
+    @staticmethod
+    def _sponsor(user_id: str, mail: str | None = None):
+        from entrabot.identity.sponsors import AgentIdentitySponsor
+
+        return AgentIdentitySponsor(user_id=user_id, user_principal_name=None, mail=mail)
+
+    async def test_the_directory_sponsors_not_env(
+        self, world: dict, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        world["config"].human_user_mails[:] = ["old-sponsor@contoso.com"]
+        monkeypatch.setattr(
+            mcp_server,
+            "_directory_sponsors",
+            AsyncMock(return_value=[self._sponsor("u-1", "pat@contoso.com")]),
+        )
+        result = await mcp_server._run_daily_summary_internal(day="2026-11-14")
+        assert result["sent_to"] == ["pat@contoso.com"]
+        assert result["recipient_source"] == "directory"
+        assert [call["to"] for call in world["graph"]] == [["pat@contoso.com"]]
+
+    async def test_every_sponsor_with_an_address(
+        self, world: dict, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sponsors = [
+            self._sponsor("u-1", "pat@contoso.com"),
+            self._sponsor("u-2", "lee@contoso.com"),
+        ]
+        monkeypatch.setattr(mcp_server, "_directory_sponsors", AsyncMock(return_value=sponsors))
+        result = await mcp_server._run_daily_summary_internal(day="2026-11-14")
+        assert result["sent_to"] == ["pat@contoso.com", "lee@contoso.com"]
+
+    async def test_env_when_no_sponsor_record_can_be_read(
+        self, world: dict, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        world["config"].human_user_mails[:] = ["pat@contoso.com"]
+        monkeypatch.setattr(
+            mcp_server, "_directory_sponsors", AsyncMock(return_value=[self._sponsor("u-1")])
+        )
+        result = await mcp_server._run_daily_summary_internal(day="2026-11-14")
+        assert result["sent_to"] == ["pat@contoso.com"]
+        assert result["recipient_source"] == "env"
+
+    async def test_env_when_the_directory_cannot_be_read(self, world: dict) -> None:
+        world["config"].human_user_mails[:] = ["pat@contoso.com"]
+        result = await mcp_server._run_daily_summary_internal(day="2026-11-14")
+        assert result["sent_to"] == ["pat@contoso.com"]
+        assert result["recipient_source"] == "env"
+
+    async def test_nothing_is_sent_with_no_address_at_all(self, world: dict) -> None:
+        world["config"].human_user_mails[:] = []
+        result = await mcp_server._run_daily_summary_internal(day="2026-11-14")
+        assert result["sent_to"] == [] and world["graph"] == []
 
 
 class TestAuditFailsClosed:

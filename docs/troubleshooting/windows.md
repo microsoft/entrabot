@@ -132,6 +132,14 @@ Setup exits with code 1, at the step that creates your agent.
 
 **Fix.** Join that agent instead (`scripts\setup-windows.cmd -UseBlueprint <its Blueprint App ID>`), or give this agent's Agent User another name (`-UpnSuffix <name>`), or name one of its Agent Users exactly (`-AgentUserUpn <address>`). See [Setup and authentication](setup-and-authentication.md#setup-stops-because-the-agent-user-belongs-to-a-different-blueprint).
 
+## "This agent has more than one Agent User, so setup can't tell which one this computer is for."
+
+Setup exits with code 1, at the step that creates your agent.
+
+**Cause.** You joined an agent with `-UseBlueprint` and no `-AgentUserUpn`, and its Blueprint has several Agent Users, none recorded on this PC. The lines above list them. Nothing was created, granted or recorded.
+
+**Fix.** Run setup again and name one of them: `scripts\setup-windows.cmd -UseBlueprint <App ID> -AgentUserUpn <address>`. See [Setup and authentication](setup-and-authentication.md#setup-stops-because-the-agent-has-several-agent-users).
+
 ## "No Teams licence", or `Graph returned 403 for /me/chats`
 
 **Cause.** The agent has no licence that includes Teams. Like a person, the agent's user account needs a licence of its own. Setup gives it a free one by itself, preferring one that also brings mail and files. When none is free, the agent is still created and can sign in, but Teams refuses it, and setup ends with exit code 3.

@@ -16,8 +16,7 @@ provider. This guide covers what each one does and when to reach for which.
 - Uploading binary files, including chunked upload sessions for larger
   files.
 - Sharing a file, provided the requester is an Agent Identity sponsor and a
-  member of the initiating chat; the recipient can be anyone the sponsor
-  chooses.
+  member of the initiating chat; the recipient must be a sponsor, a member of the requesting chat, someone in the agent's home tenant, or an address or domain listed in `ENTRABOT_OUTBOUND_ALLOW`.
 - Adding legacy Graph comments on SharePoint `.docx`/`.xlsx` files (no
   read/list operation — see Work IQ Word for reading comments).
 

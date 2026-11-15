@@ -17,7 +17,10 @@ LINKS = {
     "install": f"Full setup instructions: {resources.doc_url()}",
     "az": "Install Azure CLI: https://aka.ms/installazure",
     "troubleshoot": f"Troubleshooting: {resources.doc_url('Troubleshooting')}",
-    "clone": f"Clone the repo to provision: git clone {resources.REPO_URL}",
+    "clone": (
+        "Clone the latest release to provision: git clone --branch <tag> "
+        f"{resources.REPO_URL} (the tag is on {resources.REPO_URL}/releases/latest)"
+    ),
 }
 
 

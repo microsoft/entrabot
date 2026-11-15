@@ -213,3 +213,41 @@ async def test_call_tool_jsonrpc_error_is_truncated_before_wrapping() -> None:
 
     assert exc.detail.endswith("</external_content>"), "envelope must stay closed"
     assert "x" * 501 not in exc.detail
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    "failure",
+    [
+        httpx.ConnectError("connection refused"),
+        httpx.ProxyError("proxy refused the tunnel"),
+        httpx.ReadTimeout("timed out"),
+        httpx.RemoteProtocolError("server disconnected"),
+    ],
+    ids=["connect", "proxy", "timeout", "disconnect"],
+)
+async def test_a_request_that_fails_before_an_answer_is_a_work_iq_error(
+    failure: httpx.HTTPError,
+) -> None:
+    # The defect, seen on a Linux VM on 2026-11-15: create_word_document's request to Work IQ
+    # failed before any answer, and the httpx exception escaped the tool. The tool promises
+    # {"error", "error_type"} on a Work IQ failure and catches only Work IQ's own errors, so
+    # the caller got a raw exception instead (the audit said "failure", the reply no error).
+    respx.post("https://agent365.svc.cloud.microsoft/agents/servers/mcp_WordServer").mock(
+        side_effect=failure
+    )
+    client = WorkIqMcpClient(transport=httpx.AsyncHTTPTransport())
+
+    with pytest.raises(A365McpCallError) as exc_info:
+        await client.call_tool(
+            endpoint="https://agent365.svc.cloud.microsoft/agents/servers/mcp_WordServer",
+            server_name="mcp_WordServer",
+            tool_name="CreateDocument",
+            arguments={"fileName": "a.docx"},
+            token="token-123",
+        )
+
+    message = str(exc_info.value)
+    assert type(failure).__name__ in message  # what failed, for the operator
+    assert "token-123" not in message

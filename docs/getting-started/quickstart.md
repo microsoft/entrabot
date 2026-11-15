@@ -8,13 +8,15 @@ Entrabot gives an autonomous agent its own Microsoft Entra Agent Identity and Ag
 
 ## macOS or Linux
 
-Setup needs Python 3.12 or newer and nothing else first: no Azure CLI and no `az login`. Clone or download the repository, then run setup from a terminal in it:
+Setup needs Python 3.12 or newer and nothing else first: no Azure CLI and no `az login`. Clone the latest release (or download its source code ZIP from <https://github.com/microsoft/entrabot/releases/latest>), then run setup from a terminal in it:
 
 ```bash
-git clone https://github.com/microsoft/entrabot.git
+git clone --branch v0.2.0 https://github.com/microsoft/entrabot.git
 cd entrabot
 ./scripts/setup.sh
 ```
+
+This clones the latest release, v0.2.0. `main` is development and may be ahead of it. Git then prints a note about a "detached HEAD": that is normal when you check out a release tag, not an error. To upgrade an existing install, see [Upgrading to a new release](../troubleshooting/migrations-and-upgrades.md#upgrading-to-a-new-release).
 
 Setup builds `.venv`, then asks a few questions (each has a suggested answer), signs you in to Microsoft, and creates the agent. To answer up front instead:
 
@@ -26,14 +28,14 @@ Setup builds `.venv`, then asks a few questions (each has a suggested answer), s
 
 Use `--agent-user-upn=<existing-upn>` or `--with-upn-suffix=<label>` when the Blueprint has multiple Agent Users and auto-discovery would be ambiguous. Run `./scripts/setup.sh --help` for every option.
 
-The agent's signing key is kept in your login keychain on a Mac, or a Secret Service keyring on Linux; setup checks that it can use it before it changes anything. The wizard on macOS and Linux has not yet been run end to end against a real tenant. See [macOS and Linux installation](macos-linux.md) for what setup asks, what it installs, and its limits.
+The agent's signing key is kept in your login keychain on a Mac, or a Secret Service keyring on Linux; setup checks that it can use it before it changes anything. On Ubuntu 24.04 the wizard has been run end to end against a real tenant; on macOS only a repair run and the health check have. See [macOS and Linux installation](macos-linux.md) for what setup asks, what it installs, and its limits.
 
 ## Windows
 
-Nothing needs installing first. Download or clone the repository, then double-click `scripts\setup-windows.cmd`, or run it from a terminal:
+Nothing needs installing first. Download the latest release's source code ZIP or clone it, then double-click `scripts\setup-windows.cmd`, or run it from a terminal:
 
 ```bat
-git clone https://github.com/microsoft/entrabot.git
+git clone --branch v0.2.0 https://github.com/microsoft/entrabot.git
 cd entrabot
 scripts\setup-windows.cmd
 ```
@@ -72,6 +74,12 @@ The setup script registers Entrabot with supported MCP hosts. For Claude Code ch
 It runs `claude --dangerously-load-development-channels server:entrabot` in the Entrabot folder. On Windows, double-click `start-entrabot.cmd` in the Entrabot folder. It runs the same command.
 
 Then ask the host to call `whoami`. It should report the Agent User identity, not your human account.
+
+## What runs by default
+
+- The MCP server is not contained: it runs with all of your account's rights. Containing it on macOS and Linux is planned for 0.3.0. See [Security Boundaries](../architecture/security-boundaries.md#current-limitation-no-shipped-execution-sandbox).
+- The agent can email, invite or share files only with its sponsors, the people in the chat a request came from, and your own organization. Anyone else needs `ENTRABOT_OUTBOUND_ALLOW`. See [Configuration](../reference/configuration.md).
+- Agent 365 telemetry is off unless you switch it on at setup. It needs a Microsoft 365 E7 or Agent 365 licence in your organization.
 
 ## Next steps
 

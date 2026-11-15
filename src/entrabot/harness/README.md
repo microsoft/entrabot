@@ -75,9 +75,9 @@ provisioning, then "copy the generated `.env` to `~/.entrabot/.env`". `.env` loo
 `./.entrabot/.env`.
 
 - `ENTRABOT_GRAPH_TOKEN` — set to enable the Teams bridge (ingress polling + outbound).
-  Without it the harness runs **console-only** (you can chat with the agent; it just won't
-  listen to / post on Teams). Production should wire entrabot's three-hop token in
-  `teams/auth.py` (`make_token_provider`, marked INTEGRATION POINT).
+  Without it, and without complete three-hop credentials, the harness runs **console-only**
+  (you can chat with the agent; it just won't listen to / post on Teams). With the
+  credentials, `teams/auth.py` uses entrabot's three-hop token (see Status, item 1).
 - `ENTRABOT_AGENT_USER_ID` — the agent's own Teams user id (so it doesn't echo itself).
 - `ENTRABOT_TUI=1` — use the full-screen Textual UI (`pip install -e '.[tui]'`); the
   console UI is the default.

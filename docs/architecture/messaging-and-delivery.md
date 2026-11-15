@@ -10,7 +10,7 @@ Every Teams tool requires an explicit `chat_id` — there is no default group ch
 
 ## Outbound path
 
-`send_teams_message` calls `send()` in `tools/teams.py` through `_with_token_retry()`. What identity the message carries depends on the active auth mode:
+`send_teams_message` first writes a `pending` audit event and refuses to send if that write fails; it then calls `send()` in `tools/teams.py` through `_with_token_retry()`. What identity the message carries depends on the active auth mode:
 
 - **Agent User mode** — the three-hop token's `idtyp=user` identity means the message posts as the Agent User itself, with its own display name and (if licensed) AI-agent badge.
 - **Delegated mode** — the token belongs to the signed-in human, so `send()` prepends the literal `[EntraBot]` prefix (passed as the `prefix` argument) so the human can tell which messages the agent sent versus typed themselves. Graph still attributes the message to the human's own identity in this mode.
@@ -27,7 +27,7 @@ Every Teams tool requires an explicit `chat_id` — there is no default group ch
 
 ## Fleet-safe delivery
 
-`chat_cursors.claim_delivery()` is the mechanism that lets more than one Entrabot instance poll the same chat without double-delivering a message:
+`chat_cursors.claim_delivery()` is the mechanism that lets more than one Entrabot instance poll the same chat without double-delivering a message. It works only when the instances share their cursors, which is cloud memory. With local memory each computer has its own cursors, and each pushes every message (see [One agent on more than one computer](../guides/storage-configuration.md#one-agent-on-more-than-one-computer-with-local-memory)):
 
 - It reads the shared cursor with its ETag, computes which candidate message IDs aren't already recorded as delivered, and writes the merged cursor back with an `If-Match` precondition — an atomic compare-and-swap.
 - Across N instances racing on the same message, exactly one wins the CAS for a given ID; the losers hit a `ConcurrencyError`, re-read, see the ID already claimed, and push nothing for it.
