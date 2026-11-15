@@ -73,13 +73,13 @@ class TestSeatbeltProfile:
         policy = _policy(tmp_path)
         odd = ContainmentPolicy(
             home=policy.home,
-            read_only=(Path('/Volumes/Development HD/x"y'),),
+            read_only=(Path('/Volumes/Example Disk/x"y'),),
             read_write=policy.read_write,
             temp_dir=policy.temp_dir,
             allowed_hosts=policy.allowed_hosts,
         )
         text = seatbelt.profile(odd, proxy_port=1)
-        assert '(subpath "/Volumes/Development HD/x\\"y")' in text
+        assert '(subpath "/Volumes/Example Disk/x\\"y")' in text
 
     @pytest.mark.skipif(not Path("/usr/bin/sandbox-exec").exists(), reason="macOS only")
     def test_the_profile_compiles_and_is_enforced(self, tmp_path: Path) -> None:
