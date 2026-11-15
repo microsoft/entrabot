@@ -145,6 +145,7 @@ BLUEPRINT_COULD_NOT_CHECK = "blueprint-could-not-check"
 BLUEPRINT_AMBIGUOUS = "blueprint-ambiguous"
 AGENT_USER_WRONG_BLUEPRINT = "agent-user-wrong-blueprint"
 AGENT_LOOKUP_COULD_NOT_CHECK = "agent-lookup-could-not-check"
+AGENT_USER_AMBIGUOUS = "agent-user-ambiguous"
 _DETAILS_ABOVE = "The details are in the lines above and in the setup log."
 
 
@@ -189,6 +190,13 @@ def _agent_user_wrong_blueprint_fix(w: Words) -> str:
         f"choose another name for this one ({w.flag('upn-suffix', 'NAME')}).\n{_DETAILS_ABOVE}"
     )
 
+
+def _agent_user_ambiguous_fix(w: Words) -> str:
+    return (
+        f"Run setup again with {w.flag('use-blueprint')} and its Blueprint App ID, and name the\n"
+        f"Agent User this computer is for ({w.flag('agent-user-upn', 'UPN')}, one of those listed"
+        f" above).\n{_DETAILS_ABOVE}"
+    )
 
 
 # What a failed sign-in test looks like when the only problem is the kind of session.
@@ -1760,6 +1768,12 @@ class Wizard:
                 "Several applications in this tenant have the agent's name, and none is recorded "
                 "on this computer, so setup can't tell which one is your agent.",
                 fix=_blueprint_ambiguous_fix(self.console.words),
+            )
+        if outcome == AGENT_USER_AMBIGUOUS:
+            return SetupFailed(
+                "This agent has more than one Agent User, so setup can't tell which one this "
+                "computer is for.",
+                fix=_agent_user_ambiguous_fix(self.console.words),
             )
         if outcome == AGENT_USER_WRONG_BLUEPRINT:
             return SetupFailed(

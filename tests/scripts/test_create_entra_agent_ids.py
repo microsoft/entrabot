@@ -1122,12 +1122,14 @@ MARKERS = {
     "BLUEPRINT_AMBIGUOUS_MARKER": "ENTRABOT_RESULT=blueprint-ambiguous",
     "AGENT_USER_WRONG_BLUEPRINT_MARKER": "ENTRABOT_RESULT=agent-user-wrong-blueprint",
     "AGENT_LOOKUP_COULD_NOT_CHECK_MARKER": "ENTRABOT_RESULT=agent-lookup-could-not-check",
+    "AGENT_USER_AMBIGUOUS_MARKER": "ENTRABOT_RESULT=agent-user-ambiguous",
 }
 BLUEPRINT_NOT_FOUND = MARKERS["BLUEPRINT_NOT_FOUND_MARKER"]
 BLUEPRINT_COULD_NOT_CHECK = MARKERS["BLUEPRINT_COULD_NOT_CHECK_MARKER"]
 BLUEPRINT_AMBIGUOUS = MARKERS["BLUEPRINT_AMBIGUOUS_MARKER"]
 WRONG_BLUEPRINT = MARKERS["AGENT_USER_WRONG_BLUEPRINT_MARKER"]
 AGENT_COULD_NOT_CHECK = MARKERS["AGENT_LOOKUP_COULD_NOT_CHECK_MARKER"]
+AGENT_USER_AMBIGUOUS = MARKERS["AGENT_USER_AMBIGUOUS_MARKER"]
 
 
 def _the_one_marker(out: str) -> str:
@@ -1564,6 +1566,273 @@ class TestAnAgentUserFoundByItsSignInName:
         assert run.state["AGENT_USER_ID"] == NEW_USER_OBJECT
         assert ("grant_agent_user_consent", NEW_AI_OBJECT, NEW_USER_OBJECT) in run.granted
         assert "ENTRABOT_RESULT=" not in capsys.readouterr().out
+
+
+AGENT_IDENTITIES = (
+    "/servicePrincipals/microsoft.graph.agentIdentity"
+    "?$select=id,appId,displayName,agentIdentityBlueprintId&$top=999"
+)
+SECOND_AI_OBJECT = "c2c2c2c2-0000-4000-8000-0000000000c2"
+SECOND_AI_APP = "c2c2c2c2-1111-4000-8000-0000000000c2"
+SECOND_USER_OBJECT = "e2e2e2e2-0000-4000-8000-0000000000e2"
+SECOND_UPN = "entrabot-agent-laptop@contoso.onmicrosoft.com"
+
+
+def _listed(object_id: str, app_id: str, blueprint: str, name: str = DISPLAY_NAME) -> dict:
+    return {
+        "id": object_id,
+        "appId": app_id,
+        "displayName": name,
+        "agentIdentityBlueprintId": blueprint,
+    }
+
+
+def _user(object_id: str, upn: str) -> dict:
+    # Listed by identityParentId: Graph's default properties, no identityParentId among them.
+    return {"id": object_id, "userPrincipalName": upn, "displayName": "EntraBot Agent"}
+
+
+@pytest.fixture
+def joining(run: AgentRun, monkeypatch: pytest.MonkeyPatch) -> AgentRun:
+    """main() on a machine joining Blueprint OURS by App ID with no Agent User named, as
+    ``setup-windows.cmd -UseBlueprint OURS`` (or ``setup.sh --use-blueprint=OURS``) runs it on a
+    machine that has never been set up: no ENTRABOT_AGENT_USER_UPN, no suffix, nothing recorded
+    but the Blueprint."""
+    monkeypatch.delenv("ENTRABOT_AGENT_USER_UPN", raising=False)
+
+    def no_default_name(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("looked for entrabot-agent@<domain> instead of the Blueprint's agent")
+
+    monkeypatch.setattr(run.module, "_agent_user_upn", no_default_name)
+    return run
+
+
+class TestJoiningABlueprintJoinsItsAgent:
+    """The defect, seen on 2026-11-15: an agent was set up on Linux under a new Blueprint
+    (Agent User entrabot-agent-smoke@...). Joining that Blueprint from a Windows PC with
+    ``-UseBlueprint <App ID>`` and no Agent User named looked only for an Agent User called
+    entrabot-agent@<domain>, found nobody of that name, and created a second Agent Identity
+    and Agent User under the Blueprint. The PC was connected to that new, unlicensed agent,
+    not to the one it was asked to join. The docs say setup finds the Blueprint's Agent User,
+    and asks for a name only when it has several."""
+
+    def test_the_blueprints_only_agent_user_is_joined_and_nothing_is_created(
+        self, joining: AgentRun, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        joining.answer(
+            AGENT_IDENTITIES,
+            _resp(
+                200,
+                {
+                    "value": [
+                        _listed(THEIR_AI_OBJECT, THEIR_AI_APP, BLUEPRINT_OTHER),
+                        _listed(OUR_AI_OBJECT, OUR_AI_APP, BLUEPRINT_OURS.upper()),
+                    ]
+                },
+            ),
+        )
+        joining.answer(
+            _users_of(OUR_AI_OBJECT), _resp(200, {"value": [_user(AGENT_USER_OBJECT, AGENT_UPN)]})
+        )
+
+        assert joining.module.main() == 0
+
+        assert joining.state == {
+            "BLUEPRINT_APP_ID": BLUEPRINT_OURS,
+            "BLUEPRINT_OBJECT_ID": OURS_OBJECT,
+            "AGENT_ID": OUR_AI_APP,
+            "AGENT_OBJECT_ID": OUR_AI_OBJECT,
+            "AGENT_USER_ID": AGENT_USER_OBJECT,
+            "AGENT_USER_UPN": AGENT_UPN,
+        }
+        assert joining.graph.writes == []  # no second Agent Identity, no second Agent User
+        assert joining.granted == [
+            ("grant_agent_identity_app_permissions", OUR_AI_OBJECT),
+            ("grant_agent_user_consent", OUR_AI_OBJECT, AGENT_USER_OBJECT),
+            ("grant_agent_user_storage_consent", OUR_AI_OBJECT, AGENT_USER_OBJECT),
+            ("assign_license_to_agent_user", AGENT_USER_OBJECT),
+        ]
+        out = capsys.readouterr().out
+        assert f"The Blueprint's Agent User is {AGENT_UPN}." in out
+        assert "Reusing existing Agent User" in out
+
+    def test_several_stop_the_run_and_name_each_before_anything_is_granted_or_recorded(
+        self, joining: AgentRun, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        joining.answer(
+            AGENT_IDENTITIES,
+            _resp(
+                200,
+                {
+                    "value": [
+                        _listed(OUR_AI_OBJECT, OUR_AI_APP, BLUEPRINT_OURS, "EntraBot Agent - a"),
+                        _listed(SECOND_AI_OBJECT, SECOND_AI_APP, BLUEPRINT_OURS, "EntraBot - b"),
+                    ]
+                },
+            ),
+        )
+        joining.answer(
+            _users_of(OUR_AI_OBJECT), _resp(200, {"value": [_user(AGENT_USER_OBJECT, AGENT_UPN)]})
+        )
+        joining.answer(
+            _users_of(SECOND_AI_OBJECT),
+            _resp(200, {"value": [_user(SECOND_USER_OBJECT, SECOND_UPN)]}),
+        )
+        before = dict(joining.state)
+
+        assert joining.module.main() == 1
+
+        out = capsys.readouterr().out
+        assert _the_one_marker(out) == AGENT_USER_AMBIGUOUS
+        message = out[out.index(AGENT_USER_AMBIGUOUS) :]
+        assert AGENT_UPN in message and SECOND_UPN in message
+        assert f"--use-blueprint={BLUEPRINT_OURS} --agent-user-upn=UPN" in message
+        assert f"-UseBlueprint {BLUEPRINT_OURS} -AgentUserUpn UPN" in message
+        assert "Nothing was created or changed" in message
+        assert joining.granted == []
+        assert joining.graph.writes == []
+        assert joining.state == before
+
+    def test_among_several_the_one_recorded_here_is_kept(self, joining: AgentRun) -> None:
+        joining.state["AGENT_USER_ID"] = SECOND_USER_OBJECT
+        joining.answer(
+            AGENT_IDENTITIES,
+            _resp(
+                200,
+                {
+                    "value": [
+                        _listed(OUR_AI_OBJECT, OUR_AI_APP, BLUEPRINT_OURS),
+                        _listed(SECOND_AI_OBJECT, SECOND_AI_APP, BLUEPRINT_OURS),
+                    ]
+                },
+            ),
+        )
+        joining.answer(
+            _users_of(OUR_AI_OBJECT), _resp(200, {"value": [_user(AGENT_USER_OBJECT, AGENT_UPN)]})
+        )
+        joining.answer(
+            _users_of(SECOND_AI_OBJECT),
+            _resp(200, {"value": [_user(SECOND_USER_OBJECT, SECOND_UPN)]}),
+        )
+
+        assert joining.module.main() == 0
+
+        assert joining.state["AGENT_USER_ID"] == SECOND_USER_OBJECT
+        assert joining.state["AGENT_ID"] == SECOND_AI_APP
+        assert joining.graph.writes == []
+
+    def test_a_recorded_agent_that_is_gone_is_replaced_by_the_blueprints_only_one(
+        self, joining: AgentRun
+    ) -> None:
+        # The PC in the defect: its record names the agent it should not have created, which
+        # was then deleted. Joining again must take the Blueprint's agent, not make another.
+        joining.state.update({"AGENT_ID": NEW_AI_APP, "AGENT_USER_ID": NEW_USER_OBJECT})
+        joining.answer(
+            AGENT_IDENTITIES,
+            _resp(200, {"value": [_listed(OUR_AI_OBJECT, OUR_AI_APP, BLUEPRINT_OURS)]}),
+        )
+        joining.answer(
+            _users_of(OUR_AI_OBJECT), _resp(200, {"value": [_user(AGENT_USER_OBJECT, AGENT_UPN)]})
+        )
+
+        assert joining.module.main() == 0
+
+        assert joining.state["AGENT_USER_ID"] == AGENT_USER_OBJECT
+        assert joining.state["AGENT_ID"] == OUR_AI_APP
+        assert joining.graph.writes == []
+
+    def test_every_page_of_agent_identities_is_read(self, joining: AgentRun) -> None:
+        second_page = "/servicePrincipals/microsoft.graph.agentIdentity?$skiptoken=abc"
+        joining.answer(
+            AGENT_IDENTITIES,
+            _resp(
+                200,
+                {
+                    "value": [_listed(THEIR_AI_OBJECT, THEIR_AI_APP, BLUEPRINT_OTHER)],
+                    "@odata.nextLink": f"https://graph.microsoft.com/beta{second_page}",
+                },
+            ),
+        )
+        joining.answer(
+            second_page,
+            _resp(200, {"value": [_listed(OUR_AI_OBJECT, OUR_AI_APP, BLUEPRINT_OURS)]}),
+        )
+        joining.answer(
+            _users_of(OUR_AI_OBJECT), _resp(200, {"value": [_user(AGENT_USER_OBJECT, AGENT_UPN)]})
+        )
+
+        assert joining.module.main() == 0
+
+        assert joining.state["AGENT_USER_ID"] == AGENT_USER_OBJECT
+        assert joining.graph.writes == []
+
+    def test_a_blueprint_with_no_agent_user_yet_goes_on_as_before(
+        self, joining: AgentRun, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Only its Agent Identities are listed; with none, the run looks the name up as before.
+        monkeypatch.setattr(joining.module, "_agent_user_upn", lambda *_a, **_k: AGENT_UPN)
+        joining.answer(
+            AGENT_IDENTITIES,
+            _resp(200, {"value": [_listed(THEIR_AI_OBJECT, THEIR_AI_APP, BLUEPRINT_OTHER)]}),
+        )
+        joining.answer(_by_upn(AGENT_UPN), _resp(200, {"value": [_agent_user(OUR_AI_OBJECT)]}))
+        joining.answer(
+            f"/servicePrincipals/{OUR_AI_OBJECT}",
+            _resp(200, _identity(OUR_AI_OBJECT, OUR_AI_APP, BLUEPRINT_OURS)),
+        )
+
+        assert joining.module.main() == 0
+
+        assert joining.state["AGENT_USER_ID"] == AGENT_USER_OBJECT
+        assert (("GET", _by_upn(AGENT_UPN))) in joining.graph.calls
+
+    @pytest.mark.parametrize(
+        "where",
+        ["identities", "users"],
+    )
+    @pytest.mark.parametrize(
+        "reply",
+        [_resp(503, {}), requests.exceptions.ReadTimeout("read timed out"), _not_json(200)],
+        ids=["503", "timeout", "not-json"],
+    )
+    def test_a_listing_that_fails_stops_the_run_before_anything_is_created(
+        self,
+        joining: AgentRun,
+        capsys: pytest.CaptureFixture[str],
+        where: str,
+        reply: object,
+    ) -> None:
+        if where == "identities":
+            joining.answer(AGENT_IDENTITIES, reply)
+        else:
+            joining.answer(
+                AGENT_IDENTITIES,
+                _resp(200, {"value": [_listed(OUR_AI_OBJECT, OUR_AI_APP, BLUEPRINT_OURS)]}),
+            )
+            joining.answer(_users_of(OUR_AI_OBJECT), reply)
+        before = dict(joining.state)
+
+        assert joining.module.main() == 1
+
+        out = capsys.readouterr().out
+        assert _the_one_marker(out) == AGENT_COULD_NOT_CHECK
+        assert f"which Agent Users Blueprint {BLUEPRINT_OURS} already has" in out
+        assert joining.graph.writes == []
+        assert joining.granted == []
+        assert joining.state == before
+
+    def test_a_name_asked_for_is_looked_up_by_name_as_before(self, run: AgentRun) -> None:
+        # The run fixture names the Agent User (ENTRABOT_AGENT_USER_UPN): the Blueprint's
+        # Agent Identities are not listed (an unexpected Graph call fails the test).
+        run.answer(_by_upn(AGENT_UPN), _resp(200, {"value": [_agent_user(OUR_AI_OBJECT)]}))
+        run.answer(
+            f"/servicePrincipals/{OUR_AI_OBJECT}",
+            _resp(200, _identity(OUR_AI_OBJECT, OUR_AI_APP, BLUEPRINT_OURS)),
+        )
+
+        assert run.module.main() == 0
+
+        assert ("GET", AGENT_IDENTITIES) not in run.graph.calls
 
 
 def _identity_search_fails(run: AgentRun) -> None:
