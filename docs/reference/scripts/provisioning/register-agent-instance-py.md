@@ -32,8 +32,8 @@ python scripts/register_agent_instance.py --delete --apply   # delete the record
 - With `--apply`, reads `AGENT_REGISTRATION_ID` from the state file (or uses `--registration-id`). If one is recorded, it is read and updated; a registration that names another agent is left alone. If Graph answers 404, a new one is created. Any other answer stops the run without creating anything, so a lookup that failed never leads to a second registration. A new ID is saved as `AGENT_REGISTRATION_ID` as soon as Graph returns it.
 - The Agent Registry API has no list call, so a registration this computer has not recorded cannot be found. Setup does not run `--apply` on a computer that joined an agent that already existed and has no registration recorded; use `--registration-id` there to record the one another computer made (its `--diagnose` shows the ID).
 - `--check` only reads. `--delete --apply` deletes the recorded registration and removes `AGENT_REGISTRATION_ID`; teardown with `--delete-agent` runs it.
-- The request body is built in one function, `entrabot.a365.registry.build_registration`. It sends application IDs for `agentIdentityId` and `agentIdentityBlueprintId`; Learn does not say whether they take application IDs or object IDs.
-- Not yet run against a real tenant: unit tests only.
+- The request body is built in one function, `entrabot.a365.registry.build_registration`. It sends application IDs for `agentIdentityId` and `agentIdentityBlueprintId`; Learn does not say whether they take application IDs or object IDs, and Graph accepted them in a real run.
+- Run for real on Linux through setup: `--apply` registered the agent and `--check` (through `--diagnose`) found it. For an Entra agent identity the registration ID Graph returned was the agent identity's ID. `--delete` not yet run against a tenant.
 
 ## Exit behavior
 

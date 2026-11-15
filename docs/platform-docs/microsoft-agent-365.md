@@ -328,8 +328,11 @@ setup does it in two steps:
    Administrator. The setup app never grants it to itself. A setup that
    answers no never adds it. Setup never removes it either: the setup app is
    shared by every Entrabot agent in the tenant, and another agent's
-   registration may need it. If it cannot be added, setup says why and
-   carries on.
+   registration may need it. Consent answering success is not taken as
+   proof: right after the permission is added, Microsoft can answer success
+   and grant nothing. Setup checks that the grant shows on the setup app and
+   consents again until it does, for about a minute and a half at most. If it
+   cannot be added or never shows, setup says why and carries on.
 2. **The registration**, after telemetry:
    `scripts/register_agent_instance.py --apply`, with the setup app's token.
    The request body is built in one place
@@ -358,11 +361,12 @@ computer recorded (`DELETE .../agentRegistrations/{id}`), after the agent,
 best-effort; one it cannot delete is a to-do with where to delete it. A
 disconnect alone leaves the registration alone.
 
-Not yet checked against a tenant: whether `agentIdentityId` and
-`agentIdentityBlueprintId` take app IDs or object IDs (Learn does not say; its
-observability glossary uses "agent id" and "blueprint id" for app IDs), which
-display name the admin center shows, and whether the registration step works
-end to end. It is unit-tested only.
+Run for real on Linux (see the [Verification Record](../project/verification.md)):
+setup registered the agent, Graph accepted the app IDs above, and for an Entra
+agent identity the registration ID Graph returned was the agent identity's ID.
+About a minute later the admin center listed the agent with platform
+"Entrabot", the sponsor as owner and the Entra agent ID. Not yet run on Windows
+or macOS, nor teardown's delete.
 
 Microsoft's other route, the Agent 365 CLI's `a365 setup all`, creates its own
 Blueprint with a client secret and an Azure App Service. Do not run it against
