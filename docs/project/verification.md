@@ -117,9 +117,9 @@ an automated test and went only to the sponsor or the agent itself.
 |---|---|---|
 | `--diagnose` (`-Diagnose`) | All checks pass | All checks pass |
 | `send_teams_message`, `post_thinking_placeholder` then `resolve_placeholder`, `send_card` in a new 1:1 chat with the sponsor (`create_chat`) | Run for real; each read back through Graph | Run for real; each read back through Graph |
-| `send_email` to the sponsor | Run for real; in Sent Items | Run for real; in Sent Items |
+| `send_email` to the sponsor | Run for real; in Sent Items and the sponsor's inbox | Run for real; in Sent Items and the sponsor's inbox |
 | Word through Work IQ: `create_word_document`, `read_word_document` | Run for real (one failure, below) | Run for real |
-| `share_file` of that document with the sponsor | Run for real at the final release head, after the sponsor's message (it needs one in the same server session); the share is in the file's permissions | Run for real, after the sponsor's message; the share is in the file's permissions |
+| `share_file` of that document with the sponsor | Run for real at the final release head, after the sponsor's message (it needs one in the same server session); the share is in the file's permissions and the sponsor received the notice | Run for real, after the sponsor's message; the share is in the file's permissions and the sponsor received the notice |
 | Deleting the document | Run for real (Graph answers 423 Locked for a few minutes after Work IQ creates a document) | Run for real |
 | Inbound Teams message from the sponsor | Run for real: pushed outside the envelope, sender matched by directory ID | Run for real: pushed outside the envelope, sender matched by directory ID |
 | Inbound email from the sponsor | Run for real at the final release head: pushed inside the envelope | **Not run on this platform** (run on Linux, and on macOS in run 2) |
