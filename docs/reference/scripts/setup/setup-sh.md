@@ -154,7 +154,9 @@ Agent 365 integration:
     to date, setup adds the Microsoft Graph application permission
     `AgentRegistration.ReadWrite.All` and grants admin consent for it, through
     your Azure CLI sign-in (Global Administrator or Privileged Role
-    Administrator). After the telemetry half it runs
+    Administrator). On a setup app it took over because an administrator had
+    already approved it, setup grants that one permission on its own and
+    runs no admin consent. After the telemetry half it runs
     [`register_agent_instance.py`](../provisioning/register-agent-instance-py.md)
     `--apply`, which registers the agent (it is then listed in the Microsoft
     365 admin center under Agents > All agents > Registry) or updates the

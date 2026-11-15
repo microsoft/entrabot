@@ -33,7 +33,7 @@ python scripts/register_agent_instance.py --delete --apply   # delete the record
 - The Agent Registry API has no list call, so a registration this computer has not recorded cannot be found. Setup does not run `--apply` on a computer that joined an agent that already existed and has no registration recorded; use `--registration-id` there to record the one another computer made (its `--diagnose` shows the ID).
 - `--check` only reads. `--delete --apply` deletes the recorded registration and removes `AGENT_REGISTRATION_ID`; teardown with `--delete-agent` runs it.
 - The request body is built in one function, `entrabot.a365.registry.build_registration`. It sends application IDs for `agentIdentityId` and `agentIdentityBlueprintId`; Learn does not say whether they take application IDs or object IDs, and Graph accepted them in a real run.
-- Run for real on Linux through setup: `--apply` registered the agent and `--check` (through `--diagnose`) found it. For an Entra agent identity the registration ID Graph returned was the agent identity's ID. `--delete --apply` deleted the registration and cleared `AGENT_REGISTRATION_ID`, after which `--diagnose` said "not registered". The admin center can keep listing a deleted agent for a few minutes.
+- Run for real on Linux and Windows through setup: `--apply` registered the agent and `--check` (through `--diagnose`) found it. For an Entra agent identity the registration ID Graph returned was the agent identity's ID. `--delete --apply` deleted the registration and cleared `AGENT_REGISTRATION_ID`, after which `--diagnose` said "not registered". The admin center can keep listing a deleted agent for a few minutes.
 
 ## Exit behavior
 

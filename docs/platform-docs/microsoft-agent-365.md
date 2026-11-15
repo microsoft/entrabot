@@ -331,8 +331,14 @@ setup does it in two steps:
    registration may need it. Consent answering success is not taken as
    proof: right after the permission is added, Microsoft can answer success
    and grant nothing. Setup checks that the grant shows on the setup app and
-   consents again until it does, for about three minutes at most. If it
-   cannot be added or never shows, setup says why and carries on.
+   consents again until it does, for about three minutes at most. A run that
+   took the setup app over because an administrator had already approved it
+   (the second and later computers in a tenant) runs no admin consent, which
+   would grant everything the app declares. It grants this one permission on
+   its own instead, with an app role assignment
+   (`POST /servicePrincipals/{Graph}/appRoleAssignedTo`) through the same
+   sign-in, and checks that it shows. If it cannot be added or never shows,
+   setup says why and carries on.
 2. **The registration**, after telemetry:
    `scripts/register_agent_instance.py --apply`, with the setup app's token.
    The request body is built in one place
@@ -368,8 +374,9 @@ agent identity the registration ID Graph returned was the agent identity's ID.
 About a minute later the admin center listed the agent with platform
 "Entrabot", the sponsor as owner and the Entra agent ID. Teardown's delete
 worked, and the admin center stopped listing the agent a few minutes after it.
-Not yet run on Windows or macOS, nor with a second computer joining a
-registered agent.
+Run for real on Windows too: registration, `-Diagnose`, the admin center
+listing and teardown's delete. Not yet run on macOS, nor with a second
+computer joining a registered agent.
 
 Microsoft's other route, the Agent 365 CLI's `a365 setup all`, creates its own
 Blueprint with a client secret and an Azure App Service. Do not run it against

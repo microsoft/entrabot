@@ -172,7 +172,7 @@ It also showed that two computers running one agent with local memory both push 
 | The MCP server against a real tenant | Run for real (runs 1 and 2) | Run for real (run 3, Ubuntu 24.04, headless keyring) | Run for real (run 3, Windows 11 24H2, elevated desktop task) |
 | Setup wizard against a real tenant | Repair run and health check | Run for real: new agent, repair, health check | Run for real: join, repair, health check |
 | Telemetry setup step and the `--diagnose` check | Run for real | Run for real | Run for real |
-| Agent 365 registry through setup (after 0.2.0, on `main`): the setup app's permission, the registration, its `--diagnose` line, teardown's delete | Unit-tested | Run for real (2026-11-15, Ubuntu 24.04): the permission and its consent check, the registration, `--diagnose`, the admin center listing, the script's delete, teardown's delete. Not run: a second computer joining a registered agent | Unit-tested |
+| Agent 365 registry through setup (after 0.2.0, on `main`): the setup app's permission, the registration, its `--diagnose` line, teardown's delete | Unit-tested | Run for real (2026-11-15, Ubuntu 24.04): the permission and its consent check, the registration, `--diagnose`, the admin center listing, the script's delete, teardown's delete. Not run: a second computer joining a registered agent | Run for real (2026-11-15, Windows 11 Pro 25H2, built-in Administrator): the permission, the registration, `-Diagnose`, the admin center listing, telemetry, teardown's delete. Unit-tested: the takeover run's grant. Not run: a standard user |
 | `status.sh` and `setup_delegated.sh` read `.env` as data | Run for real (the old scripts fail the tests, the new ones pass) | Unit-tested | n/a |
 | The full test suite | Every commit | Not run | CI (`test-windows`) on each pull request |
 | Process containment | Not in 0.2.0: planned for 0.3.0 | Not in 0.2.0 | Not in 0.2.0 |
@@ -184,6 +184,8 @@ It also showed that two computers running one agent with local memory both push 
   permission the 0.2.0 setup app doesn't hold. Setup on `main` after 0.2.0 does it; see below.
 
 ## After 0.2.0: the Agent 365 registry through setup
+
+### Linux
 
 Run for real on 2026-11-15 on Ubuntu 24.04, with a throwaway agent:
 
@@ -213,4 +215,29 @@ Run for real on 2026-11-15 on Ubuntu 24.04, with a throwaway agent:
   admin center's registry still listed the agent; a few minutes after, it no longer did (a
   search for it found none). "Deleted agents" stayed empty.
 
-Not run: Windows, macOS, and a second computer joining a registered agent.
+### Windows
+
+Run for real on 2026-11-15 on Windows 11 Pro 25H2 with a TPM, with a throwaway agent. Setup
+ran in the console session of an automatic logon (no remote desktop), as the computer's
+built-in Administrator, elevated, not as a standard user. The computer was new to a tenant
+that already had the setup app.
+
+- The first run took the setup app over on an administrator's earlier approval, created the
+  agent with a TPM-held key and switched telemetry on, but did not register the agent: a
+  takeover run consents nothing, so the setup app did not get the permission, and setup
+  exited `3`. A takeover run now grants that one permission on its own, with an app role
+  assignment, and still runs no admin consent. That fix is unit-tested; run for real: not
+  yet.
+- The second run (no longer a takeover): admin consent was recorded on the second attempt,
+  about 20 seconds in, and the agent was registered in the same run. Setup exited `0`.
+- `-Diagnose` reported "Agent 365 registry: registered", and Microsoft Graph returned the
+  registration. The Microsoft 365 admin center listed the agent.
+- Agent 365 accepted telemetry sent as that agent from Windows.
+- `teardown-windows.ps1 -DeleteAgent -Yes` deleted the agent and its registration, and exited
+  `0`.
+- The Windows CI job (`test-windows`) passes on the pull request.
+
+### Not run
+
+macOS, a second computer joining an agent that is already registered, and this step on
+Windows as a standard (non-administrator) user.
