@@ -15,6 +15,7 @@ problems.
 | Blob selection, storage consent, RBAC, migration, or cursor-concurrency problem | [Storage](storage.md) |
 | MCP server will not start, disconnects, or channel push is missing | [MCP connectivity](mcp-connectivity.md) |
 | An upgrade changed state, credentials, cursors, or local paths | [Migrations and upgrades](migrations-and-upgrades.md) |
+| A recipient is refused, a send is refused because the audit log can't be written, or telemetry doesn't appear in Agent 365 | [Outbound controls and telemetry](outbound-and-telemetry.md) |
 
 ## Run the right identity check
 

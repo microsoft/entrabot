@@ -55,13 +55,13 @@ Per-script usage: [`setup.sh` reference](../reference/scripts/setup/setup-sh.md)
 
 Once a certificate-signed JWT assertion exists, the rest of the three-hop token flow, and everything built on top of it — Graph calls, the MCP tool surface, audit attribution — is identical across platforms. The platform difference is contained entirely to *how* the assertion gets signed (`auth/certificate.py::build_client_assertion()` branches on whether `private_key_pem` or `cert_sha1` was supplied); nothing downstream of Hop 1 knows or cares which OS produced the token.
 
-## Current limitation: no execution sandbox
+## Process containment
 
-Entrabot does not currently ship an execution sandbox on any platform. Process- and filesystem-level containment remains under evaluation.
+The MCP server is not contained in 0.2.0 on any platform: it runs with all of its user's rights. Containing it in an OS sandbox on macOS and Linux is planned for 0.3.0. See [Security Boundaries](security-boundaries.md#current-limitation-no-shipped-execution-sandbox).
 
 ## See also
 
-- [Security Boundaries](security-boundaries.md) — why the Mac/Linux and Windows certificate paths differ in strength, and the sandbox limitation above.
+- [Security Boundaries](security-boundaries.md) — why the Mac/Linux and Windows certificate paths differ in strength, and the missing execution sandbox.
 - [Identity and Token Flow](identity-and-token-flow.md) — the three-hop flow the certificate assertion feeds into.
 - [Platform Docs](../platform-docs/platform-macos.md) (forthcoming) — per-OS setup, rotation, and troubleshooting guidance: [macOS](../platform-docs/platform-macos.md), [Linux](../platform-docs/platform-linux.md), [Windows](../platform-docs/platform-windows.md).
 - Per-script reference pages: [`setup.sh`](../reference/scripts/setup/setup-sh.md), [`teardown.sh`](../reference/scripts/teardown/teardown-sh.md), [`start-entrabot.sh`](../reference/scripts/setup/start-entrabot-sh.md), [`prereqs-macos.sh`](../reference/scripts/setup/prereqs-macos-sh.md), [`setup-windows.ps1`](../reference/scripts/setup/setup-windows-ps1.md), [`prereqs-windows.ps1`](../reference/scripts/setup/prereqs-windows-ps1.md), [`generate_windows_cert.py`](../reference/scripts/auth-and-certs/generate-windows-cert-py.md), [`rotate_cert_windows.py`](../reference/scripts/auth-and-certs/rotate-cert-windows-py.md).

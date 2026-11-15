@@ -40,6 +40,7 @@ from entra_provisioning import (  # noqa: E402
 # fmt: on
 from entrabot.config import get_config  # noqa: E402
 from entrabot.graph_helpers import GRAPH_BETA, GRAPH_V1, graph_request  # noqa: E402
+from entrabot.version import installed_version  # noqa: E402
 from entrabot.winsetup import oldkeys  # noqa: E402
 
 
@@ -207,6 +208,14 @@ _OLD_SETUP_KEY_STATE = (
     "PROVISIONER_CLIENT_ID",
     "PROVISIONER_CERT_THUMBPRINT",
 )
+
+
+def _version_check() -> Check:
+    """Which Entrabot this is, and whether its checkout is a release (entrabot.version)."""
+    from entrabot.version import release_status
+
+    status, detail = release_status()
+    return Check("Entrabot version", status, detail)
 
 
 def _old_setup_key_checks() -> list[Check]:
@@ -544,6 +553,7 @@ def _snapshot(token: str, *, full_thumbprints: bool = False) -> dict[str, object
     checks.extend(_local_certificate_checks(state))
     checks.extend(_old_setup_key_checks())
     checks.extend(_containment_checks())
+    checks.insert(0, _version_check())
     failed = sum(1 for check in checks if check.status == "fail")
     warned = sum(1 for check in checks if check.status == "warn")
     passed = sum(1 for check in checks if check.status == "pass")
@@ -556,6 +566,7 @@ def _snapshot(token: str, *, full_thumbprints: bool = False) -> dict[str, object
         for key, value in state.items()
     }
     return {
+        "version": installed_version(),
         "tenant": {"id": state.get("TENANT_ID")},
         "provisioner": {
             "client_id": state.get("PROVISIONER_CLIENT_ID"),

@@ -1145,7 +1145,15 @@ def grant_agent_user_consent(
     )
     resp = requests.get(check_url, headers=headers)
     if resp.status_code == 200:
-        existing = resp.json().get("value", [])
+        # The Agent Identity can hold grants on other resources too (Azure Storage for
+        # cloud memory, a customer's own API). Only the Microsoft Graph grant is the one
+        # to read and extend. Taking the first grant, whatever its resource, wrote the
+        # Graph scopes onto that other grant, reported success, and left Graph without them.
+        existing = [
+            grant
+            for grant in resp.json().get("value", [])
+            if grant.get("resourceId") == graph_sp_id
+        ]
         if existing:
             grant = existing[0]
             existing_scopes = set((grant.get("scope") or "").split())

@@ -12,6 +12,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from entrabot.version import installed_version as _installed_version
+
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "show_agent_status.py"
 spec = importlib.util.spec_from_file_location("show_agent_status", _SCRIPT)
 status_mod = importlib.util.module_from_spec(spec)
@@ -208,6 +210,8 @@ class TestShowStatusJson:
         assert data["permissions"][0]["resourceName"] == "Microsoft Graph"
         assert data["key_credentials"][0]["displayName"] == "EntraBot Device Certificate - TestHost"
         assert data["key_credentials"][0]["matchesLocalBlueprintCert"] is True
+        assert data["version"] == _installed_version()
+        assert data["health"]["checks"][0]["name"] == "Entrabot version"
 
 
 class TestMissingState:

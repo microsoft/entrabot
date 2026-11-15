@@ -60,6 +60,13 @@ The channel-push notification (`notifications/claude/channel`) fires uncondition
 
 Without persona-sati configured (or with it unreachable), Entrabot runs in body-only mode: identity, Teams/email/Files tools, and audit all continue to work exactly as documented, but no personality, long-term memory, or `observe`/`reflect`/`recall` cognition loop is available. This is distinct from the efferent-copy mechanism above — a session can have efferent-copy enabled with zero eligible sinks (also effectively degraded) independent of whether a host has separately wired up persona-sati's own tools in `.mcp.json`.
 
+
+## Token age and telemetry
+
+Before Graph calls and on every poll cycle, `_ensure_valid_token()` gets a fresh three-hop token when the current one is older than `ENTRABOT_TOKEN_MAX_AGE_SECONDS` (default 600). That bounds how long a disabled agent keeps working; see [Security Boundaries](security-boundaries.md#token-lifetime-and-revocation).
+
+When Agent 365 telemetry is switched on (`ENTRABOT_A365_OBSERVABILITY_ENABLED`) and the session is an Agent User session, `_start_a365_telemetry()` initialises the Microsoft OpenTelemetry Distro and wraps every tool: an inbound Teams message or email pushed to the model starts an `invoke_agent` span, and each tool call is an `execute_tool` child span, with message content suppressed. Console spans (`ENTRABOT_A365_CONSOLE_ENABLED`) go to standard error, because standard output is the MCP channel. Telemetry failures are logged and never affect a tool.
+
 ## See also
 
 - [Identity and Token Flow](identity-and-token-flow.md) — the auth modes and token lifecycle this runtime drives.

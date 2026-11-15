@@ -1194,12 +1194,17 @@ class TestCheckOldSetupKeys:
 
     def test_diagnostics_report_it_right_after_the_state_file(self, tmp_path: Path) -> None:
         names = [check.name for check in self._diagnose(_pending(tmp_path))]
-        assert names[:3] == ["State file", OLD_KEYS_CHECK, "Blueprint cert in OS keystore"]
+        assert names[:4] == [
+            "Entrabot version",
+            "State file",
+            OLD_KEYS_CHECK,
+            "Blueprint cert in OS keystore",
+        ]
 
     def test_diagnostics_with_nothing_pending_print_nothing_new(self, tmp_path: Path) -> None:
         names = [check.name for check in self._diagnose(_set_up_state(tmp_path))]
         assert OLD_KEYS_CHECK not in names
-        assert names[:2] == ["State file", "Blueprint cert in OS keystore"]
+        assert names[:3] == ["Entrabot version", "State file", "Blueprint cert in OS keystore"]
 
 
 # ─── format_report rendering ─────────────────────────────────────────────────
@@ -1822,3 +1827,103 @@ class TestTelemetryDiagnosis:
                 copilot_mcp_path=tmp_path / "absent2.json",
             )
         assert TELEMETRY_CHECK_NAME in [c.name for c in checks]
+
+
+class TestAgentSponsorCheck:
+    """--diagnose compares .env's sponsor with the Agent Identity's sponsors in the
+    directory, which is what the server trusts."""
+
+    @staticmethod
+    def _config(**fields: object) -> EntraBotConfig:
+        values: dict[str, object] = {
+            "agent_object_id": "agent-identity",
+            "agent_user_id": "agent-user",
+            "human_user_id": "u-1",
+            "human_user_mails": ["pat@contoso.com"],
+        }
+        values.update(fields)
+        return EntraBotConfig(**values)  # type: ignore[arg-type]
+
+    @staticmethod
+    def _sponsor(user_id: str, mail: str | None = None):
+        from entrabot.identity.sponsors import AgentIdentitySponsor
+
+        return AgentIdentitySponsor(user_id=user_id, user_principal_name=None, mail=mail)
+
+    def test_pass_when_env_names_a_directory_sponsor(self) -> None:
+        from entrabot.preflight import SPONSOR_CHECK_NAME, check_agent_sponsor
+
+        check = check_agent_sponsor(
+            self._config(), fetch=lambda config: [self._sponsor("u-1", "pat@contoso.com")]
+        )
+        assert (check.name, check.status) == (SPONSOR_CHECK_NAME, "pass")
+
+    def test_warn_when_env_names_someone_else(self) -> None:
+        from entrabot.preflight import check_agent_sponsor
+
+        check = check_agent_sponsor(
+            self._config(human_user_id="u-old", human_user_mails=["old@contoso.com"]),
+            fetch=lambda config: [self._sponsor("u-1", "pat@contoso.com")],
+        )
+        assert check.status == "warn" and "not among" in check.detail
+        assert check.remediation
+
+    def test_warn_on_the_id_alone_when_the_record_cannot_be_read(self) -> None:
+        from entrabot.preflight import check_agent_sponsor
+
+        check = check_agent_sponsor(
+            self._config(human_user_id="u-old"), fetch=lambda config: [self._sponsor("u-1")]
+        )
+        assert check.status == "warn" and "not among" in check.detail
+
+    def test_warn_when_the_sponsors_record_cannot_be_read(self) -> None:
+        from entrabot.preflight import check_agent_sponsor
+
+        check = check_agent_sponsor(self._config(), fetch=lambda config: [self._sponsor("u-1")])
+        assert check.status == "warn" and "cannot read" in check.detail
+        assert "again" in check.remediation and "Microsoft Graph permissions" in check.remediation
+
+    def test_warn_when_the_sponsors_cannot_be_listed(self) -> None:
+        from entrabot.preflight import check_agent_sponsor
+
+        def fail(config: EntraBotConfig) -> list:
+            raise RuntimeError("HTTP 403")
+
+        check = check_agent_sponsor(self._config(), fetch=fail)
+        assert check.status == "warn" and "could not read" in check.detail
+
+    def test_skip_without_an_agent_identity(self) -> None:
+        from entrabot.preflight import check_agent_sponsor
+
+        check = check_agent_sponsor(
+            self._config(agent_object_id=None), fetch=lambda config: []
+        )
+        assert check.status == "skip"
+
+
+class TestVersionCheck:
+    def test_reports_the_running_version_and_never_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from entrabot import version as version_mod
+        from entrabot.preflight import VERSION_CHECK_NAME, check_version
+
+        monkeypatch.setattr(
+            version_mod, "release_status", lambda: ("warn", "Entrabot 0.2.0, not a release")
+        )
+        check = check_version()
+        assert (check.name, check.status) == (VERSION_CHECK_NAME, "warn")
+        assert "0.2.0" in check.detail and check.remediation
+
+    def test_run_diagnostics_includes_it(self, tmp_path: Path) -> None:
+        from entrabot.preflight import VERSION_CHECK_NAME
+
+        with patch("entrabot.preflight.run_smoke_checks", return_value=[]):
+            checks = run_diagnostics(
+                _telemetry_config(enabled=False, export=False),
+                state_path=tmp_path / "state.json",
+                expected_binary=tmp_path / "bin" / "entrabot-mcp",
+                claude_mcp_path=tmp_path / "absent.json",
+                copilot_mcp_path=tmp_path / "absent2.json",
+            )
+        assert checks[0].name == VERSION_CHECK_NAME

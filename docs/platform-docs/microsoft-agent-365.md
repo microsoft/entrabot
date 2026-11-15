@@ -226,8 +226,8 @@ or `./scripts/setup.sh --diagnose` on macOS and Linux) runs the same check.
    this itself, with no Agent 365 CLI, .NET SDK, PowerShell 7 or
    `a365.config.json`: answer yes to the Word, Excel and OneDrive question, or
    pass `-ConfigureA365WorkIq` on Windows and `--configure-a365-work-iq` to
-   `./scripts/setup.sh` on macOS and Linux. On macOS and Linux this path has not
-   yet been run against a real tenant.
+   `./scripts/setup.sh` on macOS and Linux. On Linux this path has been run
+   against a real tenant (Ubuntu 24.04); on macOS it has not.
 3. Keep the generated `ToolingManifest.json` in a location Entrabot
    discovers, or set the configured manifest path.
 4. Run the relevant Word MCP tool and confirm the audit event identifies the
@@ -286,11 +286,23 @@ agent that its token carries the scope, and only then writes
 `--diagnose` (`-Diagnose`) reports whether telemetry is on and whether the
 agent's token carries the scope.
 
+**No Azure Monitor.** Entrabot exports only to Agent 365 and never enables the
+distro's Azure Monitor export. The distro still makes two calls of its own:
+usage statistics to an Application Insights ingestion host, and a settings
+lookup at `settings.sdk.monitor.azure.com` by the Azure Monitor exporter it
+loads. Before it starts the distro, Entrabot sets
+`MICROSOFT_OTEL_SDKSTATS_DISABLED`, `APPLICATIONINSIGHTS_STATSBEAT_DISABLED_ALL`
+and `APPLICATIONINSIGHTS_CONTROLPLANE_DISABLED` to `true`, which stops both. A
+value you have already set is kept (`src/entrabot/observability/runtime.py`).
+
 **Licence.** Microsoft accepts the spans with `200 OK` but drops them
 (`tenant_not_licensed`) unless at least one user in the tenant has a
 **Microsoft 365 E7 or Microsoft Agent 365 licence assigned**
 ([drop conditions](https://learn.microsoft.com/microsoft-agent-365/developer/observability-concepts#limits-and-drop-conditions)).
-Neither setup nor diagnose can see that; both say so.
+Neither setup nor diagnose can see that; both say so. Because the status code is
+`200` either way, look at the response body: in a run against a licensed tenant
+it listed each span with status `sent` for each of Agent 365's sinks and
+`rejectedSpans: 0` (see the [Verification Record](../project/verification.md)).
 
 **The registry.** Learn: "Creating a Microsoft Entra identity alone doesn't
 register the instance." An agent whose Blueprint was made through Microsoft

@@ -7,12 +7,14 @@ Setup on macOS and Linux is one script. It starts the same setup wizard as Windo
 
 ## Set up your agent
 
-1. **Get the Entrabot folder onto your computer.** Either download the ZIP from <https://github.com/microsoft/entrabot> (Code > Download ZIP) and extract it, or clone it:
+1. **Get the Entrabot folder onto your computer.** Either download the source code ZIP of the latest release from <https://github.com/microsoft/entrabot/releases/latest> and extract it, or clone it:
 
     ```bash
-    git clone https://github.com/microsoft/entrabot.git
+    git clone --branch v0.2.0 https://github.com/microsoft/entrabot.git
     cd entrabot
     ```
+
+    This clones the latest release, v0.2.0. `main` is development and may be ahead of it. Git then prints a note about a "detached HEAD": that is normal when you check out a release tag, not an error. To upgrade an existing install, see [Upgrading to a new release](../troubleshooting/migrations-and-upgrades.md#upgrading-to-a-new-release).
 
 2. **Run setup** from a terminal in the Entrabot folder:
 
@@ -55,6 +57,7 @@ You do not need the Azure CLI (setup offers to install a private copy), `az logi
 | The agent's sponsor | You | The people the agent takes instructions from in Teams. When joining an existing agent, the suggested answer keeps its current sponsors. |
 | Memory | On this computer | Cloud memory (Azure Blob Storage) is offered when your account has an Azure subscription in the tenant. Then it asks which subscription, when there are several, and the Azure region (`eastus`). |
 | Switch on Word, Excel and OneDrive files? | No | Work IQ: the agent reads and edits Word, Excel and OneDrive files. Setup says first that the agent then needs a Microsoft 365 Copilot licence of its own. Most people skip this. There is nothing to install for them, and setup switches them on itself, over SSH and unattended too. |
+| Switch on Agent 365 telemetry? | No | The agent reports what it does to Microsoft Agent 365: when it is asked something, by whom and in which chat, never what the messages say. Microsoft Defender and the Microsoft 365 admin center show its activity from it. Agent 365 keeps it only if someone in your organization has a Microsoft 365 E7 or Agent 365 licence. |
 | Start setting up? | Yes | The review screen. Nothing has been changed before this point, apart from an Azure CLI you agreed to install. |
 | Set up the agent's licence now? | Yes | Only asked when the agent has no licence that includes Teams, or no Microsoft 365 Copilot licence while Word, Excel and OneDrive files are on. See [Licences for the agent](#licences-for-the-agent). |
 | Give the agent one ... licence? | Yes | When a licence is free. With several, a numbered choice; the suggested one also brings mail and files. |
@@ -69,11 +72,15 @@ Before it offers an earlier Azure CLI sign-in, setup checks it with a real reque
 
 Setup then creates or connects the agent, creates this computer's certificate with its key in your key store, saves settings, registers the agent with Claude Code and GitHub Copilot CLI, and tests that the agent can sign in and reach Teams. When this run registered a new certificate, the test waits up to about two minutes for Microsoft Entra to start accepting it. After that test, and only if you switched them on, it sets up Word, Excel and OneDrive files: it lists their tools for the agent in `ToolingManifest.json`, gives the agent's Blueprint the permissions they need, and then checks, as the agent, that Microsoft honours them, waiting up to about two minutes. A failure there never stops setup, and the last screen says why and what to do. Nothing is installed for them: no Agent 365 CLI, no .NET SDK, no PowerShell 7, and no `a365.config.json`.
 
+Then, only if you switched it on, it sets up Agent 365 telemetry: it gives the agent the `Agent365.Observability.OtelWrite` permission, checks for about two minutes, as the agent, that the agent's token carries it, and only then switches telemetry on in `.env` and reads it back. A failure there never stops setup either. Setup can't check the licence, so the last screen says that Agent 365 drops the agent's telemetry unless someone in the organization has a Microsoft 365 E7 or Agent 365 licence. `--diagnose` reports whether telemetry is on and whether the token carries the permission.
+
 ## Licences for the agent
 
 The licence walkthrough is the same as on Windows; see [Licences for the agent](windows.md#licences-for-the-agent) on the Windows page. In short: after the end-to-end test, under **Licences for Microsoft 365**, setup shows your organization's licences and what each gives the agent, gives the agent a free one when you say yes, and otherwise says who can add or free one and where in the [Microsoft 365 admin center](https://admin.microsoft.com), then checks again when you press Enter (type `s` to leave it for later). Run unattended, setup asks nothing: it only reads the organization's licences, so the last screen can say what to do. Details are in [Windows troubleshooting](../troubleshooting/windows.md#no-teams-licence-or-graph-returned-403-for-mechats); the steps there are the same on every system.
 
 ## The first start
+
+The MCP server is not contained in 0.2.0: it runs with all of your account's rights. Containing it on macOS and Linux is planned for 0.3.0. See [Security Boundaries](../architecture/security-boundaries.md#current-limitation-no-shipped-execution-sandbox).
 
 The first time Claude Code opens the Entrabot folder it asks some questions; `./start-entrabot.sh` and setup's last screen both say so. If this computer has not used Claude Code before, it asks you to sign in to Claude. Then it asks whether to trust this folder, whether to use the `entrabot` MCP server, and whether to load a development channel. Say yes to each: the folder is the one you just set up, the server is your agent, and the channel is how Teams messages reach it. Then say *Who are you?*
 
@@ -116,6 +123,7 @@ A flag that takes a value is written with `=`: `--use-blueprint=APP_ID`, not `--
 | `--tenant=NAME_OR_ID`, `--device-code` | How to sign in |
 | `--keep-memory-local` or `--use-cloud-memory` | Where the agent keeps its memory |
 | `--configure-a365-work-iq` | Switch on Word, Excel and OneDrive files |
+| `--configure-a365-observability` | Switch on Agent 365 telemetry |
 | `--hosts=claude,copilot` | Which assistants to register the agent with |
 | `--skip-smoke` | Skip the end-to-end test |
 

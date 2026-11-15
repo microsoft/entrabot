@@ -1,3 +1,5 @@
+import os
+
 from opentelemetry.sdk.resources import Resource
 
 from entrabot.config import EntraBotConfig
@@ -6,12 +8,26 @@ from entrabot.observability.tokens import resolve_observability_token
 
 _initialized = False
 
+# Entrabot exports only to Agent 365 and never switches the distro's Azure Monitor export on,
+# but the distro still makes two calls of its own to Azure Monitor: its usage statistics
+# ("SDKStats", to an Application Insights ingestion host) and its remote-settings lookup
+# (settings.sdk.monitor.azure.com). These switches, read by microsoft-opentelemetry and
+# azure-monitor-opentelemetry-exporter, turn both off. An operator's own value is kept.
+AZURE_MONITOR_OFF = {
+    "MICROSOFT_OTEL_SDKSTATS_DISABLED": "true",
+    "APPLICATIONINSIGHTS_STATSBEAT_DISABLED_ALL": "true",
+    "APPLICATIONINSIGHTS_CONTROLPLANE_DISABLED": "true",
+}
+
 
 def initialize_observability(config: EntraBotConfig, *, agent_name: str) -> None:
     global _initialized
 
     if _initialized or not config.a365_observability_enabled:
         return
+
+    for name, value in AZURE_MONITOR_OFF.items():
+        os.environ.setdefault(name, value)
 
     from microsoft.opentelemetry import use_microsoft_opentelemetry
 

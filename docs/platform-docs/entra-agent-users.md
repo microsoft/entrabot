@@ -10,6 +10,10 @@ An Agent User receives tokens with `idtyp=user`, so it appears as a user to
 every Microsoft 365 API. It cannot have passwords, passkeys, or MFA factors; it
 authenticates exclusively through its parent Agent Identity's credentials.
 
+Agent Users are available only to tenants in Microsoft's Frontier preview
+program (Microsoft Learn, November 2026), while the Agent ID platform itself is
+generally available.
+
 For the full object model and OAuth constraints of the identity chain, see
 [Microsoft Entra Agent ID: Blueprints, Identities, and Users](agent-id-blueprints-and-users.md).
 
@@ -46,7 +50,7 @@ Agent Identities are service principals. Service principals cannot:
 - Be assigned Microsoft 365 licenses.
 
 Agent Users solve this. They are real user objects in the directory, marked as
-agentic, so Conditional Access, ID Protection, and governance treat them
+agentic, so Conditional Access, ID Protection (in preview for agents), and governance treat them
 appropriately (no MFA prompts, agent-aware audit).
 
 ## Creating an Agent User

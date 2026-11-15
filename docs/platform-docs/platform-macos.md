@@ -115,9 +115,16 @@ in-memory cache for that run rather than writing an unencrypted cache to disk.
   anything already present.
 
 For step-by-step setup, see [macOS and Linux setup](../getting-started/macos-linux.md)
-and [Prerequisites](../getting-started/prerequisites.md). Setup on macOS has
-not yet been run end to end against a real tenant; see
+and [Prerequisites](../getting-started/prerequisites.md). On macOS only a
+repair run and the health check of setup have been run against a real tenant; see
 [What has been tested](../getting-started/macos-linux.md#what-has-been-tested).
+
+## Process containment
+
+The MCP server is **not contained** in 0.2.0. It runs with all of its user's rights: it can
+read every file that user can and connect to any host. Containing it on macOS and Linux is
+planned for 0.3.0. The recipient policy and audit apply on every platform. See
+[Security Boundaries](../architecture/security-boundaries.md).
 
 ## Default paths
 

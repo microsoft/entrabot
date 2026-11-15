@@ -3007,6 +3007,14 @@ class TestDeleteTeamsMessageTool:
 
 
 class TestSendEmailTool:
+    @pytest.fixture(autouse=True)
+    def _recipients_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """These tests are about the tool's own mechanics; the recipient policy has its own
+        (tests/security/test_recipients.py, tests/test_mcp_outbound_policy.py)."""
+        from entrabot import mcp_server
+
+        monkeypatch.setattr(mcp_server, "_refuse_unless_allowed", AsyncMock(return_value=None))
+
     @pytest.mark.asyncio
     async def test_splits_comma_separated_recipients(self, monkeypatch) -> None:
         """to/cc/bcc arrive as comma-separated strings; wrapper splits to lists."""

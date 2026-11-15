@@ -11,7 +11,7 @@ Entrabot is a Python MCP server that gives a device-local agent its own Entra **
 
 The scripts will take care of the rest: provisioning the Agent Identity Blueprint, Agent Identity, and Agent User in Entra; uploading a self-signed certificate; assigning the license; and configuring the local MCP server.
 
-**Microsoft Entra Agent ID** and **Microsoft Agent 365** — which enable these experiences — went GA on 2026-05-01. Entrabot is the reference implementation that pulls those primitives together on a real device, today.
+The **Microsoft Entra Agent ID** platform is generally available (Microsoft Entra, April 2026) and **Microsoft Agent 365** is generally available, licensed per user. Agents with their own user account, the Agent User Entrabot is built on, are still available only to tenants in Microsoft's [Frontier preview program](https://learn.microsoft.com/microsoft-agent-365/developer/identity) (Microsoft Learn, November 2026), so your tenant needs Frontier. Entrabot is an open-source reference implementation that pulls those primitives together on a real device.
 
 ---
 
@@ -19,8 +19,8 @@ The scripts will take care of the rest: provisioning the Agent Identity Blueprin
 
 A device-local MCP server that turns an LLM agent into a first-class principal in Microsoft Entra. Three things change when you do this:
 
-- **Attribution.** Every action — Teams message sent, file read, email drafted — is signed by the agent, not by the human who launched it. Sign-in logs distinguish them. Audit trails are honest.
-- **Authorization.** Conditional Access, ID Protection, and DLP apply to the agent's own object. You can restrict what the agent can do without restricting yourself.
+- **Attribution.** Every action — Teams message sent, file read, email drafted — is made with the agent's own token, not the token of the human who launched it. Sign-in logs distinguish them, and Entrabot's local audit log records each send, create, share and delete before it happens.
+- **Authorization.** Conditional Access policies can target the agent's own user account (it needs Microsoft 365 E7, or Agent 365 with Entra ID P1), and ID Protection for agents is in preview. You can restrict what the agent can do without restricting yourself.
 - **Autonomy.** No device-code prompt, no OBO, no human in the loop on every token refresh. The agent authenticates with its own certificate-backed credentials and minds its own session.
 
 It is for developers building agents on Microsoft 365 who want the security posture to match the architecture. The agent's smarts are up to you. entrabot gives it a secure seat at the table and the keys to the kingdom; what it does with that power is your call.
@@ -31,12 +31,12 @@ The body prompt (`prompts/agent_system.md` plus `prompts/anatomy/*.md`) loads be
 
 ## The stack
 
-entrabot is the device-side glue for a set of platform primitives Microsoft shipped at GA.
+entrabot is the device-side glue for a set of Microsoft platform primitives, some generally available and some in preview.
 
 - **Entra Agent ID** — the four-object hierarchy: Agent Identity Blueprint → BlueprintPrincipal → Agent Identity → Agent User. Confidential clients only; no public-client flows; tokens carry `idtyp=user` for the Agent User leaf. ([platform docs](docs/platform-docs/agent-id-blueprints-and-users.md))
-- **Microsoft Agent 365** — the control plane: admin-center inventory, OTel observability, Work IQ MCP servers (Mail, Calendar, Teams, SharePoint, OneDrive, Word, User, Copilot, Dataverse), AI-teammate lifecycle. GA 2026-05-01. ([platform docs](docs/platform-docs/microsoft-agent-365.md))
-- **Conditional Access for agents** — GA. Apply CA policies to Agent Identity sign-ins the same way you apply them to users.
-- **ID Protection for agents** — GA. Risk scoring and remediation against the agent's own object.
+- **Microsoft Agent 365** — the control plane: admin-center inventory, OTel observability, Work IQ MCP servers (Mail, Calendar, Teams, SharePoint, OneDrive, Word, User, Copilot, Dataverse), AI-teammate lifecycle. Entrabot sends Agent 365 telemetry through Microsoft's OpenTelemetry Distro (`microsoft-opentelemetry`) when it is switched on; see [Telemetry and the Agent 365 registry](docs/platform-docs/microsoft-agent-365.md#telemetry-and-the-agent-365-registry). ([platform docs](docs/platform-docs/microsoft-agent-365.md))
+- **Conditional Access for agents** — target the agent's user account or its Agent Identity with CA policies (Microsoft 365 E7, or Agent 365 with Entra ID P1).
+- **ID Protection for agents** — preview. Risk scoring and remediation against the agent's own object.
 - **FastMCP** — the Python MCP server framework. entrabot registers every Teams, Outlook, Files, Word, audit, and identity tool through it.
 - **Three-hop certificate chain** — Blueprint token (cert JWT) → Agent Identity token (federated identity credential) → Agent User token (`user_fic` grant). No client secret in flight. Private key in macOS Keychain, a non-exportable Windows CNG key (held by the TPM when the TPM accepts it), or Linux Secret Service.
 
@@ -88,10 +88,10 @@ Full walkthrough in [`docs/architecture/system-overview.md`](docs/architecture/s
 
 ### Windows
 
-Download or clone the repository, then double-click `scripts\setup-windows.cmd`. Or from a terminal:
+Download the latest release (the source code ZIP on <https://github.com/microsoft/entrabot/releases/latest>) or clone it, then double-click `scripts\setup-windows.cmd`. Or from a terminal:
 
 ```bat
-git clone https://github.com/microsoft/entrabot.git
+git clone --branch v0.2.0 https://github.com/microsoft/entrabot.git
 cd entrabot
 scripts\setup-windows.cmd
 ```
@@ -103,13 +103,15 @@ What you need: a Microsoft 365 tenant, an account that administers it, and a fre
 ### macOS or Linux
 
 ```bash
-git clone https://github.com/microsoft/entrabot.git
+git clone --branch v0.2.0 https://github.com/microsoft/entrabot.git
 cd entrabot
 ./scripts/setup.sh
 ./start-entrabot.sh
 ```
 
-Setup needs Python 3.12 or newer and nothing else first: no Azure CLI and no `az login`. It runs the same setup wizard as Windows: it asks a few questions (each has a suggested answer), signs you in to Microsoft, creates the agent, keeps its sign-in key in your Keychain or keyring, and tests it. To skip the questions, pass the answers: `./scripts/setup.sh --new --with-upn-suffix=workstation --yes`. The wizard on macOS and Linux has not yet been run end to end against a real tenant. Guide, limits, and what has and has not been tested: [`docs/getting-started/macos-linux.md`](docs/getting-started/macos-linux.md).
+This clones the latest release, v0.2.0. `main` is development and may be ahead of it. Git then prints a note about a "detached HEAD": that is normal when you check out a release tag, not an error. To upgrade an existing install, see [Upgrading to a new release](docs/troubleshooting/migrations-and-upgrades.md#upgrading-to-a-new-release).
+
+Setup needs Python 3.12 or newer and nothing else first: no Azure CLI and no `az login`. It runs the same setup wizard as Windows: it asks a few questions (each has a suggested answer), signs you in to Microsoft, creates the agent, keeps its sign-in key in your Keychain or keyring, and tests it. To skip the questions, pass the answers: `./scripts/setup.sh --new --with-upn-suffix=workstation --yes`. On Ubuntu 24.04 the wizard has been run end to end against a real tenant; on macOS only a repair run and the health check have. Guide, limits, and what has and has not been tested: [`docs/getting-started/macos-linux.md`](docs/getting-started/macos-linux.md).
 
 Setup is idempotent on every platform. It provisions the Blueprint, BlueprintPrincipal, Agent Identity, and Agent User; assigns a Teams-capable license; uploads a self-signed certificate to Entra; and writes `.env` plus `.mcp.json` with no secrets on disk. Full walkthrough — including cloud memory, cross-tenant group chats, and the Work IQ Word setup — is in [`docs/getting-started/quickstart.md`](docs/getting-started/quickstart.md) and [`INSTALL.md`](INSTALL.md).
 
@@ -170,7 +172,7 @@ The full doc site: **<https://microsoft.github.io/entrabot/>**
 
 Direct pointers:
 
-- [Quickstart](docs/getting-started/quickstart.md) — five minutes from clone to first Teams message
+- [Quickstart](docs/getting-started/quickstart.md) — from clone to first Teams message
 - [MCP tool reference](docs/reference/mcp-tools.md) — every tool, every parameter
 - [Setup script reference](docs/reference/scripts/setup/setup-sh.md) — `setup.sh` options and behavior
 - [Script reference](docs/reference/scripts/index.md) — status, health, DM, email, setup, teardown, and diagnostic scripts
@@ -191,12 +193,14 @@ This is a research repo, not a production service. It runs reliably on a develop
 
 - Two authenticated session types: `agent_user` (full three-hop), `delegated` (MSAL interactive for demos or environments without a provisioned Agent User)
 - Teams: 1:1 DMs, group chats, cross-tenant B2B chats with federated home-tenant resolution
-- Outlook: background email poll, Purview-encrypted detection, and a daily summary scheduler
+- Outlook: background email poll, Purview-encrypted detection, and a daily summary scheduler that mails the agent's directory sponsors
 - Files: SharePoint / OneDrive read, write, upload, share — three-stage sponsor authorization on share (sponsor allowlist, active-channel binding, Graph chat membership)
 - Microsoft Agent 365 Work IQ Word: create, read, comment, reply-to-comment
 - Storage: `LocalBackend` (default) and `BlobBackend` (Azure Blob Storage, opt-in via `setup.sh --use-cloud-memory` or the Windows setup wizard)
 - Body-first prompt architecture with optional persona layer from a separate MCP (`persona-sati`)
-- Audit fails closed: if the audit write fails, the action does not proceed
+- Audit before acting: every tool that sends, creates, shares or deletes writes its audit event first (to a local JSONL file, flushed to disk) and does nothing if that write fails. Teams and mail reads are not audited. Events the model writes through `audit_log` are marked as the model's
+- Outbound recipient policy, enforced in the server: the agent may reach its sponsors, the members of the chat a request came from, and its own tenant; anyone else needs `ENTRABOT_OUTBOUND_ALLOW`
+- Agent 365 telemetry (opt-in in setup): content-suppressed spans from the MCP server and from the harness (`entrabot`, an optional terminal front end on the GitHub Copilot SDK that runs the model loop itself). Agent 365 keeps them only if the tenant has a Microsoft 365 E7 or Agent 365 licence assigned
 - `pytest -v --tb=short && ruff check .` gates every commit
 
 **Persona-sati host bootstrap:** Hosts that attach persona-sati must call `bootstrap_session` before the first substantive answer because FastMCP instructions do not reliably reach the LLM prompt. If `mind_contract_available` is false, operate in body-only mode. When the mind contract is available, follow the per-turn cognition tools: `observe` around external tools, `reflect` for durable observations, and `recall` when a returned memory excerpt is insufficient.
@@ -205,13 +209,15 @@ This is a research repo, not a production service. It runs reliably on a develop
 
 | OS | Status |
 |---|---|
-| macOS | The same setup wizard as Windows, with one Keychain item per certificate (the certificate and its key), certificate rotation, and teardown that disconnects this computer. Covered by unit and script tests, and the Keychain items were round-tripped for real, but the wizard has not yet been run end to end against a real tenant. See [macOS and Linux installation](docs/getting-started/macos-linux.md#what-has-been-tested). |
-| Linux | The same wizard and runtime, with the key in a Secret Service, KWallet or libsecret keyring that is running and unlocked. Not yet run on Linux. |
+| macOS | The same setup wizard as Windows, with one Keychain item per certificate (the certificate and its key), certificate rotation, and teardown that disconnects this computer. Against a real tenant only a repair run and the health check have been run; a new agent, rotation and teardown are covered by unit and script tests. See [macOS and Linux installation](docs/getting-started/macos-linux.md#what-has-been-tested). |
+| Linux | The same wizard and runtime, with the key in a Secret Service, KWallet or libsecret keyring that is running and unlocked. Run end to end on Ubuntu 24.04.5 against a real tenant (new agent, rotation, joining, teardown). |
 | Windows | Shipped — one-step setup wizard, non-exportable CNG keys (TPM first, software key store otherwise), certificate rotation, teardown. Setup, repair, rotation, status and teardown were run end to end on Windows 11 25H2 x64 with a virtual TPM, as a non-administrator. Not yet tested: ARM64, physical TPMs, Windows 10, Entra-joined or Intune-managed PCs. See [Windows installation](docs/getting-started/windows.md#what-has-been-tested). |
 
 **Open:**
 
-- MXC/AppContainer sandbox integration is under review and is not part of the current `main` runtime.
+- Process containment is not shipped: the MCP server is not contained in 0.2.0 and runs with all of its user's rights. Containing it on macOS and Linux is planned for 0.3.0.
+- Registration in the Agent 365 registry is an opt-in script (`scripts/register_agent_instance.py`), not part of setup.
+- Headless and cloud operation: see the proposal in `engineering-history/plans/headless-cloud-runtime.md`.
 
 ---
 

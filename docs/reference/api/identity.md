@@ -132,7 +132,7 @@ The convenience constructor used by the MCP server at boot: fetches sponsors, bu
 
 ## Files-tool sponsor gate
 
-`src/entrabot/tools/files.py` defines the sponsor allowlist helpers (`_get_sponsor_records`, `_get_sponsor_allowlist`) and uses them to gate `share_file`. `entrabot.tools.teams.add_member` (the implementation behind the `add_teams_member` MCP tool) re-exports `_get_sponsor_records` from `files.py` so both tools share the same allowlist logic. Both `share_file` and `add_member` require a `requester_email` argument and reject any requester that is not in the resolved sponsor allowlist. The recipient (`recipient_email` / `email`) is unrestricted — sponsors may share with anyone they choose.
+`src/entrabot/tools/files.py` defines the sponsor allowlist helpers (`_get_sponsor_records`, `_get_sponsor_allowlist`) and uses them to gate `share_file`. `entrabot.tools.teams.add_member` (the implementation behind the `add_teams_member` MCP tool) re-exports `_get_sponsor_records` from `files.py` so both tools share the same allowlist logic. Both `share_file` and `add_member` require a `requester_email` argument and reject any requester that is not in the resolved sponsor allowlist. The recipient must pass the server's recipient policy (a sponsor, a member of the requesting chat, someone in the agent's home tenant, or an address or domain listed in `ENTRABOT_OUTBOUND_ALLOW`).
 
 Functions:
 

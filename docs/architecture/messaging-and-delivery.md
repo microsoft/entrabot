@@ -10,7 +10,7 @@ Every Teams tool requires an explicit `chat_id` — there is no default group ch
 
 ## Outbound path
 
-`send_teams_message` calls `send()` in `tools/teams.py` through `_with_token_retry()`. What identity the message carries depends on the active auth mode:
+`send_teams_message` first writes a `pending` audit event and refuses to send if that write fails; it then calls `send()` in `tools/teams.py` through `_with_token_retry()`. What identity the message carries depends on the active auth mode:
 
 - **Agent User mode** — the three-hop token's `idtyp=user` identity means the message posts as the Agent User itself, with its own display name and (if licensed) AI-agent badge.
 - **Delegated mode** — the token belongs to the signed-in human, so `send()` prepends the literal `[EntraBot]` prefix (passed as the `prefix` argument) so the human can tell which messages the agent sent versus typed themselves. Graph still attributes the message to the human's own identity in this mode.

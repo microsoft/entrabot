@@ -40,7 +40,11 @@ interaction log, which the daily summary later reads.
 - **`send_email`** supports both new outbound mail and replies — replying
   uses the Graph reply endpoint so the thread is preserved rather than
   starting a new conversation. Sends are attributed to the Agent User's
-  identity through the audit/tool layer.
+  identity. Before anything is sent, every `to`, `cc` and `bcc` address must
+  pass the server's recipient policy (a sponsor, a member of the requesting
+  chat, the agent's home tenant, or `ENTRABOT_OUTBOUND_ALLOW`), and the
+  `pending` audit event must be written; otherwise nothing is sent. See
+  [Security Boundaries](../architecture/security-boundaries.md#outbound-recipient-policy).
 - **`scripts/read_email.py`** is a standalone subject-search utility that
   runs outside the MCP server, independent of the poll/notification
   pipeline. See
@@ -65,10 +69,16 @@ The rendered summary (HTML) and a JSON sidecar with per-bucket counts are
 archived through the configured storage backend regardless of whether an
 email is sent.
 
-Automatic sending requires at least one address configured in
-`ENTRABOT_HUMAN_USER_MAILS`; the first address in that list is treated as
-the primary sponsor and used as the recipient. If no sponsor mail address is
-configured, the summary is still archived but no email goes out. See
+The summary goes to every sponsor the directory lists on the Agent
+Identity whose user record gives an address. Only when the directory gives
+none (the sponsors can't be listed, the agent can't read any sponsor's user
+record, or the session is delegated) does it fall back to the first address
+in `.env`'s `ENTRABOT_HUMAN_USER_MAILS`. The result's `recipient_source`
+says which was used: `directory` or `env`. Every recipient must also pass
+the recipient policy; if one doesn't, the summary is archived and the run
+reports `refused`. If neither source gives an address, the summary is still
+archived but no email goes out. `--diagnose` reports a mismatch between
+`.env` and the directory ("Agent sponsor"). See
 [Configuration](configuration.md) for the full list of sponsor-related
 environment variables.
 

@@ -100,7 +100,12 @@ certificate when it starts. A certificate is valid for one year, and the agent l
 warning when 30 days or fewer remain. See the
 [`deploy-windows.ps1` reference](../reference/scripts/setup/deploy-windows-ps1.md) and
 [`setup.sh --rotate-cert`](../reference/scripts/setup/setup-sh.md#certificate-rotation).
-On macOS and Linux, rotation has unit tests only so far.
+On Linux, rotation has been run against a real tenant (Ubuntu 24.04); on macOS it has unit tests only so far.
+
+Disabling the agent in Entra stops a running server's Graph calls within
+`ENTRABOT_TOKEN_MAX_AGE_SECONDS` (default 600 seconds): that is how often the
+server signs in again, and a disabled agent's sign-in fails. See
+[Security Boundaries](../architecture/security-boundaries.md#token-lifetime-and-revocation).
 
 To disconnect a computer from an agent, run `./scripts/teardown.sh` (macOS and Linux)
 or `scripts\teardown-windows.ps1` (Windows). It removes that computer's certificate

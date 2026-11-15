@@ -46,6 +46,16 @@ from entrabot.errors import (
 from entrabot.identity import IdentityStateMachine, set_active_identity_state
 from entrabot.logging_config import setup_logging
 from entrabot.models import IdentityState
+from entrabot.security.recipients import (
+    ALLOWLIST_ENV,
+    HOME_DOMAINS_ENV,
+    Decision,
+    RecipientContext,
+    RecipientPolicy,
+    decide,
+    domain_of,
+    parse_allowlist,
+)
 from entrabot.security.xpia import channel_safe_text, wrap_for_channel
 from entrabot.tools import poll_state
 from entrabot.tools.chat_cursors import CursorResolution
@@ -619,7 +629,23 @@ _COMMITMENT_PATTERNS: list[re.Pattern[str]] = [
 # preceding one. 120s covers normal tool-call latency.
 _COMMITMENT_PROMISE_LOOKBACK_SECONDS = 120
 
-TOKEN_REFRESH_THRESHOLD = 3300  # 55 min (5-min buffer on 60-min expiry)
+TOKEN_REFRESH_THRESHOLD = 3300  # 55 min (5-min buffer on 60-min expiry): the ceiling
+# How long a token is reused before a fresh one is asked for. A token Entra issued stays
+# valid until it expires even after the agent is disabled (CAE is not requested: Microsoft
+# documents it for users and single-tenant workload identities, not for Agent Users), so
+# asking again every few minutes is what bounds how long a disabled agent keeps acting:
+# the next sign-in fails, and with it every tool. ENTRABOT_TOKEN_MAX_AGE_SECONDS, 60 to 3300.
+TOKEN_MAX_AGE_ENV = "ENTRABOT_TOKEN_MAX_AGE_SECONDS"
+DEFAULT_TOKEN_MAX_AGE_SECONDS = 600
+
+
+def _token_max_age() -> float:
+    raw = os.environ.get(TOKEN_MAX_AGE_ENV, "").strip()
+    try:
+        value = float(raw) if raw else DEFAULT_TOKEN_MAX_AGE_SECONDS
+    except ValueError:
+        value = DEFAULT_TOKEN_MAX_AGE_SECONDS
+    return min(max(value, 60.0), float(TOKEN_REFRESH_THRESHOLD))
 
 # Sent-message tracking for delegated-mode echo prevention
 SENT_MESSAGE_MAX = 1000
@@ -750,6 +776,221 @@ async def _check_commitment_language(message: str, chat_id: str) -> str | None:
     )
 
 
+
+# ─── Outbound recipient policy (entrabot.security.recipients) ────────────────
+
+# How long the chat of the last pushed message counts as "the chat the request came from".
+REQUESTING_CHAT_SECONDS = 30 * 60
+_CHAT_MEMBERS_CACHE_SECONDS = 300
+
+
+def _recipient_policy() -> RecipientPolicy:
+    config = _state.get("config") or get_config()
+    home: set[str] = set()
+    for upn in (config.agent_user_upn or "",):
+        domain = domain_of(upn) if upn else None
+        if domain:
+            home.add(domain)
+    for item in os.environ.get(HOME_DOMAINS_ENV, "").split(","):
+        if item.strip():
+            home.add(item.strip().lower().lstrip("@"))
+    addresses, domains = parse_allowlist(os.environ.get(ALLOWLIST_ENV))
+    return RecipientPolicy(
+        home_tenant_id=config.tenant_id or "",
+        home_domains=frozenset(home),
+        allow_addresses=addresses,
+        allow_domains=domains,
+    )
+
+
+async def _sponsor_addresses() -> frozenset[str]:
+    """The sponsors' sign-in names and addresses, as the directory lists them. A lookup that
+    fails gives none: nobody is let through on the strength of a list that could not be read."""
+    if _identity and _identity.session.auth_mode == "delegated":
+        config = _state.get("config") or get_config()
+        return frozenset(mail.lower() for mail in config.human_user_mails)
+    gate = _state.get("_push_sponsor_gate")
+    if gate is None or time.monotonic() >= _state.get("_push_sponsor_gate_expires_at", 0.0):
+        try:
+            gate = await _load_sponsor_gate(_state.get("config") or get_config())
+        except Exception as exc:  # noqa: BLE001 - fail closed: no sponsors
+            if logger:
+                logger.warning("Recipient check: sponsors unreadable: %s", type(exc).__name__)
+            return frozenset()
+    return frozenset(gate.upns) | frozenset(gate.mails)
+
+
+async def _directory_sponsors() -> list | None:
+    """The Agent Identity's sponsors as the directory lists them, with their user records where
+    the agent can read them; None when the list can't be read (or in a delegated session)."""
+    if _identity and _identity.session.auth_mode == "delegated":
+        return None
+    from entrabot.identity.sponsors import fetch_agent_identity_sponsors
+
+    config = _state.get("config") or get_config()
+    try:
+        return await asyncio.to_thread(
+            fetch_agent_identity_sponsors, config, user_token_provider=acquire_agent_user_token
+        )
+    except Exception as exc:  # noqa: BLE001 - the caller falls back and says so
+        if logger:
+            logger.warning("Directory sponsors unreadable: %s", type(exc).__name__)
+        return None
+
+
+async def _daily_summary_recipients(config: EntraBotConfig) -> tuple[list[str], str]:
+    """Who gets the daily summary, and where that came from: every directory sponsor whose
+    record gives an address ("directory"); .env's first sponsor address only when the
+    directory gives none ("env"). The recipient policy still checks whichever it is."""
+    from entrabot.identity.sponsors import sponsor_addresses
+
+    sponsors = await _directory_sponsors()
+    addresses = sponsor_addresses(sponsors) if sponsors else []
+    if addresses:
+        return addresses, "directory"
+    if logger and config.human_user_mails:
+        logger.warning(
+            "Daily summary: no sponsor address from the directory; using .env's "
+            "ENTRABOT_HUMAN_USER_MAILS. Run the diagnose check to see why."
+        )
+    return list(config.human_user_mails[:1]), "env"
+
+
+async def _requesting_chat_members() -> frozenset[str]:
+    """Addresses of the members of the chat the last pushed message came from, while that
+    message is recent. Cached briefly; a lookup that fails gives none."""
+    recent = _state.get("requesting_chat")
+    if not recent or time.monotonic() - recent[1] > REQUESTING_CHAT_SECONDS:
+        return frozenset()
+    chat_id = recent[0]
+    cached = _state.get("requesting_chat_members")
+    fresh = cached and time.monotonic() - cached[1] < _CHAT_MEMBERS_CACHE_SECONDS
+    if fresh and cached[0] == chat_id:
+        return cached[2]
+    from entrabot.tools.teams import list_members
+
+    try:
+        await _ensure_valid_token()
+        members = await _with_token_retry(list_members, chat_id=chat_id)
+    except Exception as exc:  # noqa: BLE001 - fail closed: no members
+        if logger:
+            logger.warning("Recipient check: chat members unreadable: %s", type(exc).__name__)
+        return frozenset()
+    addresses = frozenset(
+        str(member.get("email") or "").strip().lower()
+        for member in members
+        if str(member.get("email") or "").strip()
+    )
+    _state["requesting_chat_members"] = (chat_id, time.monotonic(), addresses)
+    return addresses
+
+
+async def _check_recipients(addresses: list[str]) -> list[Decision]:
+    """The policy's decision for each address: sponsors, requesting chat, home tenant,
+    allowlist (see :mod:`entrabot.security.recipients`)."""
+    policy = _recipient_policy()
+    sponsors = await _sponsor_addresses()
+    members = await _requesting_chat_members()
+    tenants: dict[str, str | None] = {}
+    for address in addresses:
+        domain = domain_of(address)
+        lowered = address.strip().lower()
+        if (
+            domain
+            and domain not in policy.home_domains
+            and lowered not in sponsors
+            and lowered not in members
+            and domain not in tenants
+        ):
+            tenants[domain] = await _resolve_tenant_id(address, "")
+    context = RecipientContext(sponsors=sponsors, chat_members=members, tenant_of_domain=tenants)
+    return [decide(address, policy, context) for address in addresses]
+
+
+async def _refuse_unless_allowed(action: str, addresses: list[str]) -> str | None:
+    """None when every address may be reached; otherwise the tool's JSON refusal, after an
+    audit event that says what was refused and why. Nothing is sent or created."""
+    decisions = await _check_recipients(addresses)
+    refused = [decision for decision in decisions if not decision.allowed]
+    if not refused:
+        return None
+    from entrabot.tools.audit import log_event
+
+    try:
+        log_event(
+            action=action,
+            resource=",".join(decision.address for decision in refused),
+            outcome="denied",
+            metadata={
+                "policy": "recipients",
+                "refused": [
+                    {"address": decision.address, "reason": decision.reason}
+                    for decision in refused
+                ],
+            },
+            attribution_type=_attribution_type(),
+        )
+    except Exception as exc:  # noqa: BLE001 - refused either way
+        if logger:
+            logger.warning("Audit of a refused send failed: %s", type(exc).__name__)
+    return json.dumps(
+        {
+            "error": "recipient not allowed: nothing was sent",
+            "refused": [
+                {"address": decision.address, "reason": decision.reason} for decision in refused
+            ],
+        }
+    )
+
+
+def _audit_before(action: str, resource: str, metadata: dict | None = None) -> str | None:
+    """Write the audit event for an action about to happen. None when it was written; the
+    tool's JSON refusal when it could not be, in which case the action must not happen."""
+    from entrabot.tools.audit import log_event
+
+    try:
+        log_event(
+            action=action,
+            resource=resource,
+            outcome="pending",
+            metadata=metadata or {},
+            attribution_type=_attribution_type(),
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed: nothing happens unrecorded
+        if logger:
+            logger.error("Audit write failed; %s refused: %s", action, type(exc).__name__)
+        return json.dumps(
+            {"error": f"the audit event could not be recorded, so {action} did not run"}
+        )
+    return None
+
+
+def _audit_after(
+    action: str, resource: str, outcome: str, metadata: dict | None = None
+) -> None:
+    """The outcome of an action already taken. It cannot be undone, so a failed write is
+    logged, not raised."""
+    from entrabot.tools.audit import log_event
+
+    try:
+        log_event(
+            action=action,
+            resource=resource,
+            outcome=outcome,
+            metadata=metadata or {},
+            attribution_type=_attribution_type(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        if logger:
+            logger.error("Audit of the %s outcome failed: %s", action, type(exc).__name__)
+
+
+def _attribution_type() -> str:
+    if _identity:
+        return _identity.session.attribution_type
+    return "agent"
+
+
 async def _resolve_tenant_id(email: str, our_domain: str) -> str | None:
     """Resolve a tenant ID from an email domain via OpenID discovery.
 
@@ -801,7 +1042,7 @@ async def _ensure_valid_token() -> None:
 
     session = _identity.session
     acquired_at = session.token_acquired_at
-    if acquired_at is None or (time.monotonic() - acquired_at) > TOKEN_REFRESH_THRESHOLD:
+    if acquired_at is None or (time.monotonic() - acquired_at) > _token_max_age():
         current_state = _identity.state
 
         if current_state == IdentityState.AGENT_USER:
@@ -2666,9 +2907,31 @@ async def _run_daily_summary_internal(*, day: str | None = None, send: bool = Tr
     archive_path = archive_summary(day=target_day, html=html, buckets=buckets)
 
     sent_to: list[str] = []
-    if send and config.human_user_mails:
+    recipients, recipient_source = (
+        await _daily_summary_recipients(config) if send else ([], "none")
+    )
+    if recipients:
+        # The digest holds everyone's messages: its recipient passes the same policy.
+        decisions = await _check_recipients(recipients)
+        refused = [decision for decision in decisions if not decision.allowed]
+        if refused:
+            _audit_after(
+                "send_daily_summary",
+                ",".join(recipients),
+                "denied",
+                {"policy": "recipients", "reason": refused[0].reason},
+            )
+            return {
+                "day": target_day,
+                "archive_path": str(archive_path),
+                "sent_to": [],
+                "recipient_source": recipient_source,
+                "refused": [
+                    {"address": decision.address, "reason": decision.reason}
+                    for decision in refused
+                ],
+            }
         await _ensure_valid_token()
-        recipients = [config.human_user_mails[0]]  # primary sponsor
         await _with_token_retry(
             send_summary_email,
             html=html,
@@ -2696,6 +2959,7 @@ async def _run_daily_summary_internal(*, day: str | None = None, send: bool = Tr
         "counts": {k: len(v) for k, v in buckets.items()},
         "archive": str(archive_path),
         "sent_to": sent_to,
+        "recipient_source": recipient_source,
     }
 
 
@@ -3052,6 +3316,8 @@ async def _push_channel_notification(
         channel="msteams",
         caller_id=str(message.get("sender_id") or "").strip() or None,
     )
+    # The chat the next request most likely came from: its members may be written to.
+    _state["requesting_chat"] = (resolved_chat_id, time.monotonic())
 
     if logger:
         logger.info(
@@ -3162,6 +3428,15 @@ async def send_teams_message(
             }
         )
 
+    # Audit before acting, fail closed: no event, no message.
+    refusal = _audit_before(
+        "send_teams_message",
+        f"chat:{target_chat}",
+        {"content_type": content_type, "had_mentions": bool(mentions)},
+    )
+    if refusal:
+        return refusal
+
     await _ensure_valid_token()
 
     # In delegated mode the message comes from the human's identity,
@@ -3170,13 +3445,26 @@ async def send_teams_message(
     if _identity and _identity.session.auth_mode == "delegated":
         prefix = "[EntraBot]"
 
-    result = await _with_token_retry(
-        send,
-        chat_id=str(target_chat),
-        message=message,
-        content_type=content_type,
-        mentions=mentions,
-        prefix=prefix,
+    try:
+        result = await _with_token_retry(
+            send,
+            chat_id=str(target_chat),
+            message=message,
+            content_type=content_type,
+            mentions=mentions,
+            prefix=prefix,
+        )
+    except Exception as exc:
+        _audit_after(
+            "send_teams_message", f"chat:{target_chat}", "failure",
+            {"error_type": type(exc).__name__},
+        )
+        raise
+    _audit_after(
+        "send_teams_message",
+        f"chat:{target_chat}",
+        "success",
+        {"message_id": result.get("message_id", "") if isinstance(result, dict) else ""},
     )
 
     # Outbound-discipline hook 2: commitment-language → promise (WARN).
@@ -3372,6 +3660,9 @@ async def post_thinking_placeholder(
 
     from entrabot.tools.teams import post_thinking_placeholder as _post
 
+    refusal = _audit_before("post_thinking_placeholder", f"chat:{chat_id}")
+    if refusal:
+        return refusal
     await _ensure_valid_token()
     message_id = await _with_token_retry(
         _post,
@@ -3720,6 +4011,11 @@ async def send_email(
         # is almost always a programming error.
         return json.dumps({"error": "subject is required."})
 
+    # Server-side recipient policy: every address on the message, cc and bcc included.
+    refusal = await _refuse_unless_allowed("send_email", [*to_list, *cc_list, *bcc_list])
+    if refusal:
+        return refusal
+
     # Audit before mutating — per security.md "Audit before acting". Fail
     # closed: if the audit write raises, the Graph call does not proceed.
     from entrabot.tools.audit import log_event
@@ -3941,6 +4237,10 @@ async def send_card(
             }
         )
 
+    refusal = _audit_before("send_card", f"chat:{target_chat}")
+    if refusal:
+        return refusal
+
     await _ensure_valid_token()
 
     # Cards deliberately don't carry the [EntraBot] prefix — the card
@@ -4079,6 +4379,12 @@ async def add_teams_member(
         if resolved:
             tenant_id = resolved
 
+    # The invitee is checked by the recipient policy too: a sponsor's request is necessary,
+    # and an address outside the tenant still needs the allowlist.
+    refusal = await _refuse_unless_allowed("add_teams_member", [email])
+    if refusal:
+        return refusal
+
     await _ensure_valid_token()
     try:
         result = await _with_token_retry(
@@ -4135,13 +4441,28 @@ async def create_chat(target_email: str, target_tenant_id: str = "") -> str:
         if resolved:
             target_tenant_id = resolved
 
-    await _ensure_valid_token()
-    result = await _with_token_retry(
-        create_one_on_one_chat,
-        target_email=target_email,
-        target_tenant_id=target_tenant_id or None,
-        agent_user_id=_effective_user_id(),
+    refusal = await _refuse_unless_allowed("create_chat", [target_email])
+    if refusal:
+        return refusal
+    resource = f"oneOnOne:{target_email}"
+    refusal = _audit_before(
+        "create_chat", resource, {"target_tenant_id": target_tenant_id or ""}
     )
+    if refusal:
+        return refusal
+
+    await _ensure_valid_token()
+    try:
+        result = await _with_token_retry(
+            create_one_on_one_chat,
+            target_email=target_email,
+            target_tenant_id=target_tenant_id or None,
+            agent_user_id=_effective_user_id(),
+        )
+    except Exception as exc:
+        _audit_after("create_chat", resource, "failure", {"error_type": type(exc).__name__})
+        raise
+    _audit_after("create_chat", resource, "success", {"chat_id": result.get("chat_id", "")})
 
     # Auto-register the new chat for background polling. Both the cursor read and
     # the list write are blocking I/O, so neither runs on the event loop.
@@ -4641,10 +4962,11 @@ def audit_log(
     outcome: str = "success",
     metadata: str = "{}",
 ) -> str:
-    """Record an audit event before performing an action as the agent.
-    No credentials needed — works immediately.
+    """Record a note in the audit trail about something you are doing outside these tools.
 
-    The audit trail proves the agent (not the human) performed the action.
+    The server already records every send, create, share and delete itself; you do not
+    need this for those. Events written here are marked ``"origin": "model"``, so they are
+    never mistaken for the server's own record of what happened.
     Events are written to ~/.entrabot/audit/ as daily JSONL files.
 
     Args:
@@ -4676,6 +4998,7 @@ def audit_log(
         agent_id=agent_id,
         metadata=meta,
         attribution_type=attribution,
+        origin="model",
     )
     return json.dumps(result, indent=2)
 
@@ -4753,6 +5076,9 @@ async def whoami() -> str:
     token = _state.get("token") or (_identity.session.token if _identity else None)
     result = await _whoami(token=str(token) if token else None)
     result["teams_chat_id"] = _state.get("chat_id", "not_connected")
+    from entrabot import version as _version
+
+    result["version"] = _version.installed_version()
     # Add identity state info
     if _identity:
         result["identity_state"] = _identity.state.value
@@ -6292,7 +6618,9 @@ async def share_file(
     kind: str = "sharepoint",
     site_id: str = "",
 ) -> str:
-    """Share a file. The REQUESTER must be an Agent Identity sponsor; the recipient is unrestricted.
+    """Share a file. The REQUESTER must be an Agent Identity sponsor; the recipient must pass
+    the recipient policy (sponsors, the requesting chat's members, the home tenant, or
+    ENTRABOT_OUTBOUND_ALLOW).
 
     Authorization model: only sponsors can ask the agent to share. A
     sponsor may share with anyone they choose. The recipient is passed
@@ -6300,7 +6628,8 @@ async def share_file(
 
     Args:
         drive_id, item_id, name, mime_type, kind, site_id: ``FileRef`` fields.
-        recipient_email: Address to share with (any address — sponsors may share with non-sponsors).
+        recipient_email: Address to share with. Outside the agent's tenant it must be a
+            sponsor, a member of the requesting chat, or allowlisted.
         requester_email: REQUIRED. Email of the human (sponsor) who asked
             the agent to share. Derive this from the active conversation
             context — the sender of the Teams message that triggered
@@ -6357,6 +6686,9 @@ async def share_file(
         site_id=site_id or None,
     )
 
+    refusal = await _refuse_unless_allowed("share_file", [recipient_email])
+    if refusal:
+        return refusal
     await _ensure_valid_token()
     try:
         result = await _with_token_retry(

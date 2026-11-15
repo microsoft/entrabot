@@ -576,6 +576,106 @@ def check_containment(state_root: Path | None = None) -> Check:
     )  # type: ignore[arg-type]
 
 
+# ─── The running version ─────────────────────────────────────────────────────
+
+VERSION_CHECK_NAME = "Entrabot version"
+
+
+def check_version() -> Check:
+    """Diagnostics: which Entrabot this is, and whether its checkout is a release. Not being
+    on a release tag is a warning, never a failure."""
+    from entrabot import version
+
+    status, detail = version.release_status()
+    remediation = None
+    if status == "warn":
+        remediation = (
+            "To run a release: git fetch --tags, git checkout vX.Y.Z (the latest on the "
+            "project's Releases page), then run setup again."
+        )
+    return Check(VERSION_CHECK_NAME, status, detail + ".", remediation=remediation)  # type: ignore[arg-type]
+
+
+# ─── The agent's sponsor ─────────────────────────────────────────────────────
+
+SPONSOR_CHECK_NAME = "Agent sponsor"
+
+
+def _fetch_directory_sponsors(config: EntraBotConfig) -> list:
+    from entrabot.identity.sponsors import fetch_agent_identity_sponsors
+
+    return fetch_agent_identity_sponsors(config, user_token_provider=acquire_agent_user_token)
+
+
+def check_agent_sponsor(
+    config: EntraBotConfig, *, fetch: Callable[[EntraBotConfig], list] | None = None
+) -> Check:
+    """Diagnostics: does .env name the sponsor the directory lists, and can the agent read
+    its sponsors' records? The server trusts the directory (the Agent Identity's
+    ``sponsors``); .env's sponsor fields are used only when the directory can't be read."""
+    if not config.agent_object_id:
+        return Check(SPONSOR_CHECK_NAME, "skip", "no Agent Identity is configured.")
+    env_ids = {
+        value.strip().lower()
+        for value in (config.human_user_id, *config.human_user_ids)
+        if value and value.strip()
+    }
+    env_addresses = {
+        value.strip().lower()
+        for value in (config.human_upn, *config.human_upns, *config.human_user_mails)
+        if value and value.strip()
+    }
+    try:
+        sponsors = (fetch or _fetch_directory_sponsors)(config)
+    except Exception as exc:  # noqa: BLE001 - reported, never raised: this only looks
+        return Check(
+            SPONSOR_CHECK_NAME,
+            "warn",
+            f"could not read the Agent Identity's sponsors ({type(exc).__name__}: {exc})"[:300]
+            + ".",
+            remediation=f"Run {_diagnose_command()} again; if it persists, check the agent "
+            "in the Microsoft Entra admin center.",
+        )
+    directory_ids = {sponsor.user_id.strip().lower() for sponsor in sponsors}
+    directory_addresses: set[str] = set()
+    for sponsor in sponsors:
+        directory_addresses |= sponsor.email_identifiers()
+    unreadable = [sponsor for sponsor in sponsors if not sponsor.email_identifiers()]
+    count = f"{len(sponsors)} sponsor{'s' if len(sponsors) != 1 else ''}"
+    named_elsewhere = bool(env_ids and not env_ids & directory_ids) or bool(
+        env_addresses and directory_addresses and not env_addresses & directory_addresses
+    )
+    if named_elsewhere:
+        return Check(
+            SPONSOR_CHECK_NAME,
+            "warn",
+            f".env names a sponsor who is not among the Agent Identity's {count} in the "
+            "directory. The server checks senders and recipients against the directory; "
+            ".env's sponsor would get the daily summary if the directory couldn't be read.",
+            remediation="Make ENTRABOT_HUMAN_USER_ID, ENTRABOT_HUMAN_UPN and "
+            "ENTRABOT_HUMAN_USER_MAILS in .env name the directory's sponsor, or change the "
+            "agent's sponsors in the Microsoft Entra admin center.",
+        )
+    if unreadable:
+        return Check(
+            SPONSOR_CHECK_NAME,
+            "warn",
+            f"the directory lists {count}, but the agent cannot read the user record of "
+            f"{len(unreadable)}, so their addresses are unknown: they are matched by user ID "
+            "only, mail to them passes the recipient policy only as a home-tenant address, "
+            "and the daily summary uses .env's sponsor address instead.",
+            remediation=f"Run {_setup_command()} again: it grants the agent's Microsoft Graph "
+            "permissions, which let it read user records (setup before 0.2.0 could write them "
+            f"onto another resource's grant instead). Then run {_diagnose_command()} again.",
+        )
+    return Check(
+        SPONSOR_CHECK_NAME,
+        "pass",
+        f"the directory lists {count}"
+        + ("; .env names one of them." if env_ids or env_addresses else "."),
+    )
+
+
 # ─── Phase 3: diagnostics extras ─────────────────────────────────────────────
 
 
@@ -1099,7 +1199,7 @@ def run_diagnostics(
     ``expected_binary`` is the MCP server setup installed; see
     :func:`default_expected_binary`.
     """
-    checks: list[Check] = []
+    checks: list[Check] = [check_version()]
     checks.append(check_state_file(state_path))
     old_setup_keys = check_old_setup_keys(state_path)
     if old_setup_keys is not None:
@@ -1118,6 +1218,7 @@ def run_diagnostics(
         work_iq = check_work_iq_tokens(config, work_iq_manifest)
         if work_iq is not None:
             checks.append(work_iq)
+    checks.append(check_agent_sponsor(config))
     checks.append(check_a365_telemetry(config))
     checks.append(check_containment())
     return checks
@@ -1157,7 +1258,11 @@ def overall_exit_code(checks: Iterable[Check]) -> int:
 
 __all__ = [
     "Check",
+    "SPONSOR_CHECK_NAME",
     "TELEMETRY_CHECK_NAME",
+    "VERSION_CHECK_NAME",
+    "check_agent_sponsor",
+    "check_version",
     "check_a365_telemetry",
     "telemetry_token_scope",
     "COPILOT_CAPABLE_SKUS",

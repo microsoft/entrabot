@@ -280,7 +280,7 @@ management (the Blueprint is the credential holder).
 **Permissions to create:** `AgentIdentity.Create`.
 
 **Tenant policies:** direct Conditional Access targeting (by object ID, custom
-security attribute, or Blueprint), Identity Protection (`agentRiskDetection`,
+security attribute, or Blueprint), Identity Protection for agents, in preview (`agentRiskDetection`,
 `riskyAgent`), and ID Governance (access reviews, entitlement management). The
 blocked-permissions table applies to `requiredResourceAccess`.
 

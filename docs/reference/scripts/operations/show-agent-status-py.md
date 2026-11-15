@@ -81,6 +81,9 @@ No positional arguments.
   `state.BLUEPRINT_CERT_THUMBPRINT`, `key_credentials[].computedThumbprint` and
   `key_credentials[].customKeyIdentifier`. A reader that needs the full values
   passes `--full-thumbprints`.
+- Starts the health checks with **Entrabot version**: the installed package's
+  version, a pass on that version's release tag, and a warning (never a failure)
+  when the folder is not on a release tag. `--json` has it as `version`.
 - Reads setup's record of older setup keys (`PROVISIONER_CERT_REVOKE_PENDING`
   and `PROVISIONER_CERT_REVOKE_PENDING_EXPIRES`) for the **Older setup keys**
   health check, on every platform (Windows setup writes the record). It warns
