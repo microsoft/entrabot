@@ -24,6 +24,7 @@ from entrabot.observability.tokens import refresh_observability_token
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ensure_a365_observability_permissions as permissions  # noqa: E402
+from script_output import make_output_safe  # noqa: E402
 
 SDK_PACKAGE = "microsoft-opentelemetry"
 A365_SDK_MODULES = (
@@ -148,6 +149,7 @@ def authorize(target: ObservabilityTarget) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    make_output_safe()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--authorize",

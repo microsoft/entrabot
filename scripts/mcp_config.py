@@ -30,6 +30,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 # Filename under ``$COPILOT_HOME`` (default ``~/.copilot``) where Copilot CLI
 # stores its MCP server config. Documented at
 # https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference
@@ -118,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
             --binary /path/to/entrabot-mcp \
             --project-root /path/to/repo
     """
+    make_output_safe()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--binary",

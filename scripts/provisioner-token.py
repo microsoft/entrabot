@@ -20,9 +20,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from entra_provisioning import ProvisionerBootstrapError, get_existing_graph_token
+from script_output import make_output_safe  # noqa: E402
 
 
 def main() -> int:
+    make_output_safe()
     try:
         # wait_for_propagation=False — the app+consent already exist by the
         # time a shell caller invokes this, so no need to re-sleep.

@@ -760,3 +760,38 @@ def test_the_scopes_come_from_the_package_catalog() -> None:
     for resource in module.REQUIRED_RESOURCES:
         scopes.setdefault(resource.app_id, []).append(resource.scope)
     assert {app: tuple(found) for app, found in scopes.items()} == granted_scopes()
+
+
+def test_run_on_its_own_with_a_cp1252_stdout_it_does_not_fail_on_the_check_mark(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Live on Windows 11 with its output piped: the work was done, then printing "✅" through
+    # cp1252 raised UnicodeEncodeError and the script exited 1.
+    import io
+
+    module = load_module()
+    every_scope = " ".join(
+        scope for _app, _name, scopes in module._scopes_by_resource() for scope in scopes
+    )
+
+    def in_place(method: str, url: str, **kwargs: Any) -> FakeResponse:
+        if method == "GET" and "servicePrincipals?$filter=" in url:
+            return FakeResponse(200, {"value": [{"id": "sp"}]})
+        if method == "GET" and "oauth2PermissionGrants" in url:
+            return FakeResponse(200, {"value": [{"id": "grant", "scope": every_scope}]})
+        raise AssertionError(f"unexpected request: {method} {url}")
+
+    real = module.ensure_a365_work_iq_permissions
+    monkeypatch.setattr(module, "get_existing_graph_token", lambda: "token")
+    monkeypatch.setattr(
+        module, "ensure_a365_work_iq_permissions", lambda **kwargs: real(**kwargs, request=in_place)
+    )
+    monkeypatch.setattr(module, "ensure_inheritable_permissions", lambda **_kwargs: None)
+    out = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", newline="\n")
+    monkeypatch.setattr(sys, "stdout", out)
+
+    assert module.main(["--blueprint-app-id", "blueprint-app"]) == 0
+    out.flush()
+    assert b"? A365 Work IQ resource service principals and grants are ready" in (
+        out.buffer.getvalue()
+    )

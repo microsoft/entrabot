@@ -57,6 +57,9 @@ from entrabot.tools.chat_cursors import (  # noqa: E402
     bound_seen_ids,
 )
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 logger = logging.getLogger("entrabot.migrate_cursors_to_upn")
 
 # Prefix owned by ``chat_cursors.py``. Kept as a local constant so a future
@@ -378,6 +381,7 @@ def _print_summary(summary: dict, *, dry_run: bool) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    make_output_safe()
     parser = argparse.ArgumentParser(
         description=(
             "Migrate chat_cursors to the UPN-identity fix (2026-07-09 replay bug). "

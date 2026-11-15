@@ -26,6 +26,9 @@ import httpx
 from entrabot.config import get_config
 from entrabot.tools.teams import acquire_agent_identity_token, acquire_agent_user_token
 
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 GRAPH = "https://graph.microsoft.com/v1.0"
 SELECT = "$select=id,userPrincipalName,mail,otherMails,proxyAddresses,identities"
 
@@ -57,6 +60,7 @@ def _show(label: str, status: int, body: str, *, max_len: int = 1500) -> None:
 
 
 def main() -> int:
+    make_output_safe()
     cfg = get_config()
     if not cfg.agent_object_id:
         print("ERROR: agent_object_id is not configured", file=sys.stderr)

@@ -11,9 +11,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 
 from entrabot.config import get_config
 from entrabot.tools.teams import acquire_agent_user_token, send
+
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
 
 # Populate this dict with your own chat aliases for convenience.
 # Example: "alice": "19:xxxxxxxx...@unq.gbl.spaces"
@@ -21,6 +25,7 @@ CHAT_ALIASES: dict[str, str] = {}
 
 
 async def main() -> None:
+    make_output_safe()
     ap = argparse.ArgumentParser()
     ap.add_argument("message")
     ap.add_argument(

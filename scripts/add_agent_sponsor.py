@@ -44,6 +44,8 @@ from entra_provisioning import (  # noqa: E402
 
 # The repo root is one directory up; src/ contains the entrabot package.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from script_output import make_output_safe  # noqa: E402
+
 from entrabot.graph_helpers import GRAPH_BETA as GRAPH_BASE  # noqa: E402
 from entrabot.graph_helpers import resolve_user_by_email  # noqa: E402
 
@@ -84,6 +86,7 @@ def _add_sponsor(token: str, agent_object_id: str, user_id: str) -> None:
 
 
 def main(argv: list[str]) -> int:
+    make_output_safe()
     if len(argv) != 2:
         print(__doc__, file=sys.stderr)
         print("\nERROR: exactly one email argument is required.", file=sys.stderr)

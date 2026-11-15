@@ -67,6 +67,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 MS_GRAPH_API_ID = "00000003-0000-0000-c000-000000000000"
 PROVISIONER_APP_DISPLAY_NAME = "EntraBot Agent ID Provisioner"
 
@@ -2706,6 +2709,7 @@ def get_existing_graph_token() -> str:
 
 def bootstrap_cli() -> int:
     """Bootstrap the provisioner app and print summary."""
+    make_output_safe()
     try:
         required_values = build_required_permission_values()
         ensure_app_registration(required_values, optional_values=optional_permission_values())

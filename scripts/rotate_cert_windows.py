@@ -33,6 +33,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 # .env is UTF-8 (setup writes it that way). Read with the locale codec, a non-ASCII value
 # elsewhere in the file fails to decode on a cp1252 machine; "utf-8-sig" also drops a
 # byte-order mark an editor may have added, which would otherwise hide the first key.
@@ -178,6 +181,7 @@ def rotate(
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Rotate this checkout's certificate: ``python -m entrabot.winsetup rotate-cert``."""
+    make_output_safe()
     parser = argparse.ArgumentParser(
         description="Rotate this computer's Blueprint certificate. The current certificate "
         "stays in use until the new one is proven to work."

@@ -96,6 +96,9 @@ from entra_provisioning import get_bootstrap_graph_token
 
 from entrabot.platform.keyring_backend import assert_allowed_keyring_backend
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 EXIT_REGISTERED = 0
 EXIT_NOT_REGISTERED = 1
 EXIT_USAGE = 2  # argparse's own exit code for bad arguments
@@ -435,6 +438,7 @@ def main(
     *,
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
+    make_output_safe()
     args = _parse_args(argv)
     stdout = sys.stdout
 

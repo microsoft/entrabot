@@ -40,6 +40,9 @@ import contextlib
 import sys
 from datetime import UTC, datetime
 
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 try:
     import keyring
     from blueprint_certs import (
@@ -121,6 +124,7 @@ def _find(blueprint_obj_id: str) -> int:
 
 
 def main() -> int:
+    make_output_safe()
     if len(sys.argv) != 2:
         print("usage: find_local_blueprint_cert.py <BLUEPRINT_OBJECT_ID>", file=sys.stderr)
         return EXIT_USAGE

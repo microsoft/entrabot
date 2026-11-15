@@ -52,6 +52,7 @@ from entra_provisioning import (  # noqa: E402
     get_state,
     set_state,
 )
+from script_output import make_output_safe  # noqa: E402
 
 REGISTRATIONS_URL = registry.REGISTRATIONS_URL
 REQUIRED_ROLE = registry.REQUIRED_ROLE
@@ -189,6 +190,7 @@ def _delete(run: _Run, *, apply: bool) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    make_output_safe()
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--apply", action="store_true", help="Write (default: dry run).")
     parser.add_argument(

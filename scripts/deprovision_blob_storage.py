@@ -34,6 +34,9 @@ import shutil
 import subprocess
 import sys
 
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 DEFAULT_RESOURCE_GROUP = "entrabot-rg"
 
 
@@ -122,6 +125,7 @@ def deprovision(
 
 
 def main(argv: list[str] | None = None) -> int:
+    make_output_safe()
     parser = argparse.ArgumentParser(
         description="Deprovision Azure Blob Storage for an EntraBot Agent User."
     )

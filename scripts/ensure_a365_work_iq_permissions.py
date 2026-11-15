@@ -37,6 +37,8 @@ from entra_provisioning import (  # noqa: E402
 
 # The repo root is one directory up; src/ contains the entrabot package.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from script_output import make_output_safe  # noqa: E402
+
 from entrabot.a365.catalog import (  # noqa: E402
     AGENT_365_TOOLS_APP_ID,
     WORK_IQ_WORD_APP_ID,
@@ -618,6 +620,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    make_output_safe()
     args = parse_args(argv or sys.argv[1:])
     blueprint_app_id = args.blueprint_app_id.strip() or (get_state("BLUEPRINT_APP_ID") or "")
     if not blueprint_app_id:

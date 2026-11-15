@@ -10,8 +10,12 @@ import httpx
 from entrabot.config import get_config
 from entrabot.tools.teams import acquire_agent_user_token
 
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 
 async def main() -> None:
+    make_output_safe()
     subject_contains = sys.argv[1] if len(sys.argv) > 1 else "Project Apollo"
     top = int(sys.argv[2]) if len(sys.argv) > 2 else 5
     token = acquire_agent_user_token(get_config())

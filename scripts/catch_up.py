@@ -24,6 +24,9 @@ from entrabot.tools.poll_state import (
 )
 from entrabot.tools.teams import acquire_agent_user_token
 
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 
 async def fetch(
     client: httpx.AsyncClient,
@@ -85,6 +88,7 @@ def load_chat_ids() -> tuple[list[str], bool]:
 
 
 async def main() -> None:
+    make_output_safe()
     _hours = int(sys.argv[1]) if len(sys.argv) > 1 else 6  # noqa: F841 — reserved for future filtering
     token = acquire_agent_user_token(get_config())
 

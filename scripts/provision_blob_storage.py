@@ -46,6 +46,9 @@ import shutil
 import subprocess
 import sys
 
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 # Module-level constants
 RESOURCE_GROUP = "entrabot-rg"
 DEFAULT_LOCATION = "eastus"
@@ -362,6 +365,7 @@ def provision(
 
 
 def main(argv: list[str] | None = None) -> int:
+    make_output_safe()
     parser = argparse.ArgumentParser(
         description="Provision Azure Blob Storage for an EntraBot Agent User."
     )

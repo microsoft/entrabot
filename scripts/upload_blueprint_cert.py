@@ -17,6 +17,7 @@ from cryptography import x509
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from entra_provisioning import get_existing_graph_token  # noqa: E402
+from script_output import make_output_safe  # noqa: E402
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 REQUEST_TIMEOUT_SECONDS = 15
@@ -117,6 +118,7 @@ def upload_blueprint_certificate(
 
 
 def main(argv: list[str] | None = None) -> int:
+    make_output_safe()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--blueprint-object-id", required=True)
     parser.add_argument("--der-path", type=Path, required=True)

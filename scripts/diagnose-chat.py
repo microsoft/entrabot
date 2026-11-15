@@ -23,8 +23,12 @@ from entrabot.tools.teams import (
     send,
 )
 
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 
 async def main() -> None:
+    make_output_safe()
     config = EntraBotConfig.from_env()
 
     print("=" * 60)

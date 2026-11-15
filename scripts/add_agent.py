@@ -27,9 +27,11 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import create_entra_agent_ids as C  # noqa: E402
+from script_output import make_output_safe  # noqa: E402
 
 
 def main() -> int:
+    make_output_safe()
     suffix = os.environ.get("_ENTRABOT_UPN_SUFFIX", "").strip()
     if not suffix:
         print("ERROR: _ENTRABOT_UPN_SUFFIX is required (the agent's unique slug).", file=sys.stderr)

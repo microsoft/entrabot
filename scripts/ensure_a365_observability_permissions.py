@@ -27,6 +27,7 @@ from entra_provisioning import (  # noqa: E402
     get_existing_graph_token,
     get_state,
 )
+from script_output import make_output_safe  # noqa: E402
 
 GRAPH_V1_BASE = "https://graph.microsoft.com/v1.0"
 GRAPH_BETA_BASE = "https://graph.microsoft.com/beta"
@@ -708,6 +709,7 @@ def _argument_or_state(argument: str, state_key: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    make_output_safe()
     args = parse_args(argv if argv is not None else sys.argv[1:])
     ids = ProvisioningIds(
         blueprint_app_id=_argument_or_state(args.blueprint_app_id, "BLUEPRINT_APP_ID"),
