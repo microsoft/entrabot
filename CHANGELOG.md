@@ -43,6 +43,7 @@ planned for 0.3.0. What this release was checked against is in
 
 ### Changed
 
+- The storage guide and the install pages say that one agent on two computers with local memory answers every message on both, and that cloud memory or one computer at a time avoids it.
 - The install commands clone the latest release (`git clone --branch v0.2.0 ...`) instead of `main`, and the ZIP download is the release's. "Upgrading to a new release" in Migrations and upgrades has the steps for an existing install (`git fetch --tags`, `git checkout vX.Y.Z`, setup again).
 - The daily summary goes to every directory sponsor of the Agent Identity whose user record gives an address, instead of `.env`'s `ENTRABOT_HUMAN_USER_MAILS`; `.env` is used only when the directory gives no address. The recipient policy still applies, and the result says which source was used (`recipient_source`).
 - With telemetry on, Entrabot switches off the OpenTelemetry Distro's own calls to Azure Monitor (its usage statistics to Application Insights and its settings lookup at `settings.sdk.monitor.azure.com`) by setting `MICROSOFT_OTEL_SDKSTATS_DISABLED`, `APPLICATIONINSIGHTS_STATSBEAT_DISABLED_ALL` and `APPLICATIONINSIGHTS_CONTROLPLANE_DISABLED` to `true` unless they are already set. Entrabot never switches on the distro's Azure Monitor export.
@@ -93,6 +94,8 @@ planned for 0.3.0. What this release was checked against is in
 
 ### Fixed
 
+- Setup's review said "continue with" the Agent User that `.env` or the state file last named, even when `--agent-user-upn` named another or the agent step was about to choose the Blueprint's own. It now shows the Agent User this run is for.
+- `whoami`, `--diagnose` and the status report showed the version as "unknown" on every install: they asked for the wrong distribution name. Found before release, on Linux.
 - The Word and Excel tools raised a raw network exception when a request to Work IQ failed before an answer (connect, proxy, timeout), instead of their documented `{"error", "error_type"}` reply. Found running `create_word_document` on Linux.
 - Joining an agent by its Blueprint App ID (`--use-blueprint`, `-UseBlueprint` on Windows) with no Agent User named looked only for an Agent User called `entrabot-agent@<domain>`. When the agent had another name, setup created a second Agent Identity and Agent User under the Blueprint and connected the computer to that new, unlicensed agent. Setup now uses the Blueprint's Agent User: the one recorded on the computer, or else its only one. When it has several, setup stops and lists them; name one with `--agent-user-upn` (`-AgentUserUpn`). Found joining a Linux-created agent from Windows.
 - On Windows, after winget installed the Azure CLI, setup said "winget did not install the Azure CLI (exit 0)" and installed a private copy as well, which takes several minutes. It looked up `ProgramFiles` in an environment whose names Windows had spelled in capitals.
