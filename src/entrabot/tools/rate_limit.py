@@ -5,7 +5,7 @@ that receive a 429 response, respecting the ``Retry-After`` header.
 
 Usage in teams.py (or any module making Graph calls)::
 
-    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    transport = RetryOn429Transport(wrapped=proxied_async_transport())
     async with httpx.AsyncClient(transport=transport) as client:
         resp = await client.get(...)
 
@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -38,6 +39,20 @@ DEFAULT_MAX_WAIT = 120  # cap on Retry-After to avoid absurd waits
 # Three attempts, exponential backoff. Jitter adds 0-30% per attempt.
 RETRY_5XX_BASE_DELAYS_S = (0.2, 0.8, 2.4)
 RETRY_5XX_STATUS_CODES = (502, 503, 504)
+
+
+def proxied_async_transport() -> httpx.AsyncHTTPTransport:
+    """The base transport for Graph calls.
+
+    An explicit transport ignores ``HTTPS_PROXY``. When the server runs contained
+    (``ENTRABOT_CONTAINED`` names a sandbox, :mod:`entrabot.sandbox.launch`), the launcher's
+    allowlisting proxy is the only way out, so it is given explicitly; without it every call
+    through this transport fails inside the sandbox. Uncontained, nothing changes.
+    """
+    proxy = None
+    if os.environ.get("ENTRABOT_CONTAINED", "none") not in ("", "none"):
+        proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or None
+    return httpx.AsyncHTTPTransport(proxy=proxy)
 
 
 def parse_retry_after(value: str | None, default: int = DEFAULT_RETRY_AFTER) -> int:
