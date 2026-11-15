@@ -645,8 +645,9 @@ def check_agent_sponsor(
             f"{len(unreadable)}, so their addresses are unknown: they are matched by user ID "
             "only, mail to them passes the recipient policy only as a home-tenant address, "
             "and the daily summary uses .env's sponsor address instead.",
-            remediation="Let the Agent User read user profiles (delegated User.Read.All), "
-            f"then run {_diagnose_command()} again.",
+            remediation=f"Run {_setup_command()} again: it grants the agent's Microsoft Graph "
+            "permissions, which let it read user records (setup before 0.2.0 could write them "
+            f"onto another resource's grant instead). Then run {_diagnose_command()} again.",
         )
     return Check(
         SPONSOR_CHECK_NAME,

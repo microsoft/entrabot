@@ -1881,6 +1881,7 @@ class TestAgentSponsorCheck:
 
         check = check_agent_sponsor(self._config(), fetch=lambda config: [self._sponsor("u-1")])
         assert check.status == "warn" and "cannot read" in check.detail
+        assert "again" in check.remediation and "Microsoft Graph permissions" in check.remediation
 
     def test_warn_when_the_sponsors_cannot_be_listed(self) -> None:
         from entrabot.preflight import check_agent_sponsor
