@@ -44,6 +44,7 @@ from entrabot.winsetup import (
     memory,
     sponsors,
     state,
+    telemetry,
     workiq,
 )
 from entrabot.winsetup.agentsponsors import DirectorySponsor, SponsorSync
@@ -301,6 +302,8 @@ class Options:
     location: str = ""
     subscription: str = ""
     configure_work_iq: bool = False
+    # Agent 365 telemetry (Microsoft OpenTelemetry Distro): asked about like Work IQ.
+    configure_telemetry: bool = False
     tenant: str = ""
     device_code: bool = False
     # Sign in again even when an earlier sign-in still works: someone else is to own the agent.
@@ -419,6 +422,8 @@ class Plan:
     location: str = ""
     work_iq: bool = False  # to be switched on in this run (off again if a step fails)
     work_iq_asked: bool = False  # asked for, on the command line or at the question
+    telemetry: bool = False  # Agent 365 telemetry, to be switched on in this run
+    telemetry_asked: bool = False
     hosts: list[str] = field(default_factory=lambda: list(hosts.KNOWN_HOSTS))
 
 
@@ -483,6 +488,8 @@ class Wizard:
         self.work_iq_failure: workiq.WorkIqError | None = None  # why switching it on failed
         # Set up, but the agent's tokens did not carry the scopes within setup's wait.
         self.work_iq_pending = False
+        self.telemetry_failure: telemetry.TelemetryError | None = None
+        self.telemetry_pending = False  # set up, but the token lacks the scope so far
         # What setup did on this PC before the review screen, in words: the review says it.
         self.done_before_review: list[str] = []
         # What the organization has, as the licence walkthrough last read it: the last
@@ -1044,6 +1051,7 @@ class Wizard:
         self._decide_sponsor()
         self._decide_memory()
         self._decide_work_iq()
+        self._decide_telemetry()
 
     def _self_sponsor(self) -> Sponsor | None:
         if self.me is None or self.account is None:
@@ -1333,6 +1341,30 @@ class Wizard:
         if wanted:
             plan.work_iq_asked = plan.work_iq = True
 
+    def _decide_telemetry(self) -> None:
+        """Agent 365 telemetry: explained first, then a yes or no (default no, like Work IQ).
+        It gives the agent a delegated permission and needs a licence in the organization,
+        so it is never switched on without being asked for."""
+        console, plan = self.console, self.plan
+        wanted = self.options.configure_telemetry
+        if not wanted and (console.interactive or "telemetry" in console.answers):
+            console.info(
+                "The agent can report what it does to Microsoft Agent 365 (telemetry): when it "
+                "is asked something, by whom, and in which chat. Not what the messages say."
+            )
+            console.info(
+                "Microsoft Defender and the Microsoft 365 admin center show its activity from it."
+            )
+            console.info(
+                "Agent 365 keeps it only if someone in your organization has a Microsoft 365 E7 "
+                "or Agent 365 licence."
+            )
+            wanted = console.confirm(
+                "Switch on Agent 365 telemetry?", default=False, key="telemetry"
+            )
+        if wanted:
+            plan.telemetry_asked = plan.telemetry = True
+
     def _work_iq_label(self) -> str:
         """Work IQ, for the review screen."""
         plan = self.plan
@@ -1359,6 +1391,7 @@ class Wizard:
         console.info(f"Will take instructions in Teams from: {self._sponsor_line()}")
         console.info(f"Memory:      {plan.memory_label}")
         console.info(f"Work IQ:     {self._work_iq_label()}")
+        console.info(f"Telemetry:   {'yes (Agent 365)' if plan.telemetry else 'no'}")
         console.info(f"Assistants:  {', '.join(names[host] for host in plan.hosts)}")
         if self.options.remove_all_existing_certs:
             console.blank()
@@ -1401,6 +1434,7 @@ class Wizard:
         smoke = self._smoke(cert)
         # Optional, so after everything the agent needs is in place and tested.
         self._work_iq(identity)
+        self._telemetry(identity)
         self._licences(identity, smoke)
         return self._finish(
             identity, cert, env_result, memory_result, upload_failed, host_report, smoke
@@ -1643,6 +1677,62 @@ class Wizard:
             console.detail("Setup carries on without them. What to do is at the end.")
             return
         self.work_iq_pending = outcome == "pending"
+
+    def _telemetry(self, identity: Identity) -> None:
+        """After the end-to-end test, not a numbered step: switch Agent 365 telemetry on
+        (:mod:`telemetry`). A failure never stops setup: it stays off, and the last screen
+        says why and what to do."""
+        plan, console = self.plan, self.console
+        if not plan.telemetry:
+            return
+        console.section("Agent 365 telemetry")
+        try:
+            outcome = telemetry.configure_telemetry(
+                paths=self.paths,
+                helpers=self.helpers,
+                console=console,
+                identity=identity,
+                guard=self.guard,
+                sleep=self.world.sleep,
+            )
+        except telemetry.TelemetryError as exc:
+            plan.telemetry = False
+            self.telemetry_failure = exc
+            console.warn("Agent 365 telemetry could not be switched on.")
+            console.detail(str(exc))
+            console.detail("Setup carries on without it. What to do is at the end.")
+            return
+        self.telemetry_pending = outcome == "pending"
+
+    def _telemetry_attention(self) -> list[tuple[str, list[str]]]:
+        """Telemetry was asked for and does not work yet: why, and what to do."""
+        plan = self.plan
+        if plan.telemetry_asked and not plan.telemetry:
+            failure = self.telemetry_failure or telemetry.TelemetryError(
+                "not switched on", reason=telemetry.PERMISSIONS_REASON
+            )
+            reason = failure.reason[:1].upper() + failure.reason[1:]
+            if not reason.endswith("."):
+                reason += "."
+            body = [
+                *_wrapped(reason),
+                *_wrapped("Run setup again and answer yes to the Agent 365 telemetry question."),
+            ]
+            if self.console.log_file:
+                body += ["The details are in the setup log:", f"  {self.console.log_file}"]
+            return [("Agent 365 telemetry was asked for, but it is not switched on.", body)]
+        if plan.telemetry and self.telemetry_pending:
+            return [
+                (
+                    "Agent 365 telemetry is set up, but Microsoft has not started honouring the "
+                    "agent's permission yet.",
+                    _wrapped(
+                        "That usually takes a minute or two. The agent keeps trying. Check with:  "
+                        f"{self.words.diagnose}."
+                    ),
+                )
+            ]
+        return []
 
     def _agent_step_stopped(self, outcome: str, *, blueprint: str, recorded: bool) -> SetupFailed:
         """Why the agent step stopped, from the result line create_entra_agent_ids.py printed
@@ -2250,7 +2340,7 @@ class Wizard:
         old_keys = self._read_old_setup_keys()
         if self.old_keys.unreadable and not old_keys.unreadable:
             old_keys = replace(old_keys, unreadable=True)
-        work_iq_attention = self._work_iq_attention()
+        work_iq_attention = self._work_iq_attention() + self._telemetry_attention()
         healthy = (
             smoke in ("pass", "skipped")
             and not upload_failed

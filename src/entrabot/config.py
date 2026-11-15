@@ -140,23 +140,103 @@ def _read_dotenv_text(env_path: Path) -> str:
         return raw.decode(locale.getpreferredencoding(False), errors="replace")
 
 
-def _load_dotenv() -> None:
-    """Best-effort load of ``.env`` file from the project root."""
-    env_path = Path(__file__).resolve().parents[2] / ".env"
-    if not env_path.is_file():
-        return
-    for line in _read_dotenv_text(env_path).splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip()
-        # Don't overwrite values already in the environment
+def entrabot_home() -> Path:
+    """Home config dir for the harness (global.env + the default agent's .env).
+
+    Aligns with the platform data root so it never collides with the legacy ``~/.entrabot``
+    migration: on Windows that's ``%LOCALAPPDATA%\\entrabot`` (``~/.entrabot`` there is a *legacy*
+    location ``migrate_legacy_data_dir`` wants empty); on mac/Linux it's ``~/.entrabot``.
+    ``$ENTRABOT_HOME`` overrides."""
+    override = os.environ.get("ENTRABOT_HOME")
+    if override:
+        return Path(override)
+    if sys.platform == "win32":
+        return _windows_root()
+    return Path.home() / ".entrabot"
+
+
+def _entrabot_home() -> Path:
+    return entrabot_home()
+
+
+def _dotenv_candidates() -> list[Path]:
+    """Per-agent ``.env`` locations in precedence order (first found wins).
+
+    Repo-independent: a wheel-installed bot keeps its creds under ``~/.entrabot`` (or
+    ``$ENTRABOT_HOME``), so the runtime works with no clone. A cloned repo still uses its own
+    root ``.env`` (a combined file — fine, it just supplies global keys too).
+    ``$ENTRABOT_ENV_FILE`` overrides everything."""
+    out = []
+    explicit = os.environ.get("ENTRABOT_ENV_FILE")
+    if explicit:
+        out.append(Path(explicit).expanduser())
+    out.append(Path(__file__).resolve().parents[2] / ".env")  # cloned repo root
+    out.append(_entrabot_home() / ".env")  # home config dir (default agent / wheel install)
+    out.append(Path.cwd() / ".entrabot" / ".env")  # per-project config dir
+    return out
+
+
+def _overlay(env_path: Path) -> bool:
+    """Load KEY=VALUE pairs from ``env_path`` into ``os.environ``; pre-existing env vars win.
+    Returns True if the file was read."""
+    from entrabot.harness.config import globalcfg
+
+    try:
+        if not env_path.is_file():
+            return False
+        values = globalcfg.read_env(str(env_path), strict=True)
+    except OSError:
+        return False
+    cert_key = "ENTRABOT_BLUEPRINT_CERT_THUMBPRINT"
+    if os.environ.get(cert_key) and values.get(cert_key) != os.environ[cert_key]:
+        for key in globalcfg.BLUEPRINT_CERT_KEYS:
+            values.pop(key, None)
+    for key, value in values.items():
         if key not in os.environ:
             os.environ[key] = value
+    return True
+
+
+def _load_dotenv() -> None:
+    """Layer config: the shared global base (tenant + blueprint), then the first per-agent
+    ``.env`` found. The two are disjoint, so order only matters when a legacy combined file is
+    present — in which case the global base loads first and the combined file fills the rest."""
+    _overlay(_entrabot_home() / "global.env")  # shared tenant/blueprint root (if established)
+    for env_path in _dotenv_candidates():
+        if _overlay(env_path):
+            break  # first per-agent file wins
+
+
+def _first_dotenv() -> dict[str, str]:
+    """Values of the first per-agent/combined ``.env`` that ``_load_dotenv`` overlays."""
+    from entrabot.harness.config import globalcfg
+
+    for env_path in _dotenv_candidates():
+        if env_path.is_file():
+            return globalcfg.read_env(str(env_path), strict=True)
+    return {}
+
+
+def apply_agent_env(root: str) -> bool:
+    """Overlay ``<root>/.entrabot/.env`` for an explicitly chosen agent, overriding any ambient
+    agent identity already loaded. Called by the harness once it has resolved its root."""
+    from entrabot.harness.config import globalcfg
+
+    path = Path(globalcfg.agent_env_path(root))
+    if not path.is_file():
+        return False
+    agent_env = globalcfg.read_env(str(path), strict=True)
+    # _load_dotenv lets global.env silently win over a clone .env; reject a mixed chain instead.
+    globalcfg.resolve_shared_config(
+        globalcfg.read_env(str(_entrabot_home() / "global.env"), strict=True),
+        _first_dotenv(),
+        agent_env,
+    )
+    resolved = globalcfg.resolve_agent_env(dict(os.environ), agent=agent_env)
+    for key in (*globalcfg.AGENT_KEYS, *globalcfg.SHARED_CONFIG_KEYS):
+        os.environ.pop(key, None)
+    os.environ.update(resolved)
+    return True
 
 
 # Load .env on first import so all downstream code sees the values.
@@ -226,6 +306,10 @@ class EntraBotConfig:
     # ``ENTRABOT_XPIA_WRAP_ENABLE=false`` disables the wrap without a
     # code revert; see docs/architecture/security-boundaries.md.
     xpia_wrap_enable: bool = field(default=True)
+    a365_observability_enabled: bool = False
+    a365_export_enabled: bool = False
+    a365_console_enabled: bool = False
+    a365_service_namespace: str | None = None
 
     @classmethod
     def from_env(cls) -> EntraBotConfig:
@@ -283,6 +367,16 @@ class EntraBotConfig:
                 os.environ.get("ENTRABOT_XPIA_WRAP_ENABLE", "").strip().lower()
                 not in ("false", "0", "no", "off")
             ),
+            a365_observability_enabled=os.environ.get(
+                "ENTRABOT_A365_OBSERVABILITY_ENABLED", ""
+            ).lower()
+            in ("true", "1", "yes"),
+            a365_export_enabled=os.environ.get("ENTRABOT_A365_EXPORT_ENABLED", "").lower()
+            in ("true", "1", "yes"),
+            a365_console_enabled=os.environ.get("ENTRABOT_A365_CONSOLE_ENABLED", "").lower()
+            in ("true", "1", "yes"),
+            a365_service_namespace=os.environ.get("ENTRABOT_A365_SERVICE_NAMESPACE", "").strip()
+            or None,
         )
 
 

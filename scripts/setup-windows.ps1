@@ -68,6 +68,11 @@
   Also set up Microsoft Agent 365 Work IQ (needs the a365 CLI; see
   scripts\prereqs-windows.ps1 -WithWorkIq).
 
+.PARAMETER ConfigureA365Observability
+  Also switch on Agent 365 telemetry: grants the agent the delegated
+  Agent365.Observability.OtelWrite permission and records the runtime switches. Agent 365
+  keeps it only if someone in the organization has a Microsoft 365 E7 or Agent 365 licence.
+
 .PARAMETER Tenant
   Sign in to this tenant (domain or tenant ID).
 
@@ -143,6 +148,7 @@ param(
     [string]$Location = "",
     [string]$Subscription = "",
     [switch]$ConfigureA365WorkIq,
+    [switch]$ConfigureA365Observability,
     [string]$A365AgentName = "",
     [string]$Tenant = "",
     [switch]$DeviceCode,
@@ -631,6 +637,9 @@ function Get-WizardArguments {
     }
 
     if (Test-BoundSwitch $Bound 'ConfigureA365WorkIq') { $list.Add('--configure-a365-work-iq') }
+    if (Test-BoundSwitch $Bound 'ConfigureA365Observability') {
+        $list.Add('--configure-a365-observability')
+    }
     $tenantValue = Get-BoundText $Bound 'Tenant'
     if ($tenantValue) { $list.Add('--tenant'); $list.Add($tenantValue) }
     if (Test-BoundSwitch $Bound 'DeviceCode') { $list.Add('--device-code') }

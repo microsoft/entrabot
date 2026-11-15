@@ -150,3 +150,15 @@ def test_windows_setup_keeps_accepting_the_deprecated_a365_agent_name() -> None:
 
     assert "[string]$A365AgentName" in script
     assert "-A365AgentName is deprecated and ignored" in script
+
+
+def test_both_bootstraps_forward_the_telemetry_flag_to_the_wizard() -> None:
+    # The PR #122 wrapper stage (configure_a365_observability.py --authorize) is replaced by
+    # the wizard's own step, asked for like Work IQ (entrabot.winsetup.telemetry).
+    unix = read_script("scripts/setup.sh")
+    windows = read_script("scripts/setup-windows.ps1")
+    assert "--configure-a365-observability) ARGS+=(--configure-a365-observability) ;;" in unix
+    assert "[switch]$ConfigureA365Observability" in windows
+    assert "$list.Add('--configure-a365-observability')" in windows
+    telemetry = read_script("src/entrabot/winsetup/telemetry.py")
+    assert 'PERMISSIONS_SCRIPT = "ensure_a365_observability_permissions.py"' in telemetry

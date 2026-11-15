@@ -2596,6 +2596,12 @@ async def _push_email_notification(msg: dict) -> None:
         session_message = SessionMessage(message=JSONRPCMessage(notification))
         try:
             await write_stream.send(session_message)
+            # A sender's address is not a directory ID, so the run has no caller ID.
+            _note_inbound_run(
+                conversation_id=str(msg.get("conversationId") or message_id or "email"),
+                channel="outlook",
+                caller_id=None,
+            )
         except Exception as exc:
             # Don't let a transport failure take down the poll loop.
             # Matches the swallow-and-log pattern from _push_channel_notification.
@@ -3040,6 +3046,11 @@ async def _push_channel_notification(
     # off of it.
     await _maybe_record_sponsor_binding(
         message=message, chat_id=resolved_chat_id
+    )
+    _note_inbound_run(
+        conversation_id=resolved_chat_id,
+        channel="msteams",
+        caller_id=str(message.get("sender_id") or "").strip() or None,
     )
 
     if logger:
@@ -4750,6 +4761,48 @@ async def whoami() -> str:
     return json.dumps(result, indent=2)
 
 
+def _start_a365_telemetry() -> list:
+    """Agent 365 telemetry from this server (``entrabot.observability.mcp_runs``) when
+    ``.env`` switches it on and this is an Agent User session: every tool is traced, and the
+    agent's telemetry token is fetched and kept fresh in the background. Never raises."""
+    import asyncio
+    import uuid
+
+    from entrabot.observability import mcp_runs
+
+    try:
+        config = _state.get("config") or get_config()
+        tracker = mcp_runs.start_server_telemetry(
+            mcp, config, session_id=f"entrabot-mcp-{uuid.uuid4()}"
+        )
+    except Exception as exc:  # noqa: BLE001 - the body runs without telemetry
+        if logger:
+            logger.warning("Agent 365 telemetry did not start: %s", type(exc).__name__)
+        return []
+    if tracker is None:
+        return []
+    _state["a365_runs"] = tracker
+    tasks = [asyncio.create_task(mcp_runs.run_sweeper(tracker))]
+    if config.a365_export_enabled:
+        tasks.append(asyncio.create_task(mcp_runs.keep_token_fresh(config)))
+    return tasks
+
+
+def _stop_a365_telemetry(tasks: list) -> None:
+    for task in tasks:
+        task.cancel()
+    tracker = _state.pop("a365_runs", None)
+    if tracker is not None:
+        tracker.close()
+
+
+def _note_inbound_run(*, conversation_id: str, channel: str, caller_id: str | None) -> None:
+    """A message reached the model: a new Agent 365 run starts (no-op when telemetry is off)."""
+    tracker = _state.get("a365_runs")
+    if tracker is not None:
+        tracker.inbound(conversation_id=conversation_id, channel=channel, caller_id=caller_id)
+
+
 async def _run_stdio_with_write_stream() -> None:
     """Run the MCP server on stdio, capturing the write stream for notifications.
 
@@ -4800,6 +4853,7 @@ async def _run_stdio_with_write_stream() -> None:
                     )
 
         init_task = asyncio.create_task(_eager_init())
+        telemetry_tasks = _start_a365_telemetry()
         try:
             await mcp._mcp_server.run(
                 read_stream,
@@ -4810,6 +4864,7 @@ async def _run_stdio_with_write_stream() -> None:
             )
         finally:
             init_task.cancel()
+            _stop_a365_telemetry(telemetry_tasks)
             # Issue #17: flush any pending per-chat cursor writes before exit
             # so the next process inherits the latest watermarks instead of
             # re-bootstrapping from "newest at boot."

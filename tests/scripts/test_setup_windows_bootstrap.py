@@ -178,11 +178,14 @@ class TestRunsOnWindowsPowerShell51:
     def test_setup_does_not_need_pwsh7_or_the_old_prereq_tools(self) -> None:
         code = _code(SETUP_PS1)
         assert "pwsh" not in code
-        # Work IQ is opt-in: the bootstrap only forwards the flag, it never probes the CLI.
+        # Work IQ and telemetry are opt-in: the bootstrap only forwards their flags, it never
+        # probes the CLI.
         without_flag_names = (
             code.lower()
             .replace("configurea365workiq", "")
             .replace("--configure-a365-work-iq", "")
+            .replace("configurea365observability", "")
+            .replace("--configure-a365-observability", "")
             .replace("a365agentname", "")
         )
         assert "a365" not in without_flag_names
