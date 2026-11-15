@@ -5,7 +5,9 @@ from __future__ import annotations
 import base64
 import json
 import os
+import signal
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -70,6 +72,14 @@ class TestStatusRecord:
         launch.write_status(tmp_path, {"backend": "seatbelt", "pid": 2**22 + 12345})
         assert launch.read_status(tmp_path) is None  # no such process: nothing is running
 
+    @pytest.mark.parametrize("pid", [0, -1])
+    def test_a_pid_that_names_no_single_process_is_not_running(
+        self, tmp_path: Path, pid: int
+    ) -> None:
+        # os.kill(0 or -1, 0) on POSIX probes a whole process group and succeeds.
+        launch.write_status(tmp_path, {"backend": "seatbelt", "pid": pid})
+        assert launch.read_status(tmp_path) is None
+
     def test_unreadable_is_none(self, tmp_path: Path) -> None:
         (tmp_path / "runtime").mkdir()
         (tmp_path / "runtime" / "containment.json").write_text("{not json")
@@ -80,6 +90,50 @@ class TestStatusRecord:
     ) -> None:
         monkeypatch.setenv(launch.CONTAINED_ENV, "seatbelt")
         assert launch.maybe_contain([]) is None
+
+
+class TestLivenessOnWindows:
+    """On Windows signal 0 is CTRL_C_EVENT: ``os.kill(pid, 0)`` sends Ctrl+C rather than
+    probing, so reading the status record must never signal anything there."""
+
+    def test_never_signals_on_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def no_signals(pid: int, sig: int) -> None:
+            raise AssertionError(f"os.kill({pid}, {sig}) on Windows")
+
+        asked: list[int] = []
+        monkeypatch.setattr(launch.sys, "platform", "win32")
+        monkeypatch.setattr(launch.os, "kill", no_signals)
+        monkeypatch.setattr(launch, "_alive_windows", lambda pid: asked.append(pid) or True)
+        assert launch._alive(4242) is True
+        assert asked == [4242]
+
+    def test_status_and_lock_holder_never_signal_on_windows(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def no_signals(pid: int, sig: int) -> None:
+            raise AssertionError(f"os.kill({pid}, {sig}) on Windows")
+
+        monkeypatch.setattr(launch.sys, "platform", "win32")
+        monkeypatch.setattr(launch.os, "kill", no_signals)
+        monkeypatch.setattr(launch, "_alive_windows", lambda pid: False)
+        launch.write_status(tmp_path, {"backend": "none", "pid": 4242, "reason": "Windows"})
+        assert launch.read_status(tmp_path) is None
+        assert launch.describe_running(tmp_path)[0] in ("skip", "warn")
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="the Windows process query")
+    def test_the_windows_query_itself(self) -> None:
+        assert launch._alive_windows(os.getpid()) is True
+        assert launch._alive_windows(2**22 + 12345) is False
+
+
+class TestForwardedSignals:
+    def test_only_signals_this_system_has(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delattr(signal, "SIGHUP", raising=False)  # as on Windows
+        assert launch._forwarded_signals() == (signal.SIGTERM, signal.SIGINT)
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX has SIGHUP")
+    def test_hangup_is_forwarded_where_it_exists(self) -> None:
+        assert signal.SIGHUP in launch._forwarded_signals()
 
 
 def _policy(tmp_path: Path) -> ContainmentPolicy:
@@ -121,6 +175,7 @@ class TestMxc:
         assert argv[:2] == ["/opt/mxc/lxc-exec", "--config-base64"]
         assert json.loads(base64.b64decode(argv[2]))["version"] == "1.0.0"
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX owner and mode bits")
     def test_an_executor_others_can_write_is_not_used(self, tmp_path: Path) -> None:
         exe = tmp_path / "mxc-exec-mac"
         exe.write_text("#!/bin/sh\n")
@@ -137,6 +192,15 @@ class TestMxc:
         env = {"ENTRABOT_MXC_EXECUTOR": str(exe), "ENTRABOT_MXC_SHA256": "0" * 64}
         assert mxc.find_executor(env=env, platform="linux") is None
 
+    def test_no_owner_check_means_not_trusted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Windows has no os.getuid: the trust check must refuse, not raise.
+        exe = tmp_path / "lxc-exec"
+        exe.write_bytes(b"binary")
+        monkeypatch.delattr(mxc.os, "getuid", raising=False)
+        assert mxc.find_executor(env={"ENTRABOT_MXC_EXECUTOR": str(exe)}, platform="linux") is None
+
     def test_none_on_windows(self) -> None:
         assert mxc.find_executor(env={}, platform="win32") is None
 
@@ -148,7 +212,8 @@ class TestReporting:
             {"backend": "seatbelt", "pid": os.getpid(), "allowed_hosts": ["graph.microsoft.com"]},
         )
         status, detail = launch.describe_running(tmp_path)
-        assert status == "pass" and "seatbelt" in detail and "graph.microsoft.com" in detail
+        assert status == "pass" and "contained by seatbelt;" in detail
+        assert detail.rsplit("it can reach only ", 1)[1].split(", ") == ["graph.microsoft.com"]
 
     def test_uncontained_is_a_warning_with_the_reason(self, tmp_path: Path) -> None:
         launch.write_status(

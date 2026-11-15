@@ -26,6 +26,7 @@ def _policy(tmp_path: Path) -> ContainmentPolicy:
     )
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX paths; Windows is not contained")
 class TestSeatbeltProfile:
     def test_denies_home_writes_and_network_then_allows_back_only_the_policy(
         self, tmp_path: Path
@@ -155,6 +156,7 @@ class TestSeatbeltProfile:
         assert result.stdout.split() == ["deny", "deny", "ok", "ok"], result.stderr
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX paths; Windows is not contained")
 class TestBwrapCommand:
     def _command(self, tmp_path: Path, env: dict[str, str]) -> list[str]:
         return bwrap.command(
