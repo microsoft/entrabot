@@ -1822,3 +1822,74 @@ class TestTelemetryDiagnosis:
                 copilot_mcp_path=tmp_path / "absent2.json",
             )
         assert TELEMETRY_CHECK_NAME in [c.name for c in checks]
+
+
+class TestAgentSponsorCheck:
+    """--diagnose compares .env's sponsor with the Agent Identity's sponsors in the
+    directory, which is what the server trusts."""
+
+    @staticmethod
+    def _config(**fields: object) -> EntraBotConfig:
+        values: dict[str, object] = {
+            "agent_object_id": "agent-identity",
+            "agent_user_id": "agent-user",
+            "human_user_id": "u-1",
+            "human_user_mails": ["pat@contoso.com"],
+        }
+        values.update(fields)
+        return EntraBotConfig(**values)  # type: ignore[arg-type]
+
+    @staticmethod
+    def _sponsor(user_id: str, mail: str | None = None):
+        from entrabot.identity.sponsors import AgentIdentitySponsor
+
+        return AgentIdentitySponsor(user_id=user_id, user_principal_name=None, mail=mail)
+
+    def test_pass_when_env_names_a_directory_sponsor(self) -> None:
+        from entrabot.preflight import SPONSOR_CHECK_NAME, check_agent_sponsor
+
+        check = check_agent_sponsor(
+            self._config(), fetch=lambda config: [self._sponsor("u-1", "pat@contoso.com")]
+        )
+        assert (check.name, check.status) == (SPONSOR_CHECK_NAME, "pass")
+
+    def test_warn_when_env_names_someone_else(self) -> None:
+        from entrabot.preflight import check_agent_sponsor
+
+        check = check_agent_sponsor(
+            self._config(human_user_id="u-old", human_user_mails=["old@contoso.com"]),
+            fetch=lambda config: [self._sponsor("u-1", "pat@contoso.com")],
+        )
+        assert check.status == "warn" and "not among" in check.detail
+        assert check.remediation
+
+    def test_warn_on_the_id_alone_when_the_record_cannot_be_read(self) -> None:
+        from entrabot.preflight import check_agent_sponsor
+
+        check = check_agent_sponsor(
+            self._config(human_user_id="u-old"), fetch=lambda config: [self._sponsor("u-1")]
+        )
+        assert check.status == "warn" and "not among" in check.detail
+
+    def test_warn_when_the_sponsors_record_cannot_be_read(self) -> None:
+        from entrabot.preflight import check_agent_sponsor
+
+        check = check_agent_sponsor(self._config(), fetch=lambda config: [self._sponsor("u-1")])
+        assert check.status == "warn" and "cannot read" in check.detail
+
+    def test_warn_when_the_sponsors_cannot_be_listed(self) -> None:
+        from entrabot.preflight import check_agent_sponsor
+
+        def fail(config: EntraBotConfig) -> list:
+            raise RuntimeError("HTTP 403")
+
+        check = check_agent_sponsor(self._config(), fetch=fail)
+        assert check.status == "warn" and "could not read" in check.detail
+
+    def test_skip_without_an_agent_identity(self) -> None:
+        from entrabot.preflight import check_agent_sponsor
+
+        check = check_agent_sponsor(
+            self._config(agent_object_id=None), fetch=lambda config: []
+        )
+        assert check.status == "skip"

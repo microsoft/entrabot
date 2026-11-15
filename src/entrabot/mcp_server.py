@@ -820,6 +820,42 @@ async def _sponsor_addresses() -> frozenset[str]:
     return frozenset(gate.upns) | frozenset(gate.mails)
 
 
+async def _directory_sponsors() -> list | None:
+    """The Agent Identity's sponsors as the directory lists them, with their user records where
+    the agent can read them; None when the list can't be read (or in a delegated session)."""
+    if _identity and _identity.session.auth_mode == "delegated":
+        return None
+    from entrabot.identity.sponsors import fetch_agent_identity_sponsors
+
+    config = _state.get("config") or get_config()
+    try:
+        return await asyncio.to_thread(
+            fetch_agent_identity_sponsors, config, user_token_provider=acquire_agent_user_token
+        )
+    except Exception as exc:  # noqa: BLE001 - the caller falls back and says so
+        if logger:
+            logger.warning("Directory sponsors unreadable: %s", type(exc).__name__)
+        return None
+
+
+async def _daily_summary_recipients(config: EntraBotConfig) -> tuple[list[str], str]:
+    """Who gets the daily summary, and where that came from: every directory sponsor whose
+    record gives an address ("directory"); .env's first sponsor address only when the
+    directory gives none ("env"). The recipient policy still checks whichever it is."""
+    from entrabot.identity.sponsors import sponsor_addresses
+
+    sponsors = await _directory_sponsors()
+    addresses = sponsor_addresses(sponsors) if sponsors else []
+    if addresses:
+        return addresses, "directory"
+    if logger and config.human_user_mails:
+        logger.warning(
+            "Daily summary: no sponsor address from the directory; using .env's "
+            "ENTRABOT_HUMAN_USER_MAILS. Run the diagnose check to see why."
+        )
+    return list(config.human_user_mails[:1]), "env"
+
+
 async def _requesting_chat_members() -> frozenset[str]:
     """Addresses of the members of the chat the last pushed message came from, while that
     message is recent. Cached briefly; a lookup that fails gives none."""
@@ -2871,8 +2907,10 @@ async def _run_daily_summary_internal(*, day: str | None = None, send: bool = Tr
     archive_path = archive_summary(day=target_day, html=html, buckets=buckets)
 
     sent_to: list[str] = []
-    if send and config.human_user_mails:
-        recipients = [config.human_user_mails[0]]  # primary sponsor
+    recipients, recipient_source = (
+        await _daily_summary_recipients(config) if send else ([], "none")
+    )
+    if recipients:
         # The digest holds everyone's messages: its recipient passes the same policy.
         decisions = await _check_recipients(recipients)
         refused = [decision for decision in decisions if not decision.allowed]
@@ -2887,6 +2925,7 @@ async def _run_daily_summary_internal(*, day: str | None = None, send: bool = Tr
                 "day": target_day,
                 "archive_path": str(archive_path),
                 "sent_to": [],
+                "recipient_source": recipient_source,
                 "refused": [
                     {"address": decision.address, "reason": decision.reason}
                     for decision in refused
@@ -2920,6 +2959,7 @@ async def _run_daily_summary_internal(*, day: str | None = None, send: bool = Tr
         "counts": {k: len(v) for k, v in buckets.items()},
         "archive": str(archive_path),
         "sent_to": sent_to,
+        "recipient_source": recipient_source,
     }
 
 

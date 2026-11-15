@@ -192,6 +192,17 @@ class AgentIdentitySponsor:
             federated_emails=_merge_tuple(self.federated_emails, other.federated_emails),
         )
 
+    def address(self) -> str | None:
+        """The one address to write to: ``mail``, else a guest's home address decoded from its
+        ``#EXT#`` UPN, else the UPN. None when the user record could not be read (Graph's
+        sponsors relationship gives only the ID)."""
+        upn = self.user_principal_name
+        for value in (self.mail, _decode_b2b_ext_upn(upn), upn):
+            normalized = _normalize_email(value)
+            if normalized and "#ext#" not in normalized:
+                return normalized
+        return None
+
     def email_identifiers(self) -> frozenset[str]:
         decoded_upn = _decode_b2b_ext_upn(self.user_principal_name)
         values = [
@@ -205,6 +216,16 @@ class AgentIdentitySponsor:
         return frozenset(
             normalized for normalized in (_normalize_email(value) for value in values) if normalized
         )
+
+
+def sponsor_addresses(sponsors: list[AgentIdentitySponsor]) -> list[str]:
+    """One address per sponsor whose record gives one, in directory order, without repeats."""
+    addresses: list[str] = []
+    for sponsor in sponsors:
+        address = sponsor.address()
+        if address and address not in addresses:
+            addresses.append(address)
+    return addresses
 
 
 @dataclass(frozen=True)
