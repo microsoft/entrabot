@@ -64,7 +64,7 @@ from entrabot.errors import (
     WorkbookRangeTooLargeError,
 )
 from entrabot.tools.audit import log_event
-from entrabot.tools.rate_limit import RetryOn429Transport
+from entrabot.tools.rate_limit import RetryOn429Transport, proxied_async_transport
 from entrabot.tools.text_limits import DEFAULT_MAX_TEXT_BYTES, max_text_bytes, truncate_utf8
 from entrabot.tools.worksheet_names import (
     MAX_WORKBOOK_COLUMN,
@@ -487,7 +487,7 @@ def _build_upload_url(
 def _make_transport(*, allow_5xx_retry: bool = False) -> httpx.AsyncBaseTransport:
     """Wrap a plain httpx transport with the rate-limit retry layer."""
     return RetryOn429Transport(
-        wrapped=httpx.AsyncHTTPTransport(),
+        wrapped=proxied_async_transport(),
         allow_5xx_retry=allow_5xx_retry,
     )
 

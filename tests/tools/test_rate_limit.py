@@ -266,3 +266,47 @@ class TestAllow5xxRetry:
         async with httpx.AsyncClient(transport=transport) as client:
             resp = await client.get("https://graph.microsoft.com/v1.0/me")
         assert resp.status_code == 200
+
+
+class TestProxiedAsyncTransport:
+    """An explicit httpx transport ignores HTTPS_PROXY. Inside the sandbox the launcher's
+    allowlisting proxy is the only way out, so the Graph transport must be given it."""
+
+    def test_contained_server_uses_the_launchers_proxy(self, monkeypatch) -> None:
+        import httpcore
+
+        from entrabot.tools.rate_limit import proxied_async_transport
+
+        monkeypatch.setenv("ENTRABOT_CONTAINED", "seatbelt")
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:41234")
+        transport = proxied_async_transport()
+        assert isinstance(transport._pool, httpcore.AsyncHTTPProxy)
+
+    def test_uncontained_server_is_unchanged(self, monkeypatch) -> None:
+        import httpcore
+
+        from entrabot.tools.rate_limit import proxied_async_transport
+
+        monkeypatch.setenv("ENTRABOT_CONTAINED", "none")
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:41234")
+        transport = proxied_async_transport()
+        assert not isinstance(transport._pool, httpcore.AsyncHTTPProxy)
+        monkeypatch.delenv("ENTRABOT_CONTAINED")
+        assert not isinstance(proxied_async_transport()._pool, httpcore.AsyncHTTPProxy)
+
+    def test_no_graph_call_builds_a_bare_transport(self) -> None:
+        # A bare httpx.AsyncHTTPTransport() bypasses the proxy and fails inside the sandbox
+        # (measured: list_recent_files failed with a DNS error in a contained server run).
+        from pathlib import Path
+
+        src = Path(__file__).resolve().parents[2] / "src" / "entrabot"
+        offenders = [
+            str(path.relative_to(src))
+            for path in src.rglob("*.py")
+            if path.name != "rate_limit.py"
+            and (
+                "httpx.AsyncHTTPTransport(" in path.read_text(encoding="utf-8")
+                or "httpx.HTTPTransport(" in path.read_text(encoding="utf-8")
+            )
+        ]
+        assert offenders == []
