@@ -1,16 +1,24 @@
 # Changelog
 
-## v0.2 — draft, not tagged
+## Unreleased
 
-Everything since v0.1. Before tagging, see "Cutting v0.2" at the end of this section.
+Nothing yet.
+
+## 0.2.0 — 2026-11-14 (date to confirm on release)
+
+Everything since v0.1. Process containment of the MCP server is not in this release; it is
+planned for 0.3.0. What this release was checked against is in
+`docs/project/verification.md`; how it is cut is in `RELEASING.md`.
 
 ### Added
 
-- Agent 365 telemetry through Microsoft's OpenTelemetry Distro (`microsoft-opentelemetry`): PR #122's harness spans, and now spans from the MCP server too (an inbound Teams message or email starts an `invoke_agent` run, each tool call is an `execute_tool` span; content suppressed). Opt-in in the setup wizard (`--configure-a365-observability`, `-ConfigureA365Observability`): setup grants the delegated `Agent365.Observability.OtelWrite` permission, checks the agent's token, then switches export on. `--diagnose` reports it and Microsoft's E7/Agent 365 licence condition. Verified with the distro's console exporter only.
+- Agent 365 telemetry through Microsoft's OpenTelemetry Distro (`microsoft-opentelemetry`): PR #122's harness spans, and now spans from the MCP server too (an inbound Teams message or email starts an `invoke_agent` run, each tool call is an `execute_tool` span; content suppressed). Opt-in in the setup wizard (`--configure-a365-observability`, `-ConfigureA365Observability`): setup grants the delegated `Agent365.Observability.OtelWrite` permission, checks the agent's token, then switches export on. `--diagnose` reports it and Microsoft's E7/Agent 365 licence condition. Run for real against a licensed tenant, on a build that also had the sandbox (see the verification record): Agent 365 accepted every span, with content suppressed.
 - The Copilot SDK harness (`entrabot` command, `src/entrabot/harness/`), from PR #122 by Jacob Lyons and Rick Rybinski, merged with every original commit.
 - `scripts/register_agent_instance.py`: opt-in registration in the Agent 365 registry (Agent Registry API, Graph beta), dry run by default. Not run against a tenant.
 - Outbound recipient policy (`entrabot.security.recipients`), enforced in the server for `send_email`, `create_chat`, `add_teams_member`, `share_file` and the daily summary; `ENTRABOT_OUTBOUND_ALLOW` and `ENTRABOT_HOME_DOMAINS`.
-- Process containment for the MCP server by default on macOS (Seatbelt) and Linux (bubblewrap), or MXC 1.0.x when installed, behind an allowlisting proxy (`entrabot.sandbox`); `ENTRABOT_CONTAINMENT`, `ENTRABOT_SANDBOX_EXTRA_HOSTS`, `ENTRABOT_SANDBOX_EXTRA_READ`; `python -m entrabot.sandbox.selftest`. Reported by `./status.sh`, `--diagnose` and `whoami`.
+- Releases: tags `vX.Y.Z` with a GitHub Release, the latest one being the production version; `main` is development, and trial versions are pre-releases (`vX.Y.Z-rc.N`). `RELEASING.md` has the steps.
+- The agent reports its version: `whoami` (`version`), and an "Entrabot version" check first in `--diagnose` and the status report (`version` in `--json`), which warns, without failing, when the folder is not on a release tag.
+- An "Agent sponsor" check in `--diagnose`: it warns when `.env` names a sponsor who is not among the Agent Identity's sponsors in the directory (which is what the server trusts), and when the agent cannot read a sponsor's user record.
 - `ENTRABOT_TOKEN_MAX_AGE_SECONDS` (default 600): the server re-acquires its token this often, bounding how long a disabled agent keeps acting.
 - Rename-safe agent matching through canonical `ENTRABOT_AGENT_UPN` with object-ID fallback.
 - Boundary-owned XPIA envelopes for model-facing Teams, email, Files, and Work IQ content.
@@ -35,7 +43,9 @@ Everything since v0.1. Before tagging, see "Cutting v0.2" at the end of this sec
 
 ### Changed
 
-- **Breaking:** on macOS and Linux `entrabot-mcp` runs the server inside an OS sandbox by default. Set `ENTRABOT_CONTAINMENT=off` to restore the old behaviour.
+- The install commands clone the latest release (`git clone --branch v0.2.0 ...`) instead of `main`, and the ZIP download is the release's. "Upgrading to a new release" in Migrations and upgrades has the steps for an existing install (`git fetch --tags`, `git checkout vX.Y.Z`, setup again).
+- The daily summary goes to every directory sponsor of the Agent Identity whose user record gives an address, instead of `.env`'s `ENTRABOT_HUMAN_USER_MAILS`; `.env` is used only when the directory gives no address. The recipient policy still applies, and the result says which source was used (`recipient_source`).
+- With telemetry on, Entrabot switches off the OpenTelemetry Distro's own calls to Azure Monitor (its usage statistics to Application Insights and its settings lookup at `settings.sdk.monitor.azure.com`) by setting `MICROSOFT_OTEL_SDKSTATS_DISABLED`, `APPLICATIONINSIGHTS_STATSBEAT_DISABLED_ALL` and `APPLICATIONINSIGHTS_CONTROLPLANE_DISABLED` to `true` unless they are already set. Entrabot never switches on the distro's Azure Monitor export.
 - **Breaking:** `share_file` and `add_teams_member` no longer reach an address outside the agent's tenant unless it is a sponsor, a member of the requesting chat, or in `ENTRABOT_OUTBOUND_ALLOW`; `send_email` and `create_chat` likewise, and the daily summary is not sent to such an address.
 - `send_teams_message`, `send_card`, `post_thinking_placeholder` and `create_chat` write their audit event before acting and refuse when it cannot be written. Every audit event is fsynced and carries `origin` (`system`, or `model` for `audit_log`).
 - The runtime's `.env` loading is layered for the harness (`~/.entrabot/global.env`, `ENTRABOT_ENV_FILE`, the clone's `.env`, `~/.entrabot/.env`, `./.entrabot/.env`); with a clone `.env` and no `global.env` it behaves as before.
@@ -85,7 +95,7 @@ Everything since v0.1. Before tagging, see "Cutting v0.2" at the end of this sec
 
 - `read_file` didn't follow Graph's redirect to a file's download URL, so a `.txt`, `.md` or `.html` file read back empty and PDF and Word files failed. Found in a real end-to-end run.
 - With console telemetry on (`ENTRABOT_A365_CONSOLE_ENABLED`), spans were printed to standard output, the MCP protocol channel. They now go to standard error.
-- Inside the sandbox, Teams, mail and Files calls bypassed the proxy and failed; and on macOS the sandbox let the server read outside the home directory (other users' folders, other volumes). Both found by running the full server contained.
+- Setup's consent step extended the first delegated grant it found on the Agent Identity, which could be another resource's (Azure Storage for cloud memory, a customer's own API), instead of the Microsoft Graph grant. Graph was then left without the agent's scopes, so its token lacked `User.ReadBasic.All` and the others and the sponsor lookup got 403. Run setup again on an install set up before this fix (`--diagnose`'s "Agent sponsor" check shows it).
 - `./scripts/setup.sh` and `./scripts/teardown.sh` take an option's value after a space as well as after `=` (`--log-file /tmp/setup.log`). On a real macOS run the space form was refused as an unknown option, although the help lists the option. An option left without its value is a usage error (exit `2`).
 - Setup, the health check, rotation, teardown and status stop before anything when the code they run is one copy of the project and `--project-root` names another copy (exit `2`). The runtime reads `.env` from the folder its code is in, so the two silently disagreed: a health check of a folder that was set up said "Agent User credentials not configured". The message names both folders and how to run it from the right one. A `.venv` whose editable install was re-pointed at a git worktree is caught the same way.
 - Teardown keeps this computer's setup (Provisioner) certificate when the same agent has another certificate in this account's key store, as it does when it is set up in a second folder on the computer (every platform). On a real Linux run, disconnecting one of two folders retired the setup certificate, and the other folder's `./status.sh` stopped with "Provisioner certificate private key is missing locally" until setup was run there again. The report says why it was kept and how to remove it by hand.
@@ -163,15 +173,6 @@ Everything since v0.1. Before tagging, see "Cutting v0.2" at the end of this sec
 - The tenant-wide `teardown.sh` no longer runs `.env` as shell code. It sourced the file, so a value holding `$(...)`, backticks or `;` ran as a command; it now reads the four IDs it needs as data, the way `entrabot.config` reads `.env`, and stops (exit `1`) if `.env` is there but can't be read. It deletes an Agent User only by its object ID (`az ad user delete --id` also takes a sign-in name).
 - The tenant-wide `teardown.sh` no longer puts the Provisioner access token on a command line. It was written into the text of a `python -c` program, where any local user could read it from the process list; each Graph delete now gets it in the environment of that one command, and it is not exported to anything else. Object IDs, keys and paths reach Python as arguments, never as program text.
 - The tenant-wide `teardown.sh` (now `--tenant-wide` or one of its own flags) deletes only the Provisioner app recorded for this machine in `.entrabot-state.json`, by its application ID. It used to delete the first app registration whose name began with 'EntraBot Provisioner' and the first whose name began with 'EntraBot Agent ID Provisioner', which could be somebody else's. With no application ID recorded it deletes no app and prints how to delete this machine's by hand.
-
-### Cutting v0.2
-
-What the owner has to do; nothing here has been done:
-
-1. Merge the pull requests: Agent 365 telemetry (`feat/a365-telemetry`, #154), outbound controls (`feat/outbound-audit`, #155), containment (`feat/containment`, stacked on telemetry) and these docs (`docs/v0.2`, last).
-2. Still to run for real: the Linux bubblewrap path on Ubuntu; check that the agent's telemetry (accepted by Agent 365 in the macOS run) shows in Defender and the admin center; optionally `register_agent_instance.py --apply`. The macOS end-to-end run is recorded in `docs/project/verification.md`.
-3. Bump `version` in `pyproject.toml` from `0.1` to `0.2`, retitle this section with the date, and update the GitHub issues (#136 for telemetry and registration) per `AGENTS.md`.
-4. Tag `v0.2` on `main` and publish a GitHub release with this section as its notes.
 
 ## v0.1 — 2026-05-21
 
