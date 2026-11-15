@@ -6,7 +6,7 @@ Derived from configuration and from what the code calls, never from the model:
   ``ENTRABOT_SANDBOX_EXTRA_READ``, ``:``-separated);
 - read-write: Entrabot's own state (``~/.entrabot`` and any moved log, audit or data
   directory) and the delegated sign-in cache; the temp directory is inside the state;
-- nothing else under the home directory;
+- nothing else under the home directory (on macOS, nor under ``/Users`` or ``/Volumes``);
 - network: only these hosts, on 443, through the launcher's allowlisting proxy:
   ``login.microsoftonline.com`` (sign-in, tenant discovery), ``graph.microsoft.com``,
   ``agent365.svc.cloud.microsoft`` (Work IQ and Agent 365 telemetry), ``*.sharepoint.com``

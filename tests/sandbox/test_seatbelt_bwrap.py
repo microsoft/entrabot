@@ -17,7 +17,9 @@ def _policy(tmp_path: Path) -> ContainmentPolicy:
     home = tmp_path / "home"
     return ContainmentPolicy(
         home=home,
-        read_only=(tmp_path / "repo", tmp_path / "repo" / ".venv"),
+        # The running interpreter's environment, as the real policy has it: the enforcement
+        # tests start it inside the sandbox, and it may sit on /Volumes.
+        read_only=(tmp_path / "repo", tmp_path / "repo" / ".venv", Path(sys.prefix)),
         read_write=(home / ".entrabot", home / "Library" / "Caches" / "entrabot"),
         temp_dir=home / ".entrabot" / "tmp",
         allowed_hosts=("graph.microsoft.com",),
@@ -46,6 +48,26 @@ class TestSeatbeltProfile:
         assert os.path.realpath(tmp_path / "repo") not in allow_write
         assert os.path.realpath(tmp_path / "home" / ".entrabot") in allow_write
         assert f"{home}/Library/Keychains" in text  # the key store's client-side file
+
+    def test_reads_are_also_denied_under_users_and_volumes(self, tmp_path: Path) -> None:
+        # Other volumes (an external disk, a second data volume holding other projects) and
+        # other users' folders are outside the home directory but just as private.
+        text = seatbelt.profile(_policy(tmp_path), proxy_port=1)
+        for root in ("/Users", "/Volumes"):
+            deny = text.index(f'(deny file-read* (subpath "{os.path.realpath(root)}"))')
+            assert deny < text.index("(allow file-read* ")
+
+    def test_parents_of_allowed_paths_can_be_looked_at_but_not_listed(
+        self, tmp_path: Path
+    ) -> None:
+        text = seatbelt.profile(_policy(tmp_path), proxy_port=1)
+        repo = Path(os.path.realpath(tmp_path / "repo"))
+        for parent in repo.parents:
+            assert f'(literal "{parent}")' in text
+        metadata = next(
+            line for line in text.splitlines() if line.startswith("(allow file-read-metadata")
+        )
+        assert "subpath" not in metadata
 
     def test_paths_are_quoted(self, tmp_path: Path) -> None:
         policy = _policy(tmp_path)
@@ -98,6 +120,39 @@ class TestSeatbeltProfile:
             timeout=30,
         )
         assert result.stdout.split() == ["deny", "ok", "ok", "deny", "deny"], result.stderr
+
+    @pytest.mark.skipif(not Path("/usr/bin/sandbox-exec").exists(), reason="macOS only")
+    def test_a_hidden_root_outside_home_is_enforced(self, tmp_path: Path) -> None:
+        policy = _policy(tmp_path)
+        for path in (*policy.read_only, *policy.read_write):
+            path.mkdir(parents=True, exist_ok=True)
+        other = tmp_path / "other-volume"
+        other.mkdir()
+        (other / "private.txt").write_text("private")
+        (tmp_path / "repo" / "code.py").write_text("x")
+        profile = tmp_path / "p.sb"
+        profile.write_text(
+            seatbelt.profile(policy, proxy_port=9, hidden_roots=(policy.home, other))
+        )
+        probe = (
+            "import os,sys\n"
+            "other,repo=sys.argv[1:3]\n"
+            "def t(f):\n"
+            "  try: f(); return 'ok'\n"
+            "  except Exception: return 'deny'\n"
+            "print(t(lambda: open(other+'/private.txt').read()), t(lambda: os.listdir(other)),"
+            " t(lambda: open(repo+'/code.py').read()), t(lambda: os.path.realpath(repo)))\n"
+        )
+        result = subprocess.run(
+            seatbelt.command(
+                profile,
+                [sys.executable, "-I", "-c", probe, str(other), str(tmp_path / "repo")],
+            ),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.stdout.split() == ["deny", "deny", "ok", "ok"], result.stderr
 
 
 class TestBwrapCommand:
