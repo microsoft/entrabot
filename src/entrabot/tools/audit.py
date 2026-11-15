@@ -1,14 +1,20 @@
 """Audit event logging.
 
-Every agent action that touches a resource emits an audit event
-BEFORE the action proceeds. Events are appended to daily JSONL files
-under ``~/.entrabot/audit/``.
+Every agent action that sends, creates, shares or deletes emits an audit event
+BEFORE the action proceeds, and the action does not proceed when the write fails.
+Events are appended to daily JSONL files under ``~/.entrabot/audit/`` and flushed to
+disk (``fsync``) before :func:`log_event` returns.
+
+Each event says who wrote it: ``origin`` is ``"system"`` for events the server writes
+around an action, and ``"model"`` for events the model wrote through the ``audit_log``
+tool, which are its own claims and must not be read as the server's record.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,6 +38,7 @@ def log_event(
     agent_id: str | None = None,
     metadata: dict | None = None,
     attribution_type: str = "agent",
+    origin: str = "system",
 ) -> dict:
     """Write an audit event and return it as a dict.
 
@@ -104,12 +111,16 @@ def log_event(
         "resource": resource,
         "outcome": outcome,
         "attribution_type": attribution_type,
+        "origin": origin,
         "metadata": metadata or {},
     }
 
     audit_file = _audit_dir() / f"{datetime.now(UTC).strftime('%Y-%m-%d')}.jsonl"
-    with open(audit_file, "a") as fh:
+    # On disk before the caller acts: a crash right after cannot lose the record.
+    with open(audit_file, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(event) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
 
     logger.info(
         "audit: %s %s → %s",
