@@ -26,7 +26,7 @@ Setup builds `.venv`, then asks a few questions (each has a suggested answer), s
 
 Use `--agent-user-upn=<existing-upn>` or `--with-upn-suffix=<label>` when the Blueprint has multiple Agent Users and auto-discovery would be ambiguous. Run `./scripts/setup.sh --help` for every option.
 
-The agent's signing key is kept in your login keychain on a Mac, or a Secret Service keyring on Linux; setup checks that it can use it before it changes anything. The wizard on macOS and Linux has not yet been run end to end against a real tenant. See [macOS and Linux installation](macos-linux.md) for what setup asks, what it installs, and its limits.
+The agent's signing key is kept in your login keychain on a Mac, or a Secret Service keyring on Linux; setup checks that it can use it before it changes anything. On Ubuntu 24.04 the wizard has been run end to end against a real tenant; on macOS only a repair run and the health check have. See [macOS and Linux installation](macos-linux.md) for what setup asks, what it installs, and its limits.
 
 ## Windows
 

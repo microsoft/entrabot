@@ -48,6 +48,20 @@ See [Configuration guide § Sponsor / human owner](../guides/configuration.md#sp
 
 See [Configuration guide § Runtime mode and behavior](../guides/configuration.md#runtime-mode-and-behavior).
 
+## Outbound policy, containment and telemetry
+
+| Variable | Default / required |
+|---|---|
+| `ENTRABOT_OUTBOUND_ALLOW` | Unset. Comma-separated addresses, or domains (`fabrikam.com` or `@fabrikam.com`), the agent may reach besides its sponsors, the requesting chat's members and its own tenant. See [Security Boundaries § Outbound recipient policy](../architecture/security-boundaries.md#outbound-recipient-policy). |
+| `ENTRABOT_HOME_DOMAINS` | Unset. More domains counted as the agent's own tenant, besides the Agent User's domain and domains that resolve to its tenant ID. |
+| `ENTRABOT_TOKEN_MAX_AGE_SECONDS` | `600`. How long the server reuses an access token before asking again (60 to 3300). Bounds how long a disabled agent keeps acting. |
+| `ENTRABOT_CONTAINMENT` | `auto` (contain on macOS and Linux when a sandbox is available). `required`, `off`, `seatbelt`, `bwrap`, `mxc`. See [Security Boundaries § Process containment](../architecture/security-boundaries.md#process-containment). |
+| `ENTRABOT_SANDBOX_EXTRA_HOSTS` | Unset. More hosts the contained server may reach on 443 (`*.example.com` covers subdomains). |
+| `ENTRABOT_SANDBOX_EXTRA_READ` | Unset. More read-only paths for the contained server, `:`-separated. |
+| `ENTRABOT_MXC_EXECUTOR` / `ENTRABOT_MXC_SHA256` | Unset. The MXC executor to use instead of the one on `PATH`, and the SHA-256 it must have. |
+| `ENTRABOT_A365_OBSERVABILITY_ENABLED` / `ENTRABOT_A365_EXPORT_ENABLED` | `false`. Agent 365 telemetry and its export; setup writes both once the agent's token carries `Agent365.Observability.OtelWrite`. See [Telemetry and the Agent 365 registry](../platform-docs/microsoft-agent-365.md#telemetry-and-the-agent-365-registry). |
+| `ENTRABOT_A365_CONSOLE_ENABLED` / `ENTRABOT_A365_SERVICE_NAMESPACE` | `false` / unset. Print spans to the console; the `service.namespace` resource attribute. |
+
 ## Local paths
 
 | Variable | Default / required |
