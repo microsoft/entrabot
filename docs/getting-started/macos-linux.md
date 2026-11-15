@@ -112,6 +112,8 @@ Every question can be answered with a flag. At a terminal, a command with flags 
 ./scripts/setup.sh --diagnose
 ```
 
+With local memory, two computers running the same agent at the same time both answer every Teams message and email. Use cloud memory for that, or run the agent on one computer at a time. See [One agent on more than one computer](../guides/storage-configuration.md#one-agent-on-more-than-one-computer-with-local-memory).
+
 A flag that takes a value is written with `=`: `--use-blueprint=APP_ID`, not `--use-blueprint APP_ID`.
 
 | Flag | Answers |
