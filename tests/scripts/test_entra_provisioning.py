@@ -1629,6 +1629,11 @@ class _Consent:
         self.record_lag = 0
         self._pending: set[str] = set()
         self._lag = 0
+        # A takeover run's one targeted app role assignment (Graph appRoleAssignedTo).
+        self.assignments: list[dict[str, Any]] = []
+        self.assign_error = ""
+        self.unrecorded_assignments = 0
+        monkeypatch.setattr(module, "_graph_service_principal_id", lambda: GRAPH_SP)
         self.add_error = ""
         self.delete_error = ""
         self.calls: list[list[str]] = []
@@ -1675,6 +1680,26 @@ class _Consent:
                 return 1, "", self.delete_error
             self.declared.discard(args[-1])
             return 0, "", ""
+        if args == ["ad", "sp", "show", "--id", APP, "--query", "id", "-o", "json"]:
+            return 0, json.dumps(SETUP_SP), ""
+        if args[:3] == ["rest", "--method", "POST"]:
+            body = args[args.index("--body") + 1]
+            assert body.startswith("@")  # from a file: JSON on az.cmd's command line breaks
+            self.assignments.append(
+                {
+                    "url": args[args.index("--url") + 1],
+                    "body": json.loads(Path(body[1:]).read_text(encoding="utf-8")),
+                    "file": body[1:],
+                }
+            )
+            if self.assign_error:
+                return 1, "", self.assign_error
+            if self.unrecorded_assignments:
+                self.unrecorded_assignments -= 1
+                return 0, "{}", ""
+            self._pending.add(self.assignments[-1]["body"]["appRoleId"])
+            self._lag = self.record_lag
+            return 0, "{}", ""
         raise AssertionError(f"unexpected az call: {args}")
 
     def verbs(self) -> list[str]:
@@ -1682,6 +1707,8 @@ class _Consent:
 
 
 REGISTRY_VALUE = "AgentRegistration.ReadWrite.All"
+GRAPH_SP = "99999999-0000-0000-0000-000000000003"
+SETUP_SP = "cccccccc-0000-0000-0000-000000000001"
 
 
 def test_the_registry_permission_is_the_one_registration_needs(provisioning_module) -> None:
@@ -1734,15 +1761,104 @@ def test_one_declared_but_not_consented_is_only_consented(
     assert az.verbs() == ["admin-consent"]
 
 
-def test_an_app_taken_over_on_approval_is_given_nothing(
+# A takeover run (an app an administrator already approved) never runs admin consent, which
+# grants everything the app declares. It grants this one role on its own instead.
+
+
+def _takeover(provisioning_module: Any) -> dict[str, str]:
+    return provisioning_module._ensure_optional_permission(APP, REGISTRY_VALUE, may_consent=False)
+
+
+def test_a_takeover_run_grants_the_one_role_and_nothing_else(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    az = _Consent(provisioning_module, monkeypatch)
+    outcome = _takeover(provisioning_module)
+    assert outcome == {"permission": REGISTRY_VALUE, "status": "granted", "reason": ""}
+    assert "admin-consent" not in az.verbs()
+    assert az.calls[0][:4] == ["ad", "app", "permission", "add"]
+    assert az.calls[0][-1] == f"{REGISTRY_ROLE}=Role"
+    (assignment,) = az.assignments
+    assert assignment["url"] == (
+        f"https://graph.microsoft.com/v1.0/servicePrincipals/{GRAPH_SP}/appRoleAssignedTo"
+    )
+    assert assignment["body"] == {
+        "principalId": SETUP_SP,
+        "resourceId": GRAPH_SP,
+        "appRoleId": REGISTRY_ROLE,
+    }
+    assert not Path(assignment["file"]).exists()  # the body file is deleted afterwards
+    assert az.sleeps == []
+    assert az.consented == {REGISTRY_ROLE}
+    out = capsys.readouterr().out
+    assert f"Granted {REGISTRY_VALUE} to the provisioner app" in out
+    assert "nothing else" in out
+
+
+def test_a_takeover_run_finds_the_role_already_held(
     provisioning_module, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     az = _Consent(provisioning_module, monkeypatch)
-    outcome = provisioning_module._ensure_optional_permission(
-        APP, REGISTRY_VALUE, may_consent=False
-    )
-    assert outcome["status"] == "skipped" and "run setup again" in outcome["reason"]
+    az.declared = az.consented = {REGISTRY_ROLE}
+    assert _takeover(provisioning_module)["status"] == "present"
     assert az.calls == []
+
+
+def test_a_takeover_run_takes_already_assigned_as_granted(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    az = _Consent(provisioning_module, monkeypatch)
+    az.declared = {REGISTRY_ROLE}
+    az._pending, az._lag = {REGISTRY_ROLE}, 1  # assigned, but not visible to the first look
+    az.assign_error = (
+        "Bad Request({'error': {'code': 'Request_BadRequest', 'message': "
+        "'Permission being assigned already exists on the object'}})"
+    )
+    assert _takeover(provisioning_module)["status"] == "granted"
+    assert "admin-consent" not in az.verbs()
+    assert len(az.assignments) == 1
+
+
+def test_a_takeover_run_without_the_role_takes_the_declaration_back(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    az = _Consent(provisioning_module, monkeypatch)
+    az.assign_error = (
+        "Forbidden({'error': {'code': 'Authorization_RequestDenied', 'message': "
+        "'Insufficient privileges to complete the operation.'}})"
+    )
+    outcome = _takeover(provisioning_module)
+    assert outcome["status"] == "failed"
+    assert "needs the Global Administrator or Privileged Role Administrator role" in (
+        outcome["reason"]
+    )
+    assert "admin-consent" not in az.verbs()
+    assert az.calls[-1][:4] == ["ad", "app", "permission", "delete"]
+    assert az.declared == set() and az.sleeps == []
+    assert len(az.assignments) == 1  # not retried: it will not start working
+
+
+def test_a_takeover_grant_never_recorded_fails(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    az = _Consent(provisioning_module, monkeypatch)
+    az.unrecorded_assignments = 1
+    outcome = _takeover(provisioning_module)
+    assert outcome["status"] == "failed"
+    assert "had still not recorded it on the setup app" in outcome["reason"]
+    assert "admin-consent" not in az.verbs()
+    assert az.declared == set()
+    assert az.sleeps == [2, 5, 10]
+    assert len(az.assignments) == 1
+
+
+def test_a_takeover_grant_recorded_a_moment_later_is_waited_for(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    az = _Consent(provisioning_module, monkeypatch)
+    az.record_lag = 1
+    assert _takeover(provisioning_module)["status"] == "granted"
+    assert az.sleeps == [2]
 
 
 def test_an_account_that_cannot_consent_takes_the_declaration_back(

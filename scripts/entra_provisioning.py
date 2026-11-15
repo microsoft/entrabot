@@ -61,6 +61,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1346,6 +1347,60 @@ def optional_permission_values() -> list[str]:
 # minutes.
 _OPTIONAL_CONSENT_WAITS = (5, 10, 15, 20, 30, 30)
 
+# A takeover run grants an optional permission with one app role assignment instead (see
+# _assign_graph_role), which Microsoft recorded within a second or two live. Look at once,
+# then after each of these pauses.
+_ASSIGNMENT_RECORD_WAITS = (2, 5, 10)
+
+# What Graph says when the app role assignment is already there: that is success.
+_ASSIGNMENT_EXISTS = "permission being assigned already exists on the object"
+
+
+def _assign_graph_role(client_id: str, role_id: str) -> tuple[int, str]:
+    """Grant exactly one Microsoft Graph application permission (*role_id*) to the app's
+    service principal, through the signed-in administrator's az: an app role assignment
+    (``POST /servicePrincipals/{Graph}/appRoleAssignedTo``), not admin consent, which grants
+    everything the app declares. Returns (az's exit code, its error); an assignment that
+    already exists counts as done.
+
+    The body goes in a file (``--body @file``): JSON on the command line doesn't survive
+    az.cmd on Windows. Nothing here uses a --query with parentheses, for the same reason.
+    """
+    rc, out, err = run_az(["ad", "sp", "show", "--id", client_id, "--query", "id", "-o", "json"])
+    principal_id = _az_scalar(out) if rc == 0 else ""
+    if not principal_id:
+        return (rc or 1), err or "the setup app's service principal could not be read"
+    try:
+        graph_id = _graph_service_principal_id()
+    except ProvisionerBootstrapError as exc:
+        return 1, f"Microsoft Graph's service principal could not be read ({exc})"
+    body = {"principalId": principal_id, "resourceId": graph_id, "appRoleId": role_id}
+    with tempfile.NamedTemporaryFile(
+        suffix=".json", mode="w", delete=False, encoding="utf-8"
+    ) as tf:
+        json.dump(body, tf)
+        body_path = tf.name
+    try:
+        rc, _, err = run_az(
+            [
+                "rest",
+                "--method",
+                "POST",
+                "--url",
+                f"https://graph.microsoft.com/v1.0/servicePrincipals/{graph_id}/appRoleAssignedTo",
+                "--headers",
+                "Content-Type=application/json",
+                "--body",
+                f"@{body_path}",
+            ]
+        )
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(body_path)
+    if rc != 0 and _ASSIGNMENT_EXISTS in (err or "").lower():
+        return 0, ""
+    return rc, err
+
 
 def _ensure_optional_permission(client_id: str, value: str, *, may_consent: bool) -> dict[str, str]:
     """Add the Microsoft Graph application permission *value* to the Provisioner app and
@@ -1358,8 +1413,10 @@ def _ensure_optional_permission(client_id: str, value: str, *, may_consent: bool
     * ``present``: an administrator has already consented to it;
     * ``granted``: added (if it was not declared) and consented in this run, and the consent
       is recorded on the app's service principal (az answering 0 is not taken as proof);
-    * ``skipped``: not consented, because this run consents nothing for this app (it was
-      taken over on an administrator's approval; see _confirm_already_approved);
+    * on an app taken over on an administrator's approval (*may_consent* False; see
+      _confirm_already_approved), this run never runs admin consent, which would grant
+      everything the app declares: it grants this one permission on its own with an app
+      role assignment (:func:`_assign_graph_role`), and ``granted`` means that, recorded;
     * ``failed``: it could not be added or consented. A declaration this run added is taken
       back, so no later admin consent grants it by surprise.
     """
@@ -1379,12 +1436,6 @@ def _ensure_optional_permission(client_id: str, value: str, *, may_consent: bool
     if role in {item.lower() for item in _get_consented_graph_role_ids(client_id)}:
         print(f"  Provisioner app already holds {value} (admin-consented)")
         return result("present")
-    if not may_consent:
-        return result(
-            "skipped",
-            "setup took over an existing Provisioner app that an administrator had already "
-            "approved, and consents nothing for it in this run; run setup again to add it",
-        )
     try:
         declared = {item.lower() for item in _get_existing_permission_role_ids(client_id)}
     except ProvisionerBootstrapError as exc:
@@ -1411,6 +1462,12 @@ def _ensure_optional_permission(client_id: str, value: str, *, may_consent: bool
 
     def recorded() -> bool:
         return role in {item.lower() for item in _get_consented_graph_role_ids(client_id)}
+
+    if not may_consent:
+        reason = _grant_one_role(client_id, value, str(role_id), recorded)
+        if not reason:
+            return result("granted")
+        return result("failed", _take_back(client_id, str(role_id), added, reason))
 
     print(f"  Granting admin consent for {value} on the provisioner app...")
     rc, err = 1, ""
@@ -1449,25 +1506,63 @@ def _ensure_optional_permission(client_id: str, value: str, *, may_consent: bool
         reason = f"admin consent for it needs the {_CONSENT_ROLES} role"
     else:
         reason = f"admin consent for it failed: {_az_error(err, rc)}"
-    if added:
-        back, _, back_err = run_az(
-            [
-                "ad",
-                "app",
-                "permission",
-                "delete",
-                "--id",
-                client_id,
-                "--api",
-                MS_GRAPH_API_ID,
-                "--api-permissions",
-                str(role_id),
-            ]
+    return result("failed", _take_back(client_id, str(role_id), added, reason))
+
+
+def _take_back(client_id: str, role_id: str, added: bool, reason: str) -> str:
+    """Take back a declaration this run *added* for an optional permission it could not
+    grant, so no later admin consent grants it by surprise. Returns *reason*, with what
+    went wrong if the declaration stays."""
+    if not added:
+        return reason
+    back, _, back_err = run_az(
+        [
+            "ad",
+            "app",
+            "permission",
+            "delete",
+            "--id",
+            client_id,
+            "--api",
+            MS_GRAPH_API_ID,
+            "--api-permissions",
+            role_id,
+        ]
+    )
+    if back != 0:
+        still = _az_error(back_err, back)
+        reason += f"; it stays declared on the setup app without consent ({still})"
+    return reason
+
+
+def _grant_one_role(client_id: str, value: str, role_id: str, recorded: Callable[[], bool]) -> str:
+    """A takeover run's grant of one optional permission: one app role assignment, then
+    a short look for it on the setup app. Returns "" once it shows, else why it failed."""
+    print(
+        f"  Granting {value} to the provisioner app on its own (this run approves nothing "
+        "else for the app it took over)..."
+    )
+    rc, err = _assign_graph_role(client_id, role_id)
+    if rc != 0:
+        if _is_missing_privilege(err):
+            return f"granting it needs the {_CONSENT_ROLES} role"
+        return f"it could not be granted to the setup app: {_az_error(err, rc)}"
+    if recorded():
+        print(f"  Granted {value} to the provisioner app")
+        return ""
+    for wait in _ASSIGNMENT_RECORD_WAITS:
+        print(
+            f"  Microsoft has not recorded {value} on the setup app yet; checking again "
+            f"in {wait}s..."
         )
-        if back != 0:
-            still = _az_error(back_err, back)
-            reason += f"; it stays declared on the setup app without consent ({still})"
-    return result("failed", reason)
+        time.sleep(wait)
+        if recorded():
+            print(f"  Granted {value} to the provisioner app")
+            return ""
+    return (
+        "Microsoft accepted the grant, but had still not recorded it on the setup app after "
+        "about 20 seconds; run setup again to try once more"
+    )
 
 
 # ---------------------------------------------------------------------------

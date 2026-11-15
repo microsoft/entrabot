@@ -61,8 +61,9 @@ __all__ = [
 class Permission:
     """What the bootstrap did about ``AgentRegistration.ReadWrite.All`` in this run.
 
-    ``status``: ``granted`` (in this run), ``present`` (already), ``skipped`` (the run
-    consents nothing for this app), ``failed``, or ``unknown`` (no line was printed)."""
+    ``status``: ``granted`` (in this run; on an app setup took over, by granting this one
+    permission on its own), ``present`` (already), ``failed``, or ``unknown`` (no line was
+    printed). ``skipped`` came from older bootstraps, which gave a taken-over app nothing."""
 
     status: str
     reason: str = ""
