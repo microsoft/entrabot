@@ -38,7 +38,8 @@ on, is what 0.2.0 was checked against, and still holds for that code.
   printed "?" for the check mark.
 - **The release branch itself** (the version, the merges, the documentation): the full test
   suite and `ruff` on macOS; on Windows 11, the #153 run above. The Windows CI job
-  (`test-windows`) runs on the release's pull request; this record was written before it ran.
+  (`test-windows`, the full test suite on Windows) and CodeQL passed on the release's pull
+  request.
 - **Not run:** macOS; this step on Windows as a standard (non-administrator) user; a second
   computer joining an agent that is already registered.
 
