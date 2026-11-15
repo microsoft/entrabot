@@ -259,6 +259,7 @@ def run_contained(
             env[key.lower()] = url
 
     socket_path: Path | None = None
+    profile_path: Path | None = None
     if backend == "bwrap":
         socket_path = _short_socket_path()
         proxy.start_unix(socket_path)
@@ -313,3 +314,6 @@ def run_contained(
             with contextlib.suppress(OSError):
                 socket_path.unlink()
                 socket_path.parent.rmdir()
+        if profile_path is not None:
+            with contextlib.suppress(OSError):
+                profile_path.unlink()
