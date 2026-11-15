@@ -733,6 +733,26 @@ class Wizard:
             )
         )
 
+    def _review_label(self) -> str:
+        """The agent this run continues with, as the review shows it: the Agent User named in
+        this run, else the one .env names. A join that names neither leaves the choice to the
+        agent step (the Blueprint's own Agent User), so the review does not show what the state
+        file last recorded, which may be an agent that no longer exists."""
+        identity = self.plan.identity
+        if identity.agent_user_upn:
+            return identity.agent_user_upn
+        if identity.upn_suffix:
+            return f"entrabot-agent-{identity.upn_suffix}"
+        named = self.env_values.get("ENTRABOT_AGENT_UPN") or self.env_values.get(
+            "ENTRABOT_AGENT_USER_UPN"
+        )
+        if identity.mode == "join" and not named:
+            return (
+                f"the agent with Blueprint {identity.blueprint_app_id} "
+                "(setup finds its Agent User)"
+            )
+        return self._existing_label()
+
     def _decide_identity(self) -> str:
         console, opts = self.console, self.options
         recorded = self.state.get("BLUEPRINT_APP_ID", "")
@@ -1391,7 +1411,7 @@ class Wizard:
         elif identity.mode == "join" and not self._same_agent():
             agent = f"join the agent with Blueprint {identity.blueprint_app_id}"
         else:
-            agent = f"continue with {self._existing_label()}"
+            agent = f"continue with {self._review_label()}"
         names = {"claude": "Claude Code", "copilot": "GitHub Copilot CLI"}
         account = self.account
         console.info(f"Account:     {account.user if account else ''}")
