@@ -2083,3 +2083,74 @@ class TestTheLicenceOnItsOwn:
         monkeypatch.setattr(agent_ids_module, "_provision", lambda token: ran.append(token))
         assert agent_ids_module.main() == 0
         assert ran == ["tok"]
+
+
+class TestAgentUserConsentPicksTheGraphGrant:
+    """Setup must read and extend the Microsoft Graph grant, not whichever grant comes first.
+
+    An Agent Identity that also has a grant on another resource (Azure Storage for cloud
+    memory, say) used to get the Graph scopes written onto that grant, with setup
+    reporting success and the agent's Graph token missing the scopes.
+    """
+
+    GRAPH_SP = "graph-sp-object-id"
+    STORAGE_SP = "storage-sp-object-id"
+
+    def _run(self, agent_ids_module, monkeypatch, grants):
+        calls: list[tuple[str, str, dict | None]] = []
+
+        def fake_get(url, **kwargs):
+            calls.append(("GET", url, None))
+            return _resp(200, {"value": grants})
+
+        def fake_patch(url, **kwargs):
+            calls.append(("PATCH", url, kwargs.get("json")))
+            return _resp(204, {})
+
+        def fake_post(url, **kwargs):
+            calls.append(("POST", url, kwargs.get("json")))
+            return _resp(201, {"id": "new-grant"})
+
+        monkeypatch.setattr(
+            agent_ids_module, "_resolve_graph_sp_object_id", lambda token: self.GRAPH_SP
+        )
+        monkeypatch.setattr(agent_ids_module.requests, "get", fake_get)
+        monkeypatch.setattr(agent_ids_module.requests, "patch", fake_patch)
+        monkeypatch.setattr(agent_ids_module.requests, "post", fake_post)
+        agent_ids_module.grant_agent_user_consent("tok", "agent-identity-id", "agent-user-id")
+        return calls
+
+    def test_creates_a_graph_grant_when_only_another_resource_has_one(
+        self, agent_ids_module, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        storage_grant = {
+            "id": "storage-grant",
+            "resourceId": self.STORAGE_SP,
+            "scope": "user_impersonation",
+        }
+
+        calls = self._run(agent_ids_module, monkeypatch, [storage_grant])
+
+        assert not [c for c in calls if c[0] == "PATCH"]
+        posts = [c for c in calls if c[0] == "POST"]
+        assert len(posts) == 1
+        assert posts[0][2]["resourceId"] == self.GRAPH_SP
+        assert "User.ReadBasic.All" in posts[0][2]["scope"].split()
+
+    def test_patches_the_graph_grant_not_the_first_one(
+        self, agent_ids_module, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        storage_grant = {
+            "id": "storage-grant",
+            "resourceId": self.STORAGE_SP,
+            "scope": "user_impersonation",
+        }
+        graph_grant = {"id": "graph-grant", "resourceId": self.GRAPH_SP, "scope": "User.Read"}
+
+        calls = self._run(agent_ids_module, monkeypatch, [storage_grant, graph_grant])
+
+        patches = [c for c in calls if c[0] == "PATCH"]
+        assert len(patches) == 1
+        assert patches[0][1].endswith("/oauth2PermissionGrants/graph-grant")
+        assert "user_impersonation" not in patches[0][2]["scope"].split()
+        assert not [c for c in calls if c[0] == "POST"]
