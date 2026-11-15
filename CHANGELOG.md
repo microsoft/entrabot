@@ -4,7 +4,7 @@
 
 Nothing yet.
 
-## 0.2.0 — 2026-11-14 (date to confirm on release)
+## 0.2.0 — 2026-11-15
 
 Everything since v0.1. Process containment of the MCP server is not in this release; it is
 planned for 0.3.0. What this release was checked against is in
@@ -43,6 +43,8 @@ planned for 0.3.0. What this release was checked against is in
 
 ### Changed
 
+- The Agent User's storage token is kept until shortly before it expires, instead of a full three-hop sign-in for every blob operation (#130).
+- The test suite uses its own data folder, so it no longer writes into the developer's `~/.entrabot/data`, which setup's memory migration can upload (#139).
 - The storage guide and the install pages say that one agent on two computers with local memory answers every message on both, and that cloud memory or one computer at a time avoids it.
 - The install commands clone the latest release (`git clone --branch v0.2.0 ...`) instead of `main`, and the ZIP download is the release's. "Upgrading to a new release" in Migrations and upgrades has the steps for an existing install (`git fetch --tags`, `git checkout vX.Y.Z`, setup again).
 - The daily summary goes to every directory sponsor of the Agent Identity whose user record gives an address, instead of `.env`'s `ENTRABOT_HUMAN_USER_MAILS`; `.env` is used only when the directory gives no address. The recipient policy still applies, and the result says which source was used (`recipient_source`).
@@ -94,6 +96,8 @@ planned for 0.3.0. What this release was checked against is in
 
 ### Fixed
 
+- After a restart, the email poll no longer pushes again a message received in the same second as its cursor (#6).
+- Cloud-memory setup reuses the tenant's storage account when it is in another resource group, such as one made under the project's earlier name, instead of failing on the account name (#131).
 - Setup's review said "continue with" the Agent User that `.env` or the state file last named, even when `--agent-user-upn` named another or the agent step was about to choose the Blueprint's own. It now shows the Agent User this run is for.
 - `whoami`, `--diagnose` and the status report showed the version as "unknown" on every install: they asked for the wrong distribution name. Found before release, on Linux.
 - The Word and Excel tools raised a raw network exception when a request to Work IQ failed before an answer (connect, proxy, timeout), instead of their documented `{"error", "error_type"}` reply. Found running `create_word_document` on Linux.
@@ -165,6 +169,8 @@ planned for 0.3.0. What this release was checked against is in
 
 ### Security
 
+- `share_file` and `add_teams_member` act only in the chat where a sponsor most recently messaged the agent, within a short time, so a chat ID and requester the model supplies are no longer enough. A sponsor's message in that chat during the server's session is required (#10).
+- A Work IQ JSON-RPC error's text is truncated and wrapped as external content before it reaches the model (#132).
 - `status.sh` and `scripts/setup_delegated.sh` no longer execute `.env` as shell code.
 - Continuous access evaluation is deliberately not requested: Microsoft documents it for users and single-tenant workload identities, not Agent Users, and it would lengthen token lifetime. See `docs/architecture/security-boundaries.md`.
 - Windows setup checks the Claude Code version. The two hook gates block a tool call when they fail to start only on Claude Code 2.1.295 or later; on an older version setup warns, prints the update command, and finishes with something to check (exit `3`).
