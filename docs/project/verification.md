@@ -9,7 +9,8 @@ Last updated: 2026-11-15, for 0.2.0.
 
 ## What 0.2.0 rests on
 
-Two runs, both on macOS 27 (Apple Silicon) with the same real agent:
+Two runs on macOS 27 (Apple Silicon) with one real agent, and a run on a Linux and a Windows
+virtual machine with a second agent made for the purpose:
 
 1. **An uncontained run of the 0.2.0 release branch itself.** Its code is what 0.2.0 ships. It
    sent nothing: it covered start-up, sign-in, reads, the recipient-policy refusals, console
@@ -22,6 +23,11 @@ Two runs, both on macOS 27 (Apple Silicon) with the same real agent:
    those checks exercise is the same in 0.2.0. Two later 0.2.0 changes were not in that build:
    the daily summary's choice of recipient and the switches for the telemetry distro's Azure
    Monitor calls. Run 1 covers both.
+3. **The release branch on Linux and Windows, end to end (run 3).** Real sends, inbound Teams
+   messages from the sponsor, Word through Work IQ, the refusals, audit order, the export to
+   Agent 365 and a clean stop, on each platform, then a short check of the final release head on
+   both. The bugs it found were fixed on the release branch, each with a test, before the final
+   check.
 
 ### Run 1: the 0.2.0 release branch, uncontained, 2026-11-15
 
@@ -86,12 +92,75 @@ It also showed the Microsoft OpenTelemetry Distro calling Azure Monitor on its o
 (`settings.sdk.monitor.azure.com` and an Application Insights host) with telemetry on. The
 sandbox refused both there. 0.2.0 switches both calls off (run 1 above).
 
+### Run 3: Linux and Windows, end to end, 2026-11-15
+
+Two Azure virtual machines and a new agent made for the test, licensed for Teams, mail and
+Microsoft 365 Copilot, with local memory and Agent 365 telemetry switched on:
+
+- **Linux:** Ubuntu 24.04.5 (x86_64), no desktop. The agent's key is in GNOME Keyring, run inside
+  a D-Bus session with the keyring unlocked for each command, as
+  [platform-linux](../platform-docs/platform-linux.md) describes for a headless server. The checkout
+  is a `git clone` of the release branch.
+- **Windows:** Windows 11 Enterprise 24H2 (x64) with a virtual TPM. The agent's key is
+  non-exportable, in the TPM. The install is the branch's source ZIP (no Git). Everything that
+  uses the key ran in the logged-on desktop session through a scheduled task, **which ran
+  elevated**: a standard user's session was not tested. An SSH logon has no access to the user's
+  keys.
+
+On Linux the agent was set up new; the Windows PC then joined it by its Blueprint App ID. A
+small MCP client drove the real `entrabot-mcp` over stdio, the way an assistant starts it,
+identifying itself as Claude Code (the host with channel push). Every connection that honours
+`HTTPS_PROXY` went through a local proxy that recorded host names. Every message was labelled as
+an automated test and went only to the sponsor or the agent itself.
+
+| What | Linux | Windows |
+|---|---|---|
+| `--diagnose` (`-Diagnose`) | All checks pass | All checks pass |
+| `send_teams_message`, `post_thinking_placeholder` then `resolve_placeholder`, `send_card` in a new 1:1 chat with the sponsor (`create_chat`) | Run for real; each read back through Graph | Run for real; each read back through Graph |
+| `send_email` to the sponsor | Run for real; in Sent Items | Run for real; in Sent Items |
+| Word through Work IQ: `create_word_document`, `read_word_document` | Run for real (one failure, below) | Run for real |
+| `share_file` of that document with the sponsor | **Not run on Linux**: it needs a message from the sponsor in the same server session, and none arrived in one where sharing was on | Run for real, after the sponsor's message; the share is in the file's permissions |
+| Deleting the document | Run for real (Graph answers 423 Locked for a few minutes after Work IQ creates a document) | Run for real |
+| Inbound Teams message from the sponsor | Run for real: pushed outside the envelope, sender matched by directory ID | Run for real: pushed outside the envelope, sender matched by directory ID |
+| Inbound email from another person | **Not run on this platform** (run on macOS, run 2) | **Not run on this platform** |
+| The agent's own mail | Run for real: the poll fetched the agent's email to itself and, by design, didn't push it | Run for real: the poll fetched the agent's sent mail and didn't push it |
+| Recipient policy: `send_email` and `share_file` to an address at a reserved domain | Run for real: both refused, a `denied` audit event each, no Graph request | Run for real: both refused, a `denied` audit event each, no Graph request |
+| Audit event before each send | Run for real: every `pending` event before Graph's time for the message | Run for real: every `pending` event before Graph's time for the message |
+| Export to Agent 365 | Run for real: every span `sent` to all three sinks, none rejected, no message text | Run for real: every span `sent` to all three sinks, none rejected, no message text |
+| The telemetry distro's Azure Monitor calls | Run for real: no Azure Monitor or Application Insights host | Run for real: no Azure Monitor or Application Insights host |
+| Background polls for 25 minutes with a call every minute | Run for real | Run for real |
+| Clean stop | Run for real | Run for real |
+| The final release head: setup again (the upgrade path), `--diagnose`, `whoami` (version 0.2.0), a Work IQ create, read and delete, a refusal, the export, a clean stop | Run for real | Run for real |
+
+One `create_word_document` on Linux failed: the request to Work IQ got no answer, and the tool
+returned no error to the caller. Its tokens were all issued (HTTP 200); the cause was not
+established. It didn't happen again in 17 later creates inside the server on either platform. The
+tool now reports such a failure as a Work IQ error.
+
+Bugs run 3 found, fixed on the release branch with a test:
+
+- Joining an agent by its Blueprint App ID with no Agent User named created a second agent under
+  the Blueprint instead of joining the one it has.
+- On Windows, setup didn't find an Azure CLI that winget had just installed, and installed a
+  private copy as well.
+- The version read "unknown" on every install (`whoami`, `--diagnose`, the status report).
+- A Work IQ request that failed before an answer escaped the Word and Excel tools as a raw
+  exception.
+- Setup's review named the Agent User a state file last recorded, not the one the run was for.
+
+It also showed that two computers running one agent with local memory both push the same message
+(each keeps its own cursors). That behaviour is unchanged and now documented in the
+[storage guide](../guides/storage-configuration.md#one-agent-on-more-than-one-computer-with-local-memory).
+
 ## Not proven
 
-- Work IQ reads and writes: Word, Excel and OneDrive files weren't switched on for the test agent.
+- Work IQ beyond Word: Excel and OneDrive files through Work IQ (run 3 covered Word only).
+- Inbound email from someone else on Linux and Windows (run on macOS only).
+- `share_file` on Linux.
+- Windows setup and the server in a standard user's session (run 3 ran elevated).
 - Inbound email from someone who isn't a sponsor (the test account had no mailbox). Email is
   always wrapped, as the sponsor's email showed.
-- Sends from the 0.2.0 release branch itself; they were run on the combined branch (run 2).
+- Sends from the 0.2.0 release branch on macOS; they were run on the combined branch (run 2), and from the release branch on Linux and Windows (run 3).
 - The daily summary actually sent: run 1 checked who it would go to, without sending.
 - The agent in the Agent 365 registry (`register_agent_instance.py --apply` needs a permission the
   setup app doesn't hold), and whether the exported telemetry shows in Defender or the Microsoft
@@ -102,9 +171,9 @@ sandbox refused both there. 0.2.0 switches both calls off (run 1 above).
 
 | What | macOS | Linux | Windows |
 |---|---|---|---|
-| The MCP server against a real tenant | Run for real (above) | Not run for 0.2.0 | Not run for 0.2.0 |
-| Setup wizard against a real tenant | Repair run and health check | Run for real (Ubuntu 24.04) | Run for real (Windows 11) |
-| Telemetry setup step and the `--diagnose` check | Run for real | Unit-tested | Unit-tested |
+| The MCP server against a real tenant | Run for real (runs 1 and 2) | Run for real (run 3, Ubuntu 24.04, headless keyring) | Run for real (run 3, Windows 11 24H2, elevated desktop task) |
+| Setup wizard against a real tenant | Repair run and health check | Run for real: new agent, repair, health check | Run for real: join, repair, health check |
+| Telemetry setup step and the `--diagnose` check | Run for real | Run for real | Run for real |
 | `status.sh` and `setup_delegated.sh` read `.env` as data | Run for real (the old scripts fail the tests, the new ones pass) | Unit-tested | n/a |
 | The full test suite | Every commit | Not run | CI (`test-windows`) on each pull request |
 | Process containment | Not in 0.2.0: planned for 0.3.0 | Not in 0.2.0 | Not in 0.2.0 |
