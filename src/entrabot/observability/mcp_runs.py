@@ -26,6 +26,7 @@ import functools
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from threading import RLock
 from typing import Any
 
@@ -272,22 +273,42 @@ def agent_name_for(config: EntraBotConfig) -> str:
     return (config.agent_user_upn or "").partition("@")[0].strip() or "entrabot"
 
 
+def console_spans_to_stderr(provider: Any = None) -> None:
+    """Print every finished span to standard error (never standard output: see
+    :func:`start_server_telemetry`)."""
+    import sys
+
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
+
+    target = provider if provider is not None else trace.get_tracer_provider()
+    target.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter(out=sys.stderr)))
+
+
 def start_server_telemetry(
     mcp: Any,
     config: EntraBotConfig,
     *,
     session_id: str,
     initialize: Callable[..., None] | None = None,
+    console_to_stderr: Callable[[], None] | None = None,
 ) -> McpRunTracker | None:
     """Initialise the Microsoft OpenTelemetry Distro and trace every tool on *mcp*. Returns
-    the tracker, or None when telemetry is off or could not start (logged, never raised)."""
+    the tracker, or None when telemetry is off or could not start (logged, never raised).
+
+    Standard output is the MCP protocol channel, and the distro's console exporter writes
+    there, so with ``ENTRABOT_A365_CONSOLE_ENABLED`` the distro starts without it and the
+    server prints console spans to standard error instead."""
     if not server_telemetry_wanted(config):
         return None
     try:
         if initialize is None:
             from entrabot.observability.runtime import initialize_observability as initialize
         agent_name = agent_name_for(config)
-        initialize(config, agent_name=agent_name)
+        console = config.a365_console_enabled
+        initialize(replace(config, a365_console_enabled=False), agent_name=agent_name)
+        if console:
+            (console_to_stderr or console_spans_to_stderr)()
         tracker = tracker_for(config, agent_name=agent_name, session_id=session_id)
         count = install_into_fastmcp(mcp, tracker)
     except Exception as exc:  # noqa: BLE001 - the server runs without telemetry
