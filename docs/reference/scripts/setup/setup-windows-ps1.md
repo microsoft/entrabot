@@ -98,10 +98,13 @@ Sign-in:
 
 Other:
 
-- `-ConfigureA365Observability` — also switch on Agent 365 telemetry, as
-  answering yes to that question does (see the macOS and Linux
-  `--configure-a365-observability`; the steps are the same). A failure never
-  stops setup.
+- `-ConfigureA365` — also switch on Agent 365 integration, as answering yes
+  to that question does: the agent's entry in the Agent 365 registry (setup's
+  own app gets the Microsoft Graph permission `AgentRegistration.ReadWrite.All`
+  for it) and Agent 365 telemetry. See the macOS and Linux `--configure-a365`;
+  the steps are the same. A failure in either half never stops setup.
+- `-ConfigureA365Observability` — the older name of `-ConfigureA365` (0.2.0,
+  when it switched on telemetry alone). It now does the same.
 - `-ConfigureA365WorkIq` — also switch on Word, Excel and OneDrive files
   (Microsoft Agent 365 Work IQ), as answering yes to that question does. Setup
   does this itself, with nothing to install: no Agent 365 CLI, no .NET and no
@@ -121,7 +124,8 @@ Other:
   (the running version, and a warning, never a failure, when the folder is not on
   a release tag). Includes the "Agent sponsor" check
   (whether `.env` names a sponsor the directory lists, and whether the agent
-  can read each sponsor's user record) and the Agent 365 telemetry check.
+  can read each sponsor's user record), the Agent 365 telemetry check and the
+  Agent 365 registry check.
 - `-BootstrapOnly` — stop once Python and `.venv` are ready, without starting
   the wizard.
 - `-Status`, with `-Json`, `-HealthOnly`, `-Strict` — show the agent's status

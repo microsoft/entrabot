@@ -161,9 +161,8 @@ It also showed that two computers running one agent with local memory both push 
   always wrapped, as the sponsor's email showed.
 - Sends from the 0.2.0 release branch on macOS; they were run on the combined branch (run 2), and from the release branch on Linux and Windows (run 3).
 - The daily summary actually sent: run 1 checked who it would go to, without sending.
-- The agent in the Agent 365 registry (`register_agent_instance.py --apply` needs a permission the
-  setup app doesn't hold), and whether the exported telemetry shows in Defender or the Microsoft
-  365 admin center (a portal check, not done here).
+- Whether the exported telemetry shows in Defender or the Microsoft 365 admin center (a portal
+  check, not done here).
 - Disabling the agent and watching a running server stop.
 
 ## By platform
@@ -173,6 +172,7 @@ It also showed that two computers running one agent with local memory both push 
 | The MCP server against a real tenant | Run for real (runs 1 and 2) | Run for real (run 3, Ubuntu 24.04, headless keyring) | Run for real (run 3, Windows 11 24H2, elevated desktop task) |
 | Setup wizard against a real tenant | Repair run and health check | Run for real: new agent, repair, health check | Run for real: join, repair, health check |
 | Telemetry setup step and the `--diagnose` check | Run for real | Run for real | Run for real |
+| Agent 365 registry through setup (after 0.2.0, on `main`): the setup app's permission, the registration, its `--diagnose` line, teardown's delete | Unit-tested | Unit-tested | Unit-tested |
 | `status.sh` and `setup_delegated.sh` read `.env` as data | Run for real (the old scripts fail the tests, the new ones pass) | Unit-tested | n/a |
 | The full test suite | Every commit | Not run | CI (`test-windows`) on each pull request |
 | Process containment | Not in 0.2.0: planned for 0.3.0 | Not in 0.2.0 | Not in 0.2.0 |
@@ -180,4 +180,9 @@ It also showed that two computers running one agent with local memory both push 
 ## Never run
 
 - The Copilot SDK harness against a real Copilot runtime.
-- The agent in the Agent 365 registry.
+- The agent in the Agent 365 registry. In 0.2.0 that is `register_agent_instance.py --apply`, which
+  needs a permission the 0.2.0 setup app doesn't hold. On `main` after 0.2.0, setup's Agent 365
+  integration step adds that permission and registers the agent; it is unit-tested only, with
+  Graph and Entra faked, and has not been run against a tenant: not the permission grant, not
+  the request body (application IDs or object IDs), not the admin center listing, and not
+  teardown's delete.

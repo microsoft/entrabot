@@ -189,13 +189,13 @@ commands:
     category: provisioning
     page: reference/scripts/provisioning/ensure-a365-observability-permissions-py.md
     platforms: [macos, linux, windows]
-    summary: Gives the agent the delegated Agent365.Observability.OtelWrite permission Agent 365 telemetry needs, using the Provisioner token. The setup wizard runs it when telemetry is switched on.
+    summary: Gives the agent the delegated Agent365.Observability.OtelWrite permission Agent 365 telemetry needs, using the Provisioner token. The setup wizard runs it for Agent 365 integration.
   - id: register-agent-instance-py
     path: scripts/register_agent_instance.py
     category: provisioning
     page: reference/scripts/provisioning/register-agent-instance-py.md
     platforms: [macos, linux, windows]
-    summary: Opt-in registration of the agent in the Agent 365 registry (Graph beta agentRegistrations). Dry run by default; --apply needs AgentRegistration.ReadWrite.All on the Provisioner app.
+    summary: Registers the agent in the Agent 365 registry (Graph beta agentRegistrations), or updates the recorded registration; --check reads it, --delete deletes it. Setup runs it for Agent 365 integration. Dry run by default; --apply needs AgentRegistration.ReadWrite.All on the Provisioner app.
 
   # --- Auth and Certificates (12) ---
   - id: grant-consent-py

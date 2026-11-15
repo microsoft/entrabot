@@ -2,7 +2,16 @@
 
 ## Unreleased
 
-Nothing yet.
+### Added
+
+- Registration in the Agent 365 registry as part of setup. Saying yes to Agent 365 integration now also registers the agent (Agent Registry API, Graph beta), so Microsoft lists it in the Microsoft 365 admin center under Agents > All agents > Registry. Setup adds the Microsoft Graph application permission `AgentRegistration.ReadWrite.All` to the setup (Provisioner) app with admin consent, through the signed-in administrator's Azure CLI, the way it gives the app its other permissions, and only on a yes. The registration's ID is kept in `.entrabot-state.json` (`AGENT_REGISTRATION_ID`), so a later run updates it; a computer that joined an agent that already existed does not register it a second time. A failure never stops setup or undoes telemetry. Unit-tested only; not yet run against a tenant.
+- `--diagnose` reports the registry on its own line, "Agent 365 registry", after "Agent 365 telemetry": registered (with the ID Microsoft Graph confirms), not registered, or why it can't be checked.
+- `scripts/register_agent_instance.py --check`, `--delete`, `--registration-id` (record a registration made from another computer of the same agent), `--display-name` and `--print-result`. It reads its owners (the sponsors) and the display name (`ENTRABOT_AGENT_DISPLAY_NAME`) from `.env`, and leaves alone a recorded registration that names another agent. The request body is built in one place, `entrabot.a365.registry`.
+
+### Changed
+
+- Setup asks one question, "Switch on Agent 365 integration?", instead of "Switch on Agent 365 telemetry?". Yes switches on telemetry exactly as before and then registers the agent. The review screen and the last screen say "Agent 365 integration", the last screen with each half's result. The new flag is `--configure-a365` (`-ConfigureA365` on Windows); `--configure-a365-observability` and `-ConfigureA365Observability` from 0.2.0 still work and now mean the same. An answers key of `telemetry` still works; the new key is `a365`.
+- Teardown with `--delete-agent` (`-DeleteAgent`) also deletes the agent's Agent 365 registration when this computer recorded one, best-effort: one it cannot delete is a to-do with where to delete it. A disconnect alone leaves it alone.
 
 ## 0.2.0 — 2026-11-15
 

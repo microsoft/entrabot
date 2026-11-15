@@ -47,8 +47,9 @@ provide the capability, such as document-level Word comments — Microsoft
 Graph drive-item `/comments` is not a substitute for Word comments on `.docx`
 files.
 
-Agent 365 telemetry (OpenTelemetry) is optional and separate from Work IQ;
-see [Telemetry and the Agent 365 registry](#telemetry-and-the-agent-365-registry).
+Agent 365 integration (telemetry through OpenTelemetry, and the agent's entry in
+the Agent 365 registry) is optional and separate from Work IQ; see
+[Telemetry and the Agent 365 registry](#telemetry-and-the-agent-365-registry).
 It does not replace Entrabot's own audit log.
 
 ## `ToolingManifest.json` is authoritative
@@ -243,9 +244,12 @@ presentation vary by tenant.
 
 Agent 365 shows an agent's activity in Microsoft Defender, the Microsoft 365
 admin center and Microsoft Purview from OpenTelemetry spans the agent sends,
-and lists the agent in the Agent 365 registry only once it is registered.
-These are two separate things, and Entrabot does the first and offers the
-second as an opt-in script.
+and lists the agent in the Agent 365 registry (Microsoft 365 admin center >
+Agents > All agents > Registry) only once it is registered. These are two
+separate things in Microsoft's terms. Setup does both with one question,
+**Agent 365 integration** (default no): telemetry first, then the
+registration. Each half reports its own result, and a failure in either never
+stops setup or undoes the other.
 
 **Which SDK.** Entrabot uses Microsoft's OpenTelemetry Distro,
 [`microsoft-opentelemetry`](https://learn.microsoft.com/microsoft-agent-365/developer/microsoft-opentelemetry)
@@ -274,9 +278,11 @@ It uses the delegated route: the agent's own Agent User token for
 `Agent365.Observability.OtelWrite` on the Agent 365 Observability resource
 (`9b975845-388f-4429-889e-eab1ef63949c`), kept fresh in the background.
 
-**Switching it on.** Answer yes to the telemetry question in setup, or pass
-`--configure-a365-observability` to `./scripts/setup.sh` (macOS, Linux) or
-`-ConfigureA365Observability` to `scripts\setup-windows.cmd`. Setup runs
+**Switching it on.** Answer yes to the Agent 365 integration question in
+setup, or pass `--configure-a365` to `./scripts/setup.sh` (macOS, Linux) or
+`-ConfigureA365` to `scripts\setup-windows.cmd`. The 0.2.0 names,
+`--configure-a365-observability` and `-ConfigureA365Observability`, still work
+and now mean the same: telemetry and the registry. For telemetry, setup runs
 `scripts/ensure_a365_observability_permissions.py` with the setup credential
 (the Blueprint principal's tenant-wide grant, the Blueprint's inheritable
 permission and the Agent Identity's grant for its Agent User), checks as the
@@ -284,7 +290,8 @@ agent that its token carries the scope, and only then writes
 `ENTRABOT_A365_OBSERVABILITY_ENABLED=true` and
 `ENTRABOT_A365_EXPORT_ENABLED=true` to `.env`. A failure never stops setup.
 `--diagnose` (`-Diagnose`) reports whether telemetry is on and whether the
-agent's token carries the scope.
+agent's token carries the scope ("Agent 365 telemetry"), and on the next line
+whether the agent is registered ("Agent 365 registry").
 
 **No Azure Monitor.** Entrabot exports only to Agent 365 and never enables the
 distro's Azure Monitor export. The distro still makes two calls of its own:
@@ -308,18 +315,54 @@ it listed each span with status `sent` for each of Agent 365's sinks and
 register the instance." An agent whose Blueprint was made through Microsoft
 Graph, as Entrabot's is, registers with the Agent Registry API
 (`POST https://graph.microsoft.com/beta/copilot/agentRegistrations`,
-`AgentRegistration.ReadWrite.All`). `scripts/register_agent_instance.py` does
-that for this machine's agent: a dry run by default, `--apply` to write, the
-registration's ID kept in `.entrabot-state.json` so a later run updates it
-instead of creating another. It is not part of setup, because:
+`AgentRegistration.ReadWrite.All`). With Agent 365 integration switched on,
+setup does it in two steps:
 
-- the setup (Provisioner) app does not hold `AgentRegistration.ReadWrite.All`;
-  an administrator has to add it and consent, and the script stops when the
-  token lacks it;
-- the API is beta, has no documented list call, and Learn does not say whether
-  `agentIdentityId` takes the Agent Identity's app ID or object ID (the script
-  sends app IDs);
-- it has not been run against a tenant.
+1. **The permission.** While it brings the setup (Provisioner) app's
+   permissions up to date, setup adds the Microsoft Graph application
+   permission `AgentRegistration.ReadWrite.All` to that app and grants admin
+   consent for it. It does this the way it gives the app its other
+   permissions: through the signed-in administrator's Azure CLI
+   (`az ad app permission add`, then `az ad app permission admin-consent`),
+   so the grant needs a Global Administrator or Privileged Role
+   Administrator. The setup app never grants it to itself. A setup that
+   answers no never adds it. Setup never removes it either: the setup app is
+   shared by every Entrabot agent in the tenant, and another agent's
+   registration may need it. If it cannot be added, setup says why and
+   carries on.
+2. **The registration**, after telemetry:
+   `scripts/register_agent_instance.py --apply`, with the setup app's token.
+   The request body is built in one place
+   (`entrabot.a365.registry.build_registration`): the Agent Identity's app ID
+   as `agentIdentityId` and `sourceAgentId`, the Blueprint's app ID as
+   `agentIdentityBlueprintId`, the agent's sponsors as owners, and as display
+   name `ENTRABOT_AGENT_DISPLAY_NAME` from `.env` when set, else the part of
+   the agent's address before the `@`. The registration's ID is kept in
+   `.entrabot-state.json` (`AGENT_REGISTRATION_ID`), so a later run reads and
+   updates it instead of creating another; if Graph says it is gone (404), a
+   new one is created; any other answer creates nothing.
+
+The API is beta and has no list call: nothing can be looked up by agent, so a
+computer knows only what it recorded. A computer that **joined** an agent that
+already existed (`--use-blueprint`; setup records `JOINED_EXISTING_AGENT` in
+its state file) does not create a registration, because another computer may
+have made one: setup says so and shows the two commands to use instead,
+`register_agent_instance.py --registration-id <ID> --apply` to record and
+update the one another computer made (its `--diagnose` shows the ID), or
+`register_agent_instance.py --apply` if none did. A computer joined with an
+older setup has no such record and cannot be told apart from the one that
+created the agent.
+
+Teardown with `--delete-agent` (`-DeleteAgent`) deletes the registration this
+computer recorded (`DELETE .../agentRegistrations/{id}`), after the agent,
+best-effort; one it cannot delete is a to-do with where to delete it. A
+disconnect alone leaves the registration alone.
+
+Not yet checked against a tenant: whether `agentIdentityId` and
+`agentIdentityBlueprintId` take app IDs or object IDs (Learn does not say; its
+observability glossary uses "agent id" and "blueprint id" for app IDs), which
+display name the admin center shows, and whether the registration step works
+end to end. It is unit-tested only.
 
 Microsoft's other route, the Agent 365 CLI's `a365 setup all`, creates its own
 Blueprint with a client secret and an Azure App Service. Do not run it against

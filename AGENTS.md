@@ -90,7 +90,7 @@ Read the listed documentation before drafting code or a plan that touches the to
 - **Operational storage is local by default.** Cloud (Azure Blob) is opt-in via `./scripts/setup.sh --use-cloud-memory` (on Windows: the setup wizard's memory question, or `scripts\setup-windows.cmd -UseCloudMemory`); recommended for durability but not required. The backend resolves from env at tool-call time: `KEEP_MEMORY_LOCAL=true` → `LocalBackend`, else `BLOB_ENDPOINT`+`BLOB_CONTAINER` → `BlobBackend`, else `LocalBackend`.
 - All structured data uses `dataclasses` or `pydantic` — no raw dicts
 - **Recipient policy.** Any new tool that reaches a new person (mail, chat, invite, share) must call `_refuse_unless_allowed()` before Graph, and any tool that sends or creates must call `_audit_before()` and stop on its refusal.
-- **Agent 365 telemetry** is opt-in (`ENTRABOT_A365_*`); MCP tools are traced automatically (`observability/mcp_runs.py`) and must never put content in spans.
+- **Agent 365 integration** is opt-in (one setup question, `--configure-a365`): telemetry (`ENTRABOT_A365_*`; MCP tools are traced automatically by `observability/mcp_runs.py` and must never put content in spans) and the agent's entry in the Agent 365 registry (`entrabot.a365.registry`, `scripts/register_agent_instance.py`). The setup app gets `AgentRegistration.ReadWrite.All` only on a yes, through the signed-in administrator's Azure CLI.
 
 ## Key implementation patterns
 

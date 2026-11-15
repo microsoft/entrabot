@@ -200,7 +200,7 @@ This is a research repo, not a production service. It runs reliably on a develop
 - Body-first prompt architecture with optional persona layer from a separate MCP (`persona-sati`)
 - Audit before acting: every tool that sends, creates, shares or deletes writes its audit event first (to a local JSONL file, flushed to disk) and does nothing if that write fails. Teams and mail reads are not audited. Events the model writes through `audit_log` are marked as the model's
 - Outbound recipient policy, enforced in the server: the agent may reach its sponsors, the members of the chat a request came from, and its own tenant; anyone else needs `ENTRABOT_OUTBOUND_ALLOW`
-- Agent 365 telemetry (opt-in in setup): content-suppressed spans from the MCP server and from the harness (`entrabot`, an optional terminal front end on the GitHub Copilot SDK that runs the model loop itself). Agent 365 keeps them only if the tenant has a Microsoft 365 E7 or Agent 365 licence assigned
+- Agent 365 integration (opt-in in setup, one question): the agent's entry in the Agent 365 registry, so it is listed in the Microsoft 365 admin center (on `main`, unit-tested only so far), and Agent 365 telemetry: content-suppressed spans from the MCP server and from the harness (`entrabot`, an optional terminal front end on the GitHub Copilot SDK that runs the model loop itself). Agent 365 keeps them only if the tenant has a Microsoft 365 E7 or Agent 365 licence assigned
 - `pytest -v --tb=short && ruff check .` gates every commit
 
 **Persona-sati host bootstrap:** Hosts that attach persona-sati must call `bootstrap_session` before the first substantive answer because FastMCP instructions do not reliably reach the LLM prompt. If `mind_contract_available` is false, operate in body-only mode. When the mind contract is available, follow the per-turn cognition tools: `observe` around external tools, `reflect` for durable observations, and `recall` when a returned memory excerpt is insufficient.
@@ -216,7 +216,7 @@ This is a research repo, not a production service. It runs reliably on a develop
 **Open:**
 
 - Process containment is not shipped: the MCP server is not contained in 0.2.0 and runs with all of its user's rights. Containing it on macOS and Linux is planned for 0.3.0.
-- Registration in the Agent 365 registry is an opt-in script (`scripts/register_agent_instance.py`), not part of setup.
+- Registration in the Agent 365 registry through setup has not yet been run against a tenant.
 - Headless and cloud operation: see the proposal in `engineering-history/plans/headless-cloud-runtime.md`.
 
 ---

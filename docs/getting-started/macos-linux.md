@@ -57,7 +57,7 @@ You do not need the Azure CLI (setup offers to install a private copy), `az logi
 | The agent's sponsor | You | The people the agent takes instructions from in Teams. When joining an existing agent, the suggested answer keeps its current sponsors. |
 | Memory | On this computer | Cloud memory (Azure Blob Storage) is offered when your account has an Azure subscription in the tenant. Then it asks which subscription, when there are several, and the Azure region (`eastus`). |
 | Switch on Word, Excel and OneDrive files? | No | Work IQ: the agent reads and edits Word, Excel and OneDrive files. Setup says first that the agent then needs a Microsoft 365 Copilot licence of its own. Most people skip this. There is nothing to install for them, and setup switches them on itself, over SSH and unattended too. |
-| Switch on Agent 365 telemetry? | No | The agent reports what it does to Microsoft Agent 365: when it is asked something, by whom and in which chat, never what the messages say. Microsoft Defender and the Microsoft 365 admin center show its activity from it. Agent 365 keeps it only if someone in your organization has a Microsoft 365 E7 or Agent 365 licence. |
+| Switch on Agent 365 integration? | No | Two things in one answer. Setup registers the agent in Microsoft Agent 365, so it is listed in the Microsoft 365 admin center under Agents > All agents > Registry; for that, setup's own app gets one more Microsoft Graph permission, `AgentRegistration.ReadWrite.All`. And it switches on Agent 365 telemetry: the agent reports when it is asked something, by whom and in which chat, never what the messages say, and Microsoft Defender and the Microsoft 365 admin center show that activity. Agent 365 keeps the telemetry only if someone in your organization has a Microsoft 365 E7 or Agent 365 licence. |
 | Start setting up? | Yes | The review screen. Nothing has been changed before this point, apart from an Azure CLI you agreed to install. |
 | Set up the agent's licence now? | Yes | Only asked when the agent has no licence that includes Teams, or no Microsoft 365 Copilot licence while Word, Excel and OneDrive files are on. See [Licences for the agent](#licences-for-the-agent). |
 | Give the agent one ... licence? | Yes | When a licence is free. With several, a numbered choice; the suggested one also brings mail and files. |
@@ -72,7 +72,12 @@ Before it offers an earlier Azure CLI sign-in, setup checks it with a real reque
 
 Setup then creates or connects the agent, creates this computer's certificate with its key in your key store, saves settings, registers the agent with Claude Code and GitHub Copilot CLI, and tests that the agent can sign in and reach Teams. When this run registered a new certificate, the test waits up to about two minutes for Microsoft Entra to start accepting it. After that test, and only if you switched them on, it sets up Word, Excel and OneDrive files: it lists their tools for the agent in `ToolingManifest.json`, gives the agent's Blueprint the permissions they need, and then checks, as the agent, that Microsoft honours them, waiting up to about two minutes. A failure there never stops setup, and the last screen says why and what to do. Nothing is installed for them: no Agent 365 CLI, no .NET SDK, no PowerShell 7, and no `a365.config.json`.
 
-Then, only if you switched it on, it sets up Agent 365 telemetry: it gives the agent the `Agent365.Observability.OtelWrite` permission, checks for about two minutes, as the agent, that the agent's token carries it, and only then switches telemetry on in `.env` and reads it back. A failure there never stops setup either. Setup can't check the licence, so the last screen says that Agent 365 drops the agent's telemetry unless someone in the organization has a Microsoft 365 E7 or Agent 365 licence. `--diagnose` reports whether telemetry is on and whether the token carries the permission.
+Then, only if you switched it on, it sets up **Agent 365 integration**, in two halves that each report their own result. A failure in either never stops setup, and never undoes the other.
+
+- Telemetry: it gives the agent the `Agent365.Observability.OtelWrite` permission, checks for about two minutes, as the agent, that the agent's token carries it, and only then switches telemetry on in `.env` and reads it back. Setup can't check the licence, so it says that Agent 365 drops the agent's telemetry unless someone in the organization has a Microsoft 365 E7 or Agent 365 licence.
+- The registry: it registers the agent in the Agent 365 registry with the setup app, which was given `AgentRegistration.ReadWrite.All` earlier in the run (by your sign-in, which needs the Global Administrator or Privileged Role Administrator role for it), and records the registration's ID, so running setup again updates the same registration. Only then does it say that the agent is listed in the Microsoft 365 admin center (Agents > All agents > Registry). A computer that joined an agent that already existed does not register it again: the registry cannot be searched, so setup can't tell whether another computer did. It says so, and how to record that computer's registration here instead.
+
+`./scripts/setup.sh --diagnose` reports both: an "Agent 365 telemetry" line (whether telemetry is on and the token carries the permission) and an "Agent 365 registry" line (registered with its ID, not registered, or why it can't be checked). Registration through setup has not yet been run against a real tenant.
 
 ## Licences for the agent
 
@@ -125,7 +130,7 @@ A flag that takes a value is written with `=`: `--use-blueprint=APP_ID`, not `--
 | `--tenant=NAME_OR_ID`, `--device-code` | How to sign in |
 | `--keep-memory-local` or `--use-cloud-memory` | Where the agent keeps its memory |
 | `--configure-a365-work-iq` | Switch on Word, Excel and OneDrive files |
-| `--configure-a365-observability` | Switch on Agent 365 telemetry |
+| `--configure-a365` | Switch on Agent 365 integration: the registry and telemetry. `--configure-a365-observability` is the older name for the same thing |
 | `--hosts=claude,copilot` | Which assistants to register the agent with |
 | `--skip-smoke` | Skip the end-to-end test |
 
