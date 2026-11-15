@@ -214,7 +214,11 @@ token's `scp` claim. See Microsoft Learn,
 privilege: only the scopes the manifest needs (`enumeratedScopes`) and no app
 roles (`noRoles`). An entry that already covers them, such as the CLI's
 `allAllowed` one, is left alone; one with fewer scopes is widened, never
-narrowed. On a real tenant, Microsoft's token service took 20 to 45 seconds to
+narrowed. Graph's reads of the collection can lag behind its writes, even after
+a read has shown an entry, and it refuses a create for an entry that is already
+there with `400 Request_BadRequest` ("…already exists."), not `409`; the script
+reads every entry back and counts that answer as written once a read shows the
+entry. On a real tenant, Microsoft's token service took 20 to 45 seconds to
 honour a new entry, so setup checks the agent's tokens for each audience for
 about two minutes, and the health check (`scripts\setup-windows.cmd -Diagnose`,
 or `./scripts/setup.sh --diagnose` on macOS and Linux) runs the same check.
@@ -376,7 +380,7 @@ About a minute later the admin center listed the agent with platform
 worked, and the admin center stopped listing the agent a few minutes after it.
 Run for real on Windows too: registration, `-Diagnose`, the admin center
 listing and teardown's delete. Not yet run on macOS, nor with a second
-computer joining a registered agent.
+computer joining a registered agent, nor on Windows as a standard user.
 
 Microsoft's other route, the Agent 365 CLI's `a365 setup all`, creates its own
 Blueprint with a client secret and an Azure App Service. Do not run it against

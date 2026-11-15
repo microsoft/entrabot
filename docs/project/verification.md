@@ -5,7 +5,43 @@ real agent, on the system named. "Unit-tested" means covered by the test suite
 (`pytest -v && ruff check .`, which every commit must pass) with Graph, Entra and the operating
 system faked. Nothing here names a tenant, account or machine.
 
-Last updated: 2026-11-15, for 0.2.0.
+Last updated: 2026-11-15, for 0.3.0.
+
+## What 0.3.0 rests on
+
+0.3.0 is 0.2.0 with the Agent 365 integration (pull request #162) and two fixes carried with
+it: #153, and the scripts' output on Windows. The MCP server's code is the same as in 0.2.0:
+what changed is setup, teardown, the health check and the provisioning scripts. The rest of this record, from "What 0.2.0 rests on"
+on, is what 0.2.0 was checked against, and still holds for that code.
+
+- **The Agent 365 registry through setup** was run for real on 2026-11-15 on Linux (Ubuntu
+  24.04) and Windows (Windows 11 Pro 25H2), with throwaway agents. Those runs were made on the
+  pull request's branch before it was merged; `main` after the merge holds the same code. The
+  Linux runs came before the last change, the grant a takeover run makes on its own, which was
+  run on Windows only. See [0.3.0: the Agent 365 registry through
+  setup](#030-the-agent-365-registry-through-setup) below.
+- **The Work IQ "already exists" fix (#153)** was run for real on 2026-11-15 on Windows 11,
+  from the release branch, with a throwaway agent:
+  - Setup with `-ConfigureA365WorkIq` switched Word, Excel and OneDrive files on. The agent
+    had no Microsoft 365 Copilot licence, so setup ended with that as a to-do (exit `3`).
+  - With Graph's read of the Blueprint's inheritable permissions made to lag once (the Work IQ
+    Word entry hidden from the script's first read; every request, the create included, went
+    to Microsoft Graph), Graph answered the create with `400` "already exists". The fixed
+    script read the entry back and reported it written, exit `0`, and the entry was
+    unchanged. 0.2.0's script failed on the same answer.
+  - Not run on Linux or macOS.
+- **Scripts run on their own with redirected output** (Windows, a code page without "✅"):
+  the failure was seen live on Windows 11 in the #153 run. The first fix passed its unit tests
+  and still failed there, because a redirected stdout on Windows uses the `surrogateescape`
+  error handler, not `strict`. With that handled, run for real on Windows 11:
+  `ensure_a365_work_iq_permissions.py` with its output redirected to a file exited `0` and
+  printed "?" for the check mark.
+- **The release branch itself** (the version, the merges, the documentation): the full test
+  suite and `ruff` on macOS; on Windows 11, the #153 run above. The Windows CI job
+  (`test-windows`, the full test suite on Windows) and CodeQL passed on the release's pull
+  request.
+- **Not run:** macOS; this step on Windows as a standard (non-administrator) user; a second
+  computer joining an agent that is already registered.
 
 ## What 0.2.0 rests on
 
@@ -16,7 +52,7 @@ virtual machine with a second agent made for the purpose:
    sent nothing: it covered start-up, sign-in, reads, the recipient-policy refusals, console
    telemetry, the background polls and a clean stop.
 2. **An earlier end-to-end run on a combined branch.** That build held everything in 0.2.0
-   **and** the process containment planned for 0.3.0, and the server ran **inside the sandbox**
+   **and** the process containment now planned for 0.4.0, and the server ran **inside the sandbox**
    for the whole run. The real sends, the inbound pushes, token re-acquisition, audit
    fail-closed and the export to Agent 365 were proven there, not on the release branch.
    Apart from the sandbox launcher, its proxy and the proxy-aware Graph transport, the code
@@ -162,7 +198,8 @@ It also showed that two computers running one agent with local memory both push 
 - Sends from the 0.2.0 release branch on macOS; they were run on the combined branch (run 2), and from the release branch on Linux and Windows (run 3).
 - The daily summary actually sent: run 1 checked who it would go to, without sending.
 - Whether the exported telemetry shows in Defender or the Microsoft 365 admin center was not
-  checked for 0.2.0 itself. Both showed it after 0.2.0: see the registry section below.
+  checked for 0.2.0 itself. Both showed it in the 0.3.0 registry runs: see the registry section
+  below.
 - Disabling the agent and watching a running server stop.
 
 ## By platform
@@ -172,18 +209,20 @@ It also showed that two computers running one agent with local memory both push 
 | The MCP server against a real tenant | Run for real (runs 1 and 2) | Run for real (run 3, Ubuntu 24.04, headless keyring) | Run for real (run 3, Windows 11 24H2, elevated desktop task) |
 | Setup wizard against a real tenant | Repair run and health check | Run for real: new agent, repair, health check | Run for real: join, repair, health check |
 | Telemetry setup step and the `--diagnose` check | Run for real | Run for real | Run for real |
-| Agent 365 registry through setup (after 0.2.0, on `main`): the setup app's permission, the registration, its `--diagnose` line, teardown's delete | Unit-tested | Run for real (2026-11-15, Ubuntu 24.04): the permission and its consent check, the registration, `--diagnose`, the admin center listing, the script's delete, teardown's delete. Not run: a second computer joining a registered agent | Run for real (2026-11-15, Windows 11 Pro 25H2, built-in Administrator): the permission, the registration, `-Diagnose`, the admin center listing, telemetry, teardown's delete. Run for real: the takeover run's grant, on a first run. Not run: a standard user |
+| Agent 365 registry through setup (0.3.0): the setup app's permission, the registration, its `--diagnose` line, teardown's delete | Unit-tested | Run for real (2026-11-15, Ubuntu 24.04): the permission and its consent check, the registration, `--diagnose`, the admin center listing, the script's delete, teardown's delete. Not run: a second computer joining a registered agent | Run for real (2026-11-15, Windows 11 Pro 25H2, built-in Administrator): the permission, the registration, `-Diagnose`, the admin center listing, telemetry, teardown's delete. Run for real: the takeover run's grant, on a first run. Not run: a standard user |
 | `status.sh` and `setup_delegated.sh` read `.env` as data | Run for real (the old scripts fail the tests, the new ones pass) | Unit-tested | n/a |
 | The full test suite | Every commit | Not run | CI (`test-windows`) on each pull request |
-| Process containment | Not in 0.2.0: planned for 0.3.0 | Not in 0.2.0 | Not in 0.2.0 |
+| Process containment | Not in 0.2.0 or 0.3.0: planned for 0.4.0 | Not in 0.2.0 or 0.3.0 | Not in 0.2.0 or 0.3.0 |
 
 ## Never run
 
 - The Copilot SDK harness against a real Copilot runtime.
 - Registering the agent with 0.2.0's own `register_agent_instance.py --apply`, which needs a
-  permission the 0.2.0 setup app doesn't hold. Setup on `main` after 0.2.0 does it; see below.
+  permission the 0.2.0 setup app doesn't hold. Setup in 0.3.0 does it; see below.
 
-## After 0.2.0: the Agent 365 registry through setup
+## 0.3.0: the Agent 365 registry through setup
+
+Run on the Agent 365 integration branch (pull request #162) before it was merged into `main`.
 
 ### Linux
 

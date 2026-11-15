@@ -35,6 +35,8 @@ from entra_provisioning import (  # noqa: E402
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from script_output import make_output_safe  # noqa: E402
+
 from entrabot.graph_helpers import GRAPH_V1, graph_request  # noqa: E402
 
 
@@ -84,6 +86,7 @@ def _remove_licenses(token: str, user_id: str, sku_ids: list[str]) -> bool:
 
 def main(argv: list[str]) -> int:
     # ---- parse args ----
+    make_output_safe()
     if any(arg in ("--help", "-h") for arg in argv[1:]):
         _print_usage()
         return 0

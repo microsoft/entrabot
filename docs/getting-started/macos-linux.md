@@ -10,11 +10,11 @@ Setup on macOS and Linux is one script. It starts the same setup wizard as Windo
 1. **Get the Entrabot folder onto your computer.** Either download the source code ZIP of the latest release from <https://github.com/microsoft/entrabot/releases/latest> and extract it, or clone it:
 
     ```bash
-    git clone --branch v0.2.0 https://github.com/microsoft/entrabot.git
+    git clone --branch v0.3.0 https://github.com/microsoft/entrabot.git
     cd entrabot
     ```
 
-    This clones the latest release, v0.2.0. `main` is development and may be ahead of it. Git then prints a note about a "detached HEAD": that is normal when you check out a release tag, not an error. To upgrade an existing install, see [Upgrading to a new release](../troubleshooting/migrations-and-upgrades.md#upgrading-to-a-new-release).
+    This clones the latest release, v0.3.0. `main` is development and may be ahead of it. Git then prints a note about a "detached HEAD": that is normal when you check out a release tag, not an error. To upgrade an existing install, see [Upgrading to a new release](../troubleshooting/migrations-and-upgrades.md#upgrading-to-a-new-release).
 
 2. **Run setup** from a terminal in the Entrabot folder:
 
@@ -77,7 +77,7 @@ Then, only if you switched it on, it sets up **Agent 365 integration**, in two h
 - Telemetry: it gives the agent the `Agent365.Observability.OtelWrite` permission, checks for about two minutes, as the agent, that the agent's token carries it, and only then switches telemetry on in `.env` and reads it back. Setup can't check the licence, so it says that Agent 365 drops the agent's telemetry unless someone in the organization has a Microsoft 365 E7 or Agent 365 licence.
 - The registry: it registers the agent in the Agent 365 registry with the setup app, which was given `AgentRegistration.ReadWrite.All` earlier in the run (by your sign-in, which needs the Global Administrator or Privileged Role Administrator role for it), and records the registration's ID, so running setup again updates the same registration. Only then does it say that the agent is listed in the Microsoft 365 admin center (Agents > All agents > Registry). A computer that joined an agent that already existed does not register it again: the registry cannot be searched, so setup can't tell whether another computer did. It says so, and how to record that computer's registration here instead.
 
-`./scripts/setup.sh --diagnose` reports both: an "Agent 365 telemetry" line (whether telemetry is on and the token carries the permission) and an "Agent 365 registry" line (registered with its ID, not registered, or why it can't be checked). Registration through setup has not yet been run against a real tenant.
+`./scripts/setup.sh --diagnose` reports both: an "Agent 365 telemetry" line (whether telemetry is on and the token carries the permission) and an "Agent 365 registry" line (registered with its ID, not registered, or why it can't be checked). Registration through setup is new in 0.3.0. It has been run against a real tenant on Linux (Ubuntu 24.04) and Windows, not yet on macOS, nor with a second computer joining an agent that is already registered.
 
 ## Licences for the agent
 
@@ -85,7 +85,7 @@ The licence walkthrough is the same as on Windows; see [Licences for the agent](
 
 ## The first start
 
-The MCP server is not contained in 0.2.0: it runs with all of your account's rights. Containing it on macOS and Linux is planned for 0.3.0. See [Security Boundaries](../architecture/security-boundaries.md#current-limitation-no-shipped-execution-sandbox).
+The MCP server is not contained in 0.3.0: it runs with all of your account's rights. Containing it on macOS and Linux is planned for 0.4.0. See [Security Boundaries](../architecture/security-boundaries.md#current-limitation-no-shipped-execution-sandbox).
 
 The first time Claude Code opens the Entrabot folder it asks some questions; `./start-entrabot.sh` and setup's last screen both say so. If this computer has not used Claude Code before, it asks you to sign in to Claude. Then it asks whether to trust this folder, whether to use the `entrabot` MCP server, and whether to load a development channel. Say yes to each: the folder is the one you just set up, the server is your agent, and the channel is how Teams messages reach it. Then say *Who are you?*
 

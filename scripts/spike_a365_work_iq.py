@@ -14,6 +14,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 REQUIRED_SERVERS = ("mcp_WordServer", "mcp_ExcelServer")
 
 
@@ -62,6 +65,7 @@ async def smoke_read_word(url: str) -> int:
 
 
 def main() -> int:
+    make_output_safe()
     if len(sys.argv) == 3 and sys.argv[1] == "read-word":
         import asyncio
 

@@ -35,6 +35,8 @@ from entra_provisioning import (  # noqa: E402
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from script_output import make_output_safe  # noqa: E402
+
 from entrabot.graph_helpers import GRAPH_BETA as GRAPH_BASE  # noqa: E402
 from entrabot.graph_helpers import resolve_user_by_email  # noqa: E402
 
@@ -70,6 +72,7 @@ def _remove_sponsor(token: str, agent_object_id: str, sponsor_id: str) -> str:
 
 
 def main(argv: list[str]) -> int:
+    make_output_safe()
     if len(argv) < 2:
         print(__doc__, file=sys.stderr)
         print("\nERROR: email argument is required.", file=sys.stderr)

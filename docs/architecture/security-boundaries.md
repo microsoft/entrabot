@@ -100,7 +100,7 @@ Sensitive values are redacted before leaving the body by a case-insensitive, sub
 
 ## Current limitation: no shipped execution sandbox
 
-Entrabot does not ship an execution sandbox: the MCP server runs with all of its user's rights, and Claude Code's own sandbox covers the shell commands it runs, not local MCP servers. Containing the server in an OS sandbox on macOS and Linux is planned for 0.3.0.
+Entrabot does not ship an execution sandbox: the MCP server runs with all of its user's rights, and Claude Code's own sandbox covers the shell commands it runs, not local MCP servers. Containing the server in an OS sandbox on macOS and Linux is planned for 0.4.0.
 
 ## See also
 

@@ -45,6 +45,9 @@ from blueprint_certs import (
 )
 from entra_provisioning import get_bootstrap_graph_token
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 EXIT_REGISTERED, EXIT_NOT_REGISTERED, EXIT_USAGE, EXIT_UNCONFIRMED = 0, 1, 2, 3
 
 
@@ -83,6 +86,7 @@ def _der_from_store(sha1: str) -> bytes | None:
 
 
 def main(argv: Sequence[str] | None = None, *, sleep: Callable[[float], None] = time.sleep) -> int:
+    make_output_safe()
     parser = argparse.ArgumentParser(description="Add this machine's certificate to the Blueprint.")
     parser.add_argument("--blueprint-object-id", required=True)
     source = parser.add_mutually_exclusive_group(required=True)

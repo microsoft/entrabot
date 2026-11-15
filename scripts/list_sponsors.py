@@ -24,6 +24,7 @@ from entra_provisioning import (  # noqa: E402
     get_existing_graph_token,
     get_state,
 )
+from script_output import make_output_safe  # noqa: E402
 
 # fmt: on
 from entrabot.graph_helpers import GRAPH_BETA, graph_request  # noqa: E402
@@ -33,6 +34,7 @@ from entrabot.graph_helpers import GRAPH_BETA, graph_request  # noqa: E402
 # ---------------------------------------------------------------------------
 
 def main(argv: list[str] | None = None) -> int:
+    make_output_safe()
     parser = argparse.ArgumentParser(
         description="List sponsors for the Agent Identity.",
     )

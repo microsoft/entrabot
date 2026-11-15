@@ -36,6 +36,7 @@ from entra_provisioning import (  # noqa: E402, I001
     get_existing_graph_token,
     get_state,
 )
+from script_output import make_output_safe  # noqa: E402
 
 
 GRAPH_V1 = "https://graph.microsoft.com/v1.0"
@@ -72,6 +73,7 @@ def _find_consent_grant(
 
 def main(argv: list[str]) -> int:
     # ---- parse args ----
+    make_output_safe()
     if any(arg in ("--help", "-h") for arg in argv[1:]):
         _print_usage()
         return 0

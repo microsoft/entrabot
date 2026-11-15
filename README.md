@@ -91,7 +91,7 @@ Full walkthrough in [`docs/architecture/system-overview.md`](docs/architecture/s
 Download the latest release (the source code ZIP on <https://github.com/microsoft/entrabot/releases/latest>) or clone it, then double-click `scripts\setup-windows.cmd`. Or from a terminal:
 
 ```bat
-git clone --branch v0.2.0 https://github.com/microsoft/entrabot.git
+git clone --branch v0.3.0 https://github.com/microsoft/entrabot.git
 cd entrabot
 scripts\setup-windows.cmd
 ```
@@ -103,13 +103,13 @@ What you need: a Microsoft 365 tenant, an account that administers it, and a fre
 ### macOS or Linux
 
 ```bash
-git clone --branch v0.2.0 https://github.com/microsoft/entrabot.git
+git clone --branch v0.3.0 https://github.com/microsoft/entrabot.git
 cd entrabot
 ./scripts/setup.sh
 ./start-entrabot.sh
 ```
 
-This clones the latest release, v0.2.0. `main` is development and may be ahead of it. Git then prints a note about a "detached HEAD": that is normal when you check out a release tag, not an error. To upgrade an existing install, see [Upgrading to a new release](docs/troubleshooting/migrations-and-upgrades.md#upgrading-to-a-new-release).
+This clones the latest release, v0.3.0. `main` is development and may be ahead of it. Git then prints a note about a "detached HEAD": that is normal when you check out a release tag, not an error. To upgrade an existing install, see [Upgrading to a new release](docs/troubleshooting/migrations-and-upgrades.md#upgrading-to-a-new-release).
 
 Setup needs Python 3.12 or newer and nothing else first: no Azure CLI and no `az login`. It runs the same setup wizard as Windows: it asks a few questions (each has a suggested answer), signs you in to Microsoft, creates the agent, keeps its sign-in key in your Keychain or keyring, and tests it. To skip the questions, pass the answers: `./scripts/setup.sh --new --with-upn-suffix=workstation --yes`. On Ubuntu 24.04 the wizard has been run end to end against a real tenant; on macOS only a repair run and the health check have. Guide, limits, and what has and has not been tested: [`docs/getting-started/macos-linux.md`](docs/getting-started/macos-linux.md).
 
@@ -200,7 +200,7 @@ This is a research repo, not a production service. It runs reliably on a develop
 - Body-first prompt architecture with optional persona layer from a separate MCP (`persona-sati`)
 - Audit before acting: every tool that sends, creates, shares or deletes writes its audit event first (to a local JSONL file, flushed to disk) and does nothing if that write fails. Teams and mail reads are not audited. Events the model writes through `audit_log` are marked as the model's
 - Outbound recipient policy, enforced in the server: the agent may reach its sponsors, the members of the chat a request came from, and its own tenant; anyone else needs `ENTRABOT_OUTBOUND_ALLOW`
-- Agent 365 integration (opt-in in setup, one question): the agent's entry in the Agent 365 registry, so it is listed in the Microsoft 365 admin center (on `main`; run for real on Linux so far), and Agent 365 telemetry: content-suppressed spans from the MCP server and from the harness (`entrabot`, an optional terminal front end on the GitHub Copilot SDK that runs the model loop itself). Agent 365 keeps them only if the tenant has a Microsoft 365 E7 or Agent 365 licence assigned
+- Agent 365 integration (opt-in in setup, one question): the agent's entry in the Agent 365 registry, so it is listed in the Microsoft 365 admin center (new in 0.3.0; run for real on Linux and Windows), and Agent 365 telemetry: content-suppressed spans from the MCP server and from the harness (`entrabot`, an optional terminal front end on the GitHub Copilot SDK that runs the model loop itself). Agent 365 keeps them only if the tenant has a Microsoft 365 E7 or Agent 365 licence assigned
 - `pytest -v --tb=short && ruff check .` gates every commit
 
 **Persona-sati host bootstrap:** Hosts that attach persona-sati must call `bootstrap_session` before the first substantive answer because FastMCP instructions do not reliably reach the LLM prompt. If `mind_contract_available` is false, operate in body-only mode. When the mind contract is available, follow the per-turn cognition tools: `observe` around external tools, `reflect` for durable observations, and `recall` when a returned memory excerpt is insufficient.
@@ -215,9 +215,9 @@ This is a research repo, not a production service. It runs reliably on a develop
 
 **Open:**
 
-- Process containment is not shipped: the MCP server is not contained in 0.2.0 and runs with all of its user's rights. Containing it on macOS and Linux is planned for 0.3.0.
-- Registration in the Agent 365 registry through setup has been run against a tenant on Linux and Windows: not yet on macOS, nor with a second computer joining a registered agent.
-- Headless and cloud operation: see the proposal in `engineering-history/plans/headless-cloud-runtime.md`.
+- Process containment is not shipped: the MCP server is not contained in 0.3.0 and runs with all of its user's rights. Planned for 0.4.0: process containment of the MCP server on macOS and Linux with Microsoft eXecution Container (MXC), where it is installed, and the system's own sandbox otherwise (Seatbelt on macOS, bubblewrap on Linux), as in [pull request #156](https://github.com/microsoft/entrabot/pull/156). MXC has not been run for real. Windows is not part of it: MXC has open issues there with Python asyncio and stdio servers when egress is denied.
+- Registration in the Agent 365 registry through setup has been run against a tenant on Linux and Windows: not yet on macOS, nor with a second computer joining a registered agent, nor on Windows as a standard user.
+- Planned for 0.5.0: GitHub Copilot SDK harness support, the harness made ready for real use (run against a real Copilot runtime, with the body's audit events and the outbound recipient policy applied to its Teams tools, and Teams state that survives a restart), together with running Entrabot in a container for headless operation. The harness has not been run against a real Copilot runtime. The design note is in [pull request #161](https://github.com/microsoft/entrabot/pull/161).
 
 ---
 

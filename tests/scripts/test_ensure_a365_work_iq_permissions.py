@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -402,10 +403,30 @@ TOOLS = "ea9ffc3e-8a23-4a7d-836d-234d7c7565c1"
 WORD = "c2d0c2b6-8013-4346-9f8b-b81d3b754a29"
 
 
+def _already_there(app: str) -> FakeResponse:
+    """Graph's answer to a create for an entry it already has, on a real tenant (2026-11-14)."""
+    return FakeResponse(
+        400,
+        {
+            "error": {
+                "code": "Request_BadRequest",
+                "message": (
+                    f"An inheritable permission for resource app ID '{app}' already exists."
+                ),
+            }
+        },
+    )
+
+
+def _conflict(_app: str) -> FakeResponse:
+    return FakeResponse(409, {"error": {"message": "already exists"}})
+
+
 class FakeInheritable:
     """The Blueprint's inheritablePermissions collection, the way Graph answered on a real
-    tenant: a read straight after a write can come back empty, and a write can be lost when
-    another lands moments later."""
+    tenant: a read straight after a write can come back empty, a later read can still miss an
+    entry an earlier read showed, a create for an entry that is there is refused with 400
+    "already exists", and a write can be lost when another lands moments later."""
 
     def __init__(
         self,
@@ -414,14 +435,31 @@ class FakeInheritable:
         empty_reads_after_write: int = 1,
         lose_the_first_when_the_second_lands: bool = False,
         never_readable: bool = False,
+        lagging_reads: dict[str, int] | None = None,
+        duplicate: Callable[[str], FakeResponse] = _already_there,
     ) -> None:
         self.entries = {entry["resourceAppId"]: entry for entry in entries or []}
         self.empty_reads_after_write = empty_reads_after_write
         self.lose_first = lose_the_first_when_the_second_lands
         self.never_readable = never_readable
+        # Once a read has shown the entry for an app, the next N reads leave it out.
+        self.lagging_reads = dict(lagging_reads or {})
+        self.hidden: dict[str, int] = {}
+        self.duplicate = duplicate
         self.empty_reads = 0
         self.posted: list[str] = []
         self.calls: list[tuple[str, str, dict[str, Any] | None]] = []
+
+    def _shown(self) -> list[dict[str, Any]]:
+        shown = []
+        for app, entry in self.entries.items():
+            if self.hidden.get(app, 0):
+                self.hidden[app] -= 1  # read from a copy that has not caught up
+                continue
+            shown.append(entry)
+            if app in self.lagging_reads:
+                self.hidden[app] = self.lagging_reads.pop(app)
+        return shown
 
     def __call__(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
         body = kwargs.get("json")
@@ -431,12 +469,12 @@ class FakeInheritable:
             if self.never_readable or self.empty_reads:
                 self.empty_reads = max(0, self.empty_reads - 1)
                 return FakeResponse(200, {"value": []})
-            return FakeResponse(200, {"value": list(self.entries.values())})
+            return FakeResponse(200, {"value": self._shown()})
         if method == "POST" and url == INHERITABLE:
             assert body is not None
             app = body["resourceAppId"]
             if app in self.entries:
-                return FakeResponse(409, {"error": {"message": "already exists"}})
+                return self.duplicate(app)
             if self.lose_first and len(self.posted) == 1:
                 self.entries.pop(self.posted[0], None)  # seen for real: both answered 201
                 self.lose_first = False
@@ -514,6 +552,35 @@ def test_an_entry_lost_after_it_was_confirmed_is_written_again() -> None:
     assert set(graph.entries) == {TOOLS, WORD}
 
 
+def test_an_entry_graph_already_has_is_read_back_not_a_failure() -> None:
+    # From a real run of the Windows wizard on a new PC (2026-11-14): both entries were written
+    # and read back, then the final check's read did not show Word's. Writing it again was
+    # refused with 400 "already exists", the script exited 1, and setup said Word, Excel and
+    # OneDrive files could not be switched on. The entry was there: the next run found it.
+    graph = FakeInheritable(lagging_reads={WORD: 2})
+    timeline: list[str] = []
+
+    def request(method: str, url: str, **kwargs: Any) -> FakeResponse:
+        timeline.append(method)
+        return graph(method, url, **kwargs)
+
+    module = load_module()
+    module.ensure_inheritable_permissions(
+        token="token",
+        blueprint_app_id="blueprint-app",
+        request=request,
+        sleep=lambda _seconds: timeline.append("wait"),
+    )
+
+    assert [method for method, _url, _body in graph.writes()] == ["POST", "POST", "POST"]
+    assert graph.posted == [TOOLS, WORD]  # the third, for Word, was refused as already there
+    assert graph.entries[WORD]["inheritableScopes"] == _enumerated("Tools.ListInvoke.All")
+    refused = len(timeline) - 1 - timeline[::-1].index("POST")
+    after = timeline[refused + 1 :]
+    assert after[0] == "wait" and "GET" in after  # it waited, then read the entry back
+    assert "POST" not in after and "PATCH" not in after  # and wrote nothing more
+
+
 def test_broader_entries_from_microsofts_tool_are_left_alone() -> None:
     # On a working Mac agent, Microsoft's tool set allAllowed scopes and roles: a no-op here.
     all_allowed = {
@@ -560,8 +627,11 @@ def test_an_enumerated_entry_is_widened_never_narrowed() -> None:
     }
 
 
-def test_a_conflicting_create_reads_the_entry_and_widens_it() -> None:
-    graph = FakeInheritable()
+@pytest.mark.parametrize("duplicate", [_already_there, _conflict], ids=["400", "409"])
+def test_a_conflicting_create_reads_the_entry_and_widens_it(
+    duplicate: Callable[[str], FakeResponse],
+) -> None:
+    graph = FakeInheritable(duplicate=duplicate)
 
     def first_read_misses(method: str, url: str, **kwargs: Any) -> FakeResponse:
         # The entry exists, but the first read does not show it (Graph had not caught up).
@@ -582,7 +652,7 @@ def test_a_conflicting_create_reads_the_entry_and_widens_it() -> None:
         sleep=lambda _seconds: None,
     )
     writes = graph.writes()
-    assert writes[0][0] == "POST" and writes[1][0] == "PATCH"  # 409, then a merge
+    assert writes[0][0] == "POST" and writes[1][0] == "PATCH"  # already there, then a merge
     scopes = graph.entries[TOOLS]["inheritableScopes"]["scopes"]
     assert set(scopes) >= {"McpServers.Excel.All", "McpServers.OneDriveSharepoint.All"}
 
@@ -596,6 +666,59 @@ def test_an_entry_that_never_shows_up_is_an_error_not_a_hang() -> None:
             token="token", blueprint_app_id="blueprint-app", request=graph, sleep=sleeps.append
         )
     assert sum(sleeps) < 120
+
+
+def test_already_there_but_never_read_back_is_still_an_error() -> None:
+    # "Already exists" only counts once a read shows the entry. Otherwise it is an error, with
+    # Graph's answer, and not a hang.
+    graph = FakeInheritable(
+        [{"resourceAppId": TOOLS, "inheritableScopes": _enumerated(*AGENT_TOOLS_SCOPES)}],
+        never_readable=True,
+    )
+    sleeps: list[float] = []
+    module = load_module()
+    with pytest.raises(module.A365PermissionError, match="could not be read back") as raised:
+        module.ensure_inheritable_permissions(
+            token="token", blueprint_app_id="blueprint-app", request=graph, sleep=sleeps.append
+        )
+    assert "already exists" in str(raised.value)
+    assert [method for method, _url, _body in graph.writes()] == ["POST"]
+    assert 0 < sum(sleeps) < 120
+
+
+def test_any_other_bad_request_still_fails_at_once(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Only "already exists" counts as written. Any other 400 fails straight away, with Graph's
+    # answer and exit 1, so setup says so and puts ToolingManifest.json back.
+    module = load_module()
+    sleeps: list[float] = []
+
+    def refused(method: str, url: str, **kwargs: Any) -> FakeResponse:
+        if method == "GET":
+            return FakeResponse(200, {"value": []})
+        return FakeResponse(
+            400,
+            {
+                "error": {
+                    "code": "Request_BadRequest",
+                    "message": "Invalid value specified for property 'inheritableScopes'.",
+                }
+            },
+        )
+
+    inherit = module.ensure_inheritable_permissions
+    monkeypatch.setattr(module, "get_existing_graph_token", lambda: "token")
+    monkeypatch.setattr(module, "ensure_a365_work_iq_permissions", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "ensure_inheritable_permissions",
+        lambda **kwargs: inherit(**kwargs, request=refused, sleep=sleeps.append),
+    )
+    assert module.main(["--blueprint-app-id", "blueprint-app"]) == 1
+    error = capsys.readouterr().err
+    assert "(400)" in error and "Invalid value specified" in error
+    assert sleeps == []
 
 
 def test_a_refused_write_is_an_error_with_graphs_answer() -> None:
@@ -637,3 +760,38 @@ def test_the_scopes_come_from_the_package_catalog() -> None:
     for resource in module.REQUIRED_RESOURCES:
         scopes.setdefault(resource.app_id, []).append(resource.scope)
     assert {app: tuple(found) for app, found in scopes.items()} == granted_scopes()
+
+
+def test_run_on_its_own_with_a_cp1252_stdout_it_does_not_fail_on_the_check_mark(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Live on Windows 11 with its output piped: the work was done, then printing "✅" through
+    # cp1252 raised UnicodeEncodeError and the script exited 1.
+    import io
+
+    module = load_module()
+    every_scope = " ".join(
+        scope for _app, _name, scopes in module._scopes_by_resource() for scope in scopes
+    )
+
+    def in_place(method: str, url: str, **kwargs: Any) -> FakeResponse:
+        if method == "GET" and "servicePrincipals?$filter=" in url:
+            return FakeResponse(200, {"value": [{"id": "sp"}]})
+        if method == "GET" and "oauth2PermissionGrants" in url:
+            return FakeResponse(200, {"value": [{"id": "grant", "scope": every_scope}]})
+        raise AssertionError(f"unexpected request: {method} {url}")
+
+    real = module.ensure_a365_work_iq_permissions
+    monkeypatch.setattr(module, "get_existing_graph_token", lambda: "token")
+    monkeypatch.setattr(
+        module, "ensure_a365_work_iq_permissions", lambda **kwargs: real(**kwargs, request=in_place)
+    )
+    monkeypatch.setattr(module, "ensure_inheritable_permissions", lambda **_kwargs: None)
+    out = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", newline="\n")
+    monkeypatch.setattr(sys, "stdout", out)
+
+    assert module.main(["--blueprint-app-id", "blueprint-app"]) == 0
+    out.flush()
+    assert b"? A365 Work IQ resource service principals and grants are ready" in (
+        out.buffer.getvalue()
+    )

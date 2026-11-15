@@ -13,9 +13,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import show_agent_status  # noqa: E402
+from script_output import make_output_safe  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
+    make_output_safe()
     args = list(argv or [])
     if "--help" in args or "-h" in args:
         return show_agent_status.main(args)

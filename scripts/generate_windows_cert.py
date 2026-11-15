@@ -35,6 +35,9 @@ from pathlib import Path
 
 from entrabot.platform import wincert
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 KSP_TPM = wincert.KSP_TPM
 KSP_SOFTWARE = wincert.KSP_SOFTWARE
 VALID_KSPS = {KSP_TPM, KSP_SOFTWARE}
@@ -97,6 +100,7 @@ def compute_x5t_s256(der_bytes: bytes) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    make_output_safe()
     parser = argparse.ArgumentParser(
         description="Create a non-exportable signing certificate in Cert:\\CurrentUser\\My."
     )

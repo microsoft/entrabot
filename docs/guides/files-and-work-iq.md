@@ -112,8 +112,9 @@ permissions they need, including the inheritable permissions that let the agent 
 (through
 [`ensure_a365_work_iq_permissions.py`](../reference/scripts/provisioning/ensure-a365-work-iq-permissions-py.md)),
 and checks that the agent's tokens carry them. This has been run on Windows over SSH, for
-a new agent and an unattended repair. macOS and Linux run the same steps; there they have
-not yet been run against a real tenant.
+a new agent and an unattended repair, and on Linux (Ubuntu 24.04), where the agent then used
+Word through Work IQ. macOS runs the same steps; there they have not yet been run against a
+real tenant.
 
 Earlier versions of `setup.sh` did this on macOS and Linux with Microsoft's Agent 365 CLI
 (`a365`) and PowerShell 7. `--with-a365-work-iq` is now another name for

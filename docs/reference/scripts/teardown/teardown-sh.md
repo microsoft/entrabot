@@ -26,8 +26,10 @@ Platforms: macOS, Linux.
 
 On macOS and Linux the default teardown is covered by unit tests, and this
 script's choice between the two teardowns was run for real under bash with a
-stub interpreter. It has not been run against a real tenant from macOS or Linux;
-on Windows the same teardown has been. The tenant-wide teardown is this script's
+stub interpreter. It has been run against a real tenant on Linux (Ubuntu 24.04),
+including `--delete-agent`, which in 0.3.0 also deleted the agent's Agent 365
+registration; it has not been run from macOS. On Windows the same teardown has
+been run too. The tenant-wide teardown is this script's
 earlier teardown, unchanged apart from also deleting this agent's own key store
 item. See
 [What has been tested](../../../getting-started/macos-linux.md#what-has-been-tested).

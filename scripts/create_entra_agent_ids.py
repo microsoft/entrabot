@@ -58,6 +58,9 @@ from collections.abc import Sequence
 
 import requests
 
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 # When ENTRABOT_NEW_CHAIN=1, skip all find_existing_* lookups and create fresh.
 # Set by setup.sh --new to force a new identity chain.
 _FORCE_NEW = os.environ.get("ENTRABOT_NEW_CHAIN") == "1"
@@ -1868,6 +1871,7 @@ def _arguments(argv: Sequence[str]) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] = ()) -> int:
+    make_output_safe()
     args = _arguments(argv)
     if args.licence_report or args.assign_licence is not None:
         return _licence_only(report=args.licence_report, assign=args.assign_licence)

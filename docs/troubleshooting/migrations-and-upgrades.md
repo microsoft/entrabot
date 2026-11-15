@@ -198,7 +198,7 @@ ahead of it. To move an existing install to a release, in the Entrabot folder:
 
     ```bash
     git fetch --tags
-    git checkout v0.2.0
+    git checkout v0.3.0
     ./scripts/setup.sh
     ```
 
@@ -206,7 +206,7 @@ ahead of it. To move an existing install to a release, in the Entrabot folder:
 
     ```bat
     git fetch --tags
-    git checkout v0.2.0
+    git checkout v0.3.0
     scripts\setup-windows.cmd
     ```
 
@@ -224,7 +224,7 @@ of them. To keep your edits, put them aside first and reapply them after:
 
 ```bash
 git stash push -m "my Entrabot changes"
-git checkout v0.2.0
+git checkout v0.3.0
 git stash pop
 ```
 
@@ -237,6 +237,29 @@ into it instead of checking the tag out.
 new folder as in the getting-started guide, copy `.env` and `.entrabot-state.json` from the old
 folder into it, and run setup in the new folder. Start the agent from the new folder from then
 on.
+
+## Upgrading to 0.3.0
+
+The changes are in setup and teardown:
+
+- **One question for Agent 365.** Setup asks "Switch on Agent 365 integration?" instead of
+  "Switch on Agent 365 telemetry?". Yes switches telemetry on as before and also registers the
+  agent in the Agent 365 registry, which gives the setup app the Microsoft Graph permission
+  `AgentRegistration.ReadWrite.All`. The flag is `--configure-a365` (`-ConfigureA365` on
+  Windows); 0.2.0's `--configure-a365-observability` and `-ConfigureA365Observability` still
+  work and now mean the same.
+- **One registration per agent.** A computer that joined its agent with 0.2.0's setup has no
+  record that it joined, so setup there cannot tell it from the computer that created the
+  agent, and a yes registers the agent from it as well. If another computer has registered
+  the agent already, record that registration on this one before running setup with a yes:
+  `register_agent_instance.py --registration-id <ID> --apply`, with the ID the other
+  computer's `--diagnose` shows. Setup then updates that registration instead of making a
+  second one. See
+  [Telemetry and the Agent 365 registry](../platform-docs/microsoft-agent-365.md#telemetry-and-the-agent-365-registry).
+- **Teardown with `--delete-agent`** (`-DeleteAgent`) also deletes the agent's registration
+  when this computer recorded one.
+
+Restart the MCP host after upgrading, as for any release.
 
 ## Upgrading to 0.2.0
 

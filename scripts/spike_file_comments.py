@@ -29,6 +29,9 @@ import httpx
 from entrabot.config import EntraBotConfig
 from entrabot.tools.teams import acquire_agent_user_token
 
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 GRAPH_V1 = "https://graph.microsoft.com/v1.0"
 GRAPH_BETA = "https://graph.microsoft.com/beta"
 
@@ -46,6 +49,7 @@ def _print_section(label: str) -> None:
 
 
 def main() -> int:
+    make_output_safe()
     if len(sys.argv) != 2:
         print(f"usage: {sys.argv[0]} <share-url>", file=sys.stderr)
         return 1

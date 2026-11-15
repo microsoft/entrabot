@@ -32,6 +32,7 @@ from entra_provisioning import (  # noqa: E402
     get_state,
     set_state,
 )
+from script_output import make_output_safe  # noqa: E402
 
 # fmt: on
 from entrabot.graph_helpers import GRAPH_V1, graph_request  # noqa: E402
@@ -140,6 +141,7 @@ def _assign_license(token: str, user_id: str, sku: dict, label: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def main(argv: list[str] | None = None) -> int:
+    make_output_safe()
     parser = argparse.ArgumentParser(
         description="Assign Teams and/or Copilot licenses to the Agent User.",
     )

@@ -27,6 +27,9 @@ from __future__ import annotations
 import contextlib
 import sys
 
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 try:
     from blueprint_certs import fetch_key_credentials, unreadable_certificates
     from entra_provisioning import get_existing_graph_token
@@ -68,6 +71,7 @@ def _check(blueprint_obj_id: str, expected: str) -> int:
 
 
 def main() -> int:
+    make_output_safe()
     if len(sys.argv) != 3:
         print(
             "usage: verify_blueprint_cert.py <BLUEPRINT_OBJECT_ID> <EXPECTED_THUMBPRINT>",

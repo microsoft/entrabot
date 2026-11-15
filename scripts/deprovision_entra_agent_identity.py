@@ -24,6 +24,8 @@ from entra_provisioning import ProvisionerBootstrapError, get_existing_graph_tok
 
 # The repo root is one directory up; src/ contains the entrabot package.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from script_output import make_output_safe  # noqa: E402
+
 from entrabot.graph_helpers import (  # noqa: E402
     graph_collection_values,
     graph_request,
@@ -219,6 +221,7 @@ def deprovision_agent_user(token: str, upn: str, *, dry_run: bool = False) -> st
 
 
 def main(argv: list[str] | None = None) -> int:
+    make_output_safe()
     parser = argparse.ArgumentParser(
         description="Deprovision targeted EntraBot Agent User identity chains."
     )

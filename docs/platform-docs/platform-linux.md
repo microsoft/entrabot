@@ -174,9 +174,9 @@ and [Prerequisites](../getting-started/prerequisites.md).
 
 ## Process containment
 
-The MCP server is **not contained** in 0.2.0. It runs with all of its user's rights: it can
+The MCP server is **not contained** in 0.3.0. It runs with all of its user's rights: it can
 read every file that user can and connect to any host. Containing it on Linux and macOS is
-planned for 0.3.0. The recipient policy and audit apply on every platform. See
+planned for 0.4.0. The recipient policy and audit apply on every platform. See
 [Security Boundaries](../architecture/security-boundaries.md).
 
 ## Default paths

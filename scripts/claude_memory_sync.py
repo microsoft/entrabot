@@ -30,6 +30,9 @@ import os
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 
 def _resolve_backend():  # pragma: no cover — monkey-patched in tests
     from entrabot.storage.backend import get_backend
@@ -102,6 +105,7 @@ def _cmd_push_one(path: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    make_output_safe()
     parser = argparse.ArgumentParser(
         prog="claude_memory_sync",
         description="Sync Claude Code per-project auto-memory with blob storage.",

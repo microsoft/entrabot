@@ -36,9 +36,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from create_entra_agent_ids import grant_agent_user_consent
 from entra_provisioning import ProvisionerBootstrapError, get_existing_graph_token, get_state
+from script_output import make_output_safe  # noqa: E402
 
 
 def main() -> int:
+    make_output_safe()
     print("=" * 60)
     print("EntraBot — PATCH Agent User Files / Sites consent")
     print("=" * 60)

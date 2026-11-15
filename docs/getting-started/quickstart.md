@@ -11,12 +11,12 @@ Entrabot gives an autonomous agent its own Microsoft Entra Agent Identity and Ag
 Setup needs Python 3.12 or newer and nothing else first: no Azure CLI and no `az login`. Clone the latest release (or download its source code ZIP from <https://github.com/microsoft/entrabot/releases/latest>), then run setup from a terminal in it:
 
 ```bash
-git clone --branch v0.2.0 https://github.com/microsoft/entrabot.git
+git clone --branch v0.3.0 https://github.com/microsoft/entrabot.git
 cd entrabot
 ./scripts/setup.sh
 ```
 
-This clones the latest release, v0.2.0. `main` is development and may be ahead of it. Git then prints a note about a "detached HEAD": that is normal when you check out a release tag, not an error. To upgrade an existing install, see [Upgrading to a new release](../troubleshooting/migrations-and-upgrades.md#upgrading-to-a-new-release).
+This clones the latest release, v0.3.0. `main` is development and may be ahead of it. Git then prints a note about a "detached HEAD": that is normal when you check out a release tag, not an error. To upgrade an existing install, see [Upgrading to a new release](../troubleshooting/migrations-and-upgrades.md#upgrading-to-a-new-release).
 
 Setup builds `.venv`, then asks a few questions (each has a suggested answer), signs you in to Microsoft, and creates the agent. To answer up front instead:
 
@@ -35,7 +35,7 @@ The agent's signing key is kept in your login keychain on a Mac, or a Secret Ser
 Nothing needs installing first. Download the latest release's source code ZIP or clone it, then double-click `scripts\setup-windows.cmd`, or run it from a terminal:
 
 ```bat
-git clone --branch v0.2.0 https://github.com/microsoft/entrabot.git
+git clone --branch v0.3.0 https://github.com/microsoft/entrabot.git
 cd entrabot
 scripts\setup-windows.cmd
 ```
@@ -77,7 +77,7 @@ Then ask the host to call `whoami`. It should report the Agent User identity, no
 
 ## What runs by default
 
-- The MCP server is not contained: it runs with all of your account's rights. Containing it on macOS and Linux is planned for 0.3.0. See [Security Boundaries](../architecture/security-boundaries.md#current-limitation-no-shipped-execution-sandbox).
+- The MCP server is not contained: it runs with all of your account's rights. Containing it on macOS and Linux is planned for 0.4.0. See [Security Boundaries](../architecture/security-boundaries.md#current-limitation-no-shipped-execution-sandbox).
 - The agent can email, invite or share files only with its sponsors, the people in the chat a request came from, and your own organization. Anyone else needs `ENTRABOT_OUTBOUND_ALLOW`. See [Configuration](../reference/configuration.md).
 - Agent 365 integration (the agent's entry in the Agent 365 registry, and its telemetry) is off unless you switch it on at setup. The telemetry needs a Microsoft 365 E7 or Agent 365 licence in your organization.
 

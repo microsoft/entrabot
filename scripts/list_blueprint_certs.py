@@ -26,12 +26,16 @@ import sys
 from blueprint_certs import fetch_key_credentials
 from entra_provisioning import get_existing_graph_token
 
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from script_output import make_output_safe  # noqa: E402
+
 EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_COULD_NOT_READ = 3
 
 
 def main() -> int:
+    make_output_safe()
     if len(sys.argv) != 2:
         print(
             "usage: list_blueprint_certs.py <BLUEPRINT_OBJECT_ID>",
