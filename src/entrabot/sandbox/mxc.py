@@ -49,11 +49,14 @@ def executor_name(platform: str = sys.platform) -> str | None:
 
 
 def _trusted(path: str, expected_sha256: str | None) -> bool:
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:  # Windows: no owner check, so never trusted (MXC is not used there)
+        return False
     try:
         info = os.stat(path)
     except OSError:
         return False
-    if info.st_uid not in (os.getuid(), 0) or info.st_mode & 0o022:
+    if info.st_uid not in (getuid(), 0) or info.st_mode & 0o022:
         return False
     if expected_sha256:
         digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()

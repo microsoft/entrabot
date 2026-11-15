@@ -153,13 +153,59 @@ def _lock_holder() -> int | None:
 
 
 def _alive(pid: int) -> bool:
+    """Is process *pid* running? Never sends a signal."""
+    if pid <= 0:  # 0 and -1 name process groups, not one process
+        return False
+    if sys.platform == "win32":
+        # Signal 0 is CTRL_C_EVENT on Windows: os.kill(pid, 0) would send Ctrl+C.
+        return _alive_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
+    except OSError:
+        return False
     return True
+
+
+def _alive_windows(pid: int) -> bool:
+    """Is process *pid* running? Windows only: asks for its exit code, signals nothing."""
+    import ctypes
+    from ctypes import wintypes
+
+    process_query_limited_information = 0x1000
+    still_active = 259
+    error_access_denied = 5
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    try:
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    except (ctypes.ArgumentError, OverflowError):
+        return False
+    if not handle:
+        # Another user's process can't be opened, but it exists.
+        return ctypes.get_last_error() == error_access_denied  # type: ignore[attr-defined]
+    try:
+        code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True
+        return code.value == still_active
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _forwarded_signals() -> tuple[int, ...]:
+    """The signals the launcher passes on to the contained server: those this system has
+    (Windows has no SIGHUP)."""
+    names = ("SIGTERM", "SIGINT", "SIGHUP")
+    return tuple(getattr(signal, name) for name in names if hasattr(signal, name))
 
 
 def _clear_status(state_root: Path, pid: int) -> None:
@@ -302,7 +348,7 @@ def run_contained(
         with contextlib.suppress(ProcessLookupError):
             child.send_signal(signum)
 
-    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    for sig in _forwarded_signals():
         signal.signal(sig, forward)
     try:
         return child.wait()

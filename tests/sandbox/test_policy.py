@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -38,13 +39,12 @@ def _policy(tmp_path: Path, env: dict[str, str] | None = None, **config: object)
 class TestHosts:
     def test_the_hosts_the_code_calls(self, tmp_path: Path) -> None:
         hosts = set(_policy(tmp_path).allowed_hosts)
-        for host in (
+        assert {
             "login.microsoftonline.com",  # three-hop sign-in, OIDC discovery
             "graph.microsoft.com",
             "agent365.svc.cloud.microsoft",  # Work IQ and Agent 365 telemetry
             "*.sharepoint.com",  # Graph file downloads redirect here
-        ):
-            assert host in hosts
+        } <= hosts
         assert set(BASE_HOSTS) <= hosts
 
     def test_the_blob_endpoint_only_with_cloud_memory(self, tmp_path: Path) -> None:
@@ -54,7 +54,7 @@ class TestHosts:
             blob_endpoint="https://acct.blob.core.windows.net",
             blob_container="memory",
         )
-        assert "acct.blob.core.windows.net" in policy.allowed_hosts
+        assert {"acct.blob.core.windows.net"} <= set(policy.allowed_hosts)
 
     def test_persona_sati_and_extra_hosts_from_the_environment(self, tmp_path: Path) -> None:
         policy = _policy(
@@ -64,8 +64,9 @@ class TestHosts:
                 "ENTRABOT_SANDBOX_EXTRA_HOSTS": "proxy.corp.example, *.corp.example",
             },
         )
-        for host in ("mind.example.test", "proxy.corp.example", "*.corp.example"):
-            assert host in policy.allowed_hosts
+        assert {"mind.example.test", "proxy.corp.example", "*.corp.example"} <= set(
+            policy.allowed_hosts
+        )
 
     @pytest.mark.parametrize(
         ("host", "allowed"),
@@ -77,6 +78,8 @@ class TestHosts:
             ("sharepoint.com", False),  # a wildcard covers subdomains only
             ("evilsharepoint.com", False),
             ("graph.microsoft.com.evil.example", False),
+            ("contoso.sharepoint.com.evil.example", False),
+            ("graph.microsoft.com.", True),  # the fully qualified form
             ("example.com", False),
             ("", False),
         ],
@@ -105,5 +108,6 @@ class TestPaths:
         assert policy.temp_dir.is_relative_to(tmp_path / "home" / ".entrabot")
 
     def test_extra_read_paths_from_the_environment(self, tmp_path: Path) -> None:
-        policy = _policy(tmp_path, env={"ENTRABOT_SANDBOX_EXTRA_READ": "/opt/tools:/srv/x"})
+        extra = os.pathsep.join(["/opt/tools", "/srv/x"])  # ":" here, ";" on Windows
+        policy = _policy(tmp_path, env={"ENTRABOT_SANDBOX_EXTRA_READ": extra})
         assert Path("/opt/tools") in policy.read_only and Path("/srv/x") in policy.read_only
