@@ -1334,20 +1334,28 @@ def optional_permission_values() -> list[str]:
     return [REGISTRY_PERMISSION_VALUE] if os.environ.get(GRANT_REGISTRY_ENV) == "1" else []
 
 
-# Between admin-consent attempts for an optional permission. The app and its service principal
-# exist by then (setup's own permissions were just ensured), so this is short.
-_OPTIONAL_CONSENT_WAITS = (10, 20)
+# Admin consent for an optional permission: az answering 0 is not proof. Live, consent run
+# two seconds after the permission was added answered 0 and granted nothing (Microsoft had
+# consented the app's permissions as they were before the add), so each consent is checked
+# against the service principal's app role assignments. One pause per attempt, so at most
+# len() consent calls: after a consent az reports as done, the pause is spent waiting for
+# Microsoft to record it before consenting again; after one that failed, it is the wait
+# before the next try. At worst 50 seconds of waiting, plus 4 consent calls and 8 reads of
+# the consented permissions (3 az calls each): roughly a minute and a half.
+_OPTIONAL_CONSENT_WAITS = (5, 10, 15, 20)
 
 
 def _ensure_optional_permission(client_id: str, value: str, *, may_consent: bool) -> dict[str, str]:
     """Add the Microsoft Graph application permission *value* to the Provisioner app and
-    grant admin consent for it, through the signed-in administrator's Azure CLI, exactly as
-    :func:`_ensure_permissions_and_consent` does for setup's own permissions.
+    grant admin consent for it, through the signed-in administrator's Azure CLI, as
+    :func:`_ensure_permissions_and_consent` does for setup's own permissions; then check that
+    the consent took (see ``_OPTIONAL_CONSENT_WAITS``).
 
     Never raises: the result is ``{"permission", "status", "reason"}``, where status is
 
     * ``present``: an administrator has already consented to it;
-    * ``granted``: added (if it was not declared) and consented in this run;
+    * ``granted``: added (if it was not declared) and consented in this run, and the consent
+      is recorded on the app's service principal (az answering 0 is not taken as proof);
     * ``skipped``: not consented, because this run consents nothing for this app (it was
       taken over on an administrator's approval; see _confirm_already_approved);
     * ``failed``: it could not be added or consented. A declaration this run added is taken
@@ -1398,23 +1406,47 @@ def _ensure_optional_permission(client_id: str, value: str, *, may_consent: bool
         if rc != 0 and "already exists" not in err.lower():
             return result("failed", f"it could not be added to the setup app: {_az_error(err, rc)}")
         added = rc == 0
+
+    def recorded() -> bool:
+        return role in {item.lower() for item in _get_consented_graph_role_ids(client_id)}
+
     print(f"  Granting admin consent for {value} on the provisioner app...")
     rc, err = 1, ""
-    for attempt, wait in enumerate((0, *_OPTIONAL_CONSENT_WAITS)):
-        if attempt:
-            print(f"  Retrying admin consent in {wait}s...")
-            time.sleep(wait)
+    attempts = len(_OPTIONAL_CONSENT_WAITS)
+    for attempt, wait in enumerate(_OPTIONAL_CONSENT_WAITS, 1):
         rc, _, err = run_az(["ad", "app", "permission", "admin-consent", "--id", client_id])
         if rc == 0:
-            print(f"  Admin consent granted for {value}")
-            return result("granted")
-        if _is_missing_privilege(err):
+            done = recorded()
+            if not done:
+                print(
+                    f"  Microsoft has not recorded the admin consent for {value} on the setup "
+                    f"app yet; checking again in {wait}s..."
+                )
+                time.sleep(wait)
+                done = recorded()
+            if done:
+                print(f"  Admin consent granted for {value}")
+                return result("granted")
+            if attempt < attempts:
+                print(
+                    "  Still not recorded; running admin consent again "
+                    f"(attempt {attempt + 1}/{attempts})..."
+                )
+            continue
+        if _is_missing_privilege(err) or attempt == attempts:
             break
-    reason = (
-        f"admin consent for it needs the {_CONSENT_ROLES} role"
-        if _is_missing_privilege(err)
-        else f"admin consent for it failed: {_az_error(err, rc)}"
-    )
+        print(f"  Retrying admin consent in {wait}s (attempt {attempt + 1}/{attempts})...")
+        time.sleep(wait)
+    if rc == 0:
+        reason = (
+            "Microsoft accepted the admin consent for it, but had still not recorded it on the "
+            f"setup app after {attempts} tries over about a minute; run setup again to try "
+            "once more"
+        )
+    elif _is_missing_privilege(err):
+        reason = f"admin consent for it needs the {_CONSENT_ROLES} role"
+    else:
+        reason = f"admin consent for it failed: {_az_error(err, rc)}"
     if added:
         back, _, back_err = run_az(
             [

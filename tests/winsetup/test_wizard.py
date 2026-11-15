@@ -3882,6 +3882,28 @@ class TestAgent365Integration:
         assert "Registered the agent in the Agent 365 registry" not in out
         assert "Microsoft lists registered agents" not in out
 
+    def test_a_consent_microsoft_never_recorded_is_not_called_granted(
+        self, world: Scenario
+    ) -> None:
+        # Live: admin consent answered 0 but granted nothing. The bootstrap now says so, and
+        # setup must not tick it and then contradict itself at the registration.
+        world.registry_permission = {
+            "status": "failed",
+            "reason": "Microsoft accepted the admin consent for it, but had still not recorded "
+            "it on the setup app after 4 tries over about a minute; run setup again to try "
+            "once more",
+        }
+        world.registry_replies = [
+            {"outcome": "permission-missing", "id": "", "reason": "the setup app lacks it"}
+        ]
+        assert world.run(new_chain=True, upn_suffix="sati", configure_a365=True) == 3
+        assert len(world.ran("register_agent_instance.py")) == 1  # not granted: no retry
+        out = world.out
+        assert "Gave the setup app the permission" not in out
+        assert "The setup app could not get the permission to register the agent." in out
+        assert "Microsoft accepted the admin consent for it" in _flat(out)
+        assert "had still not recorded it on the setup app" in _flat(_last_screen(world))
+
     def test_a_permission_granted_moments_ago_is_waited_for(self, world: Scenario) -> None:
         world.registry_replies = [
             {"outcome": "permission-missing", "id": "", "reason": "not in the token yet"},

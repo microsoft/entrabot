@@ -1622,6 +1622,13 @@ class _Consent:
         self.declared: set[str] = set()
         self.consented: set[str] = set()
         self.consent_errors: list[str] = []  # one per admin-consent attempt that fails
+        # Admin-consent calls that answer 0 but record nothing, as Microsoft does when it
+        # consents the app's permissions as they were before one added moments earlier.
+        self.unrecorded = 0
+        # Reads of the consented permissions that still miss a consent just recorded.
+        self.record_lag = 0
+        self._pending: set[str] = set()
+        self._lag = 0
         self.add_error = ""
         self.delete_error = ""
         self.calls: list[list[str]] = []
@@ -1635,10 +1642,17 @@ class _Consent:
         monkeypatch.setattr(
             module, "_get_existing_permission_role_ids", lambda client_id: set(self.declared)
         )
-        monkeypatch.setattr(
-            module, "_get_consented_graph_role_ids", lambda client_id: set(self.consented)
-        )
+        monkeypatch.setattr(module, "_get_consented_graph_role_ids", self.read_consented)
         monkeypatch.setattr(module.time, "sleep", self.sleeps.append)
+
+    def read_consented(self, client_id: str) -> set[str]:
+        if self._pending:
+            if self._lag:
+                self._lag -= 1
+            else:
+                self.consented |= self._pending
+                self._pending = set()
+        return set(self.consented)
 
     def run_az(self, args: list[str], capture: bool = True) -> tuple[int, str, str]:
         self.calls.append(list(args))
@@ -1648,9 +1662,13 @@ class _Consent:
             self.declared.add(args[-1].split("=", 1)[0])
             return 0, "", ""
         if args[:4] == ["ad", "app", "permission", "admin-consent"]:
+            if self.unrecorded:  # these come first
+                self.unrecorded -= 1
+                return 0, "", ""
             if self.consent_errors:
                 return 1, "", self.consent_errors.pop(0)
-            self.consented |= self.declared
+            self._pending |= self.declared
+            self._lag = self.record_lag
             return 0, "", ""
         if args[:4] == ["ad", "app", "permission", "delete"]:
             if self.delete_error:
@@ -1687,6 +1705,7 @@ def test_it_is_added_and_consented_by_the_signed_in_administrator(
     outcome = provisioning_module._ensure_optional_permission(APP, REGISTRY_VALUE, may_consent=True)
     assert outcome == {"permission": REGISTRY_VALUE, "status": "granted", "reason": ""}
     assert az.verbs() == ["add", "admin-consent"]
+    assert az.sleeps == []  # the consent shows on the setup app at once: no waiting
     add = az.calls[0]
     assert add[add.index("--id") + 1] == APP
     assert add[add.index("--api") + 1] == GRAPH_APP
@@ -1745,7 +1764,79 @@ def test_a_transient_consent_failure_is_retried(
     az.consent_errors = ["Bad Request: service principal not found yet"]
     outcome = provisioning_module._ensure_optional_permission(APP, REGISTRY_VALUE, may_consent=True)
     assert outcome["status"] == "granted"
-    assert az.sleeps == [10]
+    assert az.verbs() == ["add", "admin-consent", "admin-consent"]
+    assert az.sleeps == [5]
+
+
+# Live, admin consent answered 0 two seconds after the permission was added, and granted
+# nothing: Microsoft consented the app's permissions as they were before it. Only the
+# service principal's app role assignments say whether consent took.
+
+
+def test_a_consent_recorded_a_moment_later_is_waited_for(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    az = _Consent(provisioning_module, monkeypatch)
+    az.record_lag = 1
+    outcome = provisioning_module._ensure_optional_permission(APP, REGISTRY_VALUE, may_consent=True)
+    assert outcome["status"] == "granted"
+    assert az.verbs() == ["add", "admin-consent"]
+    assert az.sleeps == [5]
+
+
+def test_a_consent_that_records_nothing_is_run_again(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    az = _Consent(provisioning_module, monkeypatch)
+    az.unrecorded = 1
+    outcome = provisioning_module._ensure_optional_permission(APP, REGISTRY_VALUE, may_consent=True)
+    assert outcome == {"permission": REGISTRY_VALUE, "status": "granted", "reason": ""}
+    assert az.verbs() == ["add", "admin-consent", "admin-consent"]
+    assert az.sleeps == [5]
+    out = capsys.readouterr().out
+    assert "Microsoft has not recorded the admin consent" in out
+    assert "running admin consent again (attempt 2/4)" in out
+    assert out.count(f"Admin consent granted for {REGISTRY_VALUE}") == 1
+    assert out.rindex("running admin consent again") < out.index("Admin consent granted")
+
+
+def test_a_consent_never_recorded_fails_and_takes_the_declaration_back(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    az = _Consent(provisioning_module, monkeypatch)
+    az.unrecorded = 99
+    outcome = provisioning_module._ensure_optional_permission(APP, REGISTRY_VALUE, may_consent=True)
+    assert outcome["status"] == "failed"
+    assert "had still not recorded it on the setup app" in outcome["reason"]
+    assert "run setup again" in outcome["reason"]
+    assert az.verbs() == ["add", *["admin-consent"] * 4, "delete"]
+    assert az.declared == set() and az.consented == set()
+    assert az.sleeps == [5, 10, 15, 20]  # bounded: under a minute of waiting in all
+    assert "Admin consent granted" not in capsys.readouterr().out
+
+
+def test_a_consent_never_recorded_leaves_a_declaration_it_did_not_add(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    az = _Consent(provisioning_module, monkeypatch)
+    az.declared = {REGISTRY_ROLE}
+    az.unrecorded = 99
+    outcome = provisioning_module._ensure_optional_permission(APP, REGISTRY_VALUE, may_consent=True)
+    assert outcome["status"] == "failed"
+    assert az.verbs() == ["admin-consent"] * 4
+    assert az.declared == {REGISTRY_ROLE}
+
+
+def test_a_consent_error_after_an_unrecorded_one_says_what_failed(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    az = _Consent(provisioning_module, monkeypatch)
+    az.unrecorded = 1
+    az.consent_errors = ["ERROR: Insufficient privileges to complete the operation."]
+    outcome = provisioning_module._ensure_optional_permission(APP, REGISTRY_VALUE, may_consent=True)
+    assert outcome["status"] == "failed"
+    assert "Privileged Role Administrator" in outcome["reason"]
+    assert az.verbs() == ["add", "admin-consent", "admin-consent", "delete"]
 
 
 def test_a_permission_the_tenant_does_not_have_fails_without_a_call(
