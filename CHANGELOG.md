@@ -169,7 +169,7 @@ Everything since v0.1. Before tagging, see "Cutting v0.2" at the end of this sec
 What the owner has to do; nothing here has been done:
 
 1. Merge the pull requests: Agent 365 telemetry (`feat/a365-telemetry`, #154), outbound controls (`feat/outbound-audit`, #155), containment (`feat/containment`, stacked on telemetry) and these docs (`docs/v0.2`, last).
-2. Still to run for real: the Linux bubblewrap path on Ubuntu; telemetry against a tenant with an E7 or Agent 365 licence assigned (then check Defender); optionally `register_agent_instance.py --apply`. The macOS end-to-end run is recorded in `docs/project/verification.md`.
+2. Still to run for real: the Linux bubblewrap path on Ubuntu; check that the agent's telemetry (accepted by Agent 365 in the macOS run) shows in Defender and the admin center; optionally `register_agent_instance.py --apply`. The macOS end-to-end run is recorded in `docs/project/verification.md`.
 3. Bump `version` in `pyproject.toml` from `0.1` to `0.2`, retitle this section with the date, and update the GitHub issues (#136 for telemetry and registration) per `AGENTS.md`.
 4. Tag `v0.2` on `main` and publish a GitHub release with this section as its notes.
 

@@ -31,6 +31,9 @@ showed what arrived.
 | Inbound email from the sponsor | Run for real: pushed inside the envelope |
 | The agent emailing itself | Run for real: the email poll claimed it in the shared cursor and, by design, didn't push the agent's own mail |
 | Token re-acquired at least every `ENTRABOT_TOKEN_MAX_AGE_SECONDS` | Run for real at 60 seconds: 11 re-acquisitions in 11 minutes, with every read succeeding |
+| Setup's telemetry step for a real agent (permission grant with the setup app, token check as the agent, `.env` switches written and read back) | Run for real: the agent's token carried `Agent365.Observability.OtelWrite` within seconds |
+| `--diagnose` after the telemetry step | Run for real: "Agent 365 telemetry: switched on; the agent's token carries Agent365.Observability.OtelWrite" |
+| Export to Agent 365 from the contained server (an inbound Teams message from the sponsor and a few tool calls) | Run for real: every export request to `agent365.svc.cloud.microsoft` through the sandbox's proxy answered HTTP 200 with each span's status `sent` for all three of Agent 365's sinks and no span rejected. (A 200 alone isn't proof: Microsoft also answers 200 when it drops spans for an unlicensed tenant.) The exported spans carried no message text (`gen_ai.output.messages` is `[content suppressed]`). The tenant had Agent 365 licences assigned. |
 | Agent 365 telemetry, console exporter only | Run for real: `invoke_agent` spans for inbound messages and `execute_tool` spans for each tool call, written to standard error; the MCP stream on standard output stayed intact |
 | Refusals from inside the live server's sandbox: reading the home directory, `/Users/Shared` or another volume; writing to the repository, the home directory or `/tmp`; a non-Microsoft host | Run for real (checked against the live server process and with real attempts under its profile) |
 | Clean stop: no process left, status record and generated profile removed | Run for real |
@@ -54,8 +57,9 @@ on. The sandbox's proxy refused both; without containment those requests would g
 - Work IQ reads and writes: Word, Excel and OneDrive files weren't switched on for the test agent.
 - Inbound email from someone who isn't a sponsor (the test account had no mailbox). Email is
   always wrapped, as the sponsor's email showed.
-- Telemetry reaching Agent 365, and the agent in the Agent 365 registry: both need tenant changes
-  (a permission grant, a licence, a registration) that weren't made.
+- The agent in the Agent 365 registry (`register_agent_instance.py --apply` needs a permission the
+  setup app doesn't hold), and whether the exported telemetry shows in Defender or the Microsoft
+  365 admin center (a portal check, not done here).
 - Disabling the agent and watching a running server stop.
 
 ## By platform
@@ -65,7 +69,7 @@ on. The sandbox's proxy refused both; without containment those requests would g
 | Containment | Run for real (above) | Unit-tested (`bwrap` command, network bridge); not run | Not contained |
 | Microsoft eXecution Container backend | Unit-tested | Unit-tested | Not supported |
 | Setup wizard against a real tenant | Repair run and health check | Run for real (Ubuntu 24.04) | Run for real (Windows 11) |
-| Telemetry setup step and the `--diagnose` check | Unit-tested | Unit-tested | Unit-tested |
+| Telemetry setup step and the `--diagnose` check | Run for real | Unit-tested | Unit-tested |
 | `status.sh` and `setup_delegated.sh` read `.env` as data | Run for real (the old scripts fail the tests, the new ones pass) | Unit-tested | n/a |
 
 ## Never run
@@ -73,4 +77,4 @@ on. The sandbox's proxy refused both; without containment those requests would g
 - Containment on a real Linux machine, and the MXC backend anywhere.
 - Containment on Windows (not implemented).
 - The Copilot SDK harness against a real Copilot runtime.
-- Telemetry ingestion by Agent 365, and the agent in the Agent 365 registry.
+- The agent in the Agent 365 registry.
