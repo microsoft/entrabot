@@ -620,6 +620,14 @@ class TestLoadSponsorGate:
 # ---------------------------------------------------------------------------
 class TestCreateChat:
     @pytest.fixture(autouse=True)
+    def _recipients_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """These tests are about the tool's own mechanics; the recipient policy has its own
+        (tests/security/test_recipients.py, tests/test_mcp_outbound_policy.py)."""
+        from entrabot import mcp_server
+
+        monkeypatch.setattr(mcp_server, "_refuse_unless_allowed", AsyncMock(return_value=None))
+
+    @pytest.fixture(autouse=True)
     def _create_chat_stubs(self, monkeypatch: pytest.MonkeyPatch) -> None:
         async def fake_retry(fn, **kwargs):
             return {"chat_id": CHAT_A, "created_at": "2026-11-02T12:00:00Z"}
