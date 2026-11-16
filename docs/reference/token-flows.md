@@ -74,6 +74,8 @@ The resulting token has:
 
 For Azure Blob Storage, Hops 1 and 2 are unchanged and Hop 3 uses `scope=https://storage.azure.com/.default` through `acquire_agent_user_storage_token()`.
 
+Any other API that accepts Entra access tokens works the same way: Hop 3 asks for `scope=api://<its application ID>/.default` once an administrator has granted the agent its scope. See [Calling other APIs as the agent](../guides/other-apis.md).
+
 ## Consent records
 
 Entrabot grants delegated scopes with `POST /v1.0/oauth2PermissionGrants`:

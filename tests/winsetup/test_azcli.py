@@ -167,7 +167,8 @@ class TestFindAzForScripts:
             platform="linux",
             which=lambda name: "/usr/bin/az",
         )
-        assert location is not None and location.command == ("/usr/bin/az",)
+        # The location is a Path, so on a Windows runner its separators are the host's.
+        assert location is not None and location.command == (str(Path("/usr/bin/az")),)
 
     @pytest.mark.parametrize(
         ("platform", "setup", "link"),
