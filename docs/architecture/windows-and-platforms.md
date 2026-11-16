@@ -57,7 +57,7 @@ Once a certificate-signed JWT assertion exists, the rest of the three-hop token 
 
 ## Process containment
 
-The MCP server is not contained in 0.3.0 on any platform: it runs with all of its user's rights. Containing it in an OS sandbox on macOS and Linux is planned for 0.4.0. See [Security Boundaries](security-boundaries.md#current-limitation-no-shipped-execution-sandbox).
+The MCP server is not contained in 0.3.1 on any platform: it runs with all of its user's rights. Containing it in an OS sandbox on macOS and Linux is planned for 0.4.0. See [Security Boundaries](security-boundaries.md#current-limitation-no-shipped-execution-sandbox).
 
 ## See also
 

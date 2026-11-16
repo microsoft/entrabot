@@ -151,9 +151,9 @@ In 0.3.0, a script run by hand, such as `scripts/list_sponsors.py`, stopped with
 
 **Cause.** Setup installed its own private copy of the Azure CLI, in `~/.entrabot/tools/azure-cli`, because there was none on your `PATH`, and it does not add that copy to your `PATH`. Setup, rotation, teardown and `./status.sh` found it; the scripts in `scripts/` looked for `az` on your `PATH` only, and asked it whether the setup (Provisioner) app exists before every token they got with its certificate.
 
-**Fix.** Update to a release with this fix. The scripts that read with the setup app's token (the registry check, sponsors, consent, licences, status) no longer need the Azure CLI at all, and the ones that do (setup's own app, cloud storage) find the private copy the way setup does. If neither an Azure CLI on your `PATH` nor the private copy is there, they say so in one sentence: "Entrabot could not find the Azure CLI on this computer: …". Run `./scripts/setup.sh`, which installs it.
+**Fix.** 0.3.1 fixes it: upgrade to 0.3.1 or later (see [Upgrading to a new release](migrations-and-upgrades.md#upgrading-to-a-new-release)). The scripts that read with the setup app's token (the registry check, sponsors, consent, licences, status) no longer need the Azure CLI at all, and the ones that do (setup's own app, cloud storage) find the private copy the way setup does. If neither an Azure CLI on your `PATH` nor the private copy is there, they say so in one sentence: "Entrabot could not find the Azure CLI on this computer: …". Run `./scripts/setup.sh`, which installs it.
 
-On 0.3.0, put the private copy first on `PATH` for that command:
+If you are still on 0.3.0, put the private copy first on `PATH` for that command:
 
 ```bash
 PATH="$HOME/.entrabot/tools/azure-cli/bin:$PATH" .venv/bin/python scripts/list_sponsors.py

@@ -201,7 +201,7 @@ For step-by-step setup, see [Windows installation](../getting-started/windows.md
 
 ## Process containment
 
-The MCP server is **not contained** in 0.3.0, on Windows or any other platform. It runs with
+The MCP server is **not contained** in 0.3.1, on Windows or any other platform. It runs with
 all of its user's rights: it can read every file that user can and connect to any host.
 Containing it on macOS and Linux is planned for 0.4.0. On Windows, Microsoft eXecution
 Container has open issues with Python asyncio and stdio servers when egress is denied
