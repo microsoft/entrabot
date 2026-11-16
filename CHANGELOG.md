@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-Nothing yet.
+### Fixed
+
+- On a computer whose only Azure CLI is the private copy setup installs (`~/.entrabot/tools/azure-cli`, on Windows `%LOCALAPPDATA%\entrabot\tools\azure-cli`, never on `PATH`), the scripts in `scripts/` no longer stop with `FileNotFoundError` naming `az`. Found live on Ubuntu 24.04 with 0.3.0: setup registered the agent and exited `0`, then the "Agent 365 registry" line of `--diagnose` showed the end of a Python traceback with "Run ./scripts/setup.sh --diagnose again later", and `register_agent_instance.py --check` run by hand stopped the same way. Every script that reads with the setup (Provisioner) app's token asked `az ad app show` whether that app exists before using its certificate; it no longer does, so the registry check, status, sponsors, consent, licences and teardown's deletes need no Azure CLI and no Azure CLI sign-in, and a deleted setup app is said plainly (AADSTS700016). The scripts that do need the Azure CLI (setup's own app, `create_entra_agent_ids.py`, the cloud storage scripts, `cleanup-orphans.sh`, `entrabot init`) find the private copy the way setup does, and with no Azure CLI at all say "Entrabot could not find the Azure CLI on this computer: …" and what to run. A token request Entra refuses is now a sentence, not azure-identity's exception. The registry line says a check that stopped in one line, with the command that shows the whole error, and says "again later" only when Microsoft Graph was out of reach or busy.
 
 ## 0.3.0 — 2026-11-15
 
