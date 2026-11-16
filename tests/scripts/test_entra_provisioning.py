@@ -513,6 +513,86 @@ def test_confirmed_stale_app_keeps_the_old_key_until_the_replacement_is_uploaded
     assert state["PROVISIONER_CERT_THUMBPRINT"] == "new-thumb"
 
 
+# ─── a computer whose only Azure CLI is setup's private copy ──────────────────
+#
+# Found live on Ubuntu 24.04 with v0.3.0: setup installed its own Azure CLI (not on PATH)
+# and finished; then every script run on its own, and the registry line of --diagnose,
+# stopped with FileNotFoundError: 'az'. The read paths never needed the Azure CLI (the
+# Provisioner's certificate is the credential); the paths that do now find the copy setup
+# installed, the way setup does.
+
+
+def test_az_is_started_from_setups_private_copy_when_none_is_on_path(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The paths that do need the Azure CLI (the setup app's own bootstrap, the signed-in
+    user's ID for the sponsor) start it the way setup does: its own interpreter."""
+    from tests.private_azure_cli import computer_without_az_on_path, install_private_copy
+
+    python = install_private_copy(computer_without_az_on_path(monkeypatch, tmp_path))
+    started: list[Any] = []
+
+    def fake_run(command: Any, **_kwargs: Any) -> SimpleNamespace:
+        started.append(command)
+        return SimpleNamespace(returncode=0, stdout='"user-object-id"\n', stderr="")
+
+    monkeypatch.setattr(provisioning_module.subprocess, "run", fake_run)
+
+    assert provisioning_module.get_signed_in_user_id() == "user-object-id"
+    assert started == [
+        [
+            str(python),
+            "-m",
+            "azure.cli",
+            "ad",
+            "signed-in-user",
+            "show",
+            "--query",
+            "id",
+            "-o",
+            "json",
+        ]
+    ]
+
+
+def test_no_azure_cli_at_all_is_a_sentence_not_a_traceback(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from tests.private_azure_cli import computer_without_az_on_path
+
+    data_root = computer_without_az_on_path(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        provisioning_module.subprocess,
+        "run",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("nothing to start")),
+    )
+
+    rc, out, err = provisioning_module.run_az(["account", "show"])
+
+    assert (rc, out) == (127, "")
+    assert err.startswith("Entrabot could not find the Azure CLI on this computer")
+    assert str(data_root / "tools" / "azure-cli") in err
+    setup = r"scripts\setup-windows.cmd" if sys.platform == "win32" else "./scripts/setup.sh"
+    assert f"Run {setup}" in err
+    assert "Traceback" not in err and "Errno" not in err
+    # Nothing that reads az's errors may take it for "that object does not exist".
+    assert provisioning_module._application_status("client-id") == "unknown"
+    assert provisioning_module.get_signed_in_user_id() is None
+
+
+def test_an_az_that_vanishes_after_it_was_found_is_the_same_sentence(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(provisioning_module.shutil, "which", lambda name: "/usr/bin/az")
+
+    def gone(*_a: Any, **_k: Any) -> None:
+        raise FileNotFoundError(2, "No such file or directory", "/usr/bin/az")
+
+    monkeypatch.setattr(provisioning_module.subprocess, "run", gone)
+    rc, _out, err = provisioning_module.run_az(["account", "show"])
+    assert rc == 127 and err.startswith("Entrabot could not find the Azure CLI")
+
+
 def test_load_existing_says_could_not_check_when_az_fails(
     provisioning_module, monkeypatch: pytest.MonkeyPatch
 ) -> None:

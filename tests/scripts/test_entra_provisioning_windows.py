@@ -165,6 +165,59 @@ class TestRunAzOnWindows:
 
         assert captured["command"] == [str(python), "-m", "azure.cli", "account", "show"]
 
+    @staticmethod
+    def _off_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+        """No az on PATH; %LOCALAPPDATA% and Program Files of the test's own."""
+        monkeypatch.setattr(sys.modules["shutil"], "which", lambda *a, **k: None)
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+        for variable in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+            monkeypatch.setenv(variable, str(tmp_path / "Program Files"))
+        return tmp_path
+
+    def test_setups_private_copy_off_path_runs_its_own_python(
+        self, ep: Any, captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Where setup installs it on a PC with no Azure CLI and no winget, never on PATH.
+        self._off_path(monkeypatch, tmp_path)
+        scripts = tmp_path / "Local" / "entrabot" / "tools" / "azure-cli" / "Scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "az.bat").write_text("@echo off\n", encoding="utf-8")
+        python = scripts / "python.exe"
+        python.write_bytes(b"")
+
+        assert ep.run_az(["account", "show"]) == (0, "ok", "")
+        assert captured["command"] == [str(python), "-m", "azure.cli", "account", "show"]
+        assert captured["kwargs"]["env"]["AZURE_CORE_ENABLE_BROKER_ON_WINDOWS"] == "false"
+
+    def test_a_standard_install_off_path_runs_its_bundled_python(
+        self, ep: Any, captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # winget's install puts wbin on the machine PATH, which a window opened before it
+        # does not have yet. Setup looks in Program Files too, and so do the scripts.
+        self._off_path(monkeypatch, tmp_path)
+        cli2 = tmp_path / "Program Files" / "Microsoft SDKs" / "Azure" / "CLI2"
+        (cli2 / "wbin").mkdir(parents=True)
+        (cli2 / "wbin" / "az.cmd").write_text("@echo off\n", encoding="utf-8")
+        (cli2 / "python.exe").write_bytes(b"")
+        url = "https://graph.microsoft.com/v1.0/servicePrincipals(appId='x')"
+
+        ep.run_az(["rest", "--url", url])
+
+        bundled = str(cli2 / "python.exe")
+        assert captured["command"] == [bundled, "-IBm", "azure.cli", "rest", "--url", url]
+        assert captured["kwargs"]["env"]["AZ_INSTALLER"] == "MSI"
+
+    def test_no_azure_cli_at_all_names_where_setup_puts_it(
+        self, ep: Any, captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._off_path(monkeypatch, tmp_path)
+
+        rc, out, err = ep.run_az(["account", "show"])
+
+        assert (rc, out) == (127, "") and "command" not in captured
+        assert str(tmp_path / "Local" / "entrabot" / "tools" / "azure-cli") in err
+        assert "Run scripts\\setup-windows.cmd" in err
+
     def test_az_uses_the_browser_sign_in_not_the_windows_account_broker(
         self, ep: Any, captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:

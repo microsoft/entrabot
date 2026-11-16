@@ -30,11 +30,11 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import shutil
 import subprocess
 import sys
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+import azure_cli  # noqa: E402
 from script_output import make_output_safe  # noqa: E402
 
 DEFAULT_RESOURCE_GROUP = "entrabot-rg"
@@ -45,8 +45,13 @@ def _eprint(*args: object) -> None:
 
 
 def _run_az(args: list[str], *, capture: bool = True) -> subprocess.CompletedProcess:
-    az_bin = shutil.which("az") or "az"
-    cmd = [az_bin, *args]
+    """Run ``az <args>``: the one on PATH, else the copy setup installed (not on PATH). With
+    no Azure CLI at all, exit code 127 and a plain sentence saying so, never a traceback."""
+    az = azure_cli.command()
+    if az is None:
+        missing = azure_cli.missing_message()
+        return subprocess.CompletedProcess(args, azure_cli.MISSING_EXIT, "", missing)
+    cmd = [*az, *args]
     return subprocess.run(  # noqa: S603
         cmd,
         capture_output=capture,

@@ -119,6 +119,82 @@ class TestFindAz:
         assert location.bin_dir == scripts
 
 
+
+class TestFindAzForScripts:
+    """A script started on its own (by hand, or by --diagnose) gets the person's own PATH,
+    where setup's private copy is not. It has to find that copy where setup put it, with the
+    data folder setup uses: ``~/.entrabot`` on macOS and Linux, ``%LOCALAPPDATA%\\entrabot``
+    on Windows. Simulated for each system with its own environment, so it runs everywhere."""
+
+    @staticmethod
+    def _private_copy(root: Path, platform: str) -> Path:
+        folder = root / "tools" / "azure-cli" / ("Scripts" if platform == "win32" else "bin")
+        folder.mkdir(parents=True)
+        python = folder / ("python.exe" if platform == "win32" else "python")
+        python.write_bytes(b"")
+        (folder / ("az.bat" if platform == "win32" else "az")).write_bytes(b"")
+        return python
+
+    @pytest.mark.parametrize("platform", ["linux", "darwin"])
+    def test_on_macos_and_linux_it_is_under_the_home_folder(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str
+    ) -> None:
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        python = self._private_copy(tmp_path / ".entrabot", platform)
+
+        location = azcli.find_az_for_scripts({}, platform=platform, which=lambda name: None)
+
+        assert location is not None and location.source == "tools-venv"
+        assert location.command == (str(python), "-m", "azure.cli")
+        assert azcli.private_copy_folder({}, platform=platform) == (
+            tmp_path / ".entrabot" / "tools" / "azure-cli"
+        )
+
+    def test_on_windows_it_is_under_local_app_data(self, tmp_path: Path) -> None:
+        local = tmp_path / "Local"
+        python = self._private_copy(local / "entrabot", "win32")
+        env = {"LOCALAPPDATA": str(local)}
+
+        location = azcli.find_az_for_scripts(env, platform="win32", which=lambda name: None)
+
+        assert location is not None and location.source == "tools-venv"
+        assert location.command == (str(python), "-m", "azure.cli")
+
+    def test_the_az_on_path_still_comes_first(self, tmp_path: Path) -> None:
+        self._private_copy(tmp_path / "Local" / "entrabot", "win32")
+        location = azcli.find_az_for_scripts(
+            {"LOCALAPPDATA": str(tmp_path / "Local")},
+            platform="linux",
+            which=lambda name: "/usr/bin/az",
+        )
+        assert location is not None and location.command == ("/usr/bin/az",)
+
+    @pytest.mark.parametrize(
+        ("platform", "setup", "link"),
+        [
+            ("linux", "./scripts/setup.sh", "https://aka.ms/install-az"),
+            ("win32", r"scripts\setup-windows.cmd", "https://aka.ms/installazurecliwindows"),
+        ],
+    )
+    def test_none_at_all_is_one_plain_sentence_with_what_to_do(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str, setup: str, link: str
+    ) -> None:
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        env = {"LOCALAPPDATA": str(tmp_path / "Local")}
+        assert azcli.find_az_for_scripts(env, platform=platform, which=lambda n: None) is None
+
+        message = azcli.not_found_message(env, platform=platform)
+
+        folder = azcli.private_copy_folder(env, platform=platform)
+        assert message == (
+            "Entrabot could not find the Azure CLI on this computer: there is no az command "
+            f"on PATH and no private copy in {folder}, where setup installs one. Run {setup}, "
+            f"which installs it and signs you in, or install it from {link} and sign in with "
+            "az login."
+        )
+        # Scripts read some az errors for these words; this one must not look like them.
+        assert "not found" not in message.lower() and "does not exist" not in message
+
 def _calls(spawn: FakeSpawn, *words: str) -> list[RunRequest]:
     """Calls whose arguments after the program are exactly *words* to start with."""
     return [call for call in spawn.calls if call.argv[1 : 1 + len(words)] == list(words)]

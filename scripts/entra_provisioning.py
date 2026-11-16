@@ -68,6 +68,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import azure_cli  # noqa: E402
 from script_output import make_output_safe  # noqa: E402
 
 MS_GRAPH_API_ID = "00000003-0000-0000-c000-000000000000"
@@ -931,8 +932,28 @@ def _quote_for_cmd(arg: str) -> str:
     return quoted
 
 
+class AzureCliMissing(ProvisionerBootstrapError):
+    """No Azure CLI on PATH, in the standard install folder, or where setup installs one."""
+
+
+def _az_off_path() -> Any:
+    """The Azure CLI that is not on PATH: the standard Windows install folder, then the
+    private copy setup installs (``~/.entrabot/tools/azure-cli``, on Windows under
+    ``%LOCALAPPDATA%``). The same lookup as the setup wizard's, so a script run by hand
+    finds the Azure CLI setup installed and signed in. None when there is neither."""
+    return azure_cli.off_path()
+
+
+def _az_missing_message() -> str:
+    return azure_cli.missing_message()
+
+
 def _az_command(args: list[str]) -> tuple[list[str] | str, dict[str, str] | None]:
     """The command (and environment) that runs ``az`` with these arguments.
+
+    The ``az`` on PATH, else the one setup uses (:func:`_az_off_path`): a computer that
+    had no Azure CLI has only setup's private copy, which is not on PATH. Raises
+    :class:`AzureCliMissing` when there is none.
 
     On Windows ``az`` is ``az.cmd``, a batch file that ends in ``python -m azure.cli
     %*`` inside an ``IF ( ... )`` block. Arguments are re-parsed by cmd.exe on the
@@ -941,7 +962,15 @@ def _az_command(args: list[str]) -> tuple[list[str] | str, dict[str, str] | None
     takes cmd.exe out of the path altogether; only when the layout isn't recognised
     does the call go through the shim, with such arguments quoted.
     """
-    az_bin = shutil.which("az") or "az"
+    az_bin = shutil.which("az")
+    if not az_bin:
+        location = _az_off_path()
+        if location is None:
+            raise AzureCliMissing(_az_missing_message())
+        if location.source != "standard":
+            # Setup's private copy: its own interpreter, as setup starts it.
+            return [*location.command, *args], None
+        az_bin = str(location.bin_dir / "az.cmd")  # ...\CLI2\wbin, read below
     if sys.platform != "win32" or not az_bin.lower().endswith((".cmd", ".bat")):
         return [az_bin, *args], None
 
@@ -976,13 +1005,28 @@ def _az_env(env: dict[str, str] | None) -> dict[str, str] | None:
     return result
 
 
+# ``run_az`` returns it, with :func:`_az_missing_message` as the error, when there is no
+# Azure CLI to start: the exit code a shell gives a command it cannot find.
+AZ_MISSING_EXIT = azure_cli.MISSING_EXIT
+
+
 def run_az(args: list[str], capture: bool = True) -> tuple[int, str, str]:
-    """Run an az CLI command, return (returncode, stdout, stderr)."""
-    command, env = _az_command(args)
+    """Run an az CLI command, return (returncode, stdout, stderr).
+
+    Never raises for a missing Azure CLI: every caller already reports a failed ``az``
+    from its exit code and stderr, so the plain sentence of :func:`_az_missing_message`
+    reaches the person where a traceback did before."""
+    try:
+        command, env = _az_command(args)
+    except AzureCliMissing as exc:
+        return AZ_MISSING_EXIT, "", str(exc)
     env = _az_env(env)
-    result = subprocess.run(  # noqa: S603 — az with a fixed argument list
-        command, capture_output=capture, text=True, errors="replace", env=env
-    )
+    try:
+        result = subprocess.run(  # noqa: S603 — az with a fixed argument list
+            command, capture_output=capture, text=True, errors="replace", env=env
+        )
+    except FileNotFoundError:  # found a moment ago, gone now
+        return AZ_MISSING_EXIT, "", _az_missing_message()
     return result.returncode, (result.stdout or "").strip(), (result.stderr or "").strip()
 
 

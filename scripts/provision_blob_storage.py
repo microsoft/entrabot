@@ -42,11 +42,11 @@ import hashlib
 import json
 import re
 import secrets
-import shutil
 import subprocess
 import sys
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+import azure_cli  # noqa: E402
 from script_output import make_output_safe  # noqa: E402
 
 # Module-level constants
@@ -76,8 +76,11 @@ def _run_az(args: list[str], *, capture: bool = True) -> subprocess.CompletedPro
     *args* should NOT include the leading ``"az"`` token. We capture both
     stdout and stderr so callers can inspect on failure.
     """
-    az_bin = shutil.which("az") or "az"
-    cmd = [az_bin, *args, *_SUBSCRIPTION_ARGS]
+    az = azure_cli.command()  # PATH, else setup's private copy (which is not on PATH)
+    if az is None:
+        missing = azure_cli.missing_message()
+        return subprocess.CompletedProcess(args, azure_cli.MISSING_EXIT, "", missing)
+    cmd = [*az, *args, *_SUBSCRIPTION_ARGS]
     return subprocess.run(  # noqa: S603 — args are constructed in this module only
         cmd,
         capture_output=capture,
