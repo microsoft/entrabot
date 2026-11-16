@@ -198,7 +198,7 @@ ahead of it. To move an existing install to a release, in the Entrabot folder:
 
     ```bash
     git fetch --tags
-    git checkout v0.3.0
+    git checkout v0.3.1
     ./scripts/setup.sh
     ```
 
@@ -206,7 +206,7 @@ ahead of it. To move an existing install to a release, in the Entrabot folder:
 
     ```bat
     git fetch --tags
-    git checkout v0.3.0
+    git checkout v0.3.1
     scripts\setup-windows.cmd
     ```
 
@@ -224,7 +224,7 @@ of them. To keep your edits, put them aside first and reapply them after:
 
 ```bash
 git stash push -m "my Entrabot changes"
-git checkout v0.3.0
+git checkout v0.3.1
 git stash pop
 ```
 
@@ -237,6 +237,28 @@ into it instead of checking the tag out.
 new folder as in the getting-started guide, copy `.env` and `.entrabot-state.json` from the old
 folder into it, and run setup in the new folder. Start the agent from the new folder from then
 on.
+
+## Upgrading to 0.3.1
+
+0.3.1 fixes two bugs in 0.3.0's scripts. There is no new setting and no new question, and
+nothing to run again unless one of the bugs affected you:
+
+- **`revoke_consent.py` changes only the grant on one resource**: the one on Microsoft Graph,
+  or the one the new `--resource-app-id` names. In 0.3.0 it took the first grant Microsoft
+  Graph listed, whichever resource it was on, so `--all` could delete the agent's Azure
+  Storage grant instead of its Microsoft Graph one. If you ran it on 0.3.0,
+  [`show_permissions.py`](../reference/scripts/operations/show-permissions-py.md) lists the
+  grants the agent still holds, and
+  [`grant_consent.py`](../reference/scripts/auth-and-certs/grant-consent-py.md) gives back
+  one it lost.
+- **The scripts in `scripts/` find setup's private Azure CLI.** On a computer whose only Azure
+  CLI is the private copy setup installs, 0.3.0's scripts stopped with `FileNotFoundError`
+  naming `az`, and the "Agent 365 registry" line of `--diagnose` showed the end of that
+  error. In 0.3.1 the scripts that read with the setup app's token need no Azure CLI, and the
+  ones that need it find the private copy without it being on your `PATH`. See
+  [A script in `scripts/` cannot find `az`](macos-linux.md#a-script-in-scripts-cannot-find-az).
+
+Restart the MCP host after upgrading, as for any release.
 
 ## Upgrading to 0.3.0
 
