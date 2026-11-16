@@ -4,6 +4,7 @@
 
 ### Added
 
+- A five-minute video tour, linked from the top of the README with a poster image (`docs/assets/video-poster.jpg`): a day of working with an agent in Teams, Outlook and Word, then the Agent Blueprint, Agent Identity and Agent User underneath it. Docs only.
 - A docs page, "Calling Other APIs as the Agent": the agent's sign-in gets a token for any API that accepts Entra access tokens, with only the third hop's scope changed; an administrator allows it for one agent with `grant_consent.py --resource-app-id` and takes it back with `revoke_consent.py --resource-app-id`. Run for real on Windows 11 against a stand-in API (not part of this repository): refused with `AADSTS65001` before the grant, `200` after it. Docs only; not run on macOS or Linux.
 
 ### Fixed

@@ -3,6 +3,10 @@
 
 Entrabot is a Python MCP server that gives a device-local agent its own Entra **Agent ID** and **Agent User**. The agent can sign in autonomously, send and receive Teams messages from its own account, use its mailbox, work with Microsoft 365 files, and write audit events against its own object ID. It runs on macOS, Linux, and Windows and works with Claude Code, Copilot CLI, or any MCP-speaking client.
 
+[![Watch the five-minute tour of Entrabot on YouTube](docs/assets/video-poster.jpg)](https://youtu.be/SFe-M0wzcGU)
+
+**[Watch the five-minute tour on YouTube](https://youtu.be/SFe-M0wzcGU):** a day of working with an agent in Teams, Outlook and Word, then how its identity works.
+
 **All you need to get started is:**
 
 * A Microsoft 365 development tenant where you can create app registrations and grant admin consent
