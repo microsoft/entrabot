@@ -522,6 +522,68 @@ def test_confirmed_stale_app_keeps_the_old_key_until_the_replacement_is_uploaded
 # installed, the way setup does.
 
 
+def test_load_existing_needs_no_azure_cli(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = {"TENANT_ID": "tenant-id", "PROVISIONER_CLIENT_ID": "client-id"}
+    monkeypatch.delenv("ENTRABOT_TENANT_ID", raising=False)
+    monkeypatch.setattr(provisioning_module, "get_state", lambda key: state.get(key))
+    monkeypatch.setattr(provisioning_module, "_keychain_get_cert", lambda tenant: PEM_BUNDLE)
+    monkeypatch.setattr(
+        provisioning_module,
+        "run_az",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError(f"az called: {a}")),
+    )
+
+    assert provisioning_module.load_existing_app_registration() == (
+        "client-id",
+        PEM_BUNDLE,
+        "tenant-id",
+    )
+
+
+def _certificate_credential(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """azure.identity's CertificateCredential, giving a token; returns the client IDs used."""
+    import types
+
+    used: list[str] = []
+
+    class _Credential:
+        def __init__(self, *, tenant_id: str, client_id: str, certificate_data: bytes) -> None:
+            used.append(client_id)
+
+        def get_token(self, _scope: str) -> SimpleNamespace:
+            return SimpleNamespace(token="graph-token")
+
+    fake = types.ModuleType("azure.identity")
+    fake.CertificateCredential = _Credential
+    monkeypatch.setitem(sys.modules, "azure.identity", fake)
+    return used
+
+
+@pytest.mark.parametrize("private_copy", [False, True], ids=["no-azure-cli", "private-copy"])
+def test_the_setup_apps_token_comes_without_az_on_path(
+    provisioning_module, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, private_copy: bool
+) -> None:
+    """Every script that reads with the setup app's token (the registry check, status,
+    sponsors, consent, licences, teardown's deletes) gets it through this one function. No
+    child process is mocked: with the old ``az ad app show`` first, this raised
+    FileNotFoundError."""
+    from tests.private_azure_cli import computer_without_az_on_path, install_private_copy
+
+    data_root = computer_without_az_on_path(monkeypatch, tmp_path)
+    if private_copy:
+        install_private_copy(data_root)
+    state = {"TENANT_ID": "tenant-id", "PROVISIONER_CLIENT_ID": "client-id"}
+    monkeypatch.delenv("ENTRABOT_TENANT_ID", raising=False)
+    monkeypatch.setattr(provisioning_module, "get_state", lambda key: state.get(key))
+    monkeypatch.setattr(provisioning_module, "_keychain_get_cert", lambda tenant: PEM_BUNDLE)
+    used = _certificate_credential(monkeypatch)
+
+    assert provisioning_module.get_existing_graph_token() == "graph-token"
+    assert used == ["client-id"]
+
+
 def test_az_is_started_from_setups_private_copy_when_none_is_on_path(
     provisioning_module, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -593,19 +655,25 @@ def test_an_az_that_vanishes_after_it_was_found_is_the_same_sentence(
     assert rc == 127 and err.startswith("Entrabot could not find the Azure CLI")
 
 
-def test_load_existing_says_could_not_check_when_az_fails(
+def test_a_deleted_provisioner_app_is_said_plainly(
     provisioning_module, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    state = {"TENANT_ID": "tenant-id", "PROVISIONER_CLIENT_ID": "client-id"}
-    monkeypatch.delenv("ENTRABOT_TENANT_ID", raising=False)
-    monkeypatch.setattr(provisioning_module, "get_state", lambda key: state.get(key))
-    monkeypatch.setattr(provisioning_module, "_application_status", lambda client_id: "unknown")
+    """Without ``az ad app show`` first, Entra's refusal of the token request is what says
+    the app is gone: AADSTS700016."""
+    sleeps: list[float] = []
+    _credential(
+        provisioning_module,
+        monkeypatch,
+        [_NotYet("AADSTS700016: Application with identifier 'client-id' was not found")],
+        sleeps,
+    )
 
     with pytest.raises(provisioning_module.ProvisionerBootstrapError) as excinfo:
-        provisioning_module.load_existing_app_registration()
+        provisioning_module.get_existing_graph_token()
 
-    assert "ould not check" in str(excinfo.value)
-    assert "was not found" not in str(excinfo.value)
+    message = str(excinfo.value)
+    assert "has no Provisioner app client-id in this tenant (AADSTS700016)" in message
+    assert "setup" in message and sleeps == []
 
 
 # ─── which app registration becomes the Provisioner ──────────────────────────
@@ -1625,7 +1693,9 @@ def test_any_other_token_failure_is_reported_at_once(
         provisioning_module, monkeypatch, [_NotYet("AADSTS7000215: invalid client secret")], sleeps
     )
 
-    with pytest.raises(_NotYet, match="AADSTS7000215"):
+    # As the error every script reports in a sentence, not as azure-identity's exception,
+    # which ended the registry script (and so a --diagnose line) with a traceback.
+    with pytest.raises(provisioning_module.ProvisionerBootstrapError, match="AADSTS7000215"):
         provisioning_module.get_existing_graph_token()
     assert sleeps == []
 

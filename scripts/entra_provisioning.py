@@ -2489,6 +2489,12 @@ def load_existing_app_registration() -> tuple[str, str | CngProvisionerCert, str
 
     Utility scripts use this path so read/status/action commands don't create
     app registrations, add permissions, grant consent, or wait for propagation.
+
+    It needs no Azure CLI and no sign-in: what it returns is the Provisioner's own
+    certificate, and the token request made with it is what tells whether Entra still
+    has the app (:func:`_token_refused`). It used to ask ``az ad app show`` first, which
+    failed on a computer whose only Azure CLI is setup's private copy (not on PATH), and
+    wherever the administrator's Azure CLI sign-in had ended, though nothing here needs it.
     """
     saved_tenant_id = get_state("TENANT_ID")
     tenant_id = os.environ.get("ENTRABOT_TENANT_ID") or saved_tenant_id
@@ -2502,18 +2508,6 @@ def load_existing_app_registration() -> tuple[str, str | CngProvisionerCert, str
         raise ProvisionerBootstrapError(
             "Provisioner state belongs to a different tenant. "
             "Select the checkout and provisioner state for the requested tenant."
-        )
-
-    status = _application_status(client_id)
-    if status == APP_UNKNOWN:
-        raise ProvisionerBootstrapError(
-            f"Could not check whether the Provisioner app {client_id} exists in Entra "
-            "(see the az error above). Check 'az login' and the network, then try again."
-        )
-    if status == APP_NOT_FOUND:
-        raise ProvisionerBootstrapError(
-            "Provisioner app from state was not found in Entra. "
-            "Run: python3 scripts/entra_provisioning.py"
         )
 
     if _uses_cng():
@@ -2643,7 +2637,7 @@ def _acquire_graph_token_cng(tenant_id: str, client_id: str, credential: CngProv
             failure = f"{data['error']}: {description}"
             if data["error"] == "invalid_client" and "AADSTS700027" in description:
                 continue  # the certificate hasn't reached the token endpoint yet
-            raise ProvisionerBootstrapError(f"Provisioner token request failed — {failure}")
+            raise _token_refused(failure, client_id)
 
         token = data.get("access_token")
         if not token:
@@ -2696,17 +2690,39 @@ def get_graph_token(
         client_id=client_id,
         certificate_data=pem_bundle.encode(),
     )
-    return _graph_token_once_cert_is_accepted(certificate_credential)
+    return _graph_token_once_cert_is_accepted(certificate_credential, client_id=client_id)
 
 
-def _graph_token_once_cert_is_accepted(certificate_credential: Any) -> str:
+def _setup_command() -> str:
+    return _WINDOWS_SETUP_COMMAND if sys.platform == "win32" else "./scripts/setup.sh"
+
+
+def _token_refused(failure: str, client_id: str) -> ProvisionerBootstrapError:
+    """The error for a Provisioner token request Entra refused, in words a person can act on.
+
+    AADSTS700016 is Entra saying it has no such app in the tenant. It is how a read path
+    learns that the Provisioner app was deleted, now that it no longer asks the Azure CLI
+    first (:func:`load_existing_app_registration`).
+    """
+    if "AADSTS700016" in failure:
+        return ProvisionerBootstrapError(
+            f"Microsoft Entra has no Provisioner app {client_id} in this tenant (AADSTS700016): "
+            "it was deleted, or this folder's state belongs to another tenant. Run "
+            f"{_setup_command()} to set it up again."
+        )
+    return ProvisionerBootstrapError(f"Provisioner token request failed — {failure}")
+
+
+def _graph_token_once_cert_is_accepted(certificate_credential: Any, *, client_id: str = "") -> str:
     """A Graph token from *certificate_credential*, waiting while Entra does not accept
     the certificate yet.
 
     A certificate registered moments ago is refused with AADSTS700027 until the token
     endpoint has caught up, which took about a minute on a real first run. Without the
     wait, setup's next script stopped with a traceback and worked when run again. Any other
-    failure is raised at once. Same wait as the Windows path (``_acquire_graph_token_cng``).
+    refusal is raised at once, as a :class:`ProvisionerBootstrapError` (the scripts report
+    those in a sentence; anything else would end them with a traceback). Same wait as the
+    Windows path (``_acquire_graph_token_cng``).
     """
     failure = ""
     for attempt in range(_TOKEN_PROPAGATION_ATTEMPTS):
@@ -2720,9 +2736,9 @@ def _graph_token_once_cert_is_accepted(certificate_credential: Any) -> str:
         try:
             return certificate_credential.get_token("https://graph.microsoft.com/.default").token
         except Exception as exc:  # azure-identity's ClientAuthenticationError
+            failure = (str(exc).strip().splitlines() or [type(exc).__name__])[0][:400]
             if "AADSTS700027" not in str(exc):
-                raise
-            failure = str(exc).splitlines()[0][:400]
+                raise _token_refused(failure, client_id) from exc
     raise ProvisionerBootstrapError(
         "Entra did not accept the Provisioner certificate after "
         f"{_TOKEN_PROPAGATION_ATTEMPTS} attempts — {failure}"
