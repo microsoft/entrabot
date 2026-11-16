@@ -119,6 +119,7 @@ nav:
       - Email Workflows: guides/email-workflows.md
       - Files and Microsoft Agent 365 Work IQ: guides/files-and-work-iq.md
       - Identity Lifecycle and Deprovisioning: guides/identity-lifecycle.md
+      - Calling Other APIs as the Agent: guides/other-apis.md
   - Clients:
       - Overview: clients/overview.md
       - Claude Code: clients/claude-code.md

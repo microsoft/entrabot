@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- A docs page, "Calling Other APIs as the Agent": the agent's sign-in gets a token for any API that accepts Entra access tokens, with only the third hop's scope changed; an administrator allows it for one agent with `grant_consent.py --resource-app-id` and takes it back with `revoke_consent.py --resource-app-id`. Run for real on Windows 11 against a stand-in API (not part of this repository): refused with `AADSTS65001` before the grant, `200` after it. Docs only; not run on macOS or Linux.
+
 ### Fixed
 
 - `scripts/revoke_consent.py` changes only the grant on one resource. The Agent Identity holds one delegated permission grant per resource (Microsoft Graph, Azure Storage, and any other API it was given), and the script took the first grant Microsoft Graph listed, whichever resource it was on: `--all` could delete the Storage grant when the Graph one was meant. It now picks the grant on Microsoft Graph, or on the resource the new `--resource-app-id` names, the same default as `grant_consent.py`, and changes nothing when that resource has no grant. Unit-tested; not run against a tenant.
