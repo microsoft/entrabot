@@ -95,7 +95,7 @@ Full walkthrough in [`docs/architecture/system-overview.md`](docs/architecture/s
 Download the latest release (the source code ZIP on <https://github.com/microsoft/entrabot/releases/latest>) or clone it, then double-click `scripts\setup-windows.cmd`. Or from a terminal:
 
 ```bat
-git clone --branch v0.3.0 https://github.com/microsoft/entrabot.git
+git clone --branch v0.3.1 https://github.com/microsoft/entrabot.git
 cd entrabot
 scripts\setup-windows.cmd
 ```
@@ -107,13 +107,13 @@ What you need: a Microsoft 365 tenant, an account that administers it, and a fre
 ### macOS or Linux
 
 ```bash
-git clone --branch v0.3.0 https://github.com/microsoft/entrabot.git
+git clone --branch v0.3.1 https://github.com/microsoft/entrabot.git
 cd entrabot
 ./scripts/setup.sh
 ./start-entrabot.sh
 ```
 
-This clones the latest release, v0.3.0. `main` is development and may be ahead of it. Git then prints a note about a "detached HEAD": that is normal when you check out a release tag, not an error. To upgrade an existing install, see [Upgrading to a new release](docs/troubleshooting/migrations-and-upgrades.md#upgrading-to-a-new-release).
+This clones the latest release, v0.3.1. `main` is development and may be ahead of it. Git then prints a note about a "detached HEAD": that is normal when you check out a release tag, not an error. To upgrade an existing install, see [Upgrading to a new release](docs/troubleshooting/migrations-and-upgrades.md#upgrading-to-a-new-release).
 
 Setup needs Python 3.12 or newer and nothing else first: no Azure CLI and no `az login`. It runs the same setup wizard as Windows: it asks a few questions (each has a suggested answer), signs you in to Microsoft, creates the agent, keeps its sign-in key in your Keychain or keyring, and tests it. To skip the questions, pass the answers: `./scripts/setup.sh --new --with-upn-suffix=workstation --yes`. On Ubuntu 24.04 the wizard has been run end to end against a real tenant; on macOS only a repair run and the health check have. Guide, limits, and what has and has not been tested: [`docs/getting-started/macos-linux.md`](docs/getting-started/macos-linux.md).
 
@@ -219,7 +219,7 @@ This is a research repo, not a production service. It runs reliably on a develop
 
 **Open:**
 
-- Process containment is not shipped: the MCP server is not contained in 0.3.0 and runs with all of its user's rights. Planned for 0.4.0: process containment of the MCP server on macOS and Linux with Microsoft eXecution Container (MXC), where it is installed, and the system's own sandbox otherwise (Seatbelt on macOS, bubblewrap on Linux), as in [pull request #156](https://github.com/microsoft/entrabot/pull/156). MXC has not been run for real. Windows is not part of it: MXC has open issues there with Python asyncio and stdio servers when egress is denied.
+- Process containment is not shipped: the MCP server is not contained in 0.3.1 and runs with all of its user's rights. Planned for 0.4.0: process containment of the MCP server on macOS and Linux with Microsoft eXecution Container (MXC), where it is installed, and the system's own sandbox otherwise (Seatbelt on macOS, bubblewrap on Linux), as in [pull request #156](https://github.com/microsoft/entrabot/pull/156). MXC has not been run for real. Windows is not part of it: MXC has open issues there with Python asyncio and stdio servers when egress is denied.
 - Registration in the Agent 365 registry through setup has been run against a tenant on Linux and Windows: not yet on macOS, nor with a second computer joining a registered agent, nor on Windows as a standard user.
 - Planned for 0.5.0: GitHub Copilot SDK harness support, the harness made ready for real use (run against a real Copilot runtime, with the body's audit events and the outbound recipient policy applied to its Teams tools, and Teams state that survives a restart), together with running Entrabot in a container for headless operation. The harness has not been run against a real Copilot runtime. The design note is in [pull request #161](https://github.com/microsoft/entrabot/pull/161).
 

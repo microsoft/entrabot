@@ -13,13 +13,13 @@ On Windows you install nothing first. Skip this page and go to [Windows](windows
 ## Get the code
 
 ```bash
-git clone --branch v0.3.0 https://github.com/microsoft/entrabot.git
+git clone --branch v0.3.1 https://github.com/microsoft/entrabot.git
 cd entrabot
 ```
 
 Or download the source code ZIP of the latest release from <https://github.com/microsoft/entrabot/releases/latest> and extract it.
 
-This clones the latest release, v0.3.0. `main` is development and may be ahead of it. Git then prints a note about a "detached HEAD": that is normal when you check out a release tag, not an error. To upgrade an existing install, see [Upgrading to a new release](../troubleshooting/migrations-and-upgrades.md#upgrading-to-a-new-release).
+This clones the latest release, v0.3.1. `main` is development and may be ahead of it. Git then prints a note about a "detached HEAD": that is normal when you check out a release tag, not an error. To upgrade an existing install, see [Upgrading to a new release](../troubleshooting/migrations-and-upgrades.md#upgrading-to-a-new-release).
 
 ### macOS and Linux
 

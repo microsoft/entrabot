@@ -5,7 +5,60 @@ real agent, on the system named. "Unit-tested" means covered by the test suite
 (`pytest -v && ruff check .`, which every commit must pass) with Graph, Entra and the operating
 system faked. Nothing here names a tenant, account or machine.
 
-Last updated: 2026-11-15, for 0.3.0.
+Last updated: 2026-11-16, for 0.3.1.
+
+## What 0.3.1 rests on
+
+0.3.1 is 0.3.0 with two fixes, `revoke_consent.py` changing only one resource's grant (pull
+request #164) and the scripts finding setup's private Azure CLI (#165), and two docs
+changes: #164's page on calling other APIs as the agent and #166's video tour. The MCP
+server's code is the same as in 0.3.0. What changed is the scripts in `scripts/`, the
+"Agent 365 registry" line of the health check, and how the harness's `entrabot init` finds
+the Azure CLI. The rest of this record, from "What 0.3.0 rests on" on, is what 0.3.0 and
+0.2.0 were checked against, and still holds for that code.
+
+The two fixes were run for real on their pull requests' own branches before they were
+merged, not on this release branch:
+
+- **`revoke_consent.py` on one resource (#164)**, run for real on Windows 11 from #164's
+  branch: with grants on four resources, `--all --resource-app-id` deleted only the one
+  named and left the agent's Microsoft Graph, Azure Storage and Agent 365 grants in place.
+  The guide #164 adds was run for real on Windows 11 against a stand-in API that is not part
+  of this repository: Entra refused the token with `AADSTS65001` before the grant, and the
+  API answered `200` after it.
+- **The scripts and setup's private Azure CLI (#165)**, run for real on Ubuntu 24.04 from
+  #165's branch, on the computer where the bug was found: `--diagnose` reported the registry
+  as registered and `register_agent_instance.py --check` answered "present", with no `az` on
+  `PATH`.
+
+The Windows CI job (`test-windows`, the full test suite on Windows) and CodeQL passed on each
+of the pull requests #164, #165 and #166.
+
+**The release branch itself** (the version, the CHANGELOG, the install commands and the
+documentation) was checked on macOS 27 (Apple Silicon) only, with the gate from
+`RELEASING.md`: `pytest -v --tb=short` passed 6173 tests and skipped 258, with no failures,
+`ruff check .` found nothing, and `mkdocs build --strict` built the site with no warnings.
+
+**One run for real from the release branch**, on Ubuntu 24.04, with a real agent in a real
+tenant. It only read; it changed nothing. The checkout was a second copy of an agent that was set
+up on that computer earlier, not a fresh setup, and there was no `az` on `PATH`:
+
+- `./scripts/setup.sh --diagnose` reported version 0.3.1 and passed the three-hop sign-in,
+  the Graph identity, the Teams scope, Agent 365 telemetry and the "Agent 365 registry" line
+  ("registered", and Microsoft Graph returns it). Its two MCP configuration lines did not
+  pass, because that second checkout was never set up as the agent's own; this release does
+  not change them.
+- `scripts/register_agent_instance.py --check` answered "present" and exited `0`.
+
+That is the private Azure CLI fix (#165) on the release's own code, on Linux.
+
+**Not run:**
+
+- `revoke_consent.py`'s fix on macOS or Linux, or from the release branch on any system.
+- The private Azure CLI fix on Windows or macOS.
+- A fresh setup from the release branch, on any system.
+- The full test suite on Windows on the release branch. It runs as the `test-windows` job of
+  the release's pull request.
 
 ## What 0.3.0 rests on
 
@@ -212,7 +265,7 @@ It also showed that two computers running one agent with local memory both push 
 | Agent 365 registry through setup (0.3.0): the setup app's permission, the registration, its `--diagnose` line, teardown's delete | Unit-tested | Run for real (2026-11-15, Ubuntu 24.04): the permission and its consent check, the registration, `--diagnose`, the admin center listing, the script's delete, teardown's delete. Not run: a second computer joining a registered agent | Run for real (2026-11-15, Windows 11 Pro 25H2, built-in Administrator): the permission, the registration, `-Diagnose`, the admin center listing, telemetry, teardown's delete. Run for real: the takeover run's grant, on a first run. Not run: a standard user |
 | `status.sh` and `setup_delegated.sh` read `.env` as data | Run for real (the old scripts fail the tests, the new ones pass) | Unit-tested | n/a |
 | The full test suite | Every commit | Not run | CI (`test-windows`) on each pull request |
-| Process containment | Not in 0.2.0 or 0.3.0: planned for 0.4.0 | Not in 0.2.0 or 0.3.0 | Not in 0.2.0 or 0.3.0 |
+| Process containment | Not in 0.2.0, 0.3.0 or 0.3.1: planned for 0.4.0 | Not in 0.2.0, 0.3.0 or 0.3.1 | Not in 0.2.0, 0.3.0 or 0.3.1 |
 
 ## Never run
 

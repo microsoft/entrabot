@@ -100,7 +100,10 @@ The "Agent 365 registry" line in `--diagnose` says what this computer knows:
   `.venv/bin/python scripts/register_agent_instance.py --check` (Windows:
   `.venv\Scripts\python.exe scripts\register_agent_instance.py --check`) to see all of it.
   In 0.3.0 this was `FileNotFoundError` naming `az` on a computer whose only Azure CLI is
-  the private copy setup installs. The check no longer needs the Azure CLI.
+  the private copy setup installs. 0.3.1 fixes it: the check no longer needs the Azure CLI.
+  If you are still on 0.3.0, upgrade; on macOS and Linux,
+  [A script in `scripts/` cannot find `az`](macos-linux.md#a-script-in-scripts-cannot-find-az)
+  also gives a way round it for 0.3.0.
 - **cannot be checked** with an HTTP 5xx or 429 answer, or Microsoft Graph out of reach:
   run `--diagnose` again later. With any other answer, the same `--check` command shows it
   in full.
