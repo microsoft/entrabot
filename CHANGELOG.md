@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- `scripts/revoke_consent.py` changes only the grant on one resource. The Agent Identity holds one delegated permission grant per resource (Microsoft Graph, Azure Storage, and any other API it was given), and the script took the first grant Microsoft Graph listed, whichever resource it was on: `--all` could delete the Storage grant when the Graph one was meant. It now picks the grant on Microsoft Graph, or on the resource the new `--resource-app-id` names, the same default as `grant_consent.py`, and changes nothing when that resource has no grant. Unit-tested; not run against a tenant.
+- `scripts/revoke_consent.py` changes only the grant on one resource. The Agent Identity holds one delegated permission grant per resource (Microsoft Graph, Azure Storage, and any other API it was given), and the script took the first grant Microsoft Graph listed, whichever resource it was on: `--all` could delete the Storage grant when the Graph one was meant. It now picks the grant on Microsoft Graph, or on the resource the new `--resource-app-id` names, the same default as `grant_consent.py`, and changes nothing when that resource has no grant. Unit-tested; not run against a tenant. Run for real on Windows 11: with grants on four resources, `--all --resource-app-id` deleted only the one named and left the agent's Microsoft Graph, Azure Storage and Agent 365 grants in place.
 
 ## 0.3.0 — 2026-11-15
 
