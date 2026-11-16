@@ -37,13 +37,26 @@ of the pull requests #164, #165 and #166.
 **The release branch itself** (the version, the CHANGELOG, the install commands and the
 documentation) was checked on macOS 27 (Apple Silicon) only, with the gate from
 `RELEASING.md`: `pytest -v --tb=short` passed 6173 tests and skipped 258, with no failures,
-and `ruff check .` found nothing. Nothing was run against a tenant from the release branch.
+`ruff check .` found nothing, and `mkdocs build --strict` built the site with no warnings.
+
+**One run for real from the release branch**, on Ubuntu 24.04, with a real agent in a real
+tenant. It only read; it changed nothing. The checkout was a second copy of an agent that was set
+up on that computer earlier, not a fresh setup, and there was no `az` on `PATH`:
+
+- `./scripts/setup.sh --diagnose` reported version 0.3.1 and passed the three-hop sign-in,
+  the Graph identity, the Teams scope, Agent 365 telemetry and the "Agent 365 registry" line
+  ("registered", and Microsoft Graph returns it). Its two MCP configuration lines did not
+  pass, because that second checkout was never set up as the agent's own; this release does
+  not change them.
+- `scripts/register_agent_instance.py --check` answered "present" and exited `0`.
+
+That is the private Azure CLI fix (#165) on the release's own code, on Linux.
 
 **Not run:**
 
-- `revoke_consent.py`'s fix on macOS or Linux.
+- `revoke_consent.py`'s fix on macOS or Linux, or from the release branch on any system.
 - The private Azure CLI fix on Windows or macOS.
-- Either fix from the release branch, on any system.
+- A fresh setup from the release branch, on any system.
 - The full test suite on Windows on the release branch. It runs as the `test-windows` job of
   the release's pull request.
 
