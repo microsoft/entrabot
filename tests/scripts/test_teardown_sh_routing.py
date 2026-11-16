@@ -224,8 +224,28 @@ def test_the_tenant_wide_teardown_uses_setups_private_azure_cli_when_no_other_is
 
     assert found.returncode == 0, found.stderr
     assert found.stdout.strip() == str(private)
-    # ...and the same lines are in status.sh.
+    # ...and the same lines are in status.sh and cleanup-orphans.sh.
     assert block in (REPO_ROOT / "status.sh").read_text(encoding="utf-8")
+    assert block in (REPO_ROOT / "scripts" / "cleanup-orphans.sh").read_text(encoding="utf-8")
+
+
+def test_cleanup_orphans_with_no_azure_cli_at_all_says_so_in_a_sentence(tmp_path: Path) -> None:
+    # No az on PATH and no private copy: one sentence with what to do, before anything runs.
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    for name in ("dirname",):  # all the script starts before it looks for az
+        (tools / name).symlink_to(shutil.which(name) or f"/usr/bin/{name}")
+    result = subprocess.run(  # noqa: S603 - the repository's own script, by full path
+        [BASH, str(REPO_ROOT / "scripts" / "cleanup-orphans.sh"), "blueprint-object-id"],
+        capture_output=True,
+        text=True,
+        env={"PATH": str(tools), "HOME": str(tmp_path)},
+        stdin=subprocess.DEVNULL,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "Entrabot could not find the Azure CLI on this computer" in result.stderr
+    assert "Run ./scripts/setup.sh" in result.stderr
 
 
 def test_a_log_file_may_follow_its_option_after_a_space(folder: Folder) -> None:

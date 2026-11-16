@@ -126,3 +126,13 @@ def test_agent_writer_applies_same_isolation_rules_as_runtime(monkeypatch, tmp_p
     assert resolved.agent_id == "second"
     assert resolved.agent_user_id is None
     assert not resolved.a365_export_enabled
+
+
+def test_init_starts_setups_private_azure_cli_when_none_is_on_path(monkeypatch, tmp_path):
+    """``entrabot init`` on a computer whose only Azure CLI is the private copy the setup
+    wizard installed (not on PATH) starts that copy, not a bare ``az`` that is not there."""
+    from entrabot.harness.setup import steps
+    from tests.private_azure_cli import computer_without_az_on_path, install_private_copy
+
+    python = install_private_copy(computer_without_az_on_path(monkeypatch, tmp_path))
+    assert steps._az_cmd("account", "show") == [str(python), "-m", "azure.cli", "account", "show"]

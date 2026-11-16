@@ -126,7 +126,7 @@ Everything is installed for your account only, with one exception: on an account
 |---|---|---|
 | Python 3.12 (private copy; checksum and signature checked before use) | `%LOCALAPPDATA%\entrabot\python` | Only if the PC has no Python 3.12 or newer. |
 | The project's Python environment | `.venv` in the Entrabot folder | Always. |
-| Azure CLI (private copy, version 2.92.0 or later and below 3) | `%LOCALAPPDATA%\entrabot\tools\azure-cli` | Only if the Azure CLI is missing and was not installed with `winget` (see above). |
+| Azure CLI (private copy, version 2.92.0 or later and below 3) | `%LOCALAPPDATA%\entrabot\tools\azure-cli` | Only if the Azure CLI is missing and was not installed with `winget` (see above). It is not added to your `PATH`, so a new window has no `az`; setup, status, rotation, teardown and the scripts in `scripts\` find it by themselves, and the health check does not need it. |
 | Git for Windows | `%LOCALAPPDATA%\Programs\Git` | Only if you say yes. Claude Code needs it for this project. |
 | Claude Code | `%USERPROFILE%\.local\bin` | Only if you say yes. |
 | Two certificates with non-exportable keys | Your Windows certificate store (`Cert:\CurrentUser\My`) | Always. The keys are held by the PC's TPM when it accepts them. |

@@ -1114,6 +1114,18 @@ The wrap always adds an authoritative outer envelope; a body that already resemb
 
 ---
 
+### Learning #83: A Tool Setup Installs Off `PATH` Is Only Found Where Setup Lends Its `PATH`
+
+**Date:** 2026-11-15
+**Status:** **Fix in place and covered by unit tests (Linux, macOS and Windows CI); not yet re-run on the Ubuntu machine that found it.**
+**Context:** Setup installs a private Azure CLI (`~/.entrabot/tools/azure-cli`; `%LOCALAPPDATA%\entrabot\tools\azure-cli` on Windows) when the computer has none, and never puts it on `PATH`. The helper scripts it starts find it because the wizard puts that folder first on the child's `PATH` (`AzCli.child_env`).
+**Problem:** On a fresh Ubuntu 24.04 machine with v0.3.0, setup finished and registered the agent, then `--diagnose` (which starts `register_agent_instance.py --check` with the person's own environment) and every script run by hand stopped with `FileNotFoundError: 'az'`. The diagnose line showed the last two lines of the traceback and said to try again later. The `az` was not even needed: `load_existing_app_registration` asked `az ad app show` whether the Provisioner app exists before every token got with the Provisioner's own certificate. Every test of those scripts mocked `run_az` or went through the wizard, so a `PATH` without `az` was never exercised.
+**Fix:** The certificate token path asks no Azure CLI (a deleted app shows as AADSTS700016 from the token endpoint, said in a sentence). The paths that need the Azure CLI look for it the way the wizard does (`azcli.find_az_for_scripts`, through `scripts/azure_cli.py`), and with none at all return exit 127 and one sentence saying what to run. A script that stops without an answer is one line in the diagnose report, with the command that shows the whole error.
+**Prevention:** When setup installs something off `PATH`, every entry point that is not the wizard (scripts run by hand, `--diagnose`, status, launchers) must find it the same way, through one lookup; a workaround in each shell wrapper misses the next caller. Test such paths with a `PATH` that has no `az` on it and without mocking the child process (`tests/private_azure_cli.py`). Remove a dependency a path does not need before teaching it to find the dependency.
+**Evidence/references:** `scripts/entra_provisioning.py` (`load_existing_app_registration`, `_az_command`, `run_az`, `_token_refused`), `scripts/azure_cli.py`, `src/entrabot/winsetup/azcli.py` (`find_az_for_scripts`, `not_found_message`), `src/entrabot/preflight.py` (`_look_up_registration`, `check_a365_registry`); `tests/scripts/test_register_agent_instance.py::TestWithoutAzOnPath`, `tests/scripts/test_entra_provisioning.py`, `tests/test_preflight.py::TestRegistryDiagnosis`.
+
+---
+
 ### [HISTORICAL] Learning #4: OBO Requires Matching Token Audience
 
 **Date:** 2026-04-06

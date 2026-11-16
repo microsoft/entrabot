@@ -25,6 +25,8 @@ from typing import Any, Literal
 from urllib.parse import quote
 
 from entrabot.winsetup.console import Console
+from entrabot.winsetup.helpers import default_data_root
+from entrabot.winsetup.words import words_for
 
 # Microsoft Entra built-in role template IDs (the same in every tenant).
 GLOBAL_ADMIN = "62e90394-69f5-4237-9190-012177145e10"
@@ -251,6 +253,52 @@ def find_az(
             if launcher.is_file():
                 return _from_launcher(launcher, platform, "standard")
     return _tools_venv_location(data_dir, platform)
+
+
+def private_copy_folder(
+    env: Mapping[str, str] | None = None, *, platform: str | None = None
+) -> Path:
+    """Where setup installs its private copy of the Azure CLI on this computer:
+    ``~/.entrabot/tools/azure-cli``, or ``%LOCALAPPDATA%\\entrabot\\tools\\azure-cli`` on
+    Windows. Setup never puts it on PATH."""
+    env = os.environ if env is None else env
+    return _tools_venv(default_data_root(env, platform=platform))
+
+
+def find_az_for_scripts(
+    env: Mapping[str, str] | None = None,
+    *,
+    platform: str | None = None,
+    which: Callable[[str], str | None] = shutil.which,
+) -> AzLocation | None:
+    """:func:`find_az` with the data folder setup uses, for a script started on its own.
+
+    A helper script setup starts finds ``az`` on PATH, because setup puts the folder of the
+    Azure CLI it uses first on the child's PATH (:meth:`AzCli.child_env`). The same script run
+    by hand, or by ``--diagnose``, gets the person's own PATH, where setup's private copy is
+    not. This is the lookup setup itself does, so both find the same Azure CLI.
+    """
+    env = os.environ if env is None else env
+    platform = platform or sys.platform
+    return find_az(
+        env=env,
+        data_dir=default_data_root(env, platform=platform),
+        platform=platform,
+        which=which,
+    )
+
+
+def not_found_message(env: Mapping[str, str] | None = None, *, platform: str | None = None) -> str:
+    """What to tell a person when no Azure CLI can be found at all, in one plain sentence and
+    what to do. Avoids the words "not found": scripts read some ``az`` errors for those."""
+    words = words_for(platform)
+    folder = private_copy_folder(env, platform=platform)
+    return (
+        "Entrabot could not find the Azure CLI on this computer: there is no az command on "
+        f"PATH and no private copy in {folder}, where setup installs one. Run {words.setup}, "
+        f"which installs it and signs you in, or install it from {words.az_install_url} and "
+        "sign in with az login."
+    )
 
 
 # ── Installing az ────────────────────────────────────────────────────────────

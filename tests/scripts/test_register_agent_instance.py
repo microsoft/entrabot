@@ -320,3 +320,91 @@ class TestDelete:
         monkeypatch.setattr(module, "_request", Graph())
         assert module.main(["--delete", "--apply", "--print-result"]) == 0
         assert _result(capsys.readouterr().out)["outcome"] == "not-recorded"
+
+
+class TestWithoutAzOnPath:
+    """Found live on Ubuntu 24.04 with v0.3.0: the only Azure CLI was setup's private copy
+    (not on PATH), and ``--check`` stopped with ``FileNotFoundError: 'az'``, so the registry
+    line of ``--diagnose`` showed a traceback. The setup app's token comes from its
+    certificate and needs no Azure CLI. Here that token path is the real one: only the
+    keystore, the token endpoint and Graph are stood in for, and no child process is."""
+
+    PEM = (
+        "-----BEGIN CERTIFICATE-----\ncert\n-----END CERTIFICATE-----\n"
+        "-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n"
+    )
+
+    @pytest.fixture
+    def real_token(self, module, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request):
+        import types
+
+        from tests.private_azure_cli import computer_without_az_on_path, install_private_copy
+
+        data_root = computer_without_az_on_path(monkeypatch, tmp_path)
+        if request.param:
+            install_private_copy(data_root)
+        provisioning = sys.modules["entra_provisioning"]
+        monkeypatch.delenv("ENTRABOT_TENANT_ID", raising=False)
+        monkeypatch.setattr(provisioning, "get_state", module._test_state.get)
+        monkeypatch.setattr(provisioning, "_uses_cng", lambda: False)
+        monkeypatch.setattr(provisioning, "_keychain_get_cert", lambda tenant: self.PEM)
+
+        class _Credential:
+            def __init__(self, **_kwargs: object) -> None:
+                pass
+
+            def get_token(self, _scope: str) -> object:
+                return types.SimpleNamespace(token=TOKEN)
+
+        fake = types.ModuleType("azure.identity")
+        fake.CertificateCredential = _Credential
+        monkeypatch.setitem(sys.modules, "azure.identity", fake)
+        monkeypatch.setattr(
+            module, "get_existing_graph_token", provisioning.get_existing_graph_token
+        )
+        return module
+
+    @pytest.mark.parametrize(
+        "real_token", [False, True], ids=["no-azure-cli", "private-copy"], indirect=True
+    )
+    def test_check_reads_the_registration(self, real_token, monkeypatch, capsys) -> None:
+        real_token._test_state["AGENT_REGISTRATION_ID"] = "registration-1"
+        graph = Graph(Response(200, {"id": "registration-1"}))
+        monkeypatch.setattr(real_token, "_request", graph)
+
+        assert real_token.main(["--check", "--print-result"]) == 0
+
+        assert _result(capsys.readouterr().out) == {
+            "outcome": "present",
+            "id": "registration-1",
+            "reason": "",
+        }
+
+    @pytest.mark.parametrize(
+        "real_token", [False, True], ids=["no-azure-cli", "private-copy"], indirect=True
+    )
+    def test_teardown_deletes_the_registration(self, real_token, monkeypatch, capsys) -> None:
+        """Teardown deletes the registration with ``--delete --apply``, the same token."""
+        real_token._test_state["AGENT_REGISTRATION_ID"] = "registration-1"
+        graph = Graph(Response(204))
+        monkeypatch.setattr(real_token, "_request", graph)
+
+        assert real_token.main(["--delete", "--apply", "--print-result"]) == 0
+
+        assert _result(capsys.readouterr().out)["outcome"] == "deleted"
+        assert "AGENT_REGISTRATION_ID" not in real_token._test_state
+
+    @pytest.mark.parametrize("real_token", [False], ids=["no-azure-cli"], indirect=True)
+    def test_graph_out_of_reach_is_said_plainly(self, real_token, monkeypatch, capsys) -> None:
+        import requests
+
+        real_token._test_state["AGENT_REGISTRATION_ID"] = "registration-1"
+
+        def unreachable(*_args: object, **_kwargs: object) -> Response:
+            raise requests.ConnectionError("no route to host")
+
+        monkeypatch.setattr(real_token, "_request", unreachable)
+
+        assert real_token.main(["--check", "--print-result"]) == 1
+        reason = _result(capsys.readouterr().out)["reason"]
+        assert reason == "Microsoft Graph could not be reached (no route to host)"

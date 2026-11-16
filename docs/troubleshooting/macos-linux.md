@@ -147,17 +147,17 @@ To sign in as someone else although the earlier sign-in still works, add `--swit
 
 ## A script in `scripts/` cannot find `az`
 
-A script run by hand, such as `scripts/add_agent_sponsor.py`, stops with `FileNotFoundError` naming `az`, or says it could not look up the Provisioner app.
+In 0.3.0, a script run by hand, such as `scripts/list_sponsors.py`, stopped with `FileNotFoundError` naming `az`, and the "Agent 365 registry" line of `--diagnose` showed the end of that error.
 
-**Cause.** Setup installed its own private copy of the Azure CLI, in `~/.entrabot/tools/azure-cli`, because there was none on your `PATH`, and it does not add that copy to your `PATH`. Setup, `--diagnose`, rotation, both teardowns and `./status.sh` find it by themselves. The other scripts in `scripts/` look for `az` on your `PATH` only, and they need it to reach Microsoft Entra with the setup (Provisioner) credential.
+**Cause.** Setup installed its own private copy of the Azure CLI, in `~/.entrabot/tools/azure-cli`, because there was none on your `PATH`, and it does not add that copy to your `PATH`. Setup, rotation, teardown and `./status.sh` found it; the scripts in `scripts/` looked for `az` on your `PATH` only, and asked it whether the setup (Provisioner) app exists before every token they got with its certificate.
 
-**Fix.** Put the private copy first on `PATH` for that command:
+**Fix.** Update to a release with this fix. The scripts that read with the setup app's token (the registry check, sponsors, consent, licences, status) no longer need the Azure CLI at all, and the ones that do (setup's own app, cloud storage) find the private copy the way setup does. If neither an Azure CLI on your `PATH` nor the private copy is there, they say so in one sentence: "Entrabot could not find the Azure CLI on this computer: …". Run `./scripts/setup.sh`, which installs it.
+
+On 0.3.0, put the private copy first on `PATH` for that command:
 
 ```bash
 PATH="$HOME/.entrabot/tools/azure-cli/bin:$PATH" .venv/bin/python scripts/list_sponsors.py
 ```
-
-Or add that folder to `PATH` in your shell profile, or install the Azure CLI yourself (`brew install azure-cli` on a Mac, or your distribution's package); setup then uses that one too.
 
 ## The sign-in page never appears
 

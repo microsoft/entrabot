@@ -95,6 +95,15 @@ The "Agent 365 registry" line in `--diagnose` says what this computer knows:
   setup again with `--configure-a365`, which adds that permission to the setup app.
 - **no longer has it**: the registration was deleted in Microsoft 365. Run setup again with
   `--configure-a365` to register the agent again.
+- **cannot be checked: the check stopped with an error (...)**: the check ended before it
+  had an answer; the brackets hold its error. Run
+  `.venv/bin/python scripts/register_agent_instance.py --check` (Windows:
+  `.venv\Scripts\python.exe scripts\register_agent_instance.py --check`) to see all of it.
+  In 0.3.0 this was `FileNotFoundError` naming `az` on a computer whose only Azure CLI is
+  the private copy setup installs. The check no longer needs the Azure CLI.
+- **cannot be checked** with an HTTP 5xx or 429 answer, or Microsoft Graph out of reach:
+  run `--diagnose` again later. With any other answer, the same `--check` command shows it
+  in full.
 
 The registry lists the agent in the Microsoft 365 admin center under Agents > All agents >
 Registry. The admin center lags Microsoft Graph: in a real run it listed a new registration

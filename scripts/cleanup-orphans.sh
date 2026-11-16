@@ -37,6 +37,17 @@ fi
 BLUEPRINT_OBJ_ID="${1:-}"
 AGENT_IDENTITY_OBJ_ID="${2:-}"
 
+# Setup installs its own Azure CLI when the computer has none (~/.entrabot/tools/azure-cli).
+# It is not on PATH, so it is used here when no other az is.
+if ! command -v az >/dev/null && [ -x "${HOME:-}/.entrabot/tools/azure-cli/bin/az" ]; then
+    PATH="$HOME/.entrabot/tools/azure-cli/bin:$PATH"
+    export PATH
+fi
+if ! command -v az >/dev/null; then
+    echo -e "${RED}Entrabot could not find the Azure CLI on this computer: there is no az command on PATH and no private copy in ~/.entrabot/tools/azure-cli, where setup installs one. Run ./scripts/setup.sh, which installs it and signs you in.${NC}" >&2
+    exit 1
+fi
+
 # Verify az CLI is logged in (needed for the Python helper to bootstrap
 # the Provisioner if it's missing)
 if ! az account show &>/dev/null; then

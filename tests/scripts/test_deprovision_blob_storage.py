@@ -184,3 +184,32 @@ class TestMainCLI:
         mock_deprov.assert_not_called()
         out = capsys.readouterr().out
         assert "dry run" in out.lower() or "DRY RUN" in out
+
+
+class TestWithoutAzOnPath:
+    """The docs tell people to run this script by hand. On a computer whose only Azure CLI is
+    the private copy setup installed (not on PATH), it ran ``az`` from PATH and stopped with
+    ``FileNotFoundError``. It now starts the copy setup uses."""
+
+    def test_it_starts_setups_private_copy(self, monkeypatch, tmp_path):
+        from tests.private_azure_cli import computer_without_az_on_path, install_private_copy
+
+        python = install_private_copy(computer_without_az_on_path(monkeypatch, tmp_path))
+        started = []
+
+        def fake_run(command, **_kwargs):
+            started.append(command)
+            return _ok()
+
+        monkeypatch.setattr(deprov_mod.subprocess, "run", fake_run)
+        deprov_mod.delete_container("acct1", "cont1")
+        assert started and started[0][:3] == [str(python), "-m", "azure.cli"]
+        assert started[0][3:6] == ["storage", "container-rm", "delete"]
+
+    def test_with_no_azure_cli_at_all_it_says_so_in_a_sentence(self, monkeypatch, tmp_path):
+        from tests.private_azure_cli import computer_without_az_on_path
+
+        computer_without_az_on_path(monkeypatch, tmp_path)
+        with pytest.raises(RuntimeError) as excinfo:
+            deprov_mod.delete_container("acct1", "cont1")
+        assert "Entrabot could not find the Azure CLI on this computer" in str(excinfo.value)

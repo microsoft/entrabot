@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 
+from ...winsetup import azcli
 from .. import config as cfgmod
 from ..config import HarnessConfig, globalcfg
 from ..ui import ansi
@@ -23,6 +24,11 @@ def _choose_directory(default_root: str) -> str:
 
 
 def _az_cmd(*args: str) -> list[str]:
+    """``az <args>``: the one on PATH, else the private copy the setup wizard installs (it is
+    not on PATH), found the way the wizard finds it."""
+    location = azcli.find_az_for_scripts()
+    if location is not None:
+        return [*location.command, *args]
     prefix = ["cmd", "/c", "az"] if os.name == "nt" else ["az"]
     return [*prefix, *args]
 
