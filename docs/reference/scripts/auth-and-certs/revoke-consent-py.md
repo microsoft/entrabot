@@ -9,10 +9,13 @@ Part of the [auth-and-certs command reference](../index.md#auth-and-certs).
 ## Purpose
 
 Pares down or deletes the Agent Identity → Agent User
-`oauth2PermissionGrant`. Use it to remove delegated scopes the agent no longer
-needs, or to fully revoke the grant. It operates only on the delegated consent
-record (`oauth2PermissionGrants`); it does not touch application permissions
-(`appRoleAssignments`) or any other resource.
+`oauth2PermissionGrant` on one resource. Use it to remove delegated scopes the
+agent no longer needs, or to fully revoke the grant. The Agent Identity holds one
+grant per resource (Microsoft Graph, Azure Storage, and any other API it was
+given); this command changes only the one on Microsoft Graph, or on the resource
+`--resource-app-id` names. It operates only on the delegated consent record
+(`oauth2PermissionGrants`); it does not touch application permissions
+(`appRoleAssignments`) or the grants on other resources.
 
 See [Token flows → Consent records](../../token-flows.md#consent-records) for how
 the grant is consumed at Hop 3.
@@ -35,12 +38,18 @@ python3 scripts/revoke_consent.py --scopes "Mail.Read,Files.ReadWrite"
 
 # Delete the entire grant
 python3 scripts/revoke_consent.py --all
+
+# Delete the grant on another resource, for example an API registered in the tenant
+python3 scripts/revoke_consent.py --all --resource-app-id <resource-app-id>
 ```
 
 ## Options
 
 - `--scopes SCOPES` — comma- or space-separated scope names to remove.
 - `--all` — remove every current scope, which deletes the grant.
+- `--resource-app-id ID` — the application ID of the resource whose grant to
+  change. Defaults to Microsoft Graph (`00000003-0000-0000-c000-000000000000`),
+  as in [`grant_consent.py`](grant-consent-py.md).
 - `--help`, `-h` — print usage and exit.
 
 Both `--scopes` and `--all` are accepted on the command line; at least one is
@@ -52,7 +61,9 @@ every current scope in the grant, ignoring the `--scopes` list.
 1. Reads the Agent Identity and Agent User object IDs from state and mints a
    Provisioner Graph token (certificate key read from the OS keystore, or from
    the Windows file-backed store, in memory only).
-2. Finds the matching grant by `clientId` and `principalId` (first match).
+2. Looks up the resource's service principal, then finds the grant with that
+   `clientId`, `principalId` and `resourceId`. Grants on other resources are
+   never changed.
 3. Computes the change:
    - With `--all`, targets every current scope, overriding any `--scopes` value
      that was also supplied.
@@ -68,8 +79,9 @@ every current scope in the grant, ignoring the `--scopes` list.
 ## Exit behavior
 
 - `0` — scopes removed, grant deleted, or nothing to remove (no matching scopes).
-- `1` — missing state, Provisioner token failure, no grant found for the
-  Agent Identity/Agent User pair, or a Graph `PATCH`/`DELETE` failure.
+- `1` — missing state, Provisioner token failure, no service principal for the
+  resource, no grant found for the Agent Identity/Agent User pair on that
+  resource, or a Graph `PATCH`/`DELETE` failure.
 - `2` — neither `--scopes` nor `--all` was supplied (usage error).
 - `--help`/`-h` prints usage and exits `0`.
 
