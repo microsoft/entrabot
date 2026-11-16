@@ -29,6 +29,7 @@ import base64
 import ipaddress
 import json
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -567,6 +568,8 @@ def check_a365_telemetry(
 REGISTRY_CHECK_NAME = "Agent 365 registry"
 _REGISTRY_SCRIPT = "register_agent_instance.py"
 _REGISTRY_TIMEOUT_SECONDS = 120
+# The lookup's outcome when the script stopped without giving one (a crash, not an answer).
+REGISTRY_CHECK_STOPPED = "check-stopped"
 
 
 def _read_registry_state(state_path: Path) -> tuple[str, bool, str]:
@@ -612,8 +615,27 @@ def _look_up_registration(project_root: Path) -> dict[str, str]:
             if isinstance(data, dict):
                 return {key: str(value or "") for key, value in data.items()}
             break
-    tail = " ".join(result.stderr.strip().splitlines()[-2:])[-300:]
-    return {"outcome": "could-not-check", "reason": tail or f"the check exited {result.returncode}"}
+    # No answer: the script stopped before it could give one. What it printed last is the
+    # error itself (for a Python traceback, its last line); the frames above it are for the
+    # person who runs the script, not for a line of the health check.
+    lines = [line.strip() for line in result.stderr.strip().splitlines() if line.strip()]
+    said = lines[-1][-300:] if lines else f"it exited {result.returncode}"
+    reason = f"the check stopped with an error ({said})"
+    return {"outcome": REGISTRY_CHECK_STOPPED, "reason": reason}
+
+
+def _registry_script_command(*args: str) -> str:
+    """How a person runs the registry script on this system, from the project folder."""
+    python = r".venv\Scripts\python.exe" if _is_windows() else ".venv/bin/python"
+    script = rf"scripts\{_REGISTRY_SCRIPT}" if _is_windows() else f"scripts/{_REGISTRY_SCRIPT}"
+    return " ".join([python, script, *args])
+
+
+# A reason that a later try can fix: Microsoft Graph could not be reached, did not answer in
+# time, or answered that it is busy (HTTP 5xx, 429).
+_REGISTRY_TRANSIENT = re.compile(
+    r"could not be reached|did not finish|timed? ?out|HTTP (?:5\d\d|429)\b", re.IGNORECASE
+)
 
 
 def check_a365_registry(
@@ -662,8 +684,12 @@ def check_a365_registry(
         )
     elif outcome == "no-access":
         fix = f"Run {_diagnose_command()} from the computer that ran setup, or run setup again."
+    elif outcome == REGISTRY_CHECK_STOPPED:
+        fix = f"To see the whole error, run: {_registry_script_command('--check')}"
+    elif _REGISTRY_TRANSIENT.search(why):
+        fix = f"Microsoft Graph did not answer this time. Run {_diagnose_command()} again later."
     else:
-        fix = f"Run {_diagnose_command()} again later."
+        fix = f"To see Microsoft Graph's whole answer, run: {_registry_script_command('--check')}"
     return Check(
         REGISTRY_CHECK_NAME,
         "warn",

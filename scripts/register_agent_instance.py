@@ -163,8 +163,15 @@ def _check(run: _Run) -> int:
         return EXIT_FAILED if ended is None else ended
     try:
         found = registry.look_up(token, recorded, request=_request)
-    except (registry.RegistryError, requests.RequestException) as exc:
+    except registry.RegistryError as exc:
         return run.end(EXIT_FAILED, "could-not-check", registration_id=recorded, reason=str(exc))
+    except requests.RequestException as exc:
+        return run.end(
+            EXIT_FAILED,
+            "could-not-check",
+            registration_id=recorded,
+            reason=f"Microsoft Graph could not be reached ({exc})",
+        )
     print(f"Registration {recorded}: {found}")
     return run.end(EXIT_OK, found, registration_id=recorded)
 

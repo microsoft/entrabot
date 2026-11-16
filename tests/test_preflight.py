@@ -1909,6 +1909,69 @@ class TestRegistryDiagnosis:
         assert said in check.detail
         assert check.remediation
 
+    # Found live on Ubuntu 24.04 with v0.3.0, where the only Azure CLI was setup's private
+    # copy: the line ended in the last two lines of a Python traceback, and its fix said to
+    # run --diagnose again later, which could never help. The script no longer needs the
+    # Azure CLI (tests/scripts/test_register_agent_instance.py); what is left here is that a
+    # script that stops without an answer is said in one line, with a fix that fits.
+
+    def test_a_check_that_stopped_says_its_error_in_one_line_not_a_traceback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from entrabot import preflight
+
+        (tmp_path / "scripts").mkdir()
+        (tmp_path / "scripts" / "register_agent_instance.py").write_text("", encoding="utf-8")
+
+        class Crashed:
+            returncode = 1
+            stdout = ""
+            stderr = (
+                "Traceback (most recent call last):\n"
+                '  File "/usr/lib/python3.12/subprocess.py", line 1955, in _execute_child\n'
+                "    raise child_exception_type(errno_num, err_msg, err_filename)\n"
+                "FileNotFoundError: [Errno 2] No such file or directory: 'az'\n"
+            )
+
+        monkeypatch.setattr(preflight.subprocess, "run", lambda argv, **kwargs: Crashed())
+        state = self._state(tmp_path, AGENT_REGISTRATION_ID="registration-1")
+
+        check = preflight.check_a365_registry(state)
+
+        assert check.status == "warn"
+        assert check.detail == (
+            "recorded as registration registration-1, but cannot be checked: the check "
+            "stopped with an error (FileNotFoundError: [Errno 2] No such file or directory: "
+            "'az')."
+        )
+        assert "Traceback" not in check.detail and "raise child_exception_type" not in check.detail
+        assert "again later" not in (check.remediation or "")
+        assert "register_agent_instance.py --check" in (check.remediation or "")
+
+    @pytest.mark.parametrize(
+        ("reason", "later"),
+        [
+            ("registration registration-1 could not be read (HTTP 503: busy)", True),
+            ("registration registration-1 could not be read (HTTP 429: slow down)", True),
+            ("Microsoft Graph could not be reached (ConnectionError)", True),
+            ("the check did not finish (timed out after 120 seconds)", True),
+            ("registration registration-1 could not be read (HTTP 403: Forbidden)", False),
+            ("registration registration-1 could not be read (HTTP 400: bad request)", False),
+        ],
+    )
+    def test_again_later_is_said_only_when_a_later_try_can_help(
+        self, tmp_path: Path, reason: str, later: bool
+    ) -> None:
+        from entrabot.preflight import check_a365_registry
+
+        state = self._state(tmp_path, AGENT_REGISTRATION_ID="registration-1")
+        answer = {"outcome": "could-not-check", "reason": reason}
+        check = check_a365_registry(state, look_up=lambda _root: answer)
+        assert check.status == "warn" and reason in check.detail
+        assert ("again later" in (check.remediation or "")) is later
+        if not later:
+            assert "register_agent_instance.py --check" in (check.remediation or "")
+
     def test_an_unreadable_state_file_cannot_be_checked(self, tmp_path: Path) -> None:
         from entrabot.preflight import check_a365_registry
 

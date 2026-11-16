@@ -393,3 +393,18 @@ class TestWithoutAzOnPath:
 
         assert _result(capsys.readouterr().out)["outcome"] == "deleted"
         assert "AGENT_REGISTRATION_ID" not in real_token._test_state
+
+    @pytest.mark.parametrize("real_token", [False], ids=["no-azure-cli"], indirect=True)
+    def test_graph_out_of_reach_is_said_plainly(self, real_token, monkeypatch, capsys) -> None:
+        import requests
+
+        real_token._test_state["AGENT_REGISTRATION_ID"] = "registration-1"
+
+        def unreachable(*_args: object, **_kwargs: object) -> Response:
+            raise requests.ConnectionError("no route to host")
+
+        monkeypatch.setattr(real_token, "_request", unreachable)
+
+        assert real_token.main(["--check", "--print-result"]) == 1
+        reason = _result(capsys.readouterr().out)["reason"]
+        assert reason == "Microsoft Graph could not be reached (no route to host)"
