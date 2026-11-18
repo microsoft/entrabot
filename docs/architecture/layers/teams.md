@@ -28,11 +28,17 @@ Every Teams tool requires an explicit `chat_id`; Entrabot has no default or fall
 
 `read()` fetches `GET /chats/{chat_id}/messages` with `$top` and `$orderby=createdDateTime desc`, then wraps every message body in the XPIA `<external_content>` envelope before returning it (see [Audit](audit.md) and [Security Boundaries](../security-boundaries.md) for why). Identity and dedup filtering — telling human messages apart from the agent's own, and from already-seen messages — happens client-side in `filter_human_messages()`, matching on `sender_upn` (falling back to the sender's object ID), never on the mutable display name or Graph `$filter`. The separate `/me/chats` discovery sweep omits `$orderby` because that endpoint rejects it.
 
+Each message also carries its `reactions`: who reacted, with what, and when. The reaction's name is free text, so it is wrapped like the body.
+
+## Reactions
+
+`set_reaction()` and `unset_reaction()` call Graph's `setReaction` and `unsetReaction` for one chat message, with a Unicode emoji. They back the `add_teams_reaction` and `remove_teams_reaction` tools, which accept an emoji or one of the six older names, refuse anything else, and write their audit event before the call. The chat and message IDs are percent-encoded into the URL, so an ID from the model can't turn the call into a different endpoint. `tools/reactions.py` holds the parsing, the validation and the change detection the poll uses.
+
 ## Background polling
 
 Two tasks keep conversations current without the agent needing to ask:
 
-- **Teams chat poll (5s)** — polls every chat in `watched_chats` for new messages. Starts as soon as at least one chat is watched; not gated on auth mode.
+- **Teams chat poll (5s)** — polls every chat in `watched_chats` for new messages, and for new reactions on the agent's own messages. Starts as soon as at least one chat is watched; not gated on auth mode.
 - **Chat auto-discovery (120s)** — Agent User mode only. Sweeps every page of `/me/chats`, up to 20 pages, and registers any chat not already in `watched_chats`. The updated list goes to the configured storage backend, so it survives a restart and is shared between instances on a cloud backend.
 
 ## Delivery: channel push vs. auto-wait

@@ -64,7 +64,7 @@ Events written through `audit_log` carry `origin: "model"`, so they can't be mis
 
 ## Server-side send audit and refusals
 
-`src/entrabot/mcp_server.py::_audit_before` writes the `pending` event for `send_email`, `send_teams_message`, `send_card`, `post_thinking_placeholder` and `create_chat` before the Graph call; if the write raises, the tool returns `{"error": "the audit event could not be recorded, so <tool> did not run"}` and does nothing. `_refuse_unless_allowed` writes a `denied` event, with each refused address and reason in `metadata`, when the recipient policy refuses a recipient; the tool then returns an error without calling Graph.
+`src/entrabot/mcp_server.py::_audit_before` writes the `pending` event for `send_email`, `send_teams_message`, `send_card`, `post_thinking_placeholder`, `create_chat`, `add_teams_reaction` and `remove_teams_reaction` before the Graph call; if the write raises, the tool returns `{"error": "the audit event could not be recorded, so <tool> did not run"}` and does nothing. `_refuse_unless_allowed` writes a `denied` event, with each refused address and reason in `metadata`, when the recipient policy refuses a recipient; the tool then returns an error without calling Graph.
 
 ## `_audit_graph_call` (Files tools)
 

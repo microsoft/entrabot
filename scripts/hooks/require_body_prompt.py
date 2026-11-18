@@ -51,6 +51,8 @@ _GATED_TOOLS = {
     "mcp__entrabot__add_teams_member",
     "mcp__entrabot__create_chat",
     "mcp__entrabot__delete_teams_message",
+    "mcp__entrabot__add_teams_reaction",
+    "mcp__entrabot__remove_teams_reaction",
 }
 _ENV_OVERRIDE = "ENTRABOT_SKIP_BODY_PROMPT_GATE"
 _HOOK_NAME = "require_body_prompt"

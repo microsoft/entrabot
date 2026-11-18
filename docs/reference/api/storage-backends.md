@@ -53,9 +53,10 @@ Token provider: `acquire_agent_user_storage_token(cfg)` (in `tools/teams.py`) �
 
 `write_text(key, content, if_absent=True)` is the compare-and-swap for a key that doesn't exist yet: it creates the key, and raises `ConcurrencyError` if another writer got there first. `LocalBackend` writes the content to a temp file and hard-links it into place, which is atomic and fails if the key exists (where hard links aren't available it falls back to an exclusive create). `BlobBackend` sends `If-None-Match: *`, and `BlobStore.put` translates both 412 and 409 to `ConcurrencyError` on that path, since Azure's docs list both. `if_match` and `if_absent` together raise `ValueError`.
 
-Three call sites build retry logic on top of this:
+Four call sites build retry logic on top of this:
 
 - **`chat_cursors.claim_delivery()`** — reads the shared per-chat cursor with its ETag, computes which candidate message IDs aren't already recorded delivered, and writes the merged cursor back with `if_match=etag`. On `ConcurrencyError` it re-reads and retries, up to `CLAIM_MAX_ATTEMPTS = 4` times; exhausting the retries returns an empty claim (push nothing) rather than risk double-delivering a message across concurrent pollers.
+- **`chat_cursors.claim_reactions()`** — the same read, merge and conditional write for the reaction ledger (`reaction_keys_tail`) kept in the same cursor, with the same retry bound. An unresolved result (a failed read, a corrupt cursor, a failed write or exhausted retries) claims nothing. When no cursor exists yet it creates one with `if_absent=True`.
 - **`promises.py`** — the same read-with-etag / write-with-`if_match` shape, but retries only **once** on `ConcurrencyError` before raising `PromiseStoreConflict`.
 - **`poll_state.add_watched_chats()`** — merges a batch of chat IDs into the shared list, up to `WATCHED_CHATS_MAX_ATTEMPTS = 4` times. Exhausting the retries reports failure without raising, so the caller can keep those chats dirty and try again later.
 

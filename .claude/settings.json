@@ -76,7 +76,7 @@
         ]
       },
       {
-        "matcher": "^mcp__entrabot__(send_email|send_teams_message|send_card|add_teams_member|create_chat|delete_teams_message)$",
+        "matcher": "^mcp__entrabot__(send_email|send_teams_message|send_card|add_teams_member|create_chat|delete_teams_message|add_teams_reaction|remove_teams_reaction)$",
         "hooks": [
           {
             "type": "command",

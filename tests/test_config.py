@@ -265,6 +265,28 @@ class TestXpiaWrapEnableFlag:
             assert cfg.xpia_wrap_enable is True, f"Expected True for '{val}'"
 
 
+class TestReactionNotificationsFlag:
+    """Reaction pushes are on unless the operator switches them off in the environment."""
+
+    def test_on_by_default(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ENTRABOT_REACTION_NOTIFICATIONS", None)
+            cfg = EntraBotConfig.from_env()
+        assert cfg.reaction_notifications is True
+
+    def test_falsy_values_switch_it_off(self) -> None:
+        for val in ("false", "False", "0", "no", "off", " OFF "):
+            with patch.dict(os.environ, {"ENTRABOT_REACTION_NOTIFICATIONS": val}, clear=False):
+                cfg = EntraBotConfig.from_env()
+            assert cfg.reaction_notifications is False, f"Expected False for '{val}'"
+
+    def test_anything_else_leaves_it_on(self) -> None:
+        for val in ("true", "1", "yes", "on", ""):
+            with patch.dict(os.environ, {"ENTRABOT_REACTION_NOTIFICATIONS": val}, clear=False):
+                cfg = EntraBotConfig.from_env()
+            assert cfg.reaction_notifications is True, f"Expected True for '{val}'"
+
+
 class TestLoadDotenvEncoding:
     """``.env`` is UTF-8, with or without a byte-order mark, on every platform.
 

@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-Nothing yet.
+### Added
+
+- Teams message reactions. `read_teams_messages` lists each message's reactions (`reaction_type`, `display_name`, `user_id`, `created_at`). The Teams poll notices when someone reacts to one of the agent's own messages and pushes one `[teams reaction]` notification per message, from the read it already makes: additions only, never the agent's own reactions, nothing for reactions that were already there when a chat's reaction state is first built, and always inside the external-content envelope, a sponsor's reaction included. The reaction ledger is kept apart from the message cursor's seen-set and is stored with it, so a restart doesn't repeat a notification; `ENTRABOT_REACTION_NOTIFICATIONS=false` turns the notifications off. Two new tools, `add_teams_reaction` and `remove_teams_reaction`, react to a message or take the agent's own reaction back, with a Unicode emoji or one of `like`, `heart`, `laugh`, `surprised`, `sad`, `angry`; they refuse any other text and write their audit event before calling Graph. The body prompt says when to react: sparingly, on anyone's message, and never in place of a reply the agent owes. Unit-tested with mocked HTTP only; not yet run against Teams.
 
 ## 0.3.1 — 2026-11-16
 

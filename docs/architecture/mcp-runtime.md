@@ -21,7 +21,7 @@ Every call also captures the connected client's `clientInfo.name` into `_state["
 
 | Task | Interval | Gate | Notes |
 |---|---|---|---|
-| Teams chat poll (`_background_poll`) | 5s | At least one chat in `watched_chats` at boot or registered later; not gated on auth mode | Iterates every watched chat each cycle; a single chat's failure is logged and doesn't stop the others in that cycle. |
+| Teams chat poll (`_background_poll`) | 5s | At least one chat in `watched_chats` at boot or registered later; not gated on auth mode | Iterates every watched chat each cycle; a single chat's failure is logged and doesn't stop the others in that cycle. The same read is checked for new reactions on the agent's own messages (`ENTRABOT_REACTION_NOTIFICATIONS`, on by default); see [Reaction notifications](messaging-and-delivery.md#reaction-notifications). |
 | Email poll (`_background_poll_email`) | 60s | Agent User mode only | Polls `/me/messages` — targets the agent's own mailbox, which only resolves correctly in Agent User mode. Each cycle reads the shared cursor and claims the window before pushing it. |
 | Chat auto-discovery (`_background_discover_chats`) | 120s | Agent User mode only | Sweeps every page of `GET /me/chats` (no `$orderby` — it 400s there), up to 20 pages, and registers any chat not already watched in one batched write. Each sweep also retries any earlier failed write. |
 | Daily summary scheduler (`_background_daily_summary`) | Fixed 5pm UTC-7 trigger, computed once per cycle | Agent User mode only | The offset is a fixed UTC-7 shift, not DST-adjusted, despite being labeled "PDT" in logs. |

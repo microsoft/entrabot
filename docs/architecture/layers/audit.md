@@ -8,7 +8,7 @@ Every agent action that touches a resource needs a record that proves *who* did 
 
 1. **Fail closed on attribution.** If an action is meant to be agent-attributed and no agent identity can be resolved — from the active identity session, config, or the credential store — `log_event()` raises `AuditAttributionError` instead of silently logging `"unknown"`. Bootstrap and preflight code paths that genuinely have no identity yet must opt in explicitly with `attribution_type="none"`.
 2. **Append-only, local.** Events are written as one JSON line per event to `<audit_dir>/<YYYY-MM-DD>.jsonl` and flushed to disk (`fsync`); Entrabot never edits or deletes them. The file is not signed: anything running as the same OS user can edit it.
-3. **Audit before execute, fail closed.** Every tool that sends, creates, shares or deletes (`send_email`, `send_teams_message`, `send_card`, `post_thinking_placeholder`, `create_chat`, `add_teams_member`, `share_file`, the Files and Work IQ writes, the daily summary) writes a `pending` event before it acts and does not act if that write fails; most then write `success` or `failure`. A recipient-policy refusal writes a `denied` event and makes no Graph call.
+3. **Audit before execute, fail closed.** Every tool that sends, creates, shares or deletes (`send_email`, `send_teams_message`, `send_card`, `post_thinking_placeholder`, `create_chat`, `add_teams_member`, `add_teams_reaction`, `remove_teams_reaction`, `share_file`, the Files and Work IQ writes, the daily summary) writes a `pending` event before it acts and does not act if that write fails; most then write `success` or `failure`. A recipient-policy refusal writes a `denied` event and makes no Graph call.
 
 ## Event schema
 

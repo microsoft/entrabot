@@ -55,6 +55,7 @@ Precedence and list rules:
 | `ENTRABOT_SKIP_PROVISIONING` | Truthy values `true`, `1`, or `yes` (case-insensitive) bypass the Agent User three-hop fast path at boot. MSAL delegated auth is then attempted instead when `ENTRABOT_CLIENT_ID` is configured. |
 | `ENTRABOT_LOG_LEVEL` | Python logging level name. Defaults to `INFO`. |
 | `ENTRABOT_XPIA_WRAP_ENABLE` | Enabled by default — external content (Teams, email, Files, Work IQ) is wrapped through the XPIA boundary. Set to `false`, `0`, `no`, or `off` (case-insensitive) to disable the wrap as a rollback path. See [Security Boundaries](../architecture/security-boundaries.md) and the [Security (XPIA) API Reference](../reference/api/security.md). |
+| `ENTRABOT_REACTION_NOTIFICATIONS` | Enabled by default — the Teams poll pushes a notification when someone reacts to one of the agent's own messages. Set to `false`, `0`, `no`, or `off` (case-insensitive) to turn those notifications off. Reactions stay visible through `read_teams_messages`, and the reaction tools are unaffected. See [Reaction notifications](../architecture/messaging-and-delivery.md#reaction-notifications). |
 
 ## Files limits
 

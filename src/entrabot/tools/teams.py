@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -42,6 +43,7 @@ from entrabot.graph_helpers import odata_escape
 from entrabot.platform import get_credential_store
 from entrabot.tools.audit import log_event
 from entrabot.tools.rate_limit import RetryOn429Transport, parse_retry_after
+from entrabot.tools.reactions import parse_reactions
 from entrabot.url_safety import _is_graph_url
 
 logger = logging.getLogger("entrabot.tools.teams")
@@ -1357,6 +1359,110 @@ async def delete_chat_message(
         return False
 
 
+# Longest a reaction call may take. Graph answers these in well under a second.
+REACTION_TIMEOUT_SECONDS = 15.0
+
+
+async def _post_reaction(
+    action: str,
+    *,
+    chat_id: str,
+    message_id: str,
+    reaction_type: str,
+    token: str,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> bool:
+    """POST ``setReaction`` or ``unsetReaction`` for one chat message.
+
+    The IDs are percent-encoded as path segments. They come from tool arguments, and a slash
+    or a question mark in one must not turn the call into a different Graph endpoint.
+
+    Returns True on 2xx (Graph answers 204) and False on any other 4xx/5xx, which is logged.
+
+    Raises:
+        TokenExpiredError on 401 so the caller can re-acquire.
+        RateLimitError on 429 so the caller can honour Retry-After.
+    """
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    url = (
+        f"{GRAPH_BASE}/chats/{quote(chat_id, safe=':@')}"
+        f"/messages/{quote(message_id, safe='')}/{action}"
+    )
+
+    owned_transport = transport or RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    async with httpx.AsyncClient(
+        transport=owned_transport, timeout=REACTION_TIMEOUT_SECONDS
+    ) as client:
+        resp = await client.post(url, json={"reactionType": reaction_type}, headers=headers)
+        if resp.status_code == 401:
+            raise TokenExpiredError("Token expired — re-acquire")
+        if resp.status_code == 429:
+            retry_after = parse_retry_after(resp.headers.get("Retry-After"), default=60)
+            raise RateLimitError(retry_after)
+        if 200 <= resp.status_code < 300:
+            return True
+        logger.warning(
+            "%s on chat message %s in chat %s failed: %d %s",
+            action,
+            message_id,
+            chat_id,
+            resp.status_code,
+            resp.text[:200],
+        )
+        return False
+
+
+async def set_reaction(
+    *,
+    chat_id: str,
+    message_id: str,
+    reaction_type: str,
+    token: str,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> bool:
+    """Add the caller's reaction to a chat message.
+
+    Graph ``chatMessage: setReaction``, delegated ``Chat.ReadWrite`` or ``ChatMessage.Send``.
+    *reaction_type* is a Unicode emoji; validate it with
+    :func:`entrabot.tools.reactions.normalize_reaction_input` before calling. See
+    :func:`_post_reaction` for the return value and what is raised.
+    """
+    return await _post_reaction(
+        "setReaction",
+        chat_id=chat_id,
+        message_id=message_id,
+        reaction_type=reaction_type,
+        token=token,
+        transport=transport,
+    )
+
+
+async def unset_reaction(
+    *,
+    chat_id: str,
+    message_id: str,
+    reaction_type: str,
+    token: str,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> bool:
+    """Remove the caller's own reaction from a chat message.
+
+    Graph ``chatMessage: unsetReaction``. It only ever removes the reaction of the identity
+    the token belongs to. See :func:`_post_reaction` for the return value and what is raised.
+    """
+    return await _post_reaction(
+        "unsetReaction",
+        chat_id=chat_id,
+        message_id=message_id,
+        reaction_type=reaction_type,
+        token=token,
+        transport=transport,
+    )
+
+
 async def fetch_hosted_image(*, token: str, url: str) -> bytes | None:
     """Fetch an image from a Graph API hosted content URL.
 
@@ -1493,7 +1599,10 @@ async def read(
 
     Returns up to *count* most recent messages, newest first. Each entry
     includes a ``reply_to_ids`` list — message IDs this message is an
-    explicit quote-reply to (empty for regular chat messages).
+    explicit quote-reply to (empty for regular chat messages) — and a
+    ``reactions`` list of ``{reaction_type, display_name, user_id,
+    created_at}``, empty when the message has none. A reaction's
+    ``display_name`` is free text, so it is wrapped like the body.
     """
     headers = {
         "Authorization": f"Bearer {token}",
@@ -1561,6 +1670,23 @@ async def read(
                 sender=sender_email or sender_id or None,
                 received_at=None,
             )
+            # Reactions are external content too. The type is already reduced to an emoji,
+            # a legacy name, "custom" or "unrecognized". The display name is free text (a
+            # custom reaction's name is whatever its creator typed), so it gets the envelope.
+            reactions = [
+                {
+                    **reaction.to_dict(),
+                    "display_name": wrap_external(
+                        reaction.display_name,
+                        source=f"teams:{chat_id}",
+                        sender=reaction.user_id or None,
+                        received_at=None,
+                    )
+                    if reaction.display_name
+                    else "",
+                }
+                for reaction in parse_reactions(m.get("reactions"))
+            ]
             out.append(
                 {
                     "message_id": m["id"],
@@ -1573,9 +1699,30 @@ async def read(
                     "sent_at": m.get("createdDateTime"),
                     "reply_to_ids": reply_to_ids,
                     "attachments": attachments,
+                    "reactions": reactions,
                 }
             )
         return out
+
+
+def is_agent_message(
+    message: dict,
+    *,
+    agent_upn: str | None,
+    agent_object_id: str | None,
+) -> bool:
+    """True if *message* was sent by the agent itself.
+
+    Matches ``sender_upn`` (case-insensitive) against *agent_upn* first, then ``sender_id``
+    against *agent_object_id*. Never the display name, which anyone can change (Learning #69).
+    """
+    agent_upn_normalized = (agent_upn or "").strip().lower() or None
+    agent_oid_normalized = (agent_object_id or "").strip() or None
+    msg_upn = str(message.get("sender_upn") or "").strip().lower()
+    msg_oid = str(message.get("sender_id") or "").strip()
+    upn_match = bool(agent_upn_normalized and msg_upn and msg_upn == agent_upn_normalized)
+    oid_match = bool(agent_oid_normalized and msg_oid and msg_oid == agent_oid_normalized)
+    return upn_match or oid_match
 
 
 def filter_human_messages(
@@ -1609,24 +1756,11 @@ def filter_human_messages(
     be used as identity in filter / dedup / authorization / routing code paths.
     """
     exclude_ids = sent_message_ids or set()
-    agent_upn_normalized = (agent_upn or "").strip().lower() or None
-    agent_oid_normalized = (agent_object_id or "").strip() or None
-
-    def _is_agent(m: dict) -> bool:
-        msg_upn = str(m.get("sender_upn") or "").strip().lower()
-        msg_oid = str(m.get("sender_id") or "").strip()
-        upn_match = bool(
-            agent_upn_normalized and msg_upn and msg_upn == agent_upn_normalized
-        )
-        oid_match = bool(
-            agent_oid_normalized and msg_oid and msg_oid == agent_oid_normalized
-        )
-        return upn_match or oid_match
 
     return [
         m
         for m in messages
-        if not _is_agent(m)
+        if not is_agent_message(m, agent_upn=agent_upn, agent_object_id=agent_object_id)
         and m.get("from") != "unknown"
         and m.get("message_id") not in exclude_ids
         and not (m.get("content", "").strip().startswith("[EntraBot]"))

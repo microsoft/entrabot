@@ -114,6 +114,33 @@ GET https://graph.microsoft.com/v1.0/chats/{chat-id}/messages/{message-id}
 **Permissions:** delegated `Chat.Read` or `Chat.ReadWrite`; application
 `Chat.Read.All` (admin consent).
 
+### Reactions
+
+Each chatMessage carries a `reactions` array. An entry has `reactionType`,
+`displayName`, `reactionContentUrl`, `createdDateTime`, and a `user` identity set
+whose `user.id` is the Entra object ID of whoever reacted. `reactionType` is a
+Unicode emoji, `custom`, or one of the older names `like`, `heart`, `laugh`,
+`surprised`, `sad` and `angry`. For a custom reaction, `displayName` is a name
+its creator chose, so Entrabot treats it as untrusted text.
+
+```http
+POST https://graph.microsoft.com/v1.0/chats/{chat-id}/messages/{message-id}/setReaction
+POST https://graph.microsoft.com/v1.0/chats/{chat-id}/messages/{message-id}/unsetReaction
+
+{ "reactionType": "👍" }
+```
+
+Both return `204 No Content`. `unsetReaction` removes only the caller's own
+reaction.
+
+**Permissions:** delegated `ChatMessage.Send` or `Chat.ReadWrite`. The Agent
+User token already has both, so reactions need no new consent.
+
+There is no reaction-specific change feed in the polling model. Microsoft's
+reference says a reaction updates the message's `lastModifiedDateTime`, but that
+has been reported not to hold on every list endpoint, so Entrabot compares the
+`reactions` arrays of the messages it reads instead of relying on it.
+
 ### Members
 
 ```http
@@ -225,6 +252,9 @@ always present, so implement a fallback delay.
 - [Teams messaging APIs overview](https://learn.microsoft.com/en-us/graph/teams-messaging-overview)
 - [Send chatMessage](https://learn.microsoft.com/en-us/graph/api/chatmessage-post?view=graph-rest-1.0)
 - [Create chat](https://learn.microsoft.com/en-us/graph/api/chat-post?view=graph-rest-1.0)
+- [chatMessage: setReaction](https://learn.microsoft.com/en-us/graph/api/chatmessage-setreaction?view=graph-rest-1.0)
+- [chatMessage: unsetReaction](https://learn.microsoft.com/en-us/graph/api/chatmessage-unsetreaction?view=graph-rest-1.0)
+- [chatMessageReaction resource type](https://learn.microsoft.com/en-us/graph/api/resources/chatmessagereaction?view=graph-rest-1.0)
 - [presence: setPresence](https://learn.microsoft.com/en-us/graph/api/presence-setpresence?view=graph-rest-1.0)
 - [Change notifications for Teams](https://learn.microsoft.com/en-us/graph/teams-change-notification-in-microsoft-teams-overview)
 - [Throttling limits](https://learn.microsoft.com/en-us/graph/throttling-limits)
