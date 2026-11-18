@@ -5,16 +5,29 @@ Pure functions and dataclasses, with no I/O. Three callers use them:
 * ``teams.read`` turns Graph's ``reactions`` array into :class:`MessageReaction` values.
 * The ``add_teams_reaction`` / ``remove_teams_reaction`` tools use
   :func:`normalize_reaction_input` to decide what may be sent to Graph.
-* The background poll uses :func:`observe_reactions` and :func:`merge_reaction_ledger` to
+* The background poll uses :func:`observe_reactions` and :func:`advance_reaction_ledger` to
   find reactions that are new on the agent's own messages.
 
-A reaction is external content. Its type is reduced here to an emoji, a legacy name,
+A reaction is external content. Its type is reduced here to exactly one emoji, a legacy name,
 ``custom`` or :data:`UNRECOGNIZED_REACTION`, so it can't carry text. Its display name is free
 text that whoever made a custom reaction chose; ``teams.read`` wraps it and the push keeps it
 inside the envelope.
 
 The reaction ledger is its own state. It is never mixed with the poll's seen-message set or
-with the reply-watching state (Learning #27).
+with the reply-watching state (Learning #27). Three rules shape it:
+
+* **It only grows by observation.** Several instances can poll one chat, and one of them may
+  be working from an older read than another. So nothing is ever removed because a reader
+  didn't see it. A reaction that is removed and added again is still noticed, because the
+  key includes the reaction's creation time and a re-add has a new one.
+* **Old reactions are not news.** A reaction older than :data:`REACTION_MAX_AGE_SECONDS`
+  is never announced, whatever the ledger says. That covers a ledger that went stale while
+  notifications were switched off or the server was down. Entries are dropped once they are
+  older than :data:`REACTION_RETENTION_SECONDS`, which is safe for every reader because
+  nothing that old can be announced by anyone.
+* **Past the size limit it stays quiet.** If a chat collects more than
+  :data:`MAX_REACTION_KEYS` recent reactions, the oldest entries are dropped and the ledger
+  keeps a floor: a reaction created at or before the floor is never announced.
 """
 
 from __future__ import annotations
@@ -22,7 +35,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 # What the six reaction names Teams used before Unicode reactions mean. Graph still returns
 # and accepts the names; the tools send the emoji.
@@ -38,84 +51,105 @@ LEGACY_REACTIONS: dict[str, str] = {
 CUSTOM_REACTION = "custom"
 UNRECOGNIZED_REACTION = "unrecognized"
 
-# An emoji is at most a handful of code points; the longest joined sequences are about ten.
+# One emoji is at most a handful of code points; the longest joined sequences are about ten.
 MAX_REACTION_CODE_POINTS = 16
+# A family or a couple is four emoji joined together. Nothing real is longer.
+MAX_JOINED_EMOJI = 4
 MAX_DISPLAY_NAME_LENGTH = 64
 MAX_USER_ID_LENGTH = 128
 
-# How many reactions are tracked on one message, and in one chat. The poll reads the ten
-# newest messages, so everything on them always fits: 10 x 25 <= 250.
-MAX_TRACKED_REACTIONS_PER_MESSAGE = 25
-MAX_REACTION_KEYS = 250
+# A reaction older than this is never announced.
+REACTION_MAX_AGE_SECONDS = 60 * 60
+# How long a ledger entry is kept. Longer than the maximum age, so an entry is only dropped
+# once its reaction is too old for any instance to announce.
+REACTION_RETENTION_SECONDS = 2 * 60 * 60
+# Most entries one chat's ledger holds. See the module docstring for what happens past it.
+MAX_REACTION_KEYS = 500
 
-# The Unicode blocks emoji come from. Tag characters (U+E0020 to U+E007F) are left out on
-# purpose: they are invisible and can spell ASCII text, which costs three subdivision flags.
-_EMOJI_RANGES: tuple[tuple[int, int], ...] = (
-    (0x1F000, 0x1FAFF),  # pictographs, emoticons, transport, flags, skin tones
-    (0x2190, 0x21FF),  # arrows
-    (0x2300, 0x23FF),  # miscellaneous technical (watch, alarm clock)
-    (0x2460, 0x24FF),  # enclosed alphanumerics
-    (0x25A0, 0x25FF),  # geometric shapes
-    (0x2600, 0x27BF),  # miscellaneous symbols, dingbats
-    (0x2900, 0x297F),  # supplemental arrows
-    (0x2B00, 0x2BFF),  # miscellaneous symbols and arrows (star)
+# The cursor fields the ledger is stored in. Owned here, written by ``chat_cursors``.
+REACTION_KEYS_FIELD = "reaction_keys_tail"
+REACTION_FLOOR_FIELD = "reaction_floor"
+
+# Code points that are pictures. Left out on purpose, because they read as letters, digits
+# or punctuation and a reaction type must not be able to carry text: enclosed alphanumerics
+# and their supplement (which includes the regional indicators flags are made of), keycaps,
+# arrows, the copyright, registered, trade mark and information signs, circled ideographs,
+# dingbat digits and bracket ornaments, playing cards, and tag characters. That costs
+# country flags, keycap digits and arrow emoji.
+_PICTOGRAPH_RANGES: tuple[tuple[int, int], ...] = (
+    (0x231A, 0x231B),  # watch, hourglass
+    (0x23E9, 0x23F3),  # media buttons, alarm clock, hourglass
+    (0x23F8, 0x23FA),  # pause, stop, record
+    (0x2600, 0x26FF),  # miscellaneous symbols
+    (0x2700, 0x275A),  # dingbats, up to the quotation ornaments
+    (0x2761, 0x2767),  # hearts and florets
+    (0x2B1B, 0x2B1C),  # large squares
+    (0x1F300, 0x1F3FA),  # miscellaneous symbols and pictographs, up to the skin tones
+    (0x1F400, 0x1F518),  # ... up to the word arrows (BACK, END, ON!, SOON, TOP) and keycaps
+    (0x1F525, 0x1F5FF),
+    (0x1F600, 0x1F64F),  # emoticons
+    (0x1F680, 0x1F6FF),  # transport and map symbols
+    (0x1F7E0, 0x1F7EB),  # coloured circles and squares
+    (0x1F900, 0x1F9FF),  # supplemental symbols and pictographs
+    (0x1FA70, 0x1FAFF),  # symbols and pictographs extended-A
 )
-_EMOJI_SINGLES = frozenset(
-    {0x00A9, 0x00AE, 0x203C, 0x2049, 0x2122, 0x2139, 0x3030, 0x303D, 0x3297, 0x3299}
-)
+_PICTOGRAPH_SINGLES = frozenset({0x2B50, 0x2B55})  # star, hollow circle
 _ZWJ = 0x200D
 _VARIATION_SELECTOR = 0xFE0F
-_KEYCAP = 0x20E3
-_JOINERS = frozenset({_ZWJ, _VARIATION_SELECTOR, _KEYCAP})
-_KEYCAP_BASES = frozenset("0123456789#*")
+_SKIN_TONES = range(0x1F3FB, 0x1F400)
 
 
-def _is_emoji_base(code_point: int) -> bool:
-    if code_point in _EMOJI_SINGLES:
+def _is_pictograph(code_point: int) -> bool:
+    if code_point in _PICTOGRAPH_SINGLES:
         return True
-    return any(low <= code_point <= high for low, high in _EMOJI_RANGES)
+    return any(low <= code_point <= high for low, high in _PICTOGRAPH_RANGES)
+
+
+def _after_emoji_element(code_points: list[int], index: int) -> int | None:
+    """The index after one pictograph and its optional selector and skin tone, or None."""
+    if index >= len(code_points) or not _is_pictograph(code_points[index]):
+        return None
+    index += 1
+    seen_selector = seen_tone = False
+    while index < len(code_points):
+        code_point = code_points[index]
+        if code_point == _VARIATION_SELECTOR and not seen_selector:
+            seen_selector = True
+        elif code_point in _SKIN_TONES and not seen_tone:
+            seen_tone = True
+        else:
+            break
+        index += 1
+    return index
 
 
 def is_emoji(value: str) -> bool:
-    """True if *value* is one Unicode emoji and nothing else.
+    """True if *value* is exactly one emoji and nothing else.
 
-    It accepts skin tones, joined sequences, flags and keycaps. It refuses anything with a
-    letter, a digit outside a keycap, whitespace, punctuation or a tag character, so a value
-    that passes can't carry text.
+    One emoji is a pictograph with an optional variation selector and skin tone, or up to
+    :data:`MAX_JOINED_EMOJI` of those joined by zero-width joiners (a family, a profession).
+    Two emoji side by side are refused, and so is anything that reads as a letter or a digit;
+    see ``_PICTOGRAPH_RANGES`` for what that leaves out. A value that passes can't carry text.
     """
-    if not value or len(value) > MAX_REACTION_CODE_POINTS:
+    code_points = [ord(char) for char in value or ""]
+    if not code_points or len(code_points) > MAX_REACTION_CODE_POINTS:
         return False
-    if ord(value[0]) in _JOINERS:
-        return False
-    has_base = False
-    index = 0
-    while index < len(value):
-        char = value[index]
-        code_point = ord(char)
-        if char in _KEYCAP_BASES:
-            # A digit, # or * counts only as the start of a keycap: base, optional selector, cap.
-            following = index + 1
-            if following < len(value) and ord(value[following]) == _VARIATION_SELECTOR:
-                following += 1
-            if following >= len(value) or ord(value[following]) != _KEYCAP:
-                return False
-            has_base = True
-            index = following + 1
-            continue
-        if _is_emoji_base(code_point):
-            has_base = True
-        elif code_point not in _JOINERS:
+    index = _after_emoji_element(code_points, 0)
+    joined = 1
+    while index is not None and index < len(code_points):
+        if code_points[index] != _ZWJ or joined >= MAX_JOINED_EMOJI:
             return False
-        index += 1
-    return has_base
+        index = _after_emoji_element(code_points, index + 1)
+        joined += 1
+    return index is not None
 
 
 def normalize_reaction_input(value: str) -> str:
     """The emoji to send to Graph for a reaction the caller asked for.
 
     A legacy name (``like``, ``heart``, ``laugh``, ``surprised``, ``sad``, ``angry``) becomes
-    its emoji. A Unicode emoji is returned unchanged. Anything else raises ``ValueError``, so
-    arbitrary text never reaches Graph.
+    its emoji. One Unicode emoji is returned unchanged. Anything else raises ``ValueError``,
+    so arbitrary text never reaches Graph.
     """
     candidate = (value or "").strip()
     legacy = LEGACY_REACTIONS.get(candidate.lower())
@@ -125,8 +159,9 @@ def normalize_reaction_input(value: str) -> str:
         return candidate
     names = ", ".join(LEGACY_REACTIONS)
     raise ValueError(
-        "reaction must be one Unicode emoji (for example \U0001f44d) or one of these names: "
-        f"{names}. Nothing was sent."
+        "reaction must be exactly one Unicode emoji (for example \U0001f44d) or one of these "
+        f"names: {names}. Flags, keycap digits, arrows and letter-like symbols are not "
+        "accepted. Nothing was sent."
     )
 
 
@@ -141,23 +176,33 @@ def _safe_reaction_type(value: object) -> str:
     return UNRECOGNIZED_REACTION
 
 
-def _safe_timestamp(value: object) -> str:
-    """*value* if it is an ISO 8601 timestamp, else an empty string."""
-    if not isinstance(value, str):
-        return ""
+def parse_timestamp(value: object) -> datetime | None:
+    """*value* as an aware UTC datetime, or None if it isn't an ISO 8601 timestamp."""
+    if not isinstance(value, str) or not value:
+        return None
     try:
-        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
-        return ""
-    return value
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+
+
+def canonical_timestamp(value: object) -> str:
+    """One spelling for one instant, to the millisecond, or ``""`` if *value* isn't a time.
+
+    Graph may write the same instant with a different number of fractional digits from one
+    read to the next. A ledger key has to be the same both times.
+    """
+    parsed = value if isinstance(value, datetime) else parse_timestamp(value)
+    return parsed.isoformat(timespec="milliseconds") if parsed is not None else ""
 
 
 @dataclass(frozen=True)
 class MessageReaction:
-    """One reaction on a Teams chat message.
+    """One reaction on a Teams chat message, as Graph returned it.
 
-    ``display_name`` is the reaction's name, not a person's. For a custom reaction it is text
-    its creator chose, so it is untrusted.
+    ``display_name`` is the reaction's name, not a person's, and is the raw text. For a custom
+    reaction it is text its creator chose, so it is untrusted: wrap it before a model sees it.
     """
 
     reaction_type: str
@@ -165,32 +210,13 @@ class MessageReaction:
     user_id: str
     created_at: str
 
-    def to_dict(self) -> dict[str, str]:
-        return {
-            "reaction_type": self.reaction_type,
-            "display_name": self.display_name,
-            "user_id": self.user_id,
-            "created_at": self.created_at,
-        }
-
-    @classmethod
-    def from_dict(cls, raw: object) -> MessageReaction | None:
-        """Read a reaction back from the form ``teams.read`` emits, or None if it isn't one."""
-        if not isinstance(raw, Mapping) or not raw.get("reaction_type"):
-            return None
-        return cls(
-            reaction_type=_safe_reaction_type(raw.get("reaction_type")),
-            display_name=str(raw.get("display_name") or ""),
-            user_id=str(raw.get("user_id") or "").strip(),
-            created_at=_safe_timestamp(raw.get("created_at")),
-        )
-
     @property
     def key_type(self) -> str:
         """The reaction type as the ledger keys it.
 
         Every custom reaction has the type ``custom``, so the key adds a digest of the name to
-        tell two apart. A digest, not the name, so the ledger holds no free text.
+        tell two apart. A digest, not the name, so the ledger holds no free text; and of the
+        raw name, so the key doesn't depend on how the name is wrapped for the model.
         """
         if self.reaction_type != CUSTOM_REACTION:
             return self.reaction_type
@@ -210,19 +236,20 @@ def _reactor_id(identity_set: object) -> str:
 
 
 def parse_reactions(raw: object) -> list[MessageReaction]:
-    """Read a Graph chatMessage's ``reactions`` array. Malformed entries are skipped."""
+    """Read a Graph chatMessage's ``reactions`` array, all of it. Malformed entries are skipped."""
     if not isinstance(raw, list):
         return []
     parsed: list[MessageReaction] = []
     for entry in raw:
         if not isinstance(entry, Mapping) or not entry.get("reactionType"):
             continue
+        created = entry.get("createdDateTime")
         parsed.append(
             MessageReaction(
                 reaction_type=_safe_reaction_type(entry.get("reactionType")),
                 display_name=str(entry.get("displayName") or "").strip()[:MAX_DISPLAY_NAME_LENGTH],
                 user_id=_reactor_id(entry.get("user")),
-                created_at=_safe_timestamp(entry.get("createdDateTime")),
+                created_at=str(created) if parse_timestamp(created) is not None else "",
             )
         )
     return parsed
@@ -230,58 +257,115 @@ def parse_reactions(raw: object) -> list[MessageReaction]:
 
 @dataclass(frozen=True, order=True)
 class ReactionKey:
-    """What identifies one reaction for deduplication: which message, who, and which reaction."""
+    """What identifies one reaction for deduplication.
+
+    Which message, who, which reaction, and when it was made. ``created_at`` is in the
+    :func:`canonical_timestamp` form. It is part of the key so that a reaction someone
+    removes and adds again is a new key, without the ledger ever having to forget the old one.
+    """
 
     message_id: str
     user_id: str
     reaction_type: str
+    created_at: str
 
 
-def _message_order(message_id: str) -> tuple[int, str]:
-    """Sort key that puts Teams message IDs, which are numeric strings, oldest first."""
-    return (len(message_id), message_id)
+def _key_order(key: ReactionKey) -> tuple[str, int, str, str, str]:
+    """Oldest reaction first. The canonical timestamps sort as text."""
+    return (key.created_at, len(key.message_id), key.message_id, key.user_id, key.reaction_type)
 
 
-def _key_order(key: ReactionKey) -> tuple[tuple[int, str], str, str]:
-    return (_message_order(key.message_id), key.user_id, key.reaction_type)
-
-
-def reaction_keys_to_json(keys: Iterable[ReactionKey]) -> list[list[str]]:
-    """The ledger as it is stored in the chat cursor: a sorted list of triples."""
-    return [
-        [key.message_id, key.user_id, key.reaction_type] for key in sorted(keys, key=_key_order)
-    ]
-
-
-def reaction_keys_from_json(raw: object) -> set[ReactionKey] | None:
-    """Read a stored ledger. None when there isn't one, which is not the same as an empty one.
-
-    None means the reaction state was never built for this chat, so the first observation
-    seeds it without pushing anything. Malformed entries are skipped.
-    """
-    if not isinstance(raw, list):
+def _key_from_json(entry: object) -> ReactionKey | None:
+    if not (
+        isinstance(entry, list)
+        and len(entry) == 4
+        and all(isinstance(part, str) and part for part in entry)
+    ):
         return None
-    keys: set[ReactionKey] = set()
-    for entry in raw:
-        if (
-            isinstance(entry, list)
-            and len(entry) == 3
-            and all(isinstance(part, str) and part for part in entry)
-        ):
-            keys.add(ReactionKey(entry[0], entry[1], entry[2]))
-    return keys
+    created_at = canonical_timestamp(entry[3])
+    return ReactionKey(entry[0], entry[1], entry[2], created_at) if created_at else None
+
+
+@dataclass(frozen=True)
+class ReactionLedger:
+    """The reactions on the agent's own messages that have already been noticed in one chat.
+
+    ``floor`` is empty until the ledger has had to drop entries to stay within
+    :data:`MAX_REACTION_KEYS`. From then on a reaction created at or before it is never
+    announced, so what was dropped can't come back as new.
+    """
+
+    keys: frozenset[ReactionKey] = frozenset()
+    floor: str = ""
+
+    def to_cursor_fields(self) -> dict[str, object]:
+        """The ledger as it is stored in the chat cursor."""
+        fields: dict[str, object] = {
+            REACTION_KEYS_FIELD: [
+                [key.message_id, key.user_id, key.reaction_type, key.created_at]
+                for key in sorted(self.keys, key=_key_order)
+            ]
+        }
+        if self.floor:
+            fields[REACTION_FLOOR_FIELD] = self.floor
+        return fields
+
+    @classmethod
+    def from_cursor(cls, cursor: Mapping | None) -> ReactionLedger | None:
+        """Read the ledger out of a chat cursor. None when there isn't a usable one.
+
+        None is not the same as empty. It means the reaction state was never built for this
+        chat, so the first observation seeds it without announcing anything. A ledger with
+        an entry that can't be read (one written before the timestamp was part of the key,
+        say) also counts as not built: using the readable half would announce the rest as new.
+        """
+        raw = cursor.get(REACTION_KEYS_FIELD) if isinstance(cursor, Mapping) else None
+        if not isinstance(raw, list):
+            return None
+        keys = [_key_from_json(entry) for entry in raw]
+        if any(key is None for key in keys):
+            return None
+        return cls(
+            keys=frozenset(key for key in keys if key is not None),
+            floor=canonical_timestamp(cursor.get(REACTION_FLOOR_FIELD)),
+        )
+
+    def joined_with(self, other: ReactionLedger | None) -> ReactionLedger:
+        """Everything either ledger knows."""
+        if other is None:
+            return self
+        return ReactionLedger(keys=self.keys | other.keys, floor=max(self.floor, other.floor))
+
+    def without(self, keys: Iterable[ReactionKey]) -> ReactionLedger:
+        """This ledger with exactly *keys* taken out, for a claim whose push failed."""
+        return ReactionLedger(keys=self.keys - frozenset(keys), floor=self.floor)
+
+    def trimmed(self, *, now: datetime) -> ReactionLedger:
+        """Drop what is too old to matter, then what doesn't fit.
+
+        An entry older than :data:`REACTION_RETENTION_SECONDS` goes: its reaction is past the
+        maximum age for every reader. If more than :data:`MAX_REACTION_KEYS` remain, the
+        oldest go and the floor moves up to the newest of them.
+        """
+        cutoff = canonical_timestamp(now - timedelta(seconds=REACTION_RETENTION_SECONDS))
+        kept = sorted((key for key in self.keys if key.created_at >= cutoff), key=_key_order)
+        floor = self.floor
+        overflow = len(kept) - MAX_REACTION_KEYS
+        if overflow > 0:
+            floor = max(floor, kept[overflow - 1].created_at)
+            kept = kept[overflow:]
+        return ReactionLedger(keys=frozenset(kept), floor=floor)
 
 
 @dataclass(frozen=True)
 class ReactionObservation:
-    """The reactions one poll cycle saw on the agent's own messages.
+    """The reactions one poll cycle saw that could be announced.
 
-    ``message_ids`` are the agent's messages that were in the read, with or without reactions.
-    A ledger entry for one of them that is no longer in ``reactions`` was removed. An entry
-    for any other message says nothing either way and is kept.
+    Other people's reactions on the agent's own messages, recent enough to be news. It says
+    nothing about reactions that are not in it: a reader can be behind, so absence is never
+    taken to mean a reaction was removed.
     """
 
-    message_ids: frozenset[str]
     reactions: Mapping[ReactionKey, MessageReaction] = field(default_factory=dict)
 
     @property
@@ -291,92 +375,109 @@ class ReactionObservation:
 
 def observe_reactions(
     messages: Iterable[Mapping],
+    reactions_by_message: Mapping[str, Collection[MessageReaction]],
     *,
     is_own_message: Callable[[Mapping], bool],
     self_user_ids: Collection[str],
+    now: datetime,
 ) -> ReactionObservation:
-    """Collect other people's reactions on the agent's own messages.
+    """Collect other people's recent reactions on the agent's own messages.
 
-    *is_own_message* decides which messages are the agent's; it must identify the agent by UPN
-    or object ID, never by display name. *self_user_ids* are the IDs the agent reacts as, and
-    reactions from them are left out. So are reactions with no user ID, which can't be keyed.
+    *reactions_by_message* holds every reaction on each message as ``parse_reactions`` read
+    it, keyed by message ID. Keys are built from that, never from what a model is shown.
+    *is_own_message* decides which messages are the agent's; it must identify the agent by
+    UPN or object ID, never by display name. *self_user_ids* are the IDs the agent reacts as.
 
-    Each message contributes at most :data:`MAX_TRACKED_REACTIONS_PER_MESSAGE` reactions, the
-    earliest ones, chosen the same way whatever order Graph returned them in.
+    Left out: the agent's own reactions; a reaction with no user ID, which can't be keyed; a
+    reaction older than :data:`REACTION_MAX_AGE_SECONDS`; and a reaction whose timestamp is
+    missing or unreadable, because it can't be shown to be recent.
     """
     self_ids = {str(user_id).strip().lower() for user_id in self_user_ids if user_id}
-    message_ids: set[str] = set()
+    oldest = now - timedelta(seconds=REACTION_MAX_AGE_SECONDS)
     reactions: dict[ReactionKey, MessageReaction] = {}
     for message in messages:
         message_id = str(message.get("message_id") or "")
         if not message_id or not is_own_message(message):
             continue
-        message_ids.add(message_id)
-        raw_reactions = message.get("reactions")
-        candidates: list[MessageReaction] = []
-        for raw in raw_reactions if isinstance(raw_reactions, list) else []:
-            reaction = MessageReaction.from_dict(raw)
-            if reaction is None or not reaction.user_id:
+        for reaction in reactions_by_message.get(message_id) or ():
+            if not reaction.user_id or reaction.user_id.lower() in self_ids:
                 continue
-            if reaction.user_id.lower() in self_ids:
+            created = parse_timestamp(reaction.created_at)
+            if created is None or created < oldest:
                 continue
-            candidates.append(reaction)
-        candidates.sort(key=lambda r: (r.created_at, r.user_id, r.key_type))
-        for reaction in candidates[:MAX_TRACKED_REACTIONS_PER_MESSAGE]:
-            reactions[ReactionKey(message_id, reaction.user_id, reaction.key_type)] = reaction
-    return ReactionObservation(message_ids=frozenset(message_ids), reactions=reactions)
+            key = ReactionKey(
+                message_id, reaction.user_id, reaction.key_type, canonical_timestamp(created)
+            )
+            reactions[key] = reaction
+    return ReactionObservation(reactions=reactions)
+
+
+def unclaimed_reactions(
+    ledger: ReactionLedger, observation: ReactionObservation
+) -> tuple[ReactionKey, ...]:
+    """The observed reactions *ledger* has not noticed yet, oldest first.
+
+    A reaction at or before the ledger's floor is never one of them.
+    """
+    return tuple(
+        sorted(
+            (
+                key
+                for key in observation.keys
+                if key not in ledger.keys and not (ledger.floor and key.created_at <= ledger.floor)
+            ),
+            key=_key_order,
+        )
+    )
 
 
 @dataclass(frozen=True)
 class ReactionLedgerUpdate:
     """The ledger after an observation, and the reactions that were not in it before."""
 
-    ledger: frozenset[ReactionKey]
+    ledger: ReactionLedger
     added: tuple[ReactionKey, ...]
 
 
-def merge_reaction_ledger(
-    ledger: Collection[ReactionKey], observation: ReactionObservation
+def advance_reaction_ledger(
+    ledger: ReactionLedger | None, observation: ReactionObservation, *, now: datetime
 ) -> ReactionLedgerUpdate:
-    """Apply *observation* to *ledger*.
+    """Apply *observation* to *ledger*. The ledger only gains entries from it.
 
-    * A reaction that is observed and not in the ledger is ``added``.
-    * A ledger entry for an observed message that is no longer there was removed, and leaves
-      the ledger, so adding it again is seen again.
-    * A ledger entry for a message that wasn't in the read is kept. A short or empty read
-      must not make every reaction look new on the next full one.
-
-    The result holds at most :data:`MAX_REACTION_KEYS` entries. Entries for messages outside
-    the read are dropped to fit, oldest message first. What was observed is never dropped,
-    because the next cycle would take it for new and push it again.
+    With no ledger yet (None), the observation becomes the ledger and nothing is ``added``:
+    reactions that were already there when the state is first built are not news. Otherwise
+    ``added`` is :func:`unclaimed_reactions`, and the ledger gains them. Either way the
+    result is :meth:`ReactionLedger.trimmed`.
     """
-    known = set(ledger)
-    current = observation.keys
-    added = tuple(sorted(current - known, key=_key_order))
-    kept = sorted(
-        (key for key in known - current if key.message_id not in observation.message_ids),
-        key=_key_order,
-    )
-    room = max(0, MAX_REACTION_KEYS - len(current))
-    retained = kept[len(kept) - room :] if room else []
-    return ReactionLedgerUpdate(ledger=frozenset(current) | frozenset(retained), added=added)
+    if ledger is None:
+        return ReactionLedgerUpdate(
+            ledger=ReactionLedger(keys=observation.keys).trimmed(now=now), added=()
+        )
+    added = unclaimed_reactions(ledger, observation)
+    grown = ReactionLedger(keys=ledger.keys | frozenset(added), floor=ledger.floor)
+    return ReactionLedgerUpdate(ledger=grown.trimmed(now=now), added=added)
 
 
 __all__ = [
     "CUSTOM_REACTION",
     "LEGACY_REACTIONS",
     "MAX_REACTION_KEYS",
-    "MAX_TRACKED_REACTIONS_PER_MESSAGE",
+    "REACTION_FLOOR_FIELD",
+    "REACTION_KEYS_FIELD",
+    "REACTION_MAX_AGE_SECONDS",
+    "REACTION_RETENTION_SECONDS",
     "UNRECOGNIZED_REACTION",
     "MessageReaction",
     "ReactionKey",
+    "ReactionLedger",
     "ReactionLedgerUpdate",
     "ReactionObservation",
+    "advance_reaction_ledger",
+    "canonical_timestamp",
     "is_emoji",
-    "merge_reaction_ledger",
     "normalize_reaction_input",
     "observe_reactions",
     "parse_reactions",
-    "reaction_keys_from_json",
-    "reaction_keys_to_json",
+    "parse_timestamp",
+    "unclaimed_reactions",
 ]

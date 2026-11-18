@@ -131,15 +131,21 @@ POST https://graph.microsoft.com/v1.0/chats/{chat-id}/messages/{message-id}/unse
 ```
 
 Both return `204 No Content`. `unsetReaction` removes only the caller's own
-reaction.
+reaction. The request body takes one reaction; Entrabot sends exactly one
+emoji and reports Graph's status code when the call is refused.
 
 **Permissions:** delegated `ChatMessage.Send` or `Chat.ReadWrite`. The Agent
-User token already has both, so reactions need no new consent.
+User token already has both, so reactions need no new consent. Both calls are
+delegated only, so the reaction is made by whoever the token belongs to;
+Entrabot's reaction tools therefore run only in an Agent User session.
 
 There is no reaction-specific change feed in the polling model. Microsoft's
 reference says a reaction updates the message's `lastModifiedDateTime`, but that
 has been reported not to hold on every list endpoint, so Entrabot compares the
-`reactions` arrays of the messages it reads instead of relying on it.
+`reactions` arrays of the messages it reads instead of relying on it. It
+identifies a reaction by message, user, type and `createdDateTime`, so it relies
+on that timestamp staying the same from one read to the next and being new when
+a reaction is removed and added again.
 
 ### Members
 

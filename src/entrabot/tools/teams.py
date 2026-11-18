@@ -18,6 +18,8 @@ import re
 import sys
 import threading
 import time
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
 
@@ -43,7 +45,12 @@ from entrabot.graph_helpers import odata_escape
 from entrabot.platform import get_credential_store
 from entrabot.tools.audit import log_event
 from entrabot.tools.rate_limit import RetryOn429Transport, parse_retry_after
-from entrabot.tools.reactions import parse_reactions
+from entrabot.tools.reactions import (
+    CUSTOM_REACTION,
+    MessageReaction,
+    canonical_timestamp,
+    parse_reactions,
+)
 from entrabot.url_safety import _is_graph_url
 
 logger = logging.getLogger("entrabot.tools.teams")
@@ -1362,6 +1369,22 @@ async def delete_chat_message(
 # Longest a reaction call may take. Graph answers these in well under a second.
 REACTION_TIMEOUT_SECONDS = 15.0
 
+# Most reactions ``read`` lists for one message. The message's ``reaction_count`` says how
+# many there are in all.
+MAX_REACTIONS_LISTED = 20
+
+
+@dataclass(frozen=True)
+class ReactionCallResult:
+    """How Graph answered a ``setReaction`` / ``unsetReaction`` call.
+
+    ``status_code`` is reported as it came, so a caller can say what happened without
+    guessing why.
+    """
+
+    ok: bool
+    status_code: int
+
 
 async def _post_reaction(
     action: str,
@@ -1371,13 +1394,14 @@ async def _post_reaction(
     reaction_type: str,
     token: str,
     transport: httpx.AsyncBaseTransport | None = None,
-) -> bool:
+) -> ReactionCallResult:
     """POST ``setReaction`` or ``unsetReaction`` for one chat message.
 
     The IDs are percent-encoded as path segments. They come from tool arguments, and a slash
     or a question mark in one must not turn the call into a different Graph endpoint.
 
-    Returns True on 2xx (Graph answers 204) and False on any other 4xx/5xx, which is logged.
+    Returns the outcome with Graph's status code: ``ok`` on 2xx (Graph answers 204), not ok
+    on any other 4xx/5xx, which is logged.
 
     Raises:
         TokenExpiredError on 401 so the caller can re-acquire.
@@ -1403,7 +1427,7 @@ async def _post_reaction(
             retry_after = parse_retry_after(resp.headers.get("Retry-After"), default=60)
             raise RateLimitError(retry_after)
         if 200 <= resp.status_code < 300:
-            return True
+            return ReactionCallResult(ok=True, status_code=resp.status_code)
         logger.warning(
             "%s on chat message %s in chat %s failed: %d %s",
             action,
@@ -1412,7 +1436,7 @@ async def _post_reaction(
             resp.status_code,
             resp.text[:200],
         )
-        return False
+        return ReactionCallResult(ok=False, status_code=resp.status_code)
 
 
 async def set_reaction(
@@ -1422,11 +1446,11 @@ async def set_reaction(
     reaction_type: str,
     token: str,
     transport: httpx.AsyncBaseTransport | None = None,
-) -> bool:
+) -> ReactionCallResult:
     """Add the caller's reaction to a chat message.
 
     Graph ``chatMessage: setReaction``, delegated ``Chat.ReadWrite`` or ``ChatMessage.Send``.
-    *reaction_type* is a Unicode emoji; validate it with
+    *reaction_type* is one Unicode emoji; validate it with
     :func:`entrabot.tools.reactions.normalize_reaction_input` before calling. See
     :func:`_post_reaction` for the return value and what is raised.
     """
@@ -1447,7 +1471,7 @@ async def unset_reaction(
     reaction_type: str,
     token: str,
     transport: httpx.AsyncBaseTransport | None = None,
-) -> bool:
+) -> ReactionCallResult:
     """Remove the caller's own reaction from a chat message.
 
     Graph ``chatMessage: unsetReaction``. It only ever removes the reaction of the identity
@@ -1589,20 +1613,45 @@ async def fetch_message(
         }
 
 
+class ChatMessages(list):
+    """What :func:`read` returns: a list of message dicts, plus the reactions behind them.
+
+    To everything that iterates, indexes or serializes it, this is the plain list ``read``
+    always returned, holding only what a model may be shown. ``raw_reactions`` rides along
+    for the poll's change detection: every reaction on every message as Graph returned it,
+    keyed by message ID. It is not part of the list, so it is never serialized with it.
+    """
+
+    def __init__(
+        self,
+        messages: Iterable[dict] = (),
+        raw_reactions: Mapping[str, list[MessageReaction]] | None = None,
+    ) -> None:
+        super().__init__(messages)
+        self.raw_reactions: dict[str, list[MessageReaction]] = dict(raw_reactions or {})
+
+
 async def read(
     *,
     chat_id: str,
     token: str,
     count: int = 5,
-) -> list[dict]:
+) -> ChatMessages:
     """Read recent messages from the human in the Teams chat.
 
     Returns up to *count* most recent messages, newest first. Each entry
     includes a ``reply_to_ids`` list — message IDs this message is an
-    explicit quote-reply to (empty for regular chat messages) — and a
-    ``reactions`` list of ``{reaction_type, display_name, user_id,
-    created_at}``, empty when the message has none. A reaction's
-    ``display_name`` is free text, so it is wrapped like the body.
+    explicit quote-reply to (empty for regular chat messages) — and its
+    reactions: ``reaction_count``, how many the message has, and
+    ``reactions``, the newest :data:`MAX_REACTIONS_LISTED` of them as
+    ``{reaction_type, display_name, user_id, created_at}``, newest first.
+    ``display_name`` is empty unless the reaction is a custom one, whose
+    name is free text and is wrapped like the body.
+
+    The returned :class:`ChatMessages` also carries ``raw_reactions``: every
+    reaction on every message as Graph returned it, keyed by message ID. The
+    poll's change detection uses that, so it never depends on what a model is
+    shown: not on the cap, and not on how a name is wrapped.
     """
     headers = {
         "Authorization": f"Bearer {token}",
@@ -1629,7 +1678,7 @@ async def read(
         from entrabot.security.xpia import wrap_external
 
         messages = resp.json().get("value", [])
-        out: list[dict] = []
+        out = ChatMessages()
         for m in messages:
             body_content = (m.get("body") or {}).get("content", "") or ""
             # Surface Graph's ``attachments`` array so downstream tools
@@ -1670,22 +1719,33 @@ async def read(
                 sender=sender_email or sender_id or None,
                 received_at=None,
             )
-            # Reactions are external content too. The type is already reduced to an emoji,
-            # a legacy name, "custom" or "unrecognized". The display name is free text (a
-            # custom reaction's name is whatever its creator typed), so it gets the envelope.
+            # Reactions are external content too. The type is already reduced to one emoji,
+            # a legacy name, "custom" or "unrecognized", none of which can carry text. A
+            # custom reaction's name is whatever its creator typed, so it gets the envelope;
+            # for anything else the name adds nothing and is left out. Only the newest few
+            # are listed, so a much-reacted message doesn't swamp the read.
+            all_reactions = parse_reactions(m.get("reactions"))
+            out.raw_reactions[str(m["id"])] = all_reactions
+            newest_first = sorted(
+                all_reactions,
+                key=lambda reaction: canonical_timestamp(reaction.created_at),
+                reverse=True,
+            )
             reactions = [
                 {
-                    **reaction.to_dict(),
+                    "reaction_type": reaction.reaction_type,
                     "display_name": wrap_external(
                         reaction.display_name,
                         source=f"teams:{chat_id}",
                         sender=reaction.user_id or None,
                         received_at=None,
                     )
-                    if reaction.display_name
+                    if reaction.reaction_type == CUSTOM_REACTION and reaction.display_name
                     else "",
+                    "user_id": reaction.user_id,
+                    "created_at": reaction.created_at,
                 }
-                for reaction in parse_reactions(m.get("reactions"))
+                for reaction in newest_first[:MAX_REACTIONS_LISTED]
             ]
             out.append(
                 {
@@ -1700,6 +1760,7 @@ async def read(
                     "reply_to_ids": reply_to_ids,
                     "attachments": attachments,
                     "reactions": reactions,
+                    "reaction_count": len(all_reactions),
                 }
             )
         return out
