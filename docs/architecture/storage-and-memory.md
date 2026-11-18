@@ -83,9 +83,10 @@ Modules that call `get_backend()`:
 
 `write_text(key, content, if_absent=True)` is the same guarantee for a key that doesn't exist yet: it creates the key and raises `ConcurrencyError` if another writer got there first. `if_match=None` alone is an unconditional overwrite, so without this two instances that both read "absent" would both write, and the last one would win. `LocalBackend` hard-links a fully written temp file into place, which is atomic and fails if the key exists (falling back to an exclusive create where hard links aren't available); `BlobBackend` sends `If-None-Match: *`, and `BlobStore` treats both 412 and 409 as a conflict on that path, since Azure's docs list both.
 
-Three call sites build real logic on top of this:
+Four call sites build real logic on top of this:
 
 - **`chat_cursors.claim_delivery()`** — the fleet-safe delivery ledger for inbound Teams messages. It reads the shared cursor with its ETag, computes which candidate message IDs aren't already recorded as delivered, and writes the merged cursor back with `if_match=etag`. On `ConcurrencyError` it re-reads and retries, up to `CLAIM_MAX_ATTEMPTS` (4) times; exhausting the retries returns an empty claim (push nothing) rather than risk double-delivering a message across multiple polling instances.
+- **`chat_cursors.claim_reactions()`** — the same shape for reactions on the agent's own messages, with its own ledger (`reaction_keys_tail`, `reaction_floor`) in the same cursor. A claim only adds to that ledger; `release_reactions()` takes named keys back out when a push fails. Each of the three leaves the other ledger as it read it, all go through one compare-and-swap helper (`_update_cursor`), and the stored cursor is built in one place (`_cursor_payload`). See [Reaction notifications](messaging-and-delivery.md#reaction-notifications).
 - **`promises.py`** — the same read-with-etag / write-with-if_match / retry-once-on-`ConcurrencyError` shape for the shared promises ledger.
 - **`poll_state.py`** — merges into the watched-chat list with bounded retries, and claims each window of email by advancing the cursor before pushing it. See [Messaging and Delivery](messaging-and-delivery.md#fleet-safe-delivery).
 

@@ -115,6 +115,54 @@ class TestTriage:
         assert buckets["handled"][0]["summary"].startswith("Thanks for sharing")
         assert buckets["heads_up"] == []
 
+    @pytest.mark.parametrize("action", ["add_teams_reaction", "remove_teams_reaction"])
+    def test_a_reaction_does_not_count_as_a_reply(self, action: str) -> None:
+        """Reacting to a message is not answering it, so it stays under needs-you."""
+        chat = "19:xyz@unq.gbl.spaces"
+        entries = [
+            _entry(
+                ts="2026-04-16T10:00:00+00:00",
+                channel="teams_dm",
+                direction="inbound",
+                sender="Alice",
+                summary="Can you check the build?",
+                metadata={"chat_id": chat},
+            ),
+            {
+                **_entry(
+                    ts="2026-04-16T10:01:00+00:00",
+                    channel="teams_dm",
+                    direction="outbound",
+                    sender="entrabot-agent",
+                    recipient=chat,
+                    summary="reacted to message 1",
+                ),
+                "action": action,
+            },
+        ]
+
+        buckets = triage_interactions(entries)
+
+        assert [e["summary"] for e in buckets["needs_you"]] == ["Can you check the build?"]
+        assert buckets["handled"] == []
+        assert buckets["heads_up"] == []
+
+    def test_a_reaction_alone_is_not_a_heads_up(self) -> None:
+        entries = [
+            {
+                **_entry(
+                    ts="2026-04-16T10:01:00+00:00",
+                    channel="teams_group",
+                    direction="outbound",
+                    sender="entrabot-agent",
+                    recipient="19:group@thread.v2",
+                    summary="reacted to message 1",
+                ),
+                "action": "add_teams_reaction",
+            },
+        ]
+        assert triage_interactions(entries) == {"needs_you": [], "handled": [], "heads_up": []}
+
     def test_agent_initiated_outbound_is_heads_up(self) -> None:
         entries = [
             _entry(

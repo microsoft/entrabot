@@ -45,6 +45,10 @@ class TestWriteShapedToolNameRecognizer:
             "add_word_comment",
             "add_excel_comment",
             "add_promise",
+            # Reactions change what other people see in a chat. Removing one is a write
+            # too, which is why ``remove_`` is in the pattern.
+            "add_teams_reaction",
+            "remove_teams_reaction",
             # Hypothetical plan-shaped names, still pinned.
             "add_member",
             "add_comment",

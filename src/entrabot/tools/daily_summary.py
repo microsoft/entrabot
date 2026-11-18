@@ -58,16 +58,25 @@ def _counterparty(entry: dict) -> str:
     return entry.get("recipient") or ""
 
 
+# Logged for the record, but not part of a conversation: reacting to a message doesn't
+# answer it, so these never make a thread "handled" or a heads-up.
+_REACTION_ACTIONS = frozenset({"add_teams_reaction", "remove_teams_reaction"})
+
+
 def triage_interactions(entries: list[dict], *, agent_upn: str | None = None) -> SummaryBuckets:
     """Sort *entries* into needs_you / handled / heads_up buckets.
 
     When *agent_upn* is provided, inbound entries whose ``sender`` matches
     the agent's own UPN are dropped — they're Sent-Items self-echoes that
     leaked into the log and would otherwise pollute Needs-you.
+
+    Reaction entries are left out: a reaction is not a reply.
     """
     self_upn = (agent_upn or "").lower()
     threads: dict[tuple, list[dict]] = {}
     for e in entries:
+        if e.get("action") in _REACTION_ACTIONS:
+            continue
         if (
             self_upn
             and e.get("direction") == "inbound"

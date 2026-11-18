@@ -214,6 +214,15 @@ class TestAllow:
 
 
 class TestBlock:
+    def test_no_sentinel_blocks_the_reaction_tools(self):
+        """A reaction is visible to everyone in the chat, so it is gated like a send."""
+        for tool in ("add_teams_reaction", "remove_teams_reaction"):
+            result = _run_hook(
+                {"tool_name": f"mcp__entrabot__{tool}", "transcript_path": "/dev/null"}
+            )
+            assert result.returncode == 2, tool
+            assert json.loads(result.stdout)["decision"] == "block"
+
     def test_no_sentinel_blocks_send_teams_message(self):
         transcript = _make_transcript_file([
             {

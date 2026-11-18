@@ -69,6 +69,34 @@ starve delivery for the others.
 with a timeout. It maintains its own delivery state, separate from the
 background poll's channel-push delivery.
 
+## Reactions
+
+`read_teams_messages` gives each message's `reaction_count` and lists its
+newest 20 reactions: the emoji, the ID of whoever reacted, and when. A custom
+reaction also has its name, wrapped as external content.
+
+The background poll also notices when someone reacts to one of the agent's
+own messages, and pushes a `[teams reaction]` notification saying which
+message, which reaction and who. It looks at the ten newest messages in each
+chat and at every reaction on them, announces additions only, and never
+announces the agent's own reactions. Only a reaction made within the last
+hour is announced, so turning notifications back on, or restarting after a
+long break, doesn't release a backlog. The notification is always wrapped as
+external content, a sponsor's reaction included: it is information, not an
+instruction, and needs no reply. Set `ENTRABOT_REACTION_NOTIFICATIONS=false`
+to turn these notifications off. They need an Agent User session and a host
+that shows channel pushes.
+
+`add_teams_reaction` and `remove_teams_reaction` let the agent react to a
+message, or take its own reaction back, with exactly one Unicode emoji or one
+of `like`, `heart`, `laugh`, `surprised`, `sad`, `angry`. Country flags,
+keycap digits, arrows and letter-like symbols are refused, because a reaction
+must not be able to carry text. The agent may react to other people's
+messages, including in group chats where it otherwise only watches. The body
+prompt asks it to do so sparingly, and never in place of a reply it owes. In
+a delegated session both tools refuse: the reaction would be the signed-in
+human's, with nothing to mark it as the agent's.
+
 ## Promises: tracking commitments
 
 Promise tools durably store deferred commitments the agent makes in

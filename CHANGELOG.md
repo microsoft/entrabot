@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-Nothing yet.
+### Added
+
+- Teams message reactions. `read_teams_messages` gives each message's `reaction_count` and its newest 20 reactions (`reaction_type`, `display_name`, `user_id`, `created_at`; the name only for a custom reaction, wrapped as external content). The Teams poll notices when someone reacts to one of the agent's own messages and pushes one `[teams reaction]` notification per message, from the read it already makes. It considers every reaction on the ten newest messages, and announces additions only, never the agent's own reactions, nothing older than an hour, and nothing that was already there when a chat's reaction state is first built. The notification is always inside the external-content envelope, a sponsor's reaction included. The reaction ledger is kept apart from the message cursor's seen-set and is stored with it, so a restart doesn't repeat a notification. It only grows, so with several instances on one chat an instance working from an older read can't cause a second notification; an instance that can't push doesn't claim, and a claim whose push fails is released for a retry. `ENTRABOT_REACTION_NOTIFICATIONS=false` turns the notifications off, and turning them back on doesn't announce the backlog. Two new tools, `add_teams_reaction` and `remove_teams_reaction`, react to a message or take the agent's own reaction back, with exactly one Unicode emoji or one of `like`, `heart`, `laugh`, `surprised`, `sad`, `angry`. They refuse any other text, including several emoji, country flags, keycap digits, arrows and letter-like symbols; they refuse a delegated session, where the reaction would be the signed-in human's; and they write their audit event before calling Graph. The body prompt says when to react: sparingly, on anyone's message, and never in place of a reply the agent owes. The read and the reaction call were run for real on macOS in a 1:1 chat on 2026-11-17, on the first version of this change; the poll's notification, the ledger, custom reactions and removing a reaction are unit-tested with mocked HTTP only.
 
 ## 0.3.1 — 2026-11-16
 

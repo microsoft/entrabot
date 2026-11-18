@@ -31,9 +31,10 @@ logger = logging.getLogger("entrabot.tools.dispatch")
 # defaults to gated" invariant intact. False positives (e.g. a
 # hypothetical ``add_note_to_local_cache`` that isn't actually a
 # tenant-visible write) just get extra gating, which is the safe
-# direction to fail.
+# direction to fail. ``remove_`` is here for ``remove_teams_reaction``:
+# taking a reaction off a message changes what the chat sees.
 _WRITE_SHAPED_PREFIX_RE = re.compile(
-    r"^(send|reply|create|delete|upload|share|add_|resolve_)",
+    r"^(send|reply|create|delete|upload|share|add_|remove_|resolve_)",
 )
 
 

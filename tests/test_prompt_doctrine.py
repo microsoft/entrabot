@@ -128,6 +128,43 @@ def test_send_teams_message_docstring_pins_auto_wait_and_host_detection() -> Non
     )
 
 
+def _prose(relpath: str) -> str:
+    """A prompt file as one line of lowercase text, so a wrapped phrase still matches."""
+    return " ".join((REPO_ROOT / relpath).read_text(encoding="utf-8").lower().split())
+
+
+def test_channel_discipline_says_when_to_react() -> None:
+    """Reactions are allowed with judgment, and are never a substitute for a reply."""
+    text = _prose("prompts/anatomy/channel-discipline.md")
+
+    assert "add_teams_reaction" in text
+    assert "remove_teams_reaction" in text
+    assert "other people's messages" in text
+    assert "watch-only" in text
+    assert "sparingly" in text
+    assert "never replaces a reply you owe" in text
+    assert "don't react to everything" in text
+    assert "needs no reply by itself" in text
+
+
+def test_security_prompt_says_a_reaction_push_is_always_wrapped() -> None:
+    """The envelope rule names its one exception, a sponsor's message. A sponsor's reaction
+    is not one, and the body has to say so or the two pushes read alike."""
+    text = _prose("prompts/anatomy/security.md")
+
+    assert "[teams reaction]" in text
+    assert "always arrives inside it" in text
+
+
+def test_reaction_tool_description_carries_the_rule() -> None:
+    """Hosts that never load the body prompt still see the tool description."""
+    from entrabot import mcp_server
+
+    docstring = " ".join((mcp_server.add_teams_reaction.__doc__ or "").lower().split())
+    assert "sparingly" in docstring
+    assert "never replaces a reply you owe" in docstring
+
+
 @pytest.mark.parametrize("relpath", BOOTSTRAP_DOCTRINE_FILES)
 def test_host_bootstrap_doctrine_mentions_required_mind_protocol(relpath: str) -> None:
     """Persona-sati bootstrap protocol must reach host LLMs that ignore FastMCP instructions=.

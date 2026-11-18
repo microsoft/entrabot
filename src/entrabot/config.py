@@ -306,6 +306,10 @@ class EntraBotConfig:
     # ``ENTRABOT_XPIA_WRAP_ENABLE=false`` disables the wrap without a
     # code revert; see docs/architecture/security-boundaries.md.
     xpia_wrap_enable: bool = field(default=True)
+    # Whether the Teams poll pushes a notification when someone reacts to one of the
+    # agent's own messages. On by default; ``ENTRABOT_REACTION_NOTIFICATIONS=false``
+    # switches it off. Read server-side only, never a tool parameter (Learning #54).
+    reaction_notifications: bool = field(default=True)
     a365_observability_enabled: bool = False
     a365_export_enabled: bool = False
     a365_console_enabled: bool = False
@@ -365,6 +369,10 @@ class EntraBotConfig:
             # Any non-empty value that is not explicitly falsy stays enabled.
             xpia_wrap_enable=(
                 os.environ.get("ENTRABOT_XPIA_WRAP_ENABLE", "").strip().lower()
+                not in ("false", "0", "no", "off")
+            ),
+            reaction_notifications=(
+                os.environ.get("ENTRABOT_REACTION_NOTIFICATIONS", "").strip().lower()
                 not in ("false", "0", "no", "off")
             ),
             a365_observability_enabled=os.environ.get(

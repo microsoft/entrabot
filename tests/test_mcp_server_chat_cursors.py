@@ -417,6 +417,8 @@ class TestResolvePendingChat:
             "last_ts": "2026-06-09T18:00:00Z",
             "bootstrapped": True,
             "needs_resolution": False,
+            # This cursor predates the reaction ledger, so the ledger is not built yet.
+            "reaction_ledger": None,
         }
         assert chat_state.writer_threads, "the state was updated"
         assert set(chat_state.writer_threads) == {loop_thread}, "all updates stay on the loop"
