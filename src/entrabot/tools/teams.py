@@ -44,7 +44,11 @@ from entrabot.errors import (
 from entrabot.graph_helpers import odata_escape
 from entrabot.platform import get_credential_store
 from entrabot.tools.audit import log_event
-from entrabot.tools.rate_limit import RetryOn429Transport, parse_retry_after
+from entrabot.tools.rate_limit import (
+    RetryOn429Transport,
+    parse_retry_after,
+    proxied_async_transport,
+)
 from entrabot.tools.reactions import (
     CUSTOM_REACTION,
     MessageReaction,
@@ -486,7 +490,7 @@ async def create_one_on_one_chat(
     # Agent User must be listed with their object ID — /me is not valid
     # in user@odata.bind. If not provided, resolve via /me endpoint.
     if not agent_user_id:
-        transport_me = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+        transport_me = RetryOn429Transport(wrapped=proxied_async_transport())
         async with httpx.AsyncClient(transport=transport_me) as me_client:
             me_resp = await me_client.get(
                 f"{GRAPH_BASE}/me",
@@ -509,7 +513,7 @@ async def create_one_on_one_chat(
 
     logger.info("Creating 1:1 chat with %s", target_email)
 
-    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    transport = RetryOn429Transport(wrapped=proxied_async_transport())
     async with httpx.AsyncClient(transport=transport) as client:
         resp = await client.post(
             f"{GRAPH_BASE}/chats",
@@ -639,7 +643,7 @@ async def create_or_find_chat(
 
     logger.info("Creating chat — payload: %s", chat_payload)
 
-    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    transport = RetryOn429Transport(wrapped=proxied_async_transport())
     async with httpx.AsyncClient(transport=transport) as client:
         resp = await client.post(
             f"{GRAPH_BASE}/chats",
@@ -911,7 +915,7 @@ async def add_member(
 
     logger.info("Adding member to chat %s: %s (tenant=%s)", chat_id, email, tenant_id)
 
-    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    transport = RetryOn429Transport(wrapped=proxied_async_transport())
     try:
         async with httpx.AsyncClient(transport=transport) as client:
             resp = await client.post(
@@ -987,7 +991,7 @@ async def list_members(
     """
     headers = {"Authorization": f"Bearer {token}"}
 
-    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    transport = RetryOn429Transport(wrapped=proxied_async_transport())
     async with httpx.AsyncClient(transport=transport) as client:
         resp = await client.get(
             f"{GRAPH_BASE}/chats/{chat_id}/members",
@@ -1073,7 +1077,7 @@ async def send(
             for m in mentions
         ]
 
-    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    transport = RetryOn429Transport(wrapped=proxied_async_transport())
     async with httpx.AsyncClient(transport=transport) as client:
         resp = await client.post(
             f"{GRAPH_BASE}/chats/{chat_id}/messages",
@@ -1127,7 +1131,7 @@ async def post_thinking_placeholder(
         "Content-Type": "application/json",
     }
 
-    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    transport = RetryOn429Transport(wrapped=proxied_async_transport())
     async with httpx.AsyncClient(transport=transport) as client:
         resp = await client.post(
             f"{GRAPH_BASE}/chats/{chat_id}/messages",
@@ -1183,7 +1187,7 @@ async def update_placeholder(
         "Content-Type": "application/json",
     }
 
-    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    transport = RetryOn429Transport(wrapped=proxied_async_transport())
     async with httpx.AsyncClient(transport=transport) as client:
         resp = await client.patch(
             f"{GRAPH_BASE}/chats/{chat_id}/messages/{placeholder_id}",
@@ -1235,7 +1239,7 @@ async def resolve_placeholder(
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
-    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    transport = RetryOn429Transport(wrapped=proxied_async_transport())
 
     if mode == "edit":
         payload: dict = {
@@ -1343,7 +1347,7 @@ async def delete_chat_message(
     """
     headers = {"Authorization": f"Bearer {token}"}
 
-    owned_transport = transport or RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    owned_transport = transport or RetryOn429Transport(wrapped=proxied_async_transport())
     async with httpx.AsyncClient(transport=owned_transport) as client:
         resp = await client.post(
             f"{GRAPH_BASE}/me/chats/{chat_id}/messages/{message_id}/softDelete",
@@ -1416,7 +1420,7 @@ async def _post_reaction(
         f"/messages/{quote(message_id, safe='')}/{action}"
     )
 
-    owned_transport = transport or RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    owned_transport = transport or RetryOn429Transport(wrapped=proxied_async_transport())
     async with httpx.AsyncClient(
         transport=owned_transport, timeout=REACTION_TIMEOUT_SECONDS
     ) as client:
@@ -1501,7 +1505,7 @@ async def fetch_hosted_image(*, token: str, url: str) -> bytes | None:
 
     headers = {"Authorization": f"Bearer {token}"}
 
-    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    transport = RetryOn429Transport(wrapped=proxied_async_transport())
     async with httpx.AsyncClient(transport=transport) as client:
         resp = await client.get(url, headers=headers)
         if resp.status_code == 401:
@@ -1590,7 +1594,7 @@ async def fetch_message(
     """
     headers = {"Authorization": f"Bearer {token}"}
 
-    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    transport = RetryOn429Transport(wrapped=proxied_async_transport())
     async with httpx.AsyncClient(transport=transport) as client:
         resp = await client.get(
             f"{GRAPH_BASE}/chats/{chat_id}/messages/{message_id}",
@@ -1657,7 +1661,7 @@ async def read(
         "Authorization": f"Bearer {token}",
     }
 
-    transport = RetryOn429Transport(wrapped=httpx.AsyncHTTPTransport())
+    transport = RetryOn429Transport(wrapped=proxied_async_transport())
     async with httpx.AsyncClient(transport=transport) as client:
         resp = await client.get(
             f"{GRAPH_BASE}/chats/{chat_id}/messages",

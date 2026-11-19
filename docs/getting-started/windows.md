@@ -79,7 +79,7 @@ The admin center paths it gives (**Billing > Your products**, **Billing > Licens
 
 ## The first start
 
-The MCP server is not contained in 0.3.1: it runs with all of your account's rights. Containing it on macOS and Linux is planned for 0.4.0. See [Security Boundaries](../architecture/security-boundaries.md#current-limitation-no-shipped-execution-sandbox).
+On Windows the MCP server is not contained: it runs with all of your account's rights. On macOS and Linux it starts inside a sandbox. See [Process Containment](../guides/containment.md).
 
 The first time Claude Code opens the Entrabot folder it asks some questions; `start-entrabot.cmd` and setup's last screen both say so. If this PC has not used Claude Code before, it asks you to sign in to Claude. Then it asks whether to trust this folder, whether to use the `entrabot` MCP server, and whether to load a development channel. Say yes to each: the folder is the one you just set up, the server is your agent, and the channel is how Teams messages reach it. Then say *Who are you?*
 

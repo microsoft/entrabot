@@ -201,13 +201,12 @@ For step-by-step setup, see [Windows installation](../getting-started/windows.md
 
 ## Process containment
 
-The MCP server is **not contained** in 0.3.1, on Windows or any other platform. It runs with
-all of its user's rights: it can read every file that user can and connect to any host.
-Containing it on macOS and Linux is planned for 0.4.0. On Windows, Microsoft eXecution
-Container has open issues with Python asyncio and stdio servers when egress is denied
-(microsoft/mxc #1261, #1709). The certificate key itself is still non-exportable (see above),
-and the recipient policy and audit apply on every platform. See
-[Security Boundaries](../architecture/security-boundaries.md).
+The MCP server is **not contained on Windows**. It runs with all of its user's rights: it can
+read every file that user can and connect to any host. Microsoft eXecution Container has open
+issues on Windows with Python asyncio and stdio servers when egress is denied (microsoft/mxc
+#1261, #1709), and nothing has been run there. `--diagnose` reports the server as not
+contained. The certificate key itself is still non-exportable (see above), and the recipient
+policy and audit apply on every platform. See [Process Containment](../guides/containment.md).
 
 ## Default paths
 

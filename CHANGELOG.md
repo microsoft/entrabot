@@ -2,9 +2,29 @@
 
 ## Unreleased
 
+Process containment of the MCP server. Run for real on macOS only: **Linux has never been run**
+(the bubblewrap backend is unit-tested only), the Microsoft eXecution Container backend has
+never been run anywhere, and **Windows is not contained**. Planned for 0.4.0; a pre-release
+(`v0.4.0-rc.N`) is the way to try it; see `RELEASING.md`.
+
 ### Added
 
+- Process containment for the MCP server by default on macOS (Seatbelt) and Linux (bubblewrap), or MXC 1.0.x when installed, behind an allowlisting proxy (`entrabot.sandbox`). Outside the system folders the server reads only its repository, virtual environment, state and (on macOS) the login keychain, writes only its state, and connects only to the Microsoft hosts it needs (plus its blob store and persona-sati when configured) on port 443. Refused hosts are logged to `~/.entrabot/logs/containment-refusals.jsonl`.
+- `ENTRABOT_CONTAINMENT` (`auto`, `required`, `off`, `seatbelt`, `bwrap`, `mxc`), `ENTRABOT_SANDBOX_EXTRA_HOSTS`, `ENTRABOT_SANDBOX_EXTRA_READ`, `ENTRABOT_MXC_EXECUTOR` and `ENTRABOT_MXC_SHA256`; `python -m entrabot.sandbox.selftest` runs a probe in exactly the server's sandbox.
+- A "Server containment" check in `./status.sh` and `--diagnose`, and `containment` in `whoami`.
 - Teams message reactions. `read_teams_messages` gives each message's `reaction_count` and its newest 20 reactions (`reaction_type`, `display_name`, `user_id`, `created_at`; the name only for a custom reaction, wrapped as external content). The Teams poll notices when someone reacts to one of the agent's own messages and pushes one `[teams reaction]` notification per message, from the read it already makes. It considers every reaction on the ten newest messages, and announces additions only, never the agent's own reactions, nothing older than an hour, and nothing that was already there when a chat's reaction state is first built. The notification is always inside the external-content envelope, a sponsor's reaction included. The reaction ledger is kept apart from the message cursor's seen-set and is stored with it, so a restart doesn't repeat a notification. It only grows, so with several instances on one chat an instance working from an older read can't cause a second notification; an instance that can't push doesn't claim, and a claim whose push fails is released for a retry. `ENTRABOT_REACTION_NOTIFICATIONS=false` turns the notifications off, and turning them back on doesn't announce the backlog. Two new tools, `add_teams_reaction` and `remove_teams_reaction`, react to a message or take the agent's own reaction back, with exactly one Unicode emoji or one of `like`, `heart`, `laugh`, `surprised`, `sad`, `angry`. They refuse any other text, including several emoji, country flags, keycap digits, arrows and letter-like symbols; they refuse a delegated session, where the reaction would be the signed-in human's; and they write their audit event before calling Graph. The body prompt says when to react: sparingly, on anyone's message, and never in place of a reply the agent owes. The read and the reaction call were run for real on macOS in a 1:1 chat on 2026-11-17, on the first version of this change; the poll's notification, the ledger, custom reactions and removing a reaction are unit-tested with mocked HTTP only.
+
+### Changed
+
+- **Breaking:** on macOS, and on Linux with `bwrap` installed, `entrabot-mcp` runs the server inside an OS sandbox by default. Anything it needs outside the allowed paths or hosts is refused; a persona-sati token command that reads files elsewhere needs `ENTRABOT_SANDBOX_EXTRA_READ`. Set `ENTRABOT_CONTAINMENT=off` to restore the old behaviour.
+- Teams, mail and Files calls use the launcher's proxy when contained (`proxied_async_transport`); uncontained behaviour is unchanged.
+
+### Known limitations
+
+- Linux: never run on a real machine. Install `bwrap` and run `python -m entrabot.sandbox.selftest` to check it on yours.
+- Microsoft eXecution Container: never run (no executor was installed).
+- Windows: not contained. The server runs with all of its user's rights there; MXC's ProcessContainer has open issues with Python asyncio and stdio servers under egress deny (microsoft/mxc #1261, #1709).
+- Containment protects against the server and what it is tricked into, not against other software running as the same user, and it does not limit what the agent may do through Microsoft Graph with its own permissions.
 
 ## 0.3.1 — 2026-11-16
 

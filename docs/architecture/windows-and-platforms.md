@@ -57,11 +57,11 @@ Once a certificate-signed JWT assertion exists, the rest of the three-hop token 
 
 ## Process containment
 
-The MCP server is not contained in 0.3.1 on any platform: it runs with all of its user's rights. Containing it in an OS sandbox on macOS and Linux is planned for 0.4.0. See [Security Boundaries](security-boundaries.md#current-limitation-no-shipped-execution-sandbox).
+On macOS (Seatbelt) and on Linux with `bwrap` installed, the MCP server runs inside an OS sandbox by default, behind an allowlisting proxy. macOS has been run for real; Linux is unit-tested only. Windows is not contained: the server runs with all of its user's rights. See [Process Containment](../guides/containment.md) and [Security Boundaries](security-boundaries.md#process-containment).
 
 ## See also
 
-- [Security Boundaries](security-boundaries.md) — why the Mac/Linux and Windows certificate paths differ in strength, and the missing execution sandbox.
+- [Security Boundaries](security-boundaries.md) — why the Mac/Linux and Windows certificate paths differ in strength, and process containment per platform.
 - [Identity and Token Flow](identity-and-token-flow.md) — the three-hop flow the certificate assertion feeds into.
 - [Platform Docs](../platform-docs/platform-macos.md) (forthcoming) — per-OS setup, rotation, and troubleshooting guidance: [macOS](../platform-docs/platform-macos.md), [Linux](../platform-docs/platform-linux.md), [Windows](../platform-docs/platform-windows.md).
 - Per-script reference pages: [`setup.sh`](../reference/scripts/setup/setup-sh.md), [`teardown.sh`](../reference/scripts/teardown/teardown-sh.md), [`start-entrabot.sh`](../reference/scripts/setup/start-entrabot-sh.md), [`prereqs-macos.sh`](../reference/scripts/setup/prereqs-macos-sh.md), [`setup-windows.ps1`](../reference/scripts/setup/setup-windows-ps1.md), [`prereqs-windows.ps1`](../reference/scripts/setup/prereqs-windows-ps1.md), [`generate_windows_cert.py`](../reference/scripts/auth-and-certs/generate-windows-cert-py.md), [`rotate_cert_windows.py`](../reference/scripts/auth-and-certs/rotate-cert-windows-py.md).

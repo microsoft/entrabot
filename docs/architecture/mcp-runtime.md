@@ -4,7 +4,7 @@
 
 Entrabot is a stdio [MCP](https://modelcontextprotocol.io/) server built on FastMCP. Every host-facing capability — Teams, email, Files, cards, promises, the daily summary, A365 Work IQ — is registered as an `@mcp.tool()` function in `src/entrabot/mcp_server.py`. Each tool wrapper does its work and returns a JSON string (`json.dumps(...)`), not a raw Python object, so every tool has the same wire shape regardless of what it does internally.
 
-`_run_stdio_with_write_stream()` is the process entry point: it opens the stdio transport, stashes the write stream in module state (`_state["_write_stream"]`) so background tasks can push notifications outside of a tool call, discovers efferent-copy sinks, eagerly schedules `_initialize()`, and hands control to FastMCP's request loop.
+`entrabot-mcp` first runs `entrabot.sandbox.launch.maybe_contain()`: on macOS and Linux (by default) that process becomes the launcher, starts the allowlisting proxy, and starts the server again inside the OS sandbox with the same standard input and output; see [Process Containment](../guides/containment.md). Inside that contained process, `_run_stdio_with_write_stream()` is the server's entry point: it opens the stdio transport, stashes the write stream in module state (`_state["_write_stream"]`) so background tasks can push notifications outside of a tool call, discovers efferent-copy sinks, eagerly schedules `_initialize()`, and hands control to FastMCP's request loop.
 
 ## Initialization lifecycle
 

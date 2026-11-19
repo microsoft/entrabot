@@ -120,6 +120,7 @@ nav:
       - Files and Microsoft Agent 365 Work IQ: guides/files-and-work-iq.md
       - Identity Lifecycle and Deprovisioning: guides/identity-lifecycle.md
       - Calling Other APIs as the Agent: guides/other-apis.md
+      - Process Containment: guides/containment.md
   - Clients:
       - Overview: clients/overview.md
       - Claude Code: clients/claude-code.md
@@ -230,6 +231,7 @@ nav:
       - MCP Connectivity: troubleshooting/mcp-connectivity.md
       - Migrations and Upgrades: troubleshooting/migrations-and-upgrades.md
       - Outbound Controls and Telemetry: troubleshooting/outbound-and-telemetry.md
+      - Containment: troubleshooting/containment.md
   - Project:
       - Current Status: project/status.md
       - Changelog: project/changelog.md

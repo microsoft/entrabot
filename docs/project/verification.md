@@ -5,7 +5,33 @@ real agent, on the system named. "Unit-tested" means covered by the test suite
 (`pytest -v && ruff check .`, which every commit must pass) with Graph, Entra and the operating
 system faked. Nothing here names a tenant, account or machine.
 
-Last updated: 2026-11-16, for 0.3.1.
+Last updated: 2026-11-19, for 0.3.1 and the unreleased process containment (planned for 0.4.0).
+
+## Process containment (unreleased, planned for 0.4.0)
+
+Run for real on macOS only, in run 2 below, where the server ran contained for the whole run. That run
+was made on the containment branch before it was brought up to date with 0.3.1 (the Agent 365
+registry, the per-certificate keychain items, Teams reactions); **it has not been run for real
+again since**.
+**Linux has never been run, the Microsoft eXecution Container backend has never been run, and
+Windows is not contained.**
+
+| What | macOS | Linux | Windows |
+|---|---|---|---|
+| Server contained by default; `whoami`, `containment.json` and the check behind `./status.sh` and `--diagnose` report it | Run for real (Seatbelt) | Unit-tested (`bwrap` command, network bridge); never run | Not contained; reported as such |
+| Agent signs in inside the sandbox | Run for real (certificate key from the login keychain) | Never run | n/a |
+| Every connection through the allowlisting proxy (sends, reads, polls, token re-acquisition, the Agent 365 export) | Run for real | Never run | n/a |
+| Refusals from inside the live server's sandbox: reading the home directory, `/Users/Shared` or another volume; writing to the repository, the home directory or `/tmp`; a non-Microsoft host | Run for real (checked against the live server process and with real attempts under its profile) | Never run | n/a |
+| The telemetry distro's Azure Monitor calls (`settings.sdk.monitor.azure.com`, an Application Insights host) | Refused by the proxy (before 0.2.0 switched them off) | Never run | n/a |
+| Clean stop: no process left, status record and generated profile removed | Run for real | Never run | n/a |
+| Microsoft eXecution Container backend | Unit-tested; never run | Unit-tested; never run | Not supported |
+| Reading the status record never signals the process it checks | Unit-tested | Unit-tested | Unit-tested in CI (`test-windows`) |
+
+Bugs found on the containment branch, fixed with a test each: the Seatbelt profile let the server read
+outside the home directory (other users' folders, other volumes); Teams, mail and Files calls
+didn't use the sandbox's proxy, so they failed inside it; and on Windows the status record's
+liveness check sent Ctrl+C to the process it checked (signal 0 is `CTRL_C_EVENT` there), found
+by the Windows CI run.
 
 ## What 0.3.1 rests on
 
@@ -265,9 +291,12 @@ It also showed that two computers running one agent with local memory both push 
 | Agent 365 registry through setup (0.3.0): the setup app's permission, the registration, its `--diagnose` line, teardown's delete | Unit-tested | Run for real (2026-11-15, Ubuntu 24.04): the permission and its consent check, the registration, `--diagnose`, the admin center listing, the script's delete, teardown's delete. Not run: a second computer joining a registered agent | Run for real (2026-11-15, Windows 11 Pro 25H2, built-in Administrator): the permission, the registration, `-Diagnose`, the admin center listing, telemetry, teardown's delete. Run for real: the takeover run's grant, on a first run. Not run: a standard user |
 | `status.sh` and `setup_delegated.sh` read `.env` as data | Run for real (the old scripts fail the tests, the new ones pass) | Unit-tested | n/a |
 | The full test suite | Every commit | Not run | CI (`test-windows`) on each pull request |
-| Process containment | Not in 0.2.0, 0.3.0 or 0.3.1: planned for 0.4.0 | Not in 0.2.0, 0.3.0 or 0.3.1 | Not in 0.2.0, 0.3.0 or 0.3.1 |
+| Process containment | Unreleased (planned for 0.4.0): run for real (above) | Unreleased: unit-tested, never run | Not contained |
 
 ## Never run
+
+- Containment on a real Linux machine, and the MXC backend anywhere.
+- Containment on Windows (not implemented).
 
 - The Copilot SDK harness against a real Copilot runtime.
 - Registering the agent with 0.2.0's own `register_agent_instance.py --apply`, which needs a
