@@ -450,6 +450,13 @@ class TestContainerUsesTheManagementPlane:
 
 
 class TestSubscription:
+    @pytest.fixture(autouse=True)
+    def _az_is_found(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # These tests fake subprocess.run, below _run_az. _run_az looks for the Azure CLI
+        # first and stops when there is none, so without this they pass only on a computer
+        # that has az installed.
+        monkeypatch.setattr(provision_blob_storage.azure_cli, "command", lambda: ["az"])
+
     def test_every_az_call_targets_the_chosen_subscription(self) -> None:
         seen: list[list[str]] = []
 
