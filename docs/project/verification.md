@@ -264,7 +264,7 @@ It also showed that two computers running one agent with local memory both push 
 | Telemetry setup step and the `--diagnose` check | Run for real | Run for real | Run for real |
 | Agent 365 registry through setup (0.3.0): the setup app's permission, the registration, its `--diagnose` line, teardown's delete | Unit-tested | Run for real (2026-11-15, Ubuntu 24.04): the permission and its consent check, the registration, `--diagnose`, the admin center listing, the script's delete, teardown's delete. Not run: a second computer joining a registered agent | Run for real (2026-11-15, Windows 11 Pro 25H2, built-in Administrator): the permission, the registration, `-Diagnose`, the admin center listing, telemetry, teardown's delete. Run for real: the takeover run's grant, on a first run. Not run: a standard user |
 | `status.sh` and `setup_delegated.sh` read `.env` as data | Run for real (the old scripts fail the tests, the new ones pass) | Unit-tested | n/a |
-| The full test suite | Every commit | Not run | CI (`test-windows`) on each pull request |
+| The full test suite | Every commit | CI (`test-linux`) on each pull request | CI (`test-windows`) on each pull request |
 | Process containment | Not in 0.2.0, 0.3.0 or 0.3.1: planned for 0.4.0 | Not in 0.2.0, 0.3.0 or 0.3.1 | Not in 0.2.0, 0.3.0 or 0.3.1 |
 
 ## Never run

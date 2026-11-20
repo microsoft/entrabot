@@ -1,0 +1,44 @@
+name: test-linux
+
+# The same test suite and lint as test-windows, on Linux. Linux is a supported
+# platform with code paths of its own (the flock-based single-instance lock,
+# POSIX file modes, the bash setup and hook scripts), and the tests for those
+# are skipped on Windows. Without this job no CI run exercises them: they ran
+# only on a developer's Mac.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run pytest (full suite, including the POSIX-only tests)
+        run: pytest -v --tb=short
+        env:
+          # Force LocalBackend so blob-token paths don't accidentally fire
+          # in CI. (CI has no managed identity for the storage account.)
+          ENTRABOT_KEEP_MEMORY_LOCAL: 'true'
+
+      - name: Lint
+        run: ruff check .
