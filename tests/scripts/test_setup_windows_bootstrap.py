@@ -1562,8 +1562,22 @@ class TestRefusesOffWindows:
 # Executed: the whole main body, with the machine-specific helpers stubbed
 # ─────────────────────────────────────────────────────────────────────────────
 
+
+class TestOsVersionCanBeStoodInFor:
+    def test_the_os_version_is_read_only_inside_get_osversion(self) -> None:
+        # Off Windows, [System.Environment]::OSVersion is the host's kernel version (6.x on
+        # Linux), so a simulated run gets past "needs Windows 10 or Windows 11" only when a
+        # stub can stand in for the read. On macOS it got past by accident: Darwin's own
+        # version number is above 10.
+        code = _code(SETUP_PS1)
+        read = "[System.Environment]::OSVersion"
+        assert code.count(read) == 1
+        assert read in _function(code, "Get-OSVersion")
+
+
 # Injected just before the main body. Everything else in the script runs for real.
 _SIMULATION_STUBS = """function Test-Elevated { return $false }
+function Get-OSVersion { return [version]$env:FAKE_OS_VERSION }
 function Get-LongPathsEnabled { return 1 }
 function Find-Python { return $env:FAKE_PYTHON }
 function Stop-ProjectMcpServer { param([string]$VenvDir) }
@@ -1643,6 +1657,7 @@ class _Simulation:
             TEMP=str(self.temp),
             FAKE_PYTHON=str(self.fake_python),
             FAKE_PIP_ARGV=str(self.pip_argv),
+            FAKE_OS_VERSION="10.0.26100",  # Windows 11 24H2
             POWERSHELL_TELEMETRY_OPTOUT="1",
             NO_COLOR="1",
         )
@@ -1810,6 +1825,14 @@ class TestSimulatedRun:
         assert "Full log:" in result.stdout
         assert "prereqs-windows.ps1 -WithBuildTools" in result.stdout
         assert "WIZARD_ARG" not in result.stdout
+
+    def test_a_windows_older_than_10_is_refused(self, shell: str, tmp_path: Path) -> None:
+        sim = _Simulation(tmp_path, shell)
+        result = sim.run("-BootstrapOnly", FAKE_OS_VERSION="6.3.9600")  # Windows 8.1
+        assert result.returncode == 1
+        assert result.stderr == ""
+        assert "Entrabot needs Windows 10 or Windows 11." in result.stdout
+        assert not (sim.root / ".venv").exists()  # refused before anything is installed
 
 
 # The signer of the Git for Windows 2.56.1 release downloads, read from the files.

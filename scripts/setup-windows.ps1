@@ -698,6 +698,12 @@ function Test-Elevated {
     return $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Get-OSVersion {
+    # The one place the Windows version is read, so a test can stand in for it. Off
+    # Windows this is the host's kernel version, which says nothing about Windows.
+    return [System.Environment]::OSVersion.Version
+}
+
 function Get-SessionOwnerSid {
     # The account whose desktop this window is on: the owner of explorer.exe in this
     # logon session. Empty when there is no desktop (SSH, scheduled task, service).
@@ -1143,7 +1149,7 @@ if ($Migrate) {
 
 Write-Step "[1/4] Checking this PC"
 
-if ([System.Environment]::OSVersion.Version.Major -lt 10) {
+if ((Get-OSVersion).Major -lt 10) {
     Stop-Setup "Entrabot needs Windows 10 or Windows 11." @()
 }
 
@@ -1185,7 +1191,7 @@ if (-not $diagnoseOnly) {
     }
 }
 
-Write-Ok "Windows $([System.Environment]::OSVersion.Version), project folder: $ProjectRoot"
+Write-Ok "Windows $(Get-OSVersion), project folder: $ProjectRoot"
 
 # ---- 2. Python ------------------------------------------------------------------
 Write-Step "[2/4] Python"
