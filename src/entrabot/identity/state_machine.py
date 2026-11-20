@@ -162,11 +162,14 @@ class IdentityStateMachine:
                 result = listener(from_state, to_state)
                 if asyncio.iscoroutine(result):
                     await result
-            except Exception:
+            except Exception as exc:
+                # Type name only in the message; exc_info carries the traceback
                 logger.warning(
-                    "Listener error during %s → %s",
+                    "Listener error during %s → %s: %s",
                     from_state.value,
                     to_state.value,
+                    type(exc).__name__,
+                    exc_info=True,
                 )
 
     async def update_session(self, **kwargs: Any) -> None:
