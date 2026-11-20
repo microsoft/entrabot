@@ -16,6 +16,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -541,6 +542,38 @@ class TestListeners:
         # Should not raise despite listener failure
         await sm.transition(IdentityState.DELEGATED)
         assert sm.state == IdentityState.DELEGATED
+
+    @pytest.mark.asyncio
+    async def test_listener_error_is_logged_with_exception(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        sm = IdentityStateMachine()
+
+        def bad_listener(from_s: IdentityState, to_s: IdentityState) -> None:
+            raise RuntimeError("listener broke")
+
+        sm.add_listener(bad_listener)
+        with caplog.at_level(logging.WARNING, logger="entrabot.identity.state_machine"):
+            await sm.transition(IdentityState.DELEGATED)
+
+        # conftest attaches caplog's handler to the entrabot logger as well as
+        # root, so one record can be delivered twice; count distinct records.
+        records = {
+            id(r): r
+            for r in caplog.records
+            if r.name == "entrabot.identity.state_machine"
+            and r.levelno == logging.WARNING
+            and "Listener error" in r.getMessage()
+        }
+        assert len(records) == 1
+        record = next(iter(records.values()))
+        # The traceback is what makes a listener failure triageable.
+        assert record.exc_info is not None
+        assert record.exc_info[0] is RuntimeError
+        message = record.getMessage()
+        assert "RuntimeError" in message
+        assert IdentityState.UNAUTHENTICATED.value in message
+        assert IdentityState.DELEGATED.value in message
 
     @pytest.mark.asyncio
     async def test_listener_not_called_on_invalid_transition(self) -> None:
