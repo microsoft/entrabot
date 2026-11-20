@@ -72,6 +72,9 @@ def test_layered_load_merges_global_and_agent(tmp_path, monkeypatch):
     monkeypatch.setattr(c, "_entrabot_home", lambda: home)
     for k in list(_combined()):
         monkeypatch.delenv(k, raising=False)
+    # The canonical name wins over the ENTRABOT_AGENT_USER_UPN alias the fixture writes, so
+    # a developer's own .env (loaded when entrabot.config is imported) must not supply it.
+    monkeypatch.delenv("ENTRABOT_AGENT_UPN", raising=False)
 
     glob, agent = globalcfg.split(_combined())
     globalcfg.write_env(str(home / "global.env"), glob)
