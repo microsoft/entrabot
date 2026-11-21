@@ -228,8 +228,11 @@ the sandbox, its key read from the keyring through the filtering proxy. The serv
 contained, answered `initialize` and `whoami` over stdio as the agent, ran its polls through
 the proxy with nothing refused, and stopped cleanly. The sandbox was then attacked from
 inside, and each attempt failed; the first version of this sandbox did not survive the same
-attack. **Not run:** Teams, mail and Files traffic from inside the sandbox (that agent had no
-licence), a desktop session's keyring, KWallet, arm64, and any other distribution. See the
+attack. A second run, with an agent that has a licence, sent and read a Teams message, sent
+mail, listed recent files and ran the Teams and mail polls from inside the sandbox, with
+nothing refused; inbound Teams messages and a mail from the sponsor were pushed to the host.
+**Not run:** reading a mail or a file's
+contents, a desktop session's keyring, KWallet, arm64, and any other distribution. See the
 [Verification Record](../project/verification.md). Run
 `python -m entrabot.sandbox.selftest` to check it on yours. Settings and how to turn it off:
 [Process Containment](../guides/containment.md).

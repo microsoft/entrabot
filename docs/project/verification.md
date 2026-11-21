@@ -74,10 +74,51 @@ thing to check (exit `3`): the tenant had no free Teams licence for it.
   `authenticated`, `agent_user` and `"containment": "bwrap"`. The proxy refused nothing in
   that time. The mail poll reached Microsoft Graph and got its `404` (the agent has no
   mailbox). When standard input closed, every process was gone and the launcher exited `0`.
-- **Not run:** a Teams message, mail or file sent or read from inside the sandbox, inbound
-  pushes, token re-acquisition after expiry, and the Agent 365 export (the agent had no
-  licence and telemetry was off); a desktop session's keyring, KWallet, an abstract D-Bus
-  socket, another distribution, and a `bwrap` that is setuid.
+- **Not run with this agent:** a Teams message, mail or file sent or read from inside the
+  sandbox (it had no licence; see the next run), inbound pushes, token re-acquisition after
+  expiry, and the Agent 365 export (telemetry was off); a desktop session's keyring, KWallet,
+  an abstract D-Bus socket, another distribution, and a `bwrap` that is setuid.
+
+### Teams, mail and Files from inside the Linux sandbox, 2026-11-20
+
+At commit `0d1b1b3`, after the rebuild described below, on a new Ubuntu 24.04.5 VM (x86-64,
+`bubblewrap` 0.9.0 with the AppArmor profile, `xdg-dbus-proxy` 0.1.5, GNOME Keyring unlocked
+in a `dbus-run-session` shell). The VM was joined to an existing agent that has a Microsoft
+365 E3 licence, as a second computer (`./scripts/setup.sh --yes --use-blueprint=... --agent-user-upn=...`
+with a device-code sign-in). Setup exited `0` and its end-to-end test passed. The server was
+then started contained and driven over stdio; `whoami` answered `"containment": "bwrap"`.
+
+| From inside the sandbox | Result |
+|---|---|
+| `create_chat` with the sponsor | Returned the existing 1:1 chat |
+| `send_teams_message` without a placeholder | Refused by the server's own placeholder rule, as designed |
+| `post_thinking_placeholder`, then `send_teams_message` | Both sent; message IDs returned |
+| `read_teams_messages` | Returned the message just sent, inside the external-content envelope |
+| `delete_teams_message` (the placeholder) | Deleted (`204`) |
+| `send_email` to the sponsor | Accepted by Microsoft Graph |
+| `list_recent_files` | Returned the agent's recent files |
+| Background Teams poll, 80 seconds | 16 requests, all `200` |
+| Background mail poll | `GET /me/messages` answered `200` |
+
+- The proxy refused nothing, the only hosts reached were `login.microsoftonline.com` and
+  `graph.microsoft.com`, and when standard input closed every process was gone and the
+  launcher exited `0`.
+- **Inbound pushes, in two later contained runs:** each arrived as
+  `notifications/claude/channel`, with the proxy refusing nothing.
+
+  | Inbound | Result |
+  |---|---|
+  | A message in a group chat the agent belongs to (found by chat discovery) | Pushed inside the external-content envelope |
+  | A Teams reply from the sponsor in the 1:1 chat | Pushed 14 seconds after it was sent, as the sponsor's own words (no envelope, as designed for a verified sponsor) |
+  | A mail from the sponsor to the agent | Pushed 53 seconds after it was sent, inside the external-content envelope |
+  | A mail the agent sent to its own address | Not pushed, as designed: six polls answered `200` and the poll skips the agent's own mail |
+
+  The sponsor's reply and mail were sent from Teams and Outlook on the web, signed in as the
+  sponsor. The mail the agent had sent earlier was seen in the sponsor's inbox.
+- Afterward the VM was disconnected (`./scripts/teardown.sh --yes`, which took its certificate
+  off the agent's Blueprint and left the agent) and deleted.
+- **Not run:** `read_email`, reading or sharing a file, Work IQ, token re-acquisition after expiry, and
+  the Agent 365 export.
 
 ### The Linux sandbox was escaped, then rebuilt, 2026-11-20
 

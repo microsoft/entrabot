@@ -5,8 +5,10 @@
 Process containment of the MCP server. Run for real with an agent on macOS (before the
 changes below) and on Ubuntu 24.04. **The first Linux sandbox was escaped when it was attacked
 for real, before any release had it**; the one here was rebuilt after that and attacked again
-(see Fixed). On Linux no Teams message, mail or file was sent or read from inside the
-sandbox, because the test agent had no licence. The Microsoft eXecution Container backend
+(see Fixed). On Linux a licensed agent then sent and read a Teams message, sent mail and
+listed files from inside the sandbox, and inbound Teams messages and mail from its sponsor
+were pushed to the host. The Microsoft
+eXecution Container backend
 has never been run anywhere, and **Windows is not contained**. Planned for 0.4.0; a
 pre-release (`v0.4.0-rc.N`) is the way to try it; see `RELEASING.md`.
 
@@ -31,7 +33,7 @@ pre-release (`v0.4.0-rc.N`) is the way to try it; see `RELEASING.md`.
 
 ### Known limitations
 
-- Linux: run for real on Ubuntu 24.04 (x86-64) only, with GNOME Keyring in a `dbus-run-session` shell, and without Teams, mail or Files traffic. Not run: arm64 (its system-call numbers are from the kernel headers and checked only by an interpreter in the tests), another distribution, a desktop session's keyring, KWallet.
+- Linux: run for real on Ubuntu 24.04 (x86-64) only, with GNOME Keyring in a `dbus-run-session` shell. From inside the sandbox a licensed agent sent and read a Teams message, sent mail and listed recent files, and the Teams and mail polls ran. Inbound pushes arrived: a group-chat message, a Teams reply from the sponsor and a mail from the sponsor. Not run: reading a mail or a file's contents, sharing a file, Work IQ, arm64 (its system-call numbers are from the kernel headers and checked only by an interpreter in the tests), another distribution, a desktop session's keyring, KWallet.
 - The key store is not narrowed to Entrabot's key: on Linux the contained server can read and change every secret the keyring holds for the user. `/etc` and `/usr` are readable in full on Linux, and on macOS the system folders, the real `/tmp` and the login keychain's files.
 - The allowlisting proxy matches host names only. It does not check the address a name resolves to, and it cannot see a different host name inside the TLS connection (domain fronting). Install `bwrap` and run `python -m entrabot.sandbox.selftest` to check it on yours.
 - Ubuntu 24.04 and later refuse `bwrap` unless an administrator adds an AppArmor profile for it; until then the server runs uncontained and says so. See `docs/troubleshooting/containment.md`.
