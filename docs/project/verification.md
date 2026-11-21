@@ -166,8 +166,10 @@ proxy refused nothing; every process, the D-Bus proxy included, was gone after i
 
 **Tests that attack a real sandbox** now exist (`tests/sandbox/test_bwrap_for_real.py`,
 `test_dbusproxy_for_real.py`): 12 tests, run on that VM, all passing. They skip where `bwrap`
-cannot create a sandbox, which includes macOS, Windows and a stock GitHub Ubuntu runner, so
-**they are not yet run by CI**. The system-call filter is also run through an interpreter in
+cannot create a sandbox, which includes macOS, Windows and a stock GitHub Ubuntu runner. Since
+2026-11-21 a CI job (`test-linux-sandbox`) sets an Ubuntu 24.04 runner up so that they run (the
+AppArmor profile for `bwrap`, `xdg-dbus-proxy`, and the user's systemd with its session bus),
+runs them for each pull request, and fails if any of them skips. The system-call filter is also run through an interpreter in
 `tests/sandbox/test_seccomp.py`, for x86-64 and arm64, on every system.
 
 **Not run after the rebuild:** arm64; another distribution or a bubblewrap older than 0.8.0
@@ -455,7 +457,7 @@ It also showed that two computers running one agent with local memory both push 
 | Agent 365 registry through setup (0.3.0): the setup app's permission, the registration, its `--diagnose` line, teardown's delete | Unit-tested | Run for real (2026-11-15, Ubuntu 24.04): the permission and its consent check, the registration, `--diagnose`, the admin center listing, the script's delete, teardown's delete. Not run: a second computer joining a registered agent | Run for real (2026-11-15, Windows 11 Pro 25H2, built-in Administrator): the permission, the registration, `-Diagnose`, the admin center listing, telemetry, teardown's delete. Run for real: the takeover run's grant, on a first run. Not run: a standard user |
 | `status.sh` and `setup_delegated.sh` read `.env` as data | Run for real (the old scripts fail the tests, the new ones pass) | Unit-tested | n/a |
 | The full test suite | Every commit | Not run | CI (`test-windows`) on each pull request |
-| Process containment | Unreleased (planned for 0.4.0): run for real with an agent before the latest profile rules; without an agent after them (above) | Unreleased: escaped, rebuilt, then run for real with an agent and attacked, without Teams, mail or Files traffic (above) | Not contained |
+| Process containment | Unreleased (planned for 0.4.0): run for real with an agent before the latest profile rules; without an agent after them (above) | Unreleased: escaped, rebuilt, then run for real with an agent and attacked, then with Teams, mail and Files traffic (above); the attack tests run in CI (`test-linux-sandbox`) | Not contained |
 
 ## Never run
 
