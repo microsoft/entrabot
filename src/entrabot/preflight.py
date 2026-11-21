@@ -698,6 +698,28 @@ def check_a365_registry(
     )
 
 
+# ─── Server containment ──────────────────────────────────────────────────────
+
+CONTAINMENT_CHECK_NAME = "Server containment"
+
+
+def check_containment(state_root: Path | None = None) -> Check:
+    """Is the running server contained, and by what? (``entrabot.sandbox.launch``)"""
+    from entrabot.sandbox.launch import describe_running
+
+    status, detail = describe_running(state_root)
+    remediation = None
+    if status == "warn":
+        remediation = (
+            "Install bubblewrap (bwrap) on Linux; if it is installed but the system refuses "
+            "it, see docs/troubleshooting/containment.md. On macOS check ENTRABOT_CONTAINMENT. "
+            "Windows is not contained yet."
+        )
+    return Check(
+        name=CONTAINMENT_CHECK_NAME, status=status, detail=detail + ".", remediation=remediation
+    )  # type: ignore[arg-type]
+
+
 # ─── The running version ─────────────────────────────────────────────────────
 
 VERSION_CHECK_NAME = "Entrabot version"
@@ -1343,6 +1365,7 @@ def run_diagnostics(
     checks.append(check_agent_sponsor(config))
     checks.append(check_a365_telemetry(config))
     checks.append(check_a365_registry(state_path))
+    checks.append(check_containment())
     return checks
 
 

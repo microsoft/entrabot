@@ -368,7 +368,8 @@ scope, the MCP configuration, Word, Excel and OneDrive files when
 the agent can read each sponsor's user record), Agent 365 telemetry (whether it is on and whether
 the agent's token carries `Agent365.Observability.OtelWrite`), the Agent 365
 registry (registered, with the ID Microsoft Graph confirms; not registered; or
-why it can't be checked), and the optional
+why it can't be checked), whether the running MCP server is contained
+("Server containment"), and the optional
 `persona-sati` entry in `.mcp.json`. The persona-sati check is advisory: it can report `SKIP` or `WARN`
 but never a failure, and it connects only to loopback addresses (see
 [MCP connectivity](../../../troubleshooting/mcp-connectivity.md#persona-sati-does-not-connect)).

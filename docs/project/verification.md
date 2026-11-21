@@ -5,7 +5,199 @@ real agent, on the system named. "Unit-tested" means covered by the test suite
 (`pytest -v && ruff check .`, which every commit must pass) with Graph, Entra and the operating
 system faked. Nothing here names a tenant, account or machine.
 
-Last updated: 2026-11-16, for 0.3.1.
+Last updated: 2026-11-20, for 0.3.1 and the unreleased process containment (planned for 0.4.0).
+
+## Process containment (unreleased, planned for 0.4.0)
+
+Run for real on macOS only, in run 2 below, where the server ran contained for the whole run. That run
+was made on the containment branch before it was brought up to date with 0.3.1 (the Agent 365
+registry, the per-certificate keychain items, Teams reactions); **it has not been run for real
+again since**.
+**The first Linux sandbox was escaped when it was attacked for real; it was rebuilt and
+attacked again (below).** On Linux it has been run for real with a throwaway agent that had
+no Teams licence or mailbox: sign-in, the server's start and polls, and the refusals, but no
+Teams, mail or Files traffic. The Microsoft eXecution Container backend has never been run, and Windows is
+not contained.**
+
+| What | macOS | Linux | Windows |
+|---|---|---|---|
+| Server contained by default; `whoami`, `containment.json` and the check behind `./status.sh` and `--diagnose` report it | Run for real (Seatbelt) | Run for real (`bwrap`), without and with an agent: `whoami` said `bwrap`, the status record and the check said contained | Not contained; reported as such |
+| Agent signs in inside the sandbox | Run for real (certificate key from the login keychain) | Run for real: the certificate key read from GNOME Keyring over the session's D-Bus socket (a path under `/tmp`, mounted in), the three-hop sign-in, and `GET /me` answering as the agent. A `dbus-run-session` shell only; a desktop session's keyring and KWallet never run | n/a |
+| Every connection through the allowlisting proxy (sends, reads, polls, token re-acquisition, the Agent 365 export) | Run for real | Run for real for the sign-in's token requests, `GET /me`, and the server's own polls over about 90 seconds, with nothing refused. No send, no read of a message or file, no Agent 365 export: the agent had no Teams licence or mailbox (the mail poll got Graph's `404`) | n/a |
+| Refusals from inside the live server's sandbox: reading the home directory, `/Users/Shared` or another volume; writing to the repository, the home directory or `/tmp`; a non-Microsoft host | Run for real (checked against the live server process and with real attempts under its profile) | Run for real with a probe in the server's sandbox, not against the live server: the home directory showed only the allowed folders, the repository was read-only, `example.com` was refused by the proxy (`403`, and logged), a direct connection had no route, DNS did not resolve. Writes to the home directory and `/tmp` succeed there but land in a throwaway tmpfs | n/a |
+| The telemetry distro's Azure Monitor calls (`settings.sdk.monitor.azure.com`, an Application Insights host) | Refused by the proxy (before 0.2.0 switched them off) | Never run | n/a |
+| Clean stop: no process left, status record and generated profile removed | Run for real | Run for real: after standard input closed, no `bwrap`, bridge or server process was left, the launcher exited `0`, and the status record and proxy socket were gone | n/a |
+| A `bwrap` the system refuses (unprivileged user namespaces restricted) | n/a | Run for real on stock Ubuntu 24.04.5: `auto` ran uncontained and said why; `required` exited `2` | n/a |
+| Microsoft eXecution Container backend | Unit-tested; never run | Unit-tested; never run | Not supported |
+| Reading the status record never signals the process it checks | Unit-tested | Unit-tested | Unit-tested in CI (`test-windows`) |
+
+Bugs found on the containment branch, fixed with a test each: the Seatbelt profile let the server read
+outside the home directory (other users' folders, other volumes); Teams, mail and Files calls
+didn't use the sandbox's proxy, so they failed inside it; and on Windows the status record's
+liveness check sent Ctrl+C to the process it checked (signal 0 is `CTRL_C_EVENT` there), found
+by the Windows CI run.
+
+### Linux, run for real, 2026-11-20
+
+A new Azure VM (Ubuntu 24.04.5, kernel 7.0, Python 3.12.3, `bubblewrap` 0.9.0), the branch at
+`80c65ab` plus the fix below. First with no `.env` and no agent, then with a throwaway agent.
+
+Without an agent:
+
+- **The test suite:** `pytest` passed 6546 and skipped 263, with no failures; `ruff check .`
+  found nothing.
+- **Found: on stock Ubuntu 24.04 the server did not start.** AppArmor restricts unprivileged
+  user namespaces and the `bubblewrap` package ships no profile, so `bwrap` exited `1`
+  ("setting up uid map: Permission denied") and `entrabot-mcp` exited `1` with it. Fixed with
+  tests: the launcher tries `bwrap` before it uses it. Run for real after the fix, on the
+  stock system: in `auto` the server started, answered `initialize`, and said on standard
+  error that it runs without containment and why; with `ENTRABOT_CONTAINMENT=required` it
+  exited `2` with the same reason; the self-test reported `"contained": false`.
+- **With an AppArmor profile for `bwrap`** (the one in the containment troubleshooting page):
+  the server started contained (launcher, `bwrap`, the bridge, the server), answered
+  `initialize` and `whoami` over stdio (`"containment": "bwrap"`), wrote the status record
+  with its hosts and paths, and the "Server containment" check passed. When standard input
+  closed, every process was gone, the launcher exited `0`, and the status record and the
+  proxy's socket were removed.
+- **The limits, from a probe in exactly the server's sandbox:** see the table above.
+
+With a throwaway agent, set up on the VM by `./scripts/setup.sh --yes --new` with a device-code
+sign-in, in a `dbus-run-session` shell with GNOME Keyring 46.1 unlocked (the recipe in the
+Linux platform page). Setup created the agent and its key in the keyring and ended with one
+thing to check (exit `3`): the tenant had no free Teams licence for it.
+
+- **Sign-in inside the sandbox:** `python -m entrabot.sandbox.selftest` exited `0`. Inside
+  `bwrap` the agent's key was read from the keyring over the session's D-Bus socket, the
+  three-hop sign-in went through the proxy, `GET /me` answered with the agent's address, and
+  the four refusals held in the same run.
+- **The server as the agent, contained, for about 90 seconds:** `whoami` over stdio answered
+  `authenticated`, `agent_user` and `"containment": "bwrap"`. The proxy refused nothing in
+  that time. The mail poll reached Microsoft Graph and got its `404` (the agent has no
+  mailbox). When standard input closed, every process was gone and the launcher exited `0`.
+- **Not run with this agent:** a Teams message, mail or file sent or read from inside the
+  sandbox (it had no licence; see the next run), inbound pushes, token re-acquisition after
+  expiry, and the Agent 365 export (telemetry was off); a desktop session's keyring, KWallet,
+  an abstract D-Bus socket, another distribution, and a `bwrap` that is setuid.
+
+### Teams, mail and Files from inside the Linux sandbox, 2026-11-20
+
+At commit `0d1b1b3`, after the rebuild described below, on a new Ubuntu 24.04.5 VM (x86-64,
+`bubblewrap` 0.9.0 with the AppArmor profile, `xdg-dbus-proxy` 0.1.5, GNOME Keyring unlocked
+in a `dbus-run-session` shell). The VM was joined to an existing agent that has a Microsoft
+365 E3 licence, as a second computer (`./scripts/setup.sh --yes --use-blueprint=... --agent-user-upn=...`
+with a device-code sign-in). Setup exited `0` and its end-to-end test passed. The server was
+then started contained and driven over stdio; `whoami` answered `"containment": "bwrap"`.
+
+| From inside the sandbox | Result |
+|---|---|
+| `create_chat` with the sponsor | Returned the existing 1:1 chat |
+| `send_teams_message` without a placeholder | Refused by the server's own placeholder rule, as designed |
+| `post_thinking_placeholder`, then `send_teams_message` | Both sent; message IDs returned |
+| `read_teams_messages` | Returned the message just sent, inside the external-content envelope |
+| `delete_teams_message` (the placeholder) | Deleted (`204`) |
+| `send_email` to the sponsor | Accepted by Microsoft Graph |
+| `list_recent_files` | Returned the agent's recent files |
+| Background Teams poll, 80 seconds | 16 requests, all `200` |
+| Background mail poll | `GET /me/messages` answered `200` |
+
+- The proxy refused nothing, the only hosts reached were `login.microsoftonline.com` and
+  `graph.microsoft.com`, and when standard input closed every process was gone and the
+  launcher exited `0`.
+- **Inbound pushes, in two later contained runs:** each arrived as
+  `notifications/claude/channel`, with the proxy refusing nothing.
+
+  | Inbound | Result |
+  |---|---|
+  | A message in a group chat the agent belongs to (found by chat discovery) | Pushed inside the external-content envelope |
+  | A Teams reply from the sponsor in the 1:1 chat | Pushed 14 seconds after it was sent, as the sponsor's own words (no envelope, as designed for a verified sponsor) |
+  | A mail from the sponsor to the agent | Pushed 53 seconds after it was sent, inside the external-content envelope |
+  | A mail the agent sent to its own address | Not pushed, as designed: six polls answered `200` and the poll skips the agent's own mail |
+
+  The sponsor's reply and mail were sent from Teams and Outlook on the web, signed in as the
+  sponsor. The mail the agent had sent earlier was seen in the sponsor's inbox.
+- Afterward the VM was disconnected (`./scripts/teardown.sh --yes`, which took its certificate
+  off the agent's Blueprint and left the agent) and deleted.
+- **Not run:** `read_email`, reading or sharing a file, Work IQ, token re-acquisition after expiry, and
+  the Agent 365 export.
+
+### The Linux sandbox was escaped, then rebuilt, 2026-11-20
+
+Everything above in this section was run on the first Linux sandbox. It showed that the
+documented limits held when a probe tried them. It did not show that the sandbox could not
+be left, and nobody had tried.
+
+**The escape, run for real on the same VM.** From inside exactly the server's sandbox:
+
+- `systemd-run --user`, pointed at `/run/user/<uid>/bus`, exited `0`. The command it started
+  ran outside the sandbox: it wrote a file in the real home directory, read
+  `~/.ssh/authorized_keys`, and fetched `https://example.com` (`200`). The sandbox mounted
+  the whole system read-only, and a read-only mount does not stop `connect()` on a socket.
+- Also from inside: another user's world-readable file was read, `/mnt` was listed, a
+  variable set only in the launching shell was present, and the system bus, systemd's
+  private socket and the GPG and SSH agent sockets accepted connections.
+- Refused even then: the real `/tmp`, `/root`, `mount`, `sudo`, `crontab`, a direct
+  connection.
+
+**The rebuild** follows what Flatpak and Microsoft eXecution Container's bubblewrap backend
+do: only named folders are mounted and the root is remounted read-only; the session bus is
+never mounted, and the key store is reached through `xdg-dbus-proxy --filter`; the
+environment is a named list; all capabilities are dropped; `--disable-userns`; and a
+system-call filter modelled on Flatpak's.
+
+**Run for real after the rebuild, on the same VM** (x86-64, `bubblewrap` 0.9.0,
+`xdg-dbus-proxy`, the launcher started from the login session, whose bus has systemd on it):
+
+| Attempt from inside the sandbox | Before | After |
+|---|---|---|
+| `systemd-run --user` over the session bus | Ran a command outside | "Failed to connect to bus": the socket does not exist; no file was written outside |
+| The same through the bus the sandbox is given (the proxy) | n/a | Refused; with the key store's own D-Bus library, systemd answers on the real bus and gets an error through the proxy, and no name but the key store's is visible |
+| Connect to the session bus, systemd's private socket, the system bus | Connected | No such file |
+| Unix sockets visible anywhere outside the sandbox's own two | Twelve under `/run/user` | None |
+| Another user's file under `/home`; `/mnt` | Read; listed | No such file |
+| A variable from the launching shell | Present | Not present |
+| A new user namespace (`unshare`), a mount, the kernel keyring (`keyctl`) | Not tried | Refused |
+| Capabilities held | Not checked | None, and "no new privileges" set |
+
+With the same throwaway agent, after the rebuild: `python -m entrabot.sandbox.selftest`
+exited `0` (the key was read from GNOME Keyring through the proxy, the three-hop sign-in and
+`GET /me` answered as the agent, the four refusals held). The server ran contained as the
+agent for about 90 seconds: `whoami` answered `authenticated`, `agent_user`, `bwrap`; the
+proxy refused nothing; every process, the D-Bus proxy included, was gone after it stopped.
+
+**Tests that attack a real sandbox** now exist (`tests/sandbox/test_bwrap_for_real.py`,
+`test_dbusproxy_for_real.py`): 12 tests, run on that VM, all passing. They skip where `bwrap`
+cannot create a sandbox, which includes macOS, Windows and a stock GitHub Ubuntu runner. Since
+2026-11-21 a CI job (`test-linux-sandbox`) sets an Ubuntu 24.04 runner up so that they run (the
+AppArmor profile for `bwrap`, `xdg-dbus-proxy`, and the user's systemd with its session bus),
+runs them for each pull request, and fails if any of them skips. The system-call filter is also run through an interpreter in
+`tests/sandbox/test_seccomp.py`, for x86-64 and arm64, on every system.
+
+**Not run after the rebuild:** arm64; another distribution or a bubblewrap older than 0.8.0
+(where only the filter stops new namespaces); a desktop session's keyring; KWallet; an
+abstract session bus socket (the proxy connects from outside, so it should work; not tried);
+Teams, mail and Files traffic; and no one other than the author has attacked it.
+
+### macOS, run for real without an agent, 2026-11-20
+
+On macOS 27.2.1 (Apple Silicon), the repository on a second volume, no agent set up. A probe
+in exactly the server's Seatbelt sandbox:
+
+- **Held:** the two Microsoft hosts answered through the proxy; another host, a direct
+  connection, `curl` without the proxy and name lookup were refused; the home directory,
+  `~/.ssh`, `~/Documents`, `/Users/Shared`, `/Volumes` and the repository's own volume root
+  could not be listed; writes to the repository, the home directory and `/tmp` were refused.
+- **Escape attempts refused:** `launchctl submit`, `launchctl bootstrap`, `crontab`, `at`,
+  `sudo`, a second permissive `sandbox-exec`.
+- **Found:** `open -a Calculator` started the app; an app started by Launch Services runs
+  outside the sandbox. A script written to the state folder and opened the same way did not
+  run, for a reason that was not established. The shell's environment was inherited.
+- **After denying Launch Services and Apple Events in the profile, and the named
+  environment:** `open` failed, `osascript` to another app failed with a permission error,
+  the shell's variable was not present, and the limits above still held.
+- **Readable, as documented:** `/etc/passwd`, a file in the real `/tmp`, and the login
+  keychain's item list (not the secrets).
+- **Not run:** the agent's sign-in on macOS with the new profile rules, or at all since the
+  branch was brought up to date with 0.3.1.
 
 ## What 0.3.1 rests on
 
@@ -265,9 +457,12 @@ It also showed that two computers running one agent with local memory both push 
 | Agent 365 registry through setup (0.3.0): the setup app's permission, the registration, its `--diagnose` line, teardown's delete | Unit-tested | Run for real (2026-11-15, Ubuntu 24.04): the permission and its consent check, the registration, `--diagnose`, the admin center listing, the script's delete, teardown's delete. Not run: a second computer joining a registered agent | Run for real (2026-11-15, Windows 11 Pro 25H2, built-in Administrator): the permission, the registration, `-Diagnose`, the admin center listing, telemetry, teardown's delete. Run for real: the takeover run's grant, on a first run. Not run: a standard user |
 | `status.sh` and `setup_delegated.sh` read `.env` as data | Run for real (the old scripts fail the tests, the new ones pass) | Unit-tested | n/a |
 | The full test suite | Every commit | Not run | CI (`test-windows`) on each pull request |
-| Process containment | Not in 0.2.0, 0.3.0 or 0.3.1: planned for 0.4.0 | Not in 0.2.0, 0.3.0 or 0.3.1 | Not in 0.2.0, 0.3.0 or 0.3.1 |
+| Process containment | Unreleased (planned for 0.4.0): run for real with an agent before the latest profile rules; without an agent after them (above) | Unreleased: escaped, rebuilt, then run for real with an agent and attacked, then with Teams, mail and Files traffic (above); the attack tests run in CI (`test-linux-sandbox`) | Not contained |
 
 ## Never run
+
+- Teams, mail and Files traffic from inside the Linux sandbox, and the MXC backend anywhere.
+- Containment on Windows (not implemented).
 
 - The Copilot SDK harness against a real Copilot runtime.
 - Registering the agent with 0.2.0's own `register_agent_instance.py --apply`, which needs a

@@ -10,6 +10,7 @@ The biological metaphor: every motor command the brain issues also generates a c
 
 Discovery and wrapping happen once, at server boot, inside `_run_stdio_with_write_stream`.
 
+- When the server is contained, sinks it starts as stdio peers inherit the sandbox, and a network peer is reachable only if its host is allowed (`ENTRABOT_SANDBOX_EXTRA_HOSTS`); see [Process Containment](../../guides/containment.md).
 - `EFFERENT_COPY_ENABLE=1` — required to register any sink. Without it, `discover_sinks()` returns an empty list and no tool functions are wrapped.
 - `EFFERENT_COPY_DISABLE=1` — forces registration off even when `EFFERENT_COPY_ENABLE=1` is also set. Checked first, so it always wins.
 - `EFFERENT_COPY_SINKS=name1,name2` — optional allowlist of `.mcp.json` peer names. When set, only listed peers are probed as sink candidates; peers not in the list are skipped before any connection is attempted. When unset, every schema-compatible peer is eligible, and `install_into_fastmcp` logs a one-time warning naming every sink that will receive `observe` traffic.

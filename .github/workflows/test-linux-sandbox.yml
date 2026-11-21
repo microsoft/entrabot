@@ -1,0 +1,106 @@
+name: test-linux-sandbox
+
+# The Linux sandbox, attacked for real on every pull request. The first Linux sandbox
+# passed every unit test and was escaped the first time it was attacked, so the tests
+# that start a real `bwrap` and attack it from inside must run somewhere on each change.
+# They skip where `bwrap` cannot create a sandbox, which is every developer's Mac and a
+# stock GitHub runner: this job sets the runner up so they run, and fails if any of
+# them skips.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test-linux-sandbox:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bubblewrap, the D-Bus proxy and a session bus
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap xdg-dbus-proxy dbus-user-session python3-venv
+
+      - name: Let bwrap create sandboxes (AppArmor profile)
+        # Ubuntu 24.04 stops programs without an AppArmor profile from using unprivileged
+        # user namespaces, and the bubblewrap package ships none. This is the profile
+        # docs/troubleshooting/containment.md tells an administrator to add.
+        run: |
+          sudo tee /etc/apparmor.d/bwrap > /dev/null <<'EOF'
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+            include if exists <local/bwrap>
+          }
+          EOF
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+          bwrap --version
+          bwrap --unshare-user --unshare-pid --unshare-net --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp true
+
+      - name: Start the user's systemd and its session bus
+        # The escape went through the user's systemd on the session bus, so both must be
+        # there for the attack to mean anything. A runner has no login session: lingering
+        # starts one.
+        run: |
+          sudo loginctl enable-linger "$USER"
+          runtime="/run/user/$(id -u)"
+          for _ in $(seq 1 30); do
+            [ -S "$runtime/bus" ] && break
+            sleep 1
+          done
+          if [ ! -S "$runtime/bus" ]; then echo "::error::no session bus at $runtime/bus"; exit 1; fi
+          echo "XDG_RUNTIME_DIR=$runtime" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=$runtime/bus" >> "$GITHUB_ENV"
+
+      - name: The session bus has systemd on it, and it runs commands
+        # Outside the sandbox the attack's own tool works. If it did not, its failure
+        # inside would prove nothing.
+        run: systemd-run --user --wait --collect true
+
+      - name: Install Entrabot into a virtual environment, as setup does
+        run: |
+          python3 --version
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -e ".[dev]"
+
+      - name: Run the sandbox tests, the real attacks included
+        run: .venv/bin/python -m pytest tests/sandbox -v --tb=short -rs --junitxml="$RUNNER_TEMP/sandbox.xml"
+        env:
+          ENTRABOT_KEEP_MEMORY_LOCAL: 'true'
+
+      - name: Every real attack test ran (none skipped)
+        run: |
+          .venv/bin/python - "$RUNNER_TEMP/sandbox.xml" <<'EOF'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          wanted = ("test_bwrap_for_real", "test_dbusproxy_for_real")
+          ran: dict[str, int] = dict.fromkeys(wanted, 0)
+          skipped: list[str] = []
+          for case in ET.parse(sys.argv[1]).getroot().iter("testcase"):
+              module = next((name for name in wanted if name in case.get("classname", "")), None)
+              if module is None:
+                  continue
+              if case.find("skipped") is not None:
+                  skipped.append(f"{case.get('classname')}::{case.get('name')}")
+              else:
+                  ran[module] += 1
+          for name in skipped:
+              print(f"::error::skipped: {name}")
+          for module, count in ran.items():
+              print(f"{module}: {count} ran")
+              if count == 0:
+                  print(f"::error::no test of {module} ran")
+          sys.exit(1 if skipped or 0 in ran.values() else 0)
+          EOF

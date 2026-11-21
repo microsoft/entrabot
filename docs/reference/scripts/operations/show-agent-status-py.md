@@ -40,7 +40,9 @@ python scripts/show_agent_status.py --help
 - `--json` — print the full snapshot (state, platform info, storage
   config, sponsors, licenses, permission grants, key credentials, and
   health checks) as a single JSON object instead of the formatted text
-  report.
+  report. The health checks include "Server containment": pass when the
+  running MCP server is contained (and by what), warn when it runs
+  uncontained, skip when no server is running.
 - `--health-only` — print only the pass/fail/warn/skip health checks,
   skipping the detailed sections. Always returns a non-zero exit code if
   any check fails, regardless of `--strict`.
