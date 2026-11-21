@@ -57,7 +57,7 @@ Once a certificate-signed JWT assertion exists, the rest of the three-hop token 
 
 ## Process containment
 
-On macOS (Seatbelt) and on Linux with `bwrap` installed, the MCP server runs inside an OS sandbox by default, behind an allowlisting proxy. macOS has been run for real; Linux is unit-tested only. Windows is not contained: the server runs with all of its user's rights. See [Process Containment](../guides/containment.md) and [Security Boundaries](security-boundaries.md#process-containment).
+On macOS (Seatbelt) and on Linux with `bwrap` installed, the MCP server runs inside an OS sandbox by default, behind an allowlisting proxy. Both have been run for real with an agent: macOS, and Ubuntu 24.04 (sign-in and the server's start, without Teams or mail traffic). On a Linux system that restricts unprivileged user namespaces (stock Ubuntu 24.04) `bwrap` is refused and the server runs uncontained and says so. Windows is not contained: the server runs with all of its user's rights. See [Process Containment](../guides/containment.md) and [Security Boundaries](security-boundaries.md#process-containment).
 
 ## See also
 

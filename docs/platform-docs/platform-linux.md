@@ -114,12 +114,12 @@ There is no dedicated Linux prerequisites installer. Setup itself needs only:
 - **A keyring provider that is running and unlocked** in a D-Bus session that
   setup, and later the agent, can reach: GNOME Keyring (Secret Service),
   KWallet, or libsecret.
-- **bubblewrap**, for process containment: `sudo apt install bubblewrap` or
-  `sudo dnf install bubblewrap`. Without it the server runs uncontained. Under
-  bubblewrap the D-Bus session bus must be a path socket
-  (`DBUS_SESSION_BUS_ADDRESS=unix:path=...`); with an abstract socket the
-  sign-in fails closed. Check which one `dbus-run-session` gives you with
-  `echo $DBUS_SESSION_BUS_ADDRESS`.
+- **bubblewrap and xdg-dbus-proxy**, for process containment:
+  `sudo apt install bubblewrap xdg-dbus-proxy` or
+  `sudo dnf install bubblewrap xdg-dbus-proxy`. Without either one the server
+  runs uncontained and says so. On Ubuntu 24.04 and later, `bwrap` also needs
+  an AppArmor profile before the system lets it work; see "Process
+  containment" below.
 
 Git and the Azure CLI are optional: download the repository as a ZIP if there is
 no Git, and setup offers to install a private Azure CLI under
@@ -180,16 +180,59 @@ and [Prerequisites](../getting-started/prerequisites.md).
 
 ## Process containment
 
-When bubblewrap (`bwrap`) is installed, the MCP server runs inside it by default: the home
-directory is an empty tmpfs with the repository, virtual environment, state and sign-in cache
-mounted back, `/tmp` is private, and the server has its own network namespace whose only exit
-is the launcher's allowlisting proxy. The D-Bus session bus socket is mounted in for the Secret
-Service when `DBUS_SESSION_BUS_ADDRESS` is a path; with an abstract socket, sign-in fails
-closed. Without `bwrap` the server runs uncontained and says so (`--diagnose` warns).
+When bubblewrap (`bwrap`) and `xdg-dbus-proxy` are installed, the MCP server runs inside a
+bubblewrap sandbox by default.
 
-Status: implemented and unit-tested, **not yet run on a real Linux machine**. Install `bwrap`
-(`apt install bubblewrap`, `dnf install bubblewrap`) and run `python -m entrabot.sandbox.selftest`
-to check it on yours. Settings and how to turn it off: [Process Containment](../guides/containment.md).
+- **Only named folders exist inside.** The computer's root folder is never mounted. The
+  sandbox has the system folders a Python process needs (`/usr`, `/etc`, and `/bin`, `/sbin`
+  and `/lib*`) read-only, the repository and its virtual environment read-only, and
+  Entrabot's state and sign-in cache read-write. `/tmp` is private and thrown away when the
+  server stops. There is no `/run`, `/home` (beyond the way to those folders), `/mnt`,
+  `/media`, `/var`, `/root` or `/sys` inside: no other user's files, no other disk, and none
+  of the Unix sockets under `/run` (the session and system D-Bus, systemd, the SSH and GPG
+  agents, Docker, snapd).
+- **Network.** The server has its own network namespace whose only exit is the launcher's
+  allowlisting proxy.
+- **The key store, and nothing else on the session bus.** The agent's key is in the keyring,
+  which is reached over the D-Bus session bus. That bus is never given to the sandbox,
+  because the user's systemd is on it too. The launcher runs `xdg-dbus-proxy` outside the
+  sandbox, set to let the server talk to the key store (`org.freedesktop.secrets`, and
+  KWallet's names) and to nothing else, and only that proxy's socket is inside. The proxy
+  connects to the bus from outside, so the kind of socket the bus uses does not matter.
+- **Environment.** The server gets a named part of the launcher's environment (its own
+  `ENTRABOT_*` settings, `PATH`, the language settings and a few more), not all of it. A
+  token for another service in the shell that started Entrabot stays outside. Name anything
+  else a token command needs in `ENTRABOT_SANDBOX_EXTRA_ENV`.
+- **No way to rebuild the view from inside.** The server holds no capabilities, cannot make
+  namespaces of its own (`--disable-userns` on bubblewrap 0.8.0 and later), and runs under
+  a system-call filter that refuses new namespaces and mounts, the kernel keyring, tracing
+  other processes and typing into the terminal. The filter exists for x86-64 and arm64; on
+  another kind of machine the Linux sandbox is not used.
+
+What this does not narrow: through the key store the server can read and change every secret
+the keyring holds for your account, not only Entrabot's own. `/etc` is readable in full, as is
+everything under `/usr`.
+
+**Ubuntu 24.04 and later** restrict unprivileged user namespaces through AppArmor
+(`kernel.apparmor_restrict_unprivileged_userns = 1`), and the `bubblewrap` package ships no
+AppArmor profile, so `bwrap` exits with "setting up uid map: Permission denied". Entrabot
+tries `bwrap` before it uses it: where the system refuses it, the server runs uncontained and
+says so, and with `ENTRABOT_CONTAINMENT=required` it refuses to start. To let `bwrap` work,
+an administrator adds an AppArmor profile for it; see [Containment
+troubleshooting](../troubleshooting/containment.md#linux-bwrap-is-installed-but-the-server-is-not-contained).
+
+Status: **run for real on Ubuntu 24.04.5 with a throwaway agent** (2026-11-20, x86-64,
+`bubblewrap` 0.9.0 with that AppArmor profile, `xdg-dbus-proxy`, GNOME Keyring unlocked in a
+`dbus-run-session` shell as in "Preparing a Linux host" above). The agent signed in inside
+the sandbox, its key read from the keyring through the filtering proxy. The server started
+contained, answered `initialize` and `whoami` over stdio as the agent, ran its polls through
+the proxy with nothing refused, and stopped cleanly. The sandbox was then attacked from
+inside, and each attempt failed; the first version of this sandbox did not survive the same
+attack. **Not run:** Teams, mail and Files traffic from inside the sandbox (that agent had no
+licence), a desktop session's keyring, KWallet, arm64, and any other distribution. See the
+[Verification Record](../project/verification.md). Run
+`python -m entrabot.sandbox.selftest` to check it on yours. Settings and how to turn it off:
+[Process Containment](../guides/containment.md).
 
 ## Default paths
 

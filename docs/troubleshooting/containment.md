@@ -47,10 +47,70 @@ Add other read-only paths with `ENTRABOT_SANDBOX_EXTRA_READ` (separated by `:`).
 `./status.sh` or `--diagnose` warns "the running server ... is NOT contained" when:
 
 - `ENTRABOT_CONTAINMENT=off` is set;
-- no sandbox is available (Windows; Linux without `bwrap`);
+- no sandbox is available (Windows; Linux without `bwrap` or without `xdg-dbus-proxy`, with a
+  `bwrap` the system refuses, see below, or on a machine that is neither x86-64 nor arm64);
 - the running server was started by a version without containment. Restart the MCP host.
 
 Set `ENTRABOT_CONTAINMENT=required` to make the server refuse to start uncontained.
+
+## Linux: `xdg-dbus-proxy` is not installed
+
+The server says it runs without containment because `xdg-dbus-proxy is not installed`. The
+sandbox reaches the keyring through that program and never gets the session bus itself, so
+without it there is no sandbox. Install it and restart the MCP host:
+
+```bash
+sudo apt install xdg-dbus-proxy      # Debian, Ubuntu
+sudo dnf install xdg-dbus-proxy      # Fedora, RHEL
+```
+
+## A token command or tool can't find an environment variable
+
+The contained server gets its own settings (`ENTRABOT_*`, `PERSONA_SATI_*`), `PATH`, the
+language settings and a few more from the environment it was started in, and nothing else.
+If a persona-sati token command, or anything else the server starts, needs another variable,
+name it in `ENTRABOT_SANDBOX_EXTRA_ENV` (comma-separated names) in the MCP host's `env` for
+the server.
+
+## Linux: `bwrap` is installed but the server is not contained
+
+The server says, on standard error and in `--diagnose`:
+
+```text
+running WITHOUT containment: bubblewrap (bwrap) is installed but this system does not let it
+create a sandbox: unprivileged user namespaces are restricted (on Ubuntu 24.04, by AppArmor).
+```
+
+Ubuntu 24.04 and later stop programs without an AppArmor profile from using unprivileged user
+namespaces, and the `bubblewrap` package ships no profile. Run by hand, `bwrap --ro-bind / / true`
+prints `bwrap: setting up uid map: Permission denied`. Entrabot tries `bwrap` once at each
+start, and falls back to running uncontained when that fails (or refuses to start, with
+`ENTRABOT_CONTAINMENT=required` or `bwrap`).
+
+To let `bwrap` create sandboxes, an administrator gives it an AppArmor profile. This needs
+`sudo`, and it applies to every use of `bwrap` on the computer, not only Entrabot's. Create
+`/etc/apparmor.d/bwrap` with:
+
+```text
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+  include if exists <local/bwrap>
+}
+```
+
+Then load it and check:
+
+```bash
+sudo apparmor_parser -r /etc/apparmor.d/bwrap
+bwrap --ro-bind / / true && echo works
+python -m entrabot.sandbox.selftest
+```
+
+Restart the MCP host afterwards. This was run for real on Ubuntu 24.04.5: without the profile
+the server ran uncontained and said so; with it, the server ran contained.
 
 ## The audit directory is outside `~/.entrabot`
 

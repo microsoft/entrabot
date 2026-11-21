@@ -61,6 +61,7 @@ See [Configuration guide § Runtime mode and behavior](../guides/configuration.m
 | `ENTRABOT_CONTAINMENT` | `auto` (contain on macOS and Linux when a sandbox is available). `required`, `off`, `seatbelt`, `bwrap`, `mxc`. See [Security Boundaries § Process containment](../architecture/security-boundaries.md#process-containment). |
 | `ENTRABOT_SANDBOX_EXTRA_HOSTS` | Unset. More hosts the contained server may reach on 443 (`*.example.com` covers subdomains). |
 | `ENTRABOT_SANDBOX_EXTRA_READ` | Unset. More read-only paths for the contained server, `:`-separated. |
+| `ENTRABOT_SANDBOX_EXTRA_ENV` | Unset. More environment variable names to pass on to the contained server, comma-separated. It gets `ENTRABOT_*`, `PERSONA_SATI_*`, `EFFERENT_COPY_*`, the OpenTelemetry settings, `PATH`, the locale and a few more by itself, and nothing else. |
 | `ENTRABOT_MXC_EXECUTOR` / `ENTRABOT_MXC_SHA256` | Unset. The MXC executor to use instead of the one on `PATH`, and the SHA-256 it must have. |
 | `ENTRABOT_A365_OBSERVABILITY_ENABLED` / `ENTRABOT_A365_EXPORT_ENABLED` | `false`. Agent 365 telemetry and its export; setup's Agent 365 integration step writes both once the agent's token carries `Agent365.Observability.OtelWrite`. See [Telemetry and the Agent 365 registry](../platform-docs/microsoft-agent-365.md#telemetry-and-the-agent-365-registry). |
 | `ENTRABOT_A365_CONSOLE_ENABLED` / `ENTRABOT_A365_SERVICE_NAMESPACE` | `false` / unset. Print spans to the server's standard error (never standard output, the MCP channel); the `service.namespace` resource attribute. |

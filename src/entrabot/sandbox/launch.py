@@ -13,7 +13,9 @@ on macOS, ``bwrap`` on Linux. Windows is not contained yet.
 ``ENTRABOT_CONTAINMENT`` (environment or ``.env``):
 
 - ``auto`` (default): contain when a sandbox is available; otherwise run uncontained, say so
-  on standard error, and record it, so ``./status.sh`` and ``--diagnose`` report it.
+  on standard error, and record it, so ``./status.sh`` and ``--diagnose`` report it. On Linux
+  "available" means ``bwrap`` is installed and a trial run of it works: some systems (stock
+  Ubuntu 24.04, through AppArmor) stop unprivileged user namespaces, and ``bwrap`` exits 1.
 - ``required``: refuse to start uncontained (exit 2).
 - ``off``: never contain.
 - ``seatbelt``, ``bwrap``, ``mxc``: that sandbox or nothing (exit 2 when it is unavailable).
@@ -26,6 +28,8 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import platform as platform_module
+import re
 import shutil
 import signal
 import subprocess
@@ -49,6 +53,129 @@ class Choice:
     reason: str
 
 
+BWRAP_TRIAL_SECONDS = 10
+BWRAP_REFUSED = (
+    "bubblewrap (bwrap) is installed but this system does not let it create a sandbox: "
+    "unprivileged user namespaces are restricted (on Ubuntu 24.04, by AppArmor)"
+)
+
+
+BWRAP_DISABLE_USERNS = (0, 8, 0)  # the first bubblewrap with --disable-userns
+NO_SECCOMP = (
+    "there is no system-call filter for this kind of machine (x86-64 and arm64 have one), "
+    "and the Linux sandbox is not used without it"
+)
+
+
+def bwrap_version(bwrap: str) -> tuple[int, int, int]:
+    """The version ``bwrap --version`` prints, or ``(0, 0, 0)`` when it cannot be read."""
+    try:
+        done = subprocess.run(  # noqa: S603 - bwrap by full path, fixed arguments
+            [bwrap, "--version"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=BWRAP_TRIAL_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return (0, 0, 0)
+    found = re.search(r"(\d+)\.(\d+)\.(\d+)", done.stdout or "")
+    return (int(found[1]), int(found[2]), int(found[3])) if found else (0, 0, 0)
+
+
+def bwrap_works(bwrap: str) -> bool:
+    """Can *bwrap* create the namespaces the server's sandbox needs? A trial run of ``true``
+    with the same namespaces as :func:`entrabot.sandbox.bwrap.command`. Where unprivileged
+    user namespaces are restricted it exits 1; without this check the server would not start."""
+    trial = [
+        bwrap,
+        "--unshare-user",
+        "--unshare-pid",
+        "--unshare-net",
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "true",
+    ]
+    try:
+        done = subprocess.run(  # noqa: S603 - bwrap by full path, fixed arguments
+            trial,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=BWRAP_TRIAL_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+DBUS_PROXY_MISSING = (
+    "xdg-dbus-proxy is not installed: the contained server reaches the key store through it, "
+    "because the session bus itself (which carries systemd) is never given to the sandbox"
+)
+
+EXTRA_ENV = "ENTRABOT_SANDBOX_EXTRA_ENV"
+# The contained server gets these and nothing else from the launcher's environment. Whatever
+# the shell or the MCP host that started Entrabot holds (tokens for other services, agent
+# sockets, the session bus address) stays outside.
+ENV_NAMES = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "LANG",
+        "LANGUAGE",
+        "TZ",
+        "TERM",
+        "NO_COLOR",
+        "VIRTUAL_ENV",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "COPILOT_HOME",
+        "CLAUDE_PROJECT_DIR",
+        "WAIT_TOOL_POLL_INTERVAL_S",
+        "WAIT_TOOL_HEARTBEAT_S",
+        "PYTHONUTF8",
+        "PYTHONIOENCODING",
+        "PYTHONUNBUFFERED",
+        "__CF_USER_TEXT_ENCODING",
+    }
+)
+ENV_PREFIXES = (
+    "LC_",
+    "ENTRABOT_",
+    "PERSONA_SATI_",
+    "EFFERENT_COPY_",
+    "OTEL_",
+    "MICROSOFT_OTEL_",
+    "APPLICATIONINSIGHTS_",
+)
+
+
+def child_env(parent: Mapping[str, str]) -> dict[str, str]:
+    """The part of *parent* the contained server gets: :data:`ENV_NAMES`, the names starting
+    with :data:`ENV_PREFIXES`, and the names listed in ``ENTRABOT_SANDBOX_EXTRA_ENV``."""
+    extra = {name.strip() for name in parent.get(EXTRA_ENV, "").split(",") if name.strip()}
+    return {
+        name: value
+        for name, value in parent.items()
+        if name in ENV_NAMES or name in extra or name.startswith(ENV_PREFIXES)
+    }
+
+
 def choose(
     *,
     platform: str,
@@ -56,6 +183,8 @@ def choose(
     which: Callable[[str], str | None] = shutil.which,
     exists: Callable[[str], bool] = os.path.exists,
     mxc_executor: Callable[[], str | None] | None = None,
+    bwrap_works: Callable[[str], bool] = bwrap_works,
+    machine: str | None = None,
 ) -> Choice:
     """Which sandbox to use. A mode that cannot be honoured raises :class:`SystemExit`."""
     mode = (env.get(MODE_ENV) or "auto").strip().lower()
@@ -72,15 +201,27 @@ def choose(
         available["seatbelt"] = (
             SANDBOX_EXEC if platform == "darwin" and exists(SANDBOX_EXEC) else None
         )
+    bwrap_problem = "bubblewrap (bwrap) is not installed"
     if mode in ("auto", "required", "bwrap"):
-        available["bwrap"] = which("bwrap") if platform.startswith("linux") else None
+        bwrap = which("bwrap") if platform.startswith("linux") else None
+        if bwrap and not available.get("mxc"):
+            if not bwrap_works(bwrap):
+                bwrap_problem, bwrap = BWRAP_REFUSED, None
+            elif not which("xdg-dbus-proxy"):
+                bwrap_problem, bwrap = DBUS_PROXY_MISSING, None
+            else:
+                from entrabot.sandbox import seccomp
+
+                if seccomp.program(machine or platform_module.machine()) is None:
+                    bwrap_problem, bwrap = NO_SECCOMP, None
+        available["bwrap"] = bwrap
     for backend in ("mxc", "seatbelt", "bwrap"):
         if available.get(backend):
             return Choice(backend, f"{backend} found")
     if platform == "win32":
         why = "Windows is not contained yet"
     elif platform.startswith("linux"):
-        why = "bubblewrap (bwrap) is not installed"
+        why = bwrap_problem
     else:
         why = "no sandbox available"
     if mode == "auto":
@@ -266,7 +407,7 @@ def run_contained(
     """Run *inner* contained by *backend* behind the allowlisting proxy; its exit code."""
     import platformdirs
 
-    from entrabot.sandbox import bwrap, mxc, seatbelt
+    from entrabot.sandbox import bwrap, dbusproxy, mxc, seatbelt, seccomp
     from entrabot.sandbox.policy import build_policy
     from entrabot.sandbox.proxy import AllowlistProxy
 
@@ -289,7 +430,7 @@ def run_contained(
             fh.write(json.dumps({"at": time.time(), "refused": what}) + "\n")
 
     proxy = AllowlistProxy(policy.allowed_hosts, on_refusal=record_refusal)
-    env = {k: v for k, v in os.environ.items() if k.upper() not in ("NO_PROXY",)}
+    env = child_env(os.environ)
     env.update(
         {
             CONTAINED_ENV: backend,
@@ -305,19 +446,49 @@ def run_contained(
             env[key.lower()] = url
 
     socket_path: Path | None = None
+    dbus_socket: Path | None = None
+    dbus_proxy: dbusproxy.DbusProxy | None = None
     profile_path: Path | None = None
+    inherited: tuple[int, ...] = ()
     if backend == "bwrap":
         socket_path = _short_socket_path()
         proxy.start_unix(socket_path)
         port = 3128  # inside the namespace; the bridge forwards it to the socket
         use_proxy(port)
+        bus = bwrap.session_bus_address(dict(os.environ))
+        if bus:
+            # The key store only, through a filtering proxy; never the session bus itself.
+            dbus_socket = socket_path.parent / "dbus.sock"
+            dbus_proxy = dbusproxy.DbusProxy()
+            dbus_proxy.start(
+                shutil.which(dbusproxy.EXECUTABLE) or dbusproxy.EXECUTABLE, bus, dbus_socket
+            )
+            env["DBUS_SESSION_BUS_ADDRESS"] = bwrap.DBUS_ADDRESS_INSIDE
+        # A Python that is not under the system folders (pyenv, Homebrew, /opt).
+        interpreter_home = Path(os.path.realpath(sys.base_prefix))
+        outside_system = not any(
+            interpreter_home.is_relative_to(root) for root in bwrap.SYSTEM_PATHS
+        )
+        bwrap_path = shutil.which("bwrap") or "bwrap"
+        # The system-call filter, in a file only this process and bwrap hold.
+        filter_program = seccomp.program(platform_module.machine())
+        if filter_program is None:
+            raise SystemExit(f"[entrabot] {NO_SECCOMP}.")
+        seccomp_fd = os.memfd_create("entrabot-seccomp")  # type: ignore[attr-defined]
+        os.write(seccomp_fd, filter_program)
+        os.lseek(seccomp_fd, 0, os.SEEK_SET)
+        inherited = (seccomp_fd,)
         command = bwrap.command(
             policy,
-            bwrap=shutil.which("bwrap") or "bwrap",
+            bwrap=bwrap_path,
             proxy_socket=socket_path,
             proxy_port=port,
             inner_argv=inner,
-            env=os.environ,
+            dbus_proxy_socket=dbus_socket,
+            system_paths=(interpreter_home,) if outside_system else (),
+            system_links=bwrap.system_links(),
+            disable_userns=bwrap_version(bwrap_path) >= BWRAP_DISABLE_USERNS,
+            seccomp_fd=seccomp_fd,
         )
     else:
         port = proxy.start_tcp()
@@ -329,7 +500,9 @@ def run_contained(
         else:
             command = mxc.command(policy, proxy_port=port, inner_argv=inner, env=env)
 
-    child = subprocess.Popen(command, env=env)
+    child = subprocess.Popen(command, env=env, pass_fds=inherited)
+    for fd in inherited:
+        os.close(fd)
     if record_status:
         write_status(
             state_root,
@@ -354,8 +527,13 @@ def run_contained(
         return child.wait()
     finally:
         proxy.stop()
+        if dbus_proxy is not None:
+            dbus_proxy.stop()
         if record_status:
             _clear_status(state_root, child.pid)
+        if dbus_socket is not None:
+            with contextlib.suppress(OSError):
+                dbus_socket.unlink()
         if socket_path is not None:
             with contextlib.suppress(OSError):
                 socket_path.unlink()

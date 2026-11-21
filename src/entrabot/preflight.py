@@ -711,7 +711,8 @@ def check_containment(state_root: Path | None = None) -> Check:
     remediation = None
     if status == "warn":
         remediation = (
-            "Install bubblewrap (bwrap) on Linux; on macOS check ENTRABOT_CONTAINMENT. "
+            "Install bubblewrap (bwrap) on Linux; if it is installed but the system refuses "
+            "it, see docs/troubleshooting/containment.md. On macOS check ENTRABOT_CONTAINMENT. "
             "Windows is not contained yet."
         )
     return Check(

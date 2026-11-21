@@ -21,9 +21,16 @@ def _choose(platform: str, env: dict[str, str] | None = None, **kwargs: object) 
         "which": lambda name: None,
         "exists": lambda path: False,
         "mxc_executor": lambda: None,
+        "bwrap_works": lambda path: True,
+        "machine": "x86_64",
     }
     defaults.update(kwargs)
     return launch.choose(platform=platform, env=env or {}, **defaults)  # type: ignore[arg-type]
+
+
+def _linux_tools(name: str) -> str | None:
+    """A Linux system with both programs the bubblewrap sandbox needs."""
+    return f"/usr/bin/{name}" if name in ("bwrap", "xdg-dbus-proxy") else None
 
 
 class TestChoice:
@@ -32,7 +39,7 @@ class TestChoice:
         assert choice.backend == "seatbelt"
 
     def test_linux_uses_bwrap_when_installed(self) -> None:
-        choice = _choose("linux", which=lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
+        choice = _choose("linux", which=_linux_tools)
         assert choice.backend == "bwrap"
 
     def test_mxc_wins_when_its_executor_is_there(self) -> None:
@@ -46,6 +53,88 @@ class TestChoice:
     def test_linux_without_bwrap_runs_uncontained_and_says_why(self) -> None:
         choice = _choose("linux")
         assert choice.backend is None and "bwrap" in choice.reason
+
+    def test_linux_with_a_bwrap_the_system_refuses_runs_uncontained_and_says_why(self) -> None:
+        # Stock Ubuntu 24.04: AppArmor stops unprivileged user namespaces, so an installed
+        # bwrap exits 1 ("setting up uid map: Permission denied"). Found in a run for real:
+        # the server did not start at all.
+        choice = _choose(
+            "linux",
+            which=_linux_tools,
+            bwrap_works=lambda path: False,
+        )
+        assert choice.backend is None
+        assert "installed" in choice.reason and "user namespaces" in choice.reason
+
+    @pytest.mark.parametrize("mode", ["required", "bwrap"])
+    def test_a_refused_bwrap_cannot_honour_a_mode_that_needs_it(self, mode: str) -> None:
+        with pytest.raises(SystemExit, match="user namespaces"):
+            _choose(
+                "linux",
+                {"ENTRABOT_CONTAINMENT": mode},
+                which=_linux_tools,
+                bwrap_works=lambda path: False,
+            )
+
+    def test_the_bwrap_trial_uses_the_namespaces_the_server_gets(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **_kwargs: object) -> object:
+            seen.append(cmd)
+            return type("Done", (), {"returncode": 1})()
+
+        monkeypatch.setattr(launch.subprocess, "run", fake_run)
+        assert launch.bwrap_works("/usr/bin/bwrap") is False
+        assert seen[0][0] == "/usr/bin/bwrap"
+        assert {"--unshare-net", "--unshare-pid", "--proc"} <= set(seen[0])
+
+    def test_a_bwrap_trial_that_cannot_run_is_a_no(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def boom(cmd: list[str], **_kwargs: object) -> object:
+            raise OSError("no such file")
+
+        monkeypatch.setattr(launch.subprocess, "run", boom)
+        assert launch.bwrap_works("/usr/bin/bwrap") is False
+
+    def test_linux_without_the_dbus_proxy_runs_uncontained_and_says_why(self) -> None:
+        # The session bus is never mounted raw (it carries systemd). Without the filtering
+        # proxy the server could not read its key, so bubblewrap alone is not a sandbox here.
+        choice = _choose("linux", which=lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
+        assert choice.backend is None
+        assert "xdg-dbus-proxy" in choice.reason
+
+    def test_linux_without_the_dbus_proxy_cannot_honour_required(self) -> None:
+        with pytest.raises(SystemExit, match="xdg-dbus-proxy"):
+            _choose(
+                "linux",
+                {"ENTRABOT_CONTAINMENT": "required"},
+                which=lambda name: "/usr/bin/bwrap" if name == "bwrap" else None,
+            )
+
+    def test_linux_on_a_machine_without_a_system_call_filter_is_not_contained(self) -> None:
+        choice = _choose("linux", which=_linux_tools, machine="riscv64")
+        assert choice.backend is None
+        assert "system-call filter" in choice.reason
+
+    def test_the_bwrap_version_is_read_from_what_it_prints(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_run(cmd: list[str], **_kwargs: object) -> object:
+            return type("Done", (), {"returncode": 0, "stdout": "bubblewrap 0.9.0\n"})()
+
+        monkeypatch.setattr(launch.subprocess, "run", fake_run)
+        assert launch.bwrap_version("/usr/bin/bwrap") == (0, 9, 0)
+        assert launch.BWRAP_DISABLE_USERNS <= (0, 9, 0)
+
+    def test_an_unreadable_bwrap_version_is_the_oldest(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_run(cmd: list[str], **_kwargs: object) -> object:
+            return type("Done", (), {"returncode": 0, "stdout": "something else\n"})()
+
+        monkeypatch.setattr(launch.subprocess, "run", fake_run)
+        assert launch.bwrap_version("/usr/bin/bwrap") == (0, 0, 0)
 
     def test_windows_is_not_contained_yet(self) -> None:
         choice = _choose("win32", mxc_executor=lambda: "C:/mxc/wxc-exec.exe")
@@ -63,6 +152,55 @@ class TestChoice:
     def test_an_unknown_mode_refuses_to_start(self) -> None:
         with pytest.raises(SystemExit):
             _choose("darwin", {"ENTRABOT_CONTAINMENT": "maybe"})
+
+
+class TestChildEnvironment:
+    """The contained server gets a named part of the launcher's environment, not all of it:
+    run for real, a token in the shell that started the server was readable inside."""
+
+    def test_only_named_variables_are_passed_on(self) -> None:
+        env = launch.child_env(
+            {
+                "PATH": "/usr/bin",
+                "HOME": "/home/u",
+                "LANG": "en_US.UTF-8",
+                "LC_ALL": "C",
+                "ENTRABOT_TENANT_ID": "t",
+                "PERSONA_SATI_MCP_URL": "https://p.example",
+                "EFFERENT_COPY_ENABLE": "1",
+                "OTEL_SERVICE_NAME": "x",
+                "GITHUB_TOKEN": "secret",
+                "AWS_SECRET_ACCESS_KEY": "secret",
+                "SSH_AUTH_SOCK": "/run/user/1000/ssh",
+                "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+                "XDG_RUNTIME_DIR": "/run/user/1000",
+                "HTTPS_PROXY": "http://corp:8080",
+                "NO_PROXY": "*",
+                "PYTHONPATH": "/somewhere",
+                "LD_PRELOAD": "/x.so",
+            }
+        )
+        assert env == {
+            "PATH": "/usr/bin",
+            "HOME": "/home/u",
+            "LANG": "en_US.UTF-8",
+            "LC_ALL": "C",
+            "ENTRABOT_TENANT_ID": "t",
+            "PERSONA_SATI_MCP_URL": "https://p.example",
+            "EFFERENT_COPY_ENABLE": "1",
+            "OTEL_SERVICE_NAME": "x",
+        }
+
+    def test_more_names_can_be_passed_on_by_name(self) -> None:
+        env = launch.child_env(
+            {
+                "MY_TOKEN_HELPER_CONFIG": "a",
+                "OTHER": "b",
+                launch.EXTRA_ENV: " MY_TOKEN_HELPER_CONFIG ,",
+            }
+        )
+        assert env["MY_TOKEN_HELPER_CONFIG"] == "a"
+        assert "OTHER" not in env
 
 
 class TestStatusRecord:

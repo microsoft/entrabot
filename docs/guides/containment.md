@@ -13,7 +13,7 @@ to turn it off. For the design, see [Security Boundaries](../architecture/securi
 | Platform | Sandbox | Status |
 |---|---|---|
 | macOS | Seatbelt (`sandbox-exec`) with a profile generated at each start | On by default. Verified by running the full server on macOS: sign-in, Graph reads, the background polls and the refusals below. |
-| Linux | bubblewrap (`bwrap`) | On by default when `bwrap` is installed. Implemented and unit-tested, not yet run on a real Linux machine. Without `bwrap` the server runs uncontained and says so. |
+| Linux | bubblewrap (`bwrap`) with `xdg-dbus-proxy` and a system-call filter | On by default when both programs are installed, the system lets `bwrap` create a sandbox, and the machine is x86-64 or arm64. Run for real on Ubuntu 24.04 (x86-64) with a throwaway agent: the agent signed in inside the sandbox, the server answered over MCP as the agent, and attacks from inside the sandbox failed. Not run there: Teams, mail and Files traffic (that agent had no licence), arm64, other distributions. Otherwise (for example stock Ubuntu 24.04; see [troubleshooting](../troubleshooting/containment.md#linux-bwrap-is-installed-but-the-server-is-not-contained)) the server runs uncontained and says so. |
 | Windows | none | Not contained. The server runs with all of its user's rights. |
 | Any | Microsoft eXecution Container (MXC) | Used first when its executor is installed and trusted. Implemented and unit-tested, not yet run. |
 
@@ -24,7 +24,19 @@ sign-in cache, and on macOS `~/Library/Keychains` (the certificate key is read f
 keychain in the server's own process). Nothing else under your home directory. On macOS also
 nothing else under `/Users` or `/Volumes`, so other users' folders, `/Users/Shared` and other
 disks are out of reach. System folders (`/System`, `/usr`, `/Library`, `/opt`, `/private`,
-including `/tmp`) stay readable, because Python and its libraries load from there.
+including `/tmp`) stay readable, because Python and its libraries load from there. On Linux
+only `/usr`, `/etc` and the `/bin`, `/sbin` and `/lib*` folders are there besides the allowed
+ones: other users' folders, other disks, `/run` and `/var` do not exist inside the sandbox.
+
+**Reach other programs:** no. The server can't ask something outside the sandbox to act for
+it. On Linux it has none of the computer's Unix sockets (the session bus, systemd, the SSH
+and GPG agents, Docker), can't create namespaces or mounts of its own, and reaches the
+keyring through a filtering proxy that passes calls to the key store and nothing else. On
+macOS it can't open files or apps through Launch Services (`open`) or send Apple Events.
+
+**Environment:** its own settings (`ENTRABOT_*`, `PERSONA_SATI_*`), `PATH`, the language
+settings and a few more. Other variables in the shell or MCP host that started it, such as a
+token for another service, are not passed on.
 
 **Write:** Entrabot's state and the sign-in cache only. Not the repository, not the rest of
 your home directory, not `/tmp` (the server's `TMPDIR` points inside its state).
@@ -44,6 +56,10 @@ The proxy sees host names only; TLS stays end to end. DNS isn't reachable from i
 sandbox. Anything the server starts, such as a persona-sati token command, inherits the same
 limits.
 
+The key store is not narrowed to Entrabot's own key. On Linux the server can read and change
+every secret your keyring holds; on macOS it can read the login keychain's files and ask for
+any item, under macOS's own per-item rules.
+
 Containment does not limit what the agent can do through Microsoft Graph with its own
 permissions. The recipient policy, the sponsor gates and Entra handle that; see
 [Security Boundaries](../architecture/security-boundaries.md).
@@ -58,6 +74,7 @@ permissions. The recipient policy, the sponsor gates and Entra handle that; see
 | | `seatbelt`, `bwrap`, `mxc` | Use that sandbox or refuse to start. |
 | `ENTRABOT_SANDBOX_EXTRA_HOSTS` | comma-separated host names, `*.example.com` for subdomains | Hosts the proxy also allows. |
 | `ENTRABOT_SANDBOX_EXTRA_READ` | paths separated by `:` | Extra read-only paths, for example for a token command that reads files elsewhere. |
+| `ENTRABOT_SANDBOX_EXTRA_ENV` | comma-separated variable names | More environment variables to pass on to the contained server, for example one a token command reads. |
 | `ENTRABOT_MXC_SHA256` | hex digest | When set, the MXC executor is used only if it matches. |
 
 Put them in `.env` or the MCP host's environment for the server.

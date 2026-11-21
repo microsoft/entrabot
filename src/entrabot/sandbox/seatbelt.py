@@ -16,6 +16,9 @@ what :class:`~entrabot.sandbox.policy.ContainmentPolicy` lists:
   host name, so host filtering is the proxy's job; DNS is not reachable either.
 
 Everything the server starts (a persona-sati token command, for one) inherits the profile.
+What it cannot do is have something else start a program for it: opening a file or an app
+through Launch Services (``open``) and sending Apple Events to other apps are denied, because
+a program started that way runs outside the sandbox.
 """
 
 from __future__ import annotations
@@ -85,6 +88,11 @@ def profile(
         f'(allow network-outbound (remote ip "localhost:{int(proxy_port)}"))',
         ";; Listening on loopback only: the delegated sign-in's browser redirect (MSAL).",
         '(allow network-bind network-inbound (local ip "localhost:*"))',
+        "",
+        ";; No asking the system to start a program (Launch Services: an app it starts runs",
+        ";; outside this sandbox), and no scripting other apps with Apple Events.",
+        "(deny lsopen)",
+        "(deny appleevent-send)",
         "",
     ]
     return "\n".join(lines)
