@@ -286,14 +286,16 @@ class TestBwrapCommand:
 
 class TestDbusProxyCommand:
     def test_filters_and_allows_only_the_key_store(self) -> None:
+        # The command is only ever run on Linux; str() keeps the comparison right on Windows.
+        socket_path = Path("/tmp/eb/d.sock")
         argv = dbusproxy.command(
-            "/usr/bin/xdg-dbus-proxy", "unix:path=/run/user/1000/bus", Path("/tmp/eb/d.sock"), 7
+            "/usr/bin/xdg-dbus-proxy", "unix:path=/run/user/1000/bus", socket_path, 7
         )
         assert argv[:4] == [
             "/usr/bin/xdg-dbus-proxy",
             "--fd=7",
             "unix:path=/run/user/1000/bus",
-            "/tmp/eb/d.sock",
+            str(socket_path),
         ]
         assert "--filter" in argv
         rules = [item for item in argv[4:] if item != "--filter"]
